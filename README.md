@@ -60,18 +60,27 @@ GLES 3.1+ if a consumer implements one.
 
 ## Building
 
+The toolchain is pinned in [`rust-toolchain.toml`](rust-toolchain.toml) to **Rust 1.94.1**,
+the version Yocto wrynose (6.0) ships in oe-core. `rustup` picks it up automatically, so
+there is nothing to install by hand. The pin follows the target distro rather than upstream
+Rust — building against a compiler the board does not have is how MSRV surprises reach the
+board instead of CI. CI carries an advisory `stable` lane as early warning for the next bump.
+
 ```sh
-cargo check --workspace
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 ```
 
-Cross-compilation lanes (`cargo check` only, no linking required):
+Cross-compilation lanes (`cargo check` only — nothing links, so no cross C toolchain is
+needed while the workspace stays pure Rust):
 
 ```sh
-rustup target add aarch64-unknown-linux-gnu riscv64gc-unknown-linux-gnu
+cargo check --workspace --target aarch64-unknown-linux-gnu
 cargo check --workspace --target riscv64gc-unknown-linux-gnu
 ```
+
+riscv64 is a producer, soak, and cross-compile lane only: maps require an SSBO-capable
+backend, so a VisionFive 2 builds tessella but does not draw with it.
 
 ## Relationship to MapLibre
 

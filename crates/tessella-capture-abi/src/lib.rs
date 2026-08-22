@@ -31,12 +31,22 @@
 //! Layout asserts compile on every target, which is how R-6 (riscv64 atomics and alignment)
 //! is caught at build time rather than in a soak.
 //!
+//! # Ingress validation
+//!
+//! Every `#[repr(uN)]` enum here crosses a C boundary, and a value arriving from the far
+//! side is untrusted input regardless of which mirror wrote it: a producer/consumer version
+//! skew, a torn ring read, or a mirror built against a different header all produce
+//! discriminants this crate has never heard of. Holding one in an enum is undefined
+//! behavior, not a wrong answer — so ingress goes through the `from_repr` constructors,
+//! which return `None` for anything unrecognized. Never `transmute` a discriminant, and
+//! never `as`-cast one into an enum.
+//!
 //! Status: scaffold. No implementation yet.
 
 // Not `forbid(unsafe_code)`: the ring and the `#[repr(C)]` envelope mirrors need it. Every
 // other crate in the workspace forbids it outright.
 #![deny(unsafe_op_in_unsafe_fn)]
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 
 /// Revision of the capture-stream ABI this crate implements.
 ///
@@ -100,6 +110,40 @@ pub enum CoalescePolicy {
 }
 
 impl EnvelopeKind {
+    /// Every declared envelope kind. Adding a variant without adding it here fails the
+    /// round-trip test rather than silently escaping coverage.
+    pub const ALL: [Self; 9] = [
+        Self::GeometryAdd,
+        Self::GeometryRemove,
+        Self::ViewUse,
+        Self::ViewRelease,
+        Self::UboUpdate,
+        Self::TextureUpdate,
+        Self::CameraUpdate,
+        Self::OrderUpdate,
+        Self::StencilTiles,
+    ];
+
+    /// Converts a wire discriminant into an [`EnvelopeKind`], rejecting unknown values.
+    ///
+    /// See the crate-level note on ingress validation: this is the only supported way to
+    /// turn a number off the ring into an envelope kind.
+    #[must_use]
+    pub const fn from_repr(value: u16) -> Option<Self> {
+        match value {
+            1 => Some(Self::GeometryAdd),
+            2 => Some(Self::GeometryRemove),
+            3 => Some(Self::ViewUse),
+            4 => Some(Self::ViewRelease),
+            5 => Some(Self::UboUpdate),
+            6 => Some(Self::TextureUpdate),
+            7 => Some(Self::CameraUpdate),
+            8 => Some(Self::OrderUpdate),
+            9 => Some(Self::StencilTiles),
+            _ => None,
+        }
+    }
+
     /// The §4 coalescing policy for this envelope kind.
     #[must_use]
     pub const fn coalesce_policy(self) -> CoalescePolicy {
@@ -144,4 +188,97 @@ pub enum UniformTransport {
     /// One consolidated buffer per `(view, layer)`, drawables indexing via `uboIndex`, no
     /// length ceiling (§11.2).
     ConsolidatedSsbo = 0,
+}
+
+impl CameraMode {
+    /// Converts a wire discriminant into a [`CameraMode`], rejecting unknown values.
+    ///
+    /// See the crate-level note on ingress validation.
+    #[must_use]
+    pub const fn from_repr(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Producer),
+            1 => Some(Self::Consumer),
+            _ => None,
+        }
+    }
+}
+
+impl UniformTransport {
+    /// Converts a wire discriminant into a [`UniformTransport`], rejecting unknown values.
+    ///
+    /// DR-16 leaves exactly one valid value. A second one arriving means the far side was
+    /// built against a header this crate does not know, which is a fault to report rather
+    /// than a mode to guess at.
+    #[must_use]
+    pub const fn from_repr(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::ConsolidatedSsbo),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every declared kind survives a discriminant round trip, and nothing outside the set
+    /// is accepted. This is the test that catches a discriminant renumbering that forgets to
+    /// update `from_repr` — which would otherwise be a silent misparse of the ring.
+    #[test]
+    fn envelope_kind_round_trips_and_rejects_unknown() {
+        for kind in EnvelopeKind::ALL {
+            assert_eq!(EnvelopeKind::from_repr(kind as u16), Some(kind));
+        }
+        assert_eq!(EnvelopeKind::from_repr(0), None);
+        assert_eq!(EnvelopeKind::from_repr(10), None);
+        assert_eq!(EnvelopeKind::from_repr(u16::MAX), None);
+    }
+
+    /// Discriminants must be distinct — two kinds sharing one would make the ring ambiguous.
+    #[test]
+    fn envelope_kind_discriminants_are_distinct() {
+        for (i, a) in EnvelopeKind::ALL.iter().enumerate() {
+            for b in &EnvelopeKind::ALL[i + 1..] {
+                assert_ne!(*a as u16, *b as u16, "{a:?} and {b:?} share a discriminant");
+            }
+        }
+    }
+
+    /// The §4 coalescing table, transcribed. Geometry and view lifecycle are lossless
+    /// because dropping one loses content; the state envelopes coalesce because every one
+    /// of them is an absolute write.
+    #[test]
+    fn coalescing_matches_the_normative_table() {
+        use CoalescePolicy::{LatestWins, Lossless, RectListMerge};
+        let expected = [
+            (EnvelopeKind::GeometryAdd, Lossless),
+            (EnvelopeKind::GeometryRemove, Lossless),
+            (EnvelopeKind::ViewUse, Lossless),
+            (EnvelopeKind::ViewRelease, Lossless),
+            (EnvelopeKind::UboUpdate, LatestWins),
+            (EnvelopeKind::TextureUpdate, RectListMerge),
+            (EnvelopeKind::CameraUpdate, LatestWins),
+            (EnvelopeKind::OrderUpdate, LatestWins),
+            (EnvelopeKind::StencilTiles, LatestWins),
+        ];
+        assert_eq!(expected.len(), EnvelopeKind::ALL.len());
+        for (kind, policy) in expected {
+            assert_eq!(kind.coalesce_policy(), policy, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn mode_enums_reject_unknown_discriminants() {
+        assert_eq!(CameraMode::from_repr(0), Some(CameraMode::Producer));
+        assert_eq!(CameraMode::from_repr(1), Some(CameraMode::Consumer));
+        assert_eq!(CameraMode::from_repr(2), None);
+
+        assert_eq!(
+            UniformTransport::from_repr(0),
+            Some(UniformTransport::ConsolidatedSsbo)
+        );
+        assert_eq!(UniformTransport::from_repr(1), None);
+    }
 }

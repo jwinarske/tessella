@@ -6,38 +6,45 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Least privilege: nothing here writes to the repository.
+permissions:
+  contents: read
+
+# A push that supersedes an in-flight run cancels it rather than queueing behind it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
+
+# Third-party actions are pinned by commit SHA, not by tag: a tag is a movable ref, and
+# moving it is the whole shape of a GitHub Actions supply-chain compromise. The trailing
+# comment records which tag each SHA was at when pinned.
+#
+# The toolchain is not installed by an action anywhere below — rust-toolchain.toml pins it
+# to the Rust that Yocto wrynose ships, and `rustup show` materializes it.
 
 jobs:
   check:
     name: fmt / clippy / test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --all-features
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features
       - run: cargo doc --workspace --no-deps
-
-  msrv:
-    name: msrv
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85.0
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace
+        env:
+          RUSTDOCFLAGS: -D warnings
 
   cross:
     # R-6: layout asserts compile on every target. `cargo check` only — no linking, so no
     # cross C toolchain is needed while the workspace stays pure Rust (see the
-    # recorded-but-not-wired deps in the root manifest).
+    # recorded-but-not-wired deps in the root manifest). riscv64 is DR-16's
+    # producer/soak/cross-compile lane: VisionFive 2 builds tessella but does not draw maps.
     name: cross-check ${{ matrix.target }}
     runs-on: ubuntu-latest
     strategy:
@@ -47,19 +54,36 @@ jobs:
           - aarch64-unknown-linux-gnu
           - riscv64gc-unknown-linux-gnu
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: ${{ matrix.target }}
       - run: cargo check --workspace --target ${{ matrix.target }}
 
-  publish-dry-run:
+  package:
     name: package tessella
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo package -p tessella
+
+  stable-canary:
+    # Advisory only. The pinned toolchain follows Yocto, not upstream Rust, so breakage on
+    # current stable is information about the next bump rather than a reason to block a
+    # merge. Overrides rust-toolchain.toml via RUSTUP_TOOLCHAIN.
+    name: stable canary (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - run: rustup toolchain install stable --profile minimal --component clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: stable
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace --all-features

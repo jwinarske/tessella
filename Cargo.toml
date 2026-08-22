@@ -7,7 +7,10 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.85"
+# Pinned to the Rust in Yocto wrynose (6.0) oe-core; see rust-toolchain.toml for the
+# rationale and the bump policy. Comfortably above the 1.87 that fontdue's use of
+# `integer_sign_cast` requires, and above the 1.85 that edition 2024 requires.
+rust-version = "1.94.1"
 license = "BSD-2-Clause"
 authors = ["Joel Winarske <joel.winarske@gmail.com>"]
 repository = "https://github.com/jwinarske/tessella"
@@ -63,7 +66,10 @@ panic = "abort"
 lto = "fat"
 codegen-units = 1
 opt-level = 3
-strip = "symbols"
+# Deliberately not stripped here: with panic=abort a field crash gives an address and
+# nothing else, and Yocto already splits debug info into its own -dbg package. Line
+# tables are the cheapest thing that keeps a backtrace readable. Not part of DR-12.
+debug = "line-tables-only"
 
 # `opt-level = "s"` on non-hot crates. Classification is provisional: tessella-style is listed
 # as the `dyn` boundary in §12.9 because *parse* is not hot, but it also houses the DR-11

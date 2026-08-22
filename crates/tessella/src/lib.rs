@@ -19,4 +19,3 @@
 //! The renderer is on the far side of the capture stream and is not part of this project.
 
 #![forbid(unsafe_code)]
-#![no_std]

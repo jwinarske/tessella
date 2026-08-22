@@ -1,0 +1,15 @@
+# Pinned to the Rust that Yocto wrynose (6.0) ships in oe-core
+# (meta/recipes-devtools/rust/rust_1.94.1.bb). Building against a different compiler than
+# the target distro provides is how MSRV surprises reach the board instead of CI, so this
+# is the single source of truth: CI, developers, and the Yocto build all agree.
+#
+# Bump when the target Yocto release does, not when a newer Rust lands upstream. The
+# `stable` CI lane is the early-warning canary for that day, and it is advisory only.
+[toolchain]
+channel = "1.94.1"
+components = ["rustfmt", "clippy"]
+targets = [
+    "aarch64-unknown-linux-gnu",
+    "riscv64gc-unknown-linux-gnu",
+]
+profile = "minimal"
