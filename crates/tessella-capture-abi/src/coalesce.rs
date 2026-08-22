@@ -358,17 +358,21 @@ mod tests {
         }
     }
 
+    /// Takes one record, copying it out so the ring's borrow ends before the advance that
+    /// lets the producer reuse those bytes. Splitting this out of `drain` is what lets the
+    /// loop be a plain `while let`.
+    fn take(consumer: &mut Consumer) -> Option<(EnvelopeKind, Vec<u8>)> {
+        let (kind, record, consumed) = consumer
+            .peek()
+            .map(|record| (record.kind, record.record.to_vec(), record.consumed()))?;
+        consumer.advance(consumed);
+        Some((kind, record))
+    }
+
     fn drain(consumer: &mut Consumer) -> Vec<(EnvelopeKind, Vec<u8>)> {
         let mut out = Vec::new();
-        loop {
-            let Some((kind, record, consumed)) = consumer
-                .peek()
-                .map(|record| (record.kind, record.record.to_vec(), record.consumed()))
-            else {
-                break;
-            };
-            consumer.advance(consumed);
-            out.push((kind, record));
+        while let Some(item) = take(consumer) {
+            out.push(item);
         }
         out
     }
