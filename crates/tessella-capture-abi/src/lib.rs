@@ -41,12 +41,15 @@
 //! which return `None` for anything unrecognized. Never `transmute` a discriminant, and
 //! never `as`-cast one into an enum.
 //!
-//! Status: scaffold. No implementation yet.
+//! Status: envelope records and the mbgl mirrors are in. The ring, the reverse channel, and
+//! the generated C header are not.
 
 // Not `forbid(unsafe_code)`: the ring and the `#[repr(C)]` envelope mirrors need it. Every
 // other crate in the workspace forbids it outright.
 #![deny(unsafe_op_in_unsafe_fn)]
 #![cfg_attr(not(test), no_std)]
+
+pub mod envelope;
 
 /// Mirrors of mbgl scalar enums, generated from the pinned C++ tree.
 ///
@@ -82,8 +85,9 @@ pub enum EnvelopeKind {
     ViewUse = 3,
     /// Drops a per-view use (§5.3).
     ViewRelease = 4,
-    /// Absolute uniform write, keyed `(viewId or shared, layerIndex/ownerId, slot)`.
-    /// Latest-wins is exact because the writes are absolute (§4).
+    /// Absolute uniform write, keyed `(viewId, layerIndex, slot)`. Latest-wins is exact
+    /// because the writes are absolute (§4). Rev 1's per-drawable `ownerId` key is gone with
+    /// the per-drawable buffer path (DR-16).
     UboUpdate = 5,
     /// Texture bytes plus a dirty-rect list, ordered within a texture (§6.4).
     TextureUpdate = 6,
