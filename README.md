@@ -79,6 +79,15 @@ cargo check --workspace --target aarch64-unknown-linux-gnu
 cargo check --workspace --target riscv64gc-unknown-linux-gnu
 ```
 
+### Golden oracle
+
+The C++ implementation this ports from is a differential-test oracle, which is the one asset
+a Rust port of this kind does not usually have. `mbgl-capture-probe --dump` emits a canonical
+serialization of the capture stream, the Rust frontend emits the same format for the same
+style at the same camera, and the two are diffed. Reference dumps live in
+[`tests/golden/`](tests/golden) so the Rust side can be checked without a C++ build; that
+directory documents what is deliberately not compared, and why.
+
 ### Generated code
 
 The mbgl-derived mirrors in `tessella-capture-abi` are generated from the pinned
