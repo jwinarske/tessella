@@ -1,6 +1,8 @@
 # TESSELLA_PLAN — tessella: MapLibre-style-spec frontend in Rust, capture-stream producer
 
-rev 0.7 — 2026-08-22
+rev 0.8 — 2026-08-22
+rev 0.8: DR-18 moves camera mode off ViewUse onto a dedicated ViewDeclare/ViewUndeclare pair;
+§4 table, §5.3 and DR-9 amended; per-view configuration now has a home before the R0 freeze.
 rev 0.7: DR-16 carried into §3.6 and §11.2, which still described the UBO floor as open;
 §12.9 gains the debug-info posture; workspace scaffolded and the §16 reservation closed
 (crates.io tessella 0.0.0, github.com/jwinarske/tessella), toolchain pinned to Yocto
@@ -207,6 +209,7 @@ Producer = Rust map/orchestrator thread. Consumer = Filament tick. Flat C envelo
 | envelope | policy | key | notes |
 |---|---|---|---|
 | GeometryAdd / GeometryRemove | lossless, in order | — | backpressure blocks producer; ring sized for worst-case tile turnover |
+| ViewDeclare / ViewUndeclare (§5.3) | lossless, in order | — | must precede any ViewUse naming the view |
 | ViewUse / ViewRelease (§5.3) | lossless, in order | — | small |
 | UboUpdate | latest-wins coalesce | (viewId or shared, layerIndex/ownerId, slot) | absolute writes, so latest-wins is exact; bounds occupancy under consumer stall |
 | TextureUpdate | rect-list merge, spill to union | textureId | ordered within a texture; §6.4 |
@@ -260,6 +263,9 @@ per view (primary display tight interval; cluster/inset views lazy).
 - **GeometryAdd** — process-scoped, refcounted: shared geometry id, attrs, indexes, segments,
   textureRefs, shader identity (builtin + permutationKey), vertexCount. Removed when the last
   view releases.
+- **ViewDeclare / ViewUndeclare** — per-view configuration, independent of any geometry:
+  camera mode (DR-9), and reserved space for the view class and `maxzoom` clamp §5.4 wants.
+  A `ViewUse` naming an undeclared view is a protocol fault (DR-18).
 - **ViewUse** — per-view: (viewId, geometryId, layerIndex, subLayerIndex, renderPass flags,
   tileID). ViewRelease drops it.
 
@@ -353,7 +359,8 @@ Amended by DR-9: CameraUpdate as described is the **producer-camera mode**, used
 non-interactive views. Interactive views run **consumer-camera mode** (§11.1), where the
 Fluorite ECS camera is authoritative, CameraUpdate degrades to the non-matrix fields
 (pixelsPerMeter, light, opaquePassCutoff, depthRangeSize, orderEpoch), and the producer reads
-the camera back over the reverse channel (§11.4). The mode is per view, declared at ViewUse.
+the camera back over the reverse channel (§11.4). The mode is per view, declared at
+ViewDeclare (DR-18).
 
 ### 6.4 Texture damage (rev 2)
 
@@ -491,7 +498,8 @@ camera. Rev 2 takes it to the conclusion:
 - **Producer-camera mode** (non-interactive views: cluster insets, fixed tracks): the
   CameraUpdate path of §6.3 unchanged.
 
-Mode is per view, declared at ViewUse. This is an ABI decision, not an optimization pass, so
+Mode is per view, declared at ViewDeclare (DR-18). This is an ABI decision, not an
+optimization pass, so
 it lands before R0 (see DR-9) — retrofitting it moves the world-space convention under the
 consumer.
 
@@ -738,7 +746,8 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
 - **DR-9 Camera ownership inversion.** Interactive views run consumer-camera mode: the
   Fluorite ECS camera is authoritative, the producer emits tile-local transforms in shared
   world space, and reads the camera back over the reverse channel. Producer-camera mode
-  remains for non-interactive views. Per-view, declared at ViewUse. Lands before R0 — it
+  remains for non-interactive views. Per-view, declared at ViewDeclare (DR-18). Lands before
+  R0 — it
   fixes the world-space convention the consumer projects (§11.1).
 - **DR-10 Reverse channel.** Consumer→producer atomics strip in `tessella-capture-abi`:
   last-consumed epoch, per-view camera, per-view viewport/visibility. Producer pacing,
@@ -780,6 +789,16 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
   floors are subordinate — fontdue's `integer_sign_cast` (1.87) and edition 2024 (1.85) both
   sit below the pin, and if a dependency ever demands more than the distro offers, the
   dependency is what changes.
+
+- **DR-18 View declaration is its own envelope.** DR-9 originally declared camera mode at
+  `ViewUse`, but `ViewUse` is per (view, geometry) while the mode is per view: the mode would
+  be repeated on every use, every copy would have to agree, and a consumer seeing disagreement
+  would have no principled response — it cannot know which copy is current, and treating a
+  later one as a mode change would swap the world-space convention mid-frame. `ViewDeclare`
+  and `ViewUndeclare` carry per-view state once, ordered ahead of any `ViewUse` naming the
+  view. The pair also gives per-view configuration a home before the ABI freezes: the §5.4
+  per-view `maxzoom` clamp and view class ride in reserved bytes rather than needing an
+  envelope added after R0 exit.
 
 ## 15. Risk register
 

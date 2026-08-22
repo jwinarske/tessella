@@ -109,6 +109,11 @@ pub enum EnvelopeKind {
     /// Per-`(viewId, layerIndex)` stencil tile set, emitted on change only. The consumer
     /// synthesizes masks from these; reference values are never carried (§2.2).
     StencilTiles = 9,
+    /// Declares a view and its per-view configuration, ordered ahead of any [`Self::ViewUse`]
+    /// naming it (DR-18).
+    ViewDeclare = 10,
+    /// Drops a view and everything scoped to it (DR-18).
+    ViewUndeclare = 11,
 }
 
 /// How the ring treats an envelope under consumer stall (§4).
@@ -131,7 +136,7 @@ pub enum CoalescePolicy {
 impl EnvelopeKind {
     /// Every declared envelope kind. Adding a variant without adding it here fails the
     /// round-trip test rather than silently escaping coverage.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 11] = [
         Self::GeometryAdd,
         Self::GeometryRemove,
         Self::ViewUse,
@@ -141,6 +146,8 @@ impl EnvelopeKind {
         Self::CameraUpdate,
         Self::OrderUpdate,
         Self::StencilTiles,
+        Self::ViewDeclare,
+        Self::ViewUndeclare,
     ];
 
     /// Converts a wire discriminant into an [`EnvelopeKind`], rejecting unknown values.
@@ -159,6 +166,8 @@ impl EnvelopeKind {
             7 => Some(Self::CameraUpdate),
             8 => Some(Self::OrderUpdate),
             9 => Some(Self::StencilTiles),
+            10 => Some(Self::ViewDeclare),
+            11 => Some(Self::ViewUndeclare),
             _ => None,
         }
     }
@@ -167,9 +176,12 @@ impl EnvelopeKind {
     #[must_use]
     pub const fn coalesce_policy(self) -> CoalescePolicy {
         match self {
-            Self::GeometryAdd | Self::GeometryRemove | Self::ViewUse | Self::ViewRelease => {
-                CoalescePolicy::Lossless
-            }
+            Self::GeometryAdd
+            | Self::GeometryRemove
+            | Self::ViewDeclare
+            | Self::ViewUndeclare
+            | Self::ViewUse
+            | Self::ViewRelease => CoalescePolicy::Lossless,
             Self::UboUpdate | Self::CameraUpdate | Self::OrderUpdate | Self::StencilTiles => {
                 CoalescePolicy::LatestWins
             }
@@ -251,7 +263,7 @@ mod tests {
             assert_eq!(EnvelopeKind::from_repr(kind as u16), Some(kind));
         }
         assert_eq!(EnvelopeKind::from_repr(0), None);
-        assert_eq!(EnvelopeKind::from_repr(10), None);
+        assert_eq!(EnvelopeKind::from_repr(12), None);
         assert_eq!(EnvelopeKind::from_repr(u16::MAX), None);
     }
 
@@ -281,6 +293,8 @@ mod tests {
             (EnvelopeKind::CameraUpdate, LatestWins),
             (EnvelopeKind::OrderUpdate, LatestWins),
             (EnvelopeKind::StencilTiles, LatestWins),
+            (EnvelopeKind::ViewDeclare, Lossless),
+            (EnvelopeKind::ViewUndeclare, Lossless),
         ];
         assert_eq!(expected.len(), EnvelopeKind::ALL.len());
         for (kind, policy) in expected {

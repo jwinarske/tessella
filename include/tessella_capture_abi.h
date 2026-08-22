@@ -49,6 +49,8 @@ typedef enum tsl_envelope_kind {
     TSL_ENVELOPE_KIND_CAMERA_UPDATE = 7,
     TSL_ENVELOPE_KIND_ORDER_UPDATE = 8,
     TSL_ENVELOPE_KIND_STENCIL_TILES = 9,
+    TSL_ENVELOPE_KIND_VIEW_DECLARE = 10,
+    TSL_ENVELOPE_KIND_VIEW_UNDECLARE = 11,
 } tsl_envelope_kind;
 
 /* Why geometry was announced. A steady stream of ATTRIBUTES_MODIFIED on a static scene is a */
@@ -60,7 +62,7 @@ typedef enum tsl_add_reason {
     TSL_ADD_REASON_ATTRIBUTES_MODIFIED = 3,
 } tsl_add_reason;
 
-/* Which side owns a view's camera. Declared per view at tsl_view_use. */
+/* Which side owns a view's camera. Declared per view at tsl_view_declare. */
 typedef enum tsl_camera_mode {
     TSL_CAMERA_MODE_PRODUCER = 0,
     TSL_CAMERA_MODE_CONSUMER = 1,
@@ -419,10 +421,49 @@ TSL_ASSERT(TSL_ALIGNOF(tsl_geometry_remove) == 8, "tsl_geometry_remove alignment
 TSL_ASSERT(offsetof(tsl_geometry_remove, geometry) == 0, "tsl_geometry_remove.geometry moved");
 
 /*
+ * Declares a view and its configuration.
+ *
+ * Ordered ahead of any tsl_view_use naming the view, and re-emitted when the configuration
+ * changes rather than repeated per use. A tsl_view_use naming an undeclared view is a protocol
+ * fault.
+ *
+ * Mirrors `ViewDeclare`.
+ */
+typedef struct tsl_view_declare {
+    /* View being declared. */
+    uint32_t view;
+    /* tsl_camera_mode. Per view, not per use. */
+    uint8_t camera_mode;
+    /* Must be zero. Reserved for the per-view maxzoom clamp and view class. */
+    uint8_t _reserved[3];
+} tsl_view_declare;
+
+TSL_ASSERT(sizeof(tsl_view_declare) == 8, "tsl_view_declare size differs from the Rust definition");
+TSL_ASSERT(TSL_ALIGNOF(tsl_view_declare) == 4, "tsl_view_declare alignment differs from the Rust definition");
+TSL_ASSERT(offsetof(tsl_view_declare, view) == 0, "tsl_view_declare.view moved");
+TSL_ASSERT(offsetof(tsl_view_declare, camera_mode) == 4, "tsl_view_declare.camera_mode moved");
+TSL_ASSERT(offsetof(tsl_view_declare, _reserved) == 5, "tsl_view_declare._reserved moved");
+
+/*
+ * Drops a view and everything scoped to it: its scene, uniform buffers, stencil sets and
+ * reverse-channel slot. Geometry it was using is refcounted and process-scoped, so it is not
+ * dropped with the view.
+ *
+ * Mirrors `ViewUndeclare`.
+ */
+typedef struct tsl_view_undeclare {
+    /* View being dropped. */
+    uint32_t view;
+} tsl_view_undeclare;
+
+TSL_ASSERT(sizeof(tsl_view_undeclare) == 4, "tsl_view_undeclare size differs from the Rust definition");
+TSL_ASSERT(TSL_ALIGNOF(tsl_view_undeclare) == 4, "tsl_view_undeclare alignment differs from the Rust definition");
+TSL_ASSERT(offsetof(tsl_view_undeclare, view) == 0, "tsl_view_undeclare.view moved");
+
+/*
  * Binds shared geometry into one view's draw order.
  *
- * camera_mode is per view rather than per use, so every record for one view must agree;
- * disagreement is a producer fault, not a mode change.
+ * Carries nothing about the view itself; see tsl_view_declare.
  *
  * Mirrors `ViewUse`.
  */
@@ -441,10 +482,10 @@ typedef struct tsl_view_use {
     uint8_t render_pass;
     /* tsl_draw_flags mask. */
     uint8_t draw_flags;
-    /* tsl_camera_mode. */
-    uint8_t camera_mode;
     /* Non-zero when tile is meaningful. */
     uint8_t has_tile;
+    /* Must be zero. */
+    uint8_t _pad;
 } tsl_view_use;
 
 TSL_ASSERT(sizeof(tsl_view_use) == 40, "tsl_view_use size differs from the Rust definition");
@@ -456,8 +497,8 @@ TSL_ASSERT(offsetof(tsl_view_use, sub_layer_index) == 16, "tsl_view_use.sub_laye
 TSL_ASSERT(offsetof(tsl_view_use, tile) == 20, "tsl_view_use.tile moved");
 TSL_ASSERT(offsetof(tsl_view_use, render_pass) == 32, "tsl_view_use.render_pass moved");
 TSL_ASSERT(offsetof(tsl_view_use, draw_flags) == 33, "tsl_view_use.draw_flags moved");
-TSL_ASSERT(offsetof(tsl_view_use, camera_mode) == 34, "tsl_view_use.camera_mode moved");
-TSL_ASSERT(offsetof(tsl_view_use, has_tile) == 35, "tsl_view_use.has_tile moved");
+TSL_ASSERT(offsetof(tsl_view_use, has_tile) == 34, "tsl_view_use.has_tile moved");
+TSL_ASSERT(offsetof(tsl_view_use, _pad) == 35, "tsl_view_use._pad moved");
 
 /*
  * Releases one view's use of shared geometry.

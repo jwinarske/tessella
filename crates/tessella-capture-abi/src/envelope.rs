@@ -373,12 +373,48 @@ pub struct GeometryRemove {
     pub geometry: GeometryId,
 }
 
+/// Declares a view and its configuration (§5.3, DR-18).
+///
+/// Ordered ahead of any [`ViewUse`] naming the view, and re-emitted when the configuration
+/// changes rather than being repeated per use.
+///
+/// DR-9 originally hung `camera_mode` off `ViewUse`, which is per (view, geometry) while the
+/// mode is per view. That meant the mode was repeated on every use and every copy had to
+/// agree, with no principled response available to a consumer that saw disagreement: it cannot
+/// know which copy is current, and treating a later one as a mode change would swap the
+/// world-space convention mid-frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(C)]
+pub struct ViewDeclare {
+    /// View being declared.
+    pub view: ViewId,
+    /// Which side owns this view's camera (DR-9).
+    pub camera_mode: CameraMode,
+    /// Padding, reserved. Must be zero.
+    ///
+    /// This is where the §5.4 per-view `maxzoom` clamp and view class will go — a cluster
+    /// inset capped at z14 never joins a z16 crossing burst, and the decode pool orders
+    /// foreground views ahead of background ones. Reserving the space now is why neither
+    /// needs an envelope added after the ABI freezes at R0 exit.
+    pub _reserved: [u8; 3],
+}
+
+/// Drops a view and everything scoped to it (§5.3, DR-18).
+///
+/// The consumer releases the view's scene, uniform buffers, stencil sets and reverse-channel
+/// slot. Geometry the view was using is not dropped with it — that is refcounted and
+/// process-scoped, and other views may still hold it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(C)]
+pub struct ViewUndeclare {
+    /// View being dropped.
+    pub view: ViewId,
+}
+
 /// Binds shared geometry into one view's draw order (§5.3).
 ///
-/// The `camera_mode` field is per view rather than per use, and DR-9 nonetheless declares it
-/// here because rev 2 has no separate view-creation envelope. Every `ViewUse` for one view must
-/// therefore agree; a consumer seeing disagreement is looking at a producer bug and should
-/// treat it as a protocol fault rather than a mode change.
+/// Carries nothing about the view itself — that is [`ViewDeclare`]'s job (DR-18). A `ViewUse`
+/// naming a view the consumer has not seen declared is a protocol fault.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct ViewUse {
@@ -396,10 +432,10 @@ pub struct ViewUse {
     pub render_pass: RenderPass,
     /// Render state.
     pub draw_flags: DrawFlags,
-    /// Which side owns this view's camera (DR-9).
-    pub camera_mode: CameraMode,
     /// Non-zero when `tile` is meaningful. Rev 1's `tileID` was optional.
     pub has_tile: u8,
+    /// Padding. Must be zero.
+    pub _pad: u8,
 }
 
 /// Releases one view's use of shared geometry.
@@ -644,6 +680,8 @@ const _: () = {
     layout!(TextureRef, 16, 8);
     layout!(GeometryAdd, 72, 8);
     layout!(GeometryRemove, 8, 8);
+    layout!(ViewDeclare, 8, 4);
+    layout!(ViewUndeclare, 4, 4);
     layout!(ViewUse, 40, 8);
     layout!(ViewRelease, 16, 8);
     layout!(UboUpdate, 24, 4);
@@ -701,6 +739,28 @@ mod tests {
         assert_eq!(offset_of!(CameraUpdate, bearing), 144);
         assert_eq!(offset_of!(CameraUpdate, pitch), 152);
         assert_eq!(offset_of!(CameraUpdate, pixels_per_meter), 160);
+    }
+
+    /// The reserved bytes are the whole reason DR-18 lands before the freeze rather than
+    /// after: the §5.4 maxzoom clamp and view class go here without a new envelope. Pinning
+    /// the size means an addition that overruns the reservation is a failing test rather
+    /// than a silent ABI break.
+    #[test]
+    fn view_declare_reserves_room_for_per_view_configuration() {
+        assert_eq!(size_of::<ViewDeclare>(), 8);
+        assert_eq!(offset_of!(ViewDeclare, view), 0);
+        assert_eq!(offset_of!(ViewDeclare, camera_mode), 4);
+        assert_eq!(offset_of!(ViewDeclare, _reserved), 5);
+        assert_eq!(size_of::<[u8; 3]>(), 3, "three bytes reserved");
+    }
+
+    /// Camera mode is per view, so it must not be reachable from a per-use record. If this
+    /// ever compiles again, DR-18 has been undone.
+    #[test]
+    fn view_use_carries_no_per_view_state() {
+        assert_eq!(size_of::<ViewUse>(), 40);
+        assert_eq!(offset_of!(ViewUse, has_tile), 34);
+        assert_eq!(offset_of!(ViewUse, _pad), 35);
     }
 
     #[test]

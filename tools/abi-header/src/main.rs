@@ -312,11 +312,39 @@ fn structs() -> Vec<Struct> {
             [(geometry, "uint64_t geometry", "Geometry to drop."),]
         ),
         c_struct!(
+            ViewDeclare,
+            "view_declare",
+            "Declares a view and its configuration.\n\n\
+             Ordered ahead of any tsl_view_use naming the view, and re-emitted when the \
+             configuration changes rather than repeated per use. A tsl_view_use naming an \
+             undeclared view is a protocol fault.",
+            [
+                (view, "uint32_t view", "View being declared."),
+                (
+                    camera_mode,
+                    "uint8_t camera_mode",
+                    "tsl_camera_mode. Per view, not per use."
+                ),
+                (
+                    _reserved,
+                    "uint8_t _reserved[3]",
+                    "Must be zero. Reserved for the per-view maxzoom clamp and view class."
+                ),
+            ]
+        ),
+        c_struct!(
+            ViewUndeclare,
+            "view_undeclare",
+            "Drops a view and everything scoped to it: its scene, uniform buffers, stencil \
+             sets and reverse-channel slot. Geometry it was using is refcounted and \
+             process-scoped, so it is not dropped with the view.",
+            [(view, "uint32_t view", "View being dropped."),]
+        ),
+        c_struct!(
             ViewUse,
             "view_use",
             "Binds shared geometry into one view's draw order.\n\n\
-             camera_mode is per view rather than per use, so every record for one view must \
-             agree; disagreement is a producer fault, not a mode change.",
+             Carries nothing about the view itself; see tsl_view_declare.",
             [
                 (geometry, "uint64_t geometry", "Geometry being used."),
                 (view, "uint32_t view", "View using it."),
@@ -333,12 +361,12 @@ fn structs() -> Vec<Struct> {
                 ),
                 (render_pass, "uint8_t render_pass", "tsl_render_pass mask."),
                 (draw_flags, "uint8_t draw_flags", "tsl_draw_flags mask."),
-                (camera_mode, "uint8_t camera_mode", "tsl_camera_mode."),
                 (
                     has_tile,
                     "uint8_t has_tile",
                     "Non-zero when tile is meaningful."
                 ),
+                (_pad, "uint8_t _pad", "Must be zero."),
             ]
         ),
         c_struct!(
@@ -705,7 +733,7 @@ fn generate() -> String {
     emit_enum(
         w,
         "camera_mode",
-        "Which side owns a view's camera. Declared per view at tsl_view_use.",
+        "Which side owns a view's camera. Declared per view at tsl_view_declare.",
         &[("PRODUCER".to_string(), 0), ("CONSUMER".to_string(), 1)],
     );
     emit_enum(
