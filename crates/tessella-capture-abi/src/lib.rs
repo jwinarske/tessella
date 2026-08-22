@@ -41,8 +41,8 @@
 //! which return `None` for anything unrecognized. Never `transmute` a discriminant, and
 //! never `as`-cast one into an enum.
 //!
-//! Status: envelope records and the mbgl mirrors are in. The ring, the reverse channel, and
-//! the generated C header are not.
+//! Status: envelope records, the mbgl mirrors, and the lossless ring are in. The coalescing
+//! slot table, the reverse channel, and the generated C header are not.
 
 // Not `forbid(unsafe_code)`: the ring and the `#[repr(C)]` envelope mirrors need it. Every
 // other crate in the workspace forbids it outright.
@@ -50,6 +50,9 @@
 #![cfg_attr(not(test), no_std)]
 
 pub mod envelope;
+
+/// SPSC transport for the lossless envelope stream (§4).
+pub mod ring;
 
 /// Mirrors of mbgl scalar enums, generated from the pinned C++ tree.
 ///
