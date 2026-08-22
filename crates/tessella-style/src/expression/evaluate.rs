@@ -8,7 +8,7 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use super::{ArithmeticOp, CastKind, CompareOp, Expr, Interpolation};
+use super::{ArithmeticOp, CastKind, CompareOp, Expr, FilterTarget, Interpolation};
 use crate::value::Value;
 
 /// The feature an expression is being evaluated against.
@@ -180,6 +180,81 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
             input,
             stops,
         } => interpolate(*interpolation, input, stops, context),
+        Expr::FilterCompare {
+            target,
+            op,
+            literal,
+        } => Ok(Value::Bool(filter_compare(target, *op, literal, context)?)),
+        Expr::FilterHas { target } => {
+            let feature = context.feature()?;
+            Ok(Value::Bool(match target {
+                // Every feature has a geometry type, so `["has", "$type"]` is a tautology.
+                // mbgl folds it to a literal true, and so does this.
+                FilterTarget::Type => true,
+                FilterTarget::Id => feature.id().is_some(),
+                FilterTarget::Property(key) => feature.property(key).is_some(),
+            }))
+        }
+        Expr::FilterIn { target, values } => {
+            let Some(actual) = filter_read(target, context)? else {
+                return Ok(Value::Bool(false));
+            };
+            Ok(Value::Bool(values.contains(&actual)))
+        }
+    }
+}
+
+/// Reads what a legacy filter targets, or `None` when the feature does not have it.
+fn filter_read(
+    target: &FilterTarget,
+    context: &Context<'_>,
+) -> Result<Option<Value>, EvaluationError> {
+    let feature = context.feature()?;
+    Ok(match target {
+        FilterTarget::Property(key) => feature.property(key),
+        FilterTarget::Id => feature.id(),
+        FilterTarget::Type => Some(Value::String(feature.geometry_type().to_string())),
+    })
+}
+
+/// Legacy comparison semantics: absent or mismatched is `false`, never an error.
+///
+/// The type rule is mbgl's, and it is stricter than it looks. Ordering compares a number
+/// against a number or a string against a string, and anything else is `false` rather than a
+/// coercion — so `["<", "height", 5]` skips a feature whose `height` is the string `"5"`
+/// instead of quietly admitting it.
+fn filter_compare(
+    target: &FilterTarget,
+    op: CompareOp,
+    literal: &Value,
+    context: &Context<'_>,
+) -> Result<bool, EvaluationError> {
+    let Some(actual) = filter_read(target, context)? else {
+        return Ok(false);
+    };
+
+    Ok(match op {
+        CompareOp::Eq => actual == *literal,
+        // `!=` is `!(==)` in mbgl, which means a feature *missing* the property passes a
+        // `!=` filter. That reads as surprising until you notice it is the only choice that
+        // keeps `["!=", k, v]` the exact complement of `["==", k, v]`.
+        CompareOp::Ne => actual != *literal,
+        _ => match (&actual, literal) {
+            (Value::Number(a), Value::Number(b)) => order(op, a, b),
+            (Value::String(a), Value::String(b)) => order(op, a, b),
+            _ => false,
+        },
+    })
+}
+
+fn order<T: PartialOrd>(op: CompareOp, actual: &T, literal: &T) -> bool {
+    match op {
+        CompareOp::Lt => actual < literal,
+        CompareOp::Le => actual <= literal,
+        CompareOp::Gt => actual > literal,
+        CompareOp::Ge => actual >= literal,
+        // Equality is handled before this is reached.
+        CompareOp::Eq | CompareOp::Ne => false,
     }
 }
 

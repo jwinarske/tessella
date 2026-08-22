@@ -159,6 +159,20 @@ pub enum Interpolation {
     },
 }
 
+/// What a legacy filter comparison reads from the feature.
+///
+/// Legacy filters name the feature's geometry type and id with the pseudo-properties `$type`
+/// and `$id`, which is why they cannot simply become `["get", ...]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FilterTarget {
+    /// A named property.
+    Property(alloc::string::String),
+    /// The feature id, written `$id`.
+    Id,
+    /// The geometry type, written `$type`.
+    Type,
+}
+
 /// An expression tree node.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
@@ -238,6 +252,32 @@ pub enum Expr {
         /// Stop positions and outputs, in ascending position order.
         stops: Vec<(f64, Expr)>,
     },
+    /// A legacy filter comparison.
+    ///
+    /// Separate from [`Expr::Compare`] because the semantics differ where it matters: a legacy
+    /// filter yields `false` for a missing property or a type mismatch, while an expression
+    /// comparison raises an error. Folding the two together would make `["<", "height", 5]`
+    /// fail a whole tile because one feature lacks the property.
+    FilterCompare {
+        /// What to read.
+        target: FilterTarget,
+        /// Which comparison.
+        op: CompareOp,
+        /// The value compared against, always a literal in legacy syntax.
+        literal: Value,
+    },
+    /// A legacy `has` test.
+    FilterHas {
+        /// What to test for.
+        target: FilterTarget,
+    },
+    /// A legacy `in` test.
+    FilterIn {
+        /// What to read.
+        target: FilterTarget,
+        /// Values to test membership against.
+        values: Vec<Value>,
+    },
     /// A step function over stops.
     Step {
         /// What to step over, usually zoom.
@@ -271,6 +311,17 @@ impl Expression {
         let root = parse::parse(value)?;
         let dependency = classify(&root);
         Ok(Self { root, dependency })
+    }
+
+    /// Wraps an already-built tree, classifying it.
+    ///
+    /// For trees that are constructed rather than parsed — legacy filter conversion is the
+    /// only such case — so that they get the same classification pass as everything else
+    /// rather than a hand-assigned dependency.
+    #[must_use]
+    pub fn from_expr(root: Expr) -> Self {
+        let dependency = classify(&root);
+        Self { root, dependency }
     }
 
     /// The expression tree.
@@ -318,6 +369,10 @@ fn classify(expr: &Expr) -> Dependency {
         Expr::Literal(_) => Dependency::None,
         Expr::Zoom => Dependency::Zoom,
         Expr::GeometryType | Expr::Id | Expr::Properties => Dependency::Feature,
+        // Legacy filters read the feature by construction; there is no camera-only form.
+        Expr::FilterCompare { .. } | Expr::FilterHas { .. } | Expr::FilterIn { .. } => {
+            Dependency::Feature
+        }
         // `get` and `has` read the feature even when the key itself is a constant.
         Expr::Get { key } | Expr::Has { key } => Dependency::Feature.join(classify(key)),
         Expr::Compare { lhs, rhs, .. } => classify(lhs).join(classify(rhs)),

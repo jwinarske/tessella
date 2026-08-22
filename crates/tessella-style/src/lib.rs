@@ -26,6 +26,7 @@ extern crate alloc;
 
 pub mod document;
 pub mod expression;
+pub mod filter;
 pub mod value;
 
 pub use document::{
@@ -33,6 +34,7 @@ pub use document::{
     Transition,
 };
 pub use expression::{Dependency, Expression};
+pub use filter::{Filter, FilterError};
 pub use value::Value;
 
 /// Something went wrong reading a style.
