@@ -193,7 +193,7 @@ fn parse_match(operator: &str, args: &[Value]) -> Result<Expr, ParseError> {
     let input = Box::new(parse(&args[0])?);
     let fallback = Box::new(parse(&args[args.len() - 1])?);
     let mut arms = Vec::new();
-    for pair in args[1..args.len() - 1].chunks_exact(2) {
+    for pair in args[1..args.len() - 1].as_chunks::<2>().0 {
         // A label is one value or an array of them. An array here is a label set rather than
         // a nested expression, which is why it is not parsed.
         let labels = match &pair[0] {
@@ -227,7 +227,7 @@ fn parse_case(operator: &str, args: &[Value]) -> Result<Expr, ParseError> {
     }
     let fallback = Box::new(parse(&args[args.len() - 1])?);
     let mut branches = Vec::new();
-    for pair in args[..args.len() - 1].chunks_exact(2) {
+    for pair in args[..args.len() - 1].as_chunks::<2>().0 {
         branches.push((parse(&pair[0])?, parse(&pair[1])?));
     }
     Ok(Expr::Case { branches, fallback })
@@ -310,7 +310,7 @@ fn parse_interpolate(operator: &str, args: &[Value]) -> Result<Expr, ParseError>
 fn parse_stops(operator: &str, args: &[Value]) -> Result<Vec<(f64, Expr)>, ParseError> {
     let mut stops = Vec::with_capacity(args.len() / 2);
     let mut previous: Option<f64> = None;
-    for pair in args.chunks_exact(2) {
+    for pair in args.as_chunks::<2>().0 {
         let position = pair[0].as_number().ok_or_else(|| ParseError::Malformed {
             operator: operator.to_string(),
             detail: "a stop position must be a number".to_string(),
