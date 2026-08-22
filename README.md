@@ -92,6 +92,17 @@ cargo run -p mbgl-codegen -- --mbgl /path/to/maplibre-native
 cargo run -p mbgl-codegen -- --mbgl /path/to/maplibre-native --check   # is it current?
 ```
 
+The flat C header a consumer mirror includes is generated from the Rust definitions and
+committed to [`include/`](include). Every size, alignment, and field offset in it is taken from
+the Rust types at generation time and lands as a static assertion, so a mirror built against a
+stale header fails to compile rather than misreading the stream. Generating it needs no C++
+checkout, so CI regenerates and compiles it on every push.
+
+```sh
+cargo run -p abi-header
+cargo run -p abi-header -- --check
+```
+
 riscv64 is a producer, soak, and cross-compile lane only: maps require an SSBO-capable
 backend, so a VisionFive 2 builds tessella but does not draw with it.
 

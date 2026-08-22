@@ -40,6 +40,24 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
 
+  abi-header:
+    # The generated C header is the boundary between the Rust producer and a C++ mirror
+    # (§3.1). Two independent checks, because generating it proves nothing by itself:
+    # --check catches a header stale against the Rust definitions, and compiling it makes a
+    # real C compiler evaluate the static assertions on every size, alignment and offset.
+    # Unlike the mbgl mirrors this needs no C++ checkout, so it runs on every push.
+    name: abi header
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - run: rustup show
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - run: cargo run -p abi-header -- --check
+      - name: compile as C11
+        run: gcc -std=c11 -Wall -Wextra -Werror -Iinclude -fsyntax-only tools/abi-header/probe.c
+      - name: compile as C++17
+        run: g++ -std=c++17 -Wall -Wextra -Werror -Iinclude -x c++ -fsyntax-only tools/abi-header/probe.c
+
   cross:
     # R-6: layout asserts compile on every target. `cargo check` only — no linking, so no
     # cross C toolchain is needed while the workspace stays pure Rust (see the

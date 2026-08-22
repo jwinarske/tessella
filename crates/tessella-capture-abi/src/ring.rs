@@ -48,32 +48,35 @@ use crate::EnvelopeKind;
 /// Alignment of every record's start, and the granularity records are padded to.
 pub const RECORD_ALIGN: usize = 16;
 
-/// Padding between the two counters.
+/// Padding between the two counters, and the stride between them in the control block.
 ///
 /// 128 rather than 64: some aarch64 parts have a 128-byte cache line, and the cost of being
 /// generous is a few hundred bytes in a region measured in megabytes. `head` and `tail` are
 /// written by different threads on every record, so sharing a line between them would turn
 /// each publish into a coherence round trip.
-const COUNTER_PAD: usize = 128;
-
-/// Marks a record that exists only to cover the space before a wrap.
-const FLAG_SKIP: u16 = 1 << 0;
+pub const COUNTER_PAD: usize = 128;
 
 /// Fixed-size prefix of every record on the ring.
+///
+/// Public because a consumer parses records out of the region itself: the framing is protocol,
+/// not an implementation detail of this crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(C)]
-struct RecordHeader {
+pub struct RecordHeader {
     /// [`EnvelopeKind`] discriminant, or zero for a skip record.
-    kind: u16,
-    /// [`FLAG_SKIP`], or zero.
-    flags: u16,
+    pub kind: u16,
+    /// Set when this record only covers the space before a wrap and carries nothing.
+    pub flags: u16,
     /// Bytes of fixed envelope record following this header.
-    record_len: u32,
+    pub record_len: u32,
     /// Bytes of payload region following the fixed record.
-    payload_len: u32,
+    pub payload_len: u32,
     /// Total bytes this record occupies, header included, padded to [`RECORD_ALIGN`].
-    total_len: u32,
+    pub total_len: u32,
 }
+
+/// [`RecordHeader::flags`] bit marking a record that only covers space before a wrap.
+pub const RECORD_FLAG_SKIP: u16 = 1 << 0;
 
 /// Control block at the head of the shared region.
 ///
@@ -88,13 +91,19 @@ pub struct RingControl {
     pub _pad0: u32,
     /// Bytes in the data region. Always a power of two.
     pub capacity: u64,
-    _pad1: [u8; COUNTER_PAD - 16],
-    /// Bytes ever written. Producer writes, consumer reads.
-    head: AtomicU64,
-    _pad2: [u8; COUNTER_PAD - 8],
-    /// Bytes ever consumed. Consumer writes, producer reads.
-    tail: AtomicU64,
-    _pad3: [u8; COUNTER_PAD - 8],
+    /// Padding. Must be zero.
+    pub _pad1: [u8; COUNTER_PAD - 16],
+    /// Bytes ever written. Producer writes with release, consumer reads with acquire.
+    ///
+    /// Public because a mirror consuming this region has to read it; the ordering is a
+    /// protocol obligation the type cannot express across the ABI.
+    pub head: AtomicU64,
+    /// Padding. Must be zero.
+    pub _pad2: [u8; COUNTER_PAD - 8],
+    /// Bytes ever consumed. Consumer writes with release, producer reads with acquire.
+    pub tail: AtomicU64,
+    /// Padding. Must be zero.
+    pub _pad3: [u8; COUNTER_PAD - 8],
 }
 
 const _: () = {
@@ -306,7 +315,7 @@ impl Producer {
                 offset,
                 RecordHeader {
                     kind: 0,
-                    flags: FLAG_SKIP,
+                    flags: RECORD_FLAG_SKIP,
                     record_len: 0,
                     payload_len: 0,
                     total_len: skip as u32,
@@ -459,7 +468,7 @@ impl Consumer {
         let mut offset = (cursor as usize) & (self.capacity - 1);
         let mut header = self.read_header(offset);
 
-        if header.flags & FLAG_SKIP != 0 {
+        if header.flags & RECORD_FLAG_SKIP != 0 {
             let skip = header.total_len as u64;
             if skip == 0 || skip > available {
                 return None;

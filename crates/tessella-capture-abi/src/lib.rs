@@ -41,8 +41,8 @@
 //! which return `None` for anything unrecognized. Never `transmute` a discriminant, and
 //! never `as`-cast one into an enum.
 //!
-//! Status: envelope records, the mbgl mirrors, the ring, coalescing, and the reverse channel
-//! are in. The generated C header is not.
+//! Status: envelope records, the mbgl mirrors, the ring, coalescing, the reverse channel, and
+//! the generated C header are in. What remains for R0 is a producer that emits through them.
 
 // Not `forbid(unsafe_code)`: the ring and the `#[repr(C)]` envelope mirrors need it. Every
 // other crate in the workspace forbids it outright.

@@ -3,6 +3,13 @@
 version = 4
 
 [[package]]
+name = "abi-header"
+version = "0.0.0"
+dependencies = [
+ "tessella-capture-abi",
+]
+
+[[package]]
 name = "allocator-api2"
 version = "0.2.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
