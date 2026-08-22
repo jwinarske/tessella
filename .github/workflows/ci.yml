@@ -95,8 +95,15 @@ jobs:
         run: cargo miri test -p tessella-capture-abi
         env:
           MIRIFLAGS: -Zmiri-tree-borrows
-      - name: many interleavings
+      # The two concurrent structures get many interleavings each, rather than the one run
+      # the steps above give them. This is the step that found the reverse channel's torn
+      # seqlock read, which two hundred thousand native iterations never produced.
+      - name: many interleavings, ring
         run: cargo miri test -p tessella-capture-abi --lib ring::tests::spsc_across_threads -- --exact
+        env:
+          MIRIFLAGS: -Zmiri-many-seeds=0..12
+      - name: many interleavings, reverse channel
+        run: cargo miri test -p tessella-capture-abi --lib reverse::tests::concurrent_reads_never_see_a_torn_camera -- --exact
         env:
           MIRIFLAGS: -Zmiri-many-seeds=0..12
 
