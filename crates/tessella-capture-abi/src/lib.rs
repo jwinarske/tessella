@@ -48,6 +48,15 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![cfg_attr(not(test), no_std)]
 
+/// Mirrors of mbgl scalar enums, generated from the pinned C++ tree.
+///
+/// DR-6: never hand-maintained. Regenerate with
+/// `cargo run -p mbgl-codegen -- --mbgl <maplibre-native>` when the pin moves, and
+/// `--check` to confirm the committed file is current.
+pub mod generated;
+
+pub use generated::mbgl_enums::{AttributeDataType, BuiltIn, RenderPass, TexturePixelType};
+
 /// Revision of the capture-stream ABI this crate implements.
 ///
 /// Rev 1 is the C++ `FrameDiff` stream in `include/mbgl/capture/frame_diff.hpp`. Rev 2 is
@@ -267,6 +276,77 @@ mod tests {
         for (kind, policy) in expected {
             assert_eq!(kind.coalesce_policy(), policy, "{kind:?}");
         }
+    }
+
+    /// Values transcribed from the C++ by hand, so a regeneration that silently renumbers
+    /// something fails here rather than downstream. These are the ones with consequences:
+    /// `Invalid` is a sentinel at the top of the range rather than the next value in
+    /// sequence, and the component-count ordering is what a binding stride depends on.
+    #[test]
+    fn attribute_data_type_matches_mbgl() {
+        assert_eq!(AttributeDataType::Byte as u8, 0);
+        assert_eq!(AttributeDataType::Float as u8, 25);
+        assert_eq!(AttributeDataType::Float4 as u8, 28);
+        assert_eq!(AttributeDataType::Invalid as u8, 255);
+        assert_eq!(AttributeDataType::ALL.len(), 30);
+
+        assert_eq!(
+            AttributeDataType::from_repr(255),
+            Some(AttributeDataType::Invalid)
+        );
+        // The gap between the last real type (Float4 = 28) and the sentinel must not be
+        // accepted: mbgl leaves 29..=254 undefined and a value landing there is corruption.
+        assert_eq!(AttributeDataType::from_repr(29), None);
+        assert_eq!(AttributeDataType::from_repr(254), None);
+    }
+
+    #[test]
+    fn texture_pixel_type_matches_mbgl() {
+        assert_eq!(TexturePixelType::RGBA as u8, 0);
+        assert_eq!(TexturePixelType::Alpha as u8, 1);
+        assert_eq!(TexturePixelType::ALL.len(), 5);
+        assert_eq!(TexturePixelType::from_repr(5), None);
+    }
+
+    /// `BuiltIn` has no underlying type in the C++, so it is `int` and the mirror is `i32`.
+    /// `None` at zero is load-bearing: it is the default in `DrawableAdd`.
+    #[test]
+    fn builtin_shader_matches_mbgl() {
+        assert_eq!(BuiltIn::None as i32, 0);
+        assert_eq!(BuiltIn::BackgroundShader as i32, 3);
+        assert_eq!(BuiltIn::from_repr(-1), None);
+        assert_eq!(
+            BuiltIn::from_repr(BuiltIn::ALL.len() as i32),
+            None,
+            "one past the last shader must not resolve"
+        );
+        for shader in BuiltIn::ALL {
+            assert_eq!(BuiltIn::from_repr(shader as i32), Some(shader));
+        }
+    }
+
+    /// RenderPass is a mask, so the test that matters is that combinations round-trip and
+    /// undefined bits do not. Masking an unknown bit off silently would let a consumer draw a
+    /// pass it does not understand into a pass it does.
+    #[test]
+    fn render_pass_is_a_mask_that_rejects_undefined_bits() {
+        assert_eq!(RenderPass::NONE.bits(), 0);
+        assert_eq!(RenderPass::OPAQUE.bits(), 1);
+        assert_eq!(RenderPass::TRANSLUCENT.bits(), 2);
+        assert_eq!(RenderPass::PASS3D.bits(), 4);
+        assert_eq!(RenderPass::VALID_BITS, 0b111);
+
+        let both = RenderPass::OPAQUE | RenderPass::TRANSLUCENT;
+        assert_eq!(RenderPass::from_bits(both.bits()), Some(both));
+        assert!(both.contains(RenderPass::OPAQUE));
+        assert!(!both.contains(RenderPass::PASS3D));
+        assert!(
+            both.contains(RenderPass::NONE),
+            "the empty mask is a subset of everything"
+        );
+
+        assert_eq!(RenderPass::from_bits(0b1000), None);
+        assert_eq!(RenderPass::from_bits(u8::MAX), None);
     }
 
     #[test]

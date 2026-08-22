@@ -79,6 +79,19 @@ cargo check --workspace --target aarch64-unknown-linux-gnu
 cargo check --workspace --target riscv64gc-unknown-linux-gnu
 ```
 
+### Generated code
+
+The mbgl-derived mirrors in `tessella-capture-abi` are generated from the pinned
+maplibre-native tree (`capture-backend-phase0` @ `b237943`), never hand-edited — DR-6, because
+a mirror that drifts from the C++ headers is a wrong-pixels bug that agrees with itself and so
+survives every test in this workspace. The output is committed, so building tessella does not
+need a C++ checkout; only regenerating does.
+
+```sh
+cargo run -p mbgl-codegen -- --mbgl /path/to/maplibre-native
+cargo run -p mbgl-codegen -- --mbgl /path/to/maplibre-native --check   # is it current?
+```
+
 riscv64 is a producer, soak, and cross-compile lane only: maps require an SSBO-capable
 backend, so a VisionFive 2 builds tessella but does not draw with it.
 
