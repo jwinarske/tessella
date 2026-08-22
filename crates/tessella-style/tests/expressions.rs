@@ -1,0 +1,382 @@
+//! Expression parsing, classification and evaluation.
+//!
+//! Classification carries most of the weight here. A misclassification is not a wrong pixel,
+//! which is what makes it dangerous: calling a data-driven expression camera-only gives every
+//! feature in a layer the first feature's value, and calling a camera-only one data-driven
+//! merely makes the port look inherently slow (DR-11).
+
+use tessella_style::expression::Feature;
+use tessella_style::{Dependency, Expression, Value};
+
+fn expr(json: &str) -> Expression {
+    let value: Value = serde_json::from_str(json).expect("valid json");
+    Expression::parse(&value).expect("parses")
+}
+
+fn dependency(json: &str) -> Dependency {
+    expr(json).dependency()
+}
+
+struct TestFeature {
+    kind: &'static str,
+    properties: Vec<(&'static str, Value)>,
+}
+
+impl TestFeature {
+    fn polygon(properties: Vec<(&'static str, Value)>) -> Self {
+        Self {
+            kind: "Polygon",
+            properties,
+        }
+    }
+}
+
+impl Feature for TestFeature {
+    fn property(&self, key: &str) -> Option<Value> {
+        self.properties
+            .iter()
+            .find(|(name, _)| *name == key)
+            .map(|(_, value)| value.clone())
+    }
+
+    fn geometry_type(&self) -> &str {
+        self.kind
+    }
+}
+
+fn eval(json: &str, zoom: Option<f64>, feature: Option<&dyn Feature>) -> Value {
+    expr(json).evaluate(zoom, feature).expect("evaluates")
+}
+
+// --- classification ---
+
+#[test]
+fn literals_are_constant() {
+    assert_eq!(dependency("3"), Dependency::None);
+    assert_eq!(dependency(r#""a""#), Dependency::None);
+    assert_eq!(dependency(r#"["literal", [1, 2]]"#), Dependency::None);
+    assert_eq!(dependency(r#"["+", 1, 2]"#), Dependency::None);
+}
+
+#[test]
+fn zoom_makes_an_expression_camera_only() {
+    assert_eq!(dependency(r#"["zoom"]"#), Dependency::Zoom);
+    assert_eq!(
+        dependency(r#"["interpolate", ["linear"], ["zoom"], 10, 1, 16, 4]"#),
+        Dependency::Zoom
+    );
+    assert_eq!(dependency(r#"["*", ["zoom"], 2]"#), Dependency::Zoom);
+}
+
+#[test]
+fn feature_access_makes_an_expression_data_driven() {
+    assert_eq!(dependency(r#"["get", "kind"]"#), Dependency::Feature);
+    assert_eq!(dependency(r#"["has", "kind"]"#), Dependency::Feature);
+    assert_eq!(dependency(r#"["geometry-type"]"#), Dependency::Feature);
+    assert_eq!(dependency(r#"["id"]"#), Dependency::Feature);
+    assert_eq!(dependency(r#"["properties"]"#), Dependency::Feature);
+}
+
+#[test]
+fn zoom_and_feature_together_join_to_both() {
+    assert_eq!(
+        dependency(r#"["*", ["zoom"], ["get", "scale"]]"#),
+        Dependency::ZoomAndFeature
+    );
+    assert_eq!(
+        dependency(r#"["interpolate", ["linear"], ["zoom"], 10, ["get", "a"], 16, 4]"#),
+        Dependency::ZoomAndFeature
+    );
+}
+
+/// The classification describes the expression, not one evaluation of it. An arm that happens
+/// not to be taken for a given feature still makes the expression data-driven — otherwise the
+/// property would be bound as a uniform and every feature would share one value.
+#[test]
+fn an_untaken_branch_still_counts() {
+    let match_expr = r#"["match", 1, 1, "constant", ["get", "kind"]]"#;
+    assert_eq!(dependency(match_expr), Dependency::Feature);
+
+    let case_expr = r#"["case", false, ["get", "kind"], "fallback"]"#;
+    assert_eq!(dependency(case_expr), Dependency::Feature);
+
+    // And the same for the fallback rather than the arms.
+    let fallback = r#"["match", ["zoom"], 1, "a", ["get", "kind"]]"#;
+    assert_eq!(dependency(fallback), Dependency::ZoomAndFeature);
+}
+
+/// `get` reads the feature even when its key is a constant, which is the common case and the
+/// easy one to get wrong by classifying on the arguments alone.
+#[test]
+fn get_depends_on_the_feature_even_with_a_constant_key() {
+    assert_eq!(dependency(r#"["get", "kind"]"#), Dependency::Feature);
+}
+
+#[test]
+fn the_dependency_lattice_joins_correctly() {
+    use Dependency::{Feature, None, Zoom, ZoomAndFeature};
+    assert_eq!(None.join(None), None);
+    assert_eq!(None.join(Zoom), Zoom);
+    assert_eq!(Zoom.join(None), Zoom);
+    assert_eq!(Zoom.join(Zoom), Zoom);
+    assert_eq!(Feature.join(Feature), Feature);
+    assert_eq!(Zoom.join(Feature), ZoomAndFeature);
+    assert_eq!(Feature.join(Zoom), ZoomAndFeature);
+    assert_eq!(ZoomAndFeature.join(None), ZoomAndFeature);
+
+    assert!(None.is_constant());
+    assert!(!Zoom.is_constant());
+    assert!(Zoom.needs_zoom() && !Zoom.needs_feature());
+    assert!(Feature.needs_feature() && !Feature.needs_zoom());
+    assert!(ZoomAndFeature.needs_zoom() && ZoomAndFeature.needs_feature());
+}
+
+/// Constant folding is DR-11's first tier: a property that depends on nothing is evaluated
+/// once, at parse, and never reaches the evaluator again.
+#[test]
+fn constants_fold() {
+    assert_eq!(
+        expr(r#"["+", 2, 3]"#).as_constant(),
+        Some(Value::Number(5.0))
+    );
+    assert_eq!(
+        expr(r#"["match", "b", "a", 1, "b", 2, 0]"#).as_constant(),
+        Some(Value::Number(2.0))
+    );
+    assert_eq!(expr(r#"["zoom"]"#).as_constant(), None);
+    assert_eq!(expr(r#"["get", "x"]"#).as_constant(), None);
+}
+
+// --- evaluation ---
+
+#[test]
+fn evaluates_the_hermetic_styles_match() {
+    // Straight from the probe style's fill-datadriven layer.
+    let color = r##"["match", ["get", "kind"], "a", "#c04030", "#3050c0"]"##;
+    let a = TestFeature::polygon(vec![("kind", Value::String("a".into()))]);
+    let b = TestFeature::polygon(vec![("kind", Value::String("b".into()))]);
+    let none = TestFeature::polygon(vec![]);
+
+    assert_eq!(eval(color, None, Some(&a)), Value::String("#c04030".into()));
+    assert_eq!(eval(color, None, Some(&b)), Value::String("#3050c0".into()));
+    assert_eq!(
+        eval(color, None, Some(&none)),
+        Value::String("#3050c0".into()),
+        "a missing property falls through to the fallback"
+    );
+}
+
+/// A property the feature does not carry is null, not an error. `coalesce` over `get` is
+/// idiomatic and would break otherwise.
+#[test]
+fn a_missing_property_is_null() {
+    let feature = TestFeature::polygon(vec![("name", Value::String("x".into()))]);
+    assert_eq!(
+        eval(r#"["get", "absent"]"#, None, Some(&feature)),
+        Value::Null
+    );
+    assert_eq!(
+        eval(
+            r#"["coalesce", ["get", "absent"], ["get", "name"]]"#,
+            None,
+            Some(&feature)
+        ),
+        Value::String("x".into())
+    );
+    assert_eq!(
+        eval(r#"["has", "absent"]"#, None, Some(&feature)),
+        Value::Bool(false)
+    );
+}
+
+/// Evaluating a data-driven expression with no feature is an error rather than a default.
+/// This is the failure a DR-11 misclassification produces, and it must be loud.
+#[test]
+fn a_data_driven_expression_without_a_feature_fails() {
+    let result = expr(r#"["get", "kind"]"#).evaluate(Some(13.0), None);
+    assert!(result.is_err(), "must not silently yield null");
+
+    let result = expr(r#"["zoom"]"#).evaluate(None, None);
+    assert!(result.is_err(), "must not silently yield zero");
+}
+
+#[test]
+fn interpolates_linearly_and_clamps_outside_the_stops() {
+    let e = r#"["interpolate", ["linear"], ["zoom"], 10, 0, 20, 100]"#;
+    assert_eq!(eval(e, Some(10.0), None), Value::Number(0.0));
+    assert_eq!(eval(e, Some(15.0), None), Value::Number(50.0));
+    assert_eq!(eval(e, Some(20.0), None), Value::Number(100.0));
+    // Clamped, not extrapolated.
+    assert_eq!(eval(e, Some(0.0), None), Value::Number(0.0));
+    assert_eq!(eval(e, Some(99.0), None), Value::Number(100.0));
+}
+
+/// An exponential base of one is linear. Computing it through the exponential formula divides
+/// by zero, so it is special-cased rather than left to produce NaN.
+#[test]
+fn an_exponential_base_of_one_is_linear() {
+    let exponential = r#"["interpolate", ["exponential", 1], ["zoom"], 0, 0, 10, 10]"#;
+    let linear = r#"["interpolate", ["linear"], ["zoom"], 0, 0, 10, 10]"#;
+    for zoom in [0.0, 2.5, 5.0, 7.5, 10.0] {
+        assert_eq!(
+            eval(exponential, Some(zoom), None),
+            eval(linear, Some(zoom), None),
+            "base 1 must match linear at zoom {zoom}"
+        );
+    }
+}
+
+#[test]
+fn steps_hold_their_value_until_the_next_stop() {
+    let e = r#"["step", ["zoom"], "small", 10, "medium", 15, "large"]"#;
+    assert_eq!(eval(e, Some(0.0), None), Value::String("small".into()));
+    assert_eq!(eval(e, Some(9.99), None), Value::String("small".into()));
+    assert_eq!(eval(e, Some(10.0), None), Value::String("medium".into()));
+    assert_eq!(eval(e, Some(14.9), None), Value::String("medium".into()));
+    assert_eq!(eval(e, Some(15.0), None), Value::String("large".into()));
+    assert_eq!(eval(e, Some(99.0), None), Value::String("large".into()));
+}
+
+/// Only false, null, zero, NaN and the empty string are false. An empty array is true, which
+/// is where several scripting languages disagree with the spec.
+#[test]
+fn truthiness_follows_the_spec() {
+    assert_eq!(eval(r#"["!", false]"#, None, None), Value::Bool(true));
+    assert_eq!(eval(r#"["!", 0]"#, None, None), Value::Bool(true));
+    assert_eq!(eval(r#"["!", ""]"#, None, None), Value::Bool(true));
+    assert_eq!(eval(r#"["!", null]"#, None, None), Value::Bool(true));
+
+    assert_eq!(eval(r#"["!", 1]"#, None, None), Value::Bool(false));
+    assert_eq!(eval(r#"["!", "x"]"#, None, None), Value::Bool(false));
+    assert_eq!(
+        eval(r#"["!", ["literal", []]]"#, None, None),
+        Value::Bool(false),
+        "an empty array is true"
+    );
+}
+
+/// Ordering across types is an error rather than a coercion. Letting `["<", "10", 9]` be
+/// quietly true is the sort of thing that produces a wrong map and no diagnostic.
+#[test]
+fn ordering_across_types_is_an_error() {
+    assert!(expr(r#"["<", "10", 9]"#).evaluate(None, None).is_err());
+    assert_eq!(eval(r#"["<", 9, 10]"#, None, None), Value::Bool(true));
+    assert_eq!(eval(r#"["<", "a", "b"]"#, None, None), Value::Bool(true));
+    // Equality across types is fine, and simply false.
+    assert_eq!(eval(r#"["==", "10", 10]"#, None, None), Value::Bool(false));
+}
+
+#[test]
+fn arithmetic_matches_the_spec() {
+    assert_eq!(eval(r#"["+", 1, 2, 3]"#, None, None), Value::Number(6.0));
+    assert_eq!(eval(r#"["-", 5]"#, None, None), Value::Number(-5.0));
+    assert_eq!(eval(r#"["-", 5, 2]"#, None, None), Value::Number(3.0));
+    assert_eq!(eval(r#"["*", 2, 3, 4]"#, None, None), Value::Number(24.0));
+    assert_eq!(eval(r#"["/", 10, 4]"#, None, None), Value::Number(2.5));
+    assert_eq!(eval(r#"["%", 10, 3]"#, None, None), Value::Number(1.0));
+    assert_eq!(eval(r#"["^", 2, 10]"#, None, None), Value::Number(1024.0));
+    assert_eq!(eval(r#"["min", 3, 1, 2]"#, None, None), Value::Number(1.0));
+    assert_eq!(eval(r#"["max", 3, 1, 2]"#, None, None), Value::Number(3.0));
+    assert_eq!(eval(r#"["floor", 1.7]"#, None, None), Value::Number(1.0));
+    assert_eq!(eval(r#"["ceil", 1.2]"#, None, None), Value::Number(2.0));
+    // Halves round away from zero, not to even.
+    assert_eq!(eval(r#"["round", 1.5]"#, None, None), Value::Number(2.0));
+    assert_eq!(eval(r#"["round", 2.5]"#, None, None), Value::Number(3.0));
+    assert_eq!(eval(r#"["round", -1.5]"#, None, None), Value::Number(-2.0));
+}
+
+/// A whole number stringifies without a trailing `.0`.
+#[test]
+fn number_to_string_drops_a_trailing_zero() {
+    assert_eq!(
+        eval(r#"["to-string", 2]"#, None, None),
+        Value::String("2".into())
+    );
+    assert_eq!(
+        eval(r#"["to-string", 2.5]"#, None, None),
+        Value::String("2.5".into())
+    );
+}
+
+/// `to-number` tries each argument in turn, which is what makes it a defaulting idiom.
+#[test]
+fn to_number_falls_through_to_a_default() {
+    let feature = TestFeature::polygon(vec![("n", Value::String("nope".into()))]);
+    assert_eq!(
+        eval(r#"["to-number", ["get", "n"], 7]"#, None, Some(&feature)),
+        Value::Number(7.0)
+    );
+    assert_eq!(
+        eval(r#"["to-number", "42"]"#, None, None),
+        Value::Number(42.0)
+    );
+}
+
+// --- parse errors ---
+
+/// An unimplemented operator is named rather than ignored. Silently evaluating it to something
+/// plausible would surface as wrong output rather than as a diagnostic.
+#[test]
+fn an_unknown_operator_is_reported() {
+    let value: Value = serde_json::from_str(r#"["concat", "a", "b"]"#).unwrap();
+    let error = Expression::parse(&value).expect_err("concat is not implemented");
+    assert!(format!("{error}").contains("concat"), "{error}");
+}
+
+#[test]
+fn wrong_arity_is_reported() {
+    for bad in [
+        r#"["get"]"#,
+        r#"["get", "a", "b"]"#,
+        r#"["zoom", 1]"#,
+        r#"["==", 1]"#,
+        r#"["match", 1, 2]"#,
+        r#"["case", true]"#,
+    ] {
+        let value: Value = serde_json::from_str(bad).unwrap();
+        assert!(Expression::parse(&value).is_err(), "{bad} should not parse");
+    }
+}
+
+/// Both `interpolate` and `step` locate a stop by binary search, so an out-of-order stop list
+/// would return an arbitrary neighbour: a wrong value from a style that looks reasonable.
+#[test]
+fn out_of_order_stops_are_rejected() {
+    for bad in [
+        r#"["interpolate", ["linear"], ["zoom"], 16, 1, 10, 4]"#,
+        r#"["step", ["zoom"], "a", 15, "b", 10, "c"]"#,
+        r#"["interpolate", ["linear"], ["zoom"], 10, 1, 10, 4]"#,
+    ] {
+        let value: Value = serde_json::from_str(bad).unwrap();
+        assert!(
+            Expression::parse(&value).is_err(),
+            "{bad} has non-ascending stops"
+        );
+    }
+}
+
+/// cubic-bezier is in the spec and not implemented. Approximating it with linear would be a
+/// silently wrong curve, so it is refused by name.
+#[test]
+fn unimplemented_interpolation_is_refused() {
+    let value: Value = serde_json::from_str(
+        r#"["interpolate", ["cubic-bezier", 0, 0, 1, 1], ["zoom"], 0, 0, 1, 1]"#,
+    )
+    .unwrap();
+    let error = Expression::parse(&value).expect_err("cubic-bezier is not implemented");
+    assert!(format!("{error}").contains("cubic-bezier"), "{error}");
+}
+
+/// `literal` is how a style writes data that would otherwise read as a call.
+#[test]
+fn literal_protects_data_from_being_parsed() {
+    let e = expr(r#"["literal", ["get", "not-a-call"]]"#);
+    assert_eq!(e.dependency(), Dependency::None);
+    assert_eq!(
+        e.as_constant(),
+        Some(Value::Array(vec![
+            Value::String("get".into()),
+            Value::String("not-a-call".into())
+        ]))
+    );
+}

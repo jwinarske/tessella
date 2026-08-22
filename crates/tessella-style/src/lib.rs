@@ -15,8 +15,9 @@
 //!
 //! Conformance is the style-spec expression test corpus plus the §9.1 oracle diff (R-3).
 //!
-//! Status: the style document parses. Expression compilation and the typed property view are
-//! not implemented.
+//! Status: the style document parses, and expressions parse, classify and evaluate. The
+//! bytecode VM (R1), the typed property view, and legacy filter conversion are not
+//! implemented.
 
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), no_std)]
@@ -24,12 +25,14 @@
 extern crate alloc;
 
 pub mod document;
+pub mod expression;
 pub mod value;
 
 pub use document::{
     ExpressionValue, GeojsonSource, Layer, LayerKind, PropertyValue, Source, Style, TileSource,
     Transition,
 };
+pub use expression::{Dependency, Expression};
 pub use value::Value;
 
 /// Something went wrong reading a style.
