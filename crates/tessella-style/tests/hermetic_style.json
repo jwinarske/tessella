@@ -1,0 +1,84 @@
+{
+  "version": 8,
+  "name": "capture-probe",
+  "sources": {
+    "probe": {
+      "type": "geojson",
+      "data": {
+        "type": "FeatureCollection",
+        "features": [
+          {
+            "type": "Feature",
+            "properties": { "kind": "a" },
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [[[-0.10,51.49],[-0.10,51.53],[-0.05,51.53],[-0.05,51.49],[-0.10,51.49]]]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": { "kind": "b" },
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [[[-0.16,51.49],[-0.16,51.52],[-0.12,51.52],[-0.12,51.49],[-0.16,51.49]]]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": { "kind": "a" },
+            "geometry": {
+              "type": "LineString",
+              "coordinates": [[-0.18,51.48],[-0.12,51.51],[-0.06,51.50],[-0.02,51.53]]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": { "kind": "b" },
+            "geometry": { "type": "Point", "coordinates": [-0.09,51.505] }
+          }
+        ]
+      }
+    }
+  },
+  "layers": [
+    {
+      "id": "bg",
+      "type": "background",
+      "paint": { "background-color": "#101418" }
+    },
+    {
+      "id": "fill-constant",
+      "type": "fill",
+      "source": "probe",
+      "filter": ["==", "$type", "Polygon"],
+      "paint": { "fill-color": "#2f6f4f", "fill-opacity": 0.8 }
+    },
+    {
+      "id": "fill-datadriven",
+      "type": "fill",
+      "source": "probe",
+      "filter": ["==", "$type", "Polygon"],
+      "paint": {
+        "fill-color": ["match", ["get", "kind"], "a", "#c04030", "#3050c0"],
+        "fill-opacity": ["match", ["get", "kind"], "a", 0.5, 0.9]
+      }
+    },
+    {
+      "id": "line-datadriven",
+      "type": "line",
+      "source": "probe",
+      "filter": ["==", "$type", "LineString"],
+      "paint": {
+        "line-color": ["match", ["get", "kind"], "a", "#e0d040", "#40e0d0"],
+        "line-width": ["match", ["get", "kind"], "a", 4.0, 2.0]
+      }
+    },
+    {
+      "id": "circle-constant",
+      "type": "circle",
+      "source": "probe",
+      "filter": ["==", "$type", "Point"],
+      "paint": { "circle-color": "#ffffff", "circle-radius": 8 }
+    }
+  ]
+}

@@ -15,6 +15,34 @@
 //!
 //! Conformance is the style-spec expression test corpus plus the §9.1 oracle diff (R-3).
 //!
-//! Status: scaffold. No implementation yet.
+//! Status: the style document parses. Expression compilation and the typed property view are
+//! not implemented.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
+
+pub mod document;
+pub mod value;
+
+pub use document::{
+    ExpressionValue, GeojsonSource, Layer, LayerKind, PropertyValue, Source, Style, TileSource,
+    Transition,
+};
+pub use value::Value;
+
+/// Something went wrong reading a style.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// The document is not valid JSON, or does not match the style spec's shape.
+    #[error("style is not valid JSON: {0}")]
+    Json(#[from] serde_json::Error),
+    /// The document declares a spec version this frontend does not implement.
+    ///
+    /// Version 8 is the only one there is. A different number means the document is either
+    /// from the future or not a style at all, and guessing at it would turn a clear failure
+    /// into a confusing one.
+    #[error("unsupported style spec version {0}; only version 8 is implemented")]
+    UnsupportedVersion(u32),
+}
