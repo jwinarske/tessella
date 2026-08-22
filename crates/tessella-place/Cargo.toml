@@ -1,0 +1,20 @@
+[package]
+name = "tessella-place"
+description = "Per-view symbol placement: collision index, cross-tile index and fades for tessella"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[dependencies]
+glam.workspace = true
+tessella-layout.workspace = true
+tessella-style.workspace = true
+tessella-tile.workspace = true
+
+[lints]
+workspace = true

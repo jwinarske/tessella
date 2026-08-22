@@ -1,0 +1,23 @@
+[package]
+name = "tessella-layout"
+description = "Bucket generation: fill, line, circle, pattern and symbol shaping for tessella"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[dependencies]
+earcutr.workspace = true
+rustybuzz.workspace = true
+unicode-bidi.workspace = true
+unicode-linebreak.workspace = true
+tessella-glyph.workspace = true
+tessella-style.workspace = true
+tessella-tile.workspace = true
+
+[lints]
+workspace = true

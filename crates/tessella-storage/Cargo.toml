@@ -1,0 +1,18 @@
+[package]
+name = "tessella-storage"
+description = "Online and cache file sources with request coalescing for tessella"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[dependencies]
+log.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

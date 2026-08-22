@@ -1,0 +1,22 @@
+[package]
+name = "tessella-source"
+description = "Vector, raster and GeoJSON sources for tessella"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[dependencies]
+geo-types.workspace = true
+geojson.workspace = true
+thiserror.workspace = true
+tessella-storage.workspace = true
+tessella-style.workspace = true
+tessella-tile.workspace = true
+
+[lints]
+workspace = true

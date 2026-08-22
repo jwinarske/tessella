@@ -1,0 +1,17 @@
+[package]
+name = "tessella-tile"
+description = "Tile pyramid, cover/retain and the process-scoped shared tile store for tessella"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[dependencies]
+glam.workspace = true
+
+[lints]
+workspace = true

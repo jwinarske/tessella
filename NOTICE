@@ -1,0 +1,18 @@
+tessella
+Copyright (c) 2026 Joel Winarske
+
+This project implements the MapLibre style specification and is a port of
+portions of MapLibre Native (https://github.com/maplibre/maplibre-native),
+which is distributed under the BSD 2-Clause License:
+
+    Copyright (c) 2020, MapLibre contributors
+    Copyright (c) 2014-2020, Mapbox
+
+Ported portions retain that notice. tessella is licensed under the same terms
+(BSD 2-Clause; see LICENSE), so no additional conditions are imposed on
+downstream users.
+
+tessella is not affiliated with or endorsed by the MapLibre organization.
+"MapLibre" and "Mapbox" are the marks of their respective owners and are used
+here only to name the specification implemented and the upstream project
+ported from.

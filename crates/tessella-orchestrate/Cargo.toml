@@ -1,0 +1,26 @@
+[package]
+name = "tessella-orchestrate"
+description = "Render layers, tweakers, binders, draw order, UBO packing and damage gates for tessella"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[dependencies]
+crossbeam.workspace = true
+glam.workspace = true
+log.workspace = true
+tessella-capture-abi.workspace = true
+tessella-glyph.workspace = true
+tessella-layout.workspace = true
+tessella-place.workspace = true
+tessella-source.workspace = true
+tessella-style.workspace = true
+tessella-tile.workspace = true
+
+[lints]
+workspace = true

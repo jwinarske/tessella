@@ -1,0 +1,21 @@
+[package]
+name = "tessella"
+description = "A Rust frontend for the MapLibre style spec, emitting a renderer-agnostic capture stream"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "README.md"
+keywords = ["map", "maplibre", "vector-tiles", "renderer", "gis"]
+categories = ["graphics", "rendering", "science::geo"]
+# Name-reservation stub (plan.md §16, DR-15). Intentionally dependency-free: the facade
+# gains its re-exports over tessella-* once those crates carry content and publish.
+include = ["src/**", "README.md", "LICENSE", "NOTICE"]  # symlinks to the workspace root copies
+
+[dependencies]
+
+[lints]
+workspace = true

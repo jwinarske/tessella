@@ -1,0 +1,18 @@
+[package]
+name = "tessella-glyph"
+description = "Glyph manager, PBF range path and local SDF rasterization for tessella"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[dependencies]
+fontdue.workspace = true
+tessella-storage.workspace = true
+
+[lints]
+workspace = true
