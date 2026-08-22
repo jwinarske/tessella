@@ -1,6 +1,10 @@
 # TESSELLA_PLAN — tessella: MapLibre-style-spec frontend in Rust, capture-stream producer
 
-rev 0.6 — 2026-08-22
+rev 0.7 — 2026-08-22
+rev 0.7: DR-16 carried into §3.6 and §11.2, which still described the UBO floor as open;
+§12.9 gains the debug-info posture; workspace scaffolded and the §16 reservation closed
+(crates.io tessella 0.0.0, github.com/jwinarske/tessella), toolchain pinned to Yocto
+wrynose per DR-17.
 rev 0.6: DR-16 resolves R-12 (SSBO-only, Vulkan-first; GLES 3.0 composites, does not draw);
 impeller mirror sequenced beside the R0 stub; §16 items closed; R0 ABI freeze unblocked.
 rev 0.5: project named tessella; crate prefix mln-* → tessella-*; naming decision DR-15;
@@ -165,8 +169,9 @@ offsets, §2.1 already guarantees this).
 impeller-rs (pure-Rust Impeller reimplementation: canvas/recording over an entity layer over
 Vulkan + GLES 3.0 HALs, with WSI and DRM/KMS direct-scanout presentation) is the second
 consumer — not a null mirror but a shippable one, covering product shapes Fluorite is heavy
-for: pure-2D cluster maps, direct scanout on a leased DRM connector with no compositor, and
-GLES-only silicon. The producer is untouched; this section fixes the integration layer.
+for: pure-2D cluster maps and direct scanout on a leased DRM connector with no compositor.
+Both run on the Vulkan HAL; DR-16 puts GLES-only silicon outside the map-drawing set. The
+producer is untouched; this section fixes the integration layer.
 
 - **Entity/HAL level, never canvas level.** The canvas `Vertices` model (positions + colors +
   texcoords, paint materials) cannot express custom attribute layouts or `_t`-uniform zoom
@@ -186,9 +191,11 @@ GLES-only silicon. The producer is untouched; this section fixes the integration
 - **In-process Rust elision**: same ABI, but a Rust consumer holds slab `Arc`s directly —
   geometry "copy" degenerates to a refcount bump. Not a second transport; the ring is
   unchanged for Fluorite and for process isolation (§3.5).
-- **Hardware matrix effect**: the GLES 3.0 HAL restores VisionFive 2 to the *rendering*
-  matrix (the frontend was always GPU-free); runtime backend choice serves boards where only
-  GLES is usable. See the UBO caveat in §11.2 and R-12.
+- **Hardware matrix effect**: the mirror exercises the Vulkan HAL only (DR-16). The GLES 3.0
+  HAL composites a map result but cannot draw one — it has no SSBO — so it does not widen the
+  *rendering* matrix. VisionFive 2 stays producer, soak, and cross-compile only, and joins the
+  rendering matrix if and when the Mesa pvr Vulkan driver matures. The frontend was always
+  GPU-free, so nothing about that costs this design anything either way.
 
 ---
 
@@ -503,14 +510,14 @@ from the frame.
   per-primitive index ranges. Painter order survives — layers are contiguous in the draw
   order, within-layer tile order is stencil-resolved. Scene goes from thousands of
   renderables to ~tens.
-- **Consolidated SSBO is the only UBO path** — with one floor caveat. Rev 2 drops the
-  per-drawable-buffer variant: latest-wins coalescing + one buffer update per (view, layer)
-  per tick, drawables index via `uboIndex`; per-drawable parameter-setting at map scale is
-  not left available as a path. Caveat: SSBOs need Vulkan or GLES 3.1+; the impeller-rs GLES
-  3.0 HAL (§3.6) has UBOs only. Resolution is a deliberate choice, not a bring-up surprise:
-  either a size-capped UBO-array fallback mode in the envelope (same `uboIndex` indexing,
-  bounded array length, batched by layer) or an explicit "maps require Vulkan HAL or GLES
-  3.1" support statement. Tracked in §16; the ABI reserves the mode bit either way.
+- **Consolidated SSBO is the only uniform path** (DR-16). Rev 2 drops the per-drawable-buffer
+  variant: latest-wins coalescing + one buffer update per (view, layer) per tick, drawables
+  index via `uboIndex`, no length ceiling; per-drawable parameter-setting at map scale is not
+  left available as a path. SSBOs need Vulkan or GLES 3.1+, which makes the support statement
+  capability-based rather than device-based: maps require an SSBO-capable backend. No fallback
+  path exists and none is half-built — the mode bit is reserved and the batch-splitting
+  allowance documented but dormant, so a future GLES-3.0-only SKU is an addition rather than a
+  flag day. There is no GLES map-drawing CI lane, because there is nothing to keep green.
 
 ### 11.3 Zero-copy bucket → driver
 
@@ -648,6 +655,11 @@ Sustained-idle-then-burst beats constant medium load. Pacing counters land in R4
 `opt-level=s` on non-hot crates, `dyn` boundary at the style-parse layer (parse is not hot;
 stops the largest serde/expression monomorphization fan-out). Size tracked per target in CI.
 
+Debug info is the one place size loses. Release builds keep line tables and are not stripped
+in-tree: under `panic=abort` a field crash otherwise yields an address and nothing else, and
+the packaging layer already splits symbols into a `-dbg` package, so stripping at the profile
+would trade field diagnosability for a number CI measures after the split anyway.
+
 ---
 
 ## 13. Zoom performance: two regimes, four views
@@ -759,6 +771,16 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
   producer/soak/cross-compile only, with a rendering path arriving only if the Mesa pvr
   Vulkan driver matures — at zero cost and zero breakage to this design either way.
 
+- **DR-17 Toolchain pinned to the target Yocto release.** `rust-toolchain.toml` pins the
+  compiler to the Rust oe-core ships — 1.94.1 for wrynose (Yocto 6.0) — and `rust-version`
+  follows it. The pin tracks the distro, not upstream Rust: building against a compiler the
+  board does not have moves MSRV surprises from CI onto the target, and it is the target that
+  is expensive to debug. Bumps happen when the target Yocto release bumps. CI carries an
+  advisory `stable` lane as early warning for that day; it does not gate a merge. Dependency
+  floors are subordinate — fontdue's `integer_sign_cast` (1.87) and edition 2024 (1.85) both
+  sit below the pin, and if a dependency ever demands more than the distro offers, the
+  dependency is what changes.
+
 ## 15. Risk register
 
 - **R-1 Symbol pipeline underestimation.** No ecosystem substitute; placement parity is
@@ -810,7 +832,9 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for
   0.1; delta only if churn-time bandwidth measures poorly.
-- emb manifest entries and cross toolchain pins for the workspace.
+- emb manifest entries for the workspace. The Rust pin itself is closed by DR-17
+  (rust-toolchain.toml, tracking the target Yocto release); what remains is the emb-side
+  manifest wiring and the cross C toolchains the deferred deps (rusqlite, ureq) will need.
 - Hysteresis band width and pre-warm trigger threshold: fixed constants vs tuned per view
   class; needs the §13.3 rig before choosing.
 - Compiled-style cache format (§12.5): bespoke vs rkyv-class zero-copy archive; invalidation
@@ -819,7 +843,8 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
 - ~~Second-consumer sequencing~~ closed by DR-16: the impeller-rs mirror (Vulkan HAL) lands
   beside the R0 stub.
 - ~~UBO floor~~ closed by DR-16: SSBO-only, Vulkan-first.
-- Reserve `tessella` on crates.io (0.0.0 stub) and github.com/jwinarske/tessella before R0;
-  availability today is not availability at R1.
+- ~~Reserve `tessella` on crates.io and GitHub~~ closed: `tessella` 0.0.0 published as a
+  dependency-free stub, `github.com/jwinarske/tessella` public, workspace scaffolded to §7
+  with the nine `tessella-*` members held at `publish = false` until they carry content.
 - Direct-scanout product shape: tessella-* + impeller-rs single-binary cluster map over a leased
   DRM connector (wayland-leased-drm/DLM alignment); scope as its own plan doc if pursued.
