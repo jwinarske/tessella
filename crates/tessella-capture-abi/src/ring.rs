@@ -335,6 +335,25 @@ impl Producer {
         Ok(())
     }
 
+    /// Bytes ever written, monotonic.
+    ///
+    /// The coalescer uses this to record where a key's envelope ends, so it can tell later
+    /// whether the consumer has passed it.
+    #[must_use]
+    pub fn head(&self) -> u64 {
+        // SAFETY: the region outlives this half.
+        let control = unsafe { control(self.base) };
+        control.head.load(Ordering::Relaxed)
+    }
+
+    /// Bytes the consumer has consumed, monotonic.
+    #[must_use]
+    pub fn consumed_through(&self) -> u64 {
+        // SAFETY: the region outlives this half.
+        let control = unsafe { control(self.base) };
+        control.tail.load(Ordering::Acquire)
+    }
+
     /// True when `needed` bytes are free, refreshing the cached tail only if it has to.
     fn has_room(&mut self, control: &RingControl, head: u64, needed: usize) -> bool {
         let free = |tail: u64| self.capacity - (head - tail) as usize;
@@ -744,7 +763,10 @@ mod tests {
     /// the ring far smaller than the traffic.
     #[test]
     fn spsc_across_threads() {
-        const COUNT: u32 = 20_000;
+        // Miri interprets rather than executes, so the same count would take hours. It is
+        // looking for a data race or an invalid access, and finds those in the first few
+        // wraps or not at all.
+        const COUNT: u32 = if cfg!(miri) { 400 } else { 20_000 };
         let mut region = Region::new(1024);
         let (mut producer, mut consumer) = region.open();
 

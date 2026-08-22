@@ -70,6 +70,36 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo package -p tessella
 
+  miri:
+    # tessella-capture-abi is the only crate in the workspace with unsafe, and the ring's
+    # failure mode is an intermittent race rather than a reproducible bug — the class of thing
+    # a passing test suite does not rule out. Miri checks aliasing and races under both
+    # borrow models and explores many thread interleavings.
+    #
+    # Advisory, and on nightly, which is the only place Miri exists: it deliberately steps
+    # outside the DR-17 pin via RUSTUP_TOOLCHAIN, so nightly breakage cannot block a merge.
+    name: miri (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      RUSTUP_TOOLCHAIN: nightly
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - run: rustup toolchain install nightly --profile minimal --component miri
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: miri
+      - name: stacked borrows
+        run: cargo miri test -p tessella-capture-abi
+      - name: tree borrows
+        run: cargo miri test -p tessella-capture-abi
+        env:
+          MIRIFLAGS: -Zmiri-tree-borrows
+      - name: many interleavings
+        run: cargo miri test -p tessella-capture-abi --lib ring::tests::spsc_across_threads -- --exact
+        env:
+          MIRIFLAGS: -Zmiri-many-seeds=0..12
+
   stable-canary:
     # Advisory only. The pinned toolchain follows Yocto, not upstream Rust, so breakage on
     # current stable is information about the next bump rather than a reason to block a

@@ -41,14 +41,16 @@
 //! which return `None` for anything unrecognized. Never `transmute` a discriminant, and
 //! never `as`-cast one into an enum.
 //!
-//! Status: envelope records, the mbgl mirrors, and the lossless ring are in. The coalescing
-//! slot table, the reverse channel, and the generated C header are not.
+//! Status: envelope records, the mbgl mirrors, the ring, and coalescing are in. The reverse
+//! channel and the generated C header are not.
 
 // Not `forbid(unsafe_code)`: the ring and the `#[repr(C)]` envelope mirrors need it. Every
 // other crate in the workspace forbids it outright.
 #![deny(unsafe_op_in_unsafe_fn)]
 #![cfg_attr(not(test), no_std)]
 
+/// Producer-side coalescing for the state envelopes (§4).
+pub mod coalesce;
 pub mod envelope;
 
 /// SPSC transport for the lossless envelope stream (§4).
@@ -74,7 +76,7 @@ pub const ABI_REV: u32 = 2;
 /// The envelopes carried on the ring, one variant per row of the §4 coalescing table.
 ///
 /// Discriminants are provisional until the R0 ABI freeze.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(u16)]
 pub enum EnvelopeKind {
     /// Process-scoped, refcounted geometry: shared geometry id, attributes, indexes,
