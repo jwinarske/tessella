@@ -30,12 +30,14 @@
 extern crate alloc;
 
 pub mod binder;
+pub mod counters;
 pub mod damage;
 pub mod emit;
 pub mod tile;
 pub mod view;
 
 pub use binder::{BoundAttribute, VertexLayout, pack_color};
+pub use counters::{SharedCounters, SharedWork};
 pub use damage::{CameraKey, DamageTracker, Traffic, TrafficMeter, Work};
 pub use emit::{Encoded, SlabArena, encode_fill};
 pub use tile::{Content, LayerBucket, TileError, TileId, build_tile};
