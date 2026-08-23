@@ -367,11 +367,15 @@ pub enum Expr {
     Get {
         /// Property name.
         key: Box<Expr>,
+        /// The object read, or `None` to read the feature.
+        object: Option<Box<Expr>>,
     },
     /// Whether a feature property is present.
     Has {
         /// Property name.
         key: Box<Expr>,
+        /// The object tested, or `None` to test the feature.
+        object: Option<Box<Expr>>,
     },
     /// The feature's geometry type: `Point`, `LineString` or `Polygon`.
     GeometryType,
@@ -393,7 +397,7 @@ pub enum Expr {
     /// `["array", v]`, `["array", item, v]`, `["array", item, n, v]`.
     ///
     /// Separate from [`Expr::Assert`] because it carries an element type and a length, and
-    /// because it has no fallback form — an array assertion that fails is always an error.
+    /// because its fallback is one expression rather than a list of candidates.
     AssertArray {
         /// Required element type, if the style named one.
         item: Option<AssertKind>,
@@ -401,6 +405,8 @@ pub enum Expr {
         length: Option<usize>,
         /// The value asserted.
         value: Box<Expr>,
+        /// Used when the assertion fails, instead of erroring.
+        fallback: Option<Box<Expr>>,
     },
     /// `["let", name, value, …, body]`: bind names, then evaluate the body.
     ///
@@ -557,7 +563,22 @@ impl Expression {
     ) -> Result<Self, ParseError> {
         let root = parse::parse_with_default(value, property_default)?;
         let dependency = classify(&root);
-        Ok(Self { root, dependency })
+        let parsed = Self { root, dependency };
+
+        // An expression that depends on nothing has one value, and this is where it is found
+        // out. If evaluating it fails, no input could ever make it succeed, so the failure is
+        // the style's rather than the data's and belongs at load.
+        //
+        // The spec does this too, and the suite requires it: `["number", ["get", "x",
+        // ["literal", {"y": 0}]]]` reads a key that is not in a literal object, which is a
+        // compile error there and would otherwise be an evaluation error here — once per
+        // feature, forever, for a mistake that is visible on sight.
+        if dependency.is_constant()
+            && let Err(source) = evaluate::evaluate(&parsed.root, &evaluate::Context::empty())
+        {
+            return Err(ParseError::ConstantFolds { source });
+        }
+        Ok(parsed)
     }
 
     /// Wraps an already-built tree, classifying it.
@@ -693,7 +714,12 @@ fn classify(expr: &Expr) -> Dependency {
         // The binding it reads carries the dependency; the read itself has none.
         Expr::Var(_) => Dependency::None,
         Expr::Assert { args, .. } => join_all(args),
-        Expr::AssertArray { value, .. } => classify(value),
+        Expr::AssertArray {
+            value, fallback, ..
+        } => match fallback {
+            Some(fallback) => classify(value).join(classify(fallback)),
+            None => classify(value),
+        },
         Expr::LegacyFunction(function) => {
             let from_property = if function.property.is_some() {
                 Dependency::Feature
@@ -711,7 +737,13 @@ fn classify(expr: &Expr) -> Dependency {
             Dependency::Feature
         }
         // `get` and `has` read the feature even when the key itself is a constant.
-        Expr::Get { key } | Expr::Has { key } => Dependency::Feature.join(classify(key)),
+        // Reading a named object does not touch the feature. Classifying it as feature-driven
+        // anyway would be safe for correctness and wrong for cost: an expression over a literal
+        // table would be re-evaluated per feature forever.
+        Expr::Get { key, object } | Expr::Has { key, object } => match object {
+            Some(object) => classify(key).join(classify(object)),
+            None => Dependency::Feature.join(classify(key)),
+        },
         Expr::Compare { lhs, rhs, .. } => classify(lhs).join(classify(rhs)),
         Expr::Not(inner) => classify(inner),
         Expr::All(args) | Expr::Any(args) | Expr::Coalesce(args) => join_all(args),

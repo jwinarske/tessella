@@ -20,6 +20,16 @@ pub enum ParseError {
     /// output rather than as a diagnostic.
     #[error("unknown expression operator `{0}`")]
     UnknownOperator(String),
+
+    /// A constant expression that cannot be evaluated.
+    ///
+    /// Reported at parse because a constant has one value: if computing it fails, no input
+    /// could have helped, and the alternative is the same failure once per feature per tile.
+    #[error("constant expression cannot be evaluated: {source}")]
+    ConstantFolds {
+        /// What went wrong evaluating it.
+        source: super::EvaluationError,
+    },
     /// The operator was given the wrong number of arguments.
     #[error("`{operator}` expects {expected}, got {got}")]
     Arity {
@@ -124,15 +134,28 @@ fn parse_with_default_in(
             Ok(Expr::Properties)
         }
         "get" => {
-            expect_arity(operator, args, 1, 1)?;
+            // With a second argument the lookup is in *that* object rather than in the feature,
+            // which also means the expression stops depending on the feature at all — the
+            // classifier reads the same `object` field to decide.
+            expect_arity(operator, args, 1, 2)?;
             Ok(Expr::Get {
                 key: Box::new(parse_in(&args[0], scope)?),
+                object: args
+                    .get(1)
+                    .map(|value| parse_in(value, scope))
+                    .transpose()?
+                    .map(Box::new),
             })
         }
         "has" => {
-            expect_arity(operator, args, 1, 1)?;
+            expect_arity(operator, args, 1, 2)?;
             Ok(Expr::Has {
                 key: Box::new(parse_in(&args[0], scope)?),
+                object: args
+                    .get(1)
+                    .map(|value| parse_in(value, scope))
+                    .transpose()?
+                    .map(Box::new),
             })
         }
         "==" | "!=" | "<" | "<=" | ">" | ">=" => {
@@ -212,7 +235,15 @@ fn parse_with_default_in(
                 "ceil" => ArithmeticOp::Ceil,
                 _ => ArithmeticOp::Round,
             };
-            if args.is_empty() {
+            // `+`, `*`, `min` and `max` are folds over identities, so no arguments is not an
+            // error but the identity itself: zero, one, positive infinity, negative infinity.
+            // The evaluator already folds from those, so this is only the gate. The others have
+            // no identity to return — `["-"]` and `["floor"]` are missing an operand.
+            let variadic = matches!(
+                op,
+                ArithmeticOp::Add | ArithmeticOp::Multiply | ArithmeticOp::Min | ArithmeticOp::Max
+            );
+            if args.is_empty() && !variadic {
                 return Err(ParseError::Arity {
                     operator: operator.to_string(),
                     expected: "at least 1 argument".to_string(),
@@ -403,51 +434,62 @@ fn parse_array_assertion(
     args: &[Value],
     scope: &[String],
 ) -> Result<Expr, ParseError> {
-    expect_arity(operator, args, 1, 3)?;
+    expect_arity(operator, args, 1, 4)?;
 
-    let item_of = |value: &Value| -> Result<AssertKind, ParseError> {
+    let item_of = |value: &Value| -> Result<Option<AssertKind>, ParseError> {
         match value.as_str() {
-            Some("number") => Ok(AssertKind::Number),
-            Some("string") => Ok(AssertKind::String),
-            Some("boolean") => Ok(AssertKind::Boolean),
+            Some("number") => Ok(Some(AssertKind::Number)),
+            Some("string") => Ok(Some(AssertKind::String)),
+            Some("boolean") => Ok(Some(AssertKind::Boolean)),
+            // `value` is the spec's way of saying "any element type", which is the same as not
+            // constraining one.
+            Some("value") => Ok(None),
             other => Err(ParseError::Malformed {
                 operator: operator.to_string(),
                 detail: format!(
-                    "element type must be number, string or boolean, got {}",
+                    "element type must be number, string, boolean or value, got {}",
                     other.unwrap_or("a non-string")
                 ),
             }),
         }
     };
 
-    match args {
-        [value] => Ok(Expr::AssertArray {
-            item: None,
-            length: None,
-            value: Box::new(parse_in(value, scope)?),
-        }),
-        [item, value] => Ok(Expr::AssertArray {
-            item: Some(item_of(item)?),
-            length: None,
-            value: Box::new(parse_in(value, scope)?),
-        }),
-        [item, length, value] => {
-            let length = length
-                .as_number()
-                .filter(|n| *n >= 0.0 && n.fract() == 0.0)
-                .ok_or_else(|| ParseError::Malformed {
-                    operator: operator.to_string(),
-                    detail: "length must be a non-negative integer".to_string(),
-                })?;
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            Ok(Expr::AssertArray {
-                item: Some(item_of(item)?),
-                length: Some(length as usize),
-                value: Box::new(parse_in(value, scope)?),
-            })
+    // A length of `null` means unconstrained, which is how the four-argument form writes "any
+    // length, but here is a fallback".
+    let length_of = |value: &Value| -> Result<Option<usize>, ParseError> {
+        if matches!(value, Value::Null) {
+            return Ok(None);
+        }
+        let length = value
+            .as_number()
+            .filter(|n| *n >= 0.0 && n.fract() == 0.0)
+            .ok_or_else(|| ParseError::Malformed {
+                operator: operator.to_string(),
+                detail: "length must be a non-negative integer or null".to_string(),
+            })?;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        Ok(Some(length as usize))
+    };
+
+    let (item, length, value, fallback) = match args {
+        [value] => (None, None, value, None),
+        [item, value] => (item_of(item)?, None, value, None),
+        [item, length, value] => (item_of(item)?, length_of(length)?, value, None),
+        [item, length, value, fallback] => {
+            (item_of(item)?, length_of(length)?, value, Some(fallback))
         }
         _ => unreachable!("arity is checked above"),
-    }
+    };
+
+    Ok(Expr::AssertArray {
+        item,
+        length,
+        value: Box::new(parse_in(value, scope)?),
+        fallback: fallback
+            .map(|value| parse_in(value, scope))
+            .transpose()?
+            .map(Box::new),
+    })
 }
 
 /// Recognizes and parses a pre-expression function.

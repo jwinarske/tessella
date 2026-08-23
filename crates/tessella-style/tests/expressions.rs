@@ -522,3 +522,78 @@ fn a_let_inherits_its_bindings_dependencies() {
         "a constant binding stays constant"
     );
 }
+
+/// A constant expression that cannot be evaluated is rejected at parse.
+///
+/// A constant has exactly one value. If computing it fails, no input could have helped, so the
+/// failure belongs to the style rather than to the data — and reporting it at load beats the
+/// same failure once per feature per tile, forever, for a mistake visible on sight.
+#[test]
+fn a_constant_that_cannot_evaluate_is_a_parse_error() {
+    for text in [
+        r#"["number", ["get", "x", ["literal", {"y": 0}]]]"#,
+        r#"["number", "not a number"]"#,
+        r#"["array", "number", ["literal", ["a"]]]"#,
+    ] {
+        let value: Value = serde_json::from_str(text).expect("json");
+        assert!(
+            Expression::parse(&value).is_err(),
+            "{text} should not parse"
+        );
+    }
+}
+
+/// The same expression over data is *not* rejected, because data might make it work.
+#[test]
+fn a_data_driven_expression_is_not_folded() {
+    for text in [
+        r#"["number", ["get", "x"]]"#,
+        r#"["array", "number", ["get", "xs"]]"#,
+    ] {
+        let value: Value = serde_json::from_str(text).expect("json");
+        assert!(Expression::parse(&value).is_ok(), "{text} should parse");
+    }
+}
+
+/// `get` with a second argument reads that object, and stops depending on the feature.
+///
+/// Classifying it feature-driven anyway would be safe for correctness and wrong for cost: a
+/// lookup in a literal table would be re-evaluated per feature forever.
+#[test]
+fn get_from_an_object_does_not_read_the_feature() {
+    assert_eq!(
+        dependency(r#"["get", "a", ["literal", {"a": 1}]]"#),
+        Dependency::None
+    );
+    assert_eq!(dependency(r#"["get", "a"]"#), Dependency::Feature);
+    assert_eq!(
+        eval(r#"["get", "a", ["literal", {"a": 7}]]"#, None, None),
+        Value::Number(7.0)
+    );
+    assert_eq!(
+        eval(r#"["get", "b", ["literal", {"a": 7}]]"#, None, None),
+        Value::Null,
+        "a missing key is null, as it is on a feature"
+    );
+}
+
+/// Variadic arithmetic with no arguments is its identity, not an error.
+#[test]
+fn variadic_arithmetic_folds_to_its_identity() {
+    assert_eq!(eval(r#"["+"]"#, None, None), Value::Number(0.0));
+    assert_eq!(eval(r#"["*"]"#, None, None), Value::Number(1.0));
+    assert_eq!(eval(r#"["min"]"#, None, None), Value::Number(f64::INFINITY));
+    assert_eq!(
+        eval(r#"["max"]"#, None, None),
+        Value::Number(f64::NEG_INFINITY)
+    );
+
+    // The others have no identity to return: they are missing an operand.
+    for text in [r#"["-"]"#, r#"["/"]"#, r#"["floor"]"#, r#"["abs"]"#] {
+        let value: Value = serde_json::from_str(text).expect("json");
+        assert!(
+            Expression::parse(&value).is_err(),
+            "{text} should not parse"
+        );
+    }
+}

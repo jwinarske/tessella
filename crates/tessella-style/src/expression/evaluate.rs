@@ -9,8 +9,8 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use super::{
-    ArithmeticOp, CastKind, CompareOp, Expr, FilterTarget, Interpolation, LegacyFunction,
-    LegacyKind,
+    ArithmeticOp, AssertKind, CastKind, CompareOp, Expr, FilterTarget, Interpolation,
+    LegacyFunction, LegacyKind,
 };
 use crate::value::Value;
 
@@ -173,46 +173,40 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
             item,
             length,
             value,
+            fallback,
         } => {
-            let evaluated = evaluate(value, context)?;
-            let Value::Array(items) = &evaluated else {
-                return Err(EvaluationError::Type {
-                    expected: "array",
-                    got: evaluated.type_name(),
-                });
-            };
-            if let Some(required) = length
-                && items.len() != *required
-            {
-                return Err(EvaluationError::Type {
-                    expected: "array",
-                    got: "array of the wrong length",
-                });
+            // With a fallback the assertion is a filter rather than a check: a value that does
+            // not satisfy it becomes the fallback instead of an error.
+            match (
+                check_array(item.as_ref(), *length, value, context),
+                fallback,
+            ) {
+                (Ok(value), _) => Ok(value),
+                (Err(_), Some(fallback)) => evaluate(fallback, context),
+                (Err(err), None) => Err(err),
             }
-            if let Some(required) = item {
-                // Every element, not just the first: the suite has `[1, "b"]` against
-                // `array<string>` and expects it to fail on the element that is wrong rather
-                // than pass on the one that is right.
-                for element in items {
-                    if !required.matches(element) {
-                        return Err(EvaluationError::Type {
-                            expected: required.type_name(),
-                            got: element.type_name(),
-                        });
-                    }
+        }
+        Expr::Get { key, object } => {
+            let key = expect_string(&evaluate(key, context)?)?;
+            // A property that is not there is null, not an error. Styles rely on this:
+            // `["coalesce", ["get", "name_en"], ["get", "name"]]` is idiomatic.
+            match object {
+                Some(object) => {
+                    let target = evaluate(object, context)?;
+                    Ok(lookup_in_object(&target, &key)?.unwrap_or(Value::Null))
                 }
+                None => Ok(context.feature()?.property(&key).unwrap_or(Value::Null)),
             }
-            Ok(evaluated)
         }
-        Expr::Get { key } => {
+        Expr::Has { key, object } => {
             let key = expect_string(&evaluate(key, context)?)?;
-            // A property the feature does not carry is null, not an error. Styles rely on
-            // this: `["coalesce", ["get", "name_en"], ["get", "name"]]` is idiomatic.
-            Ok(context.feature()?.property(&key).unwrap_or(Value::Null))
-        }
-        Expr::Has { key } => {
-            let key = expect_string(&evaluate(key, context)?)?;
-            Ok(Value::Bool(context.feature()?.property(&key).is_some()))
+            match object {
+                Some(object) => {
+                    let target = evaluate(object, context)?;
+                    Ok(Value::Bool(lookup_in_object(&target, &key)?.is_some()))
+                }
+                None => Ok(Value::Bool(context.feature()?.property(&key).is_some())),
+            }
         }
         Expr::Compare { op, lhs, rhs } => {
             let lhs = evaluate(lhs, context)?;
@@ -392,6 +386,61 @@ fn evaluate_let(
         scope: Some(&bound),
     };
     evaluate_let(rest, body, &inner)
+}
+
+/// Checks an array assertion, returning the value when it holds.
+///
+/// Separated from the dispatch because the fallback form has to catch the failure rather than
+/// propagate it, and matching on a result reads better than writing the checks twice.
+fn check_array(
+    item: Option<&AssertKind>,
+    length: Option<usize>,
+    value: &Expr,
+    context: &Context<'_>,
+) -> Result<Value, EvaluationError> {
+    let evaluated = evaluate(value, context)?;
+    let Value::Array(items) = &evaluated else {
+        return Err(EvaluationError::Type {
+            expected: "array",
+            got: evaluated.type_name(),
+        });
+    };
+    if let Some(required) = length
+        && items.len() != required
+    {
+        return Err(EvaluationError::Type {
+            expected: "array",
+            got: "array of the wrong length",
+        });
+    }
+    if let Some(required) = item {
+        // Every element, not just the first: the suite has `[1, "b"]` against `array<string>`
+        // and expects it to fail on the element that is wrong rather than pass on the one that
+        // is right.
+        for element in items {
+            if !required.matches(element) {
+                return Err(EvaluationError::Type {
+                    expected: required.type_name(),
+                    got: element.type_name(),
+                });
+            }
+        }
+    }
+    Ok(evaluated)
+}
+
+/// Reads a key out of a value that must be an object.
+///
+/// Unlike a missing key, a non-object *is* an error: `["get", "x", 5]` is a style asking for a
+/// property of a number, which no data can make sensible.
+fn lookup_in_object(target: &Value, key: &str) -> Result<Option<Value>, EvaluationError> {
+    match target {
+        Value::Object(members) => Ok(members.get(key).cloned()),
+        other => Err(EvaluationError::Type {
+            expected: "object",
+            got: other.type_name(),
+        }),
+    }
 }
 
 /// Evaluates a pre-expression function.

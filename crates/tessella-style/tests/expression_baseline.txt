@@ -8,6 +8,7 @@ any/arity-0
 any/arity-1
 any/basic
 array/basic
+array/default-value
 array/item-type
 array/item-type-and-length
 boolean/basic
@@ -32,7 +33,9 @@ equal/value
 floor/basic
 geometry-type/basic
 get/basic
+get/from-literal
 get/from-literal--missing
+get/from-object-property
 greater/boolean
 greater/mismatch
 greater/null
@@ -124,8 +127,10 @@ match/mixed-type
 match/multi-value
 match/unreachable-branch-1
 match/unreachable-branch-2
+max/arity-0
 max/arity-1
 max/basic
+min/arity-0
 min/arity-1
 min/basic
 minus/arity-0
@@ -142,6 +147,9 @@ number/basic
 number/default-value
 object/basic
 object/default-value
+object/implicit
+parse/non-array
+plus/arity-0
 plus/arity-1
 plus/basic
 pow/basic
@@ -151,6 +159,7 @@ step/basic
 step/duplicate_stops
 string/basic
 string/default-value
+times/arity-0
 times/arity-1
 times/basic
 to-boolean/basic
