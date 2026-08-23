@@ -1,6 +1,9 @@
 # TESSELLA_PLAN — tessella: MapLibre-style-spec frontend in Rust, capture-stream producer
 
-rev 0.8 — 2026-08-22
+rev 0.9 — 2026-08-23
+rev 0.9: R0's stream complete and diffed against the probe envelope by envelope; DR-19 records
+that GeoJSON polygon vertex *order* is wagyu's and is not ported, with the consequence for
+§9.1's diff; §10's R0 entry carries its status and its two qualifications.
 rev 0.8: DR-18 moves camera mode off ViewUse onto a dedicated ViewDeclare/ViewUndeclare pair;
 §4 table, §5.3 and DR-9 amended; per-view configuration now has a home before the R0 freeze.
 rev 0.7: DR-16 carried into §3.6 and §11.2, which still described the UBO floor as open;
@@ -454,7 +457,16 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
 
 ## 10. Phasing
 
-- **R0** — mirrors C++ Phase 0: style parse, inline GeoJSON, background/fill buckets,
+- **R0** — *stream complete; exit met with the two qualifications in DR-19 and below.* Every
+  envelope kind is emitted and diffed against the probe on the hermetic style: geometry,
+  `ViewDeclare`/`ViewUse`/`ViewRelease`, `UboUpdate` (all six buffers, byte-exact),
+  `TextureUpdate`, `StencilTiles` (matrix hashes), `OrderUpdate` (painter order element for
+  element) and `CameraUpdate` (all sixteen projection elements plus light and centre, bit-exact).
+  Parked bytes are zero over five hundred settled frames. Qualifications: GeoJSON polygon vertex
+  *order* is a rotation of the oracle's, which DR-19 explains and declines to chase; and
+  `proj_matrix` refuses bearing and pitch, the probe being unrotated, so the quaternion path
+  waits for a capture to check it against.
+  Mirrors C++ Phase 0: style parse, inline GeoJSON, background/fill buckets,
   orchestrator skeleton, ring transport, damage gates (§6.3/§6.5 — cheap now, expensive
   later), shared-store ownership + namespace split (architecture only; one view), DR-9 camera modes
   and the DR-10 reverse channel in the ABI (consumer-camera exercised by a stub mirror);
@@ -799,6 +811,24 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
   view. The pair also gives per-view configuration a home before the ABI freezes: the §5.4
   per-view `maxzoom` clamp and view class ride in reserved bytes rather than needing an
   envelope added after R0 exit.
+
+- **DR-19 GeoJSON polygon vertex order is wagyu's, and wagyu is not ported.** mbgl passes every
+  GeoJSON polygon through `fixupPolygons` before it reaches a bucket — unconditionally, citing
+  geojson-vt-cpp issue 44 — which takes a wagyu union of the rings. Wagyu rebuilds each ring from
+  its own sweep and chooses its own starting vertex, so the oracle's ring is a *rotation* of the
+  one geojson-vt's clip produces. The clip itself, the axis order, the significance filter and
+  the twenty-six-clip tiling pyramid were each tested and cleared; the pyramid simulation is a
+  test in `tessella-source::clip`. Porting wagyu would buy a vertex order and not a different
+  polygon: on well-formed input its union is geometrically an identity — same rings, winding,
+  area, and triangulation up to a permutation. mbgl runs it because GeoJSON may be
+  self-intersecting or wrongly wound. Consequence for §9.1: for GeoJSON polygon sources the
+  vertex-buffer diff compares rings as cycles rather than sequences, which still catches a wrong
+  coordinate, a missing vertex or a reversed winding. Revisit if a style appears whose geometry
+  makes the union non-trivial — self-intersecting rings are where it would show, because there
+  wagyu genuinely changes the polygon and a cycle comparison stops being enough. Vector tiles are
+  mostly unaffected — mbgl runs `fixupPolygons` on them only for spec version 1, which is
+  effectively extinct — so R1's diff against a real style can compare vertex sequences directly,
+  and a v1 tile is the one case where it would have to fall back to cycles.
 
 ## 15. Risk register
 
