@@ -12,27 +12,48 @@
 //! - **The starting vertex does not.** The oracle's ring is this one rotated. Same cycle, same
 //!   direction, different entry point.
 //!
-//! Two hypotheses for the rotation were tested and both refuted. Clipping y-before-x gives the
-//! identical result to x-before-y, so axis order is not it. And simulating geojson-vt's
-//! recursive pyramid split — clipping once per level from z0 down to z13 rather than once
-//! against the target tile — also lands on the same rotation, so the recursion is not it
-//! either. mbgl's `addRingVertices` emits the ring verbatim, so nothing downstream introduces
-//! it. That places the rotation inside geojson-vt's own `clipLine`, whose handling of the
-//! first vertex differs from the textbook Sutherland-Hodgman reconstructed here.
+//! # Where the rotation is not
 //!
-//! # Why this is left as it is for now
+//! Three hypotheses tested, all refuted:
+//!
+//! - **Axis order.** Clipping y-before-x is identical to x-before-y. There is a test.
+//! - **The clip algorithm.** `clip_ring` below is now a faithful port of geojson-vt's
+//!   `clipRing`, nested cases and last-point rule included, rather than the textbook
+//!   Sutherland-Hodgman it started as. The rotation survives the correction, so the clip is
+//!   not the cause. The port is kept because it is the real algorithm and the reconstruction
+//!   was only accidentally equivalent.
+//! - **The pyramid recursion.** Simulating geojson-vt's recursive split — clipping once per
+//!   level from z0 to z13 rather than once against the target tile — lands on the same
+//!   rotation. This was first tested with the reconstructed clip, which made the result
+//!   worthless; it was retested with the faithful one and the conclusion holds.
+//!
+//! And mbgl's `addRingVertices` emits whatever ring it is given, verbatim, so nothing
+//! downstream introduces it.
+//!
+//! # The open lead
+//!
+//! `tile.hpp`'s `transform(vt_linear_ring)` does not emit the clipped ring as-is. It keeps
+//! only points whose `z` exceeds the tile's squared tolerance, where `z` is the significance
+//! Douglas-Peucker assigned during `convert`. The endpoints are pinned at infinity and always
+//! survive, but intersection points created *during* clipping carry whatever `z` the clip gave
+//! them.
+//!
+//! That is a filtering step not modelled here at all, and it is the obvious candidate: drop
+//! the ring's original first point and a different vertex becomes first, which is a rotation.
+//! Untested, and named so the next attempt starts there rather than re-refuting the three
+//! above.
+//!
+//! # Why this cannot be normalized away
 //!
 //! A ring is cyclic, so its starting vertex carries no geometric meaning — but unlike triangle
-//! emission order, it is not free to normalize away. The index buffer refers to vertices by
+//! emission order, it is not free to normalize. The index buffer refers to vertices by
 //! position, so a rotation changes both buffers, and the flat vertex buffer does not record
 //! where one ring ends and the next begins, so the oracle cannot canonicalize rings the way it
-//! canonicalizes triangles.
+//! canonicalizes triangles. Triangles are self-delimiting; rings are not.
 //!
-//! So vertex-exact agreement needs geojson-vt's `clipLine` ported faithfully rather than
-//! reconstructed. That is a bounded piece of work and now a precisely located one: not "port
-//! geojson-vt", but "match its clip output ordering". Simplification is not implicated —
-//! at a tolerance of 6 tile units a rectangle's corners are all significant, so it is a no-op
-//! on this style — and neither is the recursion.
+//! Simplification is not implicated in the *values*: at a tolerance of 6 tile units a
+//! rectangle's corners are all significant, so nothing is dropped from this style. Its role in
+//! the *ordering*, through the `z` filter above, is the open question.
 
 use alloc::vec::Vec;
 
@@ -68,32 +89,45 @@ pub fn clip_ring(ring: &[Position], lo: f64, hi: f64, axis: Axis) -> Ring {
     }
 
     let mut out: Ring = Vec::with_capacity(ring.len());
-    for pair in ring.windows(2) {
+    let last_edge = ring.len() - 2;
+    for (i, pair) in ring.windows(2).enumerate() {
         let (a, b) = (pair[0], pair[1]);
         let (ak, bk) = (axis.of(a), axis.of(b));
-        let at = |t: f64| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+        let at = |k: f64| {
+            let t = (k - ak) / (bk - ak);
+            [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+        };
 
+        // The three cases are geojson-vt's, nested exactly as it nests them. An earlier
+        // version here checked entering and leaving independently, which is the obvious
+        // reading and produces the same ring for simple shapes but not the same sequence.
         if ak < lo {
-            // Entering through the low edge.
             if bk > lo {
-                out.push(at((lo - ak) / (bk - ak)));
+                // Enters through the low edge.
+                out.push(at(lo));
+                if bk > hi {
+                    // And leaves through the high one: crosses the box entirely.
+                    out.push(at(hi));
+                } else if i == last_edge {
+                    out.push(b);
+                }
             }
         } else if ak > hi {
-            // Entering through the high edge.
             if bk < hi {
-                out.push(at((hi - ak) / (bk - ak)));
+                out.push(at(hi));
+                if bk < lo {
+                    out.push(at(lo));
+                } else if i == last_edge {
+                    out.push(b);
+                }
             }
         } else {
             out.push(a);
-        }
-
-        // Leaving. Checked separately from entering because one edge can do both, crossing
-        // the box entirely.
-        if bk < lo && ak >= lo {
-            out.push(at((lo - ak) / (bk - ak)));
-        }
-        if bk > hi && ak <= hi {
-            out.push(at((hi - ak) / (bk - ak)));
+            if bk < lo {
+                out.push(at(lo));
+            } else if bk > hi {
+                out.push(at(hi));
+            }
         }
     }
 
