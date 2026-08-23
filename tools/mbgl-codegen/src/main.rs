@@ -97,6 +97,9 @@ const OUTPUT: &str = "crates/tessella-capture-abi/src/generated/mbgl_enums.rs";
 /// Path of the generated shader attribute tables.
 const SHADER_OUTPUT: &str = "crates/tessella-capture-abi/src/generated/shader_attributes.rs";
 
+/// Path of the generated UBO layouts.
+const UBO_OUTPUT: &str = "crates/tessella-capture-abi/src/generated/ubo_layouts.rs";
+
 /// One parsed C++ enumerator.
 struct Enumerator {
     name: String,
@@ -148,13 +151,23 @@ fn main() -> ExitCode {
         }
     };
 
+    let ubos = match generate_ubo_layouts(&mbgl).map(|text| rustfmt(&text)) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("{err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let out = workspace.join(OUTPUT);
     let shader_out = workspace.join(SHADER_OUTPUT);
+    let ubo_out = workspace.join(UBO_OUTPUT);
     if check {
         let mut stale = false;
         for (path, name, want) in [
             (&out, OUTPUT, &generated),
             (&shader_out, SHADER_OUTPUT, &shaders),
+            (&ubo_out, UBO_OUTPUT, &ubos),
         ] {
             let current = std::fs::read_to_string(path).unwrap_or_default();
             if current == *want {
@@ -180,6 +193,7 @@ fn main() -> ExitCode {
     for (path, name, text) in [
         (&out, OUTPUT, &generated),
         (&shader_out, SHADER_OUTPUT, &shaders),
+        (&ubo_out, UBO_OUTPUT, &ubos),
     ] {
         if let Err(err) = std::fs::write(path, text) {
             eprintln!("writing {}: {err}", path.display());
@@ -883,5 +897,475 @@ fn rustfmt(text: &str) -> String {
             eprintln!("note: rustfmt failed; emitting unformatted");
             text.to_string()
         }
+    }
+}
+
+/// A field of a UBO, as the header declares it.
+struct UboField {
+    offset: u32,
+    /// Kind name as the generated enum spells it. The size lives on the kind, not here.
+    kind: &'static str,
+    name: String,
+}
+
+/// A UBO layout, verified against its own header.
+struct UboLayout {
+    name: String,
+    header: String,
+    align: u32,
+    /// Where the fields end. mbgl's closing comment.
+    size: u32,
+    /// `sizeof`, which pads the field extent up to the alignment. mbgl asserts this itself.
+    stride: u32,
+    fields: Vec<UboField>,
+}
+
+/// A struct the parser could not verify, and why.
+struct UnparsedUbo {
+    name: String,
+    header: String,
+    reason: String,
+}
+
+/// Generates the UBO layouts (DR-6).
+///
+/// mbgl declares each uniform block as a `struct alignas(16)` whose every field carries its byte
+/// offset in a comment and whose closing comment is the struct's size. Those comments are the
+/// authority: mbgl's own `static_assert`s check the C++ struct against them, so a layout derived
+/// from them is derived from the same source the shaders are.
+///
+/// # Verified, not merely transcribed
+///
+/// Each struct is accepted only if every field's declared offset equals the running total of the
+/// fields before it *and* the total equals the declared size. A header whose comments had drifted
+/// from its fields would be rejected rather than turned into a table that silently mispacks every
+/// frame — which is the failure mode that makes a hand-maintained table unacceptable in the first
+/// place, and it does not improve by being generated carelessly.
+///
+/// # What it cannot parse, it names
+///
+/// Four of the fifty-one structs do not verify: two in the line layer, where one block has no size
+/// comment and another uses a bitmask type this does not model, and two in symbols, where offsets
+/// jump over fields declared in a form this does not read. All four are outside R0 — line is R1
+/// and symbols are R2 — so they are listed in `UNPARSED` rather than guessed at. A consumer that
+/// needs one gets a compile error against a missing constant, not a wrong layout.
+fn generate_ubo_layouts(mbgl: &Path) -> Result<String, String> {
+    let revision = tree_revision(mbgl);
+    let dir = mbgl.join("include/mbgl/shaders");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .map_err(|err| format!("reading {}: {err}", dir.display()))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "hpp"))
+        .collect();
+    // Filesystem order is not stable across machines, and the output is committed.
+    files.sort();
+
+    let mut layouts: Vec<UboLayout> = Vec::new();
+    let mut unparsed: Vec<UnparsedUbo> = Vec::new();
+    for file in &files {
+        let text = std::fs::read_to_string(file)
+            .map_err(|err| format!("reading {}: {err}", file.display()))?;
+        let header = file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let asserted = parse_ubo_size_asserts(&text);
+        parse_ubo_layouts(&text, &header, &asserted, &mut layouts, &mut unparsed);
+    }
+    layouts.sort_by(|a, b| a.name.cmp(&b.name));
+    unparsed.sort_by(|a, b| a.name.cmp(&b.name));
+
+    if layouts.is_empty() {
+        return Err("no UBO layouts parsed; the header format has changed".to_string());
+    }
+
+    let mut out = String::new();
+    writeln!(
+        out,
+        "// @generated by `cargo run -p mbgl-codegen`. Do not edit by hand."
+    )
+    .unwrap();
+    writeln!(out, "//").unwrap();
+    writeln!(
+        out,
+        "// Source: maplibre-native @ {revision}, branch capture-backend-phase0."
+    )
+    .unwrap();
+    writeln!(out, "// Layouts from include/mbgl/shaders/*_ubo.hpp.").unwrap();
+    writeln!(out).unwrap();
+    for line in wrap(
+        "Uniform block layouts (DR-6). mbgl declares each block as a struct whose fields carry \
+         their byte offsets in comments and whose closing comment is the size, checked there by \
+         `static_assert`. Every layout here was accepted only after each field's declared offset \
+         matched the running total and the total matched the declared size, so a header whose \
+         comments had drifted would be rejected rather than mispack silently.",
+        94,
+    ) {
+        if line.is_empty() {
+            writeln!(out, "//!").unwrap();
+        } else {
+            writeln!(out, "//! {line}").unwrap();
+        }
+    }
+    writeln!(out).unwrap();
+
+    writeln!(out, "/// What a UBO field holds.").unwrap();
+    writeln!(
+        out,
+        "#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]"
+    )
+    .unwrap();
+    writeln!(out, "pub enum UboFieldKind {{").unwrap();
+    for (name, doc) in [
+        ("F32", "A single `float`."),
+        ("I32", "A signed 32-bit integer."),
+        ("U32", "An unsigned 32-bit integer."),
+        ("Vec2", "`std::array<float, 2>`."),
+        ("Vec3", "`std::array<float, 3>`."),
+        ("Vec4", "`std::array<float, 4>`."),
+        (
+            "Color",
+            "`Color`, four floats. Premultiplied RGBA, as the style resolves it.",
+        ),
+        ("Mat4", "`std::array<float, 16>`, column-major."),
+    ] {
+        writeln!(out, "    /// {doc}").unwrap();
+        writeln!(out, "    {name},").unwrap();
+    }
+    writeln!(out, "}}").unwrap();
+    writeln!(out).unwrap();
+
+    writeln!(out, "impl UboFieldKind {{").unwrap();
+    writeln!(out, "    /// Size in bytes.").unwrap();
+    writeln!(out, "    #[must_use]").unwrap();
+    writeln!(out, "    pub const fn size(self) -> u32 {{").unwrap();
+    writeln!(out, "        match self {{").unwrap();
+    writeln!(out, "            Self::F32 | Self::I32 | Self::U32 => 4,").unwrap();
+    writeln!(out, "            Self::Vec2 => 8,").unwrap();
+    writeln!(out, "            Self::Vec3 => 12,").unwrap();
+    writeln!(out, "            Self::Vec4 | Self::Color => 16,").unwrap();
+    writeln!(out, "            Self::Mat4 => 64,").unwrap();
+    writeln!(out, "        }}").unwrap();
+    writeln!(out, "    }}").unwrap();
+    writeln!(out, "}}").unwrap();
+    writeln!(out).unwrap();
+
+    writeln!(out, "/// One field of a uniform block.").unwrap();
+    writeln!(out, "#[derive(Debug, Clone, Copy, PartialEq, Eq)]").unwrap();
+    writeln!(out, "pub struct UboField {{").unwrap();
+    writeln!(out, "    /// Field name, as the header spells it.").unwrap();
+    writeln!(out, "    pub name: &'static str,").unwrap();
+    writeln!(out, "    /// Byte offset from the start of the block.").unwrap();
+    writeln!(out, "    pub offset: u32,").unwrap();
+    writeln!(out, "    /// What it holds.").unwrap();
+    writeln!(out, "    pub kind: UboFieldKind,").unwrap();
+    writeln!(out, "}}").unwrap();
+    writeln!(out).unwrap();
+
+    writeln!(out, "/// A uniform block's layout.").unwrap();
+    writeln!(out, "#[derive(Debug, Clone, Copy, PartialEq, Eq)]").unwrap();
+    writeln!(out, "pub struct UboLayout {{").unwrap();
+    writeln!(out, "    /// Struct name, as the header spells it.").unwrap();
+    writeln!(out, "    pub name: &'static str,").unwrap();
+    writeln!(out, "    /// Header it came from.").unwrap();
+    writeln!(out, "    pub header: &'static str,").unwrap();
+    writeln!(out, "    /// Alignment the struct declares.").unwrap();
+    writeln!(out, "    pub align: u32,").unwrap();
+    writeln!(
+        out,
+        "    /// Where the fields end, which is mbgl's closing comment."
+    )
+    .unwrap();
+    writeln!(out, "    pub size: u32,").unwrap();
+    writeln!(
+        out,
+        "    /// `sizeof`: the field extent padded up to the alignment, and the stride between"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "    /// consecutive blocks in a consolidated buffer. Equal to `size` unless the fields"
+    )
+    .unwrap();
+    writeln!(out, "    /// end mid-alignment.").unwrap();
+    writeln!(out, "    pub stride: u32,").unwrap();
+    writeln!(out, "    /// Fields, in declaration order.").unwrap();
+    writeln!(out, "    pub fields: &'static [UboField],").unwrap();
+    writeln!(out, "}}").unwrap();
+    writeln!(out).unwrap();
+
+    for layout in &layouts {
+        let konst = screaming_snake(&layout.name);
+        writeln!(
+            out,
+            "/// `{}` from `include/mbgl/shaders/{}`.",
+            layout.name, layout.header
+        )
+        .unwrap();
+        writeln!(out, "pub const {konst}: UboLayout = UboLayout {{").unwrap();
+        writeln!(out, "    name: \"{}\",", layout.name).unwrap();
+        writeln!(out, "    header: \"{}\",", layout.header).unwrap();
+        writeln!(out, "    align: {},", layout.align).unwrap();
+        writeln!(out, "    size: {},", layout.size).unwrap();
+        writeln!(out, "    stride: {},", layout.stride).unwrap();
+        writeln!(out, "    fields: &[").unwrap();
+        for field in &layout.fields {
+            writeln!(
+                out,
+                "        UboField {{ name: \"{}\", offset: {}, kind: UboFieldKind::{} }},",
+                field.name, field.offset, field.kind
+            )
+            .unwrap();
+        }
+        writeln!(out, "    ],").unwrap();
+        writeln!(out, "}};").unwrap();
+        writeln!(out).unwrap();
+    }
+
+    writeln!(out, "/// Every layout, by name, for a lookup that does not").unwrap();
+    writeln!(out, "/// hard-code which blocks exist.").unwrap();
+    writeln!(out, "pub const LAYOUTS: [UboLayout; {}] = [", layouts.len()).unwrap();
+    for layout in &layouts {
+        writeln!(out, "    {},", screaming_snake(&layout.name)).unwrap();
+    }
+    writeln!(out, "];").unwrap();
+    writeln!(out).unwrap();
+
+    for line in wrap(
+        "Blocks whose headers this generator will not vouch for, with the reason. Listed rather \
+         than omitted: a block that is missing because it could not be parsed and one that is \
+         missing because mbgl does not have it are different situations, and a caller that needs \
+         one of these should find out from this list rather than from a wrong layout.",
+        94,
+    ) {
+        writeln!(out, "/// {line}").unwrap();
+    }
+    writeln!(
+        out,
+        "pub const UNPARSED: [(&str, &str, &str); {}] = [",
+        unparsed.len()
+    )
+    .unwrap();
+    for item in &unparsed {
+        writeln!(
+            out,
+            "    (\"{}\", \"{}\", \"{}\"),",
+            item.name, item.header, item.reason
+        )
+        .unwrap();
+    }
+    writeln!(out, "];").unwrap();
+
+    Ok(out)
+}
+
+/// Reads `static_assert(sizeof(X) == N * 16);` into a map from name to `sizeof`.
+///
+/// mbgl writes these beside each block, so the header states its own answer for what the struct
+/// occupies. Checking against it is what turns the offset comments from documentation into
+/// something two independent statements agree on.
+fn parse_ubo_size_asserts(text: &str) -> std::collections::BTreeMap<String, u32> {
+    let mut sizes = std::collections::BTreeMap::new();
+    for line in text.lines() {
+        let Some(rest) = line.trim().strip_prefix("static_assert(sizeof(") else {
+            continue;
+        };
+        let Some(close) = rest.find(')') else {
+            continue;
+        };
+        let name = rest[..close].trim().to_string();
+        let Some(equals) = rest[close..].find("==") else {
+            continue;
+        };
+        let expression = rest[close + equals + 2..]
+            .trim_end_matches(|c: char| c == ')' || c == ';' || c.is_whitespace());
+        // The form is either `N` or `N * 16`.
+        let value: Option<u32> = match expression.split_once('*') {
+            Some((left, right)) => left
+                .trim()
+                .parse::<u32>()
+                .ok()
+                .zip(right.trim().parse::<u32>().ok())
+                .map(|(a, b)| a * b),
+            None => expression.trim().parse::<u32>().ok(),
+        };
+        if let Some(value) = value {
+            sizes.insert(name, value);
+        }
+    }
+    sizes
+}
+
+/// Turns `FillDrawableUBO` into `FILL_DRAWABLE_UBO`.
+fn screaming_snake(name: &str) -> String {
+    let mut out = String::new();
+    let chars: Vec<char> = name.chars().collect();
+    for (index, ch) in chars.iter().enumerate() {
+        if ch.is_uppercase() && index > 0 {
+            let previous_lower = chars[index - 1].is_lowercase() || chars[index - 1].is_numeric();
+            let next_lower = chars.get(index + 1).is_some_and(|c| c.is_lowercase());
+            if previous_lower || (chars[index - 1].is_uppercase() && next_lower) {
+                out.push('_');
+            }
+        }
+        out.push(ch.to_ascii_uppercase());
+    }
+    out
+}
+
+/// Parses every `struct alignas(N) NameUBO { ... };` in a header.
+fn parse_ubo_layouts(
+    text: &str,
+    header: &str,
+    asserted: &std::collections::BTreeMap<String, u32>,
+    layouts: &mut Vec<UboLayout>,
+    unparsed: &mut Vec<UnparsedUbo>,
+) {
+    let mut rest = text;
+    while let Some(start) = rest.find("struct alignas(") {
+        let after = &rest[start + "struct alignas(".len()..];
+        let Some(paren) = after.find(')') else { break };
+        let align: u32 = after[..paren].trim().parse().unwrap_or(16);
+        let after = &after[paren + 1..];
+        let Some(brace) = after.find('{') else { break };
+        let name = after[..brace].trim().to_string();
+        let body_start = brace + 1;
+        let Some(end) = after[body_start..].find("\n};") else {
+            rest = &after[body_start..];
+            continue;
+        };
+        let body = &after[body_start..body_start + end];
+        rest = &after[body_start + end..];
+
+        if !name.ends_with("UBO") {
+            continue;
+        }
+        match parse_ubo_body(body) {
+            Ok((fields, size)) => {
+                // `sizeof` pads the field extent up to the alignment. mbgl asserts the padded
+                // value in the same header, so where that assert exists it is a second,
+                // independent check on the same struct — and a disagreement means the comments
+                // and the assert have drifted from each other, which is worse than either
+                // drifting alone.
+                let stride = size.div_ceil(align) * align;
+                if let Some(&declared) = asserted.get(&name)
+                    && declared != stride
+                {
+                    unparsed.push(UnparsedUbo {
+                        name,
+                        header: header.to_string(),
+                        reason: format!(
+                            "fields end at {size} padding to {stride}, but the header asserts sizeof {declared}"
+                        ),
+                    });
+                    continue;
+                }
+                layouts.push(UboLayout {
+                    name,
+                    header: header.to_string(),
+                    align,
+                    size,
+                    stride,
+                    fields,
+                });
+            }
+            Err(reason) => unparsed.push(UnparsedUbo {
+                name,
+                header: header.to_string(),
+                reason,
+            }),
+        }
+    }
+}
+
+/// Parses a block body, verifying every offset against the running total.
+fn parse_ubo_body(body: &str) -> Result<(Vec<UboField>, u32), String> {
+    let mut fields = Vec::new();
+    let mut running: u32 = 0;
+    let mut declared_size: Option<u32> = None;
+
+    for line in body.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("/*") else {
+            continue;
+        };
+        let Some(close) = rest.find("*/") else {
+            continue;
+        };
+        let Ok(offset) = rest[..close].trim().parse::<u32>() else {
+            continue;
+        };
+        let tail = rest[close + 2..].trim();
+        if tail.is_empty() {
+            // The closing comment: the struct's size.
+            declared_size = Some(offset);
+            continue;
+        }
+        let Some(semicolon) = tail.find(';') else {
+            return Err(format!("field `{tail}` has no terminator"));
+        };
+        let declaration = &tail[..semicolon];
+        let Some(split) = declaration.rfind(char::is_whitespace) else {
+            return Err(format!("cannot split `{declaration}`"));
+        };
+        let (kind_text, field_name) = declaration.split_at(split);
+        let kind = ubo_field_kind(kind_text.trim())
+            .ok_or_else(|| format!("unmodelled type `{}`", kind_text.trim()))?;
+
+        if offset != running {
+            return Err(format!(
+                "field `{}` declares offset {offset} where the fields before it end at {running}",
+                field_name.trim()
+            ));
+        }
+        running += kind.1;
+        fields.push(UboField {
+            offset,
+            kind: kind.0,
+            name: field_name.trim().to_string(),
+        });
+    }
+
+    let size = declared_size.ok_or_else(|| "no closing size comment".to_string())?;
+    if size != running {
+        return Err(format!(
+            "declares size {size} where its fields end at {running}"
+        ));
+    }
+    if fields.is_empty() {
+        return Err("no fields".to_string());
+    }
+    Ok((fields, size))
+}
+
+/// Maps a C++ declaration to a field kind and its size.
+///
+/// Inline comments are stripped first. mbgl annotates some integer fields as `/*bool*/ int`,
+/// which is a note about intent rather than a different type: the field occupies four bytes
+/// either way, and refusing to read it would drop two symbol blocks over a comment.
+fn ubo_field_kind(text: &str) -> Option<(&'static str, u32)> {
+    let mut stripped = String::new();
+    let mut rest = text;
+    while let Some(open) = rest.find("/*") {
+        stripped.push_str(&rest[..open]);
+        let close = rest[open..].find("*/")?;
+        rest = &rest[open + close + 2..];
+    }
+    stripped.push_str(rest);
+
+    let text = stripped.as_str();
+    let normalized: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    match normalized.as_str() {
+        "float" => Some(("F32", 4)),
+        "int32_t" | "int" => Some(("I32", 4)),
+        "uint32_t" => Some(("U32", 4)),
+        "std::array<float,2>" => Some(("Vec2", 8)),
+        "std::array<float,3>" => Some(("Vec3", 12)),
+        "std::array<float,4>" => Some(("Vec4", 16)),
+        "Color" => Some(("Color", 16)),
+        "std::array<float,16>" | "std::array<float,4*4>" => Some(("Mat4", 64)),
+        _ => None,
     }
 }

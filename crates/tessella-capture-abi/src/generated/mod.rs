@@ -5,6 +5,7 @@
 
 pub mod mbgl_enums;
 pub mod shader_attributes;
+pub mod ubo_layouts;
 
 #[cfg(test)]
 mod tests {
@@ -102,5 +103,151 @@ mod tests {
         assert!(!attributes(BuiltIn::BackgroundShader).is_empty());
         assert!(!attributes(BuiltIn::FillShader).is_empty());
         assert!(!attributes(BuiltIn::FillOutlineShader).is_empty());
+    }
+
+    /// Every generated layout is internally consistent: fields in order, no gaps, no overlaps,
+    /// and a size that is the sum of them.
+    ///
+    /// The generator checks this before emitting, so a failure here means the emitted form lost
+    /// something the parse had — which is a different bug from a header the parse misread, and
+    /// worth being able to tell apart.
+    #[test]
+    fn every_layout_is_internally_consistent() {
+        use super::ubo_layouts::LAYOUTS;
+
+        for layout in LAYOUTS {
+            let mut running = 0;
+            for field in layout.fields {
+                assert_eq!(
+                    field.offset, running,
+                    "{}: field `{}` at {} where the previous field ends at {running}",
+                    layout.name, field.name, field.offset
+                );
+                running += field.kind.size();
+            }
+            assert_eq!(running, layout.size, "{}", layout.name);
+            assert_eq!(layout.align, 16, "{} is not 16-aligned", layout.name);
+
+            // `size` is where the fields end; `stride` is `sizeof`, which pads up to the
+            // alignment. They differ only when the fields end mid-alignment —
+            // `SymbolDrawableUBO` ends at 260 and occupies 272 — and it is the stride that
+            // separates consecutive blocks in a consolidated buffer. Packing at `size` would
+            // put every block after the first at the wrong offset.
+            assert!(layout.stride >= layout.size, "{}", layout.name);
+            assert!(layout.stride - layout.size < 16, "{}", layout.name);
+            assert_eq!(layout.stride % 16, 0, "{}", layout.name);
+        }
+    }
+
+    /// The blocks R0 needs are present and sized as the oracle's UBO writes are.
+    ///
+    /// The golden dump reports `ubo layer:0 slot=5 size=32` for the background layer's
+    /// properties and `slot=5 size=48` for a fill layer's, which are exactly
+    /// `BackgroundPropsUBO` and `FillEvaluatedPropsUBO`. A layout that had drifted from the
+    /// shaders would disagree here before it ever mispacked a frame.
+    #[test]
+    fn the_blocks_r0_needs_match_the_oracles_sizes() {
+        use super::ubo_layouts::{
+            BACKGROUND_DRAWABLE_UBO, BACKGROUND_PROPS_UBO, FILL_DRAWABLE_UBO,
+            FILL_EVALUATED_PROPS_UBO, FILL_OUTLINE_DRAWABLE_UBO,
+        };
+
+        assert_eq!(BACKGROUND_PROPS_UBO.size, 32);
+        assert_eq!(FILL_EVALUATED_PROPS_UBO.size, 48);
+        assert_eq!(BACKGROUND_DRAWABLE_UBO.size, 64);
+
+        // The fill and fill-outline drawable blocks are the same size, which is not obvious —
+        // the outline carries a different second interpolation, not an extra one.
+        assert_eq!(FILL_DRAWABLE_UBO.size, 80);
+        assert_eq!(FILL_OUTLINE_DRAWABLE_UBO.size, 80);
+
+        // None of R0's blocks needs padding: their fields land on the alignment already.
+        for layout in [
+            BACKGROUND_PROPS_UBO,
+            FILL_EVALUATED_PROPS_UBO,
+            BACKGROUND_DRAWABLE_UBO,
+            FILL_DRAWABLE_UBO,
+            FILL_OUTLINE_DRAWABLE_UBO,
+        ] {
+            assert_eq!(layout.stride, layout.size, "{}", layout.name);
+        }
+    }
+
+    /// A block whose fields end mid-alignment has a stride larger than its size, and mbgl's own
+    /// `static_assert` is what says so. The generator cross-checks against that assert, so this
+    /// is the case proving the two quantities are genuinely distinct rather than always equal.
+    #[test]
+    fn a_block_ending_mid_alignment_is_padded() {
+        use super::ubo_layouts::LAYOUTS;
+
+        let padded: Vec<&str> = LAYOUTS
+            .iter()
+            .filter(|layout| layout.stride != layout.size)
+            .map(|layout| layout.name)
+            .collect();
+        assert!(
+            padded.contains(&"SymbolDrawableUBO"),
+            "expected a padded block among {padded:?}"
+        );
+        let symbol = LAYOUTS
+            .iter()
+            .find(|layout| layout.name == "SymbolDrawableUBO")
+            .expect("present");
+        assert_eq!(symbol.size, 260, "fields end here");
+        assert_eq!(symbol.stride, 272, "and mbgl asserts sizeof is 17 * 16");
+    }
+
+    /// A drawable block starts with the tile matrix, which is what makes the placement the
+    /// consumer applies the same one `StencilTiles` describes.
+    #[test]
+    fn drawable_blocks_lead_with_the_matrix() {
+        use super::ubo_layouts::{
+            BACKGROUND_DRAWABLE_UBO, FILL_DRAWABLE_UBO, FILL_OUTLINE_DRAWABLE_UBO, UboFieldKind,
+        };
+
+        for layout in [
+            BACKGROUND_DRAWABLE_UBO,
+            FILL_DRAWABLE_UBO,
+            FILL_OUTLINE_DRAWABLE_UBO,
+        ] {
+            let first = layout.fields.first().expect("at least one field");
+            assert_eq!(first.name, "matrix", "{}", layout.name);
+            assert_eq!(first.offset, 0, "{}", layout.name);
+            assert_eq!(first.kind, UboFieldKind::Mat4, "{}", layout.name);
+        }
+    }
+
+    /// What the generator would not vouch for is named rather than omitted, and none of it is
+    /// a block R0 needs.
+    ///
+    /// The distinction matters: a block missing because mbgl has no such thing and one missing
+    /// because a header could not be read are different situations, and only the second is a
+    /// reason to go and look at the header.
+    #[test]
+    fn unparsed_blocks_are_named_and_none_are_r0() {
+        use super::ubo_layouts::UNPARSED;
+
+        for (name, header, reason) in UNPARSED {
+            assert!(!reason.is_empty(), "{name} has no reason");
+            assert!(
+                name.starts_with("Line") || name.starts_with("Symbol"),
+                "{name} in {header} is outside line and symbol work: {reason}"
+            );
+        }
+    }
+
+    /// Field kinds report the sizes their C++ types occupy.
+    #[test]
+    fn field_kinds_are_sized_as_their_types() {
+        use super::ubo_layouts::UboFieldKind;
+
+        assert_eq!(UboFieldKind::F32.size(), 4);
+        assert_eq!(UboFieldKind::I32.size(), 4);
+        assert_eq!(UboFieldKind::U32.size(), 4);
+        assert_eq!(UboFieldKind::Vec2.size(), 8);
+        assert_eq!(UboFieldKind::Vec3.size(), 12);
+        assert_eq!(UboFieldKind::Vec4.size(), 16);
+        assert_eq!(UboFieldKind::Color.size(), 16);
+        assert_eq!(UboFieldKind::Mat4.size(), 64);
     }
 }
