@@ -7,6 +7,7 @@ use alloc::vec::Vec;
 
 use super::{
     ArithmeticOp, AssertKind, CastKind, CompareOp, Expr, Interpolation, LegacyFunction, LegacyKind,
+    PropertySpec,
 };
 use crate::value::Value;
 
@@ -55,15 +56,12 @@ pub enum ParseError {
 
 /// Parses a value in a scope.
 fn parse_in(value: &Value, scope: &[String]) -> Result<Expr, ParseError> {
-    parse_with_default_in(value, None, scope)
+    parse_with_default_in(value, &PropertySpec::default(), scope)
 }
 
 /// Parses a value, carrying the property spec's default for pre-expression functions.
-pub(super) fn parse_with_default(
-    value: &Value,
-    property_default: Option<Value>,
-) -> Result<Expr, ParseError> {
-    parse_with_default_in(value, property_default, &[])
+pub(super) fn parse_with_default(value: &Value, spec: &PropertySpec) -> Result<Expr, ParseError> {
+    parse_with_default_in(value, spec, &[])
 }
 
 /// The parser proper.
@@ -74,14 +72,14 @@ pub(super) fn parse_with_default(
 /// where that is.
 fn parse_with_default_in(
     value: &Value,
-    property_default: Option<Value>,
+    spec: &PropertySpec,
     scope: &[String],
 ) -> Result<Expr, ParseError> {
     // A pre-expression function is an object, which `looks_like_expression` does not recognize,
     // so without this check it falls through to `Expr::Literal` and a style that varies a
     // property by zoom silently gets the raw JSON object as the value. That is worse than an
     // error: it renders as a broken colour rather than as a message.
-    if let Some(function) = parse_legacy_function(value, property_default)? {
+    if let Some(function) = parse_legacy_function(value, spec)? {
         return Ok(function);
     }
 
@@ -497,10 +495,7 @@ fn parse_array_assertion(
 /// Returns `Ok(None)` when the value is not one, so an ordinary object literal still reaches the
 /// literal path. The shape is what identifies it: an object carrying `stops`, or an `identity`
 /// function, which is the one form with no stops at all.
-fn parse_legacy_function(
-    value: &Value,
-    property_default: Option<Value>,
-) -> Result<Option<Expr>, ParseError> {
+fn parse_legacy_function(value: &Value, spec: &PropertySpec) -> Result<Option<Expr>, ParseError> {
     let Some(object) = value.as_object() else {
         return Ok(None);
     };
@@ -555,7 +550,8 @@ fn parse_legacy_function(
         stops,
         base: object.get("base").and_then(Value::as_number).unwrap_or(1.0),
         function_default: object.get("default").cloned(),
-        property_default,
+        property_default: spec.default.clone(),
+        property_type: spec.expected,
     }))))
 }
 

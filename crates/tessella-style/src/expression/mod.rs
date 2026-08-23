@@ -336,6 +336,20 @@ pub enum LegacyKind {
     Exponential,
 }
 
+/// What the style spec says about the property an expression is being parsed for.
+///
+/// Pre-expression functions need both halves. The default is what a function falls back to, and
+/// the type is what `identity` checks its property against — a `number` property whose feature
+/// carries a string falls back rather than passing the string through. Neither is in the style,
+/// so neither can be recovered from the expression alone.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PropertySpec {
+    /// The property's default value.
+    pub default: Option<Value>,
+    /// The type the property must have, when the spec names one.
+    pub expected: Option<Type>,
+}
+
 /// A pre-expression function.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LegacyFunction {
@@ -354,6 +368,8 @@ pub struct LegacyFunction {
     /// Carried on the node because it comes from the *spec* rather than the style, and a
     /// function parsed without it would silently return null where the spec returns a value.
     pub property_default: Option<Value>,
+    /// The type the property must have, for `identity` to check against.
+    pub property_type: Option<Type>,
 }
 
 /// An expression tree node.
@@ -561,7 +577,22 @@ impl Expression {
         value: &Value,
         property_default: Option<Value>,
     ) -> Result<Self, ParseError> {
-        let root = parse::parse_with_default(value, property_default)?;
+        Self::parse_for(
+            value,
+            &PropertySpec {
+                default: property_default,
+                expected: None,
+            },
+        )
+    }
+
+    /// Parses a style value for a property whose spec is known.
+    ///
+    /// # Errors
+    ///
+    /// As [`Expression::parse`].
+    pub fn parse_for(value: &Value, spec: &PropertySpec) -> Result<Self, ParseError> {
+        let root = parse::parse_with_default(value, spec)?;
         let dependency = classify(&root);
         let parsed = Self { root, dependency };
 

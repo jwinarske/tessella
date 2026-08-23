@@ -73,6 +73,14 @@ legacy/categorical/tokens
 legacy/exponential/array-default
 legacy/exponential/base
 legacy/exponential/number-default
+legacy/identity/array-default
+legacy/identity/boolean-default
+legacy/identity/number-default
+legacy/identity/string-default
+legacy/interval/array-default
+legacy/interval/duplicate-stops
+legacy/interval/number-default
+legacy/interval/string-default
 less/boolean
 less/mismatch
 less/null
@@ -165,6 +173,7 @@ times/basic
 to-boolean/basic
 to-number/2-ary
 to-number/basic
+to-string/basic
 typecheck/array-item-subtyping
 typecheck/array-length-subtyping
 zoom/basic

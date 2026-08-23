@@ -597,3 +597,29 @@ fn variadic_arithmetic_folds_to_its_identity() {
         );
     }
 }
+
+/// `to-string` on an array or object produces JSON, not Rust's debug form.
+///
+/// This was a real defect: the fallback arm was `format!("{value:?}")`, so a style doing
+/// `["to-string", ["get", "tags"]]` rendered `Array([Number(1.0)])` onto the map. Wrong output
+/// that looks like a crash report is still wrong output, and no type would have caught it.
+#[test]
+fn to_string_serializes_aggregates_as_json() {
+    assert_eq!(
+        eval(r#"["to-string", ["literal", [1, 2]]]"#, None, None),
+        Value::String("[1,2]".to_string())
+    );
+    assert_eq!(
+        eval(r#"["to-string", ["literal", {"y": 1}]]"#, None, None),
+        Value::String(r#"{"y":1}"#.to_string())
+    );
+    assert_eq!(
+        eval(r#"["to-string", ["literal", ["a\"b"]]]"#, None, None),
+        Value::String(r#"["a\"b"]"#.to_string()),
+        "and quotes are escaped"
+    );
+    assert_eq!(
+        eval(r#"["to-string", ["literal", []]]"#, None, None),
+        Value::String("[]".to_string())
+    );
+}

@@ -25,7 +25,7 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use tessella_style::Value;
-use tessella_style::expression::{Dependency, Expression, Feature};
+use tessella_style::expression::{Dependency, Expression, Feature, PropertySpec, Type};
 
 /// The vendored suite.
 fn suite_root() -> PathBuf {
@@ -121,14 +121,28 @@ fn run_case(case: &Value) -> Result<(), String> {
     let compiled = expected.get("compiled").ok_or("no compiled")?;
     let wants_success = compiled.get("result").and_then(Value::as_str) == Some("success");
 
-    // Pre-expression functions fall back to the *property spec's* default, which lives here
-    // rather than in the expression, so it has to be handed to the parser.
-    let property_default = case
-        .get("propertySpec")
-        .and_then(|spec| spec.get("default"))
-        .cloned();
+    // Pre-expression functions need both halves of the property spec: the default they fall
+    // back to, and the type `identity` checks its property against. Neither is in the style.
+    let spec = case.get("propertySpec");
+    let property = PropertySpec {
+        default: spec.and_then(|spec| spec.get("default")).cloned(),
+        expected: spec
+            .and_then(|spec| spec.get("type"))
+            .and_then(Value::as_str)
+            .and_then(|name| match name {
+                "number" => Some(Type::Number),
+                "string" => Some(Type::String),
+                "boolean" => Some(Type::Boolean),
+                "color" => Some(Type::Color),
+                "array" => Some(Type::Array),
+                // `enum` is a string with a value list, which this does not check yet;
+                // treating it as a string is right about the type and silent about the list.
+                "enum" => Some(Type::String),
+                _ => None,
+            }),
+    };
 
-    let parsed = match Expression::parse_with_default(expression, property_default) {
+    let parsed = match Expression::parse_for(expression, &property) {
         Ok(parsed) => {
             if !wants_success {
                 return Err("parsed, but the spec expects a compile error".to_string());

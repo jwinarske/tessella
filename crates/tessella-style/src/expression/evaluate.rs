@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 
 use super::{
     ArithmeticOp, AssertKind, CastKind, CompareOp, Expr, FilterTarget, Interpolation,
-    LegacyFunction, LegacyKind,
+    LegacyFunction, LegacyKind, Type,
 };
 use crate::value::Value;
 
@@ -362,6 +362,24 @@ fn locate(stops: &[(f64, Expr)], position: f64) -> Option<usize> {
     Some(stops.partition_point(|(stop, _)| *stop <= position) - 1)
 }
 
+/// Whether a value satisfies the type a property spec asks for.
+///
+/// A colour is a string in the style and an array once resolved, so both are accepted; the
+/// coercion happens later, and rejecting the string here would make every colour function fall
+/// back to its default.
+fn matches_spec_type(expected: Type, value: &Value) -> bool {
+    match expected {
+        Type::Value => true,
+        Type::Number => matches!(value, Value::Number(_)),
+        Type::String => matches!(value, Value::String(_)),
+        Type::Boolean => matches!(value, Value::Bool(_)),
+        Type::Object => matches!(value, Value::Object(_)),
+        Type::Array => matches!(value, Value::Array(_)),
+        Type::Color => matches!(value, Value::String(_) | Value::Array(_)),
+        Type::Null => matches!(value, Value::Null),
+    }
+}
+
 /// Evaluates a `let` by extending the scope one binding at a time.
 ///
 /// Written recursively because each frame has to outlive the next: the borrowed chain points at
@@ -464,14 +482,19 @@ fn evaluate_legacy(
     let fallback = || function.fallback().cloned().unwrap_or(Value::Null);
 
     match function.kind {
-        // Identity passes the property through. A missing property falls back rather than
-        // yielding null, which is what makes `{"type": "identity", "property": "x"}` usable on
-        // features that do not all carry `x`.
-        LegacyKind::Identity => Ok(if input == Value::Null {
-            fallback()
-        } else {
-            input
-        }),
+        // Identity passes the property through, but only when it is the type the property spec
+        // asks for. A `number` property whose feature carries a string falls back rather than
+        // handing a string to something expecting a number — the check is the whole difference
+        // between identity and a bare `["get", …]`.
+        LegacyKind::Identity => {
+            if input == Value::Null {
+                return Ok(fallback());
+            }
+            let acceptable = function
+                .property_type
+                .is_none_or(|expected| matches_spec_type(expected, &input));
+            Ok(if acceptable { input } else { fallback() })
+        }
 
         // Exact equality against each stop input. Types are not coerced: the spec's own suite
         // has a case where the property is the number 0 and the stop is the string "0", and it
@@ -482,16 +505,35 @@ fn evaluate_legacy(
             .find(|(stop, _)| *stop == input)
             .map_or_else(fallback, |(_, output)| output.clone())),
 
-        // The output of the last stop at or below the input.
+        // The output of the last stop at or below the input, clamping below the range to the
+        // first stop rather than falling back. The fallback is for a property that is missing or
+        // the wrong type; a property that is simply small is still in the function's domain.
         LegacyKind::Interval => {
             let Some(position) = input.as_number() else {
                 return Ok(fallback());
             };
-            let matched = function
-                .stops
-                .iter()
-                .rfind(|(stop, _)| stop.as_number().is_some_and(|s| s <= position));
-            Ok(matched.map_or_else(fallback, |(_, output)| output.clone()))
+            let mut chosen: Option<(f64, &Value)> = None;
+            for (stop, output) in &function.stops {
+                let Some(stop) = stop.as_number() else {
+                    continue;
+                };
+                if stop > position {
+                    break;
+                }
+                // Strictly greater, so duplicate stop inputs keep the *first* of them. The
+                // suite pins this: stops at 1 for both "b" and "c" select "b".
+                if chosen.is_none_or(|(previous, _)| stop > previous) {
+                    chosen = Some((stop, output));
+                }
+            }
+            Ok(match chosen {
+                Some((_, output)) => output.clone(),
+                // Below every stop: clamp to the first, if there is one.
+                None => function
+                    .stops
+                    .first()
+                    .map_or_else(fallback, |(_, output)| output.clone()),
+            })
         }
 
         LegacyKind::Exponential => {
@@ -694,7 +736,70 @@ fn to_string(value: &Value) -> String {
                 alloc::format!("{number}")
             }
         }
-        other => alloc::format!("{other:?}"),
+        // Arrays and objects serialize as compact JSON. This used to be `{other:?}`, which is
+        // Rust's Debug form: a style doing `["to-string", ["get", "tags"]]` rendered
+        // `Array([Number(1.0)])` onto the map. Wrong output that looks like a crash report is
+        // still wrong output, and nothing in the type system was going to catch it.
+        aggregate => {
+            let mut out = String::new();
+            write_json(&mut out, aggregate);
+            out
+        }
+    }
+}
+
+/// Writes a value as compact JSON, the form the spec's string conversion produces.
+///
+/// Object keys come out sorted because [`Value`]'s objects are ordered maps — the same choice
+/// that makes a style's serialization reproducible everywhere else.
+fn write_json(out: &mut String, value: &Value) {
+    match value {
+        Value::Null => out.push_str("null"),
+        Value::Bool(flag) => out.push_str(if *flag { "true" } else { "false" }),
+        Value::Number(_) | Value::String(_) => {
+            if let Value::String(text) = value {
+                out.push('"');
+                for ch in text.chars() {
+                    match ch {
+                        '"' => out.push_str("\\\""),
+                        '\\' => out.push_str("\\\\"),
+                        '\n' => out.push_str("\\n"),
+                        '\r' => out.push_str("\\r"),
+                        '\t' => out.push_str("\\t"),
+                        // Control characters have no literal form in JSON.
+                        c if (c as u32) < 0x20 => {
+                            out.push_str(&alloc::format!("\\u{:04x}", c as u32));
+                        }
+                        c => out.push(c),
+                    }
+                }
+                out.push('"');
+            } else {
+                out.push_str(&to_string(value));
+            }
+        }
+        Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                write_json(out, item);
+            }
+            out.push(']');
+        }
+        Value::Object(members) => {
+            out.push('{');
+            for (index, (key, member)) in members.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                write_json(out, &Value::String(key.clone()));
+                out.push(':');
+                write_json(out, member);
+            }
+            out.push('}');
+        }
     }
 }
 
