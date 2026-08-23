@@ -295,6 +295,70 @@ pub fn proj_matrix(view: &ViewTransform) -> Result<Mat4, CameraError> {
     Ok(multiply(&camera_to_clip, &world_to_camera(view)))
 }
 
+/// mbgl's `matrix::scale`: scales the first three columns and leaves the translation.
+#[must_use]
+pub fn scale(a: &Mat4, x: f64, y: f64, z: f64) -> Mat4 {
+    let mut out = *a;
+    for index in 0..4 {
+        out[index] = a[index] * x;
+        out[4 + index] = a[4 + index] * y;
+        out[8 + index] = a[8 + index] * z;
+    }
+    out
+}
+
+/// The tile-local to world matrix mbgl calls `matrixFor`.
+///
+/// Tile-local coordinates run 0..`EXTENT`, so the scale is the tile's world size over the extent
+/// — a factor the vertices themselves never carry. That is the point of the split: vertices are
+/// integers in a tile's own frame, shareable across views because they say nothing about where
+/// the tile is, and this matrix is what places them.
+///
+/// The wrap multiplies into the x translation rather than being carried separately, which is how
+/// one fetched tile draws on both sides of the antimeridian.
+#[must_use]
+pub fn matrix_for_tile(z: u8, x: u32, y: u32, wrap: i32, zoom: f64) -> Mat4 {
+    let tile_scale = f64::from(1u32 << z.min(MAX_TILE_ZOOM));
+    let s = world_size(zoom) / tile_scale;
+
+    let mut matrix: Mat4 = [
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+    ];
+    // mbgl truncates the tile offsets to integers before scaling, so the products are exact.
+    let column = f64::from(x) + f64::from(wrap) * tile_scale;
+    translate_in_place(&mut matrix, column * s, f64::from(y) * s, 0.0);
+    scale(&matrix, s / EXTENT, s / EXTENT, 1.0)
+}
+
+/// The extent a tile's local coordinates run to.
+pub const EXTENT: f64 = 8192.0;
+
+/// The highest zoom [`matrix_for_tile`] will shift for, matching [`crate::cover::MAX_ZOOM`].
+const MAX_TILE_ZOOM: u8 = 30;
+
+/// The tile-local to clip matrix: the camera's projection times the tile's placement.
+///
+/// This is what a stencil mask is described by and what a consumer multiplies tile-local
+/// vertices through. Carrying the two factors apart rather than pre-multiplying is what lets a
+/// consumer own the camera (DR-9) — it can substitute its own projection and keep the placement.
+///
+/// # Errors
+///
+/// [`CameraError::Rotated`] when the view has bearing or pitch.
+pub fn tile_to_clip(
+    view: &ViewTransform,
+    z: u8,
+    x: u32,
+    y: u32,
+    wrap: i32,
+) -> Result<Mat4, CameraError> {
+    let projection = proj_matrix(view)?;
+    Ok(multiply(
+        &projection,
+        &matrix_for_tile(z, x, y, wrap, view.zoom),
+    ))
+}
+
 /// The center a map holds after being told to go somewhere.
 ///
 /// # A camera is not where you put it
@@ -606,5 +670,77 @@ mod tests {
         assert_eq!(multiply(&identity, &translated), translated);
         assert_eq!(multiply(&translated, &identity), translated);
         assert_eq!(&translated[12..15], &[3.0, 5.0, 7.0]);
+    }
+
+    /// Tile-local coordinates run 0..EXTENT, so the placement carries the tile's world size over
+    /// the extent. At z13 a tile is 512 world pixels and the extent is 8192, so the scale is
+    /// exactly one sixteenth — a power of two, and therefore exact.
+    #[test]
+    fn the_tile_matrix_scales_the_extent_to_the_tile() {
+        let matrix = matrix_for_tile(13, 0, 0, 0, 13.0);
+        assert_eq!(matrix[0], 512.0 / EXTENT);
+        assert_eq!(matrix[5], 512.0 / EXTENT);
+        assert_eq!(matrix[10], 1.0, "z is not scaled by the extent");
+        assert_eq!(
+            &matrix[12..15],
+            &[0.0, 0.0, 0.0],
+            "tile 0/0 is at the origin"
+        );
+    }
+
+    /// The tile's column and row become the translation, in world pixels.
+    #[test]
+    fn the_tile_matrix_places_the_tile() {
+        let matrix = matrix_for_tile(13, 4093, 2724, 0, 13.0);
+        assert_eq!(matrix[12], 4093.0 * 512.0);
+        assert_eq!(matrix[13], 2724.0 * 512.0);
+    }
+
+    /// A wrapped tile is the same tile a world away, which is how one fetch draws both sides of
+    /// the antimeridian. The scale is untouched: only the placement moves.
+    #[test]
+    fn a_wrap_shifts_the_placement_by_a_whole_world() {
+        let base = matrix_for_tile(13, 5, 2724, 0, 13.0);
+        let east = matrix_for_tile(13, 5, 2724, 1, 13.0);
+        let west = matrix_for_tile(13, 5, 2724, -1, 13.0);
+
+        let world = world_size(13.0);
+        assert_eq!(east[12] - base[12], world);
+        assert_eq!(base[12] - west[12], world);
+        assert_eq!(east[13], base[13], "wrap does not move the row");
+        assert_eq!(east[0], base[0], "nor the scale");
+    }
+
+    /// Overscaling: a tile drawn at a higher zoom than its own is placed by its own zoom and
+    /// sized by the view's, which is what makes a z13 tile fill four times the screen at z14.
+    #[test]
+    fn a_tile_drawn_above_its_own_zoom_is_scaled_up() {
+        let at_own = matrix_for_tile(13, 4093, 2724, 0, 13.0);
+        let overscaled = matrix_for_tile(13, 4093, 2724, 0, 14.0);
+        assert_eq!(overscaled[0], at_own[0] * 2.0, "twice the size");
+        assert_eq!(overscaled[12], at_own[12] * 2.0, "and twice as far out");
+    }
+
+    /// The tile matrix is a function of the tile and the zoom, and nothing else — which is what
+    /// lets one placement serve every layer clipping against that tile.
+    #[test]
+    fn the_tile_matrix_is_a_pure_function_of_the_tile() {
+        for _ in 0..4 {
+            assert_eq!(
+                matrix_for_tile(13, 4092, 2723, 0, 13.0),
+                matrix_for_tile(13, 4092, 2723, 0, 13.0)
+            );
+        }
+        assert_ne!(
+            matrix_for_tile(13, 4092, 2723, 0, 13.0),
+            matrix_for_tile(13, 4092, 2724, 0, 13.0)
+        );
+    }
+
+    /// A zoom past the shift ceiling clamps rather than overflowing, matching `cover`.
+    #[test]
+    fn an_absurd_tile_zoom_does_not_shift_past_the_ceiling() {
+        let matrix = matrix_for_tile(200, 0, 0, 0, 13.0);
+        assert!(matrix.iter().all(|v| v.is_finite()), "{matrix:?}");
     }
 }
