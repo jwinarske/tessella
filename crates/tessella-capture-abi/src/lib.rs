@@ -65,6 +65,7 @@ pub mod ring;
 pub mod generated;
 
 pub use generated::mbgl_enums::{AttributeDataType, BuiltIn, RenderPass, TexturePixelType};
+pub use generated::shader_attributes::{ShaderAttribute, attributes, declared_for};
 
 /// Revision of the capture-stream ABI this crate implements.
 ///

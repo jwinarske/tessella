@@ -20,8 +20,9 @@
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::process::ExitCode;
+use std::process::{Command, ExitCode, Stdio};
 
 /// How a C++ enum should be mirrored on the Rust side.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -90,8 +91,11 @@ const SOURCES: &[Source] = &[
     },
 ];
 
-/// Path of the generated file, relative to the workspace root.
+/// Path of the generated enum mirrors, relative to the workspace root.
 const OUTPUT: &str = "crates/tessella-capture-abi/src/generated/mbgl_enums.rs";
+
+/// Path of the generated shader attribute tables.
+const SHADER_OUTPUT: &str = "crates/tessella-capture-abi/src/generated/shader_attributes.rs";
 
 /// One parsed C++ enumerator.
 struct Enumerator {
@@ -136,15 +140,35 @@ fn main() -> ExitCode {
         }
     };
 
-    let out = workspace.join(OUTPUT);
-    if check {
-        let current = std::fs::read_to_string(&out).unwrap_or_default();
-        if current == generated {
-            println!("{OUTPUT} is up to date");
-            return ExitCode::SUCCESS;
+    let shaders = match generate_shader_attributes(&mbgl).map(|text| rustfmt(&text)) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("{err}");
+            return ExitCode::FAILURE;
         }
-        eprintln!("{OUTPUT} differs from the pinned mbgl tree; re-run without --check");
-        return ExitCode::FAILURE;
+    };
+
+    let out = workspace.join(OUTPUT);
+    let shader_out = workspace.join(SHADER_OUTPUT);
+    if check {
+        let mut stale = false;
+        for (path, name, want) in [
+            (&out, OUTPUT, &generated),
+            (&shader_out, SHADER_OUTPUT, &shaders),
+        ] {
+            let current = std::fs::read_to_string(path).unwrap_or_default();
+            if current == *want {
+                println!("{name} is up to date");
+            } else {
+                eprintln!("{name} differs from the pinned mbgl tree; re-run without --check");
+                stale = true;
+            }
+        }
+        return if stale {
+            ExitCode::FAILURE
+        } else {
+            ExitCode::SUCCESS
+        };
     }
 
     if let Some(parent) = out.parent()
@@ -153,11 +177,16 @@ fn main() -> ExitCode {
         eprintln!("creating {}: {err}", parent.display());
         return ExitCode::FAILURE;
     }
-    if let Err(err) = std::fs::write(&out, &generated) {
-        eprintln!("writing {}: {err}", out.display());
-        return ExitCode::FAILURE;
+    for (path, name, text) in [
+        (&out, OUTPUT, &generated),
+        (&shader_out, SHADER_OUTPUT, &shaders),
+    ] {
+        if let Err(err) = std::fs::write(path, text) {
+            eprintln!("writing {}: {err}", path.display());
+            return ExitCode::FAILURE;
+        }
+        println!("wrote {name}");
     }
-    println!("wrote {OUTPUT}");
     ExitCode::SUCCESS
 }
 
@@ -509,4 +538,350 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
         }
     }
     lines
+}
+
+/// Generates the per-shader vertex attribute tables (DR-6).
+///
+/// Two sources feed this. `shader_defines.hpp` declares the attribute ids as anonymous enums,
+/// one block per shader family, whose values are their positions. `src/mbgl/shaders/vulkan/*.cpp`
+/// declares, for each shader, the attributes it actually binds: a binding slot, the type the
+/// shader *declares*, and the id.
+///
+/// The declared type is the point of the whole exercise. A shader declares the zoom-interpolated
+/// width of a data-driven property — fill's color is `Float4`, a packed min/max pair — while the
+/// binder supplies only as much as the property needs, `Float2` when it varies per feature but
+/// not with zoom. §2.2 says to bind the declared type with the supplied offset and stride, and
+/// this table is where "declared" comes from. Without it a producer has nothing to put in
+/// `declaredDataType` but a guess.
+///
+/// The ids also decide what gets dropped. An attribute a drawable supplies that its shader does
+/// not declare binds at `-1`, and the consumer drops it — `fill-outline-color` on the plain fill
+/// shader is exactly that case, and it is visible in the golden dump as `bind=-1 ddt=255`.
+fn generate_shader_attributes(mbgl: &Path) -> Result<String, String> {
+    let revision = tree_revision(mbgl);
+
+    let defines_path = mbgl.join("include/mbgl/shaders/shader_defines.hpp");
+    let defines = std::fs::read_to_string(&defines_path)
+        .map_err(|err| format!("reading {}: {err}", defines_path.display()))?;
+    let ids = parse_attribute_ids(&defines);
+
+    let dir = mbgl.join("src/mbgl/shaders/vulkan");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .map_err(|err| format!("reading {}: {err}", dir.display()))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "cpp"))
+        .collect();
+    // Directory order is filesystem order, which is not stable across machines.
+    files.sort();
+
+    let mut shaders: Vec<ShaderTable> = Vec::new();
+    for file in &files {
+        let text = std::fs::read_to_string(file)
+            .map_err(|err| format!("reading {}: {err}", file.display()))?;
+        shaders.extend(parse_shader_attributes(&text));
+    }
+    shaders.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut out = String::new();
+    writeln!(
+        out,
+        "// @generated by `cargo run -p mbgl-codegen`. Do not edit by hand."
+    )
+    .unwrap();
+    writeln!(out, "//").unwrap();
+    writeln!(
+        out,
+        "// Source: maplibre-native @ {revision}, branch capture-backend-phase0."
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "// Attribute ids from include/mbgl/shaders/shader_defines.hpp; declared types and"
+    )
+    .unwrap();
+    writeln!(out, "// binding slots from src/mbgl/shaders/vulkan/*.cpp.").unwrap();
+    writeln!(out).unwrap();
+    for line in wrap(
+        "Per-shader vertex attribute tables (DR-6). What a shader declares, as data. A producer \
+         reads the declared type from here rather than guessing it, which is what makes \
+         `declaredDataType` on the wire mean anything; and an attribute absent from a shader's \
+         table binds at -1 and is dropped by the consumer.",
+        94,
+    ) {
+        if line.is_empty() {
+            writeln!(out, "//!").unwrap();
+        } else {
+            writeln!(out, "//! {line}").unwrap();
+        }
+    }
+    writeln!(out).unwrap();
+    writeln!(
+        out,
+        "use super::mbgl_enums::{{AttributeDataType, BuiltIn}};"
+    )
+    .unwrap();
+    writeln!(out).unwrap();
+
+    writeln!(out, "/// One attribute a shader declares.").unwrap();
+    writeln!(out, "#[derive(Debug, Clone, Copy, PartialEq, Eq)]").unwrap();
+    writeln!(out, "pub struct ShaderAttribute {{").unwrap();
+    writeln!(out, "    /// Binding slot the shader declares for it.").unwrap();
+    writeln!(out, "    pub binding: i32,").unwrap();
+    writeln!(
+        out,
+        "    /// Type the shader declares. Bind this, with the supplied offset and stride."
+    )
+    .unwrap();
+    writeln!(out, "    pub declared: AttributeDataType,").unwrap();
+    writeln!(out, "    /// Shader-side attribute id.").unwrap();
+    writeln!(out, "    pub attr_id: u32,").unwrap();
+    writeln!(
+        out,
+        "    /// Name of the id in `shader_defines.hpp`, for diagnostics."
+    )
+    .unwrap();
+    writeln!(out, "    pub name: &'static str,").unwrap();
+    writeln!(out, "}}").unwrap();
+    writeln!(out).unwrap();
+
+    for (shader, attributes) in &shaders {
+        writeln!(out, "/// Attributes declared by `{shader}`.").unwrap();
+        writeln!(
+            out,
+            "pub const {}: [ShaderAttribute; {}] = [",
+            screaming(shader),
+            attributes.len()
+        )
+        .unwrap();
+        for (binding, data_type, id_name) in attributes {
+            let id = ids.get(id_name).copied().unwrap_or(u32::MAX);
+            writeln!(out, "    ShaderAttribute {{").unwrap();
+            writeln!(out, "        binding: {binding},").unwrap();
+            writeln!(out, "        declared: AttributeDataType::{data_type},").unwrap();
+            writeln!(out, "        attr_id: {id},").unwrap();
+            writeln!(out, "        name: \"{id_name}\",").unwrap();
+            writeln!(out, "    }},").unwrap();
+        }
+        writeln!(out, "];").unwrap();
+        writeln!(out).unwrap();
+    }
+
+    writeln!(
+        out,
+        "/// The attributes a shader declares, or an empty slice for one with no table."
+    )
+    .unwrap();
+    writeln!(out, "///").unwrap();
+    writeln!(
+        out,
+        "/// An empty table is not the same as a shader that binds nothing: it means this"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// build has no data for it, and a producer should treat that as a fault rather than"
+    )
+    .unwrap();
+    writeln!(out, "/// as permission to bind nothing.").unwrap();
+    writeln!(out, "#[must_use]").unwrap();
+    writeln!(
+        out,
+        "pub fn attributes(shader: BuiltIn) -> &'static [ShaderAttribute] {{"
+    )
+    .unwrap();
+    writeln!(out, "    match shader {{").unwrap();
+    for (shader, _) in &shaders {
+        writeln!(out, "        BuiltIn::{shader} => &{},", screaming(shader)).unwrap();
+    }
+    writeln!(out, "        _ => &[],").unwrap();
+    writeln!(out, "    }}").unwrap();
+    writeln!(out, "}}").unwrap();
+    writeln!(out).unwrap();
+
+    writeln!(
+        out,
+        "/// Looks up what a shader declares for an attribute id."
+    )
+    .unwrap();
+    writeln!(out, "///").unwrap();
+    writeln!(
+        out,
+        "/// `None` when the shader does not declare it. That is not an error: a drawable may"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// supply an override its shader has no slot for, and the rule is to bind it at -1 so"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// the consumer drops it (§2.2). `fill-outline-color` on the plain fill shader is"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// exactly that, and the golden dump shows it as `bind=-1 ddt=255`."
+    )
+    .unwrap();
+    writeln!(out, "#[must_use]").unwrap();
+    writeln!(
+        out,
+        "pub fn declared_for(shader: BuiltIn, attr_id: u32) -> Option<ShaderAttribute> {{"
+    )
+    .unwrap();
+    writeln!(out, "    attributes(shader)").unwrap();
+    writeln!(out, "        .iter()").unwrap();
+    writeln!(
+        out,
+        "        .find(|attribute| attribute.attr_id == attr_id)"
+    )
+    .unwrap();
+    writeln!(out, "        .copied()").unwrap();
+    writeln!(out, "}}").unwrap();
+
+    Ok(out)
+}
+
+/// One shader's attributes: binding slot, declared type name, attribute id name.
+type ShaderTable = (String, Vec<(i32, String, String)>);
+
+/// Maps attribute id names to their values.
+///
+/// The ids are anonymous enums whose values are positions, one block per shader family, and each
+/// block ends with a `...Count` member. Preprocessor conditionals are followed by taking the
+/// first branch, which is recorded in the output rather than hidden: only fill-extrusion has
+/// one, and R0 does not use it.
+fn parse_attribute_ids(header: &str) -> BTreeMap<String, u32> {
+    let mut ids = BTreeMap::new();
+    let mut value = 0u32;
+    let mut in_enum = false;
+    let mut skipping = false;
+
+    for line in header.lines() {
+        let line = line.trim();
+        if line.starts_with("enum {") || line == "enum {" {
+            in_enum = true;
+            value = 0;
+            continue;
+        }
+        if !in_enum {
+            continue;
+        }
+        // Take the first arm of a conditional and skip the alternative.
+        if line.starts_with("#if") {
+            continue;
+        }
+        if line.starts_with("#else") {
+            skipping = true;
+            continue;
+        }
+        if line.starts_with("#endif") {
+            skipping = false;
+            continue;
+        }
+        if skipping || line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+        if line.starts_with("};") {
+            in_enum = false;
+            continue;
+        }
+        let name = line.trim_end_matches(',').trim();
+        if name.is_empty() || !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+            continue;
+        }
+        // The trailing count member is not an attribute.
+        if !name.ends_with("Count") {
+            ids.insert(name.to_string(), value);
+        }
+        value += 1;
+    }
+    ids
+}
+
+/// Extracts `(shader, [(binding, declared type, id name)])` from a shader source file.
+fn parse_shader_attributes(text: &str) -> Vec<ShaderTable> {
+    // `using XSource = ShaderSource<BuiltIn::Name, ...>;` binds an alias to a shader.
+    let mut aliases: BTreeMap<String, String> = BTreeMap::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("using ")
+            && let Some((alias, tail)) = rest.split_once(" = ShaderSource<BuiltIn::")
+            && let Some((shader, _)) = tail.split_once(',')
+        {
+            aliases.insert(alias.trim().to_string(), shader.trim().to_string());
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut current: Option<ShaderTable> = None;
+    for line in text.lines() {
+        let line = line.trim();
+        if line.contains("::attributes = {")
+            && let Some(alias) = line.split("> ").nth(1).and_then(|s| s.split("::").next())
+            && let Some(shader) = aliases.get(alias.trim())
+        {
+            current = Some((shader.clone(), Vec::new()));
+            continue;
+        }
+        if let Some((_, attributes)) = current.as_mut() {
+            if line.starts_with("};") {
+                if let Some(entry) = current.take() {
+                    out.push(entry);
+                }
+                continue;
+            }
+            if let Some(rest) = line.strip_prefix("AttributeInfo{") {
+                let body = rest.trim_end_matches("},").trim_end_matches('}');
+                let parts: Vec<&str> = body.split(',').map(str::trim).collect();
+                if parts.len() == 3
+                    && let Ok(binding) = parts[0].parse::<i32>()
+                {
+                    let data_type = parts[1].rsplit("::").next().unwrap_or(parts[1]).to_string();
+                    attributes.push((binding, data_type, parts[2].to_string()));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Formats generated source with rustfmt, falling back to the input if that is not possible.
+///
+/// The output is committed and CI runs `cargo fmt --check` over it, so a generator emitting
+/// almost-formatted code makes every regeneration dirty the tree. Replicating rustfmt's
+/// heuristics — it collapses a single-element array onto one line, for instance — is a losing
+/// game, so the real thing is used instead and stability is by construction rather than by
+/// matching its rules.
+///
+/// A missing rustfmt is not fatal: the output is still correct, `cargo fmt` will tidy it, and
+/// failing the whole generation over formatting would be worse than emitting it unformatted.
+fn rustfmt(text: &str) -> String {
+    let Ok(mut child) = Command::new("rustfmt")
+        .args(["--edition", "2024", "--emit", "stdout", "--quiet"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+    else {
+        eprintln!("note: rustfmt not found; emitting unformatted");
+        return text.to_string();
+    };
+
+    if let Some(stdin) = child.stdin.as_mut() {
+        let _ = stdin.write_all(text.as_bytes());
+    }
+    // Dropping stdin closes the pipe, which rustfmt needs before it will produce output.
+    drop(child.stdin.take());
+
+    match child.wait_with_output() {
+        Ok(output) if output.status.success() => {
+            String::from_utf8(output.stdout).unwrap_or_else(|_| text.to_string())
+        }
+        _ => {
+            eprintln!("note: rustfmt failed; emitting unformatted");
+            text.to_string()
+        }
+    }
 }
