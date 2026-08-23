@@ -13,10 +13,27 @@ That seam is the point. The frontend is GPU-free and pure Rust, so it cross-comp
 aarch64 and riscv64 without a graphics stack, and the renderer is a swappable consumer
 rather than a fused-in dependency.
 
-> **Status: pre-R0.** This repository is a workspace scaffold and a design document. No
-> crate carries an implementation yet, and the `tessella` crate is published at `0.0.0` to
-> reserve the name. Read [`plan.md`](plan.md) for the actual content — it is the design of
-> record, currently at rev 0.6.
+> **Status: R0 complete.** The producer emits its whole stream for the hermetic style. What
+> the C++ oracle also emits is diffed against it: geometry, uniform buffers, textures, clip
+> masks, painter order, and the camera block, whose projection matches bit for bit in all
+> sixteen elements. What is ours alone — the view declaration and release pair of DR-18 — has
+> no counterpart to diff, so it is checked on sequence instead: a view is declared before it
+> is used, geometry precedes the order that draws it, and the order precedes the camera naming
+> its epoch. A settled view writes zero bytes. The capture ABI is frozen, with a generated C
+> header carrying per-field offset assertions that compile as both C11 and C++17.
+>
+> Two things are known and deliberate rather than pending. GeoJSON polygon vertex *order* is
+> a rotation of the oracle's, because mbgl normalizes rings through wagyu and porting a
+> sweep-line polygon library to obtain a different ordering of the same polygon is not worth
+> it (DR-19); the diff compares rings as cycles there. And the projection refuses bearing and
+> pitch, because the probe is unrotated and there is nothing to check a quaternion path
+> against — a plausible matrix that has never been compared is how a projection defect reaches
+> a screen and gets diagnosed as a tessellation bug.
+>
+> R1 — vector tiles, network and cache, the line layer, data-driven binders, the expression
+> VM — has not started. Read [`plan.md`](plan.md) for the design of record, currently at rev
+> 0.9. The `tessella` crate is still published at `0.0.0`: the name is reserved, the
+> implementation lives in the `tessella-*` members, and none of them is published yet.
 
 ## Architecture in one paragraph
 
