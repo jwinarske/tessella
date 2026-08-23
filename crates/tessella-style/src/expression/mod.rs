@@ -33,6 +33,7 @@ pub use evaluate::{EvaluationError, Feature};
 pub use parse::ParseError;
 
 use alloc::boxed::Box;
+use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::value::Value;
@@ -173,6 +174,39 @@ pub enum FilterTarget {
     Type,
 }
 
+/// Which of the four pre-expression function forms a [`LegacyFunction`] is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LegacyKind {
+    /// The property's own value, passed through.
+    Identity,
+    /// Exact match against stop inputs.
+    Categorical,
+    /// The output of the last stop at or below the input.
+    Interval,
+    /// Interpolated between the surrounding stops. The default when `type` is absent.
+    Exponential,
+}
+
+/// A pre-expression function.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LegacyFunction {
+    /// Which of the four forms this is.
+    pub kind: LegacyKind,
+    /// The feature property read, or `None` for a zoom function.
+    pub property: Option<String>,
+    /// Stop inputs and outputs, in the order the style gave them.
+    pub stops: Vec<(Value, Value)>,
+    /// Exponential base. One is linear.
+    pub base: f64,
+    /// The function's own `default`, which takes precedence over the property's.
+    pub function_default: Option<Value>,
+    /// The property spec's default, used when nothing else matches.
+    ///
+    /// Carried on the node because it comes from the *spec* rather than the style, and a
+    /// function parsed without it would silently return null where the spec returns a value.
+    pub property_default: Option<Value>,
+}
+
 /// An expression tree node.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
@@ -196,6 +230,14 @@ pub enum Expr {
     Id,
     /// All of a feature's properties, as an object.
     Properties,
+    /// A pre-expression function: `{"property": …, "type": …, "stops": […]}`.
+    ///
+    /// The style spec's original way of varying a property, still supported and still common in
+    /// styles written before expressions existed. Kept as its own node rather than desugared
+    /// into `interpolate`/`match`, because the two are not the same function: a legacy function
+    /// falls back to the *property's* default where an expression errors, and `identity` has no
+    /// expression equivalent at all.
+    LegacyFunction(Box<LegacyFunction>),
     /// A comparison.
     Compare {
         /// Which comparison.
@@ -308,7 +350,24 @@ impl Expression {
     /// [`ParseError`] when the value is not a well-formed expression, names an operator this
     /// build does not implement, or gives one the wrong number of arguments.
     pub fn parse(value: &Value) -> Result<Self, ParseError> {
-        let root = parse::parse(value)?;
+        Self::parse_with_default(value, None)
+    }
+
+    /// Parses a style value, carrying the property spec's default.
+    ///
+    /// Only pre-expression functions use it, and they need it: a legacy function whose input
+    /// matches no stop returns the *property's* default, which lives in the spec rather than in
+    /// the style. Parsing one without it yields a function that returns null where the spec says
+    /// it returns a value, and null renders as nothing rather than as an error.
+    ///
+    /// # Errors
+    ///
+    /// As [`Expression::parse`].
+    pub fn parse_with_default(
+        value: &Value,
+        property_default: Option<Value>,
+    ) -> Result<Self, ParseError> {
+        let root = parse::parse_with_default(value, property_default)?;
         let dependency = classify(&root);
         Ok(Self { root, dependency })
     }
@@ -363,12 +422,48 @@ impl Expression {
     }
 }
 
+impl LegacyFunction {
+    /// Whether the stops are composite: `[{"zoom": z, "value": v}, output]`.
+    ///
+    /// A composite function varies with zoom *and* the property, which is the only legacy form
+    /// that lands on [`Dependency::ZoomAndFeature`].
+    #[must_use]
+    pub fn has_composite_stops(&self) -> bool {
+        self.stops
+            .iter()
+            .any(|(input, _)| input.get("zoom").is_some() && input.get("value").is_some())
+    }
+
+    /// The fallback: the function's own default, then the property's.
+    #[must_use]
+    pub fn fallback(&self) -> Option<&Value> {
+        self.function_default
+            .as_ref()
+            .or(self.property_default.as_ref())
+    }
+}
+
 /// Computes an expression's dependency as a join over its tree.
 fn classify(expr: &Expr) -> Dependency {
     match expr {
         Expr::Literal(_) => Dependency::None,
         Expr::Zoom => Dependency::Zoom,
         Expr::GeometryType | Expr::Id | Expr::Properties => Dependency::Feature,
+        // A legacy function reads the feature when it names a property and the zoom when it
+        // does not. Composite stops — `[{"zoom": z, "value": v}, out]` — read both, which is
+        // the case that makes this a lattice join rather than a choice.
+        Expr::LegacyFunction(function) => {
+            let from_property = if function.property.is_some() {
+                Dependency::Feature
+            } else {
+                Dependency::Zoom
+            };
+            if function.has_composite_stops() {
+                from_property.join(Dependency::Zoom)
+            } else {
+                from_property
+            }
+        }
         // Legacy filters read the feature by construction; there is no camera-only form.
         Expr::FilterCompare { .. } | Expr::FilterHas { .. } | Expr::FilterIn { .. } => {
             Dependency::Feature

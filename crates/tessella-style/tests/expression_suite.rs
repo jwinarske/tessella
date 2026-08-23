@@ -121,7 +121,14 @@ fn run_case(case: &Value) -> Result<(), String> {
     let compiled = expected.get("compiled").ok_or("no compiled")?;
     let wants_success = compiled.get("result").and_then(Value::as_str) == Some("success");
 
-    let parsed = match Expression::parse(expression) {
+    // Pre-expression functions fall back to the *property spec's* default, which lives here
+    // rather than in the expression, so it has to be handed to the parser.
+    let property_default = case
+        .get("propertySpec")
+        .and_then(|spec| spec.get("default"))
+        .cloned();
+
+    let parsed = match Expression::parse_with_default(expression, property_default) {
         Ok(parsed) => {
             if !wants_success {
                 return Err("parsed, but the spec expects a compile error".to_string());
@@ -305,8 +312,38 @@ fn report_the_pass_rate() {
             println!("  + {name}");
         }
     }
-    for (name, reason) in failures.iter().take(25) {
-        println!("  - {name}: {reason}");
+    // Grouped by cause rather than listed, because 285 failures scroll past and the shape of
+    // them is the actionable part: which operator to implement next is a question about counts.
+    let mut by_cause: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for (_, reason) in &failures {
+        let cause =
+            if let Some(rest) = reason.strip_prefix("parse failed: unknown expression operator ") {
+                format!("unimplemented operator {rest}")
+            } else if reason.starts_with("parse failed:") {
+                "parse rejects a valid expression".to_string()
+            } else if reason.contains("classified") {
+                "classification differs".to_string()
+            } else if reason.contains("want an error") {
+                "evaluates where the spec requires an error".to_string()
+            } else if reason.contains("parsed, but the spec expects") {
+                "accepts an expression the spec rejects".to_string()
+            } else {
+                "wrong value".to_string()
+            };
+        *by_cause.entry(cause).or_default() += 1;
+    }
+    let mut ranked: Vec<(&String, &usize)> = by_cause.iter().collect();
+    ranked.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    println!("failures by cause:");
+    for (cause, count) in ranked.iter().take(30) {
+        println!("  {count:4}  {cause}");
+    }
+
+    if let Ok(filter) = std::env::var("TESSELLA_SUITE_SHOW") {
+        println!("failures matching {filter:?}:");
+        for (name, reason) in failures.iter().filter(|(_, r)| r.contains(&filter)) {
+            println!("  - {name}: {reason}");
+        }
     }
 
     if std::env::var("TESSELLA_REGENERATE_BASELINE").is_ok() {

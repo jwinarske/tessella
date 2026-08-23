@@ -5,7 +5,7 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use super::{ArithmeticOp, CastKind, CompareOp, Expr, Interpolation};
+use super::{ArithmeticOp, CastKind, CompareOp, Expr, Interpolation, LegacyFunction, LegacyKind};
 use crate::value::Value;
 
 /// A style value that is not a well-formed expression.
@@ -43,6 +43,22 @@ pub enum ParseError {
 
 /// Parses a style value into an expression tree.
 pub(super) fn parse(value: &Value) -> Result<Expr, ParseError> {
+    parse_with_default(value, None)
+}
+
+/// Parses a value, carrying the property spec's default for pre-expression functions.
+pub(super) fn parse_with_default(
+    value: &Value,
+    property_default: Option<Value>,
+) -> Result<Expr, ParseError> {
+    // A pre-expression function is an object, which `looks_like_expression` does not recognize,
+    // so without this check it falls through to `Expr::Literal` and a style that varies a
+    // property by zoom silently gets the raw JSON object as the value. That is worse than an
+    // error: it renders as a broken colour rather than as a message.
+    if let Some(function) = parse_legacy_function(value, property_default)? {
+        return Ok(function);
+    }
+
     // A value that is not a call is itself. This is what makes `["match", x, "a", 1, 2]`
     // work: the outputs are bare values, not nested calls.
     if !value.looks_like_expression() {
@@ -156,6 +172,73 @@ pub(super) fn parse(value: &Value) -> Result<Expr, ParseError> {
         }
         other => Err(ParseError::UnknownOperator(other.to_string())),
     }
+}
+
+/// Recognizes and parses a pre-expression function.
+///
+/// Returns `Ok(None)` when the value is not one, so an ordinary object literal still reaches the
+/// literal path. The shape is what identifies it: an object carrying `stops`, or an `identity`
+/// function, which is the one form with no stops at all.
+fn parse_legacy_function(
+    value: &Value,
+    property_default: Option<Value>,
+) -> Result<Option<Expr>, ParseError> {
+    let Some(object) = value.as_object() else {
+        return Ok(None);
+    };
+    let declared_type = object.get("type").and_then(Value::as_str);
+    let has_stops = object.contains_key("stops");
+    if !has_stops && declared_type != Some("identity") {
+        return Ok(None);
+    }
+
+    let kind = match declared_type {
+        // No `type` means exponential, which is the spec's default and the reason a bare
+        // `{"stops": …}` interpolates rather than steps.
+        None | Some("exponential") => LegacyKind::Exponential,
+        Some("identity") => LegacyKind::Identity,
+        Some("categorical") => LegacyKind::Categorical,
+        Some("interval") => LegacyKind::Interval,
+        Some(other) => {
+            return Err(ParseError::Malformed {
+                operator: "function".into(),
+                detail: alloc::format!("unknown function type `{other}`"),
+            });
+        }
+    };
+
+    let mut stops = Vec::new();
+    if let Some(list) = object.get("stops") {
+        let entries = list.as_array().ok_or_else(|| ParseError::Malformed {
+            operator: "function".into(),
+            detail: "stops must be an array".into(),
+        })?;
+        for entry in entries {
+            let pair = entry.as_array().ok_or_else(|| ParseError::Malformed {
+                operator: "function".into(),
+                detail: "each stop must be a two-element array".into(),
+            })?;
+            if pair.len() != 2 {
+                return Err(ParseError::Malformed {
+                    operator: "function".into(),
+                    detail: "each stop must be a two-element array".into(),
+                });
+            }
+            stops.push((pair[0].clone(), pair[1].clone()));
+        }
+    }
+
+    Ok(Some(Expr::LegacyFunction(Box::new(LegacyFunction {
+        kind,
+        property: object
+            .get("property")
+            .and_then(Value::as_str)
+            .map(alloc::string::ToString::to_string),
+        stops,
+        base: object.get("base").and_then(Value::as_number).unwrap_or(1.0),
+        function_default: object.get("default").cloned(),
+        property_default,
+    }))))
 }
 
 fn parse_all(args: &[Value]) -> Result<Vec<Expr>, ParseError> {

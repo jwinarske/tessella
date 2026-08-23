@@ -8,7 +8,10 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use super::{ArithmeticOp, CastKind, CompareOp, Expr, FilterTarget, Interpolation};
+use super::{
+    ArithmeticOp, CastKind, CompareOp, Expr, FilterTarget, Interpolation, LegacyFunction,
+    LegacyKind,
+};
 use crate::value::Value;
 
 /// The feature an expression is being evaluated against.
@@ -104,6 +107,7 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
         )),
         Expr::Id => Ok(context.feature()?.id().unwrap_or(Value::Null)),
         Expr::Properties => Ok(context.feature()?.properties()),
+        Expr::LegacyFunction(function) => evaluate_legacy(function, context),
         Expr::Get { key } => {
             let key = expect_string(&evaluate(key, context)?)?;
             // A property the feature does not carry is null, not an error. Styles rely on
@@ -266,6 +270,100 @@ fn locate(stops: &[(f64, Expr)], position: f64) -> Option<usize> {
     // Stops ascend — the parser rejects any list that does not — so a partition point is
     // exact rather than approximate.
     Some(stops.partition_point(|(stop, _)| *stop <= position) - 1)
+}
+
+/// Evaluates a pre-expression function.
+///
+/// # Where the fallback comes from
+///
+/// A legacy function does not error when nothing matches: it falls back, first to its own
+/// `default` and then to the *property spec's*. That is the difference from `match`, which
+/// requires a fallback branch and errors without one, and it is why the spec's default has to be
+/// carried down here from parse.
+fn evaluate_legacy(
+    function: &LegacyFunction,
+    context: &Context<'_>,
+) -> Result<Value, EvaluationError> {
+    // The input: a named property, or the zoom for a function without one.
+    let input = match &function.property {
+        Some(name) => context.feature()?.property(name).unwrap_or(Value::Null),
+        None => Value::Number(context.zoom()?),
+    };
+
+    let fallback = || function.fallback().cloned().unwrap_or(Value::Null);
+
+    match function.kind {
+        // Identity passes the property through. A missing property falls back rather than
+        // yielding null, which is what makes `{"type": "identity", "property": "x"}` usable on
+        // features that do not all carry `x`.
+        LegacyKind::Identity => Ok(if input == Value::Null {
+            fallback()
+        } else {
+            input
+        }),
+
+        // Exact equality against each stop input. Types are not coerced: the spec's own suite
+        // has a case where the property is the number 0 and the stop is the string "0", and it
+        // expects the default.
+        LegacyKind::Categorical => Ok(function
+            .stops
+            .iter()
+            .find(|(stop, _)| *stop == input)
+            .map_or_else(fallback, |(_, output)| output.clone())),
+
+        // The output of the last stop at or below the input.
+        LegacyKind::Interval => {
+            let Some(position) = input.as_number() else {
+                return Ok(fallback());
+            };
+            let matched = function
+                .stops
+                .iter()
+                .rfind(|(stop, _)| stop.as_number().is_some_and(|s| s <= position));
+            Ok(matched.map_or_else(fallback, |(_, output)| output.clone()))
+        }
+
+        LegacyKind::Exponential => {
+            let Some(position) = input.as_number() else {
+                return Ok(fallback());
+            };
+            let numeric: Vec<(f64, &Value)> = function
+                .stops
+                .iter()
+                .filter_map(|(stop, output)| stop.as_number().map(|s| (s, output)))
+                .collect();
+            let Some(first) = numeric.first() else {
+                return Ok(fallback());
+            };
+
+            // Outside the range the value is clamped, matching `interpolate`.
+            if position <= first.0 {
+                return Ok(first.1.clone());
+            }
+            let last = numeric.last().expect("non-empty");
+            if position >= last.0 {
+                return Ok(last.1.clone());
+            }
+
+            let index = numeric
+                .iter()
+                .rposition(|(stop, _)| *stop <= position)
+                .unwrap_or(0);
+            let (lower_stop, lower) = numeric[index];
+            let (upper_stop, upper) = numeric[index + 1];
+            let t = factor(
+                Interpolation::Exponential {
+                    base: function.base,
+                },
+                position,
+                lower_stop,
+                upper_stop,
+            );
+            // A non-interpolatable output steps rather than blends, which is what the spec does
+            // for strings and booleans in an exponential function.
+            mix(lower, upper, t).or_else(|_| Ok(lower.clone()))
+        }
+    }
 }
 
 fn interpolate(
