@@ -11,6 +11,22 @@
 //! Cover decisions are per view; the store beneath them is not (§5.5). Watch R-11: unified
 //! retain lets one view's zoom behavior inflate another's tile lifetimes.
 //!
-//! Status: scaffold. No implementation yet.
+//! Status: the Mercator projection is in, spelled to match the oracle bit for bit. The tile
+//! store, cover and retain are not.
+
+//! # This crate uses std, deliberately
+//!
+//! `core` has no `tan`, `ln`, `exp` or `atan`, so a `no_std` version would have to pull in the
+//! `libm` crate — a Rust reimplementation of those functions, which is free to round
+//! differently in the last bit from the system libm that the C++ oracle links against. Since
+//! the projection's whole contract is bit-exact agreement with that oracle, borrowing the same
+//! libm is not an incidental convenience but the mechanism. `tessella-capture-abi` stays
+//! `no_std` because a flat ABI genuinely has no need of one; this crate does.
+//!
+//! The corollary is worth stating plainly: bit-exactness holds where both sides use the same
+//! libm. Two platforms with different libm implementations may disagree in the last bit, and
+//! the cross-target lanes only compile this crate rather than running it.
 
 #![forbid(unsafe_code)]
+
+pub mod projection;
