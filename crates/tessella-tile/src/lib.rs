@@ -11,8 +11,8 @@
 //! Cover decisions are per view; the store beneath them is not (§5.5). Watch R-11: unified
 //! retain lets one view's zoom behavior inflate another's tile lifetimes.
 //!
-//! Status: the Mercator projection is in, spelled to match the oracle bit for bit. The tile
-//! store, cover and retain are not.
+//! Status: the Mercator projection is in, spelled to match the oracle bit for bit, and the
+//! process-scoped tile store with refcounted retain. Cover computation is not.
 
 //! # This crate uses std, deliberately
 //!
@@ -30,3 +30,6 @@
 #![forbid(unsafe_code)]
 
 pub mod projection;
+pub mod store;
+
+pub use store::{Lookup, TileKey, TileStore};

@@ -1,22 +1,20 @@
 //! Two views over one cover, measured with the §9.3 flatness counters.
 //!
-//! # This test asserts the gap, not the goal
+//! # The assertion §9.3 asks for
 //!
-//! §9.3 requires fetches, decodes and bucket builds to be flat in view count for overlapping
-//! covers. There is no shared tile store yet — `build_tile` rebuilds from features every call —
-//! so two views over one tile currently do the work twice, and that is what this asserts.
+//! Fetches, decodes and bucket builds must be flat in view count for overlapping covers. Two
+//! views looking at the same place do one build, not two, and four views do the same four
+//! builds as two views do.
 //!
-//! Writing it the other way round would mean an ignored test or a failing one, and both rot.
-//! Written this way it is a tripwire: the day a shared store lands, this test fails, and the
-//! failure says exactly what to change and why. The assertion at the bottom names the
-//! inversion.
+//! These tests began as the inverse — asserting the duplication that existed before there was a
+//! shared store, as a tripwire. The store landed and they inverted, which is what the tripwire
+//! was for.
 //!
-//! What is being proved today is narrower but real: the counters detect duplication through the
-//! actual pipeline rather than through a mock, so when the store arrives the measurement is
-//! already trustworthy.
+//! What makes the measurement honest is that only a *miss* counts as work. Counting every call
+//! would count cache hits and assert nothing at all.
 
 use tessella_orchestrate::counters::{SharedCounters, SharedWork};
-use tessella_orchestrate::tile::{TileId, bucket_for, build_tile};
+use tessella_orchestrate::tile::{TileBuilder, TileId, bucket_for, build_tile};
 use tessella_source::geojson;
 use tessella_source::tiling::TilingOptions;
 use tessella_style::{Source, Style};
@@ -58,42 +56,113 @@ fn build_counting(counters: &mut SharedCounters, x: u32, y: u32) -> usize {
         .map_or(0, |fill| fill.vertices.len())
 }
 
-/// Two views over one cover. Today the work is done twice; the counters see it.
+/// The flatness assertion. Two views over one cover build each tile **once**.
 ///
-/// **This inverts when the shared tile store lands.** At that point `is_flat()` becomes the
-/// assertion and this one goes.
+/// This test used to assert the opposite, as a tripwire for the absence of a shared store. The
+/// store landed and it inverted, which is what the tripwire was for.
 #[test]
-fn two_views_over_one_cover_currently_duplicate_work() {
+fn two_views_over_one_cover_share_the_work() {
     let mut counters = SharedCounters::new();
+    let mut builder = TileBuilder::new(64, 1);
 
     for _view in 0..2 {
         for (x, y) in COVER {
-            build_counting(&mut counters, x, y);
+            let (_, lookup) = builder
+                .build(
+                    &style(),
+                    "probe",
+                    TileId::new(13, x, y),
+                    &features(),
+                    TilingOptions::default(),
+                )
+                .expect("builds");
+            // Only a miss is work. Counting every call would count cache hits as work and
+            // assert nothing.
+            if lookup.did_work() {
+                counters.record(SharedWork::BucketBuild, format!("13/{x}/{y}"));
+            }
         }
     }
 
-    assert_eq!(
-        counters.distinct(SharedWork::BucketBuild),
-        4,
-        "four distinct tiles"
-    );
+    assert!(counters.is_flat(), "{:?}", counters.duplicated());
     assert_eq!(
         counters.total(SharedWork::BucketBuild),
-        8,
-        "built twice each, because there is no shared store yet"
+        4,
+        "four tiles, not eight"
     );
+    assert_eq!(builder.builds(), 4, "and the builder agrees");
+}
 
-    let duplicated = counters.duplicated();
-    assert_eq!(duplicated.len(), 4, "every tile in the cover");
-    for (work, key, count) in duplicated {
-        assert_eq!(work, SharedWork::BucketBuild);
-        assert_eq!(count, 2, "{key}");
+/// Flatness at four views, which is the number §13 budgets against. The claim is that the work
+/// is independent of view count, so the same four builds serve four views as served two.
+#[test]
+fn flatness_holds_at_four_views() {
+    let mut builder = TileBuilder::new(64, 1);
+
+    for _view in 0..4 {
+        for (x, y) in COVER {
+            builder
+                .build(
+                    &style(),
+                    "probe",
+                    TileId::new(13, x, y),
+                    &features(),
+                    TilingOptions::default(),
+                )
+                .expect("builds");
+        }
     }
 
-    assert!(
-        !counters.is_flat(),
-        "when this starts failing, the shared store has landed: \
-         swap this for `assert!(counters.is_flat())` and delete the rest"
+    assert_eq!(builder.builds(), 4, "four tiles at four views");
+}
+
+/// Views get the same object, not equal copies. Sharing the value is what lets one GPU buffer
+/// serve every view (§5.3); sharing only the recipe would not.
+#[test]
+fn views_receive_the_same_tile_object() {
+    let mut builder = TileBuilder::new(64, 1);
+    let build = |builder: &mut TileBuilder| {
+        builder
+            .build(
+                &style(),
+                "probe",
+                TileId::new(13, 4093, 2723),
+                &features(),
+                TilingOptions::default(),
+            )
+            .expect("builds")
+            .0
+    };
+
+    let first = build(&mut builder);
+    let second = build(&mut builder);
+    assert!(std::sync::Arc::ptr_eq(&first, &second));
+}
+
+/// A restyle is a new revision, and buckets built against the old one are not reused. A changed
+/// filter admits different features, so silently reusing them would draw the old style.
+#[test]
+fn a_new_style_revision_rebuilds() {
+    let mut first = TileBuilder::new(64, 1);
+    let mut second = TileBuilder::new(64, 2);
+
+    for builder in [&mut first, &mut second] {
+        builder
+            .build(
+                &style(),
+                "probe",
+                TileId::new(13, 4093, 2723),
+                &features(),
+                TilingOptions::default(),
+            )
+            .expect("builds");
+    }
+
+    assert_eq!(first.builds(), 1);
+    assert_eq!(
+        second.builds(),
+        1,
+        "a different revision is a different key"
     );
 }
 

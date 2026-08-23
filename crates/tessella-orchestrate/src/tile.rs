@@ -33,6 +33,7 @@ use tessella_source::tiling::TilingOptions;
 use tessella_style::property::{ResolvedProperty, resolve_paint};
 use tessella_style::{Filter, LayerKind, Style};
 use tessella_tile::projection;
+use tessella_tile::store::{Lookup, TileKey, TileStore};
 
 /// The tile being built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,5 +274,104 @@ impl core::str::FromStr for TileId {
         #[allow(clippy::cast_possible_truncation)]
         let z = parse(parts[0])? as u8;
         Ok(Self::new(z, parse(parts[1])?, parse(parts[2])?))
+    }
+}
+
+/// A tile's built buckets, as the store holds them.
+pub type CachedTile = alloc::sync::Arc<Vec<LayerBucket>>;
+
+/// Builds tiles through the process-scoped store, so overlapping views share the work.
+///
+/// This is §5's claim made operational. Without it, N views over one cover do N bucket builds —
+/// which is the mbgl model and what the §9.3 flatness counters exist to forbid. With it, the
+/// first view to want a tile builds it and the rest get the same `Arc`.
+///
+/// Sharing is only correct because a bucket is a function of `(source, tile, style revision)`
+/// and camera-free (§5.1). Anything per-view — cover decisions, placement, screen-space
+/// uniforms — must not be cached here, and is not: this holds buckets, and buckets alone.
+#[derive(Debug)]
+pub struct TileBuilder {
+    store: TileStore<Vec<LayerBucket>>,
+    style_rev: u64,
+    builds: u64,
+}
+
+impl TileBuilder {
+    /// A builder over a store of `capacity` tiles.
+    #[must_use]
+    pub fn new(capacity: usize, style_rev: u64) -> Self {
+        Self {
+            store: TileStore::new(capacity),
+            style_rev,
+            builds: 0,
+        }
+    }
+
+    /// The key a tile occupies in the store.
+    #[must_use]
+    pub fn key(&self, source: &str, tile: TileId) -> TileKey {
+        TileKey::new(source, tile.z, tile.x, tile.y, self.style_rev)
+    }
+
+    /// Builds a tile, or returns the one already built.
+    ///
+    /// # Errors
+    ///
+    /// [`TileError`] when a layer's filter or paint properties do not compile. A tile that
+    /// fails is not cached, so the next view attempting it sees the same error rather than a
+    /// stale success.
+    pub fn build(
+        &mut self,
+        style: &Style,
+        source: &str,
+        tile: TileId,
+        features: &[GeoJsonFeature],
+        options: TilingOptions,
+    ) -> Result<(CachedTile, Lookup), TileError> {
+        let key = self.key(source, tile);
+
+        if let Some(cached) = self.store.get(&key) {
+            return Ok((cached, Lookup::Hit));
+        }
+
+        // Built outside `get_or_build` so a failure propagates instead of being cached. A
+        // closure returning `Result` would have to store the error or panic, and neither is
+        // right: the next view should retry, not inherit a poisoned entry.
+        let built = build_tile(style, tile, features, options)?;
+        self.builds += 1;
+        let (cached, lookup) = self.store.get_or_build(&key, || built);
+        Ok((cached, lookup))
+    }
+
+    /// Marks a tile as held by one more view.
+    pub fn retain(&mut self, source: &str, tile: TileId) {
+        let key = self.key(source, tile);
+        self.store.retain(&key);
+    }
+
+    /// Releases one view's hold.
+    pub fn release(&mut self, source: &str, tile: TileId) {
+        let key = self.key(source, tile);
+        self.store.release(&key);
+    }
+
+    /// How many tiles were actually built, as opposed to fetched from the store.
+    ///
+    /// This is the number §9.3 asserts flat in view count.
+    #[must_use]
+    pub fn builds(&self) -> u64 {
+        self.builds
+    }
+
+    /// Tiles currently held.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.store.len()
+    }
+
+    /// True when nothing is held.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.store.is_empty()
     }
 }
