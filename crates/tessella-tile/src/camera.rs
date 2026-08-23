@@ -16,15 +16,14 @@
 //! matrix would get buildings wrong by its reciprocal. Element 11 of the matrix is exactly its
 //! negation, which is the clearest statement of where it lives.
 //!
-//! # Checked bit-exactly, and where it is not
+//! # Checked bit-exactly, including the camera the map actually holds
 //!
-//! The golden dump carries the oracle's matrix as sixteen f64 bit patterns. Fourteen of the
-//! sixteen reproduce exactly. The two that do not are the x and y translation, each off by one
-//! ULP — a part in 2^52 of a translation of about four million, which is nanometers of a pixel,
-//! but not bit-exactness, and it is recorded as a divergence rather than rounded away. See
-//! [`OneUlpDivergence`] for what is known about the cause.
+//! The golden dump carries the oracle's matrix as sixteen f64 bit patterns, and all sixteen
+//! reproduce exactly — but only when the camera fed in is the one the map ended up with rather
+//! than the one it was asked for. See [`settled_center`]: a map told to sit at (51.505, -0.11)
+//! does not store (51.505, -0.11).
 //!
-//! Getting even fourteen right required matching mbgl's operation order rather than the algebra:
+//! Matching required copying mbgl's operation order rather than its algebra:
 //!
 //! - The field of view is read as a `double` for the camera distance and as a `float` for the
 //!   projection. `getFieldOfView()` returns `float`, so the perspective divide runs on a value
@@ -39,6 +38,13 @@
 //! - `pixelsPerMeter` is taken at the latitude of the *camera's* stored position, recovered by
 //!   inverting the mercator y — not at the latitude that was passed in. They agree here, and
 //!   the derivation is what has to match, not the coincidence.
+//! - `centerZoom0` does not descend from the same value the matrix does. mbgl captures it as
+//!   `project(getLatLng(), 1.0)`: the stored center goes back out to a longitude and latitude
+//!   and is re-projected at scale one. Computing it from the camera position instead agrees to
+//!   a part in 10^14 and not bit for bit.
+//! - Associations that look like formatting are not. `rad2deg` multiplies the logarithm rather
+//!   than being folded in front of it, and the pixels-per-degree factor is formed before it
+//!   multiplies rather than dividing afterwards. Each of those is one bit.
 
 use crate::cover::ViewTransform;
 use crate::projection;
@@ -201,13 +207,38 @@ pub fn pixels_per_meter(view: &ViewTransform) -> f64 {
 ///
 /// Scale-free, so a consumer can rescale it itself rather than being handed a number that is
 /// only meaningful alongside the zoom it was computed at.
+///
+/// # Not the same route as the matrix
+///
+/// mbgl captures this as `project(getLatLng(), 1.0)`: the stored center goes back to a
+/// longitude and latitude and is re-projected at scale one. The projection matrix descends from
+/// the stored value directly. The two paths agree to about a part in 10^14 and not bit for bit,
+/// so a diff that computed this from the camera position would be one ULP out on the y — which
+/// is what this function did before the route was checked rather than assumed.
 #[must_use]
 pub fn center_zoom0(view: &ViewTransform) -> [f64; 2] {
-    let position = camera_position(view);
-    [
-        position[0] * projection::TILE_SIZE,
-        position[1] * projection::TILE_SIZE,
-    ]
+    let world = world_size(view.zoom);
+    let bc = world / 360.0;
+    let cc = world / core::f64::consts::TAU;
+    let [x, y] = center_offset(view.longitude, view.latitude, view.zoom);
+
+    // `getLatLng`: back out of the stored offsets.
+    let longitude = -x / bc;
+    let latitude =
+        (2.0 * (y / cc).exp().atan() - 0.5 * core::f64::consts::PI) * 180.0 / core::f64::consts::PI;
+
+    // `project_` at scale one, which is a world of exactly one tile. Both associations here are
+    // mbgl's and neither is the obvious one: the degrees-per-radian factor multiplies the
+    // logarithm rather than being folded in front of it, and the pixels-per-degree factor is
+    // formed before it multiplies. Either written the natural way moves the last bit.
+    let mercator = 180.0
+        - (core::f64::consts::FRAC_PI_4 + latitude * core::f64::consts::PI / 360.0)
+            .tan()
+            .ln()
+            * 180.0
+            / core::f64::consts::PI;
+    let per_degree = projection::TILE_SIZE / 360.0;
+    [(180.0 + longitude) * per_degree, mercator * per_degree]
 }
 
 /// The world-to-camera matrix for an unrotated camera.
@@ -264,40 +295,67 @@ pub fn proj_matrix(view: &ViewTransform) -> Result<Mat4, CameraError> {
     Ok(multiply(&camera_to_clip, &world_to_camera(view)))
 }
 
-/// What is known about the two elements that are not bit-exact.
+/// The center a map holds after being told to go somewhere.
 ///
-/// Kept as a type rather than a comment so the divergence is something a test names and a reader
-/// can find, in the same way the clip rotation is recorded where it happens.
+/// # A camera is not where you put it
 ///
-/// The x and y translation each differ from the oracle by one ULP. The cause is narrowed but not
-/// closed:
+/// `jumpTo` routes the center through pixel space at the current scale — project, then
+/// unproject — and that pair is not an exact inverse. At zoom 13 a pixel is about 2e-10 of a
+/// world and a degree of longitude is about 11,650 pixels, so the returned longitude differs
+/// from the requested one in the fourteenth decimal place. The map then stores *that*, and every
+/// matrix it builds descends from it.
 ///
-/// - The other fourteen elements, including the scale factors that multiply these two, are
-///   exact — so the difference is in the translation itself, not in the projection applied to it.
-/// - `centerZoom0` in the same dump matches this crate's value *exactly*, and both it and the
-///   translation derive from the camera position by scaling with a power of two, which is
-///   lossless. So the oracle's own two readouts of the camera position disagree with each other
-///   by an ULP, which means the probe computes `centerZoom0` by a different route than the
-///   matrix uses.
-/// - That points at mbgl's stored `x` and `y` differing by an ULP from the recomputation here —
-///   plausibly a libm difference in `sin` or `log`, or a camera-setting path that arrives at the
-///   stored value by a different sequence.
+/// # Why this is worth a function rather than a shrug
 ///
-/// Closing it means having the probe print `TransformState::x` and `y` directly, which is the
-/// same instrument that settled the vertex-hash question. Until then the divergence is bounded
-/// and asserted: [`crate::camera`]'s tests require every element to be either bit-exact or
-/// within one ULP, so a real regression cannot hide behind it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OneUlpDivergence {
-    /// Matrix indices known to differ.
-    pub indices: [usize; 2],
+/// The difference is nanometers on screen and could not matter less to a rendered frame. It
+/// matters entirely to a bit-exact diff. Two of the sixteen matrix elements — the x and y
+/// translation — were one ULP from the oracle for exactly this reason, and the gap looked like a
+/// defect in the port: a plausible story about libm differences in `sin` and `log` fit it, and
+/// was wrong. Feeding the settled center instead makes all sixteen exact, which says the
+/// arithmetic was right the whole time and the input was not.
+///
+/// The general lesson is the one worth keeping: when a golden diff is off by an ULP, the input
+/// is a suspect before the arithmetic is. The oracle's own nominal parameters are not
+/// necessarily the parameters it ran with.
+///
+/// The zoom is taken for symmetry with mbgl's signature and does not change the result: the
+/// world size is a power of two, so the pixel scaling on either side of the round trip cancels
+/// exactly. What rounds is the degree arithmetic, which is scale-free.
+#[must_use]
+pub fn settled_center(longitude: f64, latitude: f64, zoom: f64) -> [f64; 2] {
+    let world = world_size(zoom);
+    let per_degree = world / 360.0;
+    let mercator = 180.0
+        - (core::f64::consts::FRAC_PI_4 + latitude * core::f64::consts::PI / 360.0)
+            .tan()
+            .ln()
+            * 180.0
+            / core::f64::consts::PI;
+    let (pixel_x, pixel_y) = ((180.0 + longitude) * per_degree, mercator * per_degree);
+
+    // `unproject`: degrees per pixel, then back through the inverse mercator.
+    let (degrees_x, degrees_y) = (pixel_x * 360.0 / world, pixel_y * 360.0 / world);
+    [
+        degrees_x - 180.0,
+        ((180.0 - degrees_y) * core::f64::consts::PI / 180.0)
+            .exp()
+            .atan()
+            * 360.0
+            / core::f64::consts::PI
+            - 90.0,
+    ]
 }
 
-impl OneUlpDivergence {
-    /// The elements that differ from the oracle by one ULP.
-    pub const KNOWN: Self = Self { indices: [12, 13] };
+/// A view whose center has been settled the way a map settles it.
+#[must_use]
+pub fn settled(view: &ViewTransform) -> ViewTransform {
+    let [longitude, latitude] = settled_center(view.longitude, view.latitude, view.zoom);
+    ViewTransform {
+        longitude,
+        latitude,
+        ..*view
+    }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -354,53 +412,72 @@ mod tests {
         ordered(a).abs_diff(ordered(b))
     }
 
-    /// Fourteen of sixteen elements reproduce the oracle bit for bit, and the other two are
-    /// within one ULP. Both halves are asserted: loosening the whole matrix to a tolerance would
-    /// stop the fourteen from being evidence of anything.
+    /// Every element of the projection reproduces the oracle bit for bit.
     #[test]
     fn the_projection_matches_the_oracle() {
-        let matrix = proj_matrix(&probe()).expect("an unrotated camera");
-        let mut exact = 0;
+        let matrix = proj_matrix(&settled(&probe())).expect("an unrotated camera");
         for (index, &got) in matrix.iter().enumerate() {
-            let want = f64::from_bits(ORACLE_PROJ[index]);
-            match ulps_apart(got, want) {
-                0 => exact += 1,
-                distance => {
-                    assert!(
-                        OneUlpDivergence::KNOWN.indices.contains(&index),
-                        "element {index} diverges and is not a known divergence: {got:?} vs {want:?}"
-                    );
-                    assert_eq!(distance, 1, "element {index} is {distance} ULPs out");
-                }
-            }
-        }
-        assert_eq!(exact, 14, "fourteen elements bit-exact");
-    }
-
-    /// The known divergence is exactly where it is documented to be, so it cannot quietly
-    /// migrate to another element and still pass.
-    #[test]
-    fn the_divergence_is_only_the_translation() {
-        let matrix = proj_matrix(&probe()).expect("an unrotated camera");
-        for index in OneUlpDivergence::KNOWN.indices {
-            let want = f64::from_bits(ORACLE_PROJ[index]);
-            assert_eq!(ulps_apart(matrix[index], want), 1, "element {index}");
-        }
-        // And the scale factors that multiply them are exact, which is what places the
-        // difference in the translation rather than in the projection.
-        for index in [0, 5] {
             assert_eq!(
-                matrix[index].to_bits(),
+                got.to_bits(),
                 ORACLE_PROJ[index],
-                "element {index}"
+                "element {index}: {got:?} vs {:?}",
+                f64::from_bits(ORACLE_PROJ[index])
             );
         }
+    }
+
+    /// And the nominal camera does *not* reproduce it, which is the point of settling.
+    ///
+    /// Two elements — the x and y translation — land one ULP out when the camera is taken at
+    /// face value. That gap looked like a defect in this port and was a defect in the input.
+    /// Both halves are pinned, because a `settled` that quietly became the identity would leave
+    /// the test above passing for the wrong reason.
+    #[test]
+    fn the_nominal_camera_is_one_ulp_out_and_the_settled_one_is_not() {
+        let nominal = proj_matrix(&probe()).expect("an unrotated camera");
+        let mut off = Vec::new();
+        for (index, &got) in nominal.iter().enumerate() {
+            let distance = ulps_apart(got, f64::from_bits(ORACLE_PROJ[index]));
+            if distance != 0 {
+                assert_eq!(distance, 1, "element {index}");
+                off.push(index);
+            }
+        }
+        assert_eq!(off, [12, 13], "the two translation components");
+
+        let settled_view = settled(&probe());
+        assert_ne!(settled_view.longitude, probe().longitude);
+        assert_ne!(settled_view.latitude, probe().latitude);
+    }
+
+    /// The settled center is close enough to be invisible and different enough to matter.
+    #[test]
+    fn a_map_does_not_store_the_center_it_was_given() {
+        let [longitude, latitude] = settled_center(-0.11, 51.505, 13.0);
+        assert_ne!(longitude, -0.11);
+        assert_ne!(latitude, 51.505);
+        assert!((longitude - -0.11).abs() < 1e-12, "{longitude}");
+        assert!((latitude - 51.505).abs() < 1e-12, "{latitude}");
+    }
+
+    /// Settling does not depend on the zoom, even though it looks as though it must.
+    ///
+    /// The round trip goes through pixels at a scale, so the obvious expectation is that a
+    /// coarser world rounds the center more. It does not: the world size is a power of two, and
+    /// multiplying and dividing by one is exact. What rounds is the degree arithmetic on either
+    /// side, which is the same at every zoom.
+    #[test]
+    fn settling_does_not_depend_on_the_zoom() {
+        let at = |zoom| settled_center(-0.11, 51.505, zoom);
+        assert_eq!(at(4.0), at(13.0));
+        assert_eq!(at(13.0), at(18.0));
+        assert_eq!(at(0.0), at(22.0));
     }
 
     /// `pixelsPerMeter` is bit-exact, and is exactly the negation of matrix element 11.
     #[test]
     fn pixels_per_meter_matches_and_is_element_eleven_negated() {
-        let view = probe();
+        let view = settled(&probe());
         let ppm = pixels_per_meter(&view);
         assert_eq!(ppm.to_bits(), ORACLE_PIXELS_PER_METER);
 
@@ -411,7 +488,7 @@ mod tests {
     /// The scale-free center is bit-exact on both axes.
     #[test]
     fn the_scale_free_center_matches_the_oracle() {
-        let center = center_zoom0(&probe());
+        let center = center_zoom0(&settled(&probe()));
         assert_eq!(center[0].to_bits(), ORACLE_CENTER_ZOOM0[0]);
         assert_eq!(center[1].to_bits(), ORACLE_CENTER_ZOOM0[1]);
     }
@@ -436,7 +513,7 @@ mod tests {
     /// The projection reads the f32 field of view, which is what makes element 5 not exactly -3.
     #[test]
     fn the_projection_uses_the_f32_field_of_view() {
-        let matrix = proj_matrix(&probe()).expect("an unrotated camera");
+        let matrix = proj_matrix(&settled(&probe())).expect("an unrotated camera");
         assert_ne!(matrix[5], -3.0, "the oracle's is -3.0000000293447");
         assert_eq!(matrix[5].to_bits(), ORACLE_PROJ[5]);
 
