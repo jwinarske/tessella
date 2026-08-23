@@ -30,18 +30,29 @@
 //! And mbgl's `addRingVertices` emits whatever ring it is given, verbatim, so nothing
 //! downstream introduces it.
 //!
-//! # The open lead
+//! # The open lead, narrowed
 //!
-//! `tile.hpp`'s `transform(vt_linear_ring)` does not emit the clipped ring as-is. It keeps
-//! only points whose `z` exceeds the tile's squared tolerance, where `z` is the significance
-//! Douglas-Peucker assigned during `convert`. The endpoints are pinned at infinity and always
-//! survive, but intersection points created *during* clipping carry whatever `z` the clip gave
-//! them.
+//! Two further hypotheses tested since, both refuted:
 //!
-//! That is a filtering step not modelled here at all, and it is the obvious candidate: drop
-//! the ring's original first point and a different vertex becomes first, which is a rotation.
-//! Untested, and named so the next attempt starts there rather than re-refuting the three
-//! above.
+//! - **The `z` significance filter.** `tile.hpp`'s `transform(vt_linear_ring)` keeps only
+//!   points whose `z` exceeds the tile's squared tolerance, which looked like it could drop a
+//!   ring's first point and so rotate it. It cannot, here: intersection points are created
+//!   with `z = 1.0`, and the tile tolerance at z13 is `6 / (2^13 * 8192)`, so `sq_tolerance` is
+//!   about `8e-15`. Nothing is filtered.
+//! - **A rotated or reflected input ring.** Running the clip from each of the four starting
+//!   points, in both directions, produces the oracle's sequence from none of them. The oracle's
+//!   ring is not this clip applied to a differently-ordered input.
+//!
+//! What that leaves is the recursive split, which is the one step whose *model* here is a
+//! reconstruction rather than a port. Every other stage has now been read from the source and
+//! matched. The earlier "recursion refuted" result therefore says the reconstruction of it
+//! reproduces the rotation, not that the recursion is innocent — the suspect is the model.
+//!
+//! Concretely: geojson-vt splits a parent into four children by clipping left/right and then
+//! top/bottom, and a ring surviving thirteen levels of that is clipped twenty-six times. The
+//! simulation here descends one path and clips twice per level, which is the same *shape* but
+//! not demonstrably the same *sequence*. Resolving this means running geojson-vt itself and
+//! comparing, rather than reasoning about it further.
 //!
 //! # Why this cannot be normalized away
 //!
