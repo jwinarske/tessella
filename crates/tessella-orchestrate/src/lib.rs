@@ -17,8 +17,9 @@
 //! orchestrator does not run a frame for a view whose transform is unchanged and whose
 //! sources report no churn (§6.5).
 //!
-//! Status: one tile's buckets build from a style and its features, and encode into geometry
-//! envelopes on the ring. Damage gates, draw order and UBO packing are not implemented.
+//! Status: one tile's buckets build from a style and its features, encode into geometry
+//! envelopes on the ring, and are gated by damage so a parked view emits nothing. Draw order
+//! and UBO packing are not implemented.
 
 // Not `forbid`: `emit` reinterprets `#[repr(C)]` envelope records as bytes to put them on the
 // ring, which is the one thing this crate does that cannot be expressed safely. Everything
@@ -29,9 +30,11 @@
 extern crate alloc;
 
 pub mod binder;
+pub mod damage;
 pub mod emit;
 pub mod tile;
 
 pub use binder::{BoundAttribute, VertexLayout, pack_color};
+pub use damage::{CameraKey, DamageTracker, Traffic, TrafficMeter, Work};
 pub use emit::{Encoded, SlabArena, encode_fill};
 pub use tile::{Content, LayerBucket, TileError, TileId, build_tile};
