@@ -167,6 +167,14 @@ pub struct SlabRef {
     pub length: u32,
 }
 
+impl SlabRef {
+    /// The slab and offset this points at, for comparing two references to the same bytes.
+    #[must_use]
+    pub const fn slab_and_offset(&self) -> (u32, u32) {
+        (self.slab, self.offset)
+    }
+}
+
 /// Why a piece of geometry was announced.
 ///
 /// Carried from rev 1 unchanged, because §6.1 makes it a diagnostic rather than a hint: the

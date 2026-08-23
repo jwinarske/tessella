@@ -37,6 +37,8 @@ use tessella_capture_abi::ring::{Full, Producer};
 use tessella_capture_abi::{AttributeDataType, BuiltIn, EnvelopeKind};
 use tessella_layout::fill::FillBucket;
 
+use crate::binder::VertexLayout;
+
 /// Shader-side id of the position attribute.
 ///
 /// Observed in the oracle's dump as `id=0 bind=0 dt=9 ddt=9 off=0 voff=0 stride=4`. It is the
@@ -176,7 +178,17 @@ pub struct Encoded {
 ///
 /// The envelope carries no view: it is process-scoped and refcounted, and a `ViewUse` binds it
 /// into a view's draw order (§5.3).
-pub fn encode_fill(arena: &mut SlabArena, geometry: GeometryId, bucket: &FillBucket) -> Encoded {
+///
+/// `layout` and `attributes` come from the binder. Every data-driven attribute references the
+/// *same* interleaved buffer at a different offset, which is what the oracle does — its three
+/// data-driven descriptors share one source hash and differ only in `off`.
+pub fn encode_fill(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    bucket: &FillBucket,
+    layout: &VertexLayout,
+    attributes: &[u8],
+) -> Encoded {
     let vertex_bytes = as_bytes_i16(&bucket.vertices);
     let index_bytes = as_bytes_u16(&bucket.indices);
 
@@ -198,8 +210,30 @@ pub fn encode_fill(arena: &mut SlabArena, geometry: GeometryId, bucket: &FillBuc
         _pad: [0; 2],
     };
 
+    // One allocation for the whole interleaved buffer, shared by every data-driven attribute.
+    // Allocating per attribute would give each its own slab and lose the interleaving that the
+    // stride describes.
+    let interleaved = arena.alloc(attributes);
+
+    let mut descriptors = alloc::vec![position];
+    for attribute in &layout.attributes {
+        descriptors.push(AttributeDesc {
+            attr_id: attribute.attr_id,
+            // -1 when the shader declares no slot; the consumer drops it but the bytes stay,
+            // because another shader reading this bucket may declare it (§2.2).
+            binding: attribute.binding,
+            source: interleaved,
+            offset: attribute.offset,
+            vertex_offset: 0,
+            stride: layout.stride,
+            data_type: attribute.supplied as u8,
+            declared_data_type: attribute.declared as u8,
+            _pad: [0; 2],
+        });
+    }
+
     let mut payload = Vec::new();
-    let attrs = push_span(&mut payload, &[position]);
+    let attrs = push_span(&mut payload, &descriptors);
     let segments = push_span(
         &mut payload,
         &bucket
@@ -365,7 +399,13 @@ mod tests {
     fn encoding_describes_the_bucket() {
         let mut arena = SlabArena::new();
         let bucket = bucket();
-        let encoded = encode_fill(&mut arena, GeometryId(7), &bucket);
+        let encoded = encode_fill(
+            &mut arena,
+            GeometryId(7),
+            &bucket,
+            &VertexLayout::default(),
+            &[],
+        );
         arena.seal();
 
         assert_eq!(encoded.record.geometry, GeometryId(7));
@@ -391,7 +431,13 @@ mod tests {
     fn the_position_attribute_addresses_the_vertex_bytes() {
         let mut arena = SlabArena::new();
         let bucket = bucket();
-        let encoded = encode_fill(&mut arena, GeometryId(1), &bucket);
+        let encoded = encode_fill(
+            &mut arena,
+            GeometryId(1),
+            &bucket,
+            &VertexLayout::default(),
+            &[],
+        );
         arena.seal();
 
         let (start, end) = encoded
@@ -417,7 +463,13 @@ mod tests {
     #[test]
     fn every_span_fits_its_payload() {
         let mut arena = SlabArena::new();
-        let encoded = encode_fill(&mut arena, GeometryId(1), &bucket());
+        let encoded = encode_fill(
+            &mut arena,
+            GeometryId(1),
+            &bucket(),
+            &VertexLayout::default(),
+            &[],
+        );
         let len = encoded.payload.len();
 
         assert!(encoded.record.attrs.extent::<AttributeDesc>(len).is_some());
@@ -429,6 +481,197 @@ mod tests {
                 .extent::<AttributeDesc>(len)
                 .is_some(),
             "an empty span still resolves"
+        );
+    }
+}
+
+#[cfg(test)]
+mod descriptor_tests {
+    use super::*;
+    use crate::binder::{FeatureVertices, layout, pack_attributes};
+    use tessella_capture_abi::envelope::WireRecord;
+    use tessella_capture_abi::{AttributeDataType, declared_for};
+    use tessella_source::geojson;
+    use tessella_style::{Source, Style};
+
+    const HERMETIC: &str = include_str!("../../tessella-style/tests/hermetic_style.json");
+
+    /// Everything the oracle's data-driven fill drawable declares, reproduced end to end.
+    ///
+    /// ```text
+    /// id=0 bind=0  dt=9  ddt=9   off=0  stride=4
+    /// id=1 bind=1  dt=26 ddt=28  off=0  stride=20
+    /// id=2 bind=2  dt=25 ddt=26  off=8  stride=20
+    /// id=3 bind=-1 dt=26 ddt=255 off=12 stride=20
+    /// ```
+    #[test]
+    fn the_descriptors_match_the_oracles() {
+        let style = Style::parse(HERMETIC).expect("style parses");
+        let layer = style.layer("fill-datadriven").expect("the layer");
+        let paint = tessella_style::property::resolve_paint(layer).expect("resolves");
+
+        let ids = [
+            ("idFillColorVertexAttribute", 1u32),
+            ("idFillOpacityVertexAttribute", 2),
+            ("idFillOutlineColorVertexAttribute", 3),
+        ]
+        .into_iter()
+        .map(|(name, id)| (alloc::string::String::from(name), id))
+        .collect();
+
+        // The declared types come from the generated table, not from the test.
+        let vertex_layout = layout(&paint, &ids, |attr_id| {
+            declared_for(BuiltIn::FillShader, attr_id)
+                .map(|attribute| (attribute.binding, attribute.declared))
+        });
+
+        let Some(Source::Geojson(source)) = style.source("probe") else {
+            panic!("a geojson source");
+        };
+        let features: Vec<_> = geojson::read(&source.data)
+            .expect("features")
+            .into_iter()
+            .filter(|f| f.geometry.type_name() == "Polygon")
+            .collect();
+
+        let bucket = tessella_layout::fill::build(&[alloc::vec![
+            [10240, 4820],
+            [10240, 10240],
+            [2942, 10240],
+            [2942, 4820],
+            [10240, 4820],
+        ]]);
+        let packed = pack_attributes(
+            &vertex_layout,
+            &paint,
+            &[FeatureVertices {
+                feature: &features[0],
+                vertices: bucket.vertices.len(),
+            }],
+            None,
+        )
+        .expect("packs");
+
+        let mut arena = SlabArena::new();
+        let encoded = encode_fill(&mut arena, GeometryId(1), &bucket, &vertex_layout, &packed);
+        arena.seal();
+
+        assert_eq!(encoded.record.attrs.count, 4, "position plus three");
+
+        let (start, end) = encoded
+            .record
+            .attrs
+            .extent::<AttributeDesc>(encoded.payload.len())
+            .expect("the span fits");
+        let bytes = &encoded.payload[start..end];
+        let descriptors: Vec<AttributeDesc> = (0..4)
+            .map(|i| {
+                AttributeDesc::from_bytes(&bytes[i * size_of::<AttributeDesc>()..])
+                    .expect("a descriptor")
+            })
+            .collect();
+
+        let expected = [
+            // (id, binding, supplied, declared, offset, stride)
+            (
+                0,
+                0,
+                AttributeDataType::Short2,
+                AttributeDataType::Short2,
+                0,
+                4,
+            ),
+            (
+                1,
+                1,
+                AttributeDataType::Float2,
+                AttributeDataType::Float4,
+                0,
+                20,
+            ),
+            (
+                2,
+                2,
+                AttributeDataType::Float,
+                AttributeDataType::Float2,
+                8,
+                20,
+            ),
+            (
+                3,
+                -1,
+                AttributeDataType::Float2,
+                AttributeDataType::Invalid,
+                12,
+                20,
+            ),
+        ];
+        for (descriptor, (id, binding, supplied, declared, offset, stride)) in
+            descriptors.iter().zip(expected)
+        {
+            assert_eq!(descriptor.attr_id, id, "id");
+            assert_eq!(descriptor.binding, binding, "id {id} binding");
+            assert_eq!(descriptor.data_type(), Some(supplied), "id {id} supplied");
+            assert_eq!(
+                descriptor.declared_data_type(),
+                Some(declared),
+                "id {id} declared"
+            );
+            assert_eq!(descriptor.offset, offset, "id {id} offset");
+            assert_eq!(descriptor.stride, stride, "id {id} stride");
+        }
+    }
+
+    /// The three data-driven attributes share one buffer, differing only in offset. Allocating
+    /// per attribute would give each its own slab and lose the interleaving the stride describes.
+    #[test]
+    fn the_data_driven_attributes_share_one_buffer() {
+        let style = Style::parse(HERMETIC).expect("style parses");
+        let layer = style.layer("fill-datadriven").expect("the layer");
+        let paint = tessella_style::property::resolve_paint(layer).expect("resolves");
+        let ids = [
+            ("idFillColorVertexAttribute", 1u32),
+            ("idFillOpacityVertexAttribute", 2),
+            ("idFillOutlineColorVertexAttribute", 3),
+        ]
+        .into_iter()
+        .map(|(name, id)| (alloc::string::String::from(name), id))
+        .collect();
+        let vertex_layout = layout(&paint, &ids, |attr_id| {
+            declared_for(BuiltIn::FillShader, attr_id)
+                .map(|attribute| (attribute.binding, attribute.declared))
+        });
+
+        let mut arena = SlabArena::new();
+        let bucket =
+            tessella_layout::fill::build(&[alloc::vec![[0, 0], [10, 0], [10, 10], [0, 0]]]);
+        let packed = alloc::vec![0u8; vertex_layout.stride as usize * bucket.vertices.len()];
+        let encoded = encode_fill(&mut arena, GeometryId(1), &bucket, &vertex_layout, &packed);
+
+        let (start, end) = encoded
+            .record
+            .attrs
+            .extent::<AttributeDesc>(encoded.payload.len())
+            .expect("the span fits");
+        let bytes = &encoded.payload[start..end];
+        let source_of = |i: usize| {
+            AttributeDesc::from_bytes(&bytes[i * size_of::<AttributeDesc>()..])
+                .expect("a descriptor")
+                .source
+        };
+
+        // Position has its own buffer; the three data-driven ones share another.
+        assert_ne!(
+            source_of(0).slab_and_offset(),
+            source_of(1).slab_and_offset()
+        );
+        assert_eq!(
+            source_of(1).slab_and_offset(),
+            source_of(2).slab_and_offset()
+        );
+        assert_eq!(
+            source_of(2).slab_and_offset(),
+            source_of(3).slab_and_offset()
         );
     }
 }
