@@ -15,5 +15,7 @@
 extern crate alloc;
 
 pub mod geojson;
+pub mod tiling;
 
 pub use geojson::{GeoJsonError, GeoJsonFeature, Geometry};
+pub use tiling::TilingOptions;

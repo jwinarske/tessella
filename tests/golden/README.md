@@ -20,11 +20,20 @@ ninja mbgl-capture-probe
 ./mbgl-capture-probe --dump=<tessella>/tests/golden/hermetic_style.dump
 ```
 
-Produced by `mbgl-capture-probe` at maplibre-native `ecb421191e7e`, on the
+Produced by `mbgl-capture-probe` at maplibre-native `796341e27793`, on the
 `capture-backend-phase0` branch whose base commit `b237943` plan.md pins. Byte-identical
 across six consecutive runs; if a regeneration produces a diff on unrelated lines, that is a
 determinism regression in the probe rather than a change in the frontend, and the four
 sources of variance already found are described in that commit.
+
+## Reading the actual values
+
+`--dump-vertices` prints coordinates rather than hashes, decoding the `Short2` position
+attribute into int16 pairs. It is deliberately not part of the dump — a hash is what keeps the
+golden file bounded and diffable — but it is how the tile-coordinate pipeline gets built
+against measured values instead of guesses. It is what established that the hermetic style's
+fill geometry clips to `-2048..10240` at extent 8192, and that rings keep their closing
+duplicate vertex.
 
 ## What is deliberately not compared
 
