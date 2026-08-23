@@ -41,6 +41,8 @@
 //! explicit-width atomics rather than anything richer — R-6 is about riscv64 alignment and
 //! atomics behaving the same as everywhere else.
 
+extern crate alloc;
+
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::EnvelopeKind;
@@ -142,6 +144,62 @@ pub const fn record_size(record_len: usize, payload_len: usize) -> usize {
 #[must_use]
 pub const fn region_size(capacity: usize) -> usize {
     size_of::<RingControl>() + capacity
+}
+
+/// A ring that owns its region.
+///
+/// [`init`] and [`attach`] exist for a region someone else owns — shared memory, a mapping
+/// handed over by a consumer, the §3.5 process-isolation case. When the producer owns it
+/// instead, which is every in-process use and every test, this owns the allocation and hands
+/// out both halves without the caller touching a raw pointer.
+///
+/// The halves hold pointers into the boxed region. Moving a `Ring` moves the box, not the heap
+/// allocation it points at, so the pointers stay valid — which is what makes this sound rather
+/// than merely convenient.
+#[derive(Debug)]
+pub struct Ring {
+    // Kept alive for the halves to point into; never read through this handle.
+    _region: alloc::boxed::Box<[u64]>,
+    producer: Producer,
+    consumer: Consumer,
+}
+
+impl Ring {
+    /// Allocates a ring with `capacity` data bytes.
+    ///
+    /// # Panics
+    ///
+    /// When `capacity` is not a power of two of at least [`RECORD_ALIGN`] bytes.
+    #[must_use]
+    pub fn new(capacity: usize) -> Self {
+        // u64 rather than u8 so the allocation is 8-aligned, which the control block's atomics
+        // require.
+        let words = region_size(capacity).div_ceil(8);
+        let mut region = alloc::vec![0u64; words].into_boxed_slice();
+        // SAFETY: the box is `region_size(capacity)` bytes or more, 8-aligned because its
+        // element type is, and outlives both halves because it is owned alongside them.
+        let (producer, consumer) = unsafe { init(region.as_mut_ptr().cast(), capacity) };
+        Self {
+            _region: region,
+            producer,
+            consumer,
+        }
+    }
+
+    /// Both halves, for driving them in one thread.
+    pub fn split(&mut self) -> (&mut Producer, &mut Consumer) {
+        (&mut self.producer, &mut self.consumer)
+    }
+
+    /// The producer half.
+    pub fn producer(&mut self) -> &mut Producer {
+        &mut self.producer
+    }
+
+    /// The consumer half.
+    pub fn consumer(&mut self) -> &mut Consumer {
+        &mut self.consumer
+    }
 }
 
 /// Producer half of the ring.

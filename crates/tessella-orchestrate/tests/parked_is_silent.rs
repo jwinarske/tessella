@@ -9,7 +9,7 @@
 
 use tessella_capture_abi::envelope::GeometryId;
 use tessella_capture_abi::envelope::ViewId;
-use tessella_capture_abi::ring::{Consumer, Producer, init, region_size};
+use tessella_capture_abi::ring::{Producer, Ring};
 use tessella_orchestrate::binder::{FeatureVertices, layout, pack_attributes};
 use tessella_orchestrate::damage::{CameraKey, DamageTracker, TrafficMeter};
 use tessella_orchestrate::tile::{TileId, bucket_for, build_tile};
@@ -20,28 +20,6 @@ use tessella_style::{Source, Style};
 
 const HERMETIC: &str = include_str!("../../tessella-style/tests/hermetic_style.json");
 const VIEW: ViewId = ViewId(0);
-
-/// An 8-aligned region for a ring, kept alive for the test's duration.
-struct Region {
-    buf: Vec<u64>,
-    capacity: usize,
-}
-
-impl Region {
-    fn new(capacity: usize) -> Self {
-        Self {
-            buf: vec![0u64; region_size(capacity).div_ceil(8)],
-            capacity,
-        }
-    }
-
-    fn open(&mut self) -> (Producer, Consumer) {
-        let capacity = self.capacity;
-        // SAFETY: the buffer is large enough for `region_size(capacity)`, 8-aligned, and
-        // outlives both halves within this test.
-        unsafe { init(self.buf.as_mut_ptr().cast(), capacity) }
-    }
-}
 
 fn style() -> Style {
     Style::parse(HERMETIC).expect("style parses")
@@ -122,15 +100,15 @@ fn emit_tile(producer: &mut Producer, arena: &mut SlabArena) {
 /// consumer's tick awake and, on a DVFS-governed part, the whole SoC out of idle (§12.8).
 #[test]
 fn a_parked_view_writes_no_ring_bytes() {
-    let mut region = Region::new(64 * 1024);
-    let (mut producer, _consumer) = region.open();
+    let mut ring = Ring::new(64 * 1024);
+    let producer = ring.producer();
     let mut arena = SlabArena::new();
     let mut tracker = DamageTracker::new();
 
     // First frame: everything is new, so everything is emitted.
     let first = tracker.begin_frame(VIEW, camera());
     assert!(first.camera && first.geometry);
-    emit_tile(&mut producer, &mut arena);
+    emit_tile(producer, &mut arena);
     let after_first = producer.head();
     assert!(after_first > 0, "the first frame writes something");
 
@@ -140,7 +118,7 @@ fn a_parked_view_writes_no_ring_bytes() {
         let work = tracker.begin_frame(VIEW, camera());
         assert!(work.is_idle(), "frame {frame} wanted work: {work:?}");
         if work.geometry {
-            emit_tile(&mut producer, &mut arena);
+            emit_tile(producer, &mut arena);
         }
         meter.frame();
     }
@@ -160,13 +138,13 @@ fn a_parked_view_writes_no_ring_bytes() {
 /// pass the parked test only until something happened once.
 #[test]
 fn the_view_goes_quiet_again_after_churn() {
-    let mut region = Region::new(64 * 1024);
-    let (mut producer, mut consumer) = region.open();
+    let mut ring = Ring::new(64 * 1024);
+    let (producer, consumer) = ring.split();
     let mut arena = SlabArena::new();
     let mut tracker = DamageTracker::new();
 
     tracker.begin_frame(VIEW, camera());
-    emit_tile(&mut producer, &mut arena);
+    emit_tile(producer, &mut arena);
 
     for _ in 0..10 {
         assert!(tracker.begin_frame(VIEW, camera()).is_idle());
@@ -177,7 +155,7 @@ fn the_view_goes_quiet_again_after_churn() {
     let before = producer.head();
     let work = tracker.begin_frame(VIEW, camera());
     assert!(work.geometry);
-    emit_tile(&mut producer, &mut arena);
+    emit_tile(producer, &mut arena);
     assert!(producer.head() > before, "churn writes");
 
     // Drain so the ring has room, then confirm it settles.
@@ -199,15 +177,15 @@ fn the_view_goes_quiet_again_after_churn() {
 /// pay for every frame the main display moves (§5.2).
 #[test]
 fn one_views_churn_does_not_wake_another() {
-    let mut region = Region::new(64 * 1024);
-    let (mut producer, _consumer) = region.open();
+    let mut ring = Ring::new(64 * 1024);
+    let producer = ring.producer();
     let mut arena = SlabArena::new();
     let mut tracker = DamageTracker::new();
     let other = ViewId(1);
 
     tracker.begin_frame(VIEW, camera());
     tracker.begin_frame(other, camera());
-    emit_tile(&mut producer, &mut arena);
+    emit_tile(producer, &mut arena);
 
     tracker.mark_dirty(other);
 
