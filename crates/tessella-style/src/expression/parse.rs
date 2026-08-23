@@ -131,10 +131,13 @@ pub(super) fn parse_with_default(
                 ">" => CompareOp::Gt,
                 _ => CompareOp::Ge,
             };
+            let lhs = parse(&args[0])?;
+            let rhs = parse(&args[1])?;
+            check_comparable(operator, op, &lhs, &rhs)?;
             Ok(Expr::Compare {
                 op,
-                lhs: Box::new(parse(&args[0])?),
-                rhs: Box::new(parse(&args[1])?),
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
             })
         }
         "!" => {
@@ -189,6 +192,49 @@ pub(super) fn parse_with_default(
         }
         other => Err(ParseError::UnknownOperator(other.to_string())),
     }
+}
+
+/// Rejects a comparison that no input could satisfy.
+///
+/// # Rejecting the impossible, not proving the possible
+///
+/// The check only fires when both sides have types it can see. `["==", ["get", "x"], ["get",
+/// "y"]]` compares two unknowns and is accepted, because a feature might carry anything and the
+/// comparison could well succeed — if it does not, evaluation says so, which is the right place.
+/// `["==", ["string", x], ["number", y]]` names both types itself and can never be true, so it
+/// is a mistake in the style rather than a fact about the data.
+///
+/// Ordering is stricter than equality. Numbers and strings have an order; booleans do not have
+/// one the spec is willing to invent, and null has nothing to order. Equality additionally
+/// rejects arrays and objects, which the spec compares by neither identity nor structure and so
+/// declines to compare at all.
+fn check_comparable(
+    operator: &str,
+    op: CompareOp,
+    lhs: &Expr,
+    rhs: &Expr,
+) -> Result<(), ParseError> {
+    let (left, right) = (lhs.result_type(), rhs.result_type());
+    let ordering = matches!(
+        op,
+        CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge
+    );
+
+    if ordering && !(left.is_ordered() && right.is_ordered()) {
+        let unordered = if left.is_ordered() { right } else { left };
+        return Err(ParseError::Malformed {
+            operator: operator.to_string(),
+            detail: format!("{} has no ordering", unordered.name()),
+        });
+    }
+
+    if !left.could_equal(right) {
+        return Err(ParseError::Malformed {
+            operator: operator.to_string(),
+            detail: format!("{} and {} can never be equal", left.name(), right.name()),
+        });
+    }
+    Ok(())
 }
 
 /// The spec's rules for `match` labels, which it enforces at compile time.

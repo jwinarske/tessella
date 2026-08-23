@@ -148,6 +148,112 @@ pub enum CastKind {
     Boolean,
 }
 
+/// What an expression is known to produce.
+///
+/// # `Value` is "unknown", not "anything"
+///
+/// The spec's type checker is deliberately permissive where it cannot see. `["get", "x"]` has
+/// type `Value` because a feature property could be anything, and `["==", ["get", "x"],
+/// ["get", "y"]]` is therefore *valid* — it may fail at evaluation, and that is the right place
+/// for it to fail. The same comparison between a `["string", …]` and a `["number", …]` is
+/// rejected at parse, because there both types are known and no input could make it work.
+///
+/// So this is not a type system that proves programs correct. It rejects what cannot possibly
+/// succeed and admits the rest, which is what makes it usable on styles that read arbitrary
+/// vector-tile data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Type {
+    /// Not known statically.
+    Value,
+    /// Always null.
+    Null,
+    /// A number.
+    Number,
+    /// A string.
+    String,
+    /// A boolean.
+    Boolean,
+    /// An object.
+    Object,
+    /// An array.
+    Array,
+    /// A color.
+    Color,
+}
+
+impl Type {
+    /// Whether two values of these types could ever be equal.
+    ///
+    /// Unknowns compare with anything, because the unknown might turn out to match.
+    #[must_use]
+    pub const fn could_equal(self, other: Self) -> bool {
+        matches!(self, Self::Value) || matches!(other, Self::Value) || {
+            // Equality is defined on scalars. Arrays and objects are rejected outright rather
+            // than compared structurally, which is the spec's choice and not an omission.
+            self.is_scalar() && other.is_scalar() && self.same_as(other)
+        }
+    }
+
+    /// Whether this type is ordered, so `<` and friends apply.
+    ///
+    /// Numbers and strings only. Booleans have no order the spec is willing to invent, and null
+    /// has nothing to compare.
+    #[must_use]
+    pub const fn is_ordered(self) -> bool {
+        matches!(self, Self::Value | Self::Number | Self::String)
+    }
+
+    /// Scalars can be compared for equality; aggregates cannot.
+    #[must_use]
+    pub const fn is_scalar(self) -> bool {
+        matches!(
+            self,
+            Self::Null | Self::Number | Self::String | Self::Boolean | Self::Color
+        )
+    }
+
+    const fn same_as(self, other: Self) -> bool {
+        matches!(
+            (self, other),
+            (Self::Null, Self::Null)
+                | (Self::Number, Self::Number)
+                | (Self::String, Self::String)
+                | (Self::Boolean, Self::Boolean)
+                | (Self::Color, Self::Color)
+                | (Self::Object, Self::Object)
+                | (Self::Array, Self::Array)
+        )
+    }
+
+    /// The type a value has.
+    #[must_use]
+    pub const fn of(value: &Value) -> Self {
+        match value {
+            Value::Null => Self::Null,
+            Value::Bool(_) => Self::Boolean,
+            Value::Number(_) => Self::Number,
+            Value::String(_) => Self::String,
+            Value::Array(_) => Self::Array,
+            Value::Object(_) => Self::Object,
+        }
+    }
+
+    /// A name for error messages.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Value => "value",
+            Self::Null => "null",
+            Self::Number => "number",
+            Self::String => "string",
+            Self::Boolean => "boolean",
+            Self::Object => "object",
+            Self::Array => "array",
+            Self::Color => "color",
+        }
+    }
+}
+
 /// A type an assertion requires.
 ///
 /// Distinct from [`CastKind`], and the difference is the whole point of both: `["number", v]`
@@ -485,6 +591,41 @@ impl Expression {
         feature: Option<&dyn Feature>,
     ) -> Result<Value, EvaluationError> {
         evaluate::evaluate(&self.root, &evaluate::Context { zoom, feature })
+    }
+}
+
+impl Expr {
+    /// What this expression is known to produce, or [`Type::Value`] when it cannot be known.
+    ///
+    /// Only the cases the checker acts on are given precise types. Everything else is `Value`,
+    /// which is honest: claiming a type this does not actually derive would reject valid styles,
+    /// and being wrong in that direction is worse than being vague.
+    #[must_use]
+    pub fn result_type(&self) -> Type {
+        match self {
+            Self::Literal(value) => Type::of(value),
+            Self::Zoom => Type::Number,
+            Self::GeometryType => Type::String,
+            Self::Has { .. } | Self::Not(_) | Self::Compare { .. } => Type::Boolean,
+            Self::All(_) | Self::Any(_) => Type::Boolean,
+            Self::Properties => Type::Object,
+            Self::Arithmetic { .. } => Type::Number,
+            Self::Assert { kind, .. } => match kind {
+                AssertKind::Number => Type::Number,
+                AssertKind::String => Type::String,
+                AssertKind::Boolean => Type::Boolean,
+                AssertKind::Object => Type::Object,
+            },
+            Self::AssertArray { .. } => Type::Array,
+            Self::Cast { to, .. } => match to {
+                CastKind::Number => Type::Number,
+                CastKind::String => Type::String,
+                CastKind::Boolean => Type::Boolean,
+            },
+            // `get`, `id`, and everything whose type depends on data or on branches this does
+            // not unify.
+            _ => Type::Value,
+        }
     }
 }
 

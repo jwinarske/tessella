@@ -255,15 +255,49 @@ fn truthiness_follows_the_spec() {
     );
 }
 
-/// Ordering across types is an error rather than a coercion. Letting `["<", "10", 9]` be
-/// quietly true is the sort of thing that produces a wrong map and no diagnostic.
+/// Comparing across types is a *compile* error, not a coercion and not an evaluation error.
+///
+/// This test used to assert evaluation errors, and one of its assertions — that `["==", "10",
+/// 10]` is simply false — was wrong against the spec, which rejects a comparison whose operand
+/// types are both known and different. The style-spec suite says so directly, and catching it at
+/// parse is the better place regardless: a style with this mistake in it is broken for every
+/// feature, so reporting it once at load beats reporting it per feature per tile forever.
 #[test]
-fn ordering_across_types_is_an_error() {
-    assert!(expr(r#"["<", "10", 9]"#).evaluate(None, None).is_err());
+fn comparing_across_known_types_is_a_compile_error() {
+    for text in [
+        r#"["<", "10", 9]"#,
+        r#"["==", "10", 10]"#,
+        r#"["<", true, false]"#,
+        r#"["<", null, null]"#,
+    ] {
+        let value: Value = serde_json::from_str(text).expect("valid json");
+        assert!(
+            Expression::parse(&value).is_err(),
+            "{text} should not parse"
+        );
+    }
+
     assert_eq!(eval(r#"["<", 9, 10]"#, None, None), Value::Bool(true));
     assert_eq!(eval(r#"["<", "a", "b"]"#, None, None), Value::Bool(true));
-    // Equality across types is fine, and simply false.
-    assert_eq!(eval(r#"["==", "10", 10]"#, None, None), Value::Bool(false));
+    assert_eq!(eval(r#"["==", 10, 10]"#, None, None), Value::Bool(true));
+}
+
+/// Comparing unknowns is allowed, because the unknown might match.
+///
+/// This is the other half of the rule and the half that keeps it usable: a feature property can
+/// be anything, so `["==", ["get", "a"], ["get", "b"]]` could well be true and rejecting it
+/// would reject most real styles. The checker rejects what cannot succeed, not what it cannot
+/// prove.
+#[test]
+fn comparing_unknown_types_is_allowed() {
+    for text in [
+        r#"["==", ["get", "a"], ["get", "b"]]"#,
+        r#"["<", ["get", "a"], 5]"#,
+        r#"["==", ["get", "a"], "literal"]"#,
+    ] {
+        let value: Value = serde_json::from_str(text).expect("valid json");
+        assert!(Expression::parse(&value).is_ok(), "{text} should parse");
+    }
 }
 
 #[test]
