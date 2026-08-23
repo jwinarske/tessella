@@ -30,7 +30,9 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use tessella_capture_abi::envelope::*;
-use tessella_capture_abi::reverse::MAX_VIEWS;
+use tessella_capture_abi::reverse::{
+    FLAG_PUBLISHED, FLAG_VISIBLE, MAX_VIEWS, ReverseChannel, ViewSlot,
+};
 use tessella_capture_abi::ring::{RECORD_ALIGN, RECORD_FLAG_SKIP, RecordHeader, RingControl};
 use tessella_capture_abi::{ABI_REV, AttributeDataType, BuiltIn, EnvelopeKind, TexturePixelType};
 
@@ -650,6 +652,88 @@ fn structs() -> Vec<Struct> {
                 (_pad3, "uint8_t _pad3[120]", "Must be zero."),
             ]
         ),
+        c_struct!(
+            ViewSlot,
+            "view_slot",
+            "One view's slot in the consumer-to-producer strip (DR-10).\n\n             Guarded by a seqlock. A writer increments seq to an odd value, fences, writes the \
+             payload, then stores the next even value with release. A reader takes seq, reads \
+             the payload, takes seq again, and retries unless both reads are equal and even. \
+             Skipping the retry yields a torn camera -- a center from one frame with a zoom from \
+             the next -- which reads as a view that lurches rather than one that is wrong.\n\n             The doubles travel as their bit patterns, so this stays a plain-integer struct and \
+             the header stays includable from C and C++ alike.",
+            [
+                (
+                    seq,
+                    "uint32_t seq",
+                    "Seqlock counter. Even is stable; odd means a write is in progress."
+                ),
+                (
+                    flags,
+                    "uint32_t flags",
+                    "TSL_VIEW_FLAG_PUBLISHED and TSL_VIEW_FLAG_VISIBLE."
+                ),
+                (
+                    center_x,
+                    "uint64_t center_x",
+                    "Map center at zoom zero, x, as the bits of a double. Scale-free, 0..512."
+                ),
+                (
+                    center_y,
+                    "uint64_t center_y",
+                    "Map center at zoom zero, y, as the bits of a double."
+                ),
+                (
+                    zoom,
+                    "uint64_t zoom",
+                    "Fractional zoom, as the bits of a double."
+                ),
+                (
+                    bearing,
+                    "uint64_t bearing",
+                    "Bearing in degrees, as the bits of a double."
+                ),
+                (
+                    pitch,
+                    "uint64_t pitch",
+                    "Pitch in degrees, as the bits of a double."
+                ),
+                (
+                    viewport_width,
+                    "uint32_t viewport_width",
+                    "Viewport width in pixels."
+                ),
+                (
+                    viewport_height,
+                    "uint32_t viewport_height",
+                    "Viewport height in pixels."
+                ),
+            ]
+        ),
+        c_struct!(
+            ReverseChannel,
+            "reverse_channel",
+            "The consumer-to-producer strip (DR-10), living in the shared region beside the \
+             ring.\n\n             The consumer writes every field here and the producer reads them, which is the \
+             opposite direction to everything else in this header. It carries what the producer \
+             cannot know on its own: which geometry has actually reached the GPU, and where each \
+             view's camera is under consumer-camera mode.",
+            [
+                (
+                    acked_geometry,
+                    "uint64_t acked_geometry",
+                    "Ring position whose geometry the consumer has uploaded to the GPU. \
+                     Distinct from the ring's tail, which says only that the bytes were read: \
+                     an ancestor tile may be released once its descendants are on the GPU, not \
+                     once their envelopes were parsed."
+                ),
+                (
+                    views,
+                    "tsl_view_slot views[TSL_MAX_VIEWS]",
+                    "One slot per view, indexed by view id. Slots past the declared views stay \
+                     unpublished."
+                ),
+            ]
+        ),
     ]
 }
 
@@ -715,6 +799,20 @@ fn generate() -> String {
     writeln!(w, "#define TSL_TEXTURE_RECT_CAP {TEXTURE_RECT_CAP}u").unwrap();
     writeln!(w, "#define TSL_PAYLOAD_ALIGN {PAYLOAD_ALIGN}u").unwrap();
     writeln!(w, "#define TSL_MAX_VIEWS {MAX_VIEWS}u").unwrap();
+    writeln!(w).unwrap();
+
+    writeln!(
+        w,
+        "/* Bits in tsl_view_slot.flags. An unpublished slot is not a hidden view: it is a view"
+    )
+    .unwrap();
+    writeln!(
+        w,
+        " * the consumer has never mentioned, and the producer must not read a camera out of it. */"
+    )
+    .unwrap();
+    writeln!(w, "#define TSL_VIEW_FLAG_PUBLISHED {FLAG_PUBLISHED}u").unwrap();
+    writeln!(w, "#define TSL_VIEW_FLAG_VISIBLE {FLAG_VISIBLE}u").unwrap();
     writeln!(w).unwrap();
 
     emit_enum(
@@ -906,4 +1004,137 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
         }
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every envelope kind has a struct in the header.
+    ///
+    /// This is the omission the freeze is most exposed to: a new envelope is added to the ring,
+    /// its Rust record gets its layout asserts, and the C mirror is never told. The `--check`
+    /// lane catches a table that changed and says nothing about one that should have.
+    ///
+    /// The mapping is by name rather than by count, so adding an envelope and a struct for some
+    /// unrelated type does not cancel out.
+    #[test]
+    fn every_envelope_kind_has_a_struct() {
+        let declared: Vec<String> = structs().into_iter().map(|s| s.c_name).collect();
+        for kind in EnvelopeKind::ALL {
+            let expected = format!(
+                "{PREFIX}_{}",
+                screaming(&format!("{kind:?}")).to_lowercase()
+            );
+            assert!(
+                declared.contains(&expected),
+                "{kind:?} has no {expected} in the header"
+            );
+        }
+    }
+
+    /// The infrastructure types are declared too — the ring, its record header, and the
+    /// consumer-to-producer strip.
+    ///
+    /// These are not envelopes and so are not covered by the check above, and the reverse
+    /// channel is the one a mirror is most likely to need and least likely to be handed: it is
+    /// the only region the consumer *writes*, so a producer-shaped header can omit it and still
+    /// look complete.
+    #[test]
+    fn the_shared_region_types_are_declared() {
+        let declared: Vec<String> = structs().into_iter().map(|s| s.c_name).collect();
+        for name in [
+            "ring_control",
+            "record_header",
+            "reverse_channel",
+            "view_slot",
+        ] {
+            let expected = format!("{PREFIX}_{name}");
+            assert!(declared.contains(&expected), "{expected} is not declared");
+        }
+    }
+
+    /// Every declared struct's fields are in ascending offset order and inside the struct.
+    ///
+    /// A table entry naming fields out of order still compiles — `offset_of!` gives the right
+    /// number wherever the entry sits — and produces a C struct whose declaration order differs
+    /// from Rust's. The `offsetof` assertions would then fail on the C side, which is the right
+    /// outcome but a confusing way to learn it. This says so directly.
+    #[test]
+    fn fields_are_declared_in_layout_order() {
+        for item in structs() {
+            let mut previous = None;
+            for field in &item.fields {
+                if let Some(previous) = previous {
+                    assert!(
+                        field.offset > previous,
+                        "{}: {} at {} follows offset {previous}",
+                        item.c_name,
+                        field.name,
+                        field.offset
+                    );
+                }
+                assert!(
+                    field.offset < item.size,
+                    "{}: {} at {} is past the struct's {} bytes",
+                    item.c_name,
+                    field.name,
+                    field.offset,
+                    item.size
+                );
+                previous = Some(field.offset);
+            }
+        }
+    }
+
+    /// No struct has a hole its field table does not account for.
+    ///
+    /// A gap between the end of one field and the start of the next is padding the C compiler
+    /// would have to reproduce by luck. Every wire struct here pads explicitly, so the fields
+    /// tile the struct exactly — and a future one that forgets should fail here rather than on
+    /// a consumer reading a field four bytes late.
+    #[test]
+    fn fields_tile_their_struct_without_gaps() {
+        for item in structs() {
+            let Some(first) = item.fields.first() else {
+                continue;
+            };
+            assert_eq!(
+                first.offset, 0,
+                "{} starts at {}",
+                item.c_name, first.offset
+            );
+
+            // The declared size must be reachable: the last field's offset plus its own size is
+            // the struct's size, and the only way to know that size here is the next offset, so
+            // this checks the run rather than each step.
+            let mut covered = 0;
+            for field in &item.fields {
+                assert!(
+                    field.offset >= covered,
+                    "{}: {} overlaps the field before it",
+                    item.c_name,
+                    field.name
+                );
+                assert_eq!(
+                    field.offset, covered,
+                    "{}: {} leaves a hole at {covered}",
+                    item.c_name, field.name
+                );
+                covered = field.offset + field_size(field, &item);
+            }
+            assert_eq!(covered, item.size, "{} does not tile", item.c_name);
+        }
+    }
+
+    /// The size a field occupies, from the gap to the next one or the end of the struct.
+    fn field_size(field: &Field, item: &Struct) -> usize {
+        item.fields
+            .iter()
+            .map(|other| other.offset)
+            .filter(|offset| *offset > field.offset)
+            .min()
+            .unwrap_or(item.size)
+            - field.offset
+    }
 }

@@ -38,6 +38,11 @@ extern "C" {
 #define TSL_PAYLOAD_ALIGN 8u
 #define TSL_MAX_VIEWS 8u
 
+/* Bits in tsl_view_slot.flags. An unpublished slot is not a hidden view: it is a view
+ * the consumer has never mentioned, and the producer must not read a camera out of it. */
+#define TSL_VIEW_FLAG_PUBLISHED 1u
+#define TSL_VIEW_FLAG_VISIBLE 2u
+
 /* Envelope kinds carried on the ring. */
 typedef enum tsl_envelope_kind {
     TSL_ENVELOPE_KIND_GEOMETRY_ADD = 1,
@@ -838,6 +843,77 @@ TSL_ASSERT(offsetof(tsl_ring_control, head) == 128, "tsl_ring_control.head moved
 TSL_ASSERT(offsetof(tsl_ring_control, _pad2) == 136, "tsl_ring_control._pad2 moved");
 TSL_ASSERT(offsetof(tsl_ring_control, tail) == 256, "tsl_ring_control.tail moved");
 TSL_ASSERT(offsetof(tsl_ring_control, _pad3) == 264, "tsl_ring_control._pad3 moved");
+
+/*
+ * One view's slot in the consumer-to-producer strip (DR-10).
+ *
+ * Guarded by a seqlock. A writer increments seq to an odd value, fences, writes the payload,
+ * then stores the next even value with release. A reader takes seq, reads the payload, takes seq
+ * again, and retries unless both reads are equal and even. Skipping the retry yields a torn
+ * camera -- a center from one frame with a zoom from the next -- which reads as a view that
+ * lurches rather than one that is wrong.
+ *
+ * The doubles travel as their bit patterns, so this stays a plain-integer struct and the header
+ * stays includable from C and C++ alike.
+ *
+ * Mirrors `ViewSlot`.
+ */
+typedef struct tsl_view_slot {
+    /* Seqlock counter. Even is stable; odd means a write is in progress. */
+    uint32_t seq;
+    /* TSL_VIEW_FLAG_PUBLISHED and TSL_VIEW_FLAG_VISIBLE. */
+    uint32_t flags;
+    /* Map center at zoom zero, x, as the bits of a double. Scale-free, 0..512. */
+    uint64_t center_x;
+    /* Map center at zoom zero, y, as the bits of a double. */
+    uint64_t center_y;
+    /* Fractional zoom, as the bits of a double. */
+    uint64_t zoom;
+    /* Bearing in degrees, as the bits of a double. */
+    uint64_t bearing;
+    /* Pitch in degrees, as the bits of a double. */
+    uint64_t pitch;
+    /* Viewport width in pixels. */
+    uint32_t viewport_width;
+    /* Viewport height in pixels. */
+    uint32_t viewport_height;
+} tsl_view_slot;
+
+TSL_ASSERT(sizeof(tsl_view_slot) == 56, "tsl_view_slot size differs from the Rust definition");
+TSL_ASSERT(TSL_ALIGNOF(tsl_view_slot) == 8, "tsl_view_slot alignment differs from the Rust definition");
+TSL_ASSERT(offsetof(tsl_view_slot, seq) == 0, "tsl_view_slot.seq moved");
+TSL_ASSERT(offsetof(tsl_view_slot, flags) == 4, "tsl_view_slot.flags moved");
+TSL_ASSERT(offsetof(tsl_view_slot, center_x) == 8, "tsl_view_slot.center_x moved");
+TSL_ASSERT(offsetof(tsl_view_slot, center_y) == 16, "tsl_view_slot.center_y moved");
+TSL_ASSERT(offsetof(tsl_view_slot, zoom) == 24, "tsl_view_slot.zoom moved");
+TSL_ASSERT(offsetof(tsl_view_slot, bearing) == 32, "tsl_view_slot.bearing moved");
+TSL_ASSERT(offsetof(tsl_view_slot, pitch) == 40, "tsl_view_slot.pitch moved");
+TSL_ASSERT(offsetof(tsl_view_slot, viewport_width) == 48, "tsl_view_slot.viewport_width moved");
+TSL_ASSERT(offsetof(tsl_view_slot, viewport_height) == 52, "tsl_view_slot.viewport_height moved");
+
+/*
+ * The consumer-to-producer strip (DR-10), living in the shared region beside the ring.
+ *
+ * The consumer writes every field here and the producer reads them, which is the opposite
+ * direction to everything else in this header. It carries what the producer cannot know on its
+ * own: which geometry has actually reached the GPU, and where each view's camera is under
+ * consumer-camera mode.
+ *
+ * Mirrors `ReverseChannel`.
+ */
+typedef struct tsl_reverse_channel {
+    /* Ring position whose geometry the consumer has uploaded to the GPU. Distinct from the */
+    /* ring's tail, which says only that the bytes were read: an ancestor tile may be released */
+    /* once its descendants are on the GPU, not once their envelopes were parsed. */
+    uint64_t acked_geometry;
+    /* One slot per view, indexed by view id. Slots past the declared views stay unpublished. */
+    tsl_view_slot views[TSL_MAX_VIEWS];
+} tsl_reverse_channel;
+
+TSL_ASSERT(sizeof(tsl_reverse_channel) == 456, "tsl_reverse_channel size differs from the Rust definition");
+TSL_ASSERT(TSL_ALIGNOF(tsl_reverse_channel) == 8, "tsl_reverse_channel alignment differs from the Rust definition");
+TSL_ASSERT(offsetof(tsl_reverse_channel, acked_geometry) == 0, "tsl_reverse_channel.acked_geometry moved");
+TSL_ASSERT(offsetof(tsl_reverse_channel, views) == 8, "tsl_reverse_channel.views moved");
 
 #ifdef __cplusplus
 } /* extern "C" */

@@ -80,24 +80,47 @@ pub struct ViewStatus {
     pub published: bool,
 }
 
-/// Bit positions in a slot's flags word.
-const FLAG_PUBLISHED: u32 = 1 << 0;
-const FLAG_VISIBLE: u32 = 1 << 1;
+/// Set once the consumer has published anything to a slot.
+///
+/// An unpublished slot is not a hidden view; it is a view the consumer has never mentioned, and
+/// the producer must not read a camera out of it.
+pub const FLAG_PUBLISHED: u32 = 1 << 0;
+
+/// Set while the view is on screen. A hidden view gets cover maintenance only.
+pub const FLAG_VISIBLE: u32 = 1 << 1;
 
 /// One view's slot.
+///
+/// Public, and its fields with it, for the reason [`crate::ring::RingControl`]'s are: a mirror
+/// on the other side of the ABI writes this region, and the orderings that make the seqlock work
+/// are a protocol obligation the type cannot express across a language boundary. Rust callers
+/// should go through [`ReverseChannel`]'s methods, which implement that discipline; the fields
+/// are exposed so the C header can be generated from them and so a consumer can be written
+/// against the same definition rather than a transcription of it.
 #[derive(Debug, Default)]
 #[repr(C)]
-struct ViewSlot {
+pub struct ViewSlot {
     /// Seqlock counter. Even is stable, odd means a write is in progress.
-    seq: AtomicU32,
-    flags: AtomicU32,
-    center_x: AtomicU64,
-    center_y: AtomicU64,
-    zoom: AtomicU64,
-    bearing: AtomicU64,
-    pitch: AtomicU64,
-    viewport_width: AtomicU32,
-    viewport_height: AtomicU32,
+    ///
+    /// The writer increments to odd, fences, writes the payload, then stores even with release.
+    /// A reader that sees an odd value, or a different value before and after, must retry.
+    pub seq: AtomicU32,
+    /// [`FLAG_PUBLISHED`] and [`FLAG_VISIBLE`].
+    pub flags: AtomicU32,
+    /// Map center at zoom zero, x, as `f64` bits.
+    pub center_x: AtomicU64,
+    /// Map center at zoom zero, y, as `f64` bits.
+    pub center_y: AtomicU64,
+    /// Fractional zoom, as `f64` bits.
+    pub zoom: AtomicU64,
+    /// Bearing in degrees, as `f64` bits.
+    pub bearing: AtomicU64,
+    /// Pitch in degrees, as `f64` bits.
+    pub pitch: AtomicU64,
+    /// Viewport width in pixels.
+    pub viewport_width: AtomicU32,
+    /// Viewport height in pixels.
+    pub viewport_height: AtomicU32,
 }
 
 /// The consumer-to-producer strip.
@@ -113,8 +136,9 @@ pub struct ReverseChannel {
     /// Distinct from the ring's `tail`, which only says the bytes were read. §13.2's
     /// never-blank rule needs the stronger fact: an ancestor tile may be released once its
     /// descendants are on the GPU, not once their envelopes were parsed.
-    acked_geometry: AtomicU64,
-    views: [ViewSlot; MAX_VIEWS],
+    pub acked_geometry: AtomicU64,
+    /// One slot per view, indexed by view id. Slots beyond the declared views stay unpublished.
+    pub views: [ViewSlot; MAX_VIEWS],
 }
 
 const _: () = {
