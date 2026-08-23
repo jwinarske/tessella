@@ -725,6 +725,7 @@ version = "0.0.0"
 dependencies = [
  "geo-types",
  "geojson",
+ "serde_json",
  "tessella-storage",
  "tessella-style",
  "tessella-tile",

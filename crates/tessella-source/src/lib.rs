@@ -6,6 +6,14 @@
 //! geometry decoded straight into the slab arena, and no intermediate feature
 //! materialization for layers that never read properties.
 //!
-//! Status: scaffold. No implementation yet.
+//! Status: GeoJSON features read from inline style data. MVT decode, clustering, and the
+//! network path are not implemented.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
+
+pub mod geojson;
+
+pub use geojson::{GeoJsonError, GeoJsonFeature, Geometry};

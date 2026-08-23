@@ -224,7 +224,7 @@ mod tests {
     ///
     /// The golden dump covers x in 4092..=4094 and y in 2723..=2724 at zoom 13 — a 3x2 cover
     /// for a 1024x768 viewport. The camera must land in the middle column of that, which both
-    /// pins the projection and confirms the cover is centred where it should be. Picking the
+    /// pins the projection and confirms the cover is centered where it should be. Picking the
     /// first tile that appears in the dump instead would have asserted 4092, and passed only
     /// by being wrong in a way nothing else checked.
     #[test]
