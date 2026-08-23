@@ -15,9 +15,10 @@
 //!
 //! Conformance is the style-spec expression test corpus plus the §9.1 oracle diff (R-3).
 //!
-//! Status: the style document parses, and expressions parse, classify and evaluate. The
-//! bytecode VM (R1), the typed property view, and legacy filter conversion are not
-//! implemented.
+//! Status: the style document parses; expressions parse, classify and evaluate; filters
+//! compile in both syntaxes; and paint and layout properties resolve against the R0 layer
+//! types with their binding decided. The bytecode VM (R1) and the layer types beyond
+//! background and fill are not implemented.
 
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), no_std)]
@@ -27,6 +28,7 @@ extern crate alloc;
 pub mod document;
 pub mod expression;
 pub mod filter;
+pub mod property;
 pub mod value;
 
 pub use document::{
@@ -35,6 +37,7 @@ pub use document::{
 };
 pub use expression::{Dependency, Expression};
 pub use filter::{Filter, FilterError};
+pub use property::{Binding, Color, PropertyError, PropertySpec, ResolvedProperty};
 pub use value::Value;
 
 /// Something went wrong reading a style.
