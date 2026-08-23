@@ -22,6 +22,8 @@ coalesce/null
 collator/comparison-number-error
 collator/equals-non-string-error
 collator/non-object-error
+constant-folding/to-color
+constant-folding/to-color-inferred
 constant-folding/var
 divide/basic
 equal/mismatch
@@ -65,6 +67,8 @@ legacy/categorical/array
 legacy/categorical/array-default
 legacy/categorical/boolean
 legacy/categorical/boolean-default
+legacy/categorical/color
+legacy/categorical/color-default
 legacy/categorical/number
 legacy/categorical/number-default
 legacy/categorical/string
@@ -75,9 +79,13 @@ legacy/exponential/base
 legacy/exponential/number-default
 legacy/identity/array-default
 legacy/identity/boolean-default
+legacy/identity/color
+legacy/identity/color-default
 legacy/identity/number-default
 legacy/identity/string-default
 legacy/interval/array-default
+legacy/interval/color
+legacy/interval/color-default
 legacy/interval/duplicate-stops
 legacy/interval/number-default
 legacy/interval/string-default
@@ -162,6 +170,8 @@ plus/arity-1
 plus/basic
 pow/basic
 properties/basic
+rgb/basic
+rgba/basic
 round/basic
 step/basic
 step/duplicate_stops
@@ -171,6 +181,9 @@ times/arity-0
 times/arity-1
 times/basic
 to-boolean/basic
+to-color/2-ary
+to-color/basic
+to-color/color
 to-number/2-ary
 to-number/basic
 to-string/basic

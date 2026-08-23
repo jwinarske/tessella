@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 
 use super::{
     ArithmeticOp, AssertKind, CastKind, CompareOp, Expr, Interpolation, LegacyFunction, LegacyKind,
-    PropertySpec,
+    PropertySpec, Type,
 };
 use crate::value::Value;
 
@@ -115,6 +115,30 @@ fn parse_with_default_in(
             })
         }
         "array" => parse_array_assertion(operator, args, scope),
+        "rgb" | "rgba" => {
+            let arity = if operator == "rgb" { 3 } else { 4 };
+            expect_arity(operator, args, arity, arity)?;
+            Ok(Expr::Rgba {
+                args: parse_all(args, scope)?,
+            })
+        }
+        "to-color" => {
+            expect_arity(operator, args, 1, usize::MAX)?;
+            let parsed = parse_all(args, scope)?;
+            // Converting something that is already a colour would read its normalized channels
+            // as 0..255 and darken it by a factor of 255. The spec makes `["to-color", ["rgba",
+            // …]]` a pass-through for exactly this reason, and the check is static because the
+            // difference between a colour and the four numbers it looks like is a type.
+            if let [only] = parsed.as_slice()
+                && only.result_type() == Type::Color
+            {
+                return Ok(parsed.into_iter().next().expect("one argument"));
+            }
+            Ok(Expr::Cast {
+                to: CastKind::Color,
+                args: parsed,
+            })
+        }
         "zoom" => {
             expect_arity(operator, args, 0, 0)?;
             Ok(Expr::Zoom)

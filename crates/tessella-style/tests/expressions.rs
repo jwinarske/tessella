@@ -623,3 +623,87 @@ fn to_string_serializes_aggregates_as_json() {
         Value::String("[]".to_string())
     );
 }
+
+/// `to-color` reads CSS strings and 0..255 channel arrays, and errors on neither.
+#[test]
+fn to_color_converts_strings_and_channel_arrays() {
+    let red = Value::Array(vec![
+        Value::Number(1.0),
+        Value::Number(0.0),
+        Value::Number(0.0),
+        Value::Number(1.0),
+    ]);
+    assert_eq!(eval(r#"["to-color", "red"]"#, None, None), red);
+    assert_eq!(
+        eval(r#"["to-color", ["literal", [255, 0, 0, 1]]]"#, None, None),
+        red,
+        "array channels are 0..255"
+    );
+    assert_eq!(eval(r#"["to-color", ["rgb", 255, 0, 0]]"#, None, None), red);
+
+    // Fallbacks, as with the other casts.
+    assert_eq!(
+        eval(r#"["to-color", "not a colour", "red"]"#, None, None),
+        red
+    );
+}
+
+/// A colour is not the array it looks like, and the difference is static.
+///
+/// `["to-color", ["rgba", …]]` is a pass-through while `["to-color", [0, 255, 0, 1]]` rescales.
+/// Getting this wrong is not subtle: converting an already-normalized colour reads its channels
+/// as 0..255 and darkens it by a factor of 255.
+#[test]
+fn a_colour_is_not_an_array_of_numbers() {
+    use tessella_style::expression::Type;
+
+    let colour: Value = serde_json::from_str(r#"["rgba", 0, 255, 0, 1]"#).expect("json");
+    assert_eq!(
+        Expression::parse(&colour).expect("parses").result_type(),
+        Type::Color
+    );
+
+    let array: Value = serde_json::from_str(r#"["literal", [0, 255, 0, 1]]"#).expect("json");
+    assert_eq!(
+        Expression::parse(&array).expect("parses").result_type(),
+        Type::Array
+    );
+
+    // Converting a colour twice must not change it.
+    assert_eq!(
+        eval(r#"["to-color", ["to-color", "lime"]]"#, None, None),
+        eval(r#"["to-color", "lime"]"#, None, None)
+    );
+}
+
+/// A property the spec types as a colour has its result coerced, wherever the value came from.
+#[test]
+fn a_colour_property_coerces_its_result() {
+    use tessella_style::expression::{PropertySpec, Type};
+
+    let spec = PropertySpec {
+        default: None,
+        expected: Some(Type::Color),
+    };
+    let value: Value = serde_json::from_str(r#""red""#).expect("json");
+    let parsed = Expression::parse_for(&value, &spec).expect("parses");
+    assert_eq!(
+        parsed.evaluate(None, None).expect("evaluates"),
+        Value::Array(vec![
+            Value::Number(1.0),
+            Value::Number(0.0),
+            Value::Number(0.0),
+            Value::Number(1.0),
+        ])
+    );
+
+    // And an expression already producing a colour is left alone rather than rescaled.
+    let already: Value = serde_json::from_str(r#"["rgba", 255, 0, 0, 1]"#).expect("json");
+    assert_eq!(
+        Expression::parse_for(&already, &spec)
+            .expect("parses")
+            .evaluate(None, None)
+            .expect("evaluates"),
+        parsed.evaluate(None, None).expect("evaluates")
+    );
+}

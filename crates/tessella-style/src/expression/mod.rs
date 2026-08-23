@@ -146,6 +146,8 @@ pub enum CastKind {
     String,
     /// `to-boolean`
     Boolean,
+    /// `to-color`
+    Color,
 }
 
 /// What an expression is known to produce.
@@ -424,6 +426,16 @@ pub enum Expr {
         /// Used when the assertion fails, instead of erroring.
         fallback: Option<Box<Expr>>,
     },
+    /// `["rgb", r, g, b]` and `["rgba", r, g, b, a]`.
+    ///
+    /// Its own node rather than a function call because its *type* is what matters: a colour is
+    /// distinct from the four-element array it looks like, and the distinction is static. That
+    /// is what lets `["to-color", ["rgba", …]]` be a pass-through while `["to-color", [0, 255,
+    /// 0, 1]]` rescales — the first is already a colour, the second is an array of numbers.
+    Rgba {
+        /// Red, green, blue, and optionally alpha.
+        args: Vec<Expr>,
+    },
     /// `["let", name, value, …, body]`: bind names, then evaluate the body.
     ///
     /// Kept as a binding form rather than substituted at parse, which is the other way to
@@ -592,7 +604,22 @@ impl Expression {
     ///
     /// As [`Expression::parse`].
     pub fn parse_for(value: &Value, spec: &PropertySpec) -> Result<Self, ParseError> {
-        let root = parse::parse_with_default(value, spec)?;
+        let mut root = parse::parse_with_default(value, spec)?;
+
+        // A property the spec types as a colour gets its result coerced. The style writes
+        // `"red"` or a function returning `"red"`, and what the renderer needs is RGBA — so the
+        // conversion belongs at the boundary between the two rather than in every operator that
+        // might produce a string.
+        //
+        // Skipped when the expression already produces a colour, because converting one again
+        // would read its normalized channels as 0..255 and darken it by a factor of 255.
+        if spec.expected == Some(Type::Color) && root.result_type() != Type::Color {
+            root = Expr::Cast {
+                to: CastKind::Color,
+                args: alloc::vec![root],
+            };
+        }
+
         let dependency = classify(&root);
         let parsed = Self { root, dependency };
 
@@ -627,6 +654,14 @@ impl Expression {
     #[must_use]
     pub fn root(&self) -> &Expr {
         &self.root
+    }
+
+    /// What this expression is known to produce.
+    ///
+    /// [`Type::Value`] where it cannot be known, which is most data-driven expressions.
+    #[must_use]
+    pub fn result_type(&self) -> Type {
+        self.root.result_type()
     }
 
     /// What this expression's value depends on.
@@ -696,7 +731,9 @@ impl Expr {
                 CastKind::Number => Type::Number,
                 CastKind::String => Type::String,
                 CastKind::Boolean => Type::Boolean,
+                CastKind::Color => Type::Color,
             },
+            Self::Rgba { .. } => Type::Color,
             // `get`, `id`, and everything whose type depends on data or on branches this does
             // not unify.
             _ => Type::Value,
@@ -744,6 +781,7 @@ fn classify(expr: &Expr) -> Dependency {
             .fold(classify(body), Dependency::join),
         // The binding it reads carries the dependency; the read itself has none.
         Expr::Var(_) => Dependency::None,
+        Expr::Rgba { args } => join_all(args),
         Expr::Assert { args, .. } => join_all(args),
         Expr::AssertArray {
             value, fallback, ..

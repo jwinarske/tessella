@@ -135,6 +135,20 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
         )),
         Expr::Id => Ok(context.feature()?.id().unwrap_or(Value::Null)),
         Expr::Properties => Ok(context.feature()?.properties()),
+        Expr::Rgba { args } => {
+            let mut channels = [0.0, 0.0, 0.0, 1.0];
+            for (slot, arg) in channels.iter_mut().zip(args) {
+                *slot = expect_number(&evaluate(arg, context)?)?;
+            }
+            // Red, green and blue arrive 0..255 and alpha 0..1, which is how CSS spells it and
+            // what the spec inherits.
+            Ok(colour_value([
+                channels[0] / 255.0,
+                channels[1] / 255.0,
+                channels[2] / 255.0,
+                channels[3],
+            ]))
+        }
         Expr::LegacyFunction(function) => evaluate_legacy(function, context),
         Expr::Let { bindings, body } => {
             // Bindings are evaluated once, in order, each seeing the ones before it. Evaluating
@@ -360,6 +374,45 @@ fn locate(stops: &[(f64, Expr)], position: f64) -> Option<usize> {
     // Stops ascend — the parser rejects any list that does not — so a partition point is
     // exact rather than approximate.
     Some(stops.partition_point(|(stop, _)| *stop <= position) - 1)
+}
+
+/// A colour, as the spec renders one: four channels in 0..1.
+fn colour_value(channels: [f64; 4]) -> Value {
+    Value::Array(channels.iter().copied().map(Value::Number).collect())
+}
+
+/// Converts a value to colour channels, or reports that it is not one.
+///
+/// Strings go through the same CSS parser the rest of the crate uses, so a colour written in a
+/// legacy function and a colour written as a paint value agree to the last bit. Arrays are
+/// `[r, g, b]` or `[r, g, b, a]` with the channels 0..255 and the alpha 0..1 — CSS's convention,
+/// not the normalized one, which is why an already-normalized colour must not be sent through
+/// here a second time.
+fn to_colour(value: &Value) -> Option<[f64; 4]> {
+    match value {
+        Value::String(text) => {
+            let parsed = crate::property::Color::parse(text).ok()?;
+            Some([
+                f64::from(parsed.r),
+                f64::from(parsed.g),
+                f64::from(parsed.b),
+                f64::from(parsed.a),
+            ])
+        }
+        Value::Array(items) if items.len() == 3 || items.len() == 4 => {
+            let mut channels = [0.0, 0.0, 0.0, 1.0];
+            for (slot, item) in channels.iter_mut().zip(items) {
+                *slot = item.as_number()?;
+            }
+            Some([
+                channels[0] / 255.0,
+                channels[1] / 255.0,
+                channels[2] / 255.0,
+                channels[3],
+            ])
+        }
+        _ => None,
+    }
 }
 
 /// Whether a value satisfies the type a property spec asks for.
@@ -697,6 +750,10 @@ fn cast(to: CastKind, args: &[Expr], context: &Context<'_>) -> Result<Value, Eva
         match to {
             CastKind::Boolean => return Ok(Value::Bool(truthy(&value))),
             CastKind::String => return Ok(Value::String(to_string(&value))),
+            CastKind::Color => match to_colour(&value) {
+                Some(colour) => return Ok(colour_value(colour)),
+                None => last = Some(value.type_name()),
+            },
             CastKind::Number => match to_number(&value) {
                 Some(number) => return Ok(Value::Number(number)),
                 None => last = Some(value.type_name()),
