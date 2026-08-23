@@ -311,3 +311,55 @@ fn an_unimplemented_layer_type_resolves_empty() {
     assert!(paint.is_empty());
     assert!(is_all_uniform(&paint), "vacuously");
 }
+
+/// Colors are stored premultiplied, as mbgl stores them.
+///
+/// The golden dump's colors are all opaque, so this is a difference the oracle cannot show and
+/// the spec has to decide. A half-transparent red is `(0.5, 0, 0, 0.5)`, not `(1, 0, 0, 0.5)`,
+/// and a consumer blending the second as though it were the first draws it at twice the
+/// intensity.
+#[test]
+fn colors_are_stored_premultiplied() {
+    let half = Color::parse("rgba(255, 0, 0, 0.5)").expect("a color");
+    assert_eq!(half.a, 0.5);
+    assert!((half.r - 0.5).abs() < 1e-6, "{}", half.r);
+    assert_eq!(half.g, 0.0);
+
+    let transparent = Color::parse("rgba(255, 255, 255, 0)").expect("a color");
+    assert_eq!([transparent.r, transparent.g, transparent.b], [0.0; 3]);
+    assert_eq!(transparent.a, 0.0);
+}
+
+/// An opaque color is its own premultiple, which is why the oracle's colors matched before this
+/// was right.
+#[test]
+fn an_opaque_color_is_its_own_premultiple() {
+    let color = Color::parse("#2f6f4f").expect("a color");
+    assert_eq!(color.a, 1.0);
+    assert!((color.r - 47.0 / 255.0).abs() < 1e-6);
+}
+
+/// The channel conversion is a multiply by `alpha / 255`, not a divide by 255.
+///
+/// The same real number and a different `f32`: `#2f6f4f`'s green comes out one ULP low the other
+/// way, while its blue is identical either way — so a check on a single channel concludes the two
+/// spellings are interchangeable. Both cases are asserted here for that reason.
+#[test]
+fn the_channel_conversion_is_mbgls_expression() {
+    let color = Color::parse("#2f6f4f").expect("a color");
+
+    let mbgl_way = 111.0_f32 * (1.0_f32 / 255.0);
+    assert_eq!(color.g.to_bits(), mbgl_way.to_bits());
+    assert_ne!(
+        (111.0_f32 / 255.0).to_bits(),
+        mbgl_way.to_bits(),
+        "the two spellings differ on this channel, which is why one was chosen"
+    );
+
+    assert_eq!(color.b.to_bits(), (79.0_f32 * (1.0_f32 / 255.0)).to_bits());
+    assert_eq!(
+        (79.0_f32 / 255.0).to_bits(),
+        (79.0_f32 * (1.0_f32 / 255.0)).to_bits(),
+        "and agree on this one, which is how the difference stays hidden"
+    );
+}

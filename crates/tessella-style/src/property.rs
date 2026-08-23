@@ -89,10 +89,22 @@ impl Color {
         let parsed: csscolorparser::Color = text.parse().map_err(|_| PropertyError::Color {
             text: text.to_string(),
         })?;
+        // mbgl stores colors *premultiplied*, and does the premultiply and the 0..255 normalize
+        // in a single multiply: `channel * (alpha / 255)` over the integer channel. Dividing by
+        // 255 and multiplying by alpha separately is the same real number and a different f32 —
+        // `#2f6f4f`'s green comes out one ULP low — so the expression is copied rather than
+        // rearranged, for the same reason the projection's is.
+        //
+        // Premultiplying matters beyond the last bit. A half-transparent red is stored as
+        // `(0.5, 0, 0, 0.5)`, not `(1, 0, 0, 0.5)`, and a consumer blending the second as though
+        // it were the first draws it at twice the intensity. The golden dump's colors are all
+        // opaque, so this is a difference the oracle cannot show and the spec decides.
+        let [r, g, b, _] = parsed.to_rgba8();
+        let factor = parsed.a / 255.0;
         Ok(Self {
-            r: parsed.r,
-            g: parsed.g,
-            b: parsed.b,
+            r: f32::from(r) * factor,
+            g: f32::from(g) * factor,
+            b: f32::from(b) * factor,
             a: parsed.a,
         })
     }

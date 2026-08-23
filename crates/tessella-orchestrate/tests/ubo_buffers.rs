@@ -1,0 +1,273 @@
+//! Uniform buffers, checked against the golden dump (§6.3, §9.1).
+//!
+//! # Why the comparison sorts
+//!
+//! mbgl's iteration over a layer's tiles is not deterministic: the same style at the same camera
+//! permutes the consolidated buffer between runs, because the entry index is assigned from that
+//! iteration. The probe canonicalizes by sorting 16-byte blocks, so this does too.
+//!
+//! That is not a weaker comparison than it looks. The blocks are sixteen bytes of exact float
+//! patterns; a wrong matrix, a wrong color, or a missing entry all change the multiset. What it
+//! deliberately does not check is which slot an entry landed in, because that is not a property
+//! of the map — and asserting it would make the test fail on a rerun of the oracle rather than on
+//! a defect.
+
+use std::collections::BTreeMap;
+
+use tessella_capture_abi::generated::{ubo_layouts, ubo_slots};
+use tessella_orchestrate::ubo::{self, DrawableEntry, GlobalPaintParams};
+use tessella_style::property::Color;
+use tessella_tile::cover::{self, ViewTransform};
+
+const DUMP: &str = include_str!("../../../tests/golden/hermetic_style.dump");
+
+fn probe() -> ViewTransform {
+    tessella_tile::camera::settled(&ViewTransform {
+        longitude: -0.11,
+        latitude: 51.505,
+        zoom: 13.0,
+        width: 1024.0,
+        height: 768.0,
+        bearing: 0.0,
+        pitch: 0.0,
+    })
+}
+
+/// `(layer, slot) -> (size, sorted 16-byte blocks)`. `layer` is `-1` for the global buffers.
+fn oracle_buffers() -> BTreeMap<(i32, u32), (usize, Vec<String>)> {
+    let mut out = BTreeMap::new();
+    for line in DUMP.lines() {
+        let Some(rest) = line.strip_prefix("ubo ") else {
+            continue;
+        };
+        let mut fields = rest.split(' ');
+        let key = fields.next().expect("a key");
+        let (kind, index) = key.split_once(':').expect("kind:index");
+        let layer = if kind == "global" {
+            -1
+        } else {
+            index.parse::<i32>().expect("layer number")
+        };
+        let slot: u32 = fields
+            .next()
+            .and_then(|f| f.strip_prefix("slot="))
+            .expect("a slot")
+            .parse()
+            .expect("slot number");
+        let size: usize = fields
+            .next()
+            .and_then(|f| f.strip_prefix("size="))
+            .expect("a size")
+            .parse()
+            .expect("size number");
+        let bytes = fields
+            .next()
+            .and_then(|f| f.strip_prefix("bytes="))
+            .expect("bytes");
+
+        let mut blocks: Vec<String> = bytes
+            .as_bytes()
+            .chunks(32)
+            .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
+            .collect();
+        blocks.sort();
+        out.insert((layer, slot), (size, blocks));
+    }
+    out
+}
+
+/// Sorted 16-byte blocks of a packed buffer, in the dump's spelling.
+fn blocks(bytes: &[u8]) -> Vec<String> {
+    let mut blocks: Vec<String> = bytes
+        .chunks(16)
+        .map(|chunk| chunk.iter().map(|byte| format!("{byte:02x}")).collect())
+        .collect();
+    blocks.sort();
+    blocks
+}
+
+/// The six tiles of the probe's cover, biased for a layer and sublayer.
+fn cover_entries(layer_index: i32, sub_layer_index: i32) -> Vec<DrawableEntry> {
+    let view = probe();
+    cover::cover(&view)
+        .expect("covers")
+        .into_iter()
+        .map(|tile| {
+            DrawableEntry::for_tile(
+                &view,
+                tile.z,
+                tile.x,
+                tile.y,
+                tile.wrap,
+                layer_index,
+                sub_layer_index,
+            )
+            .expect("an unrotated camera")
+        })
+        .collect()
+}
+
+/// The frame-wide paint parameters match, byte for byte except the elided fade.
+///
+/// `symbol_fade_change` is elided in the golden file because it settles asynchronously and made
+/// the dump nondeterministic; everything around it is compared exactly.
+#[test]
+fn the_global_paint_params_match_the_oracle() {
+    let oracle = oracle_buffers();
+    let (size, want) = oracle
+        .get(&(-1, ubo_slots::ID_GLOBAL_PAINT_PARAMS_UBO))
+        .expect("the oracle writes global paint params");
+    assert_eq!(*size, ubo_layouts::GLOBAL_PAINT_PARAMS_UBO.size as usize);
+
+    let packed = GlobalPaintParams::for_view(&probe(), [64.0, 64.0], 1.0).pack();
+    assert_eq!(packed.len(), *size);
+
+    // The dump elides the fade as eight dashes. Compare block by block, skipping the one it
+    // falls in and checking the rest exactly.
+    let mine = blocks(&packed);
+    assert_eq!(mine.len(), want.len());
+    let mut compared = 0;
+    for (got, expected) in mine.iter().zip(want) {
+        if expected.contains('-') {
+            continue;
+        }
+        assert_eq!(got, expected);
+        compared += 1;
+    }
+    assert!(compared >= 2, "only {compared} blocks were comparable");
+}
+
+/// Every scalar of the global block is the quantity mbgl puts there.
+#[test]
+fn the_global_scalars_are_what_mbgl_assigns() {
+    let params = GlobalPaintParams::for_view(&probe(), [64.0, 64.0], 1.0);
+
+    assert_eq!(params.world_size, [1024.0, 768.0], "the viewport, misnamed");
+    assert_eq!(
+        params.units_to_pixels,
+        [512.0, -384.0],
+        "half of it, y flipped"
+    );
+    assert_eq!(
+        params.camera_to_center_distance, 1152.0,
+        "1.5 times the height"
+    );
+    assert_eq!(params.aspect_ratio, 4.0 / 3.0);
+    assert_eq!(params.map_zoom, 13.0);
+    assert_eq!(params.pixel_ratio, 1.0);
+}
+
+/// The background layer's drawable buffer matches: six tile matrices at the union's stride.
+#[test]
+fn the_background_drawable_buffer_matches_the_oracle() {
+    let oracle = oracle_buffers();
+    let (size, want) = oracle
+        .get(&(0, ubo_slots::ID_BACKGROUND_DRAWABLE_UBO))
+        .expect("the oracle writes a background drawable buffer");
+
+    let stride = ubo_layouts::BACKGROUND_DRAWABLE_UNION_UBO.stride;
+    // The background is style layer 0, sublayer 0.
+    let packed = ubo::pack_drawable_buffer(&cover_entries(0, 0), stride);
+
+    assert_eq!(packed.len(), *size, "six tiles at the union's stride");
+    assert_eq!(blocks(&packed), *want);
+}
+
+/// A fill layer's drawable buffer matches: twelve entries, the triangles and the outline sharing
+/// the tile matrices.
+#[test]
+fn the_fill_drawable_buffer_matches_the_oracle() {
+    let oracle = oracle_buffers();
+    let (size, want) = oracle
+        .get(&(1, ubo_slots::ID_FILL_DRAWABLE_UBO))
+        .expect("the oracle writes a fill drawable buffer");
+
+    // A fill layer is two drawables per tile — triangles at sublayer 1, outline at sublayer 2 —
+    // over the same geometry. They differ only in the depth bias, which is the whole reason the
+    // outline is not z-fighting with the fill it outlines.
+    let mut entries = cover_entries(1, 1);
+    entries.extend(cover_entries(1, 2));
+
+    let stride = ubo_layouts::FILL_DRAWABLE_UNION_UBO.stride;
+    let packed = ubo::pack_drawable_buffer(&entries, stride);
+
+    assert_eq!(packed.len(), *size, "twelve entries at the union's stride");
+    assert_eq!(blocks(&packed), *want);
+}
+
+/// The tile-properties buffer is present, full size and empty.
+///
+/// Its union holds only pattern variants, so a layer with no `fill-pattern` has nothing to put
+/// in it — but the shader indexes it by the same entry number as the drawable buffer, so a short
+/// one would read past the end.
+#[test]
+fn the_fill_tile_props_buffer_is_sized_and_empty() {
+    let oracle = oracle_buffers();
+    let (size, want) = oracle
+        .get(&(1, ubo_slots::ID_FILL_TILE_PROPS_UBO))
+        .expect("the oracle writes a fill tile props buffer");
+
+    let stride = ubo_layouts::FILL_TILE_PROPS_UNION_UBO.stride;
+    let packed = ubo::pack_tile_props_buffer(12, stride);
+
+    assert_eq!(packed.len(), *size);
+    assert!(packed.iter().all(|byte| *byte == 0), "nothing to put in it");
+    assert_eq!(blocks(&packed), *want, "and the oracle agrees it is empty");
+}
+
+/// The fill layer's evaluated properties match, including the outline color inheriting the fill's.
+#[test]
+fn the_fill_evaluated_props_match_the_oracle() {
+    let oracle = oracle_buffers();
+    let (size, want) = oracle
+        .get(&(1, ubo_slots::ID_FILL_EVALUATED_PROPS_UBO))
+        .expect("the oracle writes fill evaluated props");
+
+    // `#2f6f4f` at 0.8 opacity, with the outline color inheriting the fill's because the style
+    // sets no `fill-outline-color`. That inheritance was measured on the binding side first;
+    // this is the same fact arriving through the uniforms.
+    let fill = Color::parse("#2f6f4f").expect("a color");
+    let packed = ubo::pack_fill_props(fill, fill, 0.8, 1.0, 0.5, 1.0);
+
+    assert_eq!(packed.len(), *size);
+    assert_eq!(blocks(&packed), *want);
+}
+
+/// The background layer's properties match.
+#[test]
+fn the_background_props_match_the_oracle() {
+    let oracle = oracle_buffers();
+    let (size, want) = oracle
+        .get(&(0, ubo_slots::ID_BACKGROUND_PROPS_UBO))
+        .expect("the oracle writes background props");
+
+    let color = Color::parse("#101418").expect("a color");
+    let packed = ubo::pack_background_props(color, 1.0);
+
+    assert_eq!(packed.len(), *size);
+    assert_eq!(blocks(&packed), *want);
+}
+
+/// Buffers go on the ring as one envelope each, with the bytes inline.
+#[test]
+fn a_buffer_writes_one_envelope_with_its_bytes() {
+    use tessella_capture_abi::EnvelopeKind;
+    use tessella_capture_abi::envelope::ViewId;
+    use tessella_capture_abi::ring::Ring;
+
+    let packed = GlobalPaintParams::for_view(&probe(), [64.0, 64.0], 1.0).pack();
+    let mut ring = Ring::new(1 << 14);
+    let (producer, consumer) = ring.split();
+    ubo::write(
+        producer,
+        ViewId(0),
+        ubo::FRAME_WIDE,
+        ubo_slots::ID_GLOBAL_PAINT_PARAMS_UBO,
+        &packed,
+    )
+    .expect("writes");
+
+    let record = consumer.peek().expect("an envelope");
+    assert_eq!(record.kind, EnvelopeKind::UboUpdate);
+    assert_eq!(record.payload, &packed[..], "the buffer travels inline");
+}

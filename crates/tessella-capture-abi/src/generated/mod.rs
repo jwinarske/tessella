@@ -6,6 +6,7 @@
 pub mod mbgl_enums;
 pub mod shader_attributes;
 pub mod ubo_layouts;
+pub mod ubo_slots;
 
 #[cfg(test)]
 mod tests {
@@ -332,6 +333,99 @@ mod tests {
                     union.name
                 );
             }
+        }
+    }
+
+    /// Every slot the oracle writes is reproduced by evaluating the header's enum chain.
+    ///
+    /// The dump's UBO section names a layer and a slot for each buffer:
+    ///
+    /// ```text
+    /// ubo global:0 slot=0    GlobalPaintParamsUBO
+    /// ubo layer:0  slot=2    BackgroundDrawableUBO
+    /// ubo layer:0  slot=5    BackgroundPropsUBO
+    /// ubo layer:1  slot=2    FillDrawableUBO
+    /// ubo layer:1  slot=4    FillTilePropsUBO
+    /// ubo layer:1  slot=5    FillEvaluatedPropsUBO
+    /// ```
+    ///
+    /// None of those numbers is written down anywhere in mbgl. They come out of a chain of
+    /// anonymous enums that take their values from each other, through a `std::max` over fifteen
+    /// layer counts and a macro whose expansion depends on the render backend. Six independent
+    /// agreements is what says the chain was evaluated rather than curve-fitted.
+    #[test]
+    fn the_slots_match_the_oracles_ubo_writes() {
+        use super::ubo_slots::{
+            ID_BACKGROUND_DRAWABLE_UBO, ID_BACKGROUND_PROPS_UBO, ID_FILL_DRAWABLE_UBO,
+            ID_FILL_EVALUATED_PROPS_UBO, ID_FILL_TILE_PROPS_UBO, ID_GLOBAL_PAINT_PARAMS_UBO,
+        };
+
+        assert_eq!(ID_GLOBAL_PAINT_PARAMS_UBO, 0);
+        assert_eq!(ID_BACKGROUND_DRAWABLE_UBO, 2);
+        assert_eq!(ID_BACKGROUND_PROPS_UBO, 5);
+        assert_eq!(ID_FILL_DRAWABLE_UBO, 2);
+        assert_eq!(ID_FILL_TILE_PROPS_UBO, 4);
+        assert_eq!(ID_FILL_EVALUATED_PROPS_UBO, 5);
+    }
+
+    /// The chain's structure holds, not just its endpoints.
+    ///
+    /// Layer slots start after the global ones, drawable slots sit inside the reserved range,
+    /// and props slots sit at or above the shared start. Checking the shape as well as the
+    /// values means a future mbgl that renumbered everything consistently would still be caught
+    /// if it broke the ordering the packer depends on.
+    ///
+    /// Asserted at compile time, because every operand is a generated constant: a chain that
+    /// came out inconsistent should stop the build rather than wait for a test run.
+    const _: () = {
+        use super::ubo_slots::{
+            DRAWABLE_RESERVED_UBO_COUNT, GLOBAL_UBO_COUNT, ID_FILL_DRAWABLE_UBO,
+            ID_FILL_EVALUATED_PROPS_UBO, LAYER_SSBO_START_ID, LAYER_UBO_START_ID,
+        };
+
+        assert!(LAYER_SSBO_START_ID == GLOBAL_UBO_COUNT);
+        assert!(ID_FILL_DRAWABLE_UBO >= LAYER_SSBO_START_ID);
+        assert!(ID_FILL_DRAWABLE_UBO < DRAWABLE_RESERVED_UBO_COUNT);
+        assert!(LAYER_UBO_START_ID >= DRAWABLE_RESERVED_UBO_COUNT);
+        assert!(ID_FILL_EVALUATED_PROPS_UBO >= LAYER_UBO_START_ID);
+    };
+
+    /// A drawable slot and a props slot within one layer are distinct, or one buffer would
+    /// overwrite the other. Compile time, for the same reason as above.
+    const _: () = {
+        use super::ubo_slots::{
+            ID_BACKGROUND_DRAWABLE_UBO, ID_BACKGROUND_PROPS_UBO, ID_FILL_DRAWABLE_UBO,
+            ID_FILL_EVALUATED_PROPS_UBO, ID_FILL_TILE_PROPS_UBO,
+        };
+
+        assert!(ID_BACKGROUND_DRAWABLE_UBO != ID_BACKGROUND_PROPS_UBO);
+        assert!(ID_FILL_DRAWABLE_UBO != ID_FILL_EVALUATED_PROPS_UBO);
+        assert!(ID_FILL_TILE_PROPS_UBO != ID_FILL_EVALUATED_PROPS_UBO);
+        assert!(ID_FILL_DRAWABLE_UBO != ID_FILL_TILE_PROPS_UBO);
+    };
+
+    /// The evaluation produced a whole table, not just the handful R0 reads.
+    ///
+    /// A chain that stopped early would still satisfy every assertion above, because those name
+    /// only the symbols R0 needs — and would leave R1 to discover the gap.
+    #[test]
+    fn the_whole_chain_was_evaluated() {
+        use super::ubo_slots::SLOTS;
+
+        assert!(SLOTS.len() > 100, "{} symbols", SLOTS.len());
+        for (name, _) in SLOTS {
+            assert!(!name.is_empty());
+        }
+        for required in [
+            "idLineDrawableUBO",
+            "idSymbolDrawableUBO",
+            "idCircleDrawableUBO",
+            "idRasterDrawableUBO",
+        ] {
+            assert!(
+                SLOTS.iter().any(|(name, _)| *name == required),
+                "{required} is missing, so the chain stopped short of the later layers"
+            );
         }
     }
 }

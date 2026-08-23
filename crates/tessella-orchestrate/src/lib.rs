@@ -38,6 +38,7 @@ pub mod order;
 pub mod stencil;
 pub mod sweep;
 pub mod tile;
+pub mod ubo;
 pub mod view;
 
 pub use binder::{BoundAttribute, VertexLayout, pack_color};
