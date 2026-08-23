@@ -920,6 +920,14 @@ struct UboLayout {
     fields: Vec<UboField>,
 }
 
+/// A union of drawable blocks, whose size is the stride of a consolidated buffer.
+struct UboUnion {
+    name: String,
+    header: String,
+    members: Vec<String>,
+    stride: u32,
+}
+
 /// A struct the parser could not verify, and why.
 struct UnparsedUbo {
     name: String,
@@ -963,6 +971,7 @@ fn generate_ubo_layouts(mbgl: &Path) -> Result<String, String> {
 
     let mut layouts: Vec<UboLayout> = Vec::new();
     let mut unparsed: Vec<UnparsedUbo> = Vec::new();
+    let mut union_sources: Vec<(String, String)> = Vec::new();
     for file in &files {
         let text = std::fs::read_to_string(file)
             .map_err(|err| format!("reading {}: {err}", file.display()))?;
@@ -973,8 +982,21 @@ fn generate_ubo_layouts(mbgl: &Path) -> Result<String, String> {
             .to_string();
         let asserted = parse_ubo_size_asserts(&text);
         parse_ubo_layouts(&text, &header, &asserted, &mut layouts, &mut unparsed);
+        union_sources.push((header, text));
     }
     layouts.sort_by(|a, b| a.name.cmp(&b.name));
+
+    // Unions are resolved after every struct is known, because a union in one header may name a
+    // block declared in another.
+    let known: std::collections::BTreeMap<&str, u32> = layouts
+        .iter()
+        .map(|layout| (layout.name.as_str(), layout.stride))
+        .collect();
+    let mut unions: Vec<UboUnion> = Vec::new();
+    for (header, text) in &union_sources {
+        parse_ubo_unions(text, header, &known, &mut unions, &mut unparsed);
+    }
+    unions.sort_by(|a, b| a.name.cmp(&b.name));
     unparsed.sort_by(|a, b| a.name.cmp(&b.name));
 
     if layouts.is_empty() {
@@ -1133,6 +1155,57 @@ fn generate_ubo_layouts(mbgl: &Path) -> Result<String, String> {
     writeln!(out, "];").unwrap();
     writeln!(out).unwrap();
 
+    writeln!(out, "/// A union of drawable blocks.").unwrap();
+    writeln!(out, "#[derive(Debug, Clone, Copy, PartialEq, Eq)]").unwrap();
+    writeln!(out, "pub struct UboUnion {{").unwrap();
+    writeln!(out, "    /// Union name, as the header spells it.").unwrap();
+    writeln!(out, "    pub name: &'static str,").unwrap();
+    writeln!(out, "    /// Header it came from.").unwrap();
+    writeln!(out, "    pub header: &'static str,").unwrap();
+    writeln!(out, "    /// The blocks it can hold.").unwrap();
+    writeln!(out, "    pub members: &'static [&'static str],").unwrap();
+    writeln!(
+        out,
+        "    /// The largest member's stride, which is the stride of a consolidated buffer."
+    )
+    .unwrap();
+    writeln!(out, "    pub stride: u32,").unwrap();
+    writeln!(out, "}}").unwrap();
+    writeln!(out).unwrap();
+
+    for item in &unions {
+        let konst = screaming_snake(&item.name);
+        writeln!(
+            out,
+            "/// `{}` from `include/mbgl/shaders/{}`.",
+            item.name, item.header
+        )
+        .unwrap();
+        writeln!(out, "pub const {konst}: UboUnion = UboUnion {{").unwrap();
+        writeln!(out, "    name: \"{}\",", item.name).unwrap();
+        writeln!(out, "    header: \"{}\",", item.header).unwrap();
+        writeln!(out, "    members: &[").unwrap();
+        for member in &item.members {
+            writeln!(out, "        \"{member}\",").unwrap();
+        }
+        writeln!(out, "    ],").unwrap();
+        writeln!(out, "    stride: {},", item.stride).unwrap();
+        writeln!(out, "}};").unwrap();
+        writeln!(out).unwrap();
+    }
+
+    writeln!(
+        out,
+        "/// Every union, for a lookup that does not hard-code which exist."
+    )
+    .unwrap();
+    writeln!(out, "pub const UNIONS: [UboUnion; {}] = [", unions.len()).unwrap();
+    for item in &unions {
+        writeln!(out, "    {},", screaming_snake(&item.name)).unwrap();
+    }
+    writeln!(out, "];").unwrap();
+    writeln!(out).unwrap();
+
     for line in wrap(
         "Blocks whose headers this generator will not vouch for, with the reason. Listed rather \
          than omitted: a block that is missing because it could not be parsed and one that is \
@@ -1159,6 +1232,80 @@ fn generate_ubo_layouts(mbgl: &Path) -> Result<String, String> {
     writeln!(out, "];").unwrap();
 
     Ok(out)
+}
+
+/// Parses every `union NameUnionUBO { ... };` in a header.
+///
+/// A consolidated buffer is an array of these, not of the block a drawable happens to use: mbgl
+/// sizes it `sizeof(union) * drawableCount` so every drawable's entry sits at a fixed stride
+/// whatever variant it is. Packing at the individual block's size instead puts every entry after
+/// the first at the wrong offset, and the symptom is a layer whose tiles are drawn with each
+/// other's matrices.
+///
+/// A union naming a block this generator could not verify is itself unverifiable — its stride
+/// depends on that block's size — so it is reported rather than sized from the members that
+/// happen to be known.
+fn parse_ubo_unions(
+    text: &str,
+    header: &str,
+    known: &std::collections::BTreeMap<&str, u32>,
+    unions: &mut Vec<UboUnion>,
+    unparsed: &mut Vec<UnparsedUbo>,
+) {
+    let mut rest = text;
+    while let Some(start) = rest.find("union ") {
+        let after = &rest[start + "union ".len()..];
+        let Some(brace) = after.find('{') else { break };
+        let name = after[..brace].trim().to_string();
+        let Some(end) = after[brace..].find("\n};") else {
+            rest = &after[brace..];
+            continue;
+        };
+        let body = &after[brace + 1..brace + end];
+        rest = &after[brace + end..];
+
+        if !name.ends_with("UBO") {
+            continue;
+        }
+
+        let mut members = Vec::new();
+        let mut missing = Vec::new();
+        let mut stride = 0;
+        for line in body.lines() {
+            let line = line.trim();
+            let Some(semicolon) = line.find(';') else {
+                continue;
+            };
+            let declaration = &line[..semicolon];
+            let Some(split) = declaration.rfind(char::is_whitespace) else {
+                continue;
+            };
+            let member = declaration[..split].trim().to_string();
+            match known.get(member.as_str()) {
+                Some(&size) => stride = stride.max(size),
+                None => missing.push(member.clone()),
+            }
+            members.push(member);
+        }
+
+        if members.is_empty() {
+            continue;
+        }
+        if !missing.is_empty() {
+            unparsed.push(UnparsedUbo {
+                name,
+                header: header.to_string(),
+                reason: format!("names unverified blocks: {}", missing.join(", ")),
+            });
+            continue;
+        }
+        unions.push(UboUnion {
+            name,
+            header: header.to_string(),
+            members,
+            stride,
+        });
+    }
 }
 
 /// Reads `static_assert(sizeof(X) == N * 16);` into a map from name to `sizeof`.

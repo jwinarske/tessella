@@ -250,4 +250,88 @@ mod tests {
         assert_eq!(UboFieldKind::Color.size(), 16);
         assert_eq!(UboFieldKind::Mat4.size(), 64);
     }
+
+    /// The union strides explain every consolidated-buffer size the oracle reports.
+    ///
+    /// A consolidated buffer is an array of the *union*, not of the block a drawable happens to
+    /// use: mbgl sizes it `sizeof(union) * drawableCount` so every entry sits at a fixed stride
+    /// whatever variant it is. That is why a fill layer's buffer is 96 bytes per drawable when
+    /// `FillDrawableUBO` is 80 — the pattern variants are larger, and they set the stride for
+    /// everyone.
+    ///
+    /// Packing at the individual block's size instead would put every entry after the first at
+    /// the wrong offset, and the symptom is a layer whose tiles are drawn with each other's
+    /// matrices. The dump's sizes are what catch it:
+    ///
+    /// ```text
+    /// ubo layer:0 slot=2 size=576    6 background drawables
+    /// ubo layer:1 slot=2 size=1152   12 fill drawables (6 fills + 6 outlines)
+    /// ubo layer:1 slot=4 size=576    12 fill tile props
+    /// ubo layer:3 slot=2 size=768    6 line drawables
+    /// ubo layer:3 slot=3 size=384    6 line tile props
+    /// ```
+    #[test]
+    fn union_strides_explain_the_oracles_buffer_sizes() {
+        use super::ubo_layouts::{
+            BACKGROUND_DRAWABLE_UNION_UBO, FILL_DRAWABLE_UNION_UBO, FILL_TILE_PROPS_UNION_UBO,
+            LINE_DRAWABLE_UNION_UBO, LINE_TILE_PROPS_UNION_UBO,
+        };
+
+        assert_eq!(BACKGROUND_DRAWABLE_UNION_UBO.stride * 6, 576);
+        assert_eq!(FILL_DRAWABLE_UNION_UBO.stride * 12, 1152);
+        assert_eq!(FILL_TILE_PROPS_UNION_UBO.stride * 12, 576);
+        assert_eq!(LINE_DRAWABLE_UNION_UBO.stride * 6, 768);
+        assert_eq!(LINE_TILE_PROPS_UNION_UBO.stride * 6, 384);
+    }
+
+    /// A union is as large as its largest member and no larger, and larger than the member a
+    /// plain fill actually uses — which is the whole reason the stride is not the block size.
+    #[test]
+    fn a_union_is_its_largest_member() {
+        use super::ubo_layouts::{FILL_DRAWABLE_UNION_UBO, LAYOUTS};
+
+        let member_stride = |name: &str| {
+            LAYOUTS
+                .iter()
+                .find(|layout| layout.name == name)
+                .unwrap_or_else(|| panic!("{name} is a known block"))
+                .stride
+        };
+
+        let largest = FILL_DRAWABLE_UNION_UBO
+            .members
+            .iter()
+            .map(|name| member_stride(name))
+            .max()
+            .expect("members");
+        assert_eq!(FILL_DRAWABLE_UNION_UBO.stride, largest);
+    }
+
+    /// The stride a plain fill is packed at is larger than the block it actually writes.
+    ///
+    /// Asserted at compile time rather than in a test body, because both sides are generated
+    /// constants: if a future mbgl made the variants the same size, this would stop building
+    /// rather than stop being checked. That is the right failure — the packing code reads the
+    /// union stride precisely because it cannot assume the two agree.
+    const _: () = assert!(
+        super::ubo_layouts::FILL_DRAWABLE_UNION_UBO.stride
+            > super::ubo_layouts::FILL_DRAWABLE_UBO.stride
+    );
+
+    /// Every union names blocks that exist, so a stride can always be recomputed from them.
+    #[test]
+    fn every_union_names_known_blocks() {
+        use super::ubo_layouts::{LAYOUTS, UNIONS};
+
+        for union in UNIONS {
+            assert!(!union.members.is_empty(), "{}", union.name);
+            for member in union.members {
+                assert!(
+                    LAYOUTS.iter().any(|layout| layout.name == *member),
+                    "{} names {member}, which is not a known block",
+                    union.name
+                );
+            }
+        }
+    }
 }

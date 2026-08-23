@@ -2228,6 +2228,79 @@ pub const LAYOUTS: [UboLayout; 49] = [
     WIDE_VECTOR_UNIFORMS_UBO,
 ];
 
+/// A union of drawable blocks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UboUnion {
+    /// Union name, as the header spells it.
+    pub name: &'static str,
+    /// Header it came from.
+    pub header: &'static str,
+    /// The blocks it can hold.
+    pub members: &'static [&'static str],
+    /// The largest member's stride, which is the stride of a consolidated buffer.
+    pub stride: u32,
+}
+
+/// `BackgroundDrawableUnionUBO` from `include/mbgl/shaders/background_layer_ubo.hpp`.
+pub const BACKGROUND_DRAWABLE_UNION_UBO: UboUnion = UboUnion {
+    name: "BackgroundDrawableUnionUBO",
+    header: "background_layer_ubo.hpp",
+    members: &["BackgroundDrawableUBO", "BackgroundPatternDrawableUBO"],
+    stride: 96,
+};
+
+/// `FillDrawableUnionUBO` from `include/mbgl/shaders/fill_layer_ubo.hpp`.
+pub const FILL_DRAWABLE_UNION_UBO: UboUnion = UboUnion {
+    name: "FillDrawableUnionUBO",
+    header: "fill_layer_ubo.hpp",
+    members: &[
+        "FillDrawableUBO",
+        "FillOutlineDrawableUBO",
+        "FillPatternDrawableUBO",
+        "FillOutlinePatternDrawableUBO",
+        "FillOutlineTriangulatedDrawableUBO",
+    ],
+    stride: 96,
+};
+
+/// `FillTilePropsUnionUBO` from `include/mbgl/shaders/fill_layer_ubo.hpp`.
+pub const FILL_TILE_PROPS_UNION_UBO: UboUnion = UboUnion {
+    name: "FillTilePropsUnionUBO",
+    header: "fill_layer_ubo.hpp",
+    members: &["FillPatternTilePropsUBO", "FillOutlinePatternTilePropsUBO"],
+    stride: 48,
+};
+
+/// `LineDrawableUnionUBO` from `include/mbgl/shaders/line_layer_ubo.hpp`.
+pub const LINE_DRAWABLE_UNION_UBO: UboUnion = UboUnion {
+    name: "LineDrawableUnionUBO",
+    header: "line_layer_ubo.hpp",
+    members: &[
+        "LineDrawableUBO",
+        "LineGradientDrawableUBO",
+        "LinePatternDrawableUBO",
+        "LineSDFDrawableUBO",
+    ],
+    stride: 128,
+};
+
+/// `LineTilePropsUnionUBO` from `include/mbgl/shaders/line_layer_ubo.hpp`.
+pub const LINE_TILE_PROPS_UNION_UBO: UboUnion = UboUnion {
+    name: "LineTilePropsUnionUBO",
+    header: "line_layer_ubo.hpp",
+    members: &["LinePatternTilePropsUBO", "LineSDFTilePropsUBO"],
+    stride: 64,
+};
+
+/// Every union, for a lookup that does not hard-code which exist.
+pub const UNIONS: [UboUnion; 5] = [
+    BACKGROUND_DRAWABLE_UNION_UBO,
+    FILL_DRAWABLE_UNION_UBO,
+    FILL_TILE_PROPS_UNION_UBO,
+    LINE_DRAWABLE_UNION_UBO,
+    LINE_TILE_PROPS_UNION_UBO,
+];
+
 /// Blocks whose headers this generator will not vouch for, with the reason. Listed rather than
 /// omitted: a block that is missing because it could not be parsed and one that is missing
 /// because mbgl does not have it are different situations, and a caller that needs one of these
