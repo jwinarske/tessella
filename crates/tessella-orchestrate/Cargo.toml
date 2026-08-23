@@ -23,5 +23,8 @@ tessella-source.workspace = true
 tessella-style.workspace = true
 tessella-tile.workspace = true
 
+[dev-dependencies]
+serde_json.workspace = true
+
 [lints]
 workspace = true

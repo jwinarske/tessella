@@ -358,3 +358,345 @@ mod tests {
         assert_eq!(float_type(4), AttributeDataType::Float4);
     }
 }
+
+/// One feature's contribution to a bucket: the feature itself, and how many vertices it added.
+///
+/// A paint property is evaluated once per *feature* but the buffer is per *vertex*, so each
+/// value is repeated across the vertices that feature contributed. The oracle confirms the
+/// arithmetic: five vertices at stride 20 is 100 bytes, ten is 200.
+pub struct FeatureVertices<'a> {
+    /// The feature to evaluate against.
+    pub feature: &'a dyn tessella_style::expression::Feature,
+    /// How many vertices it contributed.
+    pub vertices: usize,
+}
+
+/// A value that could not be packed into a vertex attribute.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PackError {
+    /// A property evaluated to something its type cannot hold.
+    #[error("`{property}` evaluated to a value that is not {expected}")]
+    Type {
+        /// Property name.
+        property: &'static str,
+        /// What was needed.
+        expected: &'static str,
+    },
+    /// A zoom-interpolated attribute, which needs endpoints this does not yet compute.
+    ///
+    /// §12.1 evaluates a camera-varying property once per `(layer, integer-zoom interval)` and
+    /// caches the endpoints. The buffer then carries a packed min/max pair for the shader to
+    /// mix. That machinery does not exist yet, and packing one endpoint twice would produce a
+    /// property that does not change with zoom — wrong in a way that renders.
+    #[error("`{property}` is zoom-interpolated, which needs endpoints that are not computed yet")]
+    Interpolated {
+        /// Property name.
+        property: &'static str,
+    },
+}
+
+/// Packs every feature's data-driven values into the interleaved vertex buffer.
+///
+/// The result is `stride * total_vertices` bytes, or empty when nothing is data-driven.
+///
+/// # Errors
+///
+/// [`PackError`] when a property evaluates to the wrong type, or is zoom-interpolated.
+pub fn pack_attributes(
+    layout: &VertexLayout,
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    features: &[FeatureVertices<'_>],
+    zoom: Option<f64>,
+) -> Result<Vec<u8>, PackError> {
+    if layout.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let stride = layout.stride as usize;
+    let total: usize = features.iter().map(|f| f.vertices).sum();
+    let mut buffer = alloc::vec![0u8; stride * total];
+
+    let mut vertex = 0usize;
+    for entry in features {
+        // One evaluation per feature, then repeated across its vertices. Evaluating per vertex
+        // would give the same answer at N times the cost, since nothing here varies within a
+        // feature.
+        let mut packed: Vec<(usize, Vec<u8>)> = Vec::with_capacity(layout.attributes.len());
+        for attribute in &layout.attributes {
+            let property = paint.get(attribute.property).ok_or(PackError::Type {
+                property: attribute.property,
+                expected: "a resolved property",
+            })?;
+
+            if matches!(property.binding, Binding::Attribute { interpolated: true }) {
+                return Err(PackError::Interpolated {
+                    property: attribute.property,
+                });
+            }
+
+            let value = property
+                .expression
+                .evaluate(zoom, Some(entry.feature))
+                .map_err(|_| PackError::Type {
+                    property: attribute.property,
+                    expected: "evaluable against this feature",
+                })?;
+
+            let floats: Vec<f32> = match property.spec.kind {
+                PropertyKind::Color => {
+                    let color = tessella_style::property::as_color(&value).map_err(|_| {
+                        PackError::Type {
+                            property: attribute.property,
+                            expected: "a colour",
+                        }
+                    })?;
+                    pack_color(color).to_vec()
+                }
+                PropertyKind::Number => {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let number = value.as_number().ok_or(PackError::Type {
+                        property: attribute.property,
+                        expected: "a number",
+                    })? as f32;
+                    alloc::vec![number]
+                }
+                _ => {
+                    return Err(PackError::Type {
+                        property: attribute.property,
+                        expected: "a colour or a number",
+                    });
+                }
+            };
+
+            let mut bytes = Vec::with_capacity(floats.len() * 4);
+            for float in floats {
+                bytes.extend_from_slice(&float.to_le_bytes());
+            }
+            packed.push((attribute.offset as usize, bytes));
+        }
+
+        for _ in 0..entry.vertices {
+            let base = vertex * stride;
+            for (offset, bytes) in &packed {
+                buffer[base + offset..base + offset + bytes.len()].copy_from_slice(bytes);
+            }
+            vertex += 1;
+        }
+    }
+
+    Ok(buffer)
+}
+
+#[cfg(test)]
+mod pack_tests {
+    use super::*;
+    use tessella_source::geojson;
+    use tessella_style::{Source, Style};
+
+    const HERMETIC: &str = include_str!("../../tessella-style/tests/hermetic_style.json");
+
+    fn hermetic_layout() -> (
+        VertexLayout,
+        alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    ) {
+        let style = Style::parse(HERMETIC).expect("style parses");
+        let layer = style.layer("fill-datadriven").expect("the layer");
+        let paint = tessella_style::property::resolve_paint(layer).expect("resolves");
+        let ids = [
+            ("idFillColorVertexAttribute", 1u32),
+            ("idFillOpacityVertexAttribute", 2),
+            ("idFillOutlineColorVertexAttribute", 3),
+        ]
+        .into_iter()
+        .map(|(name, id)| (alloc::string::String::from(name), id))
+        .collect();
+        let declared = |attr_id: u32| match attr_id {
+            1 => Some((1, AttributeDataType::Float4)),
+            2 => Some((2, AttributeDataType::Float2)),
+            _ => None,
+        };
+        (layout(&paint, &ids, declared), paint)
+    }
+
+    fn polygons() -> Vec<tessella_source::GeoJsonFeature> {
+        let style = Style::parse(HERMETIC).expect("style parses");
+        let Some(Source::Geojson(source)) = style.source("probe") else {
+            panic!("a geojson source");
+        };
+        geojson::read(&source.data)
+            .expect("features")
+            .into_iter()
+            .filter(|f| f.geometry.type_name() == "Polygon")
+            .collect()
+    }
+
+    /// Five vertices at stride 20 is 100 bytes, ten is 200 — which is exactly what the oracle's
+    /// one-polygon and two-polygon tiles carry.
+    #[test]
+    fn the_buffer_is_sized_as_the_oracles_is() {
+        let (layout, paint) = hermetic_layout();
+        let features = polygons();
+
+        let one = pack_attributes(
+            &layout,
+            &paint,
+            &[FeatureVertices {
+                feature: &features[0],
+                vertices: 5,
+            }],
+            None,
+        )
+        .expect("packs");
+        assert_eq!(one.len(), 100);
+
+        let two = pack_attributes(
+            &layout,
+            &paint,
+            &[
+                FeatureVertices {
+                    feature: &features[0],
+                    vertices: 5,
+                },
+                FeatureVertices {
+                    feature: &features[1],
+                    vertices: 5,
+                },
+            ],
+            None,
+        )
+        .expect("packs");
+        assert_eq!(two.len(), 200);
+    }
+
+    /// A property is evaluated once per feature and repeated across its vertices. Every vertex
+    /// of one feature therefore carries identical bytes, and two features with different
+    /// property values carry different ones.
+    #[test]
+    fn a_features_value_repeats_across_its_vertices() {
+        let (layout, paint) = hermetic_layout();
+        let features = polygons();
+        let stride = layout.stride as usize;
+
+        let packed = pack_attributes(
+            &layout,
+            &paint,
+            &[
+                FeatureVertices {
+                    feature: &features[0],
+                    vertices: 3,
+                },
+                FeatureVertices {
+                    feature: &features[1],
+                    vertices: 2,
+                },
+            ],
+            None,
+        )
+        .expect("packs");
+
+        let vertex = |i: usize| &packed[i * stride..(i + 1) * stride];
+        assert_eq!(vertex(0), vertex(1), "same feature");
+        assert_eq!(vertex(1), vertex(2), "same feature");
+        assert_eq!(vertex(3), vertex(4), "same feature");
+        assert_ne!(
+            vertex(2),
+            vertex(3),
+            "the two features have different `kind`, so different colours"
+        );
+    }
+
+    /// The colours the style's `match` selects, packed as the shader reads them.
+    ///
+    /// Feature one is `kind: a`, which the style maps to `#c04030`; feature two is `kind: b`,
+    /// mapped to `#3050c0`. Checking the actual bytes rather than just that they differ is what
+    /// catches a packing that is self-consistently wrong.
+    #[test]
+    fn the_packed_colours_are_the_ones_the_style_selects() {
+        let (layout, paint) = hermetic_layout();
+        let features = polygons();
+        let stride = layout.stride as usize;
+
+        let packed = pack_attributes(
+            &layout,
+            &paint,
+            &[
+                FeatureVertices {
+                    feature: &features[0],
+                    vertices: 1,
+                },
+                FeatureVertices {
+                    feature: &features[1],
+                    vertices: 1,
+                },
+            ],
+            None,
+        )
+        .expect("packs");
+
+        let float_at = |vertex: usize, offset: usize| {
+            let base = vertex * stride + offset;
+            f32::from_le_bytes(packed[base..base + 4].try_into().expect("four bytes"))
+        };
+
+        // fill-color sits at offset 0.
+        let expected_a = pack_color(Color::parse("#c04030").expect("a colour"));
+        assert_eq!(float_at(0, 0), expected_a[0]);
+        assert_eq!(float_at(0, 4), expected_a[1]);
+
+        let expected_b = pack_color(Color::parse("#3050c0").expect("a colour"));
+        assert_eq!(float_at(1, 0), expected_b[0]);
+        assert_eq!(float_at(1, 4), expected_b[1]);
+
+        // fill-opacity at offset 8: 0.5 for `a`, 0.9 for `b`.
+        assert!((float_at(0, 8) - 0.5).abs() < 1e-6, "{}", float_at(0, 8));
+        assert!((float_at(1, 8) - 0.9).abs() < 1e-6, "{}", float_at(1, 8));
+
+        // fill-outline-color at offset 12 inherits fill-color, so it repeats those bytes.
+        assert_eq!(float_at(0, 12), expected_a[0]);
+        assert_eq!(float_at(0, 16), expected_a[1]);
+    }
+
+    /// A zoom-interpolated attribute is refused rather than packed with one endpoint twice,
+    /// which would render as a property that does not change with zoom.
+    #[test]
+    fn an_interpolated_attribute_is_refused_for_now() {
+        use tessella_style::Layer;
+
+        let layer: Layer = serde_json::from_str(
+            r#"{"id": "l", "type": "fill", "source": "s",
+                "paint": {"fill-opacity":
+                    ["interpolate", ["linear"], ["zoom"], 10, ["get", "o"], 16, 1]}}"#,
+        )
+        .expect("a layer");
+        let paint = tessella_style::property::resolve_paint(&layer).expect("resolves");
+        let ids = [("idFillOpacityVertexAttribute", 2u32)]
+            .into_iter()
+            .map(|(name, id)| (alloc::string::String::from(name), id))
+            .collect();
+        let layout = layout(&paint, &ids, |_| Some((2, AttributeDataType::Float2)));
+
+        let features = polygons();
+        let error = pack_attributes(
+            &layout,
+            &paint,
+            &[FeatureVertices {
+                feature: &features[0],
+                vertices: 1,
+            }],
+            Some(13.0),
+        )
+        .expect_err("not implemented");
+        assert!(matches!(error, PackError::Interpolated { .. }), "{error:?}");
+    }
+
+    #[test]
+    fn an_all_constant_layer_packs_nothing() {
+        let style = Style::parse(HERMETIC).expect("style parses");
+        let layer = style.layer("fill-constant").expect("the layer");
+        let paint = tessella_style::property::resolve_paint(layer).expect("resolves");
+        let layout = layout(&paint, &alloc::collections::BTreeMap::new(), |_| None);
+
+        let packed = pack_attributes(&layout, &paint, &[], None).expect("packs");
+        assert!(packed.is_empty());
+    }
+}

@@ -700,6 +700,7 @@ dependencies = [
  "crossbeam",
  "glam",
  "log",
+ "serde_json",
  "tessella-capture-abi",
  "tessella-glyph",
  "tessella-layout",
