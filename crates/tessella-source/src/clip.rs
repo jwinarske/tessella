@@ -12,59 +12,67 @@
 //! - **The starting vertex does not.** The oracle's ring is this one rotated. Same cycle, same
 //!   direction, different entry point.
 //!
-//! # Where the rotation is not
+//! # Where the rotation comes from: wagyu, not the clip
 //!
-//! Three hypotheses tested, all refuted:
+//! Resolved. mbgl runs *every* GeoJSON polygon through `fixupPolygons` before it reaches a
+//! bucket — `geojson_tile_data.hpp` calls it unconditionally on any feature whose type is
+//! Polygon, citing geojson-vt-cpp issue 44 — and `fixupPolygons` hands the rings to wagyu and
+//! takes a `clip_type_union` of them. Wagyu does not preserve input order: it rebuilds each ring
+//! from its own sweep and chooses its own starting vertex. That is the whole of it.
+//!
+//! So this is not a clipping question and never was. The clip below is a faithful port of
+//! geojson-vt's `clipRing` and produces the right ring; a later normalization pass rotates it.
+//!
+//! # What was ruled out getting there
+//!
+//! Every earlier suspect is refuted, and the last of them by simulation rather than by argument:
 //!
 //! - **Axis order.** Clipping y-before-x is identical to x-before-y. There is a test.
-//! - **The clip algorithm.** `clip_ring` below is now a faithful port of geojson-vt's
-//!   `clipRing`, nested cases and last-point rule included, rather than the textbook
-//!   Sutherland-Hodgman it started as. The rotation survives the correction, so the clip is
-//!   not the cause. The port is kept because it is the real algorithm and the reconstruction
-//!   was only accidentally equivalent.
-//! - **The pyramid recursion.** Simulating geojson-vt's recursive split — clipping once per
-//!   level from z0 to z13 rather than once against the target tile — lands on the same
-//!   rotation. This was first tested with the reconstructed clip, which made the result
-//!   worthless; it was retested with the faithful one and the conclusion holds.
-//!
-//! And mbgl's `addRingVertices` emits whatever ring it is given, verbatim, so nothing
-//! downstream introduces it.
-//!
-//! # The open lead, narrowed
-//!
-//! Two further hypotheses tested since, both refuted:
-//!
-//! - **The `z` significance filter.** `tile.hpp`'s `transform(vt_linear_ring)` keeps only
-//!   points whose `z` exceeds the tile's squared tolerance, which looked like it could drop a
-//!   ring's first point and so rotate it. It cannot, here: intersection points are created
-//!   with `z = 1.0`, and the tile tolerance at z13 is `6 / (2^13 * 8192)`, so `sq_tolerance` is
-//!   about `8e-15`. Nothing is filtered.
+//! - **The clip algorithm.** `clip_ring` is a faithful port of `clipRing`, nested cases and
+//!   last-point rule included, rather than the textbook Sutherland-Hodgman it started as. The
+//!   rotation survived the correction. The port is kept because it is the real algorithm and the
+//!   reconstruction was only accidentally equivalent.
+//! - **The pyramid recursion.** This was the last hypothesis standing, on the grounds that the
+//!   model of it here was a reconstruction rather than a port. It has since been simulated
+//!   properly — descending z0 to z13 with geojson-vt's own `splitTile` bounds, `p = 0.5 * buffer
+//!   / extent`, clipping x then y at every level, twenty-six clips in total — and it lands on
+//!   exactly the ring this module produces in one pass. The recursion is innocent.
+//! - **The `z` significance filter.** `tile.hpp` keeps only points whose `z` exceeds the tile's
+//!   squared tolerance, which looked like it could drop a ring's first point. It cannot here:
+//!   intersections are created with `z = 1.0` and `sq_tolerance` is about `8e-15`.
 //! - **A rotated or reflected input ring.** Running the clip from each of the four starting
-//!   points, in both directions, produces the oracle's sequence from none of them. The oracle's
-//!   ring is not this clip applied to a differently-ordered input.
+//!   points, in both directions, produces the oracle's sequence from none of them.
 //!
-//! What that leaves is the recursive split, which is the one step whose *model* here is a
-//! reconstruction rather than a port. Every other stage has now been read from the source and
-//! matched. The earlier "recursion refuted" result therefore says the reconstruction of it
-//! reproduces the rotation, not that the recursion is innocent — the suspect is the model.
+//! # Why the port stops here
 //!
-//! Concretely: geojson-vt splits a parent into four children by clipping left/right and then
-//! top/bottom, and a ring surviving thirteen levels of that is clipped twenty-six times. The
-//! simulation here descends one path and clips twice per level, which is the same *shape* but
-//! not demonstrably the same *sequence*. Resolving this means running geojson-vt itself and
-//! comparing, rather than reasoning about it further.
+//! Wagyu is a full polygon-clipping library — a sweep-line union with its own topology
+//! structures — and porting it would buy a vertex *order*, not a different polygon. On
+//! well-formed input its union is geometrically an identity: same rings, same winding, same
+//! area, same triangulation up to a permutation of indices. mbgl runs it because GeoJSON is
+//! allowed to be self-intersecting and wrongly-wound and it has to cope with that; the hermetic
+//! style's rectangles are neither.
 //!
-//! # Why this cannot be normalized away
+//! What that costs is byte-exact vertex-buffer comparison against the oracle for GeoJSON
+//! polygon sources, which is why the test below compares rings as cycles. It is worth revisiting
+//! if a real style turns up geometry where wagyu is not an identity — self-intersecting rings are
+//! where it would show, because there the union genuinely changes the polygon and a cycle
+//! comparison would stop being enough.
+//!
+//! # What the rotation costs
 //!
 //! A ring is cyclic, so its starting vertex carries no geometric meaning — but unlike triangle
-//! emission order, it is not free to normalize. The index buffer refers to vertices by
-//! position, so a rotation changes both buffers, and the flat vertex buffer does not record
-//! where one ring ends and the next begins, so the oracle cannot canonicalize rings the way it
-//! canonicalizes triangles. Triangles are self-delimiting; rings are not.
+//! emission order, it is not free for the *oracle* to normalize away. The index buffer refers to
+//! vertices by position, so a rotation moves both buffers, and the flat vertex buffer does not
+//! record where one ring ends and the next begins, so the probe cannot canonicalize rings the
+//! way it canonicalizes triangles. Triangles are self-delimiting; rings are not.
 //!
-//! Simplification is not implicated in the *values*: at a tolerance of 6 tile units a
-//! rectangle's corners are all significant, so nothing is dropped from this style. Its role in
-//! the *ordering*, through the `z` filter above, is the open question.
+//! This side can compare as cycles, because it knows its own ring boundaries. That is what the
+//! test below does, and it is a real comparison: it still catches a wrong vertex, a missing one,
+//! a reversed winding, or a different entry point in the *cycle*. What it gives up is the
+//! sequence, which wagyu owns.
+//!
+//! Simplification is not implicated in the values: at a tolerance of 6 tile units a rectangle's
+//! corners are all significant, so nothing is dropped from this style.
 
 use alloc::vec::Vec;
 
@@ -239,23 +247,147 @@ mod tests {
         );
     }
 
-    /// The divergence, recorded rather than hidden: same cycle, different entry point.
+    /// The clipped ring is the oracle's, as a cycle.
     ///
-    /// When this starts failing, geojson-vt's clip ordering has been matched and the note at
-    /// the top of this file can go.
+    /// The sequences differ because mbgl passes every GeoJSON polygon through wagyu's union
+    /// before it reaches a bucket, and wagyu picks its own starting vertex — see the note at the
+    /// top of this file. What is asserted is what survives that: the same vertices, in the same
+    /// cyclic order, entered at some rotation.
+    ///
+    /// This still fails on a wrong coordinate, a missing or extra vertex, or a reversed winding.
+    /// Only the entry point is given up.
     #[test]
-    fn the_starting_vertex_still_differs_from_the_oracle() {
+    fn the_clipped_ring_is_the_oracles_cycle() {
         let (lo, hi) = box_bounds();
         let clipped = round_to_tile_units(&clip_ring_to_box(&hermetic_polygon(), lo, hi));
-        assert_ne!(clipped.as_slice(), ORACLE.as_slice());
 
-        // But it is a rotation of it, not a different ring.
+        // Both are closed; compare the open cycles.
         let ours = &clipped[..clipped.len() - 1];
-        let theirs = &ORACLE[..4];
-        let rotated = (0..theirs.len()).any(|offset| {
-            (0..theirs.len()).all(|i| ours[i] == theirs[(i + offset) % theirs.len()])
-        });
-        assert!(rotated, "{ours:?} should be a rotation of {theirs:?}");
+        let theirs = &ORACLE[..ORACLE.len() - 1];
+        assert_eq!(ours.len(), theirs.len(), "{ours:?} vs {theirs:?}");
+
+        let offset = (0..theirs.len())
+            .find(|offset| {
+                (0..theirs.len()).all(|i| ours[i] == theirs[(i + offset) % theirs.len()])
+            })
+            .unwrap_or_else(|| panic!("{ours:?} is not a rotation of {theirs:?}"));
+
+        // The rotation is real, so the test is not passing by the sequences being equal.
+        assert_ne!(offset, 0, "if this is ever zero, wagyu has been ported");
+    }
+
+    /// And the winding survives, which a cycle comparison alone would not establish.
+    ///
+    /// A ring traversed backwards visits the same vertices in a cyclic order too — the reverse
+    /// cycle — so the rotation check above would reject it, but only because the sequence differs.
+    /// Signed area says it directly, and it is what decides whether the polygon is an exterior or
+    /// a hole.
+    #[test]
+    fn the_winding_survives_the_clip() {
+        let (lo, hi) = box_bounds();
+        let clipped = round_to_tile_units(&clip_ring_to_box(&hermetic_polygon(), lo, hi));
+
+        let signed = |ring: &[[i32; 2]]| -> i64 {
+            let n = ring.len() - 1;
+            (0..n)
+                .map(|i| {
+                    let (a, b) = (ring[i], ring[(i + 1) % n]);
+                    i64::from(a[0]) * i64::from(b[1]) - i64::from(b[0]) * i64::from(a[1])
+                })
+                .sum()
+        };
+        let ours = signed(&clipped);
+        let theirs = signed(&ORACLE);
+        assert_eq!(ours.signum(), theirs.signum(), "{ours} vs {theirs}");
+        assert_eq!(ours, theirs, "and the same area, not merely the same sign");
+    }
+
+    /// The tiling pyramid produces the same ring as one clip against the target tile.
+    ///
+    /// This is the evidence that retired the last hypothesis before wagyu was found. geojson-vt
+    /// does not clip once against the tile you ask for: it splits a parent into four children by
+    /// clipping left/right and then top/bottom, so a ring reaching z13 has been clipped
+    /// twenty-six times. That looked like somewhere a rotation could accumulate.
+    ///
+    /// It does not. Descending z0 to z13 along the path to 4092/2723, with geojson-vt's own
+    /// bounds — `(x - p) / 2^z` to `(x + 0.5 + p) / 2^z` for a left child and the mirror for a
+    /// right one, `p = 0.5 * buffer / extent` — lands on the ring this module produces in a
+    /// single pass. Twenty-six clips, no rotation.
+    #[test]
+    fn the_tiling_pyramid_does_not_rotate_the_ring() {
+        // The polygon in normalized mercator, which is the space geojson-vt splits in.
+        let world: Vec<[f64; 2]> = [
+            [-0.16, 51.49],
+            [-0.16, 51.52],
+            [-0.12, 51.52],
+            [-0.12, 51.49],
+            [-0.16, 51.49],
+        ]
+        .iter()
+        .map(|[lon, lat]| {
+            let sin = (lat * core::f64::consts::PI / 180.0).sin();
+            [
+                lon / 360.0 + 0.5,
+                0.5 - 0.25 * ((1.0 + sin) / (1.0 - sin)).ln() / core::f64::consts::PI,
+            ]
+        })
+        .collect();
+
+        // geojson-vt's `p = 0.5 * buffer / extent`, both in tile units.
+        let options = TilingOptions::default();
+        let (lo_bound, hi_bound) = options.clip_range();
+        let extent = f64::from(hi_bound + lo_bound);
+        let p = 0.5 * f64::from(-lo_bound) / extent;
+        let (target_z, target_x, target_y) = (13u32, 4092u32, 2723u32);
+
+        let mut ring = world;
+        for z in 0..target_z {
+            let scale = f64::from(1u32 << z);
+            let step = 1u32 << (target_z - z);
+            let (x, y) = (target_x / step, target_y / step);
+            let (child_x, child_y) = (target_x / (step / 2), target_y / (step / 2));
+
+            let (x_lo, x_hi) = if child_x == 2 * x {
+                ((f64::from(x) - p) / scale, (f64::from(x) + 0.5 + p) / scale)
+            } else {
+                (
+                    (f64::from(x) + 0.5 - p) / scale,
+                    (f64::from(x) + 1.0 + p) / scale,
+                )
+            };
+            ring = clip_ring(&ring, x_lo, x_hi, Axis::X);
+
+            let (y_lo, y_hi) = if child_y == 2 * y {
+                ((f64::from(y) - p) / scale, (f64::from(y) + 0.5 + p) / scale)
+            } else {
+                (
+                    (f64::from(y) + 0.5 - p) / scale,
+                    (f64::from(y) + 1.0 + p) / scale,
+                )
+            };
+            ring = clip_ring(&ring, y_lo, y_hi, Axis::Y);
+            assert!(!ring.is_empty(), "the ring vanished at z{}", z + 1);
+        }
+
+        // Into tile-local units, the space the single-pass clip works in.
+        let scale = f64::from(1u32 << target_z);
+        let descended: Vec<[f64; 2]> = ring
+            .iter()
+            .map(|point| {
+                [
+                    (point[0] * scale - f64::from(target_x)) * extent,
+                    (point[1] * scale - f64::from(target_y)) * extent,
+                ]
+            })
+            .collect();
+
+        let (lo, hi) = box_bounds();
+        let single_pass = clip_ring_to_box(&hermetic_polygon(), lo, hi);
+        assert_eq!(
+            round_to_tile_units(&descended),
+            round_to_tile_units(&single_pass),
+            "twenty-six clips and one clip disagree"
+        );
     }
 
     /// Rounding to nearest, not truncating. A whole unit of drift on every vertex would read
