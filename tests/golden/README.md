@@ -20,7 +20,7 @@ ninja mbgl-capture-probe
 ./mbgl-capture-probe --dump=<tessella>/tests/golden/hermetic_style.dump
 ```
 
-Produced by `mbgl-capture-probe` at maplibre-native `96461f03d547`, on the
+Produced by `mbgl-capture-probe` at maplibre-native `ecb421191e7e`, on the
 `capture-backend-phase0` branch whose base commit `b237943` plan.md pins. Byte-identical
 across six consecutive runs; if a regeneration produces a diff on unrelated lines, that is a
 determinism regression in the probe rather than a change in the frontend, and the four
@@ -42,3 +42,10 @@ on, and comparing it would produce failures that mean nothing:
   which slot it happens to occupy is not.
 - **Intra-array order of a consolidated buffer.** Sorted at 16-byte granularity, the
   std140/std430 alignment unit, so a block boundary never falls inside a member.
+- **Triangle emission order.** Index buffers are hashed canonically: each triangle rotated to
+  start at its lowest index, then the triangles sorted. Measured reason — `earcutr` and
+  `earcut.hpp` produce the *same* triangulation, but emit it in a different order once a
+  polygon has a hole. Same triangles, same total area, same winding on every one; simple
+  polygons, concave included, agree index for index. Rotation preserves winding, which is a
+  real property since a reversed triangle is backface-culled, so a winding flip still fails.
+  What is discarded is the sequence, which nothing downstream depends on.
