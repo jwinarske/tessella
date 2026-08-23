@@ -1,19 +1,25 @@
-//! Painter order, checked against the golden dump (§6.3, §9.1).
+//! Painter order, checked against the golden dump's order section (§6.3, §9.1).
 //!
-//! The dump is a draw order: mbgl emits its drawables in the order it draws them, and the key on
-//! each line carries the layer, the sublayer and the tile. So the order this crate resolves can
-//! be compared against the oracle's element for element, rather than asserted as a rule and
-//! hoped for.
+//! # Two sections, only one of which is a draw order
 //!
-//! # What the comparison covers
+//! The dump has a `drawable` section and an `order` section, and they are not the same list. The
+//! drawable section is a canonical listing: the probe groups by structural key and sorts, so the
+//! golden file is stable across runs. Sorting it happens to produce layer-then-sublayer-then-tile,
+//! which is close enough to painter order to be mistaken for it.
 //!
-//! The dump has five layers; R0 implements the first three (a background and two fills). Those
-//! are the dump's first thirty drawables, and they are contiguous — a layer that draws nothing
-//! still holds its index, so no renumbering separates them from the line and circle layers that
-//! follow. The comparison takes the dump's own prefix rather than a filtered subset, which means
-//! a defect that reordered across layers would show up here rather than being filtered away.
+//! The `order` section is the draw order. It differs from the listing in three ways that matter,
+//! and every one of them is invisible if the listing is compared instead:
+//!
+//! - Pass groups before layer. Opaque entries all precede translucent ones.
+//! - Within a pass, the topmost layer comes first, because mbgl orders by a depth slot that runs
+//!   opposite the style index.
+//! - A drawable whose pass is a mask appears once per pass. The oracle's order has forty-three
+//!   entries for thirty-seven drawables; the six extra are the background, which is
+//!   `Opaque | Translucent` and is genuinely drawn twice.
+//!
+//! So this compares against `order`, and a separate test pins the listing as the listing.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use tessella_capture_abi::envelope::ViewId;
 use tessella_orchestrate::order::{self, DrawOrder};
@@ -39,29 +45,46 @@ fn probe() -> ViewTransform {
     }
 }
 
-/// `(layer, sublayer, x, y)` for one drawable.
-type Slot = (u32, i32, u32, u32);
+/// `(pass, layer, sublayer, x, y)` for one entry of the draw order.
+type Slot = (u8, u32, i32, u32, u32);
 
-/// The order the oracle drew in, parsed from the dump's drawable lines.
+/// Pulls `Lnnnnn.Snnnnn.tZZ_XXXXXXXX_YYYYYYYY` out of a drawable key.
+fn parse_key(key: &str) -> (u32, i32, u32, u32) {
+    let mut parts = key.strip_prefix('L').expect("a layer prefix").split('.');
+    let layer: u32 = parts.next().expect("layer").parse().expect("layer number");
+    let sub: i32 = parts
+        .next()
+        .and_then(|s| s.strip_prefix('S'))
+        .expect("sublayer")
+        .parse()
+        .expect("sublayer number");
+    let mut fields = parts
+        .next()
+        .and_then(|t| t.strip_prefix('t'))
+        .expect("a tile field")
+        .split('_');
+    let _z = fields.next();
+    let x: u32 = fields.next().expect("x").parse().expect("x number");
+    let y: u32 = fields.next().expect("y").parse().expect("y number");
+    (layer, sub, x, y)
+}
+
+/// The oracle's draw order, from the `order` section.
 fn oracle_order() -> Vec<Slot> {
     DUMP.lines()
-        .filter_map(|line| line.strip_prefix("drawable L"))
+        .filter_map(|line| line.strip_prefix("draw "))
         .map(|rest| {
-            let key = rest.split(' ').next().expect("a drawable key");
-            let mut parts = key.split('.');
-            let layer: u32 = parts.next().expect("layer").parse().expect("layer number");
-            let sub: i32 = parts
+            let mut fields = rest.split(' ');
+            let _index = fields.next();
+            let key = fields.next().expect("a drawable key");
+            let pass: u8 = fields
                 .next()
-                .and_then(|s| s.strip_prefix('S'))
-                .expect("sublayer")
+                .and_then(|f| f.strip_prefix("pass="))
+                .expect("a pass")
                 .parse()
-                .expect("sublayer number");
-            let tile = parts.next().expect("tile");
-            let mut fields = tile.strip_prefix('t').expect("a tile field").split('_');
-            let _z = fields.next();
-            let x: u32 = fields.next().expect("x").parse().expect("x number");
-            let y: u32 = fields.next().expect("y").parse().expect("y number");
-            (layer, sub, x, y)
+                .expect("pass number");
+            let (layer, sub, x, y) = parse_key(key);
+            (pass, layer, sub, x, y)
         })
         .collect()
 }
@@ -79,7 +102,8 @@ fn resolved_order() -> Vec<Slot> {
     let features = geojson::read(&source.data).expect("features");
 
     let view = ViewId(0);
-    let mut order = DrawOrder::new();
+    #[allow(clippy::cast_possible_truncation)]
+    let mut order = DrawOrder::new(style.layers.len() as u32);
     let mut next_id = 0;
     let mut tile_of_geometry = BTreeMap::new();
 
@@ -109,60 +133,104 @@ fn resolved_order() -> Vec<Slot> {
         .iter()
         .map(|entry| {
             let (x, y) = tile_of_geometry[&entry.geometry.0];
-            (entry.layer_index, entry.sub_layer_index, x, y)
+            (
+                entry.pass.bits(),
+                entry.layer_index,
+                entry.sub_layer_index,
+                x,
+                y,
+            )
         })
         .collect()
 }
 
-/// The resolved order matches the oracle's, drawable for drawable.
+/// The resolved order is the oracle's draw order restricted to the layers R0 implements.
+///
+/// A subsequence rather than a prefix, because the layers R0 does not implement are interleaved
+/// among the ones it does — the circle layer is drawn before every fill, being topmost. Taking a
+/// prefix would compare against a window that stops before the fills begin.
 #[test]
 fn painter_order_matches_the_oracle() {
-    let oracle = oracle_order();
+    let implemented = [0u32, 1, 2];
+    let oracle: Vec<Slot> = oracle_order()
+        .into_iter()
+        .filter(|(_, layer, ..)| implemented.contains(layer))
+        .collect();
     let mine = resolved_order();
 
-    // Asserted before the comparison, because comparing a prefix of length `mine.len()` passes
-    // trivially when `mine` is empty. Thirty is the background's six plus two fills at two
-    // drawables per tile.
-    assert_eq!(mine.len(), 30, "six tiles, one background and two fills");
-    assert_eq!(oracle.len(), 37, "the dump's five layers");
-
+    // Asserted before the comparison, because an empty `mine` compares equal to an empty filter.
     assert_eq!(
-        &oracle[..mine.len()],
-        &mine[..],
-        "draw order diverges from the oracle"
+        mine.len(),
+        36,
+        "six background twice for its two passes, plus two fills at two drawables per tile"
     );
+    assert_eq!(oracle.len(), mine.len(), "same drawables, same count");
+    assert_eq!(oracle, mine, "draw order diverges from the oracle");
 }
 
-/// And the comparison can fail: a swapped sublayer is caught.
-///
-/// The test above passed on its first run, which is the moment to check that it was capable of
-/// not passing. Drawing a fill's outline before its triangles is a real defect — the outline
-/// would be painted over — and it must not compare equal to the oracle.
+/// The background is drawn in both passes, which is why the order is longer than the drawables.
 #[test]
-fn a_swapped_sublayer_would_not_match() {
-    let oracle = oracle_order();
-    let mut swapped = resolved_order();
-    for slot in &mut swapped {
-        slot.1 = match slot.1 {
-            1 => 2,
-            2 => 1,
-            other => other,
-        };
-    }
-    assert_ne!(&oracle[..swapped.len()], &swapped[..]);
+fn a_multi_pass_drawable_appears_once_per_pass() {
+    let mine = resolved_order();
+    let background: Vec<&Slot> = mine.iter().filter(|(_, layer, ..)| *layer == 0).collect();
+    assert_eq!(background.len(), 12, "six tiles in two passes");
+    assert_eq!(background.iter().filter(|(pass, ..)| *pass == 1).count(), 6);
+    assert_eq!(background.iter().filter(|(pass, ..)| *pass == 2).count(), 6);
+
+    // And the whole oracle order is longer than its drawable list by exactly that much.
+    let drawables = DUMP.lines().filter(|l| l.starts_with("drawable ")).count();
+    assert_eq!(oracle_order().len(), drawables + 6);
 }
 
-/// The dump's R0 prefix is contiguous, which is what makes comparing a prefix legitimate.
-///
-/// If the line and circle layers were interleaved among the fills, taking the first thirty
-/// drawables would be taking an arbitrary window rather than the part R0 implements.
+/// Pass groups before layer: every opaque entry precedes every translucent one.
 #[test]
-fn the_implemented_layers_are_the_dumps_prefix() {
-    let oracle = oracle_order();
-    let r0: BTreeSet<u32> = oracle.iter().take(30).map(|(layer, ..)| *layer).collect();
-    assert_eq!(r0, BTreeSet::from([0, 1, 2]), "background and two fills");
+fn the_opaque_pass_precedes_the_translucent_one() {
+    let mine = resolved_order();
+    let last_opaque = mine.iter().rposition(|(pass, ..)| *pass == 1);
+    let first_translucent = mine.iter().position(|(pass, ..)| *pass == 2);
+    assert!(matches!(
+        (last_opaque, first_translucent),
+        (Some(a), Some(b)) if a < b
+    ));
+}
+
+/// Within a pass, the topmost layer is drawn first — the depth slot runs opposite the style
+/// index. Ordering by the style index directly would draw the background over the fills.
+#[test]
+fn within_a_pass_the_topmost_layer_comes_first() {
+    let mine = resolved_order();
+    let translucent: Vec<u32> = mine
+        .iter()
+        .filter(|(pass, ..)| *pass == 2)
+        .map(|(_, layer, ..)| *layer)
+        .collect();
+    let first = translucent.first().copied().expect("a translucent entry");
+    let last = translucent.last().copied().expect("a translucent entry");
     assert!(
-        oracle[30..].iter().all(|(layer, ..)| *layer >= 3),
-        "and nothing after the prefix belongs to them"
+        first > last,
+        "layer {first} before layer {last}: the order runs top to bottom"
     );
+    assert_eq!(last, 0, "and the background is drawn last");
+}
+
+/// The drawable section is a canonical listing, not a draw order. Pinned so that a future reader
+/// comparing against it knows what it is.
+#[test]
+fn the_drawable_section_is_sorted_not_ordered() {
+    let listing: Vec<(u32, i32, u32, u32)> = DUMP
+        .lines()
+        .filter_map(|line| line.strip_prefix("drawable "))
+        .map(|rest| parse_key(rest.split(' ').next().expect("a key")))
+        .collect();
+    let mut sorted = listing.clone();
+    sorted.sort_unstable();
+    assert_eq!(listing, sorted, "the listing is in sorted order");
+
+    let order: Vec<(u32, i32, u32, u32)> = oracle_order()
+        .into_iter()
+        .map(|(_, layer, sub, x, y)| (layer, sub, x, y))
+        .collect();
+    let mut order_sorted = order.clone();
+    order_sorted.sort_unstable();
+    assert_ne!(order, order_sorted, "the draw order is not");
 }

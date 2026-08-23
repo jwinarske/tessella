@@ -32,9 +32,22 @@
 //! views and low hundreds of drawables §13.3 budgets against, an O(n log n) sort per view per
 //! frame is far below the tessellation it follows.
 //!
-//! separates a fill's triangles from its outline — 1 and 2 respectively — and it is why a fill
-//! layer is two entries rather than one. The golden dump is a draw order, and
-//! `tests/draw_order.rs` reproduces it exactly rather than asserting the rule and hoping.
+//! Painter order is pass, then depth slot, then sublayer, then sort key, then tile — and only
+//! the last two are what intuition suggests.
+//!
+//! Pass groups before everything because mbgl runs the opaque and translucent passes as separate
+//! traversals of the layer list, so a drawable marked with both is genuinely drawn twice. The
+//! depth slot runs *opposite* the style index: mbgl walks the list reversed in the opaque pass
+//! counting up and forwards in the translucent pass counting down, so a layer lands on the same
+//! slot in both, and ordering by that slot draws the topmost layer first within a pass. Sublayer
+//! is what separates a fill's triangles from its outline — 1 and 2 — and it sorts above the sort
+//! key so that a sort key cannot paint an outline before the fill it outlines.
+//!
+//! The dump carries both a `drawable` listing and an `order` section, and only the second is a
+//! draw order. The listing is sorted by structural key to keep the golden file stable, which
+//! makes it look like painter order while differing on all three points above. `tests/
+//! draw_order.rs` compares against `order` and pins the listing as a listing, because comparing
+//! against the listing is the mistake that is easy to make and passes.
 
 use alloc::vec::Vec;
 
@@ -72,18 +85,27 @@ impl Placed {
         }
     }
 
-    /// The key painter order sorts on.
+    /// The key painter order sorts on, for one pass.
     ///
-    /// Layer first, because that is what the style document says and what a consumer keys
-    /// uniforms by. Then sort key, then sublayer, then tile — sublayer below sort key because a
-    /// sort key that reordered within a layer would reorder a fill's outline away from its
-    /// triangles, and the outline has to follow the fill it outlines.
-    fn sort_key(&self) -> (i32, i64, i32, u8, u32, u32) {
+    /// Pass first. The oracle's draw order is grouped by pass before anything else — opaque
+    /// entries precede translucent ones regardless of layer — because the two passes are
+    /// separate traversals of the layer list, not two kinds of entry interleaved in one.
+    ///
+    /// Then the depth slot, which runs opposite the style index. mbgl walks the layer list
+    /// reversed in the opaque pass counting up and forwards in the translucent pass counting
+    /// down, precisely so a layer lands on the same slot in both; ordering by it is what puts
+    /// the topmost layer first within a pass.
+    ///
+    /// Then sublayer, then sort key, then tile. Sublayer above the sort key because a sort key
+    /// that reordered within a layer would separate a fill's outline from the triangles it
+    /// outlines, and the outline has to follow the fill.
+    fn sort_key(&self, pass: RenderPass, layer_count: u32) -> (u8, u32, i32, i64, u8, u32, u32) {
         let tile = self.binding.tile.unwrap_or_default();
         (
-            self.binding.layer_index,
-            self.draw_priority,
+            pass.bits(),
+            depth_slot(self.binding.layer_index, layer_count),
             self.binding.sub_layer_index,
+            self.draw_priority,
             tile.z,
             tile.x,
             tile.y,
@@ -91,19 +113,42 @@ impl Placed {
     }
 }
 
+/// The depth slot a style layer occupies, which runs opposite the style index.
+///
+/// mbgl calls this `currentLayer` and uses it for the depth value, not for painter order
+/// directly — but ordering by it is what produces painter order, because it is assigned by
+/// walking the layer list in the direction each pass draws. The absolute base is a consumer-side
+/// depth mapping and mbgl's own count includes groups this frontend does not model, so what is
+/// reproduced here is the ordering, not mbgl's particular integers.
+#[must_use]
+pub fn depth_slot(layer_index: i32, layer_count: u32) -> u32 {
+    #[allow(clippy::cast_sign_loss)]
+    let index = layer_index.max(0) as u32;
+    layer_count
+        .saturating_sub(1)
+        .saturating_sub(index.min(layer_count.saturating_sub(1)))
+}
+
 /// A view's draw order, and the epoch naming the last one emitted.
 #[derive(Debug, Default)]
 pub struct DrawOrder {
     entries: Vec<Placed>,
+    layer_count: u32,
     epoch: u64,
     emitted: Option<Vec<OrderEntry>>,
 }
 
 impl DrawOrder {
-    /// An empty order at epoch zero.
+    /// An empty order over a style of `layer_count` layers, at epoch zero.
+    ///
+    /// The layer count is needed because the depth slot is measured from the top of the style,
+    /// so a layer's place in the order depends on how many layers there are.
     #[must_use]
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(layer_count: u32) -> Self {
+        Self {
+            layer_count,
+            ..Self::default()
+        }
     }
 
     /// Adds a drawable.
@@ -147,23 +192,40 @@ impl DrawOrder {
 
     /// The order, sorted, with `ubo_index` assigned.
     ///
+    /// A drawable whose pass is a mask of several bits becomes one entry per pass. That is not a
+    /// convenience: mbgl runs the opaque and translucent passes as separate traversals, and a
+    /// background marked `Opaque | Translucent` is genuinely drawn in both — the oracle's order
+    /// has forty-three entries for thirty-seven drawables, and the six extra are the background
+    /// appearing a second time. Emitting the mask once would leave the consumer to invent the
+    /// second entry and to guess where it goes.
+    ///
     /// `sort_by_key` rather than `sort_unstable_by_key`: two drawables with an identical key are
     /// genuinely interchangeable in painter order, but keeping their insertion order makes the
     /// output a function of the input rather than of the sort implementation, and a stream that
-    /// reorders equal entries between runs would emit an `OrderUpdate` every frame to say
+    /// reordered equal entries between runs would emit an `OrderUpdate` every frame to say
     /// nothing had changed.
     #[must_use]
     pub fn resolve(&self) -> Vec<OrderEntry> {
-        let mut sorted = self.entries.clone();
-        sorted.sort_by_key(Placed::sort_key);
+        let mut expanded: Vec<(Placed, RenderPass)> = Vec::new();
+        for placed in &self.entries {
+            for pass in [
+                RenderPass::OPAQUE,
+                RenderPass::TRANSLUCENT,
+                RenderPass::PASS3D,
+            ] {
+                if placed.binding.pass.bits() & pass.bits() != 0 {
+                    expanded.push((*placed, pass));
+                }
+            }
+        }
+        expanded.sort_by_key(|(placed, pass)| placed.sort_key(*pass, self.layer_count));
 
         // Per pass, from this view's own draw order. A drawable in both passes takes a slot in
         // each, because it is written to both consolidated buffers.
         let mut next: [u32; 8] = [0; 8];
-        sorted
+        expanded
             .iter()
-            .map(|placed| {
-                let pass = placed.binding.pass;
+            .map(|(placed, pass)| {
                 let slot = &mut next[usize::from(pass.bits() & 0x7)];
                 let ubo_index = *slot;
                 *slot += 1;
@@ -178,33 +240,40 @@ impl DrawOrder {
                     // for the whole view. Clamped, because a negative layer index has no
                     // painter-order meaning and the sort above has already used the signed
                     // value.
+                    //
+                    // The *style* index travels here, not the depth slot the sort used. The
+                    // slot is derivable from this and the layer count, while the style index is
+                    // what UBO updates are keyed by (§2.2) and cannot be recovered from a slot
+                    // whose base depends on how many layer groups mbgl happened to create.
                     layer_index: placed.binding.layer_index.max(0) as u32,
                     sub_layer_index: placed.binding.sub_layer_index,
                     ubo_index,
-                    pass,
+                    pass: *pass,
                     _pad: [0; 3],
                 }
             })
             .collect()
     }
 
-    /// The index at which the opaque pass ends, for [`CameraUpdate::opaque_pass_cutoff`].
+    /// The depth slot at which the opaque pass ends.
     ///
-    /// mbgl draws opaque layers front-to-back with depth writes and translucent back-to-front,
-    /// and the cutoff is where the consumer switches. Computed from the resolved order rather
-    /// than tracked alongside it, because a cutoff that disagreed with the order it indexes is
-    /// worse than no cutoff at all.
+    /// Not an index into the draw order, which is what it looks like and what this returned
+    /// before the oracle was consulted. mbgl compares it against the layer's own slot —
+    /// `if (currentLayer < opaquePassCutoff)` — so it is a threshold on the layer list, and a
+    /// draw-order position substituted for it would cut the passes in the wrong place as soon
+    /// as a layer contributed more than one drawable.
     ///
-    /// [`CameraUpdate::opaque_pass_cutoff`]: tessella_capture_abi::envelope::CameraUpdate
+    /// How mbgl *derives* the value is not ported: it comes from the render tree, and the
+    /// oracle's own frame reports zero. What is modeled here is the comparison it takes part in,
+    /// so a consumer reading this field reads the quantity mbgl's shaders expect.
     #[must_use]
-    pub fn opaque_cutoff(resolved: &[OrderEntry]) -> u32 {
-        #[allow(clippy::cast_possible_truncation)]
-        {
-            resolved
-                .iter()
-                .position(|e| e.pass.bits() & RenderPass::OPAQUE.bits() == 0)
-                .unwrap_or(resolved.len()) as u32
-        }
+    pub fn opaque_cutoff(&self) -> u32 {
+        self.entries
+            .iter()
+            .filter(|placed| placed.binding.pass.bits() & RenderPass::OPAQUE.bits() != 0)
+            .map(|placed| depth_slot(placed.binding.layer_index, self.layer_count))
+            .max()
+            .map_or(0, |slot| slot + 1)
     }
 
     /// Emits the order if it differs from the last one emitted, returning the epoch in force.
@@ -361,22 +430,35 @@ mod tests {
         binding(0, 0, x, background_pass(), background_flags())
     }
 
-    /// Layer first, then sublayer, then tile — and the input order does not survive.
+    /// Pass first, then depth slot, then sublayer — and the input order does not survive.
+    ///
+    /// The background is `Opaque | Translucent`, so it opens the order in the opaque pass and
+    /// closes it in the translucent one, with the fills between. Sorting by style index would
+    /// have put it first in both.
     #[test]
-    fn painter_order_is_layer_then_sublayer_then_tile() {
-        let mut order = DrawOrder::new();
+    fn painter_order_is_pass_then_depth_slot_then_sublayer() {
+        let mut order = DrawOrder::new(5);
         // Deliberately backwards on every axis.
         order.bind(fill(2, 2, 4094));
         order.bind(fill(1, 1, 4092));
         order.bind(fill(2, 1, 4092));
         order.bind(background(4093));
 
-        let resolved = order.resolve();
-        let keys: Vec<(u32, i32)> = resolved
+        let keys: Vec<(u8, u32, i32)> = order
+            .resolve()
             .iter()
-            .map(|e| (e.layer_index, e.sub_layer_index))
+            .map(|e| (e.pass.bits(), e.layer_index, e.sub_layer_index))
             .collect();
-        assert_eq!(keys, [(0, 0), (1, 1), (2, 1), (2, 2)]);
+        assert_eq!(
+            keys,
+            [
+                (1, 0, 0), // background, opaque pass
+                (2, 2, 1), // then translucent, topmost layer first
+                (2, 2, 2),
+                (2, 1, 1),
+                (2, 0, 0), // background again, drawn last
+            ]
+        );
     }
 
     /// A sort key does not separate a fill's outline from its triangles.
@@ -386,7 +468,7 @@ mod tests {
     /// outlines, which is the R-9 failure in miniature.
     #[test]
     fn a_sort_key_does_not_split_a_fill_from_its_outline() {
-        let mut order = DrawOrder::new();
+        let mut order = DrawOrder::new(5);
         order.push(Placed {
             binding: fill(1, 1, 4092),
             draw_priority: 5,
@@ -405,11 +487,15 @@ mod tests {
         });
 
         let resolved = order.resolve();
-        let pairs: Vec<(i64, i32)> = resolved
+        let pairs: Vec<(i32, i64)> = resolved
             .iter()
-            .map(|e| (e.draw_priority, e.sub_layer_index))
+            .map(|e| (e.sub_layer_index, e.draw_priority))
             .collect();
-        assert_eq!(pairs, [(1, 1), (1, 2), (5, 1), (5, 2)]);
+        assert_eq!(
+            pairs,
+            [(1, 1), (1, 5), (2, 1), (2, 5)],
+            "sublayer groups above the sort key, so no outline precedes its fill"
+        );
     }
 
     /// `ubo_index` is dense from zero within each pass, not across the whole order.
@@ -418,7 +504,7 @@ mod tests {
     /// holes in both buffers and index past the end of the shorter one.
     #[test]
     fn ubo_indices_are_dense_within_each_pass() {
-        let mut order = DrawOrder::new();
+        let mut order = DrawOrder::new(5);
         order.bind(background(4092));
         order.bind(fill(1, 1, 4092));
         order.bind(background(4093));
@@ -438,24 +524,53 @@ mod tests {
         }
     }
 
-    /// The cutoff is where the opaque pass ends, computed from the order it indexes.
+    /// The cutoff is a threshold on the depth slot, not a position in the draw order.
+    ///
+    /// mbgl compares it against the layer's own slot, so a draw-order position substituted for
+    /// it would cut the passes in the wrong place the moment a layer contributed more than one
+    /// drawable — which every tiled layer does.
     #[test]
-    fn the_opaque_cutoff_is_the_first_translucent_entry() {
-        let mut order = DrawOrder::new();
-        order.bind(background(4092));
-        order.bind(background(4093));
+    fn the_opaque_cutoff_is_a_layer_slot_not_a_draw_index() {
+        let mut order = DrawOrder::new(5);
+        // Six background drawables, all in one layer at one slot.
+        for x in 4092..4098 {
+            order.bind(background(x));
+        }
         order.bind(fill(1, 1, 4092));
 
-        let resolved = order.resolve();
-        assert_eq!(DrawOrder::opaque_cutoff(&resolved), 2, "two backgrounds");
+        assert_eq!(
+            order.opaque_cutoff(),
+            5,
+            "the background's slot plus one, not its six drawables"
+        );
     }
 
-    /// An order with no opaque entries cuts off at zero, not at the end.
+    /// An order with no opaque entries cuts off at zero.
     #[test]
     fn an_all_translucent_order_cuts_off_at_zero() {
-        let mut order = DrawOrder::new();
+        let mut order = DrawOrder::new(5);
         order.bind(fill(1, 1, 4092));
-        assert_eq!(DrawOrder::opaque_cutoff(&order.resolve()), 0);
+        assert_eq!(order.opaque_cutoff(), 0);
+    }
+
+    /// The depth slot runs opposite the style index, so the topmost layer sorts first.
+    #[test]
+    fn the_depth_slot_runs_opposite_the_style_index() {
+        assert_eq!(depth_slot(0, 5), 4, "the bottom layer is deepest");
+        assert_eq!(depth_slot(4, 5), 0, "the top layer is shallowest");
+        assert!(depth_slot(1, 5) > depth_slot(2, 5));
+    }
+
+    /// A layer index past the end of the style clamps rather than underflowing the slot.
+    #[test]
+    fn a_layer_index_past_the_style_does_not_underflow() {
+        assert_eq!(depth_slot(99, 5), 0);
+        assert_eq!(depth_slot(-1, 5), 4);
+        assert_eq!(
+            depth_slot(0, 0),
+            0,
+            "an empty style has one slot, not a wrap"
+        );
     }
 
     /// §6.3: emitted only when the list differs. An unchanged order writes nothing at all, which
@@ -464,7 +579,7 @@ mod tests {
     fn an_unchanged_order_writes_no_bytes() {
         let mut ring = Ring::new(4096);
         let (producer, _consumer) = ring.split();
-        let mut order = DrawOrder::new();
+        let mut order = DrawOrder::new(5);
         order.bind(background(4092));
         order.bind(fill(1, 1, 4092));
 
@@ -491,7 +606,7 @@ mod tests {
     fn a_changed_order_advances_the_epoch() {
         let mut ring = Ring::new(4096);
         let (producer, _consumer) = ring.split();
-        let mut order = DrawOrder::new();
+        let mut order = DrawOrder::new(5);
         order.bind(background(4092));
         assert_eq!(
             order.emit(producer, ViewId(0)).expect("emits").epoch,
@@ -502,7 +617,10 @@ mod tests {
         let second = order.emit(producer, ViewId(0)).expect("emits");
         assert!(second.changed);
         assert_eq!(second.epoch, OrderEpoch(2));
-        assert_eq!(second.entries, 2);
+        assert_eq!(
+            second.entries, 3,
+            "the background is two entries for its two passes, plus the fill"
+        );
     }
 
     /// A restack with the same entry count is still a change. Comparing lengths would miss it,
@@ -511,7 +629,7 @@ mod tests {
     fn a_restack_of_equal_length_is_a_change() {
         let mut ring = Ring::new(4096);
         let (producer, _consumer) = ring.split();
-        let mut order = DrawOrder::new();
+        let mut order = DrawOrder::new(5);
 
         order.bind(fill(1, 1, 4092));
         order.bind(fill(2, 1, 4092));
@@ -544,7 +662,7 @@ mod tests {
     fn rebuilding_an_identical_order_each_frame_stays_silent() {
         let mut ring = Ring::new(4096);
         let (producer, _consumer) = ring.split();
-        let mut order = DrawOrder::new();
+        let mut order = DrawOrder::new(5);
 
         let bind_scene = |order: &mut DrawOrder| {
             order.clear();
@@ -573,7 +691,7 @@ mod tests {
     /// to say nothing had changed.
     #[test]
     fn equal_keys_keep_their_insertion_order() {
-        let mut order = DrawOrder::new();
+        let mut order = DrawOrder::new(5);
         for id in 0..16 {
             let mut b = fill(1, 1, 4092);
             b.geometry = GeometryId(id);
@@ -589,17 +707,22 @@ mod tests {
     /// negative last at the consumer and invert painter order for the whole view.
     #[test]
     fn a_negative_layer_index_does_not_wrap() {
-        let mut order = DrawOrder::new();
+        let mut order = DrawOrder::new(5);
         let mut odd = fill(1, 1, 4092);
         odd.layer_index = -1;
         order.bind(odd);
         order.bind(fill(1, 1, 4093));
 
         let resolved = order.resolve();
-        assert_eq!(resolved[0].layer_index, 0, "clamped, not wrapped");
         assert!(
             resolved.iter().all(|e| e.layer_index < 1000),
-            "and nothing sorted to the end of the world"
+            "clamped, not wrapped: {:?}",
+            resolved.iter().map(|e| e.layer_index).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            resolved.last().expect("an entry").layer_index,
+            0,
+            "and a clamped index sorts deepest, not first"
         );
     }
 }
