@@ -28,6 +28,7 @@ extern crate alloc;
 pub mod document;
 pub mod expression;
 pub mod filter;
+pub mod light;
 pub mod property;
 pub mod value;
 
