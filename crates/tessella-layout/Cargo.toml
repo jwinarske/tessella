@@ -20,7 +20,6 @@ tessella-style.workspace = true
 tessella-tile.workspace = true
 
 [dev-dependencies]
-earcutr.workspace = true
 
 [lints]
 workspace = true
