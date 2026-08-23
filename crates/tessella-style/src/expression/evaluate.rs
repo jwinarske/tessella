@@ -77,6 +77,33 @@ pub(super) struct Context<'a> {
     pub(super) zoom: Option<f64>,
     /// Current feature, when there is one.
     pub(super) feature: Option<&'a dyn Feature>,
+    /// Names bound by enclosing `let`s, innermost first.
+    ///
+    /// A borrowed chain rather than an owned map: a `let` pushes one frame onto the stack and
+    /// hands a reference down, so entering a binding costs nothing and leaving it is a return.
+    /// The innermost-first order is what makes shadowing a lookup rule rather than a rewrite.
+    pub(super) scope: Option<&'a Binding<'a>>,
+}
+
+/// One name bound by a `let`, and the scope it was bound in.
+pub(super) struct Binding<'a> {
+    name: &'a str,
+    value: Value,
+    parent: Option<&'a Binding<'a>>,
+}
+
+impl Binding<'_> {
+    /// The value bound to a name, searching inward-out so the innermost wins.
+    fn lookup(&self, name: &str) -> Option<&Value> {
+        let mut frame = Some(self);
+        while let Some(current) = frame {
+            if current.name == name {
+                return Some(&current.value);
+            }
+            frame = current.parent;
+        }
+        None
+    }
 }
 
 impl Context<'_> {
@@ -85,6 +112,7 @@ impl Context<'_> {
         Self {
             zoom: None,
             feature: None,
+            scope: None,
         }
     }
 
@@ -108,6 +136,22 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
         Expr::Id => Ok(context.feature()?.id().unwrap_or(Value::Null)),
         Expr::Properties => Ok(context.feature()?.properties()),
         Expr::LegacyFunction(function) => evaluate_legacy(function, context),
+        Expr::Let { bindings, body } => {
+            // Bindings are evaluated once, in order, each seeing the ones before it. Evaluating
+            // once is the whole reason a style writes `let` — the alternative, substituting the
+            // bound expression at each `var`, would recompute it per use.
+            evaluate_let(bindings, body, context)
+        }
+        Expr::Var(name) => context
+            .scope
+            .and_then(|scope| scope.lookup(name))
+            .cloned()
+            // Parsing rejects an unbound name, so reaching here means the tree was built by
+            // hand rather than parsed.
+            .ok_or(EvaluationError::Type {
+                expected: "a bound variable",
+                got: "an unbound one",
+            }),
         Expr::Assert { kind, args } => {
             // Each argument in turn; the first of the required type wins. Only running out is
             // an error, which is what makes `["number", ["get", "x"], 0]` a fallback rather than
@@ -322,6 +366,32 @@ fn locate(stops: &[(f64, Expr)], position: f64) -> Option<usize> {
     // Stops ascend — the parser rejects any list that does not — so a partition point is
     // exact rather than approximate.
     Some(stops.partition_point(|(stop, _)| *stop <= position) - 1)
+}
+
+/// Evaluates a `let` by extending the scope one binding at a time.
+///
+/// Written recursively because each frame has to outlive the next: the borrowed chain points at
+/// stack slots, so a loop would have to own the frames and lose the cheap entry that makes the
+/// chain worth having.
+fn evaluate_let(
+    bindings: &[(String, Expr)],
+    body: &Expr,
+    context: &Context<'_>,
+) -> Result<Value, EvaluationError> {
+    let Some(((name, value), rest)) = bindings.split_first() else {
+        return evaluate(body, context);
+    };
+    let bound = Binding {
+        name,
+        value: evaluate(value, context)?,
+        parent: context.scope,
+    };
+    let inner = Context {
+        zoom: context.zoom,
+        feature: context.feature,
+        scope: Some(&bound),
+    };
+    evaluate_let(rest, body, &inner)
 }
 
 /// Evaluates a pre-expression function.

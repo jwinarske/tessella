@@ -43,15 +43,29 @@ pub enum ParseError {
     NotAnExpression,
 }
 
-/// Parses a style value into an expression tree.
-pub(super) fn parse(value: &Value) -> Result<Expr, ParseError> {
-    parse_with_default(value, None)
+/// Parses a value in a scope.
+fn parse_in(value: &Value, scope: &[String]) -> Result<Expr, ParseError> {
+    parse_with_default_in(value, None, scope)
 }
 
 /// Parses a value, carrying the property spec's default for pre-expression functions.
 pub(super) fn parse_with_default(
     value: &Value,
     property_default: Option<Value>,
+) -> Result<Expr, ParseError> {
+    parse_with_default_in(value, property_default, &[])
+}
+
+/// The parser proper.
+///
+/// `scope` carries the names an enclosing `let` has bound. It is threaded through every operator
+/// rather than resolved in a separate pass, because a `var` can appear anywhere an expression
+/// can and a separate walker would have to reimplement each operator's argument shape to know
+/// where that is.
+fn parse_with_default_in(
+    value: &Value,
+    property_default: Option<Value>,
+    scope: &[String],
 ) -> Result<Expr, ParseError> {
     // A pre-expression function is an object, which `looks_like_expression` does not recognize,
     // so without this check it falls through to `Expr::Literal` and a style that varies a
@@ -89,10 +103,10 @@ pub(super) fn parse_with_default(
             expect_arity(operator, args, 1, usize::MAX)?;
             Ok(Expr::Assert {
                 kind,
-                args: parse_all(args)?,
+                args: parse_all(args, scope)?,
             })
         }
-        "array" => parse_array_assertion(operator, args),
+        "array" => parse_array_assertion(operator, args, scope),
         "zoom" => {
             expect_arity(operator, args, 0, 0)?;
             Ok(Expr::Zoom)
@@ -112,13 +126,13 @@ pub(super) fn parse_with_default(
         "get" => {
             expect_arity(operator, args, 1, 1)?;
             Ok(Expr::Get {
-                key: Box::new(parse(&args[0])?),
+                key: Box::new(parse_in(&args[0], scope)?),
             })
         }
         "has" => {
             expect_arity(operator, args, 1, 1)?;
             Ok(Expr::Has {
-                key: Box::new(parse(&args[0])?),
+                key: Box::new(parse_in(&args[0], scope)?),
             })
         }
         "==" | "!=" | "<" | "<=" | ">" | ">=" => {
@@ -131,8 +145,8 @@ pub(super) fn parse_with_default(
                 ">" => CompareOp::Gt,
                 _ => CompareOp::Ge,
             };
-            let lhs = parse(&args[0])?;
-            let rhs = parse(&args[1])?;
+            let lhs = parse_in(&args[0], scope)?;
+            let rhs = parse_in(&args[1], scope)?;
             check_comparable(operator, op, &lhs, &rhs)?;
             Ok(Expr::Compare {
                 op,
@@ -142,26 +156,46 @@ pub(super) fn parse_with_default(
         }
         "!" => {
             expect_arity(operator, args, 1, 1)?;
-            Ok(Expr::Not(Box::new(parse(&args[0])?)))
+            Ok(Expr::Not(Box::new(parse_in(&args[0], scope)?)))
         }
-        "all" => Ok(Expr::All(parse_all(args)?)),
-        "any" => Ok(Expr::Any(parse_all(args)?)),
-        "coalesce" => Ok(Expr::Coalesce(parse_all(args)?)),
-        "match" => parse_match(operator, args),
-        "case" => parse_case(operator, args),
-        "step" => parse_step(operator, args),
-        "interpolate" => parse_interpolate(operator, args),
+        "all" => Ok(Expr::All(parse_all(args, scope)?)),
+        "any" => Ok(Expr::Any(parse_all(args, scope)?)),
+        "coalesce" => Ok(Expr::Coalesce(parse_all(args, scope)?)),
+        "let" => parse_let(operator, args, scope),
+        "var" => {
+            expect_arity(operator, args, 1, 1)?;
+            let name = args[0].as_str().ok_or_else(|| ParseError::Malformed {
+                operator: operator.to_string(),
+                detail: "a variable name must be a string".to_string(),
+            })?;
+            // Resolved against the scope threaded down from any enclosing `let`. A name that is
+            // not there was never bound, and the spec rejects that at compile time rather than
+            // yielding null at evaluation — where it would be one silent wrong value per
+            // feature rather than one loud message at load.
+            if scope.iter().any(|bound| bound == name) {
+                Ok(Expr::Var(name.to_string()))
+            } else {
+                Err(ParseError::Malformed {
+                    operator: operator.to_string(),
+                    detail: format!("`{name}` is not bound by any enclosing let"),
+                })
+            }
+        }
+        "match" => parse_match(operator, args, scope),
+        "case" => parse_case(operator, args, scope),
+        "step" => parse_step(operator, args, scope),
+        "interpolate" => parse_interpolate(operator, args, scope),
         "to-number" => Ok(Expr::Cast {
             to: CastKind::Number,
-            args: parse_all(args)?,
+            args: parse_all(args, scope)?,
         }),
         "to-string" => Ok(Expr::Cast {
             to: CastKind::String,
-            args: parse_all(args)?,
+            args: parse_all(args, scope)?,
         }),
         "to-boolean" => Ok(Expr::Cast {
             to: CastKind::Boolean,
-            args: parse_all(args)?,
+            args: parse_all(args, scope)?,
         }),
         "+" | "-" | "*" | "/" | "%" | "^" | "min" | "max" | "abs" | "floor" | "ceil" | "round" => {
             let op = match operator {
@@ -187,11 +221,68 @@ pub(super) fn parse_with_default(
             }
             Ok(Expr::Arithmetic {
                 op,
-                args: parse_all(args)?,
+                args: parse_all(args, scope)?,
             })
         }
         other => Err(ParseError::UnknownOperator(other.to_string())),
     }
+}
+
+/// `["let", name, value, …, body]`.
+///
+/// # Scope is resolved here, not at evaluation
+///
+/// Parsing walks the body with the bound names in hand, so an unbound `var` is a parse error and
+/// shadowing is decided before anything runs. The alternative — carrying names to evaluation and
+/// failing there — turns a style-authoring mistake into a per-feature per-tile error, which is
+/// the same trade the comparison checker makes and for the same reason.
+fn parse_let(operator: &str, args: &[Value], scope: &[String]) -> Result<Expr, ParseError> {
+    // Pairs of name and value, then a body: odd, and at least three.
+    if args.len() < 3 || args.len().is_multiple_of(2) {
+        return Err(ParseError::Arity {
+            operator: operator.to_string(),
+            expected: "name/value pairs followed by a body".to_string(),
+            got: args.len(),
+        });
+    }
+
+    // The enclosing scope, extended as each binding is made. Extending rather than replacing is
+    // what gives shadowing its meaning: an inner name is pushed after the outer one and found
+    // first on lookup.
+    let mut scope: Vec<String> = scope.to_vec();
+    let mut bindings = Vec::new();
+    for pair in args[..args.len() - 1].as_chunks::<2>().0 {
+        let name = pair[0].as_str().ok_or_else(|| ParseError::Malformed {
+            operator: operator.to_string(),
+            detail: "a binding name must be a string".to_string(),
+        })?;
+        if !is_binding_name(name) {
+            return Err(ParseError::Malformed {
+                operator: operator.to_string(),
+                detail: format!("`{name}` is not a valid variable name"),
+            });
+        }
+        // Parsed in the scope built so far, so a later binding may read an earlier one and a
+        // binding cannot read itself.
+        let value = parse_in(&pair[1], &scope)?;
+        bindings.push((name.to_string(), value));
+        scope.push(name.to_string());
+    }
+
+    let body = Box::new(parse_in(&args[args.len() - 1], &scope)?);
+    Ok(Expr::Let { bindings, body })
+}
+
+/// A variable name: a letter or underscore, then letters, digits or underscores.
+///
+/// The suite rejects `$a`, which is what this rule is for. Names that look like identifiers keep
+/// `var` unambiguous and leave room for the spec to give punctuation a meaning later.
+fn is_binding_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Rejects a comparison that no input could satisfy.
@@ -307,7 +398,11 @@ fn check_match_labels(operator: &str, arms: &[(Vec<Value>, Expr)]) -> Result<(),
 /// The leading arguments are a type name and a length, not expressions, so they are read
 /// literally rather than parsed. That is why this cannot be folded into the assertion arm: the
 /// arity decides which arguments are data and which is the value.
-fn parse_array_assertion(operator: &str, args: &[Value]) -> Result<Expr, ParseError> {
+fn parse_array_assertion(
+    operator: &str,
+    args: &[Value],
+    scope: &[String],
+) -> Result<Expr, ParseError> {
     expect_arity(operator, args, 1, 3)?;
 
     let item_of = |value: &Value| -> Result<AssertKind, ParseError> {
@@ -329,12 +424,12 @@ fn parse_array_assertion(operator: &str, args: &[Value]) -> Result<Expr, ParseEr
         [value] => Ok(Expr::AssertArray {
             item: None,
             length: None,
-            value: Box::new(parse(value)?),
+            value: Box::new(parse_in(value, scope)?),
         }),
         [item, value] => Ok(Expr::AssertArray {
             item: Some(item_of(item)?),
             length: None,
-            value: Box::new(parse(value)?),
+            value: Box::new(parse_in(value, scope)?),
         }),
         [item, length, value] => {
             let length = length
@@ -348,7 +443,7 @@ fn parse_array_assertion(operator: &str, args: &[Value]) -> Result<Expr, ParseEr
             Ok(Expr::AssertArray {
                 item: Some(item_of(item)?),
                 length: Some(length as usize),
-                value: Box::new(parse(value)?),
+                value: Box::new(parse_in(value, scope)?),
             })
         }
         _ => unreachable!("arity is checked above"),
@@ -422,8 +517,8 @@ fn parse_legacy_function(
     }))))
 }
 
-fn parse_all(args: &[Value]) -> Result<Vec<Expr>, ParseError> {
-    args.iter().map(parse).collect()
+fn parse_all(args: &[Value], scope: &[String]) -> Result<Vec<Expr>, ParseError> {
+    args.iter().map(|arg| parse_in(arg, scope)).collect()
 }
 
 fn expect_arity(operator: &str, args: &[Value], min: usize, max: usize) -> Result<(), ParseError> {
@@ -443,7 +538,7 @@ fn expect_arity(operator: &str, args: &[Value], min: usize, max: usize) -> Resul
 }
 
 /// `["match", input, label|labels, output, ..., fallback]`
-fn parse_match(operator: &str, args: &[Value]) -> Result<Expr, ParseError> {
+fn parse_match(operator: &str, args: &[Value], scope: &[String]) -> Result<Expr, ParseError> {
     // One input, at least one label/output pair, and a fallback: 2 + 2k, so always even and
     // never fewer than four. (`case` is the odd-length one, having no separate input.)
     if args.len() < 4 || !args.len().is_multiple_of(2) {
@@ -454,8 +549,8 @@ fn parse_match(operator: &str, args: &[Value]) -> Result<Expr, ParseError> {
         });
     }
 
-    let input = Box::new(parse(&args[0])?);
-    let fallback = Box::new(parse(&args[args.len() - 1])?);
+    let input = Box::new(parse_in(&args[0], scope)?);
+    let fallback = Box::new(parse_in(&args[args.len() - 1], scope)?);
     let mut arms = Vec::new();
     for pair in args[1..args.len() - 1].as_chunks::<2>().0 {
         // A label is one value or an array of them. An array here is a label set rather than
@@ -470,7 +565,7 @@ fn parse_match(operator: &str, args: &[Value]) -> Result<Expr, ParseError> {
                 detail: "a label set must not be empty".to_string(),
             });
         }
-        arms.push((labels, parse(&pair[1])?));
+        arms.push((labels, parse_in(&pair[1], scope)?));
     }
 
     check_match_labels(operator, &arms)?;
@@ -483,7 +578,7 @@ fn parse_match(operator: &str, args: &[Value]) -> Result<Expr, ParseError> {
 }
 
 /// `["case", condition, output, ..., fallback]`
-fn parse_case(operator: &str, args: &[Value]) -> Result<Expr, ParseError> {
+fn parse_case(operator: &str, args: &[Value], scope: &[String]) -> Result<Expr, ParseError> {
     if args.len() < 3 || args.len().is_multiple_of(2) {
         return Err(ParseError::Arity {
             operator: operator.to_string(),
@@ -491,16 +586,16 @@ fn parse_case(operator: &str, args: &[Value]) -> Result<Expr, ParseError> {
             got: args.len(),
         });
     }
-    let fallback = Box::new(parse(&args[args.len() - 1])?);
+    let fallback = Box::new(parse_in(&args[args.len() - 1], scope)?);
     let mut branches = Vec::new();
     for pair in args[..args.len() - 1].as_chunks::<2>().0 {
-        branches.push((parse(&pair[0])?, parse(&pair[1])?));
+        branches.push((parse_in(&pair[0], scope)?, parse_in(&pair[1], scope)?));
     }
     Ok(Expr::Case { branches, fallback })
 }
 
 /// `["step", input, base, stop, output, ...]`
-fn parse_step(operator: &str, args: &[Value]) -> Result<Expr, ParseError> {
+fn parse_step(operator: &str, args: &[Value], scope: &[String]) -> Result<Expr, ParseError> {
     if args.len() < 4 || !args.len().is_multiple_of(2) {
         return Err(ParseError::Arity {
             operator: operator.to_string(),
@@ -508,14 +603,14 @@ fn parse_step(operator: &str, args: &[Value]) -> Result<Expr, ParseError> {
             got: args.len(),
         });
     }
-    let input = Box::new(parse(&args[0])?);
-    let base = Box::new(parse(&args[1])?);
-    let stops = parse_stops(operator, &args[2..])?;
+    let input = Box::new(parse_in(&args[0], scope)?);
+    let base = Box::new(parse_in(&args[1], scope)?);
+    let stops = parse_stops(operator, &args[2..], scope)?;
     Ok(Expr::Step { input, base, stops })
 }
 
 /// `["interpolate", interpolation, input, stop, output, ...]`
-fn parse_interpolate(operator: &str, args: &[Value]) -> Result<Expr, ParseError> {
+fn parse_interpolate(operator: &str, args: &[Value], scope: &[String]) -> Result<Expr, ParseError> {
     if args.len() < 4 || !args.len().is_multiple_of(2) {
         return Err(ParseError::Arity {
             operator: operator.to_string(),
@@ -559,8 +654,8 @@ fn parse_interpolate(operator: &str, args: &[Value]) -> Result<Expr, ParseError>
         }
     };
 
-    let input = Box::new(parse(&args[1])?);
-    let stops = parse_stops(operator, &args[2..])?;
+    let input = Box::new(parse_in(&args[1], scope)?);
+    let stops = parse_stops(operator, &args[2..], scope)?;
     Ok(Expr::Interpolate {
         interpolation,
         input,
@@ -573,7 +668,11 @@ fn parse_interpolate(operator: &str, args: &[Value]) -> Result<Expr, ParseError>
 /// Ascending order is checked rather than assumed. Both `interpolate` and `step` locate a stop
 /// by binary search, and an out-of-order stop list would make that search return an arbitrary
 /// neighbour — a wrong value from a style that looks perfectly reasonable.
-fn parse_stops(operator: &str, args: &[Value]) -> Result<Vec<(f64, Expr)>, ParseError> {
+fn parse_stops(
+    operator: &str,
+    args: &[Value],
+    scope: &[String],
+) -> Result<Vec<(f64, Expr)>, ParseError> {
     let mut stops = Vec::with_capacity(args.len() / 2);
     let mut previous: Option<f64> = None;
     for pair in args.as_chunks::<2>().0 {
@@ -590,7 +689,7 @@ fn parse_stops(operator: &str, args: &[Value]) -> Result<Vec<(f64, Expr)>, Parse
             });
         }
         previous = Some(position);
-        stops.push((position, parse(&pair[1])?));
+        stops.push((position, parse_in(&pair[1], scope)?));
     }
     Ok(stops)
 }

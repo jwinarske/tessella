@@ -21,6 +21,7 @@ coalesce/null
 collator/comparison-number-error
 collator/equals-non-string-error
 collator/non-object-error
+constant-folding/var
 divide/basic
 equal/mismatch
 equal/null-lhs
@@ -83,6 +84,13 @@ less_or_equal/number
 less_or_equal/string
 less_or_equal/string-and-value
 less_or_equal/value
+let/basic
+let/invalid-name
+let/nested
+let/property-function
+let/shadow
+let/unbound
+let/zoom
 literal/boolean-array
 literal/empty
 literal/infer-empty-array-type
@@ -152,3 +160,4 @@ typecheck/array-item-subtyping
 typecheck/array-length-subtyping
 zoom/basic
 zoom/nested-coalesce
+zoom/nested-let

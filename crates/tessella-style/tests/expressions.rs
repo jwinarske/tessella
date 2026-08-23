@@ -414,3 +414,111 @@ fn literal_protects_data_from_being_parsed() {
         ]))
     );
 }
+
+/// `let` binds names its body can read, and an inner binding shadows an outer one.
+#[test]
+fn let_binds_and_shadows() {
+    assert_eq!(
+        eval(r#"["let", "a", 2, ["*", ["var", "a"], 3]]"#, None, None),
+        Value::Number(6.0)
+    );
+    assert_eq!(
+        eval(
+            r#"["let", "a", 1, ["let", "a", 2, ["var", "a"]]]"#,
+            None,
+            None
+        ),
+        Value::Number(2.0),
+        "the inner binding wins"
+    );
+    assert_eq!(
+        eval(
+            r#"["let", "a", 1, ["+", ["let", "a", 2, ["var", "a"]], ["var", "a"]]]"#,
+            None,
+            None
+        ),
+        Value::Number(3.0),
+        "and the outer one is intact once the inner scope ends"
+    );
+}
+
+/// A later binding can read an earlier one; nothing can read itself.
+#[test]
+fn a_binding_sees_the_ones_before_it() {
+    assert_eq!(
+        eval(
+            r#"["let", "a", 2, "b", ["*", ["var", "a"], 5], ["var", "b"]]"#,
+            None,
+            None
+        ),
+        Value::Number(10.0)
+    );
+
+    let value: Value = serde_json::from_str(r#"["let", "a", ["var", "a"], 1]"#).expect("json");
+    assert!(
+        Expression::parse(&value).is_err(),
+        "a binding must not read itself"
+    );
+}
+
+/// An unbound name is a compile error, not a null at evaluation.
+///
+/// The difference matters at the scale styles run at: a style with this mistake is broken for
+/// every feature of every tile, so one message at load beats a wrong value per feature forever.
+#[test]
+fn an_unbound_variable_is_a_compile_error() {
+    for text in [
+        r#"["var", "nope"]"#,
+        r#"["let", "a", 1, ["var", "b"]]"#,
+        r#"["+", 1, ["var", "a"]]"#,
+    ] {
+        let value: Value = serde_json::from_str(text).expect("json");
+        assert!(
+            Expression::parse(&value).is_err(),
+            "{text} should not parse"
+        );
+    }
+}
+
+/// A variable name looks like an identifier. The suite rejects `$a`.
+#[test]
+fn binding_names_are_identifiers() {
+    for name in ["$a", "1a", "a-b", "", "a b"] {
+        let text = format!(r#"["let", "{name}", 1, ["var", "{name}"]]"#);
+        let value: Value = serde_json::from_str(&text).expect("json");
+        assert!(Expression::parse(&value).is_err(), "{name} should not bind");
+    }
+    for name in ["a", "_a", "a1", "snake_case"] {
+        let text = format!(r#"["let", "{name}", 1, ["var", "{name}"]]"#);
+        let value: Value = serde_json::from_str(&text).expect("json");
+        assert!(Expression::parse(&value).is_ok(), "{name} should bind");
+    }
+}
+
+/// A `let`'s dependency is its bindings' as well as its body's.
+///
+/// Taking only the body would classify `["let", "a", ["get", "x"], ["var", "a"]]` as constant,
+/// which is the misclassification that gives every feature in a layer the first one's value —
+/// the failure this file's header is about, arriving through a binding form.
+#[test]
+fn a_let_inherits_its_bindings_dependencies() {
+    assert_eq!(
+        dependency(r#"["let", "a", ["get", "x"], ["var", "a"]]"#),
+        Dependency::Feature
+    );
+    assert_eq!(
+        dependency(r#"["let", "a", ["zoom"], ["var", "a"]]"#),
+        Dependency::Zoom
+    );
+    assert_eq!(
+        dependency(
+            r#"["let", "a", ["get", "x"], "b", ["zoom"], ["+", ["var", "a"], ["var", "b"]]]"#
+        ),
+        Dependency::ZoomAndFeature
+    );
+    assert_eq!(
+        dependency(r#"["let", "a", 1, ["var", "a"]]"#),
+        Dependency::None,
+        "a constant binding stays constant"
+    );
+}

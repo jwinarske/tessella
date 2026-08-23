@@ -402,6 +402,22 @@ pub enum Expr {
         /// The value asserted.
         value: Box<Expr>,
     },
+    /// `["let", name, value, …, body]`: bind names, then evaluate the body.
+    ///
+    /// Kept as a binding form rather than substituted at parse, which is the other way to
+    /// implement it. Substitution would duplicate a bound expression once per `var` that reads
+    /// it, and evaluating once is the entire reason `let` exists — a style writes it precisely
+    /// when a subexpression is expensive and used several times.
+    Let {
+        /// Names and their values, in order. A later binding may read an earlier one.
+        bindings: Vec<(String, Expr)>,
+        /// The expression evaluated with those names in scope.
+        body: Box<Expr>,
+    },
+    /// `["var", name]`: read a bound name.
+    ///
+    /// Unbound names are rejected at parse, so reaching evaluation means the name is in scope.
+    Var(String),
     /// A pre-expression function: `{"property": …, "type": …, "stops": […]}`.
     ///
     /// The style spec's original way of varying a property, still supported and still common in
@@ -590,7 +606,14 @@ impl Expression {
         zoom: Option<f64>,
         feature: Option<&dyn Feature>,
     ) -> Result<Value, EvaluationError> {
-        evaluate::evaluate(&self.root, &evaluate::Context { zoom, feature })
+        evaluate::evaluate(
+            &self.root,
+            &evaluate::Context {
+                zoom,
+                feature,
+                scope: None,
+            },
+        )
     }
 }
 
@@ -659,6 +682,16 @@ fn classify(expr: &Expr) -> Dependency {
         // A legacy function reads the feature when it names a property and the zoom when it
         // does not. Composite stops — `[{"zoom": z, "value": v}, out]` — read both, which is
         // the case that makes this a lattice join rather than a choice.
+        // A `let` depends on whatever its bindings and body depend on. Taking only the body
+        // would classify `["let", "a", ["get", "x"], ["var", "a"]]` as constant, which is how a
+        // data-driven property gets evaluated once and every feature in the layer gets the
+        // first one's value.
+        Expr::Let { bindings, body } => bindings
+            .iter()
+            .map(|(_, value)| classify(value))
+            .fold(classify(body), Dependency::join),
+        // The binding it reads carries the dependency; the read itself has none.
+        Expr::Var(_) => Dependency::None,
         Expr::Assert { args, .. } => join_all(args),
         Expr::AssertArray { value, .. } => classify(value),
         Expr::LegacyFunction(function) => {
