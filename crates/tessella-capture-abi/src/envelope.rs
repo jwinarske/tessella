@@ -293,10 +293,14 @@ pub struct AttributeDesc {
     pub vertex_offset: u32,
     /// Bytes between consecutive vertices.
     pub stride: u32,
-    /// The type the buffer supplies.
-    pub data_type: AttributeDataType,
-    /// The type the shader declares. Bind this one.
-    pub declared_data_type: AttributeDataType,
+    /// The type the buffer supplies, as an [`AttributeDataType`] discriminant.
+    ///
+    /// Raw rather than the enum, because a record is reconstructed from untrusted bytes and an
+    /// out-of-range discriminant in an enum field is undefined behavior. Read it through
+    /// [`AttributeDesc::data_type`].
+    pub data_type: u8,
+    /// The type the shader declares, as an [`AttributeDataType`] discriminant. Bind this one.
+    pub declared_data_type: u8,
     /// Padding to a 4-byte boundary. Must be zero.
     pub _pad: [u8; 2],
 }
@@ -355,12 +359,13 @@ pub struct GeometryAdd {
     pub segments: Span,
     /// [`TextureRef`] run.
     pub texture_refs: Span,
-    /// Shader family.
-    pub builtin_shader: BuiltIn,
-    /// Vertex type.
-    pub vertex_type: AttributeDataType,
-    /// Why this was announced. Watch [`AddReason::AttributesModified`] (§6.1).
-    pub reason: AddReason,
+    /// Shader family, as a [`BuiltIn`] discriminant.
+    pub builtin_shader: i32,
+    /// Vertex type, as an [`AttributeDataType`] discriminant.
+    pub vertex_type: u8,
+    /// Why this was announced, as an [`AddReason`] discriminant. Watch
+    /// [`AddReason::AttributesModified`] (§6.1).
+    pub reason: u8,
     /// Padding. Must be zero.
     pub _pad: [u8; 2],
 }
@@ -388,8 +393,8 @@ pub struct GeometryRemove {
 pub struct ViewDeclare {
     /// View being declared.
     pub view: ViewId,
-    /// Which side owns this view's camera (DR-9).
-    pub camera_mode: CameraMode,
+    /// Which side owns this view's camera, as a [`CameraMode`] discriminant (DR-9).
+    pub camera_mode: u8,
     /// Padding, reserved. Must be zero.
     ///
     /// This is where the §5.4 per-view `maxzoom` clamp and view class will go — a cluster
@@ -498,8 +503,8 @@ pub struct TextureUpdate {
     /// Pixel bytes for the dirty regions, inline in the payload region. `count` is a byte
     /// count here.
     pub pixels: Span,
-    /// Pixel format.
-    pub format: TexturePixelType,
+    /// Pixel format, as a [`TexturePixelType`] discriminant.
+    pub format: u8,
     /// Number of meaningful entries in `rects`. Zero means a whole-texture upload.
     pub rect_count: u8,
     /// Padding. Must be zero.
@@ -651,6 +656,133 @@ pub struct CameraUpdate {
     /// Padding. Must be zero.
     pub _pad: u32,
 }
+
+impl AttributeDesc {
+    /// The type the buffer supplies, or `None` if the discriminant is not one this build knows.
+    #[must_use]
+    pub const fn data_type(&self) -> Option<AttributeDataType> {
+        AttributeDataType::from_repr(self.data_type)
+    }
+
+    /// The type the shader declares, or `None` if the discriminant is unrecognized.
+    #[must_use]
+    pub const fn declared_data_type(&self) -> Option<AttributeDataType> {
+        AttributeDataType::from_repr(self.declared_data_type)
+    }
+}
+
+impl GeometryAdd {
+    /// The shader family, or `None` if the discriminant is unrecognized.
+    #[must_use]
+    pub const fn builtin_shader(&self) -> Option<BuiltIn> {
+        BuiltIn::from_repr(self.builtin_shader)
+    }
+
+    /// The vertex type, or `None` if the discriminant is unrecognized.
+    #[must_use]
+    pub const fn vertex_type(&self) -> Option<AttributeDataType> {
+        AttributeDataType::from_repr(self.vertex_type)
+    }
+
+    /// Why this geometry was announced, or `None` if the discriminant is unrecognized.
+    #[must_use]
+    pub const fn reason(&self) -> Option<AddReason> {
+        AddReason::from_repr(self.reason)
+    }
+}
+
+impl ViewDeclare {
+    /// Which side owns this view's camera, or `None` if the discriminant is unrecognized.
+    #[must_use]
+    pub const fn camera_mode(&self) -> Option<CameraMode> {
+        CameraMode::from_repr(self.camera_mode)
+    }
+}
+
+impl TextureUpdate {
+    /// The pixel format, or `None` if the discriminant is unrecognized.
+    #[must_use]
+    pub const fn format(&self) -> Option<TexturePixelType> {
+        TexturePixelType::from_repr(self.format)
+    }
+}
+
+/// An envelope record whose `#[repr(C)]` bytes are its wire form.
+///
+/// The bytes a record occupies on the ring are its in-memory bytes: that is the whole premise
+/// of a flat ABI, and it is what the generated C header's `sizeof` and `offsetof` assertions
+/// pin down. So the byte view lives here, in the crate that owns the layout, rather than in
+/// whichever crate happens to need it — a producer serializing field by field would duplicate
+/// the layout knowledge and could drift from the header without anything noticing.
+///
+/// # Safety
+///
+/// Implementors must be `#[repr(C)]`, declare every padding byte as an explicit field, hold no
+/// pointers, and — for [`WireRecord::from_bytes`] to be sound — contain no field with invalid
+/// bit patterns. That last requirement is why no record here stores an enum: an out-of-range
+/// discriminant in an enum field is undefined behavior, not a wrong value, so records carry raw
+/// discriminants and expose them through accessors that go via `from_repr`.
+///
+/// Getting that backwards is easy and was in fact got backwards here first: the ingress rule
+/// was written down, the validating constructors were built, and then the records were given
+/// enum fields that could only be read by bypassing them. It surfaced the moment something
+/// tried to read a record back off the ring.
+pub unsafe trait WireRecord: Copy {
+    /// This record as the bytes the ring carries.
+    fn as_bytes(&self) -> &[u8] {
+        // SAFETY: the trait's contract requires `#[repr(C)]` with all padding written, so
+        // every byte of the value is initialized and reading them is defined.
+        unsafe {
+            core::slice::from_raw_parts(core::ptr::from_ref(self).cast::<u8>(), size_of::<Self>())
+        }
+    }
+
+    /// Reads a record out of bytes taken off the ring.
+    ///
+    /// `None` when there are not enough bytes. Nothing else can fail, because the trait's
+    /// contract confines implementors to fields where every bit pattern is a legal value — the
+    /// enum discriminants a record carries are raw integers here, and turning one into an enum
+    /// is a separate, checked step.
+    ///
+    /// The read is unaligned: a record sits wherever the ring's framing put it, which is
+    /// 16-byte aligned in practice but not something this needs to assume.
+    fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() < size_of::<Self>() {
+            return None;
+        }
+        // SAFETY: the length is checked above, and the trait's contract makes every bit
+        // pattern of `Self` a valid value, so an unaligned read of those bytes is defined.
+        Some(unsafe { core::ptr::read_unaligned(bytes.as_ptr().cast::<Self>()) })
+    }
+}
+
+macro_rules! wire_records {
+    ($($record:ty),* $(,)?) => {
+        $(
+            // SAFETY: each is `#[repr(C)]` with explicit padding fields, asserted below.
+            unsafe impl WireRecord for $record {}
+        )*
+    };
+}
+
+wire_records!(
+    GeometryAdd,
+    GeometryRemove,
+    ViewDeclare,
+    ViewUndeclare,
+    ViewUse,
+    ViewRelease,
+    UboUpdate,
+    TextureUpdate,
+    StencilTiles,
+    StencilTile,
+    OrderEntry,
+    OrderUpdate,
+    CameraUpdate,
+    AttributeDesc,
+    Segment,
+    TextureRef,
+);
 
 const _: () = {
     // Layout is protocol. These fire at compile time, on every target, which is how R-6

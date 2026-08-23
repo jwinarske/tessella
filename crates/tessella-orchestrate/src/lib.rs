@@ -17,14 +17,19 @@
 //! orchestrator does not run a frame for a view whose transform is unchanged and whose
 //! sources report no churn (§6.5).
 //!
-//! Status: one tile's buckets build from a style and its features. The ring emission, damage
-//! gates, draw order and UBO packing are not implemented.
+//! Status: one tile's buckets build from a style and its features, and encode into geometry
+//! envelopes on the ring. Damage gates, draw order and UBO packing are not implemented.
 
-#![forbid(unsafe_code)]
+// Not `forbid`: `emit` reinterprets `#[repr(C)]` envelope records as bytes to put them on the
+// ring, which is the one thing this crate does that cannot be expressed safely. Everything
+// else is safe, and `deny` keeps any new unsafe deliberate.
+#![deny(unsafe_code)]
 #![cfg_attr(not(test), no_std)]
 
 extern crate alloc;
 
+pub mod emit;
 pub mod tile;
 
+pub use emit::{Encoded, SlabArena, encode_fill};
 pub use tile::{Content, LayerBucket, TileError, TileId, build_tile};
