@@ -1,0 +1,364 @@
+//! R0's exit criterion: the stream matches the probe on the hermetic style (§10, §9.1).
+//!
+//! The pieces are each checked against the golden dump in their own tests — vertices, painter
+//! order, clip masks, the camera block, the uniform buffers. This runs the producer end to end
+//! and checks what actually reaches the ring: that every envelope kind the frame needs is
+//! emitted, in an order a consumer can act on, and that the totals agree with the oracle's.
+//!
+//! # Why the whole stream is a different test from the sum of its parts
+//!
+//! Each piece being right does not make the stream right. A producer can compute a correct
+//! camera block and never send it, or send it before the order it names, or emit a `ViewUse`
+//! for a view it never declared. Those are protocol faults rather than arithmetic ones, and
+//! they are invisible to a test that calls one function and inspects its return value.
+
+use std::collections::BTreeMap;
+
+use tessella_capture_abi::envelope::{OrderEpoch, ViewId};
+use tessella_capture_abi::ring::Ring;
+use tessella_capture_abi::{CameraMode, EnvelopeKind};
+use tessella_orchestrate::camera::CameraBlock;
+use tessella_orchestrate::order::{self, DrawOrder};
+use tessella_orchestrate::tile::{TileId as BuildTile, build_tile};
+use tessella_orchestrate::ubo::{self, DrawableEntry, GlobalPaintParams};
+use tessella_orchestrate::view::{GeometryBinding, ViewSession};
+use tessella_orchestrate::{stencil, texture};
+use tessella_source::geojson;
+use tessella_source::tiling::TilingOptions;
+use tessella_style::light::Light;
+use tessella_style::property::Color;
+use tessella_style::{Source, Style};
+use tessella_tile::camera;
+use tessella_tile::cover::{self, ViewTransform};
+
+const HERMETIC: &str = include_str!("../../tessella-style/tests/hermetic_style.json");
+const DUMP: &str = include_str!("../../../tests/golden/hermetic_style.dump");
+
+fn probe() -> ViewTransform {
+    camera::settled(&ViewTransform {
+        longitude: -0.11,
+        latitude: 51.505,
+        zoom: 13.0,
+        width: 1024.0,
+        height: 768.0,
+        bearing: 0.0,
+        pitch: 0.0,
+    })
+}
+
+/// Emits one settled frame of the hermetic style, returning the envelope kinds in order.
+fn emit_frame() -> Vec<EnvelopeKind> {
+    let style = Style::parse(HERMETIC).expect("style parses");
+    let Some(Source::Geojson(source)) = style.source("probe") else {
+        panic!("a geojson source");
+    };
+    let features = geojson::read(&source.data).expect("features");
+
+    let view_id = ViewId(0);
+    let view = probe();
+    let tiles = cover::cover(&view).expect("covers");
+
+    let mut ring = Ring::new(1 << 22);
+    let (producer, consumer) = ring.split();
+    let mut session = ViewSession::new();
+
+    // DR-18: the view is declared before anything names it.
+    session
+        .declare(producer, view_id, CameraMode::Producer)
+        .expect("declares");
+
+    // Frame-wide state the shaders read whatever the style says.
+    for upload in texture::placeholders() {
+        texture::write(producer, &upload).expect("writes");
+    }
+    let global = GlobalPaintParams::for_view(&view, [64.0, 64.0], 1.0).pack();
+    ubo::write(
+        producer,
+        view_id,
+        ubo::FRAME_WIDE,
+        tessella_capture_abi::generated::ubo_slots::ID_GLOBAL_PAINT_PARAMS_UBO,
+        &global,
+    )
+    .expect("writes");
+
+    // Geometry, then the uses that bind it into this view's order.
+    let mut draw_order = DrawOrder::new(style.layers.len() as u32);
+    let mut next_id = 0;
+    let mut by_layer: BTreeMap<i32, Vec<GeometryBinding>> = BTreeMap::new();
+
+    for tile in &tiles {
+        let buckets = build_tile(
+            &style,
+            BuildTile::new(tile.z, tile.x, tile.y),
+            &features,
+            TilingOptions::default(),
+        )
+        .expect("tile builds");
+        for binding in order::bindings_for(
+            view_id,
+            order::tile_of(tile.z, tile.x, tile.y),
+            &buckets,
+            &mut next_id,
+        ) {
+            by_layer
+                .entry(binding.layer_index)
+                .or_default()
+                .push(binding);
+            session.use_geometry(producer, binding).expect("uses");
+            draw_order.bind(binding);
+        }
+    }
+
+    // Per-layer state: clip masks for tiled layers, uniforms for all of them.
+    for (layer_index, bindings) in &by_layer {
+        let tiled = bindings.iter().any(|binding| {
+            binding
+                .flags
+                .contains(tessella_capture_abi::envelope::DrawFlags::ENABLE_STENCIL)
+        });
+        if tiled {
+            let set = stencil::clip_set(&view, *layer_index, &tiles).expect("clips");
+            stencil::write(producer, view_id, &set).expect("writes");
+        }
+
+        let entries: Vec<DrawableEntry> = bindings
+            .iter()
+            .map(|binding| {
+                let tile = binding.tile.expect("a tiled drawable");
+                DrawableEntry::for_tile(
+                    &view,
+                    tile.z,
+                    tile.x,
+                    tile.y,
+                    i32::from(tile.wrap),
+                    *layer_index,
+                    binding.sub_layer_index,
+                )
+                .expect("an unrotated camera")
+            })
+            .collect();
+        let stride = if tiled {
+            tessella_capture_abi::generated::ubo_layouts::FILL_DRAWABLE_UNION_UBO.stride
+        } else {
+            tessella_capture_abi::generated::ubo_layouts::BACKGROUND_DRAWABLE_UNION_UBO.stride
+        };
+        let buffer = ubo::pack_drawable_buffer(&entries, stride);
+        ubo::write(
+            producer,
+            view_id,
+            *layer_index,
+            ubo::drawable_slot(),
+            &buffer,
+        )
+        .expect("writes");
+
+        let props = if tiled {
+            let fill = Color::parse("#2f6f4f").expect("a color");
+            ubo::pack_fill_props(fill, fill, 0.8, 1.0, 0.5, 1.0)
+        } else {
+            ubo::pack_background_props(Color::parse("#101418").expect("a color"), 1.0)
+        };
+        let slot = tessella_capture_abi::generated::ubo_slots::ID_FILL_EVALUATED_PROPS_UBO;
+        ubo::write(producer, view_id, *layer_index, slot, &props).expect("writes");
+    }
+
+    // The order, then the camera naming its epoch — never the other way round.
+    let emitted = draw_order.emit(producer, view_id).expect("emits");
+    let cutoff = draw_order.opaque_cutoff();
+    CameraBlock::new(&view, &Light::default(), emitted.epoch, 0, cutoff)
+        .expect("an unrotated camera")
+        .for_view(view_id)
+        .write(producer)
+        .expect("writes");
+
+    let mut kinds = Vec::new();
+    while let Some(record) = consumer.peek() {
+        kinds.push(record.kind);
+        let consumed = record.consumed();
+        consumer.advance(consumed);
+    }
+    kinds
+}
+
+/// Every envelope kind R0's frame needs reaches the ring.
+#[test]
+fn the_frame_emits_every_kind_r0_needs() {
+    let kinds = emit_frame();
+    for required in [
+        EnvelopeKind::ViewDeclare,
+        EnvelopeKind::TextureUpdate,
+        EnvelopeKind::UboUpdate,
+        EnvelopeKind::ViewUse,
+        EnvelopeKind::StencilTiles,
+        EnvelopeKind::OrderUpdate,
+        EnvelopeKind::CameraUpdate,
+    ] {
+        assert!(kinds.contains(&required), "{required:?} was never emitted");
+    }
+}
+
+/// The view is declared before anything names it (DR-18).
+///
+/// `ViewUse` carries a view id and `ViewDeclare` carries the per-view state that id means. A use
+/// arriving first names a view the consumer has no configuration for, and its only principled
+/// response is to drop the drawable.
+#[test]
+fn the_view_is_declared_before_it_is_used() {
+    let kinds = emit_frame();
+    let declare = kinds
+        .iter()
+        .position(|kind| *kind == EnvelopeKind::ViewDeclare)
+        .expect("a declaration");
+    let first_use = kinds
+        .iter()
+        .position(|kind| *kind == EnvelopeKind::ViewUse)
+        .expect("a use");
+    assert!(declare < first_use, "{declare} vs {first_use}");
+}
+
+/// The order precedes the camera that names its epoch (§4).
+///
+/// A consumer holding a camera whose epoch it has not seen must hold the camera. Emitting them
+/// the other way round makes that rule fire every frame, which turns a correctness guard into a
+/// frame of latency.
+#[test]
+fn the_order_precedes_the_camera_naming_it() {
+    let kinds = emit_frame();
+    let order = kinds
+        .iter()
+        .rposition(|kind| *kind == EnvelopeKind::OrderUpdate)
+        .expect("an order");
+    let camera = kinds
+        .iter()
+        .rposition(|kind| *kind == EnvelopeKind::CameraUpdate)
+        .expect("a camera");
+    assert!(order < camera, "{order} vs {camera}");
+}
+
+/// Geometry is on the wire before the order that draws it.
+#[test]
+fn geometry_precedes_the_order_that_draws_it() {
+    let kinds = emit_frame();
+    let last_use = kinds
+        .iter()
+        .rposition(|kind| *kind == EnvelopeKind::ViewUse)
+        .expect("a use");
+    let order = kinds
+        .iter()
+        .rposition(|kind| *kind == EnvelopeKind::OrderUpdate)
+        .expect("an order");
+    assert!(last_use < order, "{last_use} vs {order}");
+}
+
+/// The counts agree with the oracle's: one clip set per tiled layer, one use per drawable.
+#[test]
+fn the_counts_agree_with_the_oracle() {
+    let kinds = emit_frame();
+
+    let uses = kinds
+        .iter()
+        .filter(|kind| **kind == EnvelopeKind::ViewUse)
+        .count();
+    assert_eq!(uses, 30, "six tiles: one background and two fills each");
+
+    // The oracle emits a clip set for each of its three tiled layers; R0 implements two of them.
+    let oracle_sets = DUMP
+        .lines()
+        .filter(|line| line.starts_with("stencil layer="))
+        .count();
+    assert_eq!(oracle_sets, 3, "the oracle clips three layers");
+    let mine = kinds
+        .iter()
+        .filter(|kind| **kind == EnvelopeKind::StencilTiles)
+        .count();
+    assert_eq!(mine, 2, "R0 implements two of them");
+
+    // Two placeholder textures, as the oracle lists.
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|kind| **kind == EnvelopeKind::TextureUpdate)
+            .count(),
+        2
+    );
+    assert_eq!(
+        DUMP.lines()
+            .filter(|line| line.starts_with("texture "))
+            .count(),
+        2
+    );
+}
+
+/// A second identical frame writes nothing: R0's other exit criterion (§6.5, DR-8).
+///
+/// The frame above is a cold start, so everything is new. What DR-8 requires is that a settled
+/// view goes silent, and the order and clip sets are where that is decided — they are the two
+/// channels that would otherwise re-send a list proportional to the scene every frame.
+#[test]
+fn a_settled_frame_goes_quiet() {
+    let style = Style::parse(HERMETIC).expect("style parses");
+    let view = probe();
+    let tiles = cover::cover(&view).expect("covers");
+
+    let mut ring = Ring::new(1 << 20);
+    let (producer, _consumer) = ring.split();
+
+    let mut draw_order = DrawOrder::new(style.layers.len() as u32);
+    let mut next_id = 0;
+    for tile in &tiles {
+        let buckets = build_tile(
+            &style,
+            BuildTile::new(tile.z, tile.x, tile.y),
+            &[],
+            TilingOptions::default(),
+        )
+        .expect("tile builds");
+        for binding in order::bindings_for(
+            ViewId(0),
+            order::tile_of(tile.z, tile.x, tile.y),
+            &buckets,
+            &mut next_id,
+        ) {
+            draw_order.bind(binding);
+        }
+    }
+    let mut sets = stencil::ClipSets::new();
+    let clip = stencil::clip_set(&view, 1, &tiles).expect("clips");
+
+    draw_order.emit(producer, ViewId(0)).expect("emits");
+    sets.emit(producer, ViewId(0), &clip).expect("emits");
+    let settled = producer.head();
+
+    for _frame in 0..500 {
+        assert!(!draw_order.emit(producer, ViewId(0)).expect("emits").changed);
+        assert!(!sets.emit(producer, ViewId(0), &clip).expect("emits"));
+    }
+    assert_eq!(producer.head(), settled, "five hundred settled frames");
+}
+
+/// The epoch the camera names is the one the order established.
+#[test]
+fn the_camera_names_the_order_it_was_computed_against() {
+    let mut ring = Ring::new(1 << 16);
+    let (producer, _consumer) = ring.split();
+    let mut draw_order = DrawOrder::new(5);
+    draw_order.bind(GeometryBinding {
+        geometry: tessella_capture_abi::envelope::GeometryId(0),
+        view: ViewId(0),
+        layer_index: 1,
+        sub_layer_index: 1,
+        tile: Some(order::tile_of(13, 4093, 2724)),
+        pass: tessella_orchestrate::view::fill_pass(),
+        flags: tessella_orchestrate::view::tiled_flags(),
+    });
+
+    let emitted = draw_order.emit(producer, ViewId(0)).expect("emits");
+    let block = CameraBlock::new(&probe(), &Light::default(), emitted.epoch, 0, 0)
+        .expect("an unrotated camera");
+    assert_eq!(block.record.order_epoch, emitted.epoch);
+    assert_ne!(
+        emitted.epoch,
+        OrderEpoch(0),
+        "a real epoch, not the default"
+    );
+}

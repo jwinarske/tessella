@@ -30,8 +30,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use tessella_capture_abi::envelope::{
-    AddReason, AttributeDesc, GeometryAdd, GeometryId, Segment as AbiSegment, SlabRef, Span,
-    WireRecord,
+    AddReason, AttributeDesc, GeometryAdd, GeometryId, GeometryRemove, Segment as AbiSegment,
+    SlabRef, Span, WireRecord,
 };
 use tessella_capture_abi::ring::{Full, Producer};
 use tessella_capture_abi::{AttributeDataType, BuiltIn, EnvelopeKind};
@@ -282,6 +282,22 @@ pub fn write(producer: &mut Producer, encoded: &Encoded) -> Result<(), Full> {
         encoded.record.as_bytes(),
         &encoded.payload,
     )
+}
+
+/// Drops a shared geometry.
+///
+/// Emitted when the last view releases it, not when one does: geometry is process-scoped and
+/// refcounted (§5.3), so a remove sent on the first release would pull a tile out from under
+/// every other view still drawing it. The caller owns the refcount; this is only the envelope.
+///
+/// # Errors
+///
+/// [`Full`] when the ring cannot take it. Geometry is lossless, so the caller retries rather
+/// than dropping (§4) — and dropping a remove in particular would leak the geometry at the
+/// consumer for as long as the stream lives.
+pub fn remove(producer: &mut Producer, geometry: GeometryId) -> Result<(), Full> {
+    let record = GeometryRemove { geometry };
+    producer.write(EnvelopeKind::GeometryRemove, record.as_bytes(), &[])
 }
 
 /// Appends `items` to the payload and returns the span addressing them.

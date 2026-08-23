@@ -37,6 +37,7 @@ pub mod emit;
 pub mod order;
 pub mod stencil;
 pub mod sweep;
+pub mod texture;
 pub mod tile;
 pub mod ubo;
 pub mod view;
