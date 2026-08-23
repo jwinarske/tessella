@@ -28,7 +28,26 @@
 //! pitched view as its bounding rectangle would cover a vast area cheaply and wrongly, fetching
 //! tiles that are never drawn, so [`cover`] reports the limitation rather than guessing at it.
 
+use std::collections::BTreeSet;
+
 use crate::projection;
+
+/// The highest zoom a cover is computed at.
+///
+/// A structural ceiling, not a policy one: tile indices are `u32`, so beyond z31 an address
+/// cannot be represented, and `1u32 << z` stops being a shift at all. Thirty leaves a level of
+/// headroom below that edge and sits well above the z22-ish where tile data actually ends. The
+/// per-view `maxzoom` clamp of §5.4 is the policy limit and belongs above this, not here.
+pub const MAX_ZOOM: u8 = 30;
+
+/// The most tiles a single view's cover may contain.
+///
+/// A bound on work, not on geography. The tile loop is quadratic in the viewport's extent, so a
+/// viewport of ten million pixels asks for four hundred million tiles and the loop becomes an
+/// out-of-memory rather than an answer. Real covers are tens of tiles — a 4K display at any zoom
+/// is well under a hundred — so this sits three orders of magnitude above the working range and
+/// only ever fires on a viewport that is wrong.
+pub const MAX_TILES: usize = 4096;
 
 /// A tile address in a cover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -68,11 +87,16 @@ impl ViewTransform {
     /// Floor, not round: a view at zoom 13.9 draws z13 tiles scaled up, because the next level
     /// does not exist yet at that fraction. Rounding would fetch z14 for the top tenth of every
     /// level and throw the work away on the way back down.
+    ///
+    /// Clamped to [`MAX_ZOOM`]. A camera is not necessarily trustworthy — with DR-9 it is the
+    /// consumer's ECS that owns it and the value arrives over the reverse channel — and an
+    /// unclamped zoom of 40 reaches `1u32 << 40`, which is a shift overflow rather than a large
+    /// cover. Saturating `as u8` turns an absurd zoom into 255 and makes that worse, not better.
     #[must_use]
     pub fn tile_zoom(&self) -> u8 {
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         {
-            self.zoom.max(0.0).floor() as u8
+            self.zoom.clamp(0.0, f64::from(MAX_ZOOM)).floor() as u8
         }
     }
 }
@@ -87,6 +111,16 @@ pub enum CoverError {
     /// would fetch a great many tiles that are never drawn.
     #[error("pitched views need a frustum cover, which is not implemented")]
     Pitched,
+    /// The viewport asks for more tiles than [`MAX_TILES`].
+    ///
+    /// Reported rather than truncated. A silently truncated cover is a map with a missing
+    /// corner, and the §13.3 coverage walk would then be measuring a hole this function chose
+    /// to create.
+    #[error("cover of {tiles} tiles exceeds the {MAX_TILES} limit")]
+    TooLarge {
+        /// How many tiles were asked for.
+        tiles: u64,
+    },
 }
 
 /// The tiles a view needs at its integer zoom.
@@ -133,6 +167,16 @@ pub fn cover(view: &ViewTransform) -> Result<Vec<TileCoord>, CoverError> {
     #[allow(clippy::cast_possible_truncation)]
     let (y0, y1) = (min_y.floor() as i64, max_y.floor() as i64);
 
+    // Checked before the loop rather than inside it: the point is not to stop after four
+    // thousand tiles but never to begin. Widening to u64 keeps the multiply from wrapping on the
+    // very input that makes it large.
+    let span_x = (x1 - x0 + 1).max(0) as u64;
+    let span_y = (y1 - y0 + 1).max(0) as u64;
+    let demanded = span_x.saturating_mul(span_y);
+    if demanded > MAX_TILES as u64 {
+        return Err(CoverError::TooLarge { tiles: demanded });
+    }
+
     for y in y0..=y1 {
         // Latitude does not wrap. A viewport extending past the pole sees empty space there,
         // not the other side of the world, so those rows are dropped rather than clamped —
@@ -160,6 +204,97 @@ pub fn cover(view: &ViewTransform) -> Result<Vec<TileCoord>, CoverError> {
 
     tiles.sort_unstable();
     Ok(tiles)
+}
+
+/// A viewport sample that no tile in a cover contains.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Gap {
+    /// Where in the viewport, as a fraction of width and height from the top left.
+    pub screen: [f64; 2],
+    /// Which tile the sample landed in.
+    pub tile: TileCoord,
+}
+
+/// Walks a viewport looking for points no tile in `tiles` covers (§13.3, coverage completeness).
+///
+/// # What a gap means
+///
+/// Every pixel of a map has to come from some tile. A cover that misses one leaves a hole that
+/// renders as background — the symptom §13.3 calls an uncovered frame — and it is the failure a
+/// zoom sweep produces, because each level change recomputes the cover from scratch and an
+/// off-by-one at a boundary shows up for exactly the frames that straddle it.
+///
+/// # What this proves and what it does not
+///
+/// For a bearing of zero the cover is the bounding box of the four corners, so an interior
+/// sample being inside it is close to arithmetic identity. The walker earns its place at the
+/// edges and in the cases the bounding box does not decide: the `floor` at each boundary, the
+/// wrap arithmetic across the antimeridian, and the fractional-zoom scale. Those are where a
+/// cover goes wrong, and they are all boundary conditions a corner check passes over.
+///
+/// Samples outside the world vertically are not gaps. A viewport past the pole sees empty space,
+/// and [`cover`] drops those rows deliberately rather than clamping them; counting them as gaps
+/// would demand tiles that do not exist.
+///
+/// `steps` is the sample grid per axis. It should exceed the tile count across the viewport, or
+/// the walk can step over a missing column entirely.
+///
+/// # Errors
+///
+/// [`CoverError::Pitched`] when the view has pitch, matching [`cover`].
+pub fn coverage_gaps(
+    view: &ViewTransform,
+    tiles: &[TileCoord],
+    steps: usize,
+) -> Result<Vec<Gap>, CoverError> {
+    if view.pitch.abs() > f64::EPSILON {
+        return Err(CoverError::Pitched);
+    }
+
+    let z = view.tile_zoom();
+    let world = f64::from(1u32 << z);
+    let centre = projection::tile_units(view.longitude, view.latitude, z);
+    let scale = (view.zoom - f64::from(z)).exp2();
+    let half_width = view.width / (2.0 * projection::TILE_SIZE * scale);
+    let half_height = view.height / (2.0 * projection::TILE_SIZE * scale);
+
+    let present: BTreeSet<(u32, u32)> = tiles.iter().map(|t| (t.x, t.y)).collect();
+    let radians = view.bearing.to_radians();
+    let (sin, cos) = radians.sin_cos();
+
+    let mut gaps = Vec::new();
+    let divisor = steps.max(1) as f64;
+    for row in 0..=steps.max(1) {
+        for column in 0..=steps.max(1) {
+            let (u, v) = (column as f64 / divisor, row as f64 / divisor);
+
+            // The same transform the corners take, so a gap is a real disagreement rather than
+            // two different ideas of where the viewport is.
+            let (dx, dy) = ((u - 0.5) * 2.0 * half_width, (v - 0.5) * 2.0 * half_height);
+            let x = centre[0] + (dx * cos - dy * sin);
+            let y = centre[1] + (dx * sin + dy * cos);
+
+            let row_index = y.floor();
+            if row_index < 0.0 || row_index >= world {
+                continue;
+            }
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let (tile_x, tile_y) = (x.rem_euclid(world).floor() as u32, row_index as u32);
+            if !present.contains(&(tile_x, tile_y)) {
+                #[allow(clippy::cast_possible_truncation)]
+                gaps.push(Gap {
+                    screen: [u, v],
+                    tile: TileCoord {
+                        z,
+                        x: tile_x,
+                        y: tile_y,
+                        wrap: (x / world).floor() as i32,
+                    },
+                });
+            }
+        }
+    }
+    Ok(gaps)
 }
 
 /// The four corners of a half-extent rectangle, rotated by a bearing.
@@ -354,5 +489,175 @@ mod tests {
 
         assert!(shared > 0, "they overlap");
         assert!(shared < a.len(), "but are not identical");
+    }
+
+    /// The probe's own cover leaves no hole in the probe's own viewport.
+    #[test]
+    fn a_cover_covers_the_view_it_was_computed_for() {
+        let view = probe_view();
+        let tiles = cover(&view).expect("covers");
+        let gaps = coverage_gaps(&view, &tiles, 64).expect("walks");
+        assert!(gaps.is_empty(), "{gaps:?}");
+    }
+
+    /// And the walker finds a hole when there is one, which is what makes the test above mean
+    /// something. A walker that returned empty unconditionally would pass every sweep frame.
+    #[test]
+    fn the_walker_detects_a_missing_tile() {
+        let view = probe_view();
+        let full = cover(&view).expect("covers");
+        let punctured: Vec<TileCoord> = full
+            .iter()
+            .copied()
+            .filter(|t| !(t.x == 4093 && t.y == 2724))
+            .collect();
+
+        let gaps = coverage_gaps(&view, &punctured, 64).expect("walks");
+        assert!(!gaps.is_empty(), "a removed tile is a hole");
+        assert!(
+            gaps.iter().all(|g| g.tile.x == 4093 && g.tile.y == 2724),
+            "and the hole names the tile that is missing: {gaps:?}"
+        );
+    }
+
+    /// Fractional zoom is where a cover most easily comes up short, because the viewport is
+    /// sized in tiles that are no longer 512 pixels on screen. Ignoring the fraction would under-
+    /// or over-fetch, and the under-fetch half of that is a hole.
+    #[test]
+    fn fractional_zoom_leaves_no_hole() {
+        for tenths in 0..10 {
+            let mut view = probe_view();
+            view.zoom = 13.0 + f64::from(tenths) / 10.0;
+            let tiles = cover(&view).expect("covers");
+            let gaps = coverage_gaps(&view, &tiles, 64).expect("walks");
+            assert!(gaps.is_empty(), "at zoom {}: {gaps:?}", view.zoom);
+        }
+    }
+
+    /// A rotated viewport is covered by the bounding box of its rotated corners, at every
+    /// bearing rather than the axis-aligned ones that happen to be easy.
+    #[test]
+    fn every_bearing_leaves_no_hole() {
+        for degrees in (0..360).step_by(15) {
+            let mut view = probe_view();
+            view.bearing = f64::from(degrees);
+            let tiles = cover(&view).expect("covers");
+            let gaps = coverage_gaps(&view, &tiles, 64).expect("walks");
+            assert!(gaps.is_empty(), "at bearing {degrees}: {gaps:?}");
+        }
+    }
+
+    /// The antimeridian, where the wrap arithmetic decides whether the right half of the screen
+    /// is covered or blank.
+    #[test]
+    fn a_view_across_the_antimeridian_leaves_no_hole() {
+        let mut view = probe_view();
+        view.longitude = 179.98;
+        view.zoom = 13.0;
+        let tiles = cover(&view).expect("covers");
+        let gaps = coverage_gaps(&view, &tiles, 64).expect("walks");
+        assert!(gaps.is_empty(), "{gaps:?}");
+        assert!(
+            tiles.iter().any(|t| t.wrap != 0),
+            "and it genuinely straddles: {tiles:?}"
+        );
+    }
+
+    /// A view over the pole sees empty space above it, not tiles. Those rows are dropped, and
+    /// the walker must agree that dropped is correct rather than reporting the sky as a hole.
+    #[test]
+    fn space_beyond_the_pole_is_not_a_hole() {
+        let view = ViewTransform {
+            latitude: 85.0,
+            zoom: 2.0,
+            ..probe_view()
+        };
+        let tiles = cover(&view).expect("covers");
+        let gaps = coverage_gaps(&view, &tiles, 64).expect("walks");
+        assert!(gaps.is_empty(), "{gaps:?}");
+        assert!(tiles.iter().all(|t| t.y < 4), "no row outside the world");
+    }
+
+    #[test]
+    fn a_pitched_walk_is_refused_like_a_pitched_cover() {
+        let view = ViewTransform {
+            pitch: 30.0,
+            ..probe_view()
+        };
+        assert_eq!(coverage_gaps(&view, &[], 8), Err(CoverError::Pitched));
+    }
+
+    /// An absurd zoom is clamped, not shifted. `1u32 << 40` is a shift overflow rather than a
+    /// large number, and with DR-9 the camera arrives from the consumer rather than from here.
+    #[test]
+    fn an_absurd_zoom_is_clamped_rather_than_shifted() {
+        for zoom in [40.0, 255.0, 1e9, f64::INFINITY] {
+            let view = ViewTransform {
+                zoom,
+                ..probe_view()
+            };
+            assert_eq!(view.tile_zoom(), MAX_ZOOM, "at zoom {zoom}");
+            // The point of the clamp: this call must return rather than panic.
+            let tiles = cover(&view);
+            assert!(tiles.is_ok() || tiles == Err(CoverError::TooLarge { tiles: 0 }));
+        }
+    }
+
+    /// Negative and non-finite zooms land at the bottom of the range instead of wrapping through
+    /// the `as u8` cast, which would turn -1.0 into 0 but 1e9 into 255.
+    #[test]
+    fn zoom_below_the_range_is_clamped_too() {
+        for zoom in [-1.0, -1e9, f64::NEG_INFINITY] {
+            let view = ViewTransform {
+                zoom,
+                ..probe_view()
+            };
+            assert_eq!(view.tile_zoom(), 0, "at zoom {zoom}");
+        }
+        // NaN has no ordering, so `clamp` is not defined on it; `tile_zoom` must still produce a
+        // usable level rather than an arbitrary one.
+        let nan = ViewTransform {
+            zoom: f64::NAN,
+            ..probe_view()
+        };
+        assert!(nan.tile_zoom() <= MAX_ZOOM);
+    }
+
+    /// A viewport large enough to ask for hundreds of millions of tiles is refused before the
+    /// loop starts, rather than answered by exhausting memory.
+    #[test]
+    fn an_enormous_viewport_is_refused_not_enumerated() {
+        let view = ViewTransform {
+            width: 1e7,
+            height: 1e7,
+            zoom: 0.0,
+            ..probe_view()
+        };
+        match cover(&view) {
+            Err(CoverError::TooLarge { tiles }) => {
+                assert!(tiles > MAX_TILES as u64, "{tiles}");
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    /// And the limit does not fire on anything real. A 4K viewport at every level of the §13.3
+    /// sweep stays far below it, so the bound is a guard rather than a ceiling on use.
+    #[test]
+    fn a_real_viewport_is_nowhere_near_the_limit() {
+        for zoom in 0..=22 {
+            let view = ViewTransform {
+                width: 3840.0,
+                height: 2160.0,
+                zoom: f64::from(zoom),
+                ..probe_view()
+            };
+            let tiles = cover(&view).expect("a 4K viewport covers");
+            assert!(
+                tiles.len() < MAX_TILES / 32,
+                "z{zoom} wanted {} tiles",
+                tiles.len()
+            );
+        }
     }
 }

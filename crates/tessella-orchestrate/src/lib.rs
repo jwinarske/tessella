@@ -33,6 +33,7 @@ pub mod binder;
 pub mod counters;
 pub mod damage;
 pub mod emit;
+pub mod sweep;
 pub mod tile;
 pub mod view;
 

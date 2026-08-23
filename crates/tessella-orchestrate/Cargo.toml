@@ -28,3 +28,7 @@ serde_json.workspace = true
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "four_view_sweep"
+harness = false

@@ -39,6 +39,11 @@ jobs:
       - run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+      # The section 13.3 sweep harness. Run rather than merely compiled: its correctness half
+      # is asserted in tests, but the timing half rots silently if nothing executes it, and it
+      # is the harness the RK3566 measurement will use.
+      - name: four-view sweep harness
+        run: cargo bench --workspace
 
   abi-header:
     # The generated C header is the boundary between the Rust producer and a C++ mirror
