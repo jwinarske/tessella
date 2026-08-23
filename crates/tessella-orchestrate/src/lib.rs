@@ -17,6 +17,14 @@
 //! orchestrator does not run a frame for a view whose transform is unchanged and whose
 //! sources report no churn (§6.5).
 //!
-//! Status: scaffold. No implementation yet.
+//! Status: one tile's buckets build from a style and its features. The ring emission, damage
+//! gates, draw order and UBO packing are not implemented.
 
 #![forbid(unsafe_code)]
+#![cfg_attr(not(test), no_std)]
+
+extern crate alloc;
+
+pub mod tile;
+
+pub use tile::{Content, LayerBucket, TileError, TileId, build_tile};

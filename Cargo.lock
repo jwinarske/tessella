@@ -707,6 +707,7 @@ dependencies = [
  "tessella-source",
  "tessella-style",
  "tessella-tile",
+ "thiserror",
 ]
 
 [[package]]
