@@ -11,6 +11,7 @@ homepage.workspace = true
 publish = false
 
 [dependencies]
+thiserror.workspace = true
 glam.workspace = true
 
 [lints]
