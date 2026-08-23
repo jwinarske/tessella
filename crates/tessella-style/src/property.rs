@@ -339,7 +339,36 @@ pub fn resolve_paint(
     layer: &Layer,
 ) -> Result<BTreeMap<&'static str, ResolvedProperty>, PropertyError> {
     let specs = paint_specs(&layer.kind).unwrap_or(&[]);
-    resolve(specs, &layer.paint)
+    let mut resolved = resolve(specs, &layer.paint)?;
+    apply_layer_rules(layer, &mut resolved);
+    Ok(resolved)
+}
+
+/// Applies the defaults that are layer logic rather than table entries.
+///
+/// The spec says `fill-outline-color` defaults to `fill-color`, and mbgl implements that in the
+/// fill layer rather than in the property's default — which is why the table gives it
+/// transparent. Copying the *resolved* fill-color across, expression and binding together, is
+/// what makes it right: when `fill-color` is data-driven the outline is data-driven too, and
+/// needs a vertex attribute rather than a uniform.
+///
+/// Found by the oracle rather than by reading the spec. The golden dump's data-driven fill
+/// drawable carries `fill-outline-color` as an attribute at offset 12 even though the style
+/// never mentions it, which is only explicable if it inherited the binding along with the
+/// value. Treating it as its own constant default gave a stride of 12 where the oracle has 20.
+fn apply_layer_rules(layer: &Layer, resolved: &mut BTreeMap<&'static str, ResolvedProperty>) {
+    if layer.kind != LayerKind::Fill || layer.paint.contains_key("fill-outline-color") {
+        return;
+    }
+    let Some(fill_color) = resolved.get("fill-color").cloned() else {
+        return;
+    };
+    if let Some(outline) = resolved.get_mut("fill-outline-color") {
+        // The spec entry belongs to `fill-outline-color`; only the value and how it binds are
+        // inherited.
+        outline.expression = fill_color.expression;
+        outline.binding = fill_color.binding;
+    }
 }
 
 /// Every layout property of a layer, resolved against its spec.

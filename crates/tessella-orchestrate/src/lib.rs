@@ -28,8 +28,10 @@
 
 extern crate alloc;
 
+pub mod binder;
 pub mod emit;
 pub mod tile;
 
+pub use binder::{BoundAttribute, VertexLayout, pack_color};
 pub use emit::{Encoded, SlabArena, encode_fill};
 pub use tile::{Content, LayerBucket, TileError, TileId, build_tile};

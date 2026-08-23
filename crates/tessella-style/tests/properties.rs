@@ -94,8 +94,8 @@ fn a_data_driven_property_binds_as_an_uninterpolated_attribute() {
     assert!(!is_all_uniform(&paint));
     assert_eq!(
         attribute_properties(&paint),
-        ["fill-color", "fill-opacity"],
-        "in spec order"
+        ["fill-color", "fill-opacity", "fill-outline-color"],
+        "in spec order — the outline inherits fill-color's binding, so it is data-driven too"
     );
 }
 
@@ -159,25 +159,71 @@ fn unset_properties_carry_their_defaults() {
     assert_eq!(paint["background-pattern"].as_constant(), Some(Value::Null));
 }
 
-/// mbgl defaults fill-outline-color to a default-constructed Color, which is transparent
-/// rather than black. The spec's "defaults to fill-color" is resolved by the layer at draw
-/// time, not by the property table — getting this backwards would outline every fill in black.
+/// `fill-outline-color` inherits `fill-color` — value *and* binding — when a style does not
+/// set it.
+///
+/// The property table gives it transparent, which is mbgl's own default-constructed Color, but
+/// that default is never what a layer draws with: the spec says it defaults to `fill-color` and
+/// mbgl resolves that in the fill layer. So a bare fill layer outlines in black because
+/// `fill-color` is black, not because the table says so.
+///
+/// An earlier version of this test asserted the table default was what came out, and an earlier
+/// commit message claimed that getting it "backwards" would outline every fill in black. That
+/// was wrong twice over: black is correct here, and the real consequence of getting it backwards
+/// is the binding, not the colour. The oracle settled it — its data-driven fill drawable carries
+/// the outline as a vertex attribute even though the style never mentions the property, which
+/// only happens if the binding was inherited too.
 #[test]
-fn fill_outline_color_defaults_to_transparent_not_black() {
+fn fill_outline_color_inherits_fill_color() {
+    use tessella_style::property::{Binding, DefaultValue};
+
+    // The table's own default is still transparent, and still what mbgl declares.
+    let spec = tessella_style::property::paint_specs(&tessella_style::LayerKind::Fill)
+        .expect("fill specs")
+        .iter()
+        .find(|spec| spec.name == "fill-outline-color")
+        .expect("the spec");
+    assert_eq!(spec.default, DefaultValue::Color(Color::transparent()));
+
+    // But resolution inherits fill-color, so a bare layer outlines in black.
     let layer = layer_from(r#"{"id": "l", "type": "fill", "source": "s"}"#);
     let paint = resolve_paint(&layer).expect("resolves");
-
     let outline = paint["fill-outline-color"]
         .as_constant()
         .expect("a constant");
-    let color = tessella_style::property::as_color(&outline).expect("a color");
-    assert_eq!(color, Color::transparent());
-
-    let fill = paint["fill-color"].as_constant().expect("a constant");
     assert_eq!(
-        tessella_style::property::as_color(&fill).expect("a color"),
+        tessella_style::property::as_color(&outline).expect("a colour"),
         Color::black(),
-        "fill-color itself does default to black"
+        "inherited from fill-color's default"
+    );
+
+    // And the binding is inherited with it, which is the part that matters: a data-driven
+    // fill-color makes the outline data-driven, needing a vertex attribute rather than a
+    // uniform.
+    let driven = layer_from(
+        r#"{"id": "l", "type": "fill", "source": "s",
+            "paint": {"fill-color": ["get", "c"]}}"#,
+    );
+    let paint = resolve_paint(&driven).expect("resolves");
+    assert_eq!(
+        paint["fill-outline-color"].binding,
+        Binding::Attribute {
+            interpolated: false
+        }
+    );
+
+    // An explicit value is not overridden.
+    let explicit = layer_from(
+        r##"{"id": "l", "type": "fill", "source": "s",
+            "paint": {"fill-color": "#ff0000", "fill-outline-color": "#00ff00"}}"##,
+    );
+    let paint = resolve_paint(&explicit).expect("resolves");
+    let outline = paint["fill-outline-color"]
+        .as_constant()
+        .expect("a constant");
+    assert_eq!(
+        tessella_style::property::as_color(&outline).expect("a colour"),
+        Color::parse("#00ff00").expect("green")
     );
 }
 
