@@ -30,6 +30,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod camera;
 pub mod cover;
 pub mod projection;
 pub mod store;
