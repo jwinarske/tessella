@@ -5,7 +5,9 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use super::{ArithmeticOp, CastKind, CompareOp, Expr, Interpolation, LegacyFunction, LegacyKind};
+use super::{
+    ArithmeticOp, AssertKind, CastKind, CompareOp, Expr, Interpolation, LegacyFunction, LegacyKind,
+};
 use crate::value::Value;
 
 /// A style value that is not a well-formed expression.
@@ -76,6 +78,21 @@ pub(super) fn parse_with_default(
             expect_arity(operator, args, 1, 1)?;
             Ok(Expr::Literal(args[0].clone()))
         }
+        "number" | "string" | "boolean" | "object" => {
+            let kind = match operator {
+                "number" => AssertKind::Number,
+                "string" => AssertKind::String,
+                "boolean" => AssertKind::Boolean,
+                _ => AssertKind::Object,
+            };
+            // At least the value; any further arguments are fallbacks tried in order.
+            expect_arity(operator, args, 1, usize::MAX)?;
+            Ok(Expr::Assert {
+                kind,
+                args: parse_all(args)?,
+            })
+        }
+        "array" => parse_array_assertion(operator, args),
         "zoom" => {
             expect_arity(operator, args, 0, 0)?;
             Ok(Expr::Zoom)
@@ -171,6 +188,124 @@ pub(super) fn parse_with_default(
             })
         }
         other => Err(ParseError::UnknownOperator(other.to_string())),
+    }
+}
+
+/// The spec's rules for `match` labels, which it enforces at compile time.
+///
+/// A label is a string or an integer, every label in one expression is the same kind, and no
+/// label repeats. All three are checkable without knowing any other type, which is why they are
+/// here rather than waiting on a type checker.
+///
+/// The rules earn their keep at different times. A non-integer or out-of-range label is a typo
+/// the style author wants told about. A mixed-kind label set is a `match` whose input cannot be
+/// both, so some branch is dead. A duplicate label is a branch that can never run — and unlike
+/// the others it looks completely reasonable, which is why the spec calls it out rather than
+/// letting the first match win.
+fn check_match_labels(operator: &str, arms: &[(Vec<Value>, Expr)]) -> Result<(), ParseError> {
+    // JavaScript's safe-integer range, which is what the spec's labels are bounded by.
+    const SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
+
+    let malformed = |detail: String| ParseError::Malformed {
+        operator: operator.to_string(),
+        detail,
+    };
+
+    let mut expecting_strings: Option<bool> = None;
+    let mut seen: Vec<&Value> = Vec::new();
+
+    for (labels, _) in arms {
+        for label in labels {
+            let is_string = match label {
+                Value::String(_) => true,
+                Value::Number(number) => {
+                    if number.fract() != 0.0 {
+                        return Err(malformed(format!("label {number} is not an integer")));
+                    }
+                    if number.abs() > SAFE_INTEGER {
+                        return Err(malformed(format!("label {number} is out of range")));
+                    }
+                    false
+                }
+                other => {
+                    return Err(malformed(format!(
+                        "a label must be a string or an integer, got {}",
+                        other.type_name()
+                    )));
+                }
+            };
+
+            match expecting_strings {
+                None => expecting_strings = Some(is_string),
+                Some(previous) if previous != is_string => {
+                    return Err(malformed(
+                        "labels must all be strings or all be integers".to_string(),
+                    ));
+                }
+                Some(_) => {}
+            }
+
+            if seen.contains(&label) {
+                return Err(malformed(format!(
+                    "label {label:?} appears more than once, so its second branch is unreachable"
+                )));
+            }
+            seen.push(label);
+        }
+    }
+    Ok(())
+}
+
+/// `["array", v]`, `["array", item, v]`, `["array", item, n, v]`.
+///
+/// The leading arguments are a type name and a length, not expressions, so they are read
+/// literally rather than parsed. That is why this cannot be folded into the assertion arm: the
+/// arity decides which arguments are data and which is the value.
+fn parse_array_assertion(operator: &str, args: &[Value]) -> Result<Expr, ParseError> {
+    expect_arity(operator, args, 1, 3)?;
+
+    let item_of = |value: &Value| -> Result<AssertKind, ParseError> {
+        match value.as_str() {
+            Some("number") => Ok(AssertKind::Number),
+            Some("string") => Ok(AssertKind::String),
+            Some("boolean") => Ok(AssertKind::Boolean),
+            other => Err(ParseError::Malformed {
+                operator: operator.to_string(),
+                detail: format!(
+                    "element type must be number, string or boolean, got {}",
+                    other.unwrap_or("a non-string")
+                ),
+            }),
+        }
+    };
+
+    match args {
+        [value] => Ok(Expr::AssertArray {
+            item: None,
+            length: None,
+            value: Box::new(parse(value)?),
+        }),
+        [item, value] => Ok(Expr::AssertArray {
+            item: Some(item_of(item)?),
+            length: None,
+            value: Box::new(parse(value)?),
+        }),
+        [item, length, value] => {
+            let length = length
+                .as_number()
+                .filter(|n| *n >= 0.0 && n.fract() == 0.0)
+                .ok_or_else(|| ParseError::Malformed {
+                    operator: operator.to_string(),
+                    detail: "length must be a non-negative integer".to_string(),
+                })?;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            Ok(Expr::AssertArray {
+                item: Some(item_of(item)?),
+                length: Some(length as usize),
+                value: Box::new(parse(value)?),
+            })
+        }
+        _ => unreachable!("arity is checked above"),
     }
 }
 
@@ -291,6 +426,8 @@ fn parse_match(operator: &str, args: &[Value]) -> Result<Expr, ParseError> {
         }
         arms.push((labels, parse(&pair[1])?));
     }
+
+    check_match_labels(operator, &arms)?;
 
     Ok(Expr::Match {
         input,

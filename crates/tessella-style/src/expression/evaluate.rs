@@ -108,6 +108,58 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
         Expr::Id => Ok(context.feature()?.id().unwrap_or(Value::Null)),
         Expr::Properties => Ok(context.feature()?.properties()),
         Expr::LegacyFunction(function) => evaluate_legacy(function, context),
+        Expr::Assert { kind, args } => {
+            // Each argument in turn; the first of the required type wins. Only running out is
+            // an error, which is what makes `["number", ["get", "x"], 0]` a fallback rather than
+            // a check.
+            let mut last = Value::Null;
+            for arg in args {
+                let value = evaluate(arg, context)?;
+                if kind.matches(&value) {
+                    return Ok(value);
+                }
+                last = value;
+            }
+            Err(EvaluationError::Type {
+                expected: kind.type_name(),
+                got: last.type_name(),
+            })
+        }
+        Expr::AssertArray {
+            item,
+            length,
+            value,
+        } => {
+            let evaluated = evaluate(value, context)?;
+            let Value::Array(items) = &evaluated else {
+                return Err(EvaluationError::Type {
+                    expected: "array",
+                    got: evaluated.type_name(),
+                });
+            };
+            if let Some(required) = length
+                && items.len() != *required
+            {
+                return Err(EvaluationError::Type {
+                    expected: "array",
+                    got: "array of the wrong length",
+                });
+            }
+            if let Some(required) = item {
+                // Every element, not just the first: the suite has `[1, "b"]` against
+                // `array<string>` and expects it to fail on the element that is wrong rather
+                // than pass on the one that is right.
+                for element in items {
+                    if !required.matches(element) {
+                        return Err(EvaluationError::Type {
+                            expected: required.type_name(),
+                            got: element.type_name(),
+                        });
+                    }
+                }
+            }
+            Ok(evaluated)
+        }
         Expr::Get { key } => {
             let key = expect_string(&evaluate(key, context)?)?;
             // A property the feature does not carry is null, not an error. Styles rely on

@@ -148,6 +148,49 @@ pub enum CastKind {
     Boolean,
 }
 
+/// A type an assertion requires.
+///
+/// Distinct from [`CastKind`], and the difference is the whole point of both: `["number", v]`
+/// *asserts* that `v` is already a number and errors otherwise, while `["to-number", v]`
+/// converts one. A style uses the first to say "this data is numeric and I want to know when it
+/// is not", and the second to say "make it numeric".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AssertKind {
+    /// `number`
+    Number,
+    /// `string`
+    String,
+    /// `boolean`
+    Boolean,
+    /// `object`
+    Object,
+}
+
+impl AssertKind {
+    /// The type name the spec uses in the error message.
+    #[must_use]
+    pub const fn type_name(self) -> &'static str {
+        match self {
+            Self::Number => "number",
+            Self::String => "string",
+            Self::Boolean => "boolean",
+            Self::Object => "object",
+        }
+    }
+
+    /// Whether a value already has this type.
+    #[must_use]
+    pub const fn matches(self, value: &Value) -> bool {
+        matches!(
+            (self, value),
+            (Self::Number, Value::Number(_))
+                | (Self::String, Value::String(_))
+                | (Self::Boolean, Value::Bool(_))
+                | (Self::Object, Value::Object(_))
+        )
+    }
+}
+
 /// How to interpolate between stops.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Interpolation {
@@ -230,6 +273,29 @@ pub enum Expr {
     Id,
     /// All of a feature's properties, as an object.
     Properties,
+    /// `["number", v, fallback…]` and its siblings: assert a type, or try the next argument.
+    ///
+    /// The fallbacks are what make this more than a type check. `["number", ["get", "x"], 0]`
+    /// says "x is a number, and where it is not, zero" — the arguments are tried in order and
+    /// only exhausting them is an error.
+    Assert {
+        /// The type required.
+        kind: AssertKind,
+        /// The value, then any fallbacks.
+        args: Vec<Expr>,
+    },
+    /// `["array", v]`, `["array", item, v]`, `["array", item, n, v]`.
+    ///
+    /// Separate from [`Expr::Assert`] because it carries an element type and a length, and
+    /// because it has no fallback form — an array assertion that fails is always an error.
+    AssertArray {
+        /// Required element type, if the style named one.
+        item: Option<AssertKind>,
+        /// Required length, if the style named one.
+        length: Option<usize>,
+        /// The value asserted.
+        value: Box<Expr>,
+    },
     /// A pre-expression function: `{"property": …, "type": …, "stops": […]}`.
     ///
     /// The style spec's original way of varying a property, still supported and still common in
@@ -452,6 +518,8 @@ fn classify(expr: &Expr) -> Dependency {
         // A legacy function reads the feature when it names a property and the zoom when it
         // does not. Composite stops — `[{"zoom": z, "value": v}, out]` — read both, which is
         // the case that makes this a lattice join rather than a choice.
+        Expr::Assert { args, .. } => join_all(args),
+        Expr::AssertArray { value, .. } => classify(value),
         Expr::LegacyFunction(function) => {
             let from_property = if function.property.is_some() {
                 Dependency::Feature
