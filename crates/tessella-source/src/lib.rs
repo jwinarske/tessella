@@ -14,6 +14,7 @@
 
 extern crate alloc;
 
+pub mod clip;
 pub mod geojson;
 pub mod tiling;
 
