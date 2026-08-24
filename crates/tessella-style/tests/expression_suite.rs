@@ -138,6 +138,7 @@ fn run_case(case: &Value) -> Result<(), String> {
                 // `enum` is a string with a value list, which this does not check yet;
                 // treating it as a string is right about the type and silent about the list.
                 "enum" => Some(Type::String),
+                "formatted" => Some(Type::Formatted),
                 _ => None,
             }),
     };

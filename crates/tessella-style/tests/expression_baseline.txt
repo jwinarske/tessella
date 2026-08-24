@@ -33,6 +33,11 @@ equal/number
 equal/string
 equal/value
 floor/basic
+format/coercion
+format/data-driven-font
+format/implicit
+format/implicit-coerce
+format/implicit-omit
 geometry-type/basic
 get/basic
 get/from-literal

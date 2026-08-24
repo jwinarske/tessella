@@ -898,3 +898,86 @@ fn an_aggregate_needle_is_an_error() {
         "and from a feature it fails at evaluation"
     );
 }
+
+/// `format` builds sections, each carrying its own font, scale and colour.
+///
+/// That per-section state is why formatted text is a type rather than a string with markup in
+/// it: one label can mix a place name with a smaller elevation in a different face, and R2's
+/// shaper needs those as separate runs.
+#[test]
+fn format_builds_sections() {
+    let value = eval(r#"["format", "a", {}, "b", {"font-scale": 2}]"#, None, None);
+    let sections = value
+        .get("sections")
+        .and_then(Value::as_array)
+        .expect("sections");
+    assert_eq!(sections.len(), 2);
+    assert_eq!(sections[0].get("text"), Some(&Value::String("a".into())));
+    assert_eq!(sections[0].get("scale"), Some(&Value::Null));
+    assert_eq!(sections[1].get("text"), Some(&Value::String("b".into())));
+    assert_eq!(sections[1].get("scale"), Some(&Value::Number(2.0)));
+
+    // Every slot is present on every section, so a consumer never has to distinguish "absent"
+    // from "not applicable".
+    for section in sections {
+        for key in ["text", "image", "scale", "fontStack", "textColor"] {
+            assert!(section.get(key).is_some(), "{key} missing");
+        }
+    }
+}
+
+/// Content is coerced to text, so `format` accepts what a style actually writes.
+#[test]
+fn format_coerces_its_content() {
+    let value = eval(r#"["format", 1, {}, true, {}]"#, None, None);
+    let sections = value
+        .get("sections")
+        .and_then(Value::as_array)
+        .expect("sections");
+    assert_eq!(sections[0].get("text"), Some(&Value::String("1".into())));
+    assert_eq!(sections[1].get("text"), Some(&Value::String("true".into())));
+}
+
+/// A property the spec types as formatted wraps whatever it got in a single section.
+///
+/// The same shape as the colour coercion, for the same reason: the style writes a string and the
+/// shaper needs sections, so the conversion belongs at that boundary rather than in every
+/// operator that might produce text.
+#[test]
+fn a_formatted_property_wraps_its_result() {
+    use tessella_style::expression::{PropertySpec, Type};
+
+    let spec = PropertySpec {
+        default: None,
+        expected: Some(Type::Formatted),
+    };
+    let value: Value = serde_json::from_str(r#""a label""#).expect("json");
+    let parsed = Expression::parse_for(&value, &spec).expect("parses");
+    let result = parsed.evaluate(None, None).expect("evaluates");
+
+    let sections = result
+        .get("sections")
+        .and_then(Value::as_array)
+        .expect("sections");
+    assert_eq!(sections.len(), 1);
+    assert_eq!(
+        sections[0].get("text"),
+        Some(&Value::String("a label".into()))
+    );
+
+    // And an expression already producing formatted text is left alone rather than nested.
+    let already: Value = serde_json::from_str(r#"["format", "x", {}]"#).expect("json");
+    let wrapped = Expression::parse_for(&already, &spec)
+        .expect("parses")
+        .evaluate(None, None)
+        .expect("evaluates");
+    assert_eq!(
+        wrapped
+            .get("sections")
+            .and_then(Value::as_array)
+            .expect("sections")
+            .len(),
+        1,
+        "one section, not a section containing a formatted value"
+    );
+}

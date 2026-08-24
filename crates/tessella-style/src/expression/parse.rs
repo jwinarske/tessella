@@ -6,8 +6,8 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use super::{
-    ArithmeticOp, AssertKind, CastKind, CompareOp, Expr, Interpolation, LegacyFunction, LegacyKind,
-    PropertySpec, Type,
+    ArithmeticOp, AssertKind, CastKind, CompareOp, Expr, FormatSection, Interpolation,
+    LegacyFunction, LegacyKind, PropertySpec, Type,
 };
 use crate::value::Value;
 
@@ -189,6 +189,46 @@ fn parse_rooted(
                     .transpose()?
                     .map(Box::new),
             })
+        }
+        "format" => {
+            // Content and options alternate. The trailing options object may be omitted, which
+            // is why the arity is not simply even.
+            if args.is_empty() {
+                return Err(ParseError::Arity {
+                    operator: operator.to_string(),
+                    expected: "at least one section".to_string(),
+                    got: 0,
+                });
+            }
+            let mut sections = Vec::new();
+            let mut index = 0;
+            while index < args.len() {
+                let content = Box::new(parse_in(&args[index], scope)?);
+                // An options object follows unless this is the last argument.
+                let options = args.get(index + 1).and_then(Value::as_object);
+                let mut section = FormatSection {
+                    content,
+                    scale: None,
+                    font: None,
+                    color: None,
+                };
+                if let Some(options) = options {
+                    for (key, target) in [
+                        ("font-scale", &mut section.scale),
+                        ("text-font", &mut section.font),
+                        ("text-color", &mut section.color),
+                    ] {
+                        if let Some(value) = options.get(key) {
+                            *target = Some(Box::new(parse_in(value, scope)?));
+                        }
+                    }
+                    index += 2;
+                } else {
+                    index += 1;
+                }
+                sections.push(section);
+            }
+            Ok(Expr::Format { sections })
         }
         "rgb" | "rgba" => {
             let arity = if operator == "rgb" { 3 } else { 4 };

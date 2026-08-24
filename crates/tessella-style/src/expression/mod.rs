@@ -181,6 +181,8 @@ pub enum Type {
     Array,
     /// A color.
     Color,
+    /// Formatted text: sections with per-section font, scale and colour.
+    Formatted,
 }
 
 impl Type {
@@ -256,6 +258,7 @@ impl Type {
             Self::Object => "object",
             Self::Array => "array",
             Self::Color => "color",
+            Self::Formatted => "formatted",
         }
     }
 }
@@ -340,6 +343,19 @@ pub enum LegacyKind {
     Interval,
     /// Interpolated between the surrounding stops. The default when `type` is absent.
     Exponential,
+}
+
+/// One section of formatted text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormatSection {
+    /// The text, or an image to place inline.
+    pub content: Box<Expr>,
+    /// `font-scale`, relative to the layer's text size.
+    pub scale: Option<Box<Expr>>,
+    /// `text-font`, a font stack for this section alone.
+    pub font: Option<Box<Expr>>,
+    /// `text-color`, for this section alone.
+    pub color: Option<Box<Expr>>,
 }
 
 /// What the style spec says about the property an expression is being parsed for.
@@ -429,6 +445,15 @@ pub enum Expr {
         value: Box<Expr>,
         /// Used when the assertion fails, instead of erroring.
         fallback: Option<Box<Expr>>,
+    },
+    /// `["format", content, options, …]`: text in sections.
+    ///
+    /// The unit R2's shaping consumes. A section carries its own font, scale and colour, which
+    /// is what lets one label mix a place name with a smaller elevation in a different face —
+    /// and why formatted text is a type rather than a string with markup in it.
+    Format {
+        /// One entry per `content, options` pair.
+        sections: Vec<FormatSection>,
     },
     /// `["length", v]`: the length of a string or array.
     Length(Box<Expr>),
@@ -651,6 +676,20 @@ impl Expression {
             };
         }
 
+        // A property the spec types as formatted wraps whatever it got in a single section.
+        // Same shape as the colour coercion above and for the same reason: the style writes a
+        // string and the shaper needs sections, so the conversion belongs at that boundary.
+        if spec.expected == Some(Type::Formatted) && root.result_type() != Type::Formatted {
+            root = Expr::Format {
+                sections: alloc::vec![FormatSection {
+                    content: Box::new(root),
+                    scale: None,
+                    font: None,
+                    color: None,
+                }],
+            };
+        }
+
         // Checked before the colour wrapper is counted, on the tree the style actually wrote.
         check_zoom_placement(&root)?;
 
@@ -768,6 +807,7 @@ impl Expr {
                 CastKind::Color => Type::Color,
             },
             Self::Rgba { .. } => Type::Color,
+            Self::Format { .. } => Type::Formatted,
             Self::Length(_) | Self::IndexOf { .. } => Type::Number,
             Self::In { .. } => Type::Boolean,
             // `get`, `id`, and everything whose type depends on data or on branches this does
@@ -905,6 +945,16 @@ fn children(expr: &Expr) -> Vec<&Expr> {
         | Expr::Properties
         | Expr::Var(_)
         | Expr::LegacyFunction(_) => Vec::new(),
+        Expr::Format { sections } => sections
+            .iter()
+            .flat_map(|section| {
+                let mut parts = alloc::vec![&*section.content];
+                parts.extend(section.scale.as_deref());
+                parts.extend(section.font.as_deref());
+                parts.extend(section.color.as_deref());
+                parts
+            })
+            .collect(),
         Expr::Not(inner) | Expr::Length(inner) => alloc::vec![&**inner],
         Expr::Get { key, object } | Expr::Has { key, object } => {
             let mut out = alloc::vec![&**key];
@@ -997,6 +1047,16 @@ fn classify(expr: &Expr) -> Dependency {
         // The binding it reads carries the dependency; the read itself has none.
         Expr::Var(_) => Dependency::None,
         Expr::Rgba { args } => join_all(args),
+        Expr::Format { sections } => sections.iter().fold(Dependency::None, |acc, section| {
+            let mut joined = acc.join(classify(&section.content));
+            for part in [&section.scale, &section.font, &section.color]
+                .into_iter()
+                .flatten()
+            {
+                joined = joined.join(classify(part));
+            }
+            joined
+        }),
         Expr::Length(inner) => classify(inner),
         Expr::In { needle, haystack } => classify(needle).join(classify(haystack)),
         Expr::IndexOf {

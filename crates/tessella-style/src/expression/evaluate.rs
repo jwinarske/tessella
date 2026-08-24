@@ -8,6 +8,8 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use alloc::boxed::Box;
+
 use super::{
     ArithmeticOp, AssertKind, CastKind, CompareOp, Expr, FilterTarget, Interpolation,
     LegacyFunction, LegacyKind, Type,
@@ -200,6 +202,38 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
                 // `sequence_length` already rejected anything else.
                 _ => unreachable!("checked by sequence_length"),
             })
+        }
+        Expr::Format { sections } => {
+            let mut out = Vec::with_capacity(sections.len());
+            for section in sections {
+                let content = evaluate(&section.content, context)?;
+                let mut entry = alloc::collections::BTreeMap::new();
+
+                // An image section carries no text and a text section carries no image; the
+                // shaper needs both slots present so it can tell which it has.
+                let (text, image) = match &content {
+                    Value::Object(members) if members.contains_key("name") => {
+                        (String::new(), content.clone())
+                    }
+                    other => (to_string(other), Value::Null),
+                };
+                entry.insert("text".to_string(), Value::String(text));
+                entry.insert("image".to_string(), image);
+
+                let optional = |expr: &Option<Box<Expr>>| -> Result<Value, EvaluationError> {
+                    match expr {
+                        Some(expr) => evaluate(expr, context),
+                        None => Ok(Value::Null),
+                    }
+                };
+                entry.insert("scale".to_string(), optional(&section.scale)?);
+                entry.insert("fontStack".to_string(), optional(&section.font)?);
+                entry.insert("textColor".to_string(), optional(&section.color)?);
+                out.push(Value::Object(entry));
+            }
+            let mut formatted = alloc::collections::BTreeMap::new();
+            formatted.insert("sections".to_string(), Value::Array(out));
+            Ok(Value::Object(formatted))
         }
         Expr::LegacyFunction(function) => evaluate_legacy(function, context),
         Expr::Let { bindings, body } => {
@@ -560,6 +594,8 @@ fn matches_spec_type(expected: Type, value: &Value) -> bool {
         Type::Array => matches!(value, Value::Array(_)),
         Type::Color => matches!(value, Value::String(_) | Value::Array(_)),
         Type::Null => matches!(value, Value::Null),
+        // A formatted property accepts anything, because anything can be wrapped in a section.
+        Type::Formatted => true,
     }
 }
 
