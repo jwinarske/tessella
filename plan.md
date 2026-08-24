@@ -709,13 +709,15 @@ Measured on this port, against the fixture's 17154-feature `admin` layer with ev
 property data-driven: 7.9 ms to build against 2.0 ms with the same properties constant, so
 evaluation is about three quarters of bucket build. §12.1's premise holds here.
 
-Where that cost sits is not where DR-11 assumed. Per feature, a bare literal is 3 ns — the loop
-and the dispatch — and a `get` is 26 ns, on features carrying three properties whose first key
-is the one being read, so the linear scan finds it immediately. The 23 ns difference is the
-value representation: `Result<Value, EvaluationError>` is 40 bytes, moved through every node of
-the tree to carry what is nearly always an 8-byte `f64`. A VM that removed virtual dispatch and
-kept that representation would win the 3 ns and not the 23. `benches/expression_cost.rs` holds
-the measurement.
+Where that cost sits is worth knowing before building the VM. `Feature::property` called
+directly — the same dyn-dispatched call `["get", k]` makes, same scan, same owned `Value` — is
+2 ns per feature. The data access is not the cost. A literal number evaluates in 3 ns and a
+literal string in 7 ns, the difference being the `String` clone `Expr::Literal` does every time.
+`["get", "admin_level"]` is 26 ns, so after the lookup and the key most of it is the walk
+itself: recursive non-inlined `evaluate` calls returning a 40-byte
+`Result<Value, EvaluationError>` by memory to carry what is nearly always an 8-byte `f64`, plus
+the wrapping and the drops on the way back. The VM's target is the walk, not the data access.
+`benches/expression_cost.rs` holds the measurement.
 
 - **Strict classification at compile time.** Constant → folded at style parse. Camera-only →
   evaluated once per (layer, integer-zoom interval), process-wide, cached as interpolation

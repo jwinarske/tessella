@@ -24,13 +24,25 @@
 //! would have argued against building the VM at all. The layer a benchmark picks is not a
 //! detail.
 //!
-//! The per-expression numbers say where the cost is. A bare literal is 3 ns per feature, which
-//! is the loop and the dispatch; a `get` is 25 ns. The features here carry three properties and
-//! the one being read sorts first, so the linear scan finds it immediately — meaning the 22 ns
-//! difference is not lookup work. It is the value representation:
-//! `Result<Value, EvaluationError>` is 40 bytes, moved through every node of the tree to carry
-//! what is nearly always an 8-byte `f64`. That is the thing DR-11's bytecode VM has to fix, and
-//! eliminating dispatch alone would not have.
+//! The per-expression numbers say where the cost is, and the first two lines are there so it is
+//! attributable rather than inferred.
+//!
+//! `Feature::property` called directly — the same dyn-dispatched call `["get", k]` makes, with
+//! the same scan and the same owned `Value` built — is 2 ns per feature, present or absent. The
+//! data access is not the cost. A bare literal number is 3 ns, which is the loop and one
+//! `evaluate` call; a literal string is 7 ns, the extra 4 being the `String` clone that
+//! `Expr::Literal` does on every evaluation.
+//!
+//! `["get", "admin_level"]` is 26 ns. Two of those are the lookup and about seven are evaluating
+//! the key — itself a string literal, cloned per feature — which leaves most of it in the walk:
+//! recursive non-inlined `evaluate` calls returning a 40-byte
+//! `Result<Value, EvaluationError>` by memory, to carry what is nearly always an 8-byte `f64`,
+//! plus the `Option`/`Result` wrapping and the drops on the way back out.
+//!
+//! That is what DR-11's bytecode VM has to fix, and it is a claim about the walk rather than
+//! about any one part of it. An earlier reading of these numbers named the 40-byte `Result` as
+//! *the* cause; that was inference from a lookup cost nobody had measured, and measuring it at
+//! 2 ns is what made the rest attributable.
 //!
 //! Dependency-free and percentile-reporting for the reasons `four_view_sweep` gives.
 
@@ -153,6 +165,8 @@ fn per_expression(decoded: &mvt::Tile) {
 
     let cases: &[(&str, &str)] = &[
         ("literal number", "4.0"),
+        ("literal string", r#""admin_level""#),
+        ("literal short string", r#""a""#),
         ("get", r#"["get", "admin_level"]"#),
         ("has", r#"["has", "admin_level"]"#),
         (
@@ -182,6 +196,37 @@ fn per_expression(decoded: &mvt::Tile) {
             r##"["match", ["get", "admin_level"], 2, "#ffcc00", "#ffffff"]"##,
         ),
     ];
+
+    // The lookup on its own, with no expression around it: the same call `["get", k]` makes,
+    // timed directly, so what the expression costs above and beyond it is attributable.
+    {
+        use tessella_style::expression::Feature as StyleFeature;
+        for (label, key) in [
+            ("property (present)", "admin_level"),
+            ("property (absent)", "zzz"),
+        ] {
+            let run = || {
+                let mut sink = 0usize;
+                for feature in &layer.features {
+                    if StyleFeature::property(feature, key).is_some() {
+                        sink += 1;
+                    }
+                }
+                sink
+            };
+            let _ = run();
+            let mut samples = Vec::with_capacity(20);
+            for _ in 0..20 {
+                let started = Instant::now();
+                let _ = run();
+                samples.push(started.elapsed());
+            }
+            let (p50, _, _) = percentiles(samples);
+            #[allow(clippy::cast_possible_truncation)]
+            let each = p50.as_nanos() as u64 / layer.features.len() as u64;
+            println!("  {label:<26} {p50:>9.2?} total  {each:>5} ns/feature");
+        }
+    }
 
     for (label, source) in cases {
         let value: tessella_style::Value = serde_json::from_str(source).expect("a value");
