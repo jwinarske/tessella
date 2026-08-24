@@ -4,7 +4,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tessella_storage::cache::SqliteCache;
+use tessella_storage::cache::{CachingFileSource, SqliteCache};
 use tessella_storage::download::{Download, DownloadError, Progress};
 use tessella_storage::http::HttpFileSource;
 use tessella_storage::offline::Region;
@@ -12,6 +12,19 @@ use tessella_tile::cover::Bounds;
 
 const TILE: &[u8] = include_bytes!("../../../tests/mvt-fixtures/real-world-0-0-0.mvt");
 const NOW: i64 = 1_000_000;
+
+// A clock the tests move, so an entry can be aged past what the origin allowed. Thread-local
+// rather than static: cargo runs these in parallel, and one test winding time forward would
+// otherwise expire another's entries out from under it.
+thread_local! {
+    static CLOCK: std::cell::Cell<i64> = const { std::cell::Cell::new(NOW) };
+}
+fn clock() -> i64 {
+    CLOCK.with(std::cell::Cell::get)
+}
+fn set_clock(value: i64) {
+    CLOCK.with(|clock| clock.set(value));
+}
 
 /// A style whose sources are inline, so the only network is tiles and assets.
 fn style(origin: &str) -> tessella_style::Style {
@@ -401,4 +414,81 @@ fn declining_a_plan_downloads_nothing() {
     // Sources are inline here, so planning needed no network at all.
     assert_eq!(server.requests(), 0);
     assert_eq!(cache.region_size().expect("reads"), 0);
+}
+
+/// A downloaded region is served without asking the origin, however old it gets.
+///
+/// This is what the user actually bought. Deferring to `max-age` here undoes it twice over:
+/// with no network the map goes blank the first time an hour runs out, which is precisely the
+/// situation the region exists for; with a network every tile costs a revalidation round trip,
+/// so a download taken to avoid a metered connection puts the user straight back on it.
+#[test]
+fn a_downloaded_region_outlives_its_cache_headers() {
+    set_clock(NOW);
+    let routes = routes().cache_control("max-age=60");
+    let server = tile_server::Server::start(routes).expect("binds");
+    let origin = server.origin();
+
+    let region = region(&origin);
+    let caching = CachingFileSource::with_clock(
+        HttpFileSource::default(),
+        SqliteCache::in_memory_with_capacity(1_000_000).expect("opens"),
+        clock,
+    );
+    let id = caching
+        .cache()
+        .create_region(&region, Some("Berlin"), NOW)
+        .expect("creates");
+
+    Download {
+        cache: caching.cache(),
+        files: &HttpFileSource::default(),
+        region: id,
+        definition: &region,
+        now: NOW,
+    }
+    .all(&style(&origin), &AtomicBool::new(false), &mut |_| {})
+    .expect("downloads");
+
+    // A week later, long past the minute the origin allowed.
+    set_clock(NOW + 7 * 24 * 3600);
+    let before = server.requests();
+    let tile = format!("{origin}/4/8/5.mvt");
+    let response = tessella_storage::source::FileSource::fetch(&caching, &tile).expect("serves");
+
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body, TILE);
+    assert_eq!(
+        server.requests(),
+        before,
+        "no round trip: the user already paid for this"
+    );
+}
+
+/// An ambient copy of the same age does go back to the origin.
+///
+/// The contrast is the point — pinning changes the answer, rather than the cache having simply
+/// stopped honouring `max-age`.
+#[test]
+fn an_unclaimed_copy_still_revalidates() {
+    set_clock(NOW);
+    let routes = routes().cache_control("max-age=60");
+    let server = tile_server::Server::start(routes).expect("binds");
+    let origin = server.origin();
+
+    let caching = CachingFileSource::with_clock(
+        HttpFileSource::default(),
+        SqliteCache::in_memory_with_capacity(1_000_000).expect("opens"),
+        clock,
+    );
+    let tile = format!("{origin}/4/8/5.mvt");
+    tessella_storage::source::FileSource::fetch(&caching, &tile).expect("fetches");
+
+    set_clock(NOW + 7 * 24 * 3600);
+    let before = server.requests();
+    tessella_storage::source::FileSource::fetch(&caching, &tile).expect("fetches");
+    assert!(
+        server.requests() > before,
+        "an ordinary cached tile still asks"
+    );
 }

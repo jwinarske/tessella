@@ -84,6 +84,10 @@ pub struct Entry {
     pub modified: i64,
     /// When it was last read, in seconds since the Unix epoch.
     pub accessed: i64,
+    /// Whether a region claims this.
+    ///
+    /// Which changes what it means for the entry to be stale — see [`Self::is_usable`].
+    pub pinned: bool,
 }
 
 impl Entry {
@@ -92,8 +96,25 @@ impl Entry {
     /// Two conditions, and they are different. A `must-revalidate` entry may never be served
     /// unasked, however fresh — the origin said so. An entry with no stated expiry is fresh,
     /// because silence is not staleness (mbgl's `isFresh`).
+    ///
+    /// # Why a claimed resource ignores both
+    ///
+    /// Freshness answers "may I use this instead of asking?", and for an ambient copy the
+    /// answer belongs to the origin. For a resource a region claims it does not: the user
+    /// selected an area and paid to have it, and a download is a snapshot of the moment they
+    /// took it.
+    ///
+    /// Deferring to the headers here would undo the download twice over. With no network the
+    /// map goes blank the first time a `max-age` runs out, which is precisely the situation the
+    /// region exists for. With a network it is worse in a quieter way: every tile of the region
+    /// costs a revalidation round trip, so a download taken specifically to avoid a metered or
+    /// slow connection puts the user straight back on it. mbgl draws the same line, serving
+    /// region resources without regard to expiry until the region is explicitly refreshed.
     #[must_use]
     pub const fn is_usable(&self, now: i64) -> bool {
+        if self.pinned {
+            return true;
+        }
         if self.response.must_revalidate {
             return false;
         }
@@ -267,7 +288,7 @@ impl SqliteCache {
 
         let entry = connection
             .query_row(
-                "SELECT status, expires, modified, etag, data, must_revalidate, accessed
+                "SELECT status, expires, modified, etag, data, must_revalidate, accessed, pinned
                  FROM responses WHERE url = ?1",
                 params![url],
                 |row| {
@@ -285,6 +306,7 @@ impl SqliteCache {
                         expires: row.get(1)?,
                         modified: row.get(2)?,
                         accessed: row.get(6)?,
+                        pinned: row.get::<_, i64>(7)? > 0,
                     })
                 },
             )
