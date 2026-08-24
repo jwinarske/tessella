@@ -35,12 +35,14 @@
 
 #[cfg(feature = "http")]
 pub mod http;
+pub mod shared;
 pub mod source;
 pub mod tileset;
 pub mod url;
 
 #[cfg(feature = "http")]
 pub use http::HttpFileSource;
-pub use source::{Coalescing, FetchError, Fetched, FileSource, Response, Stats};
+pub use shared::{Abandoned, ShareStats, Shared};
+pub use source::{Coalescing, FetchError, Fetched, FileSource, Response};
 pub use tileset::{ResolveError, TileSet, resolve};
 pub use url::{Scheme, ZoomRange, expand, fetch_zoom};

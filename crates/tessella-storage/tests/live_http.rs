@@ -159,11 +159,11 @@ fn concurrent_views_produce_one_request() {
         server.requests()
     );
     assert_eq!(
-        coalescing.stats().fetches() + coalescing.stats().waits(),
+        coalescing.stats().computed() + coalescing.stats().waited(),
         VIEWS as u64,
         "every caller is accounted for"
     );
-    assert_eq!(coalescing.stats().fetches(), server.requests());
+    assert_eq!(coalescing.stats().computed(), server.requests());
 }
 
 /// A gzipped tile is inflated before it reaches the caller.

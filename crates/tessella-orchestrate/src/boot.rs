@@ -51,7 +51,8 @@ use tessella_storage::tileset::{self, TileSet};
 use tessella_style::{LayerKind, Source, Style};
 use tessella_tile::cover::{self, ViewTransform};
 
-use crate::tile::{LayerBucket, TileError, TileId, build_mvt_tile};
+use crate::cache::TileCache;
+use crate::tile::{LayerBucket, TileId, build_mvt_tile};
 
 /// When each stage of a cold start finished, measured from the moment it began.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -74,7 +75,7 @@ pub struct BootTrace {
 #[derive(Debug)]
 pub struct Boot {
     /// Buckets per tile of the cover, in cover order.
-    pub tiles: Vec<(TileId, Vec<LayerBucket>)>,
+    pub tiles: Vec<(TileId, alloc::sync::Arc<Vec<LayerBucket>>)>,
     /// Stage timings.
     pub trace: BootTrace,
     /// Tile bodies fetched, in bytes.
@@ -116,15 +117,23 @@ pub enum BootError {
     },
     /// A tile's buckets did not build.
     ///
-    /// Boxed: [`TileError`] carries two owned strings and would otherwise set the size of every
-    /// `Result` this module returns, on the success path as much as the failure one.
-    #[error("building `{url}`")]
+    /// The cause is a string rather than a `TileError`: it is shared with every caller waiting
+    /// on the same tile, so it has to be cloneable, and a `TileError` carries owned strings
+    /// that would set the size of every `Result` this module returns.
+    #[error("building `{url}`: {message}")]
     Build {
         /// What was asked for.
         url: String,
         /// What went wrong.
-        #[source]
-        source: alloc::boxed::Box<TileError>,
+        message: String,
+    },
+    /// The caller that owned a tile's build unwound without producing one.
+    ///
+    /// Retryable: the key is free again, so the next attempt becomes a new leader.
+    #[error("the build of `{url}` was abandoned")]
+    Abandoned {
+        /// What was being built.
+        url: String,
     },
     /// The view covers nothing any source provides.
     #[error("no source covers this view")]
@@ -202,6 +211,44 @@ impl Default for Workers {
 struct Job {
     tile: TileId,
     url: String,
+    key: tessella_tile::store::TileKey,
+}
+
+/// What a cold start needs.
+///
+/// A struct rather than six arguments: `files` and `cache` are process-scoped and the rest are
+/// per-start, and a positional list of that shape is one whose call sites stop being readable
+/// after the third one.
+#[derive(Debug, Clone, Copy)]
+pub struct ColdStart<'a, S> {
+    /// The style document.
+    pub style: &'a str,
+    /// The camera to cover.
+    pub view: &'a ViewTransform,
+    /// Where bytes come from. Shared between views, so one tile is fetched once.
+    pub files: &'a Coalescing<S>,
+    /// Where built tiles live. Shared between views, so one tile is built once.
+    pub cache: &'a TileCache<BootError>,
+    /// How many threads share the tile work.
+    pub workers: Workers,
+    /// Which revision of the style this is.
+    ///
+    /// Part of the cache key: a bucket built against one style is not valid against another,
+    /// since a changed filter admits different features and a changed paint property changes
+    /// what is data-driven (§5.1). A caller that reuses a revision across an edited style gets
+    /// the old buckets.
+    pub style_rev: u64,
+}
+
+impl<S: FileSource> ColdStart<'_, S> {
+    /// Runs the start and reports how long each stage took.
+    ///
+    /// # Errors
+    ///
+    /// [`BootError`] when the style, a source, or any tile of the cover fails.
+    pub fn run(&self) -> Result<Boot, BootError> {
+        cold_start(self)
+    }
 }
 
 /// Runs a cold start and reports how long each stage took.
@@ -210,15 +257,22 @@ struct Job {
 /// carries the rationale for the count; [`Workers::serial`] is the one-thread baseline a trace
 /// is compared against.
 ///
+/// The cache is process-scoped and shared between views. A second view over the same cover
+/// finds the buckets already built; a second view starting *at the same time* joins the build
+/// rather than repeating it, which is the case a cache alone cannot cover (§9.3).
+///
 /// # Errors
 ///
 /// [`BootError`] when the style, a source, or any tile of the cover fails.
-pub fn cold_start<S: FileSource>(
-    style_text: &str,
-    view: &ViewTransform,
-    files: &Coalescing<S>,
-    workers: Workers,
-) -> Result<Boot, BootError> {
+pub fn cold_start<S: FileSource>(config: &ColdStart<'_, S>) -> Result<Boot, BootError> {
+    let &ColdStart {
+        style: style_text,
+        view,
+        files,
+        cache,
+        workers,
+        style_rev,
+    } = config;
     let started = Instant::now();
 
     let style = Style::parse(style_text).map_err(|error| BootError::Style(error.to_string()))?;
@@ -253,7 +307,7 @@ pub fn cold_start<S: FileSource>(
     for tile in &cover {
         // One source for now: the cold-start shape is the same for several, and the tile loop
         // below is what changes rather than this.
-        let Some((_, set)) = sets.first() else {
+        let Some((name, set)) = sets.first() else {
             break;
         };
         let Some(z) = fetch_zoom(tile.z, set.zooms) else {
@@ -264,8 +318,17 @@ pub fn cold_start<S: FileSource>(
         let Some(url) = set.url_for(z, x, y, 1.0) else {
             continue;
         };
+        let tile = TileId::overscaled(z, x, y, tile.z);
         jobs.push(Job {
-            tile: TileId::overscaled(z, x, y, tile.z),
+            key: tessella_tile::store::TileKey::overscaled(
+                name.as_str(),
+                tile.z,
+                tile.x,
+                tile.y,
+                tile.overscaled_z,
+                style_rev,
+            ),
+            tile,
             url,
         });
     }
@@ -288,7 +351,9 @@ pub fn cold_start<S: FileSource>(
 
     // Results are placed by index so the output order is the cover's however the work is
     // scheduled — a trace that reordered its tiles would make two runs incomparable.
-    let done: Mutex<Vec<Option<Vec<LayerBucket>>>> =
+    // `Arc`, because the cache owns the buckets and hands out shares of them: a second view
+    // over the same cover gets the same allocation rather than a copy of it.
+    let done: Mutex<Vec<Option<alloc::sync::Arc<Vec<LayerBucket>>>>> =
         Mutex::new((0..jobs.len()).map(|_| None).collect());
     let next = AtomicUsize::new(0);
     let bytes = AtomicUsize::new(0);
@@ -323,54 +388,49 @@ pub fn cold_start<S: FileSource>(
                         return;
                     }
 
-                    let response = match files.fetch(&job.url) {
-                        Ok(response) => response,
-                        Err(error) => {
-                            fail(
-                                &failure,
-                                BootError::Fetch {
+                    // The cache is outermost: a tile whose buckets are already built costs
+                    // no fetch and no decode. Fetching first and consulting the cache after
+                    // would make a warm view pay the network for bytes it is about to throw
+                    // away — which is what a second view over the same cover mostly is.
+                    let built = cache.get_or_build(
+                        &job.key,
+                        || {
+                            let response =
+                                files.fetch(&job.url).map_err(|error| BootError::Fetch {
                                     url: job.url.clone(),
                                     message: error.to_string(),
-                                },
-                            );
-                            return;
-                        }
-                    };
-                    record(&first_fetch);
-                    bytes.fetch_add(response.body.len(), Ordering::Relaxed);
+                                })?;
+                            record(&first_fetch);
+                            bytes.fetch_add(response.body.len(), Ordering::Relaxed);
 
-                    // An absent tile is ordinary, not a failure: a source's coverage is not a
-                    // rectangle, and the cover asks for the whole viewport.
-                    if response.is_absent() {
-                        done.lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)[index] =
-                            Some(Vec::new());
-                        continue;
-                    }
+                            // An absent tile is ordinary, not a failure: a source's coverage is
+                            // not a rectangle and the cover asks for the whole viewport. It is
+                            // cached as an empty tile so the next view does not ask again.
+                            if response.is_absent() {
+                                return Ok(Vec::new());
+                            }
 
-                    let decoded = match mvt::Tile::decode(&response.body) {
-                        Ok(decoded) => decoded,
-                        Err(error) => {
-                            fail(
-                                &failure,
+                            let decoded = mvt::Tile::decode(&response.body).map_err(|error| {
                                 BootError::Decode {
                                     url: job.url.clone(),
                                     message: error.to_string(),
-                                },
-                            );
-                            return;
-                        }
-                    };
-                    let buckets = match build_mvt_tile(&style, job.tile, &decoded) {
-                        Ok(buckets) => buckets,
-                        Err(source) => {
-                            fail(
-                                &failure,
+                                }
+                            })?;
+                            build_mvt_tile(&style, job.tile, &decoded).map_err(|error| {
                                 BootError::Build {
                                     url: job.url.clone(),
-                                    source: alloc::boxed::Box::new(source),
-                                },
-                            );
+                                    message: error.to_string(),
+                                }
+                            })
+                        },
+                        || BootError::Abandoned {
+                            url: job.url.clone(),
+                        },
+                    );
+                    let buckets = match built {
+                        Ok(built) => built.tile,
+                        Err(error) => {
+                            fail(&failure, error);
                             return;
                         }
                     };
@@ -435,7 +495,7 @@ impl Boot {
     pub fn vertices(&self) -> usize {
         self.tiles
             .iter()
-            .flat_map(|(_, buckets)| buckets)
+            .flat_map(|(_, buckets)| buckets.iter())
             .map(|bucket| {
                 bucket.content.as_fill().map_or(0, |b| b.vertices.len())
                     + bucket.content.as_line().map_or(0, |b| b.vertices.len())

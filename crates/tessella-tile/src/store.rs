@@ -43,7 +43,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 /// Identifies a tile's contribution to a style.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TileKey {
     /// Source id the tile came from.
     pub source: String,

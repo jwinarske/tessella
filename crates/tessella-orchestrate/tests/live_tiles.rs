@@ -253,13 +253,13 @@ fn four_views_over_one_cover_fetch_each_tile_once() {
 
     // Each view asks for every tile; the server must see far fewer than that.
     let asked = (VIEWS * urls.len()) as u64;
-    assert_eq!(files.stats().fetches() + files.stats().waits(), asked);
+    assert_eq!(files.stats().computed() + files.stats().waited(), asked);
     assert!(
         server.requests() < asked,
         "{} requests for {asked} asks",
         server.requests()
     );
-    assert_eq!(files.stats().fetches(), server.requests());
+    assert_eq!(files.stats().computed(), server.requests());
 
     // And no tile was fetched more than once, which is the claim that matters.
     let mut per_path: BTreeMap<String, usize> = BTreeMap::new();

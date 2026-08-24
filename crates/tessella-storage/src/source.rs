@@ -9,7 +9,7 @@
 //! requests before any of them has an answer to share.
 //!
 //! §9.3's flatness counters are the assertion: over an identical cover, four views must produce
-//! one fetch and three waits, not four fetches. [`Stats`] is what those counters read.
+//! one fetch and three waits, not four fetches. [`ShareStats`] is what those counters read.
 //!
 //! # The leader/waiter split, and why the leader cannot simply hold the lock
 //!
@@ -26,9 +26,9 @@
 //! wakes everyone whether the fetch returned, returned an error, or panicked. Without it a
 //! single malformed response could hang every worker that asked for the same tile.
 
-use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
+
+use crate::shared::{ShareStats, Shared};
 
 /// What a fetch produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,83 +96,24 @@ pub trait FileSource: Send + Sync {
     fn fetch(&self, url: &str) -> Result<Response, FetchError>;
 }
 
-/// How much work coalescing saved, for the §9.3 flatness assertion.
-#[derive(Debug, Default)]
-pub struct Stats {
-    fetches: AtomicU64,
-    waits: AtomicU64,
-}
-
-impl Stats {
-    /// Requests that actually went to the source.
-    #[must_use]
-    pub fn fetches(&self) -> u64 {
-        self.fetches.load(Ordering::Relaxed)
-    }
-
-    /// Requests that joined one already in flight.
-    #[must_use]
-    pub fn waits(&self) -> u64 {
-        self.waits.load(Ordering::Relaxed)
-    }
-}
-
-#[derive(Debug, Default)]
-struct Pending {
-    outcome: Mutex<Option<Fetched>>,
-    ready: Condvar,
-}
-
 /// Wraps a source so concurrent requests for one URL become one request.
+///
+/// # Not a cache, and what that costs
+///
+/// A finished request is deregistered, so two views wanting a tile *one after the other* fetch
+/// it twice. That is deliberate — caching has lifetime rules of its own, and revalidation is
+/// impossible against a table that never forgets — but it means coalescing alone does not make
+/// fetches flat in view count (§9.3). Only concurrent ones. Flatness across time needs
+/// something that remembers: the byte cache of §12.6, or a caller that consults its own cache
+/// before reaching for the network, which is what `tessella_orchestrate::boot` does.
+///
+/// The leader/waiter machinery — including the guard that keeps a panicking leader from
+/// stranding its waiters — lives in [`crate::shared::Shared`], because §5.5 shares decodes and
+/// buckets the same way and the subtle part should exist once.
 #[derive(Debug)]
 pub struct Coalescing<S> {
     source: S,
-    inflight: Mutex<HashMap<String, Arc<Pending>>>,
-    stats: Stats,
-}
-
-/// The leader's obligation to post *something*.
-///
-/// Held across the fetch. On drop it deregisters the URL and, if no result was posted, posts a
-/// failure — so an unwinding leader wakes its waiters with an error instead of leaving them
-/// blocked forever.
-struct Leadership<'a, S> {
-    owner: &'a Coalescing<S>,
-    url: &'a str,
-    pending: Arc<Pending>,
-    posted: bool,
-}
-
-impl<S> Leadership<'_, S> {
-    fn post(&mut self, outcome: Fetched) {
-        let mut slot = self
-            .pending
-            .outcome
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *slot = Some(outcome);
-        self.posted = true;
-        drop(slot);
-        self.pending.ready.notify_all();
-    }
-}
-
-impl<S> Drop for Leadership<'_, S> {
-    fn drop(&mut self) {
-        // Deregister first: a later caller must be free to become the next leader rather than
-        // wait on an entry that is finished.
-        self.owner
-            .inflight
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(self.url);
-
-        if !self.posted {
-            self.post(Err(FetchError::LeaderLost {
-                url: self.url.to_string(),
-            }));
-        }
-    }
+    inflight: Shared<String, Fetched>,
 }
 
 impl<S: FileSource> Coalescing<S> {
@@ -180,15 +121,14 @@ impl<S: FileSource> Coalescing<S> {
     pub fn new(source: S) -> Self {
         Self {
             source,
-            inflight: Mutex::new(HashMap::new()),
-            stats: Stats::default(),
+            inflight: Shared::new(),
         }
     }
 
     /// What coalescing saved.
     #[must_use]
-    pub fn stats(&self) -> &Stats {
-        &self.stats
+    pub fn stats(&self) -> &ShareStats {
+        self.inflight.stats()
     }
 
     /// The wrapped source.
@@ -203,42 +143,14 @@ impl<S: FileSource> Coalescing<S> {
     ///
     /// [`FetchError`] from the underlying source, or if the leader for this URL was lost.
     pub fn fetch(&self, url: &str) -> Fetched {
-        let mut table = self
-            .inflight
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-
-        if let Some(pending) = table.get(url).cloned() {
-            drop(table);
-            self.stats.waits.fetch_add(1, Ordering::Relaxed);
-
-            let mut slot = pending
-                .outcome
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            while slot.is_none() {
-                slot = pending
-                    .ready
-                    .wait(slot)
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-            }
-            return slot.clone().expect("the loop only exits with a result");
-        }
-
-        let pending = Arc::new(Pending::default());
-        table.insert(url.to_string(), Arc::clone(&pending));
-        drop(table);
-
-        self.stats.fetches.fetch_add(1, Ordering::Relaxed);
-        let mut leadership = Leadership {
-            owner: self,
-            url,
-            pending,
-            posted: false,
-        };
-
-        let outcome = self.source.fetch(url).map(Arc::new);
-        leadership.post(outcome.clone());
-        outcome
+        // The value shared between leader and waiters is the *outcome*, not the response: a
+        // failure is one caller's answer for all of them, not something each retries.
+        self.inflight
+            .compute(url.to_string(), || self.source.fetch(url).map(Arc::new))
+            .unwrap_or_else(|_| {
+                Err(FetchError::LeaderLost {
+                    url: url.to_string(),
+                })
+            })
     }
 }

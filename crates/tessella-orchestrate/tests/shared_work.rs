@@ -18,6 +18,7 @@ use tessella_orchestrate::tile::{TileBuilder, TileId, bucket_for, build_tile};
 use tessella_source::geojson;
 use tessella_source::tiling::TilingOptions;
 use tessella_style::{Source, Style};
+use tessella_tile::store::Lookup;
 
 const HERMETIC: &str = include_str!("../../tessella-style/tests/hermetic_style.json");
 
@@ -221,4 +222,47 @@ fn a_tiles_bucket_does_not_depend_on_when_it_was_built() {
         [5, 5, 10, 10],
         "matching the oracle's per-tile counts"
     );
+}
+
+/// A tile used at two zooms is two entries, not one shared between them.
+///
+/// The store key carries the overscaled zoom because a zoom-varying paint property's endpoints
+/// are evaluated against it. This was wrong when the field was added: `TileKey` gained it and
+/// the one place that builds keys kept calling the constructor that defaults it to the tile's
+/// own zoom, so the field existed and did nothing. Nothing failed, because nothing overscaled.
+#[test]
+fn a_tile_used_at_two_zooms_is_two_entries() {
+    let style = style();
+    let features = features();
+    let mut builder = TileBuilder::new(64, 1);
+
+    let own = TileId::new(13, 4093, 2723);
+    let stood_in = TileId::overscaled(13, 4093, 2723, 15);
+    assert_ne!(
+        builder.key("probe", own),
+        builder.key("probe", stood_in),
+        "the keys must differ before anything else can"
+    );
+
+    let (_, first) = builder
+        .build(&style, "probe", own, &features, TilingOptions::default())
+        .expect("builds");
+    let (_, second) = builder
+        .build(
+            &style,
+            "probe",
+            stood_in,
+            &features,
+            TilingOptions::default(),
+        )
+        .expect("builds");
+    assert_eq!(first, Lookup::Miss);
+    assert_eq!(second, Lookup::Miss, "not served the other's bucket");
+
+    // And the same tile at the same zoom still shares.
+    let (_, again) = builder
+        .build(&style, "probe", own, &features, TilingOptions::default())
+        .expect("builds");
+    assert_eq!(again, Lookup::Hit);
+    assert_eq!(builder.builds(), 2);
 }

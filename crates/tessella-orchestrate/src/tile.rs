@@ -778,9 +778,23 @@ impl TileBuilder {
     }
 
     /// The key a tile occupies in the store.
+    ///
+    /// Carries the tile's *used* zoom as well as its own. A bucket is only shareable between
+    /// views that would build it identically, and a zoom-varying paint property is stored as
+    /// its value at `overscaled_z` and `overscaled_z + 1` — so the same canonical tile standing
+    /// in at two different zooms is two different buckets. Keying on `(z, x, y)` alone hands
+    /// one view the other's endpoints: wrong colours and widths, and invisible at integer zoom,
+    /// which is where a person would look first.
     #[must_use]
     pub fn key(&self, source: &str, tile: TileId) -> TileKey {
-        TileKey::new(source, tile.z, tile.x, tile.y, self.style_rev)
+        TileKey::overscaled(
+            source,
+            tile.z,
+            tile.x,
+            tile.y,
+            tile.overscaled_z,
+            self.style_rev,
+        )
     }
 
     /// Builds a tile, or returns the one already built.

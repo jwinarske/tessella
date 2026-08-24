@@ -183,7 +183,8 @@ fn the_berlin_archive_overscales_past_its_maximum() {
 #[test]
 #[ignore = "needs a tile server; see the module docs"]
 fn cold_boot_to_first_tile() {
-    use tessella_orchestrate::boot::{Workers, cold_start};
+    use tessella_orchestrate::boot::{BootError, ColdStart, Workers};
+    use tessella_orchestrate::cache::TileCache;
 
     let origin = origin();
     for (name, manifest, lon, lat, zoom) in [
@@ -209,8 +210,19 @@ fn cold_boot_to_first_tile() {
 
         for workers in [Workers::serial(), Workers::default()] {
             let files = Coalescing::new(HttpFileSource::default());
-            let boot = cold_start(&text, &view(lon, lat, zoom), &files, workers)
-                .unwrap_or_else(|error| panic!("{error}\nis `pmtiles serve` running?"));
+            // A fresh cache per run: a shared one would make the second a cache hit and report
+            // a startup time that no cold start ever sees.
+            let cache: TileCache<BootError> = TileCache::new(256);
+            let boot = ColdStart {
+                style: &text,
+                view: &view(lon, lat, zoom),
+                files: &files,
+                cache: &cache,
+                workers,
+                style_rev: 1,
+            }
+            .run()
+            .unwrap_or_else(|error| panic!("{error}\nis `pmtiles serve` running?"));
             let t = boot.trace;
             println!(
                 "{name} z{zoom} x{}: parse {:?}  sources {:?}  cover {:?}  \

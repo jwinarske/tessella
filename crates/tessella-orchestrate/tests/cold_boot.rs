@@ -1,18 +1,20 @@
 //! Cold start, traced (§12.5) — R1's remaining exit criterion.
 //!
 //! Runs against the in-repo tile server, so the numbers are reproducible and CI needs no
-//! network. They are not *representative* — loopback has no latency and the fixture is one
-//! tile repeated — which is the point: what this asserts is the shape of the startup, not a
+//! network. They are not *representative* — loopback has no latency and the fixture is one tile
+//! repeated — which is the point: what this asserts is the shape of the startup, not a
 //! wall-clock budget that would only measure the machine it ran on.
 //!
 //! `live_pmtiles` reports the same trace against real archives, where the numbers mean
 //! something.
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use tessella_orchestrate::boot::{BootError, Workers, cold_start};
+use tessella_orchestrate::boot::{Boot, BootError, ColdStart, Workers};
+use tessella_orchestrate::cache::TileCache;
 use tessella_storage::http::HttpFileSource;
-use tessella_storage::source::Coalescing;
+use tessella_storage::source::{Coalescing, FetchError, FileSource, Response};
 use tessella_tile::cover::ViewTransform;
 
 const FIXTURE: &[u8] = include_bytes!("../../../tests/mvt-fixtures/real-world-0-0-0.mvt");
@@ -32,11 +34,8 @@ struct Slow {
     delay: Duration,
 }
 
-impl tessella_storage::source::FileSource for Slow {
-    fn fetch(
-        &self,
-        url: &str,
-    ) -> Result<tessella_storage::source::Response, tessella_storage::source::FetchError> {
+impl FileSource for Slow {
+    fn fetch(&self, url: &str) -> Result<Response, FetchError> {
         std::thread::sleep(self.delay);
         self.inner.fetch(url)
     }
@@ -68,25 +67,45 @@ fn view(zoom: f64) -> ViewTransform {
     })
 }
 
+fn boot<S: FileSource>(
+    style: &str,
+    view: &ViewTransform,
+    files: &Coalescing<S>,
+    cache: &TileCache<BootError>,
+    workers: Workers,
+) -> Result<Boot, BootError> {
+    ColdStart {
+        style,
+        view,
+        files,
+        cache,
+        workers,
+        style_rev: 1,
+    }
+    .run()
+}
+
 /// A cold start reaches geometry, and reports every stage on the way.
 #[test]
 fn a_cold_start_reaches_the_first_bucket() {
     let server = server();
     let files = Coalescing::new(HttpFileSource::default());
-    let boot = cold_start(
+    let cache: TileCache<BootError> = TileCache::new(64);
+    let started = boot(
         &style(&server.origin()),
         &view(4.0),
         &files,
+        &cache,
         Workers::default(),
     )
     .expect("boots");
 
-    assert!(!boot.tiles.is_empty(), "the cover produced tiles");
-    assert!(boot.vertices() > 0, "and something tessellated");
+    assert!(!started.tiles.is_empty(), "the cover produced tiles");
+    assert!(started.vertices() > 0, "and something tessellated");
 
-    // The stages are monotonic: each finishes no earlier than the one before it. A trace whose
+    // The stages are monotonic: each finishes no earlier than the one before. A trace whose
     // stages crossed would be measuring from different clocks.
-    let t = boot.trace;
+    let t = started.trace;
     assert!(t.style_parsed <= t.sources_resolved, "{t:?}");
     assert!(t.sources_resolved <= t.cover_computed, "{t:?}");
     assert!(t.cover_computed <= t.first_fetch, "{t:?}");
@@ -105,28 +124,29 @@ fn the_first_bucket_precedes_completion() {
         inner: HttpFileSource::default(),
         delay: Duration::from_millis(20),
     });
-    let boot = cold_start(
+    let cache: TileCache<BootError> = TileCache::new(64);
+    let started = boot(
         &style(&server.origin()),
         &view(4.0),
         &files,
+        &cache,
         Workers::default(),
     )
     .expect("boots");
 
-    assert!(boot.tiles.len() >= 4, "{} tiles", boot.tiles.len());
+    assert!(started.tiles.len() >= 4, "{} tiles", started.tiles.len());
     assert!(
-        boot.trace.first_bucket < boot.trace.complete,
+        started.trace.first_bucket < started.trace.complete,
         "first {:?} vs complete {:?}",
-        boot.trace.first_bucket,
-        boot.trace.complete
+        started.trace.first_bucket,
+        started.trace.complete
     );
 }
 
 /// Tile work overlaps: more workers finish a cover sooner.
 ///
 /// Asserted as a ratio rather than a wall-clock bound, so it measures the fan-out rather than
-/// the machine. With a 20 ms delay per fetch and at least four tiles, a serial start pays at
-/// least four delays and a four-way one pays about one.
+/// the machine.
 #[test]
 fn the_cover_is_fetched_in_parallel() {
     let server = server();
@@ -138,7 +158,10 @@ fn the_cover_is_fetched_in_parallel() {
             inner: HttpFileSource::default(),
             delay,
         });
-        cold_start(&text, &view(4.0), &files, workers)
+        // A fresh cache each time: reusing one would make the second run a cache hit and
+        // measure nothing.
+        let cache: TileCache<BootError> = TileCache::new(64);
+        boot(&text, &view(4.0), &files, &cache, workers)
             .expect("boots")
             .trace
             .complete
@@ -171,9 +194,10 @@ fn an_unused_source_costs_no_round_trip() {
     );
 
     let files = Coalescing::new(HttpFileSource::default());
+    let cache: TileCache<BootError> = TileCache::new(64);
     // If the unused source were resolved, its manifest would 404 and this would fail.
-    let boot = cold_start(&text, &view(4.0), &files, Workers::default()).expect("boots");
-    assert!(boot.vertices() > 0);
+    let started = boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
+    assert!(started.vertices() > 0);
     assert!(
         !server
             .paths()
@@ -192,17 +216,20 @@ fn a_dead_origin_fails_with_the_url() {
         server.origin()
     };
     let files = Coalescing::new(HttpFileSource::default());
-    match cold_start(&style(&origin), &view(4.0), &files, Workers::default()) {
+    let cache: TileCache<BootError> = TileCache::new(64);
+    match boot(
+        &style(&origin),
+        &view(4.0),
+        &files,
+        &cache,
+        Workers::default(),
+    ) {
         Err(BootError::Fetch { url, .. }) => assert!(url.starts_with(&origin), "{url}"),
         other => panic!("{other:?}"),
     }
 }
 
 /// The worker count is a policy with a default, not a number every caller invents.
-///
-/// It was one: `cold_start` took a bare `usize` and each call site picked its own. That is the
-/// shape a tuning parameter takes when nobody has decided what it should be, and it puts the
-/// decision in the place least able to make it.
 #[test]
 fn the_worker_count_has_a_policy() {
     assert_eq!(Workers::default().get(), Workers::DEFAULT);
@@ -219,21 +246,114 @@ fn the_worker_count_has_a_policy() {
 }
 
 /// A cover smaller than the pool still completes.
-///
-/// `for_jobs` can return zero when there is nothing to do, and a loop spawning zero workers
-/// must not leave the results unfilled — the empty-cover path returns before that point, and
-/// this is what says so.
 #[test]
 fn a_pool_larger_than_the_cover_is_harmless() {
     let server = server();
     let files = Coalescing::new(HttpFileSource::default());
-    let boot = cold_start(
+    let cache: TileCache<BootError> = TileCache::new(64);
+    let started = boot(
         &style(&server.origin()),
         &view(0.0),
         &files,
+        &cache,
         Workers::new(64),
     )
     .expect("boots");
-    assert!(!boot.tiles.is_empty());
-    assert!(boot.vertices() > 0);
+    assert!(!started.tiles.is_empty());
+    assert!(started.vertices() > 0);
+}
+
+/// Four views over one cover build each tile once — §9.3's flatness claim, past the fetch.
+///
+/// Coalescing already made the *bytes* arrive once. This is the rest of it: decoding and
+/// bucket building are process-scoped work (§5.5), and a build that ran per view would be a bug
+/// whether or not the fetch was shared.
+///
+/// The views start together on a barrier, so they all miss the cache — which is the case a
+/// cache alone cannot cover and the shared-work table exists for.
+#[test]
+fn four_views_over_one_cover_build_each_tile_once() {
+    const VIEWS: usize = 4;
+    let server = server();
+    let text = style(&server.origin());
+    let files = Arc::new(Coalescing::new(HttpFileSource::default()));
+    let cache = Arc::new(TileCache::<BootError>::new(64));
+
+    let start = Arc::new(std::sync::Barrier::new(VIEWS));
+    let handles: Vec<_> = (0..VIEWS)
+        .map(|_| {
+            let files = Arc::clone(&files);
+            let cache = Arc::clone(&cache);
+            let start = Arc::clone(&start);
+            let text = text.clone();
+            std::thread::spawn(move || {
+                start.wait();
+                let started =
+                    boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
+                (started.tiles.len(), started.vertices())
+            })
+        })
+        .collect();
+
+    let results: Vec<(usize, usize)> = handles
+        .into_iter()
+        .map(|handle| handle.join().expect("no panic"))
+        .collect();
+    assert!(
+        results.iter().all(|result| *result == results[0]),
+        "every view saw the same map: {results:?}"
+    );
+
+    let tiles = results[0].0;
+    assert!(tiles >= 4, "{tiles} tiles");
+    assert_eq!(
+        cache.builds() as usize,
+        tiles,
+        "one build per tile, not per view"
+    );
+    // Builds, joins *and* hits: a view that arrives after another finished hits rather than
+    // joining, and which of the three happens depends on scheduling. What must hold in every
+    // interleaving is that each tile is built once and every caller is answered.
+    assert_eq!(
+        cache.lookups(),
+        (VIEWS * tiles) as u64,
+        "every view is accounted for: {} built, {} joined, {} hit",
+        cache.builds(),
+        cache.joins(),
+        cache.hits()
+    );
+    // The cache is consulted before the network, so a tile whose buckets exist costs no
+    // request. Coalescing alone would not give this: it dedupes requests *in flight* and
+    // deliberately is not a cache, so a view arriving after another finished would fetch
+    // again. Until the byte cache of §12.6 exists, this is what keeps fetches flat.
+    assert!(
+        server.requests() as usize <= tiles,
+        "{} requests for {tiles} tiles",
+        server.requests()
+    );
+}
+
+/// A second view arriving later finds the tiles built, and builds nothing.
+#[test]
+fn a_later_view_finds_the_cache_warm() {
+    let server = server();
+    let text = style(&server.origin());
+    let files = Coalescing::new(HttpFileSource::default());
+    let cache: TileCache<BootError> = TileCache::new(64);
+
+    let first = boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
+    let builds = cache.builds();
+    assert_eq!(builds as usize, first.tiles.len());
+
+    let requests = server.requests();
+    let second = boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
+    assert_eq!(second.tiles.len(), first.tiles.len());
+    assert_eq!(
+        server.requests(),
+        requests,
+        "a warm view costs no network at all"
+    );
+    assert_eq!(cache.builds(), builds, "the second view built nothing");
+    assert_eq!(cache.joins(), 0, "and waited on nothing, having hit");
+    assert_eq!(cache.hits() as usize, second.tiles.len(), "it hit for each");
 }

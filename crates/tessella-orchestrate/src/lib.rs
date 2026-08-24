@@ -37,6 +37,8 @@ extern crate std;
 pub mod binder;
 #[cfg(feature = "std")]
 pub mod boot;
+#[cfg(feature = "std")]
+pub mod cache;
 pub mod camera;
 pub mod counters;
 pub mod damage;

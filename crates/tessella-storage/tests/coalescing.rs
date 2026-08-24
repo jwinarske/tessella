@@ -75,7 +75,7 @@ fn concurrent_callers_share_one_fetch() {
 
     start.wait();
     // Let the threads pile up on the URL before the leader is allowed to return.
-    while coalescing.stats().waits() < (VIEWS - 1) as u64 {
+    while coalescing.stats().waited() < (VIEWS - 1) as u64 {
         std::thread::sleep(Duration::from_millis(1));
     }
     gate.wait();
@@ -97,8 +97,8 @@ fn concurrent_callers_share_one_fetch() {
         1,
         "one fetch"
     );
-    assert_eq!(coalescing.stats().fetches(), 1);
-    assert_eq!(coalescing.stats().waits(), (VIEWS - 1) as u64);
+    assert_eq!(coalescing.stats().computed(), 1);
+    assert_eq!(coalescing.stats().waited(), (VIEWS - 1) as u64);
     assert!(bodies.iter().all(|body| body == &bodies[0]), "one answer");
 }
 
@@ -109,8 +109,8 @@ fn distinct_urls_each_fetch() {
     for tile in 0..3 {
         coalescing.fetch(&format!("host/{tile}")).expect("fetched");
     }
-    assert_eq!(coalescing.stats().fetches(), 3);
-    assert_eq!(coalescing.stats().waits(), 0);
+    assert_eq!(coalescing.stats().computed(), 3);
+    assert_eq!(coalescing.stats().waited(), 0);
 }
 
 /// A finished request does not keep coalescing: the next caller is a new leader.
@@ -123,11 +123,11 @@ fn a_finished_request_is_not_a_cache() {
     coalescing.fetch("host/a").expect("fetched");
     coalescing.fetch("host/a").expect("fetched");
     assert_eq!(
-        coalescing.stats().fetches(),
+        coalescing.stats().computed(),
         2,
         "not deduped after the fact"
     );
-    assert_eq!(coalescing.stats().waits(), 0);
+    assert_eq!(coalescing.stats().waited(), 0);
 }
 
 /// A failure is shared with the waiters rather than retried per caller.
@@ -141,7 +141,7 @@ fn a_failure_reaches_every_waiter() {
         coalescing.fetch("host/a"),
         Err(FetchError::Transport { .. })
     ));
-    assert_eq!(coalescing.stats().fetches(), 1);
+    assert_eq!(coalescing.stats().computed(), 1);
 }
 
 /// A leader that panics wakes its waiters with an error instead of stranding them.
@@ -173,7 +173,7 @@ fn a_panicking_leader_does_not_strand_waiters() {
         })
     };
 
-    while coalescing.stats().fetches() == 0 {
+    while coalescing.stats().computed() == 0 {
         std::thread::sleep(Duration::from_millis(1));
     }
     let waiter = {
@@ -186,7 +186,7 @@ fn a_panicking_leader_does_not_strand_waiters() {
         })
     };
 
-    while coalescing.stats().waits() == 0 {
+    while coalescing.stats().waited() == 0 {
         std::thread::sleep(Duration::from_millis(1));
     }
     gate.wait();
@@ -211,5 +211,5 @@ fn a_panicking_leader_does_not_strand_waiters() {
     }));
     std::panic::set_hook(previous);
     assert!(again.is_err(), "still panicking, but reachable");
-    assert_eq!(coalescing.stats().fetches(), 2, "a new leader was allowed");
+    assert_eq!(coalescing.stats().computed(), 2, "a new leader was allowed");
 }

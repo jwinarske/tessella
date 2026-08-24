@@ -506,7 +506,11 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   little cores and a host-derived number makes a workstation measurement say nothing about the
   device. Remaining for exit: a budget to hold that number against, on the RK3566 lane rather
   than on a workstation loopback; and §5.4's one process-scoped pool with priority classes,
-  which the per-call pool here stands in for.
+  which the per-call pool here stands in for. Decode and bucket build are now shared as well as
+  fetched once: the bucket cache is consulted *before* the network, so a warm view costs no
+  request at all — which matters because coalescing alone dedupes only *concurrent* fetches and
+  is deliberately not a cache, so flatness across time waits on §12.6's byte cache or on a
+  caller that checks its own first.
 - **R1.5** — four views over the same style (§13). Exit: §9.2 invariants green; §13.3
   four-view zoom benchmark green on RK3566; §13.1 fractional-zoom counters at zero.
 - **R2** — symbols: glyph manager, shaping, quads, per-view placement, collision, cross-tile
