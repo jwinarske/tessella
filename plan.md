@@ -513,7 +513,9 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   zoom is hours over a connection that will drop.
   Remaining: TLS and reading `.pmtiles`
   archives directly (both held for the cross toolchains, §16), cross-faded (pattern) binders,
-  DR-11 evaluator, §12.5 startup path.
+  DR-11's bytecode VM — classification, constant folding and the direct evaluator are done and
+  wired, and §12.1 now carries the measurement that says what the VM has to fix — and §12.5's
+  startup path.
   A region's area is a box or a shape. The shape path is a port of mbgl's `util::TileCover`
   scanline, checked against mbgl's own expectations — the exact 424-tile multipolygon, the
   punched hole at 8/136/87, the six-tile San Francisco outline — and against
@@ -562,9 +564,12 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   6.7 ms and completes in 22 ms, against 12.7/72 ms serially. The worker count is a bounded
   constant rather than the host's core count, for the reason §5.4 gives — decode belongs on the
   little cores and a host-derived number makes a workstation measurement say nothing about the
-  device. Remaining for exit: a budget to hold that number against, on the RK3566 lane rather
-  than on a workstation loopback; and §5.4's one process-scoped pool with priority classes,
-  which the per-call pool here stands in for. Decode and bucket build are now shared as well as
+  device. §5.4's one process-scoped pool now exists, with the three
+  priority classes, and the cold start queues onto it rather than spawning threads per view; a
+  waiter helps with work at or above its own class only, so an hours-long region download at
+  the background class cannot get in front of a view trying to draw. Remaining for exit: a
+  budget to hold the worker count against, on the RK3566 lane rather than on a workstation
+  loopback. Decode and bucket build are now shared as well as
   fetched once: the bucket cache is consulted *before* the network, so a warm view costs no
   request at all — which matters because coalescing alone dedupes only *concurrent* fetches and
   is deliberately not a cache, so flatness across time waits on §12.6's byte cache or on a
@@ -699,6 +704,18 @@ easy pass).
 
 Bucket build evaluates expressions per feature; mbgl walks a boxed AST. Largest pure-CPU line
 item after tessellation, and the one place a rewrite beats mbgl outright:
+
+Measured on this port, against the fixture's 17154-feature `admin` layer with every paint
+property data-driven: 7.9 ms to build against 2.0 ms with the same properties constant, so
+evaluation is about three quarters of bucket build. §12.1's premise holds here.
+
+Where that cost sits is not where DR-11 assumed. Per feature, a bare literal is 3 ns — the loop
+and the dispatch — and a `get` is 26 ns, on features carrying three properties whose first key
+is the one being read, so the linear scan finds it immediately. The 23 ns difference is the
+value representation: `Result<Value, EvaluationError>` is 40 bytes, moved through every node of
+the tree to carry what is nearly always an 8-byte `f64`. A VM that removed virtual dispatch and
+kept that representation would win the 3 ns and not the 23. `benches/expression_cost.rs` holds
+the measurement.
 
 - **Strict classification at compile time.** Constant → folded at style parse. Camera-only →
   evaluated once per (layer, integer-zoom interval), process-wide, cached as interpolation
