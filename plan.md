@@ -713,7 +713,14 @@ Where that cost sits is worth knowing before building the VM. `Feature::property
 directly — the same dyn-dispatched call `["get", k]` makes, same scan, same owned `Value` — is
 2 ns per feature. The data access is not the cost. A literal number evaluates in 3 ns and a
 literal string in 7 ns, the difference being the `String` clone `Expr::Literal` does every time.
-`["get", "admin_level"]` is 26 ns, so after the lookup and the key most of it is the walk
+`["get", "admin_level"]` was 26 ns, of which two were the lookup and the rest the walk. Reading
+a string without copying it took that to 12 ns: `["get", k]` holds its key as a literal, and
+`expect_string(&evaluate(key))` allocated twice per feature — once cloning the `Value`, once
+copying the text out of the clone — to read something known at parse. Borrowing the literal
+straight from the tree is 2.5x on `get` and `has` and about a third off `match`. End to end it
+is inside the noise on the style above, whose cost is dominated by nested `interpolate` rather
+than by key reads; on a style whose data-driven properties are mostly plain `get` and `match` it
+is the larger part. What remains at 12 ns is the walk
 itself: recursive non-inlined `evaluate` calls returning a 40-byte
 `Result<Value, EvaluationError>` by memory to carry what is nearly always an 8-byte `f64`, plus
 the wrapping and the drops on the way back. The VM's target is the walk, not the data access.

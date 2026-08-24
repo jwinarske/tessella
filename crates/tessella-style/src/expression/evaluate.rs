@@ -5,6 +5,7 @@
 //! oracle is what will confirm it does — optimizing something not yet known to be correct is
 //! the wrong order.
 
+use alloc::borrow::Cow;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -163,7 +164,7 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
         }
         Expr::Join { items, separator } => {
             let items = evaluate(items, context)?;
-            let separator = expect_string(&evaluate(separator, context)?)?;
+            let separator = expect_str(separator, context)?;
             let Value::Array(items) = items else {
                 return Err(EvaluationError::Type {
                     expected: "array",
@@ -322,7 +323,7 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
             }
         }
         Expr::Get { key, object } => {
-            let key = expect_string(&evaluate(key, context)?)?;
+            let key = expect_str(key, context)?;
             // A property that is not there is null, not an error. Styles rely on this:
             // `["coalesce", ["get", "name_en"], ["get", "name"]]` is idiomatic.
             match object {
@@ -334,7 +335,7 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
             }
         }
         Expr::Has { key, object } => {
-            let key = expect_string(&evaluate(key, context)?)?;
+            let key = expect_str(key, context)?;
             match object {
                 Some(object) => {
                     let target = evaluate(object, context)?;
@@ -1128,12 +1129,27 @@ fn expect_number(value: &Value) -> Result<f64, EvaluationError> {
     })
 }
 
-fn expect_string(value: &Value) -> Result<String, EvaluationError> {
-    value
-        .as_str()
-        .map(ToString::to_string)
-        .ok_or(EvaluationError::Type {
+/// The string an expression names, without copying it when it is already one.
+///
+/// # Why this is not `expect_string(&evaluate(..))`
+///
+/// That spelling allocates twice for the commonest expression in any style. `["get", "name"]`
+/// holds its key as `Expr::Literal(Value::String)`; evaluating it clones the `Value`, and
+/// `expect_string` then copies the text out of the clone. Both happen per feature, so a layer
+/// of seventeen thousand features does thirty-four thousand allocations to read a key that was
+/// known when the style was parsed.
+///
+/// A literal is borrowed straight from the tree. Anything else is evaluated as before, but the
+/// text is moved out of the resulting `Value` rather than copied from it.
+fn expect_str<'a>(expr: &'a Expr, context: &Context<'_>) -> Result<Cow<'a, str>, EvaluationError> {
+    if let Expr::Literal(Value::String(text)) = expr {
+        return Ok(Cow::Borrowed(text));
+    }
+    match evaluate(expr, context)? {
+        Value::String(text) => Ok(Cow::Owned(text)),
+        other => Err(EvaluationError::Type {
             expected: "string",
-            got: value.type_name(),
-        })
+            got: other.type_name(),
+        }),
+    }
 }
