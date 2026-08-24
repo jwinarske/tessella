@@ -55,7 +55,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 
 use tessella_tile::cover::Bounds;
 
-use crate::offline::Region;
+use crate::offline::{Area, Region};
 use crate::source::Response;
 
 /// Why a cache operation failed.
@@ -152,6 +152,10 @@ CREATE TABLE IF NOT EXISTS regions (
   max_zoom           REAL NOT NULL,
   pixel_ratio        REAL NOT NULL,
   include_ideographs INTEGER NOT NULL,
+  -- MultiPolygon coordinates for a shape, null for a plain box. The bounding-box columns are
+  -- filled either way: a list of regions draws them on a map without parsing anything, and a
+  -- shape that is only a box would otherwise be two copies of the same four numbers.
+  geometry           TEXT,
   description        TEXT,
   created            INTEGER NOT NULL
 );
@@ -270,6 +274,17 @@ impl SqliteCache {
         if !has_pinned {
             connection
                 .execute_batch("ALTER TABLE responses ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+                .map_err(CacheError::Open)?;
+        }
+        // Regions written before shapes existed are boxes, which is what a null geometry means.
+        let has_geometry = connection
+            .prepare("SELECT 1 FROM pragma_table_info('regions') WHERE name = 'geometry'")
+            .map_err(CacheError::Open)?
+            .exists([])
+            .map_err(CacheError::Open)?;
+        if !has_geometry {
+            connection
+                .execute_batch("ALTER TABLE regions ADD COLUMN geometry TEXT")
                 .map_err(CacheError::Open)?;
         }
         Ok(())
@@ -563,6 +578,7 @@ impl SqliteCache {
         description: Option<&str>,
         now: i64,
     ) -> Result<RegionId, CacheError> {
+        let bounds = region.area.bounds();
         let connection = self
             .connection
             .lock()
@@ -570,18 +586,19 @@ impl SqliteCache {
         connection.execute(
             "INSERT INTO regions
                (style_url, west, south, east, north, min_zoom, max_zoom,
-                pixel_ratio, include_ideographs, description, created)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                pixel_ratio, include_ideographs, geometry, description, created)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 region.style_url,
-                region.bounds.west,
-                region.bounds.south,
-                region.bounds.east,
-                region.bounds.north,
+                bounds.west,
+                bounds.south,
+                bounds.east,
+                bounds.north,
                 region.min_zoom,
                 region.max_zoom,
                 f64::from(region.pixel_ratio),
                 i64::from(region.include_ideographs),
+                region.area.geometry().map(|value| value.to_string()),
                 description,
                 now,
             ],
@@ -601,23 +618,42 @@ impl SqliteCache {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut statement = connection.prepare(
             "SELECT id, style_url, west, south, east, north, min_zoom, max_zoom,
-                    pixel_ratio, include_ideographs, description, created
+                    pixel_ratio, include_ideographs, geometry, description, created
              FROM regions ORDER BY id",
         )?;
         let rows = statement.query_map([], |row| {
+            // A stored shape that no longer parses is an error rather than a silent fall back
+            // to its bounding box: downgrading a city outline to the sea around it, without
+            // saying so, is a download the user never agreed to.
+            let unreadable = |error: Box<dyn std::error::Error + Send + Sync>| {
+                rusqlite::Error::FromSqlConversionFailure(10, rusqlite::types::Type::Text, error)
+            };
+            let area = match row.get::<_, Option<String>>(10)? {
+                Some(geometry) => {
+                    let value: serde_json::Value =
+                        serde_json::from_str(&geometry).map_err(|e| unreadable(Box::new(e)))?;
+                    Area::from_geometry(&value).map_err(|e| unreadable(Box::new(e)))?
+                }
+                None => Area::Box(Bounds::new(
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                )),
+            };
             Ok(StoredRegion {
                 id: RegionId(row.get(0)?),
                 region: Region {
                     style_url: row.get(1)?,
-                    bounds: Bounds::new(row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?),
+                    area,
                     min_zoom: row.get(6)?,
                     max_zoom: row.get(7)?,
                     #[allow(clippy::cast_possible_truncation)]
                     pixel_ratio: row.get::<_, f64>(8)? as f32,
                     include_ideographs: row.get::<_, i64>(9)? != 0,
                 },
-                description: row.get(10)?,
-                created: row.get(11)?,
+                description: row.get(11)?,
+                created: row.get(12)?,
             })
         })?;
         rows.collect::<Result<Vec<_>, _>>()

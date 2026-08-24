@@ -23,6 +23,7 @@
 //! [`Estimate::precise`] says which it is.
 
 use tessella_tile::cover::{Bounds, CoverError, TileCoord};
+use tessella_tile::polygon::{Cover, Polygon};
 
 use crate::url::ZoomRange;
 
@@ -57,13 +58,184 @@ impl SourceKind {
     }
 }
 
+/// The area a region covers.
+///
+/// A box is the cheap case and answers "how many tiles" with a closed formula. A shape is what
+/// a user actually draws, and covering a coastal city by its bounding box downloads the sea —
+/// at street zoom that is most of the tiles and all of the waiting.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Area {
+    /// A rectangle.
+    Box(Bounds),
+    /// A shape in one or more parts, each with optional holes.
+    Shape(Vec<Polygon>),
+}
+
+impl Area {
+    /// The box that contains this area.
+    ///
+    /// For a shape this is what it is stored as and what a list of regions shows on a map; the
+    /// shape itself is what decides which tiles are fetched.
+    #[must_use]
+    pub fn bounds(&self) -> Bounds {
+        match self {
+            Self::Box(bounds) => *bounds,
+            Self::Shape(parts) => {
+                let mut bounds: Option<Bounds> = None;
+                for point in parts
+                    .iter()
+                    .flat_map(|part| core::iter::once(&part.exterior).chain(&part.interiors))
+                    .flatten()
+                {
+                    bounds = Some(match bounds {
+                        None => Bounds::new(point[0], point[1], point[0], point[1]),
+                        Some(held) => Bounds::new(
+                            held.west.min(point[0]),
+                            held.south.min(point[1]),
+                            held.east.max(point[0]),
+                            held.north.max(point[1]),
+                        ),
+                    });
+                }
+                bounds.unwrap_or_else(|| Bounds::new(0.0, 0.0, 0.0, 0.0))
+            }
+        }
+    }
+
+    /// How many tiles this area covers at `z`.
+    ///
+    /// A box answers by formula and never allocates. A shape has to be scanned — there is no
+    /// closed form for an arbitrary outline — but the scan is an iterator, so counting a
+    /// continent at street zoom costs time rather than memory, and the caller can still decline.
+    #[must_use]
+    pub fn tile_count(&self, z: u8) -> u64 {
+        match self {
+            Self::Box(bounds) => bounds.tile_count(z),
+            Self::Shape(parts) => Cover::shape(parts, z).count() as u64,
+        }
+    }
+
+    /// Every tile this area covers at `z`.
+    ///
+    /// # Errors
+    ///
+    /// [`CoverError::TooLarge`] when the level exceeds `limit`.
+    pub fn tiles(&self, z: u8, limit: u64) -> Result<Vec<TileCoord>, CoverError> {
+        match self {
+            Self::Box(bounds) => bounds.tiles(z, limit),
+            Self::Shape(parts) => {
+                let mut tiles = Vec::new();
+                for tile in Cover::shape(parts, z) {
+                    if tiles.len() as u64 >= limit {
+                        return Err(CoverError::TooLarge {
+                            tiles: tiles.len() as u64 + 1,
+                        });
+                    }
+                    tiles.push(tile);
+                }
+                // The scan can name an edge tile twice where a projection overshot the world.
+                tiles.sort_unstable();
+                tiles.dedup();
+                Ok(tiles)
+            }
+        }
+    }
+}
+
+impl Area {
+    /// The area as GeoJSON MultiPolygon coordinates, or `None` for a box.
+    ///
+    /// A box needs no geometry: its four numbers are already columns, and writing them twice
+    /// invites the two copies to disagree. A shape is stored in the form a client would have
+    /// sent it in, which is also the form anyone debugging the database can read.
+    #[must_use]
+    pub fn geometry(&self) -> Option<serde_json::Value> {
+        match self {
+            Self::Box(_) => None,
+            Self::Shape(parts) => Some(serde_json::Value::Array(
+                parts
+                    .iter()
+                    .map(|part| {
+                        serde_json::Value::Array(
+                            core::iter::once(&part.exterior)
+                                .chain(&part.interiors)
+                                .map(|ring| {
+                                    serde_json::Value::Array(
+                                        ring.iter()
+                                            .map(|point| serde_json::json!([point[0], point[1]]))
+                                            .collect(),
+                                    )
+                                })
+                                .collect(),
+                        )
+                    })
+                    .collect(),
+            )),
+        }
+    }
+
+    /// Reads back what [`Self::geometry`] wrote.
+    ///
+    /// # Errors
+    ///
+    /// [`AreaError`] when the value is not MultiPolygon coordinates. A stored region that no
+    /// longer parses is reported rather than silently downgraded to its bounding box — that
+    /// would turn a city into the sea around it without saying so.
+    pub fn from_geometry(value: &serde_json::Value) -> Result<Self, AreaError> {
+        let parts = value.as_array().ok_or(AreaError::NotMultiPolygon)?;
+        let mut shape = Vec::with_capacity(parts.len());
+        for part in parts {
+            let rings = part.as_array().ok_or(AreaError::NotMultiPolygon)?;
+            let mut read = Vec::with_capacity(rings.len());
+            for ring in rings {
+                let points = ring.as_array().ok_or(AreaError::NotMultiPolygon)?;
+                let mut out = Vec::with_capacity(points.len());
+                for point in points {
+                    let pair = point.as_array().ok_or(AreaError::NotMultiPolygon)?;
+                    let longitude = pair
+                        .first()
+                        .and_then(serde_json::Value::as_f64)
+                        .ok_or(AreaError::NotMultiPolygon)?;
+                    let latitude = pair
+                        .get(1)
+                        .and_then(serde_json::Value::as_f64)
+                        .ok_or(AreaError::NotMultiPolygon)?;
+                    out.push([longitude, latitude]);
+                }
+                read.push(out);
+            }
+            let mut rings = read.into_iter();
+            let exterior = rings.next().ok_or(AreaError::NoExterior)?;
+            shape.push(Polygon {
+                exterior,
+                interiors: rings.collect(),
+            });
+        }
+        if shape.is_empty() {
+            return Err(AreaError::NoExterior);
+        }
+        Ok(Self::Shape(shape))
+    }
+}
+
+/// Why a stored area could not be read back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AreaError {
+    /// The value is not an array of parts of rings of points.
+    #[error("stored geometry is not MultiPolygon coordinates")]
+    NotMultiPolygon,
+    /// A part had no rings at all.
+    #[error("stored geometry has a part with no exterior ring")]
+    NoExterior,
+}
+
 /// An area a user asked to have available offline.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Region {
     /// The style to make available.
     pub style_url: String,
     /// The area.
-    pub bounds: Bounds,
+    pub area: Area,
     /// Lowest zoom to include.
     pub min_zoom: f64,
     /// Highest zoom to include.
@@ -102,7 +274,7 @@ impl Region {
             return 0;
         }
         (min..=max)
-            .map(|z| self.bounds.tile_count(z))
+            .map(|z| self.area.tile_count(z))
             .fold(0u64, u64::saturating_add)
     }
 
@@ -125,7 +297,7 @@ impl Region {
         }
         let mut tiles = Vec::new();
         for z in min..=max {
-            tiles.extend(self.bounds.tiles(z, limit)?);
+            tiles.extend(self.area.tiles(z, limit)?);
         }
         Ok(tiles)
     }
@@ -450,7 +622,7 @@ pub fn plan(
         for z in min..=max {
             // The limit is the count itself: a caller that wants a bound checks
             // [`Region::tile_count`] first and declines, rather than being surprised here.
-            let Ok(coords) = region.bounds.tiles(z, u64::MAX) else {
+            let Ok(coords) = region.area.tiles(z, u64::MAX) else {
                 plan.complete = false;
                 continue;
             };

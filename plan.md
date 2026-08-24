@@ -514,12 +514,16 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   Remaining: TLS and reading `.pmtiles`
   archives directly (both held for the cross toolchains, §16), cross-faded (pattern) binders,
   DR-11 evaluator, §12.5 startup path.
+  A region's area is a box or a shape. The shape path is a port of mbgl's `util::TileCover`
+  scanline, checked against mbgl's own expectations — the exact 424-tile multipolygon, the
+  punched hole at 8/136/87, the six-tile San Francisco outline — and against
+  [`Bounds`] over six boxes and eleven zooms, since a rectangle spelled as a polygon must cover
+  exactly what the rectangle does. One deliberate divergence: a chain with no vertical extent is
+  dropped rather than kept as a bound. mbgl keeps them, and two axis-aligned parts at the same
+  latitudes then get a full-width bound each in their shared top row, the winding never returns
+  to zero between them, and the gap fills in — two selected cities download the ocean between
+  them. Every mbgl expectation still passes with the chains dropped.
   Remaining on offline, none of it blocking R1 exit:
-  the download runs serially on the calling thread, so it wants §5.4's pool at a background
-  priority class — for a country that is the difference between hours and rather fewer hours,
-  and it is the same pool the cover already needs;
-  only rectangles are supported, where mbgl also has `OfflineGeometryRegionDefinition` and
-  "draw the area you want" usually means a polygon;
   there is no `packDatabase` equivalent, so deleting a region unpins its bytes but SQLite does
   not return the file size to the OS until something vacuums — which on a storage-constrained
   target is the difference between a delete that frees space and one that only promises to;

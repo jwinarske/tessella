@@ -66,7 +66,7 @@ pub use download::{Download, DownloadError, Got, Progress, Summary};
 pub use geojson::{GeoJsonSourceError, Origin};
 #[cfg(feature = "http")]
 pub use http::HttpFileSource;
-pub use offline::{Estimate, Region, SourceContribution, SourceKind, StyleAssets};
+pub use offline::{Area, AreaError, Estimate, Region, SourceContribution, SourceKind, StyleAssets};
 pub use shared::{Abandoned, ShareStats, Shared};
 pub use source::{Coalescing, FetchError, Fetched, FileSource, Response};
 pub use tileset::{ResolveError, TileSet, resolve};

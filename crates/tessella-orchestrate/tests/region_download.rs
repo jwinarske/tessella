@@ -11,7 +11,7 @@ use tessella_orchestrate::pool::{Pool, Priority};
 use tessella_storage::cache::SqliteCache;
 use tessella_storage::download::Download;
 use tessella_storage::http::HttpFileSource;
-use tessella_storage::offline::Region;
+use tessella_storage::offline::{Area, Region};
 use tessella_storage::source::{FetchError, FileSource, Response};
 use tessella_tile::cover::Bounds;
 
@@ -46,7 +46,7 @@ fn style(origin: &str) -> tessella_style::Style {
 fn region(origin: &str, max_zoom: f64) -> Region {
     Region {
         style_url: format!("{origin}/style.json"),
-        bounds: Bounds::new(13.0, 52.3, 13.8, 52.7),
+        area: Area::Box(Bounds::new(13.0, 52.3, 13.8, 52.7)),
         min_zoom: 0.0,
         max_zoom,
         pixel_ratio: 1.0,

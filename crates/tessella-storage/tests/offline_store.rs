@@ -3,14 +3,14 @@
 #![cfg(feature = "cache")]
 
 use tessella_storage::cache::SqliteCache;
-use tessella_storage::offline::Region;
+use tessella_storage::offline::{Area, Region};
 use tessella_storage::source::Response;
 use tessella_tile::cover::Bounds;
 
 fn berlin() -> Region {
     Region {
         style_url: "https://host/style.json".into(),
-        bounds: Bounds::new(13.0, 52.3, 13.8, 52.7),
+        area: Area::Box(Bounds::new(13.0, 52.3, 13.8, 52.7)),
         min_zoom: 0.0,
         max_zoom: 12.0,
         pixel_ratio: 2.0,
@@ -125,7 +125,7 @@ fn overlapping_regions_share_and_neither_frees_the_other() {
     let cache = SqliteCache::in_memory_with_capacity(1_000_000).expect("opens");
     let city = cache.create_region(&berlin(), None, 0).expect("creates");
     let mut route = berlin();
-    route.bounds = Bounds::new(13.4, 52.4, 14.5, 52.9);
+    route.area = Area::Box(Bounds::new(13.4, 52.4, 14.5, 52.9));
     let route = cache.create_region(&route, None, 0).expect("creates");
 
     let shared = "https://host/z12/shared.mvt";
@@ -305,4 +305,91 @@ fn a_repeated_claim_does_not_double_pin() {
         0,
         "one delete released it"
     );
+}
+
+/// A shape round-trips through the store, rings and holes intact.
+///
+/// A resumed download re-enumerates from what was stored, so a shape that came back as its
+/// bounding box would quietly start fetching the sea the user declined the first time.
+#[test]
+fn a_shape_round_trips() {
+    let cache = SqliteCache::in_memory().expect("opens");
+    let shape = tessella_tile::polygon::Polygon::new(vec![
+        [13.0, 52.3],
+        [13.8, 52.3],
+        [13.8, 52.7],
+        [13.0, 52.7],
+        [13.0, 52.3],
+    ])
+    .with_hole(vec![
+        [13.3, 52.4],
+        [13.5, 52.4],
+        [13.5, 52.6],
+        [13.3, 52.6],
+        [13.3, 52.4],
+    ]);
+    let mut region = berlin();
+    region.area = Area::Shape(vec![shape]);
+
+    cache
+        .create_region(&region, Some("Berlin, less the lake"), 1_000)
+        .expect("creates");
+
+    let stored = cache.regions().expect("lists");
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].region, region, "the rings came back");
+    assert_eq!(
+        stored[0].region.area.tile_count(11),
+        region.area.tile_count(11)
+    );
+}
+
+/// A stored shape covers less than the box around it.
+///
+/// The whole reason shapes exist. A region drawn around a coastal city and stored as its
+/// bounding box is a download of the sea.
+#[test]
+fn a_shape_costs_less_than_its_box() {
+    let triangle = tessella_tile::polygon::Polygon::new(vec![
+        [13.0, 52.3],
+        [13.8, 52.3],
+        [13.0, 52.7],
+        [13.0, 52.3],
+    ]);
+    let mut shaped = berlin();
+    shaped.area = Area::Shape(vec![triangle]);
+
+    let boxed = berlin();
+    let z = 12;
+    assert!(
+        shaped.area.tile_count(z) * 3 < boxed.area.tile_count(z) * 2,
+        "{} against {}",
+        shaped.area.tile_count(z),
+        boxed.area.tile_count(z)
+    );
+}
+
+/// A region written before shapes existed reads back as the box it was.
+#[test]
+fn an_older_region_reads_as_a_box() {
+    let directory = tempfile::tempdir().expect("a temp dir");
+    let path = directory.path().join("cache.sqlite");
+    {
+        let cache = SqliteCache::open(&path).expect("opens");
+        cache
+            .create_region(&berlin(), Some("Berlin"), 1)
+            .expect("creates");
+    }
+    // Drop the column, as a database from before this feature would have.
+    {
+        let connection = rusqlite::Connection::open(&path).expect("opens");
+        connection
+            .execute_batch("ALTER TABLE regions DROP COLUMN geometry")
+            .expect("drops");
+    }
+
+    let cache = SqliteCache::open(&path).expect("reopens and migrates");
+    let stored = cache.regions().expect("lists");
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].region.area, berlin().area);
 }

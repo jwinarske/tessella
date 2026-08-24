@@ -1,7 +1,8 @@
 //! Sizing an offline region — what a user is told before they agree to a download.
 
 use tessella_storage::offline::{
-    Estimate, Region, SourceContribution, SourceKind, StyleAssets, covering_zoom_range, estimate,
+    Area, Estimate, Region, SourceContribution, SourceKind, StyleAssets, covering_zoom_range,
+    estimate,
 };
 use tessella_storage::url::ZoomRange;
 use tessella_tile::cover::Bounds;
@@ -9,7 +10,7 @@ use tessella_tile::cover::Bounds;
 fn berlin(min_zoom: f64, max_zoom: f64) -> Region {
     Region {
         style_url: "https://host/style.json".into(),
-        bounds: Bounds::new(13.0, 52.3, 13.8, 52.7),
+        area: Area::Box(Bounds::new(13.0, 52.3, 13.8, 52.7)),
         min_zoom,
         max_zoom,
         pixel_ratio: 1.0,
@@ -229,7 +230,7 @@ fn an_empty_style_still_costs_its_own_document() {
 fn a_large_region_is_countable_but_not_enumerable() {
     let france = Region {
         style_url: "https://host/style.json".into(),
-        bounds: Bounds::new(-5.0, 41.0, 9.0, 51.0),
+        area: Area::Box(Bounds::new(-5.0, 41.0, 9.0, 51.0)),
         min_zoom: 0.0,
         max_zoom: 16.0,
         pixel_ratio: 1.0,
@@ -269,7 +270,7 @@ fn tiny() -> Region {
     Region {
         style_url: "https://host/style.json".into(),
         // A box inside one tile at every zoom it is planned for.
-        bounds: Bounds::new(13.40, 52.51, 13.41, 52.52),
+        area: Area::Box(Bounds::new(13.40, 52.51, 13.41, 52.52)),
         min_zoom: 4.0,
         max_zoom: 5.0,
         pixel_ratio: 1.0,

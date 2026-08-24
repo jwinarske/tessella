@@ -144,7 +144,9 @@ fn eviction_cost_against_a_large_region() {
         .create_region(
             &tessella_storage::offline::Region {
                 style_url: "https://host/style.json".into(),
-                bounds: tessella_tile::cover::Bounds::new(-5.0, 41.0, 9.0, 51.0),
+                area: tessella_storage::offline::Area::Box(tessella_tile::cover::Bounds::new(
+                    -5.0, 41.0, 9.0, 51.0,
+                )),
                 min_zoom: 0.0,
                 max_zoom: 14.0,
                 pixel_ratio: 1.0,

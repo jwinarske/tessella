@@ -32,6 +32,7 @@
 
 pub mod camera;
 pub mod cover;
+pub mod polygon;
 pub mod projection;
 pub mod store;
 

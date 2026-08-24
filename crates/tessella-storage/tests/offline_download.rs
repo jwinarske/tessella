@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tessella_storage::cache::{CachingFileSource, SqliteCache};
 use tessella_storage::download::{Download, DownloadError, Progress};
 use tessella_storage::http::HttpFileSource;
-use tessella_storage::offline::Region;
+use tessella_storage::offline::{Area, Region};
 use tessella_tile::cover::Bounds;
 
 const TILE: &[u8] = include_bytes!("../../../tests/mvt-fixtures/real-world-0-0-0.mvt");
@@ -51,7 +51,7 @@ fn style(origin: &str) -> tessella_style::Style {
 fn region(origin: &str) -> Region {
     Region {
         style_url: format!("{origin}/style.json"),
-        bounds: Bounds::new(13.40, 52.51, 13.41, 52.52),
+        area: Area::Box(Bounds::new(13.40, 52.51, 13.41, 52.52)),
         min_zoom: 4.0,
         max_zoom: 5.0,
         pixel_ratio: 1.0,
@@ -491,4 +491,74 @@ fn an_unclaimed_copy_still_revalidates() {
         server.requests() > before,
         "an ordinary cached tile still asks"
     );
+}
+
+/// A shaped region downloads the shape, not the box around it.
+///
+/// The end of the chain: the outline the user drew reaches the actual fetches. A triangle over
+/// half a box must cost about half a box, and every tile it does fetch must be one the shape
+/// covers.
+#[test]
+fn a_shaped_region_fetches_only_its_shape() {
+    let server = tile_server::Server::start(routes()).expect("binds");
+    let origin = server.origin();
+    let cache = SqliteCache::in_memory_with_capacity(4_000_000).expect("opens");
+
+    let west = 13.0;
+    let south = 52.3;
+    let east = 13.8;
+    let north = 52.7;
+    let mut region = Region {
+        style_url: format!("{origin}/style.json"),
+        area: Area::Shape(vec![tessella_tile::polygon::Polygon::new(vec![
+            [west, south],
+            [east, south],
+            [west, north],
+            [west, south],
+        ])]),
+        // Deep enough for the shape to matter. At zoom 10 this box is two tiles across and a
+        // triangle over half of it saves nothing; the saving is all at the zooms that dominate
+        // a download.
+        min_zoom: 11.0,
+        max_zoom: 13.0,
+        pixel_ratio: 1.0,
+        include_ideographs: false,
+    };
+    let id = cache
+        .create_region(&region, Some("half of Berlin"), NOW)
+        .expect("creates");
+
+    let shaped = Download {
+        cache: &cache,
+        files: &HttpFileSource::default(),
+        region: id,
+        definition: &region,
+        now: NOW,
+    }
+    .plan(&style(&origin))
+    .expect("plans");
+
+    region.area = Area::Box(tessella_tile::cover::Bounds::new(west, south, east, north));
+    let boxed = Download {
+        cache: &cache,
+        files: &HttpFileSource::default(),
+        region: id,
+        definition: &region,
+        now: NOW,
+    }
+    .plan(&style(&origin))
+    .expect("plans");
+
+    assert!(!shaped.tiles.is_empty());
+    assert!(
+        shaped.tiles.len() * 3 < boxed.tiles.len() * 2,
+        "the shape costs less: {} against {}",
+        shaped.tiles.len(),
+        boxed.tiles.len()
+    );
+
+    // And the tiles it names are a subset of the box's — nothing outside the outline.
+    let inside: std::collections::BTreeSet<&String> = shaped.tiles.iter().collect();
+    let around: std::collections::BTreeSet<&String> = boxed.tiles.iter().collect();
+    assert!(inside.is_subset(&around));
 }
