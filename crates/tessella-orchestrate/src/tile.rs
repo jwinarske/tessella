@@ -39,7 +39,9 @@ use tessella_layout::circle::CircleBucket;
 use tessella_layout::fill::{self, FillBucket, Position, Ring};
 use tessella_layout::line::{LineBucket, LineCap, LineJoin, LineOptions};
 use tessella_layout::paint::{BinderError, PaintBinder};
-use tessella_source::clip::{clip_line_to_box, clip_ring_to_box, round_to_tile_units};
+use tessella_source::clip::{
+    clip_line_to_box, clip_points_to_box, clip_ring_to_box, round_to_tile_units,
+};
 use tessella_source::geojson::{GeoJsonFeature, Geometry};
 use tessella_source::tiling::{EXTENT, TilingOptions};
 use tessella_style::property::{ResolvedProperty, paint_specs, resolve_paint};
@@ -204,25 +206,36 @@ pub fn build_tile(
                     if !filter.matches(feature, None) {
                         continue;
                     }
-                    let Geometry::Polygon(polygons) = &feature.geometry else {
-                        // A fill layer's filter usually excludes non-polygons, but a style is
-                        // free to write one that does not. mbgl draws nothing for those rather
-                        // than treating a line as a degenerate ring.
-                        continue;
+                    // Every geometry type, not just polygons. mbgl's `FillBucket::addFeature`
+                    // makes no type check — see the note in `build_mvt_tile` — so a point or a
+                    // line in a fill layer becomes a degenerate ring, and `classify_rings`
+                    // keeps a lone one because it short-circuits before the area filter.
+                    let parts: Vec<&[[f64; 2]]> = match &feature.geometry {
+                        Geometry::Polygon(polygons) => polygons
+                            .iter()
+                            .flat_map(|polygon| polygon.iter().map(Vec::as_slice))
+                            .collect(),
+                        Geometry::LineString(lines) => lines.iter().map(Vec::as_slice).collect(),
+                        Geometry::Point(points) => alloc::vec![points.as_slice()],
                     };
+                    let points_only = matches!(feature.geometry, Geometry::Point(_));
                     let mut rings: Vec<Ring> = Vec::new();
-                    for polygon in polygons {
-                        for ring in polygon {
-                            let projected: Vec<[f64; 2]> = ring
-                                .iter()
-                                .map(|p| projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y))
-                                .collect();
-                            let clipped = clip_ring_to_box(&projected, lo, hi);
-                            if clipped.is_empty() {
-                                continue;
-                            }
-                            rings.push(to_tile_ring(&clipped));
+                    for ring in parts {
+                        let projected: Vec<[f64; 2]> = ring
+                            .iter()
+                            .map(|p| projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y))
+                            .collect();
+                        // A point set has no edges to intersect the box with, so the ring clip
+                        // would drop it entirely rather than keep the ones inside.
+                        let clipped = if points_only {
+                            clip_points_to_box(&projected, lo, hi)
+                        } else {
+                            clip_ring_to_box(&projected, lo, hi)
+                        };
+                        if clipped.is_empty() {
+                            continue;
                         }
+                        rings.push(to_tile_ring(&clipped));
                     }
                     if !rings.is_empty() {
                         per_feature.push(rings);
@@ -424,9 +437,13 @@ pub fn build_mvt_tile(
                         if !filter.matches(feature, None) {
                             continue;
                         }
-                        if feature.geom_type != tessella_source::mvt::GeomType::Polygon {
-                            continue;
-                        }
+                        // No geometry-type check, deliberately. `FillBucket::addFeature` has
+                        // none either: it hands whatever the feature carries to
+                        // `classifyRings`, and a point or a line becomes a degenerate ring
+                        // whose vertices are still written. Filtering here reads as tidiness
+                        // and is a divergence — one that the real-style oracle diff found, as
+                        // a single missing vertex in a `water` layer whose one point feature
+                        // mbgl draws and this did not.
                         let mut rings: Vec<Ring> = Vec::new();
                         for ring in feature.rings_scaled(named.extent, EXTENT) {
                             #[allow(clippy::cast_possible_truncation)]

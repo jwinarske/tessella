@@ -237,6 +237,37 @@ pub fn clip_line(line: &[Position], lo: f64, hi: f64, axis: Axis) -> Vec<Ring> {
     slices
 }
 
+/// Clips a point set to `lo..=hi` on one axis.
+///
+/// Ported from geojson-vt's `clipper::operator()(const vt_multi_point&)`: a point is kept when
+/// its coordinate on the axis is inside the range, inclusive at both ends.
+///
+/// # Why points need their own clip at all
+///
+/// [`clip_ring`] and [`clip_line`] both work on *edges*, and refuse anything shorter than two
+/// positions — there is no segment to intersect the box with. A point has no edges, so it
+/// falls through both and vanishes. That matters beyond point layers, because a fill layer
+/// draws whatever geometry a feature carries: mbgl's `FillBucket::addFeature` makes no
+/// type check, and a point becomes a one-vertex ring that `classify_rings` keeps.
+#[must_use]
+pub fn clip_points(points: &[Position], lo: f64, hi: f64, axis: Axis) -> Vec<Position> {
+    points
+        .iter()
+        .filter(|point| {
+            let k = axis.of(**point);
+            k >= lo && k <= hi
+        })
+        .copied()
+        .collect()
+}
+
+/// Clips a point set to a box on both axes.
+#[must_use]
+pub fn clip_points_to_box(points: &[Position], lo: f64, hi: f64) -> Vec<Position> {
+    let x = clip_points(points, lo, hi, Axis::X);
+    clip_points(&x, lo, hi, Axis::Y)
+}
+
 /// Clips an open line to a box on both axes.
 ///
 /// The y pass runs over each piece the x pass produced, so a line crossing a corner can split
@@ -555,5 +586,38 @@ mod tests {
         let x_then_y = clip_ring(&clip_ring(&ring, lo, hi, Axis::X), lo, hi, Axis::Y);
         let y_then_x = clip_ring(&clip_ring(&ring, lo, hi, Axis::Y), lo, hi, Axis::X);
         assert_eq!(x_then_y, y_then_x);
+    }
+
+    /// A point set is filtered, not intersected: there are no edges to cut.
+    #[test]
+    fn points_are_kept_or_dropped_whole() {
+        let points = alloc::vec![
+            [0.0, 0.0],
+            [100.0, 100.0],
+            [-3000.0, 100.0],
+            [100.0, 12000.0],
+        ];
+        let kept = clip_points_to_box(&points, -2048.0, 10240.0);
+        assert_eq!(kept, [[0.0, 0.0], [100.0, 100.0]]);
+    }
+
+    /// The range is inclusive at both ends, as geojson-vt writes it.
+    #[test]
+    fn the_point_range_is_inclusive() {
+        let edges = alloc::vec![[-2048.0, 0.0], [10240.0, 0.0], [-2049.0, 0.0]];
+        let kept = clip_points_to_box(&edges, -2048.0, 10240.0);
+        assert_eq!(kept, [[-2048.0, 0.0], [10240.0, 0.0]]);
+    }
+
+    /// A single point survives the ring clip's refusal to handle it.
+    ///
+    /// `clip_ring` returns nothing for anything shorter than two positions, which is right for
+    /// a ring and wrong for a point — and a fill layer does receive points, because mbgl makes
+    /// no geometry-type check before classifying rings.
+    #[test]
+    fn the_ring_clip_drops_what_the_point_clip_keeps() {
+        let one = alloc::vec![[100.0, 100.0]];
+        assert!(clip_ring_to_box(&one, -2048.0, 10240.0).is_empty());
+        assert_eq!(clip_points_to_box(&one, -2048.0, 10240.0), one);
     }
 }

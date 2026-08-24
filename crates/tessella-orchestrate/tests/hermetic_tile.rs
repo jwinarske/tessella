@@ -510,3 +510,48 @@ fn circle_buffers_are_byte_identical_to_the_oracle() {
     assert_eq!(circle.vertices.len(), 4);
     assert_eq!(circle.indices.len(), 6);
 }
+
+/// A fill layer draws a point or a line as a degenerate ring, because mbgl does.
+///
+/// `FillBucket::addFeature` makes no geometry-type check: it hands whatever the feature carries
+/// to `classifyRings`, which short-circuits on a single ring *before* its zero-area filter and
+/// so keeps it. The vertices are written; earcut makes no triangles from them.
+///
+/// Filtering non-polygons out reads as tidiness and is a divergence. It was found by the
+/// real-style oracle diff as a single missing vertex in a `water` layer of one tile — one
+/// point feature among two thousand polygon vertices — and nothing in the hermetic style could
+/// have shown it, because both its fill layers filter on `$type`.
+#[test]
+fn a_fill_layer_draws_a_point_as_a_degenerate_ring() {
+    let style = Style::parse(
+        r##"{"version": 8,
+             "sources": {"probe": {"type": "geojson", "data":
+               {"type": "FeatureCollection", "features": [
+                 {"type": "Feature", "properties": {},
+                  "geometry": {"type": "Point", "coordinates": [-0.11, 51.505]}}]}}},
+             "layers": [{"id": "f", "type": "fill", "source": "probe",
+                         "paint": {"fill-color": "#ff0000"}}]}"##,
+    )
+    .expect("style parses");
+    let Some(Source::Geojson(source)) = style.source("probe") else {
+        panic!("one geojson source");
+    };
+    let features = geojson::read(&source.data).expect("features read");
+
+    let buckets = build_tile(
+        &style,
+        TileId::new(13, 4093, 2723),
+        &features,
+        TilingOptions::default(),
+    )
+    .expect("tile builds");
+    let fill = bucket_for(&buckets, "f")
+        .and_then(|b| b.content.as_fill())
+        .expect("a fill bucket");
+
+    assert_eq!(fill.vertices.len(), 1, "the point is a one-vertex ring");
+    assert!(
+        fill.indices.is_empty(),
+        "and earcut makes no triangle of it"
+    );
+}

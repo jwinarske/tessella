@@ -13,6 +13,24 @@ maplibre-native build. Regenerating them needs both.
 | `hermetic_style.dump` | the probe's built-in inline GeoJSON style, no network | 51.505, -0.11 @ z13, 1024x768 |
 | `composite_style.dump` | `crates/tessella-style/tests/composite_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `composite_style_z13_5.dump` | the same | 51.505, -0.11 @ **z13.5**, 1024x768 |
+| `live_protomaps_z5.dump` | `crates/tessella-style/tests/live_style.json` | 51.505, -0.11 @ z5, 1024x768 |
+
+### The one that is not hermetic
+
+`live_protomaps_z5.dump` is captured against a **real** style over **real** tiles: a Protomaps
+planet extract served locally by `pmtiles serve`, nine tiles at zoom 5, thousands of features.
+Both the probe and the frontend fetch from the same origin, so both see identical bytes and any
+difference is in what they do with them.
+
+That is what the other three cannot be. A hermetic style is four features chosen to be
+tractable; agreement on it says the rules were transcribed, not that they hold. This one found
+a divergence nothing else could: a `water` layer whose two features are a polygon and a *point*,
+where mbgl draws the point as a one-vertex degenerate ring and this build was filtering
+non-polygons out of fill layers. One vertex in two thousand, in one tile.
+
+Regenerating it needs the tile server running as well as a maplibre-native checkout, and the
+archives are not in this repository — see `tools/tile-server` and the module docs of
+`tessella-orchestrate/tests/live_parity.rs`.
 
 ### Why there are three
 

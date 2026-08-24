@@ -1,0 +1,41 @@
+{
+  "version": 8,
+  "name": "live-protomaps",
+  "sources": {
+    "world": {
+      "type": "vector",
+      "url": "http://127.0.0.1:8080/world_z7.json"
+    }
+  },
+  "layers": [
+    {
+      "id": "bg",
+      "type": "background",
+      "paint": { "background-color": "#a8c9e0" }
+    },
+    {
+      "id": "earth",
+      "type": "fill",
+      "source": "world",
+      "source-layer": "earth",
+      "paint": { "fill-color": "#e9e4d8" }
+    },
+    {
+      "id": "water",
+      "type": "fill",
+      "source": "world",
+      "source-layer": "water",
+      "paint": { "fill-color": "#a8c9e0" }
+    },
+    {
+      "id": "boundaries",
+      "type": "line",
+      "source": "world",
+      "source-layer": "boundaries",
+      "paint": {
+        "line-color": ["match", ["get", "kind"], "country", "#8c7f95", "#b0a8b8"],
+        "line-width": 1.0
+      }
+    }
+  ]
+}
