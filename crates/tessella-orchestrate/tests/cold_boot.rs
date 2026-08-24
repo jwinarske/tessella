@@ -10,7 +10,7 @@
 
 use std::time::Duration;
 
-use tessella_orchestrate::boot::{BootError, cold_start};
+use tessella_orchestrate::boot::{BootError, Workers, cold_start};
 use tessella_storage::http::HttpFileSource;
 use tessella_storage::source::Coalescing;
 use tessella_tile::cover::ViewTransform;
@@ -73,7 +73,13 @@ fn view(zoom: f64) -> ViewTransform {
 fn a_cold_start_reaches_the_first_bucket() {
     let server = server();
     let files = Coalescing::new(HttpFileSource::default());
-    let boot = cold_start(&style(&server.origin()), &view(4.0), &files, 4).expect("boots");
+    let boot = cold_start(
+        &style(&server.origin()),
+        &view(4.0),
+        &files,
+        Workers::default(),
+    )
+    .expect("boots");
 
     assert!(!boot.tiles.is_empty(), "the cover produced tiles");
     assert!(boot.vertices() > 0, "and something tessellated");
@@ -99,7 +105,13 @@ fn the_first_bucket_precedes_completion() {
         inner: HttpFileSource::default(),
         delay: Duration::from_millis(20),
     });
-    let boot = cold_start(&style(&server.origin()), &view(4.0), &files, 4).expect("boots");
+    let boot = cold_start(
+        &style(&server.origin()),
+        &view(4.0),
+        &files,
+        Workers::default(),
+    )
+    .expect("boots");
 
     assert!(boot.tiles.len() >= 4, "{} tiles", boot.tiles.len());
     assert!(
@@ -121,7 +133,7 @@ fn the_cover_is_fetched_in_parallel() {
     let delay = Duration::from_millis(25);
     let text = style(&server.origin());
 
-    let run = |workers: usize| {
+    let run = |workers: Workers| {
         let files = Coalescing::new(Slow {
             inner: HttpFileSource::default(),
             delay,
@@ -132,8 +144,8 @@ fn the_cover_is_fetched_in_parallel() {
             .complete
     };
 
-    let serial = run(1);
-    let parallel = run(4);
+    let serial = run(Workers::serial());
+    let parallel = run(Workers::default());
     assert!(
         parallel * 2 < serial,
         "four workers took {parallel:?}, one took {serial:?}"
@@ -160,7 +172,7 @@ fn an_unused_source_costs_no_round_trip() {
 
     let files = Coalescing::new(HttpFileSource::default());
     // If the unused source were resolved, its manifest would 404 and this would fail.
-    let boot = cold_start(&text, &view(4.0), &files, 2).expect("boots");
+    let boot = cold_start(&text, &view(4.0), &files, Workers::default()).expect("boots");
     assert!(boot.vertices() > 0);
     assert!(
         !server
@@ -180,8 +192,48 @@ fn a_dead_origin_fails_with_the_url() {
         server.origin()
     };
     let files = Coalescing::new(HttpFileSource::default());
-    match cold_start(&style(&origin), &view(4.0), &files, 4) {
+    match cold_start(&style(&origin), &view(4.0), &files, Workers::default()) {
         Err(BootError::Fetch { url, .. }) => assert!(url.starts_with(&origin), "{url}"),
         other => panic!("{other:?}"),
     }
+}
+
+/// The worker count is a policy with a default, not a number every caller invents.
+///
+/// It was one: `cold_start` took a bare `usize` and each call site picked its own. That is the
+/// shape a tuning parameter takes when nobody has decided what it should be, and it puts the
+/// decision in the place least able to make it.
+#[test]
+fn the_worker_count_has_a_policy() {
+    assert_eq!(Workers::default().get(), Workers::DEFAULT);
+    assert_eq!(Workers::serial().get(), 1);
+
+    // Zero means one: a caller asking for no workers wants the work done, and a cold start
+    // that silently did nothing would be worse than a slow one.
+    assert_eq!(Workers::new(0).get(), 1);
+
+    // Never more threads than tiles. The extras would start, find the queue empty and exit.
+    assert_eq!(Workers::new(16).for_jobs(9), 9);
+    assert_eq!(Workers::new(4).for_jobs(9), 4);
+    assert_eq!(Workers::new(4).for_jobs(0), 0);
+}
+
+/// A cover smaller than the pool still completes.
+///
+/// `for_jobs` can return zero when there is nothing to do, and a loop spawning zero workers
+/// must not leave the results unfilled — the empty-cover path returns before that point, and
+/// this is what says so.
+#[test]
+fn a_pool_larger_than_the_cover_is_harmless() {
+    let server = server();
+    let files = Coalescing::new(HttpFileSource::default());
+    let boot = cold_start(
+        &style(&server.origin()),
+        &view(0.0),
+        &files,
+        Workers::new(64),
+    )
+    .expect("boots");
+    assert!(!boot.tiles.is_empty());
+    assert!(boot.vertices() > 0);
 }

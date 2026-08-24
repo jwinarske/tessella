@@ -131,6 +131,73 @@ pub enum BootError {
     Uncovered,
 }
 
+/// How many threads share the tile work.
+///
+/// # Why this is not `available_parallelism`
+///
+/// The obvious default is the host's core count, and it is wrong for this target class. An
+/// RK3566 has four cores that the deployment wants split — §5.4 puts decode workers on the
+/// little ones and reserves the big ones for the orchestrator and the renderer — so a cold
+/// start that took every core would take them from the things that have to stay responsive.
+/// And a number derived from the host makes a measurement on a workstation say nothing about
+/// the device, which is the measurement that matters.
+///
+/// mbgl reaches the same conclusion: its background `ThreadPool` is a fixed three, not a
+/// derived count.
+///
+/// # Why four rather than mbgl's three
+///
+/// mbgl's pool does decode and layout while its I/O happens elsewhere. A worker here does the
+/// fetch too, so a blocked worker is not merely idle — it is holding a slot that has no CPU
+/// work to do. One more than the CPU-bound count is the cheapest way to keep the others busy
+/// across a round trip. It is a starting point with a reason, not a tuned number; §5.4's pool
+/// with priority classes is where tuning belongs, and it does not exist yet.
+///
+/// # Never more workers than tiles
+///
+/// [`Self::for_jobs`] clamps to the work available. Nine tiles on a sixteen-core host is nine
+/// threads, not sixteen; the rest would start, find the queue empty and exit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Workers(usize);
+
+impl Workers {
+    /// The default worker count. See the type's note for why it is a constant.
+    pub const DEFAULT: usize = 4;
+
+    /// A pool of `count` workers, with a floor of one.
+    ///
+    /// Zero is treated as one rather than refused: a caller asking for no workers wants the
+    /// work done, and a cold start that silently did nothing would be worse than a slow one.
+    #[must_use]
+    pub const fn new(count: usize) -> Self {
+        Self(if count == 0 { 1 } else { count })
+    }
+
+    /// A serial start, which is what a trace is compared against.
+    #[must_use]
+    pub const fn serial() -> Self {
+        Self(1)
+    }
+
+    /// The number to actually spawn for `jobs` pieces of work.
+    #[must_use]
+    pub const fn for_jobs(self, jobs: usize) -> usize {
+        if jobs < self.0 { jobs } else { self.0 }
+    }
+
+    /// The configured count, before clamping.
+    #[must_use]
+    pub const fn get(self) -> usize {
+        self.0
+    }
+}
+
+impl Default for Workers {
+    fn default() -> Self {
+        Self(Self::DEFAULT)
+    }
+}
+
 /// One tile's work, resolved before any of it is done.
 struct Job {
     tile: TileId,
@@ -139,8 +206,9 @@ struct Job {
 
 /// Runs a cold start and reports how long each stage took.
 ///
-/// `workers` threads share the tile work. One is a serial cold start, which is what the
-/// trace is compared against to show the fan-out is doing something.
+/// `workers` threads share the tile work, clamped to the number of tiles. [`Workers::default`]
+/// carries the rationale for the count; [`Workers::serial`] is the one-thread baseline a trace
+/// is compared against.
 ///
 /// # Errors
 ///
@@ -149,7 +217,7 @@ pub fn cold_start<S: FileSource>(
     style_text: &str,
     view: &ViewTransform,
     files: &Coalescing<S>,
-    workers: usize,
+    workers: Workers,
 ) -> Result<Boot, BootError> {
     let started = Instant::now();
 
@@ -238,7 +306,7 @@ pub fn cold_start<S: FileSource>(
     };
 
     std::thread::scope(|scope| {
-        for _ in 0..workers.max(1) {
+        for _ in 0..workers.for_jobs(jobs.len()) {
             scope.spawn(|| {
                 loop {
                     let index = next.fetch_add(1, Ordering::Relaxed);

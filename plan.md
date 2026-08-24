@@ -501,8 +501,12 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   both, over the same live origin. Cold-boot-to-first-tile is traced (§12.5): style parse,
   source resolution, cover, first fetch, first bucket, complete, with the cover fanned out
   across workers. Against a local Protomaps extract a nine-tile cover reaches first geometry in
-  6.7 ms and completes in 22 ms, against 12.7/72 ms serially. Remaining for exit: a budget to
-  hold that number against, on the RK3566 lane rather than on a workstation loopback.
+  6.7 ms and completes in 22 ms, against 12.7/72 ms serially. The worker count is a bounded
+  constant rather than the host's core count, for the reason §5.4 gives — decode belongs on the
+  little cores and a host-derived number makes a workstation measurement say nothing about the
+  device. Remaining for exit: a budget to hold that number against, on the RK3566 lane rather
+  than on a workstation loopback; and §5.4's one process-scoped pool with priority classes,
+  which the per-call pool here stands in for.
 - **R1.5** — four views over the same style (§13). Exit: §9.2 invariants green; §13.3
   four-view zoom benchmark green on RK3566; §13.1 fractional-zoom counters at zero.
 - **R2** — symbols: glyph manager, shaping, quads, per-view placement, collision, cross-tile

@@ -183,7 +183,7 @@ fn the_berlin_archive_overscales_past_its_maximum() {
 #[test]
 #[ignore = "needs a tile server; see the module docs"]
 fn cold_boot_to_first_tile() {
-    use tessella_orchestrate::boot::cold_start;
+    use tessella_orchestrate::boot::{Workers, cold_start};
 
     let origin = origin();
     for (name, manifest, lon, lat, zoom) in [
@@ -207,15 +207,16 @@ fn cold_boot_to_first_tile() {
                           16, ["match", ["get", "kind"], "highway", 8.0, 2.0]]}}}}]}}"##
         );
 
-        for workers in [1usize, 8] {
+        for workers in [Workers::serial(), Workers::default()] {
             let files = Coalescing::new(HttpFileSource::default());
             let boot = cold_start(&text, &view(lon, lat, zoom), &files, workers)
                 .unwrap_or_else(|error| panic!("{error}\nis `pmtiles serve` running?"));
             let t = boot.trace;
             println!(
-                "{name} z{zoom} x{workers}: parse {:?}  sources {:?}  cover {:?}  \
+                "{name} z{zoom} x{}: parse {:?}  sources {:?}  cover {:?}  \
                  first fetch {:?}  FIRST BUCKET {:?}  complete {:?}  \
                  ({} tiles, {} KiB, {} vertices)",
+                workers.get(),
                 t.style_parsed,
                 t.sources_resolved - t.style_parsed,
                 t.cover_computed - t.sources_resolved,
