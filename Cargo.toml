@@ -50,7 +50,7 @@ thiserror = "2.0"
 # the first three build C for the target and would break the cross `cargo check` lane
 # until the CI cross toolchains land (§16: emb manifest entries and cross toolchain pins).
 rusqlite = { version = "0.40", features = ["bundled"] }  # sqlite vendored (§3.1: the only surviving C)
-ureq = "3.4"             # cpp-httplib/curl (§12.6 wants HTTP/2 multiplexing — revisit at R1)
+ureq = { version = "3.4", default-features = false }   # cpp-httplib/curl (§12.6 wants HTTP/2 multiplexing — revisit at R1)
 zune-image = "0.5"       # SIMD raster decode straight into the texture slab (§12.2, R3)
 geozero = "0.15"         # interim MVT decode; §8 prefers a hand-rolled zero-copy varint reader
 

@@ -25,6 +25,8 @@ libm.workspace = true
 tessella-tile.workspace = true
 
 [dev-dependencies]
+tessella-storage = { workspace = true, features = ["http"] }
+tile-server = { path = "../../tools/tile-server" }
 serde_json.workspace = true
 
 [lints]

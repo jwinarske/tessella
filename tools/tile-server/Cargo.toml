@@ -1,0 +1,24 @@
+[package]
+name = "tile-server"
+description = "A local vector tile server, for testing tessella against a real HTTP origin"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[dependencies]
+
+[lib]
+name = "tile_server"
+path = "src/lib.rs"
+
+[[bin]]
+name = "tile-server"
+path = "src/main.rs"
+
+[lints]
+workspace = true
