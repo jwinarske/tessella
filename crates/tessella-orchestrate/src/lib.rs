@@ -44,6 +44,8 @@ pub mod counters;
 pub mod damage;
 pub mod emit;
 pub mod order;
+#[cfg(feature = "std")]
+pub mod pool;
 pub mod stencil;
 pub mod sweep;
 pub mod texture;
