@@ -82,6 +82,7 @@ fn one_request_serves_every_tile() {
     for (x, y) in COVER {
         let buckets = build_tile(
             &style,
+            "g",
             TileId::new(13, x, y),
             &features,
             TilingOptions::default(),
@@ -127,6 +128,7 @@ fn a_url_source_draws_what_an_inline_one_does() {
         let build = |style: &Style, features: &[tessella_source::GeoJsonFeature]| {
             build_tile(
                 style,
+                "g",
                 TileId::new(13, x, y),
                 features,
                 TilingOptions::default(),

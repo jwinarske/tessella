@@ -42,6 +42,7 @@ fn build_counting(counters: &mut SharedCounters, x: u32, y: u32) -> usize {
     let key = format!("13/{x}/{y}");
     let buckets = build_tile(
         &style(),
+        "probe",
         TileId::new(13, x, y),
         &features(),
         TilingOptions::default(),
@@ -179,6 +180,7 @@ fn both_views_build_identical_buckets() {
     for (x, y) in COVER {
         let first = build_tile(
             &style(),
+            "probe",
             TileId::new(13, x, y),
             &features(),
             TilingOptions::default(),
@@ -186,6 +188,7 @@ fn both_views_build_identical_buckets() {
         .expect("builds");
         let second = build_tile(
             &style(),
+            "probe",
             TileId::new(13, x, y),
             &features(),
             TilingOptions::default(),

@@ -47,6 +47,7 @@ fn features() -> Vec<tessella_source::GeoJsonFeature> {
 fn build(x: u32, y: u32) -> Vec<tessella_orchestrate::LayerBucket> {
     build_tile(
         &style(),
+        "probe",
         TileId::new(13, x, y),
         &features(),
         TilingOptions::default(),
@@ -174,6 +175,7 @@ fn the_endpoints_follow_the_overscaled_zoom() {
     let at = |overscaled_z: u8| {
         let buckets = build_tile(
             &style(),
+            "probe",
             TileId::overscaled(13, 4093, 2723, overscaled_z),
             &features(),
             TilingOptions::default(),

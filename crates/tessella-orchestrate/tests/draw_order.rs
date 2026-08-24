@@ -23,7 +23,7 @@ use std::collections::BTreeMap;
 
 use tessella_capture_abi::envelope::ViewId;
 use tessella_orchestrate::order::{self, DrawOrder};
-use tessella_orchestrate::tile::{TileId as BuildTile, build_tile};
+use tessella_orchestrate::tile::{TileId as BuildTile, build_sourceless, build_tile};
 use tessella_source::geojson;
 use tessella_source::tiling::TilingOptions;
 use tessella_style::{Source, Style};
@@ -70,6 +70,24 @@ fn parse_key(key: &str) -> (u32, i32, u32, u32) {
 }
 
 /// The oracle's draw order, from the `order` section.
+/// Every bucket a tile produces: the source's layers and the source-less ones, in style order.
+///
+/// Spelled out rather than hidden behind a library helper, because the merge is only this
+/// simple for a *single*-source style. Two sources build separately, and a background belongs
+/// to neither — it must be taken once, not once per source.
+fn build_all(
+    style: &Style,
+    source: &str,
+    tile: BuildTile,
+    features: &[tessella_source::GeoJsonFeature],
+) -> Vec<tessella_orchestrate::LayerBucket> {
+    let mut buckets =
+        build_tile(style, source, tile, features, TilingOptions::default()).expect("tile builds");
+    buckets.extend(build_sourceless(style, tile).expect("background builds"));
+    buckets.sort_by_key(|bucket| bucket.layer_index);
+    buckets
+}
+
 fn oracle_order() -> Vec<Slot> {
     DUMP.lines()
         .filter_map(|line| line.strip_prefix("draw "))
@@ -110,13 +128,12 @@ fn resolved_order() -> Vec<Slot> {
     // Bound in cover order, which is not draw order. Sorting is the module's job, and feeding it
     // pre-sorted input would test nothing.
     for tile in cover::cover(&probe()).expect("covers") {
-        let buckets = build_tile(
+        let buckets = build_all(
             &style,
+            "probe",
             BuildTile::new(tile.z, tile.x, tile.y),
             &features,
-            TilingOptions::default(),
-        )
-        .expect("tile builds");
+        );
         for binding in order::bindings_for(
             view,
             order::tile_of(tile.z, tile.x, tile.y),

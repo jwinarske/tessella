@@ -71,11 +71,32 @@ pub struct BootTrace {
     pub complete: Duration,
 }
 
+/// One tile of one source, built.
+#[derive(Debug, Clone)]
+pub struct BuiltTile {
+    /// Which tile.
+    pub tile: TileId,
+    /// Which source it was built from.
+    pub source: String,
+    /// Its buckets, shared with every other view that wanted them.
+    pub buckets: alloc::sync::Arc<Vec<LayerBucket>>,
+}
+
 /// What a cold start produced.
 #[derive(Debug)]
 pub struct Boot {
-    /// Buckets per tile of the cover, in cover order.
-    pub tiles: Vec<(TileId, alloc::sync::Arc<Vec<LayerBucket>>)>,
+    /// Buckets per `(tile, source)`, in cover order.
+    ///
+    /// A tile is one thing per *source*: a style overlaying a local extract on a world basemap
+    /// has two entries at the same address, and each carries only the layers that draw from its
+    /// own source.
+    pub tiles: Vec<BuiltTile>,
+    /// Layers that draw from no source, per tile of the cover.
+    ///
+    /// A background fills the viewport rather than reading a tile, so it is per tile but not
+    /// per source. Building it inside a source's pass would emit one copy per source of a
+    /// thing the oracle emits once.
+    pub sourceless: Vec<(TileId, Vec<LayerBucket>)>,
     /// Stage timings.
     pub trace: BootTrace,
     /// Tile bodies fetched, in bytes.
@@ -211,6 +232,7 @@ impl Default for Workers {
 struct Job {
     tile: TileId,
     url: String,
+    source: String,
     key: tessella_tile::store::TileKey,
 }
 
@@ -304,39 +326,41 @@ pub fn cold_start<S: FileSource>(config: &ColdStart<'_, S>) -> Result<Boot, Boot
 
     let cover = cover::cover(view).map_err(|_| BootError::Uncovered)?;
     let mut jobs: Vec<Job> = Vec::new();
+    // One job per (tile, source). A tile is not one thing: it is one thing *per source*, the
+    // way mbgl has a render tile per source-tile, and a style that overlays a local extract on
+    // a world basemap wants both at the same address.
     for tile in &cover {
-        // One source for now: the cold-start shape is the same for several, and the tile loop
-        // below is what changes rather than this.
-        let Some((name, set)) = sets.first() else {
-            break;
-        };
-        let Some(z) = fetch_zoom(tile.z, set.zooms) else {
-            continue;
-        };
-        let shift = tile.z - z;
-        let (x, y) = (tile.x >> shift, tile.y >> shift);
-        let Some(url) = set.url_for(z, x, y, 1.0) else {
-            continue;
-        };
-        let tile = TileId::overscaled(z, x, y, tile.z);
-        jobs.push(Job {
-            key: tessella_tile::store::TileKey::overscaled(
-                name.as_str(),
-                tile.z,
-                tile.x,
-                tile.y,
-                tile.overscaled_z,
-                style_rev,
-            ),
-            tile,
-            url,
-        });
+        for (name, set) in &sets {
+            let Some(z) = fetch_zoom(tile.z, set.zooms) else {
+                continue;
+            };
+            let shift = tile.z - z;
+            let (x, y) = (tile.x >> shift, tile.y >> shift);
+            let Some(url) = set.url_for(z, x, y, 1.0) else {
+                continue;
+            };
+            let tile = TileId::overscaled(z, x, y, tile.z);
+            jobs.push(Job {
+                source: name.clone(),
+                key: tessella_tile::store::TileKey::overscaled(
+                    name.as_str(),
+                    tile.z,
+                    tile.x,
+                    tile.y,
+                    tile.overscaled_z,
+                    style_rev,
+                ),
+                tile,
+                url,
+            });
+        }
     }
     let cover_computed = started.elapsed();
 
     if jobs.is_empty() {
         return Ok(Boot {
             tiles: Vec::new(),
+            sourceless: Vec::new(),
             trace: BootTrace {
                 style_parsed,
                 sources_resolved,
@@ -416,12 +440,12 @@ pub fn cold_start<S: FileSource>(config: &ColdStart<'_, S>) -> Result<Boot, Boot
                                     message: error.to_string(),
                                 }
                             })?;
-                            build_mvt_tile(&style, job.tile, &decoded).map_err(|error| {
-                                BootError::Build {
+                            build_mvt_tile(&style, &job.source, job.tile, &decoded).map_err(
+                                |error| BootError::Build {
                                     url: job.url.clone(),
                                     message: error.to_string(),
-                                }
-                            })
+                                },
+                            )
                         },
                         || BootError::Abandoned {
                             url: job.url.clone(),
@@ -456,11 +480,32 @@ pub fn cold_start<S: FileSource>(config: &ColdStart<'_, S>) -> Result<Boot, Boot
     let tiles = jobs
         .into_iter()
         .zip(built)
-        .filter_map(|(job, buckets)| buckets.map(|buckets| (job.tile, buckets)))
+        .filter_map(|(job, buckets)| {
+            buckets.map(|buckets| BuiltTile {
+                tile: job.tile,
+                source: job.source,
+                buckets,
+            })
+        })
         .collect();
+
+    // Cheap enough to do after the fan-out: no I/O, and one paint resolve per source-less
+    // layer per tile.
+    let mut sourceless = Vec::with_capacity(cover.len());
+    for tile in &cover {
+        let id = TileId::new(tile.z, tile.x, tile.y);
+        sourceless.push((
+            id,
+            crate::tile::build_sourceless(&style, id).map_err(|error| BootError::Build {
+                url: alloc::format!("{id}"),
+                message: error.to_string(),
+            })?,
+        ));
+    }
 
     Ok(Boot {
         tiles,
+        sourceless,
         trace: BootTrace {
             style_parsed,
             sources_resolved,
@@ -495,7 +540,7 @@ impl Boot {
     pub fn vertices(&self) -> usize {
         self.tiles
             .iter()
-            .flat_map(|(_, buckets)| buckets.iter())
+            .flat_map(|built| built.buckets.iter())
             .map(|bucket| {
                 bucket.content.as_fill().map_or(0, |b| b.vertices.len())
                     + bucket.content.as_line().map_or(0, |b| b.vertices.len())

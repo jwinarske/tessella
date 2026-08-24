@@ -511,8 +511,11 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   request at all — which matters because coalescing alone dedupes only *concurrent* fetches and
   is deliberately not a cache, so flatness across time waits on §12.6's byte cache or on a
   caller that checks its own first. GeoJSON sources resolve by URL as well as inline — one
-  fetch feeds every tile of a cover, since the tiling is the client's — though `boot` still
-  covers vector sources only, and a style mixing the two draws just the vector half.
+  fetch feeds every tile of a cover, since the tiling is the client's. A tile is built per
+  *source*: layers are scoped to the source they name, and the source-less ones — a background
+  — are built once per tile rather than once per source. `boot` fetches every vector source a
+  layer draws from; a GeoJSON source in the same style is still not covered by it, though the
+  pieces to do so now exist.
 - **R1.5** — four views over the same style (§13). Exit: §9.2 invariants green; §13.3
   four-view zoom benchmark green on RK3566; §13.1 fractional-zoom counters at zero.
 - **R2** — symbols: glyph manager, shaping, quads, per-view placement, collision, cross-tile

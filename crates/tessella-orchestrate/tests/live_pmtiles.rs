@@ -119,8 +119,13 @@ fn run(source: &str, manifest: &str, longitude: f64, latitude: f64, zoom: f64) {
         bytes += response.body.len();
 
         let decoded = Tile::decode(&response.body).unwrap_or_else(|error| panic!("{url}: {error}"));
-        let buckets = build_mvt_tile(&style, TileId::overscaled(z, x, y, tile.z), &decoded)
-            .unwrap_or_else(|error| panic!("{url}: {error}"));
+        let buckets = build_mvt_tile(
+            &style,
+            source,
+            TileId::overscaled(z, x, y, tile.z),
+            &decoded,
+        )
+        .unwrap_or_else(|error| panic!("{url}: {error}"));
 
         for bucket in &buckets {
             let entry = totals.entry(bucket.layer_id.clone()).or_default();

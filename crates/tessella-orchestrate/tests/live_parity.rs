@@ -167,8 +167,13 @@ fn build_cover() -> BTreeMap<(u32, u32), Vec<tessella_orchestrate::LayerBucket>>
         assert!(response.is_ok(), "{} for {url}", response.status);
 
         let decoded = Tile::decode(&response.body).unwrap_or_else(|e| panic!("{url}: {e}"));
-        let buckets = build_mvt_tile(&style, TileId::overscaled(z, x, y, tile.z), &decoded)
-            .unwrap_or_else(|e| panic!("{url}: {e}"));
+        let buckets = build_mvt_tile(
+            &style,
+            "world",
+            TileId::overscaled(z, x, y, tile.z),
+            &decoded,
+        )
+        .unwrap_or_else(|e| panic!("{url}: {e}"));
         out.insert((tile.x, tile.y), buckets);
     }
     out

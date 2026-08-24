@@ -357,3 +357,71 @@ fn a_later_view_finds_the_cache_warm() {
     assert_eq!(cache.joins(), 0, "and waited on nothing, having hit");
     assert_eq!(cache.hits() as usize, second.tiles.len(), "it hit for each");
 }
+
+/// A style with two sources fetches both, and each layer draws from its own.
+///
+/// This did not work and could not: `boot` took `sets.first()` and built one source, while the
+/// tile builder matched layers on `source-layer` alone — so the second source was never
+/// fetched and its layers were filled from the first source's tiles. Both halves are fixed, and
+/// this is what says so: two origins, two request streams, and the layers landing on the right
+/// side of the line.
+#[test]
+fn a_two_source_style_fetches_both() {
+    let world = server();
+    let local = server();
+    let text = format!(
+        r##"{{"version": 8,
+             "sources": {{
+               "world": {{"type": "vector", "tiles": ["{w}/{{z}}/{{x}}/{{y}}.pbf"],
+                          "minzoom": 0, "maxzoom": 6}},
+               "local": {{"type": "vector", "tiles": ["{l}/{{z}}/{{x}}/{{y}}.pbf"],
+                          "minzoom": 0, "maxzoom": 6}}}},
+             "layers": [
+               {{"id": "bg", "type": "background",
+                 "paint": {{"background-color": "#000000"}}}},
+               {{"id": "w-water", "type": "fill", "source": "world", "source-layer": "water",
+                 "paint": {{"fill-color": "#3050c0"}}}},
+               {{"id": "l-water", "type": "fill", "source": "local", "source-layer": "water",
+                 "paint": {{"fill-color": "#c04030"}}}}]}}"##,
+        w = world.origin(),
+        l = local.origin()
+    );
+
+    let files = Coalescing::new(HttpFileSource::default());
+    let cache: TileCache<BootError> = TileCache::new(64);
+    let started = boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
+
+    // Both origins were asked, and for the same number of tiles.
+    assert!(world.requests() > 0, "the world source was fetched");
+    assert!(local.requests() > 0, "and so was the local one");
+    assert_eq!(world.requests(), local.requests());
+
+    // One entry per (tile, source), so twice the tiles of a single-source cover.
+    let cover: std::collections::BTreeSet<_> =
+        started.tiles.iter().map(|built| built.tile).collect();
+    assert_eq!(started.tiles.len(), cover.len() * 2, "a tile per source");
+
+    // And each entry carries only its own source's layer.
+    for built in &started.tiles {
+        let ids: Vec<&str> = built
+            .buckets
+            .iter()
+            .map(|bucket| bucket.layer_id.as_str())
+            .collect();
+        match built.source.as_str() {
+            "world" => assert_eq!(ids, ["w-water"], "{:?}", built.tile),
+            "local" => assert_eq!(ids, ["l-water"], "{:?}", built.tile),
+            other => panic!("unexpected source {other}"),
+        }
+    }
+
+    // The background belongs to neither, and appears once per tile rather than once per source.
+    assert_eq!(started.sourceless.len(), cover.len());
+    for (_, buckets) in &started.sourceless {
+        let ids: Vec<&str> = buckets
+            .iter()
+            .map(|bucket| bucket.layer_id.as_str())
+            .collect();
+        assert_eq!(ids, ["bg"]);
+    }
+}

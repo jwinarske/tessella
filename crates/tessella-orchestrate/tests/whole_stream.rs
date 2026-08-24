@@ -19,7 +19,7 @@ use tessella_capture_abi::ring::Ring;
 use tessella_capture_abi::{CameraMode, EnvelopeKind};
 use tessella_orchestrate::camera::CameraBlock;
 use tessella_orchestrate::order::{self, DrawOrder};
-use tessella_orchestrate::tile::{TileId as BuildTile, build_tile};
+use tessella_orchestrate::tile::{TileId as BuildTile, build_sourceless, build_tile};
 use tessella_orchestrate::ubo::{self, DrawableEntry, GlobalPaintParams};
 use tessella_orchestrate::view::{GeometryBinding, ViewSession};
 use tessella_orchestrate::{stencil, texture};
@@ -87,13 +87,14 @@ fn emit_frame() -> Vec<EnvelopeKind> {
     let mut by_layer: BTreeMap<i32, Vec<GeometryBinding>> = BTreeMap::new();
 
     for tile in &tiles {
-        let buckets = build_tile(
-            &style,
-            BuildTile::new(tile.z, tile.x, tile.y),
-            &features,
-            TilingOptions::default(),
-        )
-        .expect("tile builds");
+        // The source's layers plus the source-less ones. A background reads no source, so it
+        // is not in a source's pass and must be taken once per tile rather than once per
+        // source — which for a single-source style is the same thing, and would not be for two.
+        let id = BuildTile::new(tile.z, tile.x, tile.y);
+        let mut buckets = build_tile(&style, "probe", id, &features, TilingOptions::default())
+            .expect("tile builds");
+        buckets.extend(build_sourceless(&style, id).expect("background builds"));
+        buckets.sort_by_key(|bucket| bucket.layer_index);
         for binding in order::bindings_for(
             view_id,
             order::tile_of(tile.z, tile.x, tile.y),
@@ -488,6 +489,7 @@ fn a_settled_frame_goes_quiet() {
     for tile in &tiles {
         let buckets = build_tile(
             &style,
+            "probe",
             BuildTile::new(tile.z, tile.x, tile.y),
             &[],
             TilingOptions::default(),

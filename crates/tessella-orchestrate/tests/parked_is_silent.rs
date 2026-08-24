@@ -49,6 +49,7 @@ fn emit_tile(producer: &mut Producer, arena: &mut SlabArena) {
     let features = features();
     let buckets = build_tile(
         &style,
+        "probe",
         TileId::new(13, 4093, 2723),
         &features,
         TilingOptions::default(),

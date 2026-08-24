@@ -63,7 +63,7 @@ fn a_fill_layer_tessellates_a_vector_source() {
     )
     .expect("style parses");
 
-    let buckets = build_mvt_tile(&style, TileId::new(0, 0, 0), &tile).expect("builds");
+    let buckets = build_mvt_tile(&style, "v", TileId::new(0, 0, 0), &tile).expect("builds");
     let fill = buckets
         .iter()
         .find(|b| b.layer_id == "f")
@@ -93,7 +93,7 @@ fn an_absent_source_layer_draws_nothing() {
     )
     .expect("style parses");
 
-    let buckets = build_mvt_tile(&style, TileId::new(0, 0, 0), &decoded()).expect("builds");
+    let buckets = build_mvt_tile(&style, "v", TileId::new(0, 0, 0), &decoded()).expect("builds");
     let fill = buckets
         .iter()
         .find(|b| b.layer_id == "f")
@@ -154,7 +154,7 @@ fn a_real_tile_layer_tessellates() {
     )
     .expect("style parses");
 
-    let buckets = build_mvt_tile(&style, TileId::new(0, 0, 0), &tile).expect("builds");
+    let buckets = build_mvt_tile(&style, "v", TileId::new(0, 0, 0), &tile).expect("builds");
     let fill = buckets
         .iter()
         .find(|b| b.layer_id == "f")
@@ -229,7 +229,7 @@ fn a_real_tile_line_layer_tessellates() {
     )
     .expect("style parses");
 
-    let buckets = build_mvt_tile(&style, TileId::new(0, 0, 0), &tile).expect("builds");
+    let buckets = build_mvt_tile(&style, "v", TileId::new(0, 0, 0), &tile).expect("builds");
     let line = buckets
         .iter()
         .find(|b| b.layer_id == "l")
@@ -279,7 +279,7 @@ fn measure_the_real_tile_line_layer() {
     )
     .expect("style parses");
     let start = std::time::Instant::now();
-    let buckets = build_mvt_tile(&style, TileId::new(0, 0, 0), &tile).expect("builds");
+    let buckets = build_mvt_tile(&style, "v", TileId::new(0, 0, 0), &tile).expect("builds");
     let elapsed = start.elapsed();
     let line = buckets
         .iter()
@@ -318,7 +318,7 @@ fn data_driven_paint_binds_over_a_real_tile() {
     .expect("style parses");
 
     let start = std::time::Instant::now();
-    let buckets = build_mvt_tile(&style, TileId::new(0, 0, 0), &tile).expect("builds");
+    let buckets = build_mvt_tile(&style, "v", TileId::new(0, 0, 0), &tile).expect("builds");
     let elapsed = start.elapsed();
 
     let bucket = buckets
@@ -356,4 +356,46 @@ fn data_driven_paint_binds_over_a_real_tile() {
     assert_eq!(distinct(12..16), 2, "two widths");
     // And floorwidth mirrors width, so it varies the same way.
     assert_eq!(distinct(8..12), 2, "two floorwidths");
+}
+
+/// A layer is built from *its own* source, not from whichever tile happens to be in hand.
+///
+/// A vector layer names its data twice — `source` picks the source, `source-layer` picks a
+/// layer within that source's tile — and matching only the second is enough for a style with
+/// one source and silently wrong for a style with two. Every schema calls a layer `water`, so
+/// a layer of source B was being built from source A's tile and drawn with data it never asked
+/// for. Nothing had two sources, so nothing failed; a real style has two the moment it overlays
+/// a local extract on a world basemap.
+#[test]
+fn a_layer_is_built_only_from_its_own_source() {
+    let tile = Tile::decode(REAL_TILE).expect("decodes");
+    let style = Style::parse(
+        r##"{"version": 8,
+             "sources": {"a": {"type": "vector"}, "b": {"type": "vector"}},
+             "layers": [
+               {"id": "from-a", "type": "fill", "source": "a", "source-layer": "water",
+                "paint": {"fill-color": "#ff0000"}},
+               {"id": "from-b", "type": "fill", "source": "b", "source-layer": "water",
+                "paint": {"fill-color": "#00ff00"}}]}"##,
+    )
+    .expect("style parses");
+
+    // Building source "a" produces a bucket for "from-a" and none at all for "from-b" — not an
+    // empty one, because that layer is not part of this source's pass.
+    let buckets = build_mvt_tile(&style, "a", TileId::new(0, 0, 0), &tile).expect("builds");
+    let ids: Vec<&str> = buckets.iter().map(|b| b.layer_id.as_str()).collect();
+    assert_eq!(ids, ["from-a"]);
+    assert!(
+        buckets[0]
+            .content
+            .as_fill()
+            .is_some_and(|fill| !fill.vertices.is_empty()),
+        "and it drew the water it asked for"
+    );
+
+    // And building source "b" from the same bytes produces "from-b" — a caller that hands the
+    // wrong tile to a source still gets only that source's layers.
+    let buckets = build_mvt_tile(&style, "b", TileId::new(0, 0, 0), &tile).expect("builds");
+    let ids: Vec<&str> = buckets.iter().map(|b| b.layer_id.as_str()).collect();
+    assert_eq!(ids, ["from-b"]);
 }

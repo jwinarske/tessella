@@ -10,7 +10,9 @@
 //! the tile is made of, and they are exact.
 
 use tessella_orchestrate::Content;
-use tessella_orchestrate::tile::{TileId, bucket_for, build_tile, drawable_count};
+use tessella_orchestrate::tile::{
+    TileId, bucket_for, build_sourceless, build_tile, drawable_count,
+};
 use tessella_source::geojson;
 use tessella_source::tiling::TilingOptions;
 use tessella_style::{Source, Style};
@@ -40,14 +42,24 @@ const COVER: [(u32, u32); 6] = [
     (4094, 2724),
 ];
 
+/// Every bucket a tile produces: the source's layers and the source-less ones, in style order.
+///
+/// Spelled out rather than hidden behind a library helper, because the merge is only this
+/// simple for a *single*-source style. A style with two sources builds each separately, and a
+/// background belongs to neither — it is taken once, not once per source.
 fn build(x: u32, y: u32) -> Vec<tessella_orchestrate::LayerBucket> {
-    build_tile(
+    let tile = TileId::new(13, x, y);
+    let mut buckets = build_tile(
         &style(),
-        TileId::new(13, x, y),
+        "probe",
+        tile,
         &features(),
         TilingOptions::default(),
     )
-    .expect("tile builds")
+    .expect("tile builds");
+    buckets.extend(build_sourceless(&style(), tile).expect("background builds"));
+    buckets.sort_by_key(|bucket| bucket.layer_index);
+    buckets
 }
 
 /// Vertex counts per tile, read out of the golden dump's fill drawables: five where one
@@ -226,6 +238,7 @@ fn every_tiles_triangles_are_well_formed() {
 fn a_tile_outside_the_data_builds_empty_rather_than_failing() {
     let buckets = build_tile(
         &style(),
+        "probe",
         TileId::new(13, 0, 0),
         &features(),
         TilingOptions::default(),
@@ -238,9 +251,14 @@ fn a_tile_outside_the_data_builds_empty_rather_than_failing() {
     assert!(fill.vertices.is_empty());
     assert!(fill.indices.is_empty());
 
-    // Background draws everywhere, including where there is no data.
+    // The background is not in a source's pass at all — it reads no source — so it is absent
+    // here and present in `build_sourceless`. It still draws everywhere, including where there
+    // is no data.
+    assert!(bucket_for(&buckets, "bg").is_none(), "not a source's layer");
+    let sourceless = tessella_orchestrate::tile::build_sourceless(&style(), TileId::new(13, 0, 0))
+        .expect("builds");
     assert_eq!(
-        bucket_for(&buckets, "bg").map(|b| &b.content),
+        bucket_for(&sourceless, "bg").map(|b| &b.content),
         Some(&Content::Background)
     );
 }
@@ -356,6 +374,7 @@ fn a_line_layer_strokes_polygon_features() {
 
     let buckets = build_tile(
         &style,
+        "probe",
         TileId::new(13, 4093, 2723),
         &features,
         TilingOptions::default(),
@@ -540,6 +559,7 @@ fn a_fill_layer_draws_a_point_as_a_degenerate_ring() {
 
     let buckets = build_tile(
         &style,
+        "probe",
         TileId::new(13, 4093, 2723),
         &features,
         TilingOptions::default(),

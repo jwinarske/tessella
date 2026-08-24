@@ -438,7 +438,13 @@ mod tests {
             std::thread::spawn(move || {
                 let mut seen = 0u64;
                 let mut highest = 0f64;
-                while !done.load(Ordering::Acquire) {
+                // Until the writer is finished *and* something has been observed. The second
+                // clause is what makes this not depend on scheduling: a reader that starts
+                // after the writer has already set `done` would otherwise exit having read
+                // nothing, and fail an assertion about its own liveness rather than about the
+                // channel. It cannot spin: by the time `done` is set the channel holds a
+                // camera, so the next read succeeds.
+                while !done.load(Ordering::Acquire) || seen == 0 {
                     if let Some(camera) = channel.camera(ViewId(0)) {
                         assert!(is_coherent(&camera), "torn camera: {camera:?}");
                         assert!(
@@ -457,7 +463,10 @@ mod tests {
         writer.join().unwrap();
         let seen = reader.join().unwrap();
 
-        // The reader may be starved in principle; if it read nothing the test proved nothing.
+        // Liveness of the reader, not evidence that the two overlapped — a single read after
+        // the writer finished would satisfy it too, and always could. What the test is *for* is
+        // the coherence and monotonicity checks above, which run on every read the reader
+        // manages to take while the writer is going.
         assert!(seen > 0, "the reader never observed a camera");
         assert_eq!(channel.camera(ViewId(0)), Some(generation(WRITES)));
     }

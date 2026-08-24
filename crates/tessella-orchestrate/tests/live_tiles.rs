@@ -96,6 +96,7 @@ fn a_live_source_builds_buckets() {
         let decoded = Tile::decode(&response.body).expect("decodes");
         let buckets = build_mvt_tile(
             &style,
+            "live",
             TileId::overscaled(z, tile.x, tile.y, tile.z),
             &decoded,
         )

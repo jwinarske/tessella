@@ -50,7 +50,7 @@ use tessella_tile::projection;
 use tessella_tile::store::{Lookup, TileKey, TileStore};
 
 /// The tile being built.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TileId {
     /// Zoom.
     pub z: u8,
@@ -162,6 +162,7 @@ pub enum TileError {
 /// [`TileError`] when a layer's filter or paint properties do not compile.
 pub fn build_tile(
     style: &Style,
+    source: &str,
     tile: TileId,
     features: &[GeoJsonFeature],
     options: TilingOptions,
@@ -171,7 +172,7 @@ pub fn build_tile(
     let mut buckets = Vec::new();
 
     for (layer_index, layer) in style.layers.iter().enumerate() {
-        if !layer.kind.is_built() {
+        if !layer.kind.is_built() || !draws_from(layer, source) {
             continue;
         }
 
@@ -372,6 +373,64 @@ pub fn build_tile(
     Ok(buckets)
 }
 
+/// Whether a layer draws from this source.
+///
+/// # Why this is not obvious, and what it cost
+///
+/// A vector layer names its data twice: `source` picks the source, `source-layer` picks a layer
+/// within that source's tile. Matching only on the second is enough for a style with one
+/// source and silently wrong for a style with two — every schema calls a layer `water`, so a
+/// layer of source B would be built from source A's tile and drawn with data it never asked
+/// for. Nothing here had two sources, so nothing failed; a real style has two the moment it
+/// overlays a local extract on a world basemap.
+///
+/// A layer with no source at all — a background — belongs to none of them and is built by
+/// [`build_sourceless`] instead, once per tile rather than once per source.
+fn draws_from(layer: &tessella_style::Layer, source: &str) -> bool {
+    layer.source.as_deref() == Some(source)
+}
+
+/// Builds the layers that draw from no source at all.
+///
+/// A background is one: it fills the viewport rather than reading a tile, so it is per *tile*
+/// but not per *source*, and building it inside a source's pass would produce one copy per
+/// source of a thing the oracle emits once.
+///
+/// # Errors
+///
+/// [`TileError`] when a layer's paint properties do not compile.
+pub fn build_sourceless(style: &Style, tile: TileId) -> Result<Vec<LayerBucket>, TileError> {
+    let _ = tile;
+    let mut buckets = Vec::new();
+    for (layer_index, layer) in style.layers.iter().enumerate() {
+        if layer.source.is_some() || !layer.kind.is_built() {
+            continue;
+        }
+        let paint = resolve_paint(layer).map_err(|source| TileError::Property {
+            layer: layer.id.clone(),
+            source,
+        })?;
+        let binder = PaintBinder::new(
+            paint_specs(&layer.kind).unwrap_or(&[]),
+            &paint,
+            f64::from(tile.bucket_zoom()),
+        );
+        let content = match layer.kind {
+            LayerKind::Background => Content::Background,
+            // Every other built kind reads a source, so `layer.source.is_some()` excluded it.
+            _ => continue,
+        };
+        buckets.push(LayerBucket {
+            layer_index,
+            layer_id: layer.id.clone(),
+            content,
+            paint,
+            binder,
+        });
+    }
+    Ok(buckets)
+}
+
 /// Builds a tile's buckets from a decoded vector tile.
 ///
 /// # Why this is not `build_tile` with a different feature type
@@ -390,13 +449,14 @@ pub fn build_tile(
 /// [`TileError`] when a layer's filter or paint properties do not compile.
 pub fn build_mvt_tile(
     style: &Style,
+    source: &str,
     tile: TileId,
-    source: &tessella_source::mvt::Tile,
+    decoded: &tessella_source::mvt::Tile,
 ) -> Result<Vec<LayerBucket>, TileError> {
     let mut buckets = Vec::new();
 
     for (layer_index, layer) in style.layers.iter().enumerate() {
-        if !layer.kind.is_built() {
+        if !layer.kind.is_built() || !draws_from(layer, source) {
             continue;
         }
 
@@ -428,7 +488,7 @@ pub fn build_mvt_tile(
                 let named = layer
                     .source_layer
                     .as_deref()
-                    .and_then(|name| source.layer(name));
+                    .and_then(|name| decoded.layer(name));
 
                 let mut per_feature: Vec<Vec<Ring>> = Vec::new();
                 let mut kept: Vec<&tessella_source::mvt::Feature> = Vec::new();
@@ -485,7 +545,7 @@ pub fn build_mvt_tile(
                 let named = layer
                     .source_layer
                     .as_deref()
-                    .and_then(|name| source.layer(name));
+                    .and_then(|name| decoded.layer(name));
 
                 let options = line_options(layer);
                 let mut bucket = LineBucket::default();
@@ -821,7 +881,7 @@ impl TileBuilder {
         // Built outside `get_or_build` so a failure propagates instead of being cached. A
         // closure returning `Result` would have to store the error or panic, and neither is
         // right: the next view should retry, not inherit a poisoned entry.
-        let built = build_tile(style, tile, features, options)?;
+        let built = build_tile(style, source, tile, features, options)?;
         self.builds += 1;
         let (cached, lookup) = self.store.get_or_build(&key, || built);
         Ok((cached, lookup))
