@@ -35,6 +35,8 @@ pub struct Routes {
     tiles: Option<(Vec<u8>, Option<&'static str>)>,
     /// Zooms the tile route answers for. Anything else is a 404.
     tile_zooms: Option<(u8, u8)>,
+    /// A `Cache-Control` to send with every response, when set.
+    cache_control: Option<&'static str>,
 }
 
 impl Routes {
@@ -42,6 +44,13 @@ impl Routes {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Sends this `Cache-Control` with every response.
+    #[must_use]
+    pub fn cache_control(mut self, value: &'static str) -> Self {
+        self.cache_control = Some(value);
+        self
     }
 
     /// Serves `body` at exactly `path`.
@@ -234,12 +243,19 @@ fn serve(stream: TcpStream, routes: &Routes, paths: &Mutex<Vec<String>>) -> Opti
     let method = parts.next()?.to_string();
     let target = parts.next()?.to_string();
 
-    // Drain the headers. The body is not read: this serves GET only, and a client that sent
-    // one would be doing something this is not here to support.
+    // Read the headers, keeping the one that decides whether a body is needed. The request
+    // body is not read: this serves GET only, and a client that sent one would be doing
+    // something this is not here to support.
+    let mut if_none_match: Option<String> = None;
     loop {
         let mut line = String::new();
         if reader.read_line(&mut line).ok()? == 0 || line.trim().is_empty() {
             break;
+        }
+        if let Some((name, value)) = line.split_once(':')
+            && name.trim().eq_ignore_ascii_case("if-none-match")
+        {
+            if_none_match = Some(value.trim().to_string());
         }
     }
 
@@ -269,21 +285,35 @@ fn serve(stream: TcpStream, routes: &Routes, paths: &Mutex<Vec<String>>) -> Opti
 
     let reason = match status {
         200 => "OK",
+        304 => "Not Modified",
         404 => "Not Found",
         405 => "Method Not Allowed",
         _ => "Unknown",
     };
+    // A conditional request whose tag matches is answered with a status and no body, which is
+    // the whole point of revalidation. Without this the cache's 304 path is untestable, and a
+    // path that cannot be tested is one that will be wrong.
+    let etag = format!("\"{status}-{}\"", body.len());
+    let (status, reason, body) = if status == 200 && if_none_match.as_deref() == Some(&etag) {
+        (304, "Not Modified", Vec::new())
+    } else {
+        (status, reason, body)
+    };
+
     let encoding = encoding.map_or_else(String::new, |value| {
         format!("Content-Encoding: {value}\r\n")
     });
+    let cache_control = routes
+        .cache_control
+        .map_or_else(String::new, |value| format!("Cache-Control: {value}\r\n"));
     let head = format!(
         "HTTP/1.1 {status} {reason}\r\n\
          Content-Type: {content_type}\r\n\
          {encoding}\
+         {cache_control}\
          Content-Length: {}\r\n\
-         ETag: \"{status}-{}\"\r\n\
+         ETag: {etag}\r\n\
          Connection: close\r\n\r\n",
-        body.len(),
         body.len()
     );
 

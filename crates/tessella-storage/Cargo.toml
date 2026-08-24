@@ -15,14 +15,17 @@ log.workspace = true
 serde_json.workspace = true
 tessella-style.workspace = true
 thiserror.workspace = true
+rusqlite = { workspace = true, optional = true }
 ureq = { workspace = true, optional = true }
 
 [features]
 default = []
+cache = ["dep:rusqlite"]
 http = ["dep:ureq"]
 
 [dev-dependencies]
 flate2 = "1"
+tempfile = "3"
 tessella-source.workspace = true
 tile-server = { path = "../../tools/tile-server" }
 

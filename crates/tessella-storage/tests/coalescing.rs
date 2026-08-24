@@ -42,7 +42,7 @@ impl FileSource for Controlled {
         Ok(Response {
             status: 200,
             body: url.as_bytes().to_vec(),
-            etag: None,
+            ..Response::default()
         })
     }
 }

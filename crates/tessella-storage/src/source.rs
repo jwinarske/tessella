@@ -31,7 +31,7 @@ use std::sync::Arc;
 use crate::shared::{ShareStats, Shared};
 
 /// What a fetch produced.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Response {
     /// HTTP status, or 200 for a source with no notion of one.
     pub status: u16,
@@ -39,6 +39,26 @@ pub struct Response {
     pub body: Vec<u8>,
     /// Entity tag, for revalidation.
     pub etag: Option<String>,
+    /// `Cache-Control: max-age`, in seconds, exactly as the origin stated it.
+    ///
+    /// Relative, and left relative. Resolving it here would need a clock, and a transport with
+    /// a clock is a transport that disagrees with whatever else has one — which is what
+    /// happened: the cache resolved freshness against an injected clock while the transport had
+    /// already resolved the expiry against the system one, and every stored entry expired a
+    /// lifetime away from when the cache thought it would. [`Self::expires`] resolves it, and
+    /// its caller owns the clock.
+    pub max_age: Option<i64>,
+    /// `Expires`, in seconds since the Unix epoch.
+    ///
+    /// Absolute as sent, and the fallback when there is no `max-age` — mbgl reads both and
+    /// prefers `Cache-Control`.
+    pub expires_at: Option<i64>,
+    /// The origin said `Cache-Control: must-revalidate`.
+    ///
+    /// The difference between "stale" and "unusable". A stale tile may still be drawn while a
+    /// fresh copy is fetched — mbgl's schema says so in as many words — but one whose origin
+    /// asked for revalidation may not be drawn until the origin has been asked.
+    pub must_revalidate: bool,
 }
 
 impl Response {
@@ -46,6 +66,24 @@ impl Response {
     #[must_use]
     pub const fn is_ok(&self) -> bool {
         self.status >= 200 && self.status < 300
+    }
+
+    /// Whether the origin said the cached copy is still good.
+    #[must_use]
+    pub const fn is_not_modified(&self) -> bool {
+        self.status == 304
+    }
+
+    /// When this stops being fresh, given when it was received.
+    ///
+    /// `None` means the origin said nothing about it, which mbgl treats as *fresh* rather than
+    /// as stale — `isFresh()` is `expires ? *expires > now : !error`. Treating silence as
+    /// immediately stale would revalidate every tile on every start.
+    #[must_use]
+    pub fn expires(&self, received_at: i64) -> Option<i64> {
+        self.max_age
+            .map(|seconds| received_at.saturating_add(seconds))
+            .or(self.expires_at)
     }
 
     /// Whether the resource is absent rather than broken.
@@ -94,6 +132,21 @@ pub trait FileSource: Send + Sync {
     ///
     /// [`FetchError`] when the transport failed. A 404 is a *response*, not an error.
     fn fetch(&self, url: &str) -> Result<Response, FetchError>;
+
+    /// Fetches, telling the origin which copy is already held.
+    ///
+    /// The origin may answer `304 Not Modified`, which means the held copy is still good and
+    /// costs a round trip rather than a body. A source with no notion of conditional requests
+    /// may ignore `etag` and fetch normally: that is always correct and merely slower, which is
+    /// why the default does exactly that rather than refusing.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::fetch`].
+    fn fetch_conditional(&self, url: &str, etag: Option<&str>) -> Result<Response, FetchError> {
+        let _ = etag;
+        self.fetch(url)
+    }
 }
 
 /// Wraps a source so concurrent requests for one URL become one request.

@@ -493,9 +493,11 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   full — all 37 drawables and all 14 uniform buffers. Tiles now come off a socket: URL
   templating, TileJSON resolution, request coalescing and an HTTP file source, tested end to
   end against `tools/tile-server` on a loopback port, and opt-in against a `pmtiles serve`
-  origin over real Protomaps planet extracts. Remaining: the SQLite cache and etag
-  revalidation, TLS and reading `.pmtiles` archives directly (both held for the cross
-  toolchains, §16), cross-faded (pattern) binders, DR-11 evaluator, §12.5 startup path.
+  origin over real Protomaps planet extracts. An SQLite response cache with etag revalidation
+  lands behind an off-by-default feature, since `rusqlite` bundles C the cross lane has no
+  toolchain for. Remaining: wiring that cache into the cold start, TLS and reading `.pmtiles`
+  archives directly (both held for the cross toolchains, §16), cross-faded (pattern) binders,
+  DR-11 evaluator, §12.5 startup path.
   Exit: probe parity on a *real* style sans symbols — **geometry half met**: nine tiles of a
   Protomaps planet extract at z5, all 21 drawables byte-identical to the probe, fills and lines
   both, over the same live origin. Cold-boot-to-first-tile is traced (§12.5): style parse,
