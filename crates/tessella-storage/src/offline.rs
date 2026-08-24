@@ -243,3 +243,261 @@ pub fn estimate(region: &Region, sources: &[SourceContribution], assets: StyleAs
         precise,
     }
 }
+
+/// Every glyph range in the plane, as `[start, end]` pairs.
+///
+/// 256 ranges of 256 code points, which is what the `{range}` token in a glyph URL selects.
+const GLYPH_RANGE_STRIDE: u32 = 256;
+
+/// The ranges a region asks for, given whether it wants ideographs.
+fn glyph_ranges(include_ideographs: bool) -> impl Iterator<Item = (u32, u32)> {
+    let count = if include_ideographs {
+        GLYPH_RANGES_PER_FONT_STACK
+    } else {
+        NON_IDEOGRAPH_GLYPH_RANGES_PER_FONT_STACK
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    (0..count as u32).map(|index| {
+        let start = index * GLYPH_RANGE_STRIDE;
+        (start, start + GLYPH_RANGE_STRIDE - 1)
+    })
+}
+
+/// What a download will fetch, resolved down to URLs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Plan {
+    /// Manifests, glyphs, sprites and single documents.
+    ///
+    /// Separate from the tiles because they are the small, shared, always-needed part: a
+    /// download fetches them first so that a cancelled or interrupted region still has a style
+    /// that renders whatever tiles did arrive.
+    pub assets: Vec<String>,
+    /// Every tile, across every source.
+    pub tiles: Vec<String>,
+    /// Whether this is everything.
+    ///
+    /// False when a source's manifest has not been resolved, or when a `text-font` is
+    /// data-driven and so names fonts that only the features themselves reveal.
+    pub complete: bool,
+}
+
+impl Plan {
+    /// How many resources this plan names.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.assets.len() + self.tiles.len()
+    }
+
+    /// True when the plan names nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// Expression operators the spec permits to head a `text-font`.
+///
+/// [`tessella_style::PropertyValue`] classifies syntactically — a non-empty array headed by a
+/// string is a call — and says so, leaving the meaning to whoever has an operator table. That
+/// is deliberate and it is why this table exists: `text-font`'s value is `array<string>`, so
+/// the overwhelmingly common `["Noto Sans Regular"]` is a *font stack* that happens to look
+/// exactly like a call to an operator named "Noto Sans Regular".
+///
+/// So the head is checked against the operators that can actually produce an `array<string>`,
+/// and an unrecognized head means a font name. That is the right direction to be wrong in: no
+/// font is named `step`, whereas reading every stack as an expression loses every glyph in the
+/// style and ships a region whose labels are all missing.
+const FONT_EXPRESSION_OPERATORS: &[&str] = &[
+    "array",
+    "at",
+    "case",
+    "coalesce",
+    "config",
+    "feature-state",
+    "get",
+    "global-state",
+    "let",
+    "literal",
+    "match",
+    "slice",
+    "step",
+    "var",
+];
+
+/// Collects the font stacks a style names, and says whether it found all of them.
+///
+/// A `text-font` may be data-driven — `["get", "font"]`, or a `match` on a feature property —
+/// in which case the fonts in play are a property of the data rather than of the style, and no
+/// amount of reading the style reveals them. mbgl handles this by asking the expression for its
+/// possible outputs, which answers for a `match` and not for a `get`. Here the constant forms
+/// are collected and anything else sets the flag, so a download reports itself as a lower bound
+/// rather than quietly shipping a region whose labels have no glyphs.
+#[must_use]
+pub fn font_stacks(style: &tessella_style::Style) -> (Vec<String>, bool) {
+    let mut stacks: Vec<String> = Vec::new();
+    let mut complete = true;
+
+    for layer in &style.layers {
+        let Some(value) = layer.layout.get("text-font") else {
+            continue;
+        };
+        let fonts = match value {
+            tessella_style::PropertyValue::Literal(literal) => literal.as_array(),
+            tessella_style::PropertyValue::Expression(expression) => {
+                let call = expression.value().as_array();
+                let head = call
+                    .and_then(<[tessella_style::Value]>::first)
+                    .and_then(tessella_style::Value::as_str);
+                match head {
+                    // A stack whose first font shares a name with an operator, which is to say
+                    // an ordinary stack.
+                    Some(name) if !FONT_EXPRESSION_OPERATORS.contains(&name) => call,
+                    // `["literal", [...]]` is the one expression form whose fonts are stated
+                    // rather than computed.
+                    Some("literal") => call
+                        .and_then(|call| call.get(1))
+                        .and_then(tessella_style::Value::as_array),
+                    _ => None,
+                }
+            }
+        };
+        match fonts {
+            Some(fonts) => {
+                // The stack is the comma-joined list, which is what the `{fontstack}` token in
+                // a glyph URL expects.
+                let stack = fonts
+                    .iter()
+                    .filter_map(tessella_style::Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(",");
+                if !stack.is_empty() && !stacks.contains(&stack) {
+                    stacks.push(stack);
+                }
+            }
+            None => complete = false,
+        }
+    }
+
+    stacks.sort_unstable();
+    (stacks, complete)
+}
+
+/// Turns a style and a region into the list of URLs a download must fetch.
+///
+/// `manifests` supplies the [`crate::tileset::TileSet`] for each source id whose manifest has
+/// already been resolved. A tiled source missing from it contributes no tiles and makes the
+/// plan incomplete — which is why a download resolves manifests first and plans afterwards.
+///
+/// The style URL itself is not included: the caller already has it, and having fetched it is
+/// what made this call possible.
+#[must_use]
+pub fn plan(
+    style: &tessella_style::Style,
+    region: &Region,
+    manifests: &std::collections::BTreeMap<String, crate::tileset::TileSet>,
+) -> Plan {
+    use tessella_style::Source;
+
+    let mut plan = Plan {
+        complete: true,
+        ..Plan::default()
+    };
+
+    for (id, source) in &style.sources {
+        let (kind, manifest_url) = match source {
+            Source::Vector(tiles) => (SourceKind::Vector, tiles.url.as_deref()),
+            Source::Raster(tiles) | Source::RasterDem(tiles) => (
+                SourceKind::Raster {
+                    #[allow(clippy::cast_possible_truncation)]
+                    tile_size: tiles.tile_size.unwrap_or(512) as u16,
+                },
+                tiles.url.as_deref(),
+            ),
+            Source::Geojson(geojson) => {
+                // A GeoJSON source by URL is one document; one given inline is already in the
+                // style and costs nothing more.
+                match crate::geojson::origin(geojson) {
+                    Ok(crate::geojson::Origin::Url(url)) => plan.assets.push(url.to_string()),
+                    Ok(crate::geojson::Origin::Inline) => {}
+                    // A source whose `data` is neither is a style this cannot enumerate. It is
+                    // not fatal to the region -- the other sources still download -- but the
+                    // plan is no longer everything.
+                    Err(_) => plan.complete = false,
+                }
+                continue;
+            }
+            // An image or video source, or something this build does not model. Its resources
+            // cannot be named, so saying the plan is complete would be a lie.
+            Source::Other(_) => {
+                plan.complete = false;
+                continue;
+            }
+        };
+
+        if let Some(url) = manifest_url {
+            plan.assets.push(url.to_string());
+        }
+
+        let Some(manifest) = manifests.get(id) else {
+            plan.complete = false;
+            continue;
+        };
+
+        let (min, max) = covering_zoom_range(region, kind, manifest.zooms);
+        if min > max {
+            continue;
+        }
+        for z in min..=max {
+            // The limit is the count itself: a caller that wants a bound checks
+            // [`Region::tile_count`] first and declines, rather than being surprised here.
+            let Ok(coords) = region.bounds.tiles(z, u64::MAX) else {
+                plan.complete = false;
+                continue;
+            };
+            for coord in coords {
+                // One template per tile. A source sharded across hosts states several so a
+                // browser can open more connections; fetching the same tile from each of them
+                // would download it two or three times over.
+                let template = &manifest.templates
+                    [(coord.x as usize + coord.y as usize) % manifest.templates.len().max(1)];
+                plan.tiles.push(crate::url::expand(
+                    template,
+                    z,
+                    coord.x,
+                    coord.y,
+                    manifest.scheme,
+                    region.pixel_ratio,
+                ));
+            }
+        }
+    }
+
+    if let Some(template) = &style.glyphs {
+        let (stacks, all_found) = font_stacks(style);
+        plan.complete &= all_found;
+        for stack in stacks {
+            for (start, end) in glyph_ranges(region.include_ideographs) {
+                plan.assets.push(
+                    template
+                        // Font stacks have spaces in them, and a raw space is not a legal URI
+                        // character: unencoded, the request fails at the transport rather than
+                        // as a 404, and no style with a label in it can be downloaded at all.
+                        .replace("{fontstack}", &crate::url::percent_encode(&stack))
+                        .replace("{range}", &format!("{start}-{end}")),
+                );
+            }
+        }
+    }
+
+    if let Some(sprite) = &style.sprite {
+        // Both densities of both files: a region downloaded on a phone may be viewed after the
+        // display scale changes, and a missing `@2x` sheet is a map with no icons.
+        for suffix in ["", "@2x"] {
+            for extension in ["json", "png"] {
+                plan.assets.push(format!("{sprite}{suffix}.{extension}"));
+            }
+        }
+    }
+
+    plan
+}

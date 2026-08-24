@@ -173,8 +173,48 @@ pub fn fetch_zoom(display_zoom: u8, range: ZoomRange) -> Option<u8> {
     Some(display_zoom.min(range.max))
 }
 
+/// Percent-encodes a string for use as one URL path segment.
+///
+/// RFC 3986's unreserved set — alphanumerics and `-`, `_`, `.`, `~` — pass through; every other
+/// byte becomes `%xx` in lower-case hex, which is what mbgl's `percentEncode` does and so what
+/// every hosted glyph endpoint has been serving against.
+///
+/// This exists because font stacks have spaces in them. `Noto Sans Regular` is the ordinary
+/// case, not an edge one, and a raw space is not a legal URI character at all — the request
+/// fails at the transport rather than coming back as a 404, so a style with any label in it
+/// cannot be downloaded until this runs over the stack name.
+#[must_use]
+pub fn percent_encode(value: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            out.push(char::from(byte));
+        } else {
+            out.push('%');
+            out.push(char::from(HEX[usize::from(byte >> 4)]));
+            out.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
+    /// The unreserved set passes through and everything else does not.
+    #[test]
+    fn percent_encoding_matches_rfc_3986() {
+        assert_eq!(super::percent_encode("aZ09-_.~"), "aZ09-_.~");
+        assert_eq!(
+            super::percent_encode("Noto Sans Regular"),
+            "Noto%20Sans%20Regular"
+        );
+        assert_eq!(super::percent_encode("a/b?c#d"), "a%2fb%3fc%23d");
+        // Multi-byte input is encoded per byte, which is what a UTF-8 path segment is.
+        assert_eq!(super::percent_encode("é"), "%c3%a9");
+        assert_eq!(super::percent_encode(""), "");
+    }
+
     use super::*;
 
     #[test]

@@ -61,6 +61,17 @@ impl Routes {
         self
     }
 
+    /// Serves `status` with an empty body at exactly `path`.
+    ///
+    /// For the statuses that are neither the thing nor a definite absence -- a 500, a 403 --
+    /// which a client has to treat differently from a 404.
+    #[must_use]
+    pub fn at_status(mut self, path: &str, status: u16) -> Self {
+        self.exact
+            .insert(path.to_string(), (status, "text/plain", Vec::new()));
+        self
+    }
+
     /// Serves `body` for any `/{z}/{x}/{y}.pbf`, optionally only within a zoom range.
     ///
     /// One body for every tile is deliberate: what is under test is the plumbing, and a

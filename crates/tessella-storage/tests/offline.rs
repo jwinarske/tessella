@@ -160,7 +160,11 @@ fn an_unfetched_manifest_makes_the_estimate_imprecise() {
         from_manifest: false,
     };
 
-    let all_known = estimate(&region, std::slice::from_ref(&known), StyleAssets::default());
+    let all_known = estimate(
+        &region,
+        std::slice::from_ref(&known),
+        StyleAssets::default(),
+    );
     assert!(all_known.precise);
 
     let one_unknown = estimate(
@@ -239,4 +243,348 @@ fn a_large_region_is_countable_but_not_enumerable() {
         france.tiles(SourceKind::Vector, zooms, 100_000).is_err(),
         "refused rather than attempted"
     );
+}
+
+// --- Planning: from a style and a region to the URLs a download fetches. ---
+
+use std::collections::BTreeMap;
+
+use tessella_storage::offline::{Plan, font_stacks, plan};
+use tessella_storage::tileset::TileSet;
+use tessella_storage::url::Scheme;
+
+fn style(json: &str) -> tessella_style::Style {
+    serde_json::from_str(json).expect("a style")
+}
+
+fn manifest(template: &str, min: u8, max: u8) -> TileSet {
+    TileSet {
+        templates: vec![template.to_string()],
+        zooms: ZoomRange { min, max },
+        scheme: Scheme::Xyz,
+    }
+}
+
+fn tiny() -> Region {
+    Region {
+        style_url: "https://host/style.json".into(),
+        // A box inside one tile at every zoom it is planned for.
+        bounds: Bounds::new(13.40, 52.51, 13.41, 52.52),
+        min_zoom: 4.0,
+        max_zoom: 5.0,
+        pixel_ratio: 1.0,
+        include_ideographs: false,
+    }
+}
+
+/// A plan names the manifest, the tiles, the glyph ranges and both sprite densities.
+#[test]
+fn a_plan_names_everything_the_style_needs() {
+    let style = style(
+        r#"{
+          "version": 8,
+          "sprite": "https://host/sprite",
+          "glyphs": "https://host/fonts/{fontstack}/{range}.pbf",
+          "sources": {
+            "base": { "type": "vector", "url": "https://host/base.json" }
+          },
+          "layers": [
+            { "id": "labels", "type": "symbol", "source": "base",
+              "layout": { "text-font": ["Noto Sans Regular"] } }
+          ]
+        }"#,
+    );
+    let manifests = BTreeMap::from([(
+        "base".to_string(),
+        manifest("https://host/{z}/{x}/{y}.mvt", 0, 14),
+    )]);
+
+    let plan = plan(&style, &tiny(), &manifests);
+    assert!(plan.complete);
+
+    assert!(plan.assets.contains(&"https://host/base.json".to_string()));
+    // Five non-ideograph ranges for the one stack.
+    assert!(
+        plan.assets
+            .contains(&"https://host/fonts/Noto%20Sans%20Regular/0-255.pbf".to_string())
+    );
+    assert!(
+        plan.assets
+            .contains(&"https://host/fonts/Noto%20Sans%20Regular/1024-1279.pbf".to_string())
+    );
+    // Both densities of both sprite files: a region downloaded on one display scale may be
+    // viewed at another, and a missing sheet is a map with no icons.
+    for expected in [
+        "https://host/sprite.json",
+        "https://host/sprite.png",
+        "https://host/sprite@2x.json",
+        "https://host/sprite@2x.png",
+    ] {
+        assert!(plan.assets.contains(&expected.to_string()), "{expected}");
+    }
+
+    // Zooms 4 and 5, one tile each for a box this small.
+    assert_eq!(
+        plan.tiles,
+        vec![
+            "https://host/4/8/5.mvt".to_string(),
+            "https://host/5/17/10.mvt".to_string(),
+        ]
+    );
+}
+
+/// A source whose manifest has not been resolved contributes no tiles, and says so.
+///
+/// Its zoom range lives in that manifest, so planning without it would either invent a range or
+/// silently omit the source. The plan omits it and reports itself incomplete, which is what
+/// makes "resolve manifests, then plan" the required order rather than a preference.
+#[test]
+fn an_unresolved_manifest_makes_the_plan_incomplete() {
+    let style = style(
+        r#"{
+          "version": 8,
+          "sources": { "base": { "type": "vector", "url": "https://host/base.json" } },
+          "layers": []
+        }"#,
+    );
+    let plan = plan(&style, &tiny(), &BTreeMap::new());
+    assert!(!plan.complete);
+    assert!(plan.tiles.is_empty());
+    assert_eq!(plan.assets, vec!["https://host/base.json".to_string()]);
+}
+
+/// An inline source needs no manifest fetch and still yields tiles.
+#[test]
+fn an_inline_source_needs_no_manifest() {
+    let style = style(
+        r#"{
+          "version": 8,
+          "sources": {
+            "base": { "type": "vector", "tiles": ["https://host/{z}/{x}/{y}.mvt"], "maxzoom": 14 }
+          },
+          "layers": []
+        }"#,
+    );
+    let manifests = BTreeMap::from([(
+        "base".to_string(),
+        manifest("https://host/{z}/{x}/{y}.mvt", 0, 14),
+    )]);
+    let plan = plan(&style, &tiny(), &manifests);
+    assert!(plan.complete);
+    assert!(plan.assets.is_empty(), "nothing to fetch but the tiles");
+    assert_eq!(plan.tiles.len(), 2);
+}
+
+/// A sharded source is fetched once per tile, not once per host.
+///
+/// Several templates exist so a browser can open more connections, not because the tile differs
+/// between them. Fetching each would download the region two or three times over.
+#[test]
+fn a_sharded_source_downloads_each_tile_once() {
+    let style = style(
+        r#"{
+          "version": 8,
+          "sources": { "base": { "type": "vector", "url": "https://host/base.json" } },
+          "layers": []
+        }"#,
+    );
+    let manifests = BTreeMap::from([(
+        "base".to_string(),
+        TileSet {
+            templates: vec![
+                "https://a.host/{z}/{x}/{y}.mvt".into(),
+                "https://b.host/{z}/{x}/{y}.mvt".into(),
+                "https://c.host/{z}/{x}/{y}.mvt".into(),
+            ],
+            zooms: ZoomRange { min: 0, max: 14 },
+            scheme: Scheme::Xyz,
+        },
+    )]);
+
+    let plan = plan(&style, &tiny(), &manifests);
+    assert_eq!(plan.tiles.len(), 2, "two zooms, one tile each");
+    let unique: std::collections::BTreeSet<_> = plan
+        .tiles
+        .iter()
+        .map(|url| url.rsplit_once("host/").expect("a host").1.to_string())
+        .collect();
+    assert_eq!(
+        unique.len(),
+        2,
+        "two distinct tiles, however they are shared"
+    );
+}
+
+/// A GeoJSON source by URL is one document; one written into the style is free.
+#[test]
+fn geojson_costs_a_document_only_when_it_is_remote() {
+    let remote = style(
+        r#"{
+          "version": 8,
+          "sources": { "points": { "type": "geojson", "data": "https://host/points.json" } },
+          "layers": []
+        }"#,
+    );
+    assert_eq!(
+        plan(&remote, &tiny(), &BTreeMap::new()).assets,
+        vec!["https://host/points.json".to_string()]
+    );
+
+    let inline = style(
+        r#"{
+          "version": 8,
+          "sources": {
+            "points": { "type": "geojson",
+                        "data": { "type": "FeatureCollection", "features": [] } }
+          },
+          "layers": []
+        }"#,
+    );
+    let plan = plan(&inline, &tiny(), &BTreeMap::new());
+    assert!(plan.assets.is_empty());
+    assert!(plan.complete);
+}
+
+/// A data-driven `text-font` names fonts only the features reveal, so the plan is a lower bound.
+///
+/// Shipping a region whose labels have no glyphs, and calling it complete, is the failure worth
+/// avoiding here — the map renders, and every label is missing.
+#[test]
+fn a_data_driven_font_makes_the_plan_incomplete() {
+    let style = style(
+        r#"{
+          "version": 8,
+          "glyphs": "https://host/fonts/{fontstack}/{range}.pbf",
+          "sources": {},
+          "layers": [
+            { "id": "a", "type": "symbol", "layout": { "text-font": ["get", "font"] } }
+          ]
+        }"#,
+    );
+    let (stacks, all_found) = font_stacks(&style);
+    assert!(stacks.is_empty());
+    assert!(!all_found);
+    assert!(!plan(&style, &tiny(), &BTreeMap::new()).complete);
+}
+
+/// `["literal", [...]]` states its fonts, so it is enumerable where `["get", …]` is not.
+#[test]
+fn a_literal_font_expression_is_enumerable() {
+    let style = style(
+        r#"{
+          "version": 8,
+          "glyphs": "https://host/fonts/{fontstack}/{range}.pbf",
+          "sources": {},
+          "layers": [
+            { "id": "a", "type": "symbol",
+              "layout": { "text-font": ["literal", ["Noto Sans Bold", "Arial Unicode MS Bold"]] } }
+          ]
+        }"#,
+    );
+    let (stacks, all_found) = font_stacks(&style);
+    assert!(all_found);
+    assert_eq!(
+        stacks,
+        vec!["Noto Sans Bold,Arial Unicode MS Bold".to_string()]
+    );
+}
+
+/// Two layers sharing a stack download its glyphs once.
+#[test]
+fn a_shared_font_stack_is_fetched_once() {
+    let style = style(
+        r#"{
+          "version": 8,
+          "glyphs": "https://host/fonts/{fontstack}/{range}.pbf",
+          "sources": {},
+          "layers": [
+            { "id": "a", "type": "symbol", "layout": { "text-font": ["Noto Sans Regular"] } },
+            { "id": "b", "type": "symbol", "layout": { "text-font": ["Noto Sans Regular"] } },
+            { "id": "c", "type": "symbol", "layout": { "text-font": ["Noto Sans Bold"] } }
+          ]
+        }"#,
+    );
+    assert_eq!(font_stacks(&style).0.len(), 2);
+    assert_eq!(plan(&style, &tiny(), &BTreeMap::new()).assets.len(), 2 * 5);
+}
+
+/// Ideographs multiply the glyph download by fifty, which is why they are opt-in.
+#[test]
+fn ideographs_multiply_the_glyph_plan() {
+    let style = style(
+        r#"{
+          "version": 8,
+          "glyphs": "https://host/fonts/{fontstack}/{range}.pbf",
+          "sources": {},
+          "layers": [
+            { "id": "a", "type": "symbol", "layout": { "text-font": ["Noto Sans Regular"] } }
+          ]
+        }"#,
+    );
+    let mut region = tiny();
+    region.include_ideographs = true;
+    assert_eq!(plan(&style, &region, &BTreeMap::new()).assets.len(), 256);
+    assert_eq!(plan(&style, &tiny(), &BTreeMap::new()).assets.len(), 5);
+}
+
+/// A style with nothing in it plans nothing, and that is complete rather than unknown.
+#[test]
+fn an_empty_style_plans_nothing() {
+    let style = style(r#"{ "version": 8, "sources": {}, "layers": [] }"#);
+    assert_eq!(
+        plan(&style, &tiny(), &BTreeMap::new()),
+        Plan {
+            complete: true,
+            ..Plan::default()
+        }
+    );
+}
+
+/// A plain font stack is not a call to an operator named after its first font.
+///
+/// `["Noto Sans Regular"]` is syntactically indistinguishable from an expression, and the style
+/// crate classifies it as one by design. Reading it that way here would lose every glyph in the
+/// style — a map that renders with no labels at all, which is the exact failure this planning
+/// exists to prevent.
+#[test]
+fn a_plain_stack_is_not_mistaken_for_an_expression() {
+    let style = style(
+        r#"{
+          "version": 8,
+          "glyphs": "https://host/fonts/{fontstack}/{range}.pbf",
+          "sources": {},
+          "layers": [
+            { "id": "a", "type": "symbol",
+              "layout": { "text-font": ["Noto Sans Regular", "Arial Unicode MS Regular"] } }
+          ]
+        }"#,
+    );
+    let (stacks, all_found) = font_stacks(&style);
+    assert!(all_found);
+    assert_eq!(
+        stacks,
+        vec!["Noto Sans Regular,Arial Unicode MS Regular".to_string()]
+    );
+}
+
+/// A stack and an expression are told apart by whether the head names an operator.
+#[test]
+fn an_operator_head_is_read_as_an_expression() {
+    for (layout, expect_stacks, expect_complete) in [
+        (r#"["step", ["zoom"], ["A"], 8, ["B"]]"#, 0, false),
+        (r#"["match", ["get", "x"], "a", ["A"], ["B"]]"#, 0, false),
+        (r#"["coalesce", ["get", "font"], ["A"]]"#, 0, false),
+        (r#"["Open Sans Regular"]"#, 1, true),
+        (r#"["literal", ["Open Sans Regular"]]"#, 1, true),
+    ] {
+        let style = style(&format!(
+            r#"{{ "version": 8, "glyphs": "https://host/{{fontstack}}/{{range}}.pbf",
+                  "sources": {{}},
+                  "layers": [ {{ "id": "a", "type": "symbol",
+                                 "layout": {{ "text-font": {layout} }} }} ] }}"#
+        ));
+        let (stacks, all_found) = font_stacks(&style);
+        assert_eq!(stacks.len(), expect_stacks, "{layout}");
+        assert_eq!(all_found, expect_complete, "{layout}");
+    }
 }

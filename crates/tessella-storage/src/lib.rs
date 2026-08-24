@@ -45,6 +45,8 @@
 
 #[cfg(feature = "cache")]
 pub mod cache;
+#[cfg(feature = "cache")]
+pub mod download;
 pub mod geojson;
 #[cfg(feature = "http")]
 pub mod http;
@@ -59,6 +61,8 @@ pub use cache::{
     CacheError, CacheStats, CachingFileSource, Entry, RegionId, RegionProgress, SqliteCache,
     StoredRegion,
 };
+#[cfg(feature = "cache")]
+pub use download::{Download, DownloadError, Progress, Summary};
 pub use geojson::{GeoJsonSourceError, Origin};
 #[cfg(feature = "http")]
 pub use http::HttpFileSource;
@@ -66,4 +70,4 @@ pub use offline::{Estimate, Region, SourceContribution, SourceKind, StyleAssets}
 pub use shared::{Abandoned, ShareStats, Shared};
 pub use source::{Coalescing, FetchError, Fetched, FileSource, Response};
 pub use tileset::{ResolveError, TileSet, resolve};
-pub use url::{Scheme, ZoomRange, expand, fetch_zoom};
+pub use url::{Scheme, ZoomRange, expand, fetch_zoom, percent_encode};
