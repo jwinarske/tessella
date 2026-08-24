@@ -513,9 +513,9 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   caller that checks its own first. GeoJSON sources resolve by URL as well as inline — one
   fetch feeds every tile of a cover, since the tiling is the client's. A tile is built per
   *source*: layers are scoped to the source they name, and the source-less ones — a background
-  — are built once per tile rather than once per source. `boot` fetches every vector source a
-  layer draws from; a GeoJSON source in the same style is still not covered by it, though the
-  pieces to do so now exist.
+  — are built once per tile rather than once per source. `boot` covers both kinds and their
+  different lifecycles: a vector source is fetched once per tile because the server cut it up,
+  a GeoJSON source once in total because this side does the cutting.
 - **R1.5** — four views over the same style (§13). Exit: §9.2 invariants green; §13.3
   four-view zoom benchmark green on RK3566; §13.1 fractional-zoom counters at zero.
 - **R2** — symbols: glyph manager, shaping, quads, per-view placement, collision, cross-tile

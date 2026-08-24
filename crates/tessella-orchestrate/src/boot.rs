@@ -44,7 +44,9 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use tessella_source::GeoJsonFeature;
 use tessella_source::mvt;
+use tessella_source::tiling::TilingOptions;
 use tessella_storage::fetch_zoom;
 use tessella_storage::source::{Coalescing, FileSource};
 use tessella_storage::tileset::{self, TileSet};
@@ -52,7 +54,7 @@ use tessella_style::{LayerKind, Source, Style};
 use tessella_tile::cover::{self, ViewTransform};
 
 use crate::cache::TileCache;
-use crate::tile::{LayerBucket, TileId, build_mvt_tile};
+use crate::tile::{LayerBucket, TileId, build_mvt_tile, build_tile};
 
 /// When each stage of a cold start finished, measured from the moment it began.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -229,11 +231,38 @@ impl Default for Workers {
 }
 
 /// One tile's work, resolved before any of it is done.
+/// What a tile's work needs, which differs by source kind.
+///
+/// A vector tile is cut by the server, so its work starts with a request. A GeoJSON tile is cut
+/// from a document already in hand — one fetched once during source resolution, or written
+/// into the style — so its work is tessellation and nothing else. The distinction is here
+/// rather than in the worker because it is a property of the *source*, decided once, not
+/// something to re-derive per tile.
+enum Work {
+    /// Fetch, decode, then build.
+    Vector { url: String },
+    /// Build from the document the source already resolved to.
+    Geojson {
+        features: alloc::sync::Arc<Vec<GeoJsonFeature>>,
+    },
+}
+
 struct Job {
     tile: TileId,
-    url: String,
     source: String,
+    work: Work,
     key: tessella_tile::store::TileKey,
+}
+
+impl Job {
+    /// What to name in an error. A GeoJSON tile has no URL of its own — the document's was
+    /// spent during resolution — so it names the tile instead.
+    fn what(&self) -> String {
+        match &self.work {
+            Work::Vector { url } => url.clone(),
+            Work::Geojson { .. } => alloc::format!("{}/{}", self.source, self.tile),
+        }
+    }
 }
 
 /// What a cold start needs.
@@ -312,15 +341,37 @@ pub fn cold_start<S: FileSource>(config: &ColdStart<'_, S>) -> Result<Boot, Boot
     wanted.dedup();
 
     let mut sets: Vec<(String, TileSet)> = Vec::new();
+    let mut documents: Vec<(String, alloc::sync::Arc<Vec<GeoJsonFeature>>)> = Vec::new();
     for name in wanted {
-        let Some(Source::Vector(source)) = style.source(name) else {
-            continue;
-        };
-        let set = tileset::resolve(source, files.inner()).map_err(|error| BootError::Source {
-            name: name.to_string(),
-            message: error.to_string(),
-        })?;
-        sets.push((name.to_string(), set));
+        match style.source(name) {
+            Some(Source::Vector(source)) => {
+                let set =
+                    tileset::resolve(source, files.inner()).map_err(|error| BootError::Source {
+                        name: name.to_string(),
+                        message: error.to_string(),
+                    })?;
+                sets.push((name.to_string(), set));
+            }
+            Some(Source::Geojson(source)) => {
+                // One fetch for the whole document, or none at all if it is inline. The tiling
+                // is this side's, so there is nothing per-tile to ask for afterwards.
+                let document =
+                    tessella_storage::geojson::resolve(source, files.inner()).map_err(|error| {
+                        BootError::Source {
+                            name: name.to_string(),
+                            message: error.to_string(),
+                        }
+                    })?;
+                let features = tessella_source::geojson::read(&document).map_err(|error| {
+                    BootError::Source {
+                        name: name.to_string(),
+                        message: error.to_string(),
+                    }
+                })?;
+                documents.push((name.to_string(), alloc::sync::Arc::new(features)));
+            }
+            _ => continue,
+        }
     }
     let sources_resolved = started.elapsed();
 
@@ -351,7 +402,21 @@ pub fn cold_start<S: FileSource>(config: &ColdStart<'_, S>) -> Result<Boot, Boot
                     style_rev,
                 ),
                 tile,
-                url,
+                work: Work::Vector { url },
+            });
+        }
+
+        // A GeoJSON source has no zoom range to clamp against and nothing to fetch: every tile
+        // of the cover is cut from the one document, at the cover's own zoom.
+        for (name, features) in &documents {
+            let id = TileId::new(tile.z, tile.x, tile.y);
+            jobs.push(Job {
+                source: name.clone(),
+                key: tessella_tile::store::TileKey::new(name.as_str(), id.z, id.x, id.y, style_rev),
+                tile: id,
+                work: Work::Geojson {
+                    features: alloc::sync::Arc::clone(features),
+                },
             });
         }
     }
@@ -418,38 +483,53 @@ pub fn cold_start<S: FileSource>(config: &ColdStart<'_, S>) -> Result<Boot, Boot
                     // away — which is what a second view over the same cover mostly is.
                     let built = cache.get_or_build(
                         &job.key,
-                        || {
-                            let response =
-                                files.fetch(&job.url).map_err(|error| BootError::Fetch {
-                                    url: job.url.clone(),
-                                    message: error.to_string(),
-                                })?;
-                            record(&first_fetch);
-                            bytes.fetch_add(response.body.len(), Ordering::Relaxed);
+                        || match &job.work {
+                            Work::Vector { url } => {
+                                let response =
+                                    files.fetch(url).map_err(|error| BootError::Fetch {
+                                        url: url.clone(),
+                                        message: error.to_string(),
+                                    })?;
+                                record(&first_fetch);
+                                bytes.fetch_add(response.body.len(), Ordering::Relaxed);
 
-                            // An absent tile is ordinary, not a failure: a source's coverage is
-                            // not a rectangle and the cover asks for the whole viewport. It is
-                            // cached as an empty tile so the next view does not ask again.
-                            if response.is_absent() {
-                                return Ok(Vec::new());
-                            }
-
-                            let decoded = mvt::Tile::decode(&response.body).map_err(|error| {
-                                BootError::Decode {
-                                    url: job.url.clone(),
-                                    message: error.to_string(),
+                                // An absent tile is ordinary, not a failure: a source's
+                                // coverage is not a rectangle and the cover asks for the whole
+                                // viewport. It is cached as an empty tile so the next view does
+                                // not ask again.
+                                if response.is_absent() {
+                                    return Ok(Vec::new());
                                 }
-                            })?;
-                            build_mvt_tile(&style, &job.source, job.tile, &decoded).map_err(
-                                |error| BootError::Build {
-                                    url: job.url.clone(),
-                                    message: error.to_string(),
-                                },
+
+                                let decoded =
+                                    mvt::Tile::decode(&response.body).map_err(|error| {
+                                        BootError::Decode {
+                                            url: url.clone(),
+                                            message: error.to_string(),
+                                        }
+                                    })?;
+                                build_mvt_tile(&style, &job.source, job.tile, &decoded).map_err(
+                                    |error| BootError::Build {
+                                        url: url.clone(),
+                                        message: error.to_string(),
+                                    },
+                                )
+                            }
+                            // Nothing to fetch and nothing to decode: the document arrived
+                            // during source resolution, and this cuts a tile out of it.
+                            Work::Geojson { features } => build_tile(
+                                &style,
+                                &job.source,
+                                job.tile,
+                                features,
+                                TilingOptions::default(),
                             )
+                            .map_err(|error| BootError::Build {
+                                url: job.what(),
+                                message: error.to_string(),
+                            }),
                         },
-                        || BootError::Abandoned {
-                            url: job.url.clone(),
-                        },
+                        || BootError::Abandoned { url: job.what() },
                     );
                     let buckets = match built {
                         Ok(built) => built.tile,

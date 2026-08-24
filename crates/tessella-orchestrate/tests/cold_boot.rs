@@ -425,3 +425,122 @@ fn a_two_source_style_fetches_both() {
         assert_eq!(ids, ["bg"]);
     }
 }
+
+/// A style mixing a vector source and a GeoJSON one builds both.
+///
+/// The two have different lifecycles and that is the point: the vector source is fetched once
+/// per tile because the server cut it up, and the GeoJSON source is fetched *once in total*
+/// because this side does the cutting. A cold start has to do both and report one trace.
+#[test]
+fn a_style_mixing_source_kinds_builds_both() {
+    const DOCUMENT: &str = r#"{
+      "type": "FeatureCollection",
+      "features": [
+        {"type": "Feature", "properties": {},
+         "geometry": {"type": "Polygon",
+           "coordinates": [[[-1.0,51.0],[-1.0,52.0],[0.5,52.0],[0.5,51.0],[-1.0,51.0]]]}}
+      ]
+    }"#;
+
+    let tiles = server();
+    let docs = tile_server::Server::start(tile_server::Routes::new().at(
+        "/features.geojson",
+        "application/json",
+        DOCUMENT.as_bytes().to_vec(),
+    ))
+    .expect("binds");
+
+    let text = format!(
+        r##"{{"version": 8,
+             "sources": {{
+               "v": {{"type": "vector", "tiles": ["{t}/{{z}}/{{x}}/{{y}}.pbf"],
+                      "minzoom": 0, "maxzoom": 6}},
+               "g": {{"type": "geojson", "data": "{d}/features.geojson"}}}},
+             "layers": [
+               {{"id": "bg", "type": "background",
+                 "paint": {{"background-color": "#000000"}}}},
+               {{"id": "v-water", "type": "fill", "source": "v", "source-layer": "water",
+                 "paint": {{"fill-color": "#3050c0"}}}},
+               {{"id": "g-area", "type": "fill", "source": "g",
+                 "paint": {{"fill-color": "#c04030"}}}}]}}"##,
+        t = tiles.origin(),
+        d = docs.origin()
+    );
+
+    let files = Coalescing::new(HttpFileSource::default());
+    let cache: TileCache<BootError> = TileCache::new(64);
+    let started = boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
+
+    // The document was asked for exactly once, however many tiles were cut from it.
+    assert_eq!(docs.paths(), ["/features.geojson"], "one request in total");
+    assert!(tiles.requests() > 1, "and the vector source once per tile");
+
+    let cover: std::collections::BTreeSet<_> =
+        started.tiles.iter().map(|built| built.tile).collect();
+    assert_eq!(started.tiles.len(), cover.len() * 2, "a tile per source");
+
+    let mut vector_vertices = 0usize;
+    let mut geojson_vertices = 0usize;
+    for built in &started.tiles {
+        for bucket in built.buckets.iter() {
+            let n = bucket.content.as_fill().map_or(0, |f| f.vertices.len());
+            match built.source.as_str() {
+                "v" => {
+                    assert_eq!(bucket.layer_id, "v-water");
+                    vector_vertices += n;
+                }
+                "g" => {
+                    assert_eq!(bucket.layer_id, "g-area");
+                    geojson_vertices += n;
+                }
+                other => panic!("unexpected source {other}"),
+            }
+        }
+    }
+    assert!(vector_vertices > 0, "the vector source tessellated");
+    assert!(geojson_vertices > 0, "and so did the GeoJSON one");
+}
+
+/// A GeoJSON-only style needs no per-tile fetch at all.
+///
+/// Its trace has no per-tile fetch to report, so `first_fetch` falls back to the moment the
+/// cover was known — which is honest: the only fetch was the document, and it happened during
+/// source resolution.
+#[test]
+fn a_geojson_only_style_fetches_once() {
+    const DOCUMENT: &str = r#"{
+      "type": "FeatureCollection",
+      "features": [
+        {"type": "Feature", "properties": {},
+         "geometry": {"type": "Polygon",
+           "coordinates": [[[-1.0,51.0],[-1.0,52.0],[0.5,52.0],[0.5,51.0],[-1.0,51.0]]]}}
+      ]
+    }"#;
+
+    let docs = tile_server::Server::start(tile_server::Routes::new().at(
+        "/features.geojson",
+        "application/json",
+        DOCUMENT.as_bytes().to_vec(),
+    ))
+    .expect("binds");
+
+    let text = format!(
+        r##"{{"version": 8,
+             "sources": {{"g": {{"type": "geojson", "data": "{d}/features.geojson"}}}},
+             "layers": [{{"id": "g-area", "type": "fill", "source": "g",
+                          "paint": {{"fill-color": "#c04030"}}}}]}}"##,
+        d = docs.origin()
+    );
+
+    let files = Coalescing::new(HttpFileSource::default());
+    let cache: TileCache<BootError> = TileCache::new(64);
+    let started = boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
+
+    assert_eq!(docs.requests(), 1, "the document, once");
+    assert!(started.vertices() > 0);
+    assert_eq!(
+        started.trace.first_fetch, started.trace.cover_computed,
+        "no per-tile fetch to report"
+    );
+    assert_eq!(started.bytes, 0, "no tile bodies were fetched");
+}
