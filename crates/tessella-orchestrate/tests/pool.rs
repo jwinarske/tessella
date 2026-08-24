@@ -292,54 +292,63 @@ fn dropping_a_pool_stops_its_threads() {
 
 /// A waiter helps with its own class and above, never below it.
 ///
-/// The hazard this closes: a foreground start that has run out of its own jobs would otherwise
-/// help by picking up an hours-long region download, and block first-tile behind a network
-/// fetch nobody asked it to make.
+/// The hazard this closes: a foreground start whose own jobs are all in flight on workers looks
+/// for more work to do. Without a floor it finds a queued region-download fetch, runs it, and
+/// blocks first-tile behind a network round trip nobody asked it to make.
+///
+/// Constructing that needs the batch's jobs to be on *workers* rather than in the queue — a
+/// waiter is greedy about its own class first, so while anything of its own is queued it never
+/// looks lower. Hence the two-stage gate: both foreground jobs are confirmed running before the
+/// background job is queued, which leaves no free worker to take it.
+///
+/// Without the floor this thread takes that background job and blocks on a barrier nothing
+/// releases until after the assertion — the test hangs rather than failing an assert, which is
+/// what "the waiter went and did something else" looks like from the outside.
 #[test]
 fn a_waiter_does_not_help_with_lower_priority_work() {
-    let pool = Pool::new(Workers::new(1));
+    let pool = Pool::new(Workers::new(2));
 
-    // Occupy the only worker, so nothing below runs on a worker at all.
-    let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let gate = Arc::new(Barrier::new(2));
-    let held = Arc::clone(&gate);
-    let announce = Arc::clone(&started);
-    pool.submit(Priority::Foreground, move || {
-        announce.store(true, Ordering::Release);
-        held.wait();
-    });
-    until("the worker to pick the job up", || {
-        started.load(Ordering::Acquire)
-    });
-
-    // A background job nobody is waiting on. If a foreground waiter helped with it, it would
-    // run on the waiting thread below.
-    let stolen = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let flag = Arc::clone(&stolen);
-    pool.submit(Priority::Background, move || {
-        flag.store(true, Ordering::Release);
-    });
-
-    // A foreground batch, which the waiter may and must run itself.
-    let mine = Arc::new(AtomicUsize::new(0));
+    let started = Arc::new(AtomicUsize::new(0));
+    let release_foreground = Arc::new(Barrier::new(3));
     let batch = pool.batch(Priority::Foreground);
-    let counted = Arc::clone(&mine);
-    batch.submit(move || {
-        counted.fetch_add(1, Ordering::AcqRel);
+    for _ in 0..2 {
+        let started = Arc::clone(&started);
+        let gate = Arc::clone(&release_foreground);
+        batch.submit(move || {
+            started.fetch_add(1, Ordering::AcqRel);
+            gate.wait();
+        });
+    }
+    until("both foreground jobs to be on workers", || {
+        started.load(Ordering::Acquire) == 2
     });
+
+    // Every worker is inside a foreground job, so this queues rather than running.
+    let background_started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let release_background = Arc::new(Barrier::new(2));
+    {
+        let flag = Arc::clone(&background_started);
+        let gate = Arc::clone(&release_background);
+        pool.submit(Priority::Background, move || {
+            flag.store(true, Ordering::Release);
+            gate.wait();
+        });
+    }
+
+    // From another thread, so this one is free to wait — and to be tempted.
+    let releaser = {
+        let gate = Arc::clone(&release_foreground);
+        std::thread::spawn(move || gate.wait())
+    };
+
     batch.wait().expect("no panics");
+    releaser.join().expect("the releaser");
 
-    assert_eq!(mine.load(Ordering::Acquire), 1, "it ran its own work");
-    assert!(
-        !stolen.load(Ordering::Acquire),
-        "and left the background job alone"
-    );
-
-    // Released, the worker gets to it in its own time.
-    gate.wait();
-    until("the background job to run", || {
-        stolen.load(Ordering::Acquire)
+    // A worker picks the background job up in its own time, now that they are free.
+    until("a worker to take the background job", || {
+        background_started.load(Ordering::Acquire)
     });
+    release_background.wait();
 }
 
 /// A background waiter still helps with foreground work.

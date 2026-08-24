@@ -62,7 +62,7 @@ pub use cache::{
     StoredRegion,
 };
 #[cfg(feature = "cache")]
-pub use download::{Download, DownloadError, Progress, Summary};
+pub use download::{Download, DownloadError, Got, Progress, Summary};
 pub use geojson::{GeoJsonSourceError, Origin};
 #[cfg(feature = "http")]
 pub use http::HttpFileSource;

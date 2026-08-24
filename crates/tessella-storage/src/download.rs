@@ -68,6 +68,16 @@ pub enum DownloadError {
         /// What came back.
         status: u16,
     },
+    /// A resource's work panicked.
+    ///
+    /// A bug rather than a resource that failed to arrive, and separate from the rest so it
+    /// cannot be mistaken for one: a region that quietly stored fewer resources than it claimed
+    /// would show up offline as a map with holes and nothing anywhere saying why.
+    #[error("{jobs} download job(s) panicked")]
+    Panicked {
+        /// How many.
+        jobs: usize,
+    },
     /// The store could not be written.
     #[error(transparent)]
     Cache(#[from] CacheError),
@@ -214,7 +224,11 @@ impl Download<'_> {
                 summary.cancelled = true;
                 break;
             }
-            self.take(url, &mut summary)?;
+            match self.fetch_one(url)? {
+                Got::Fetched => summary.fetched += 1,
+                Got::Missing => summary.missing += 1,
+                Got::Held => {}
+            }
 
             let held = self.cache.region_progress(self.region)?;
             summary.progress.completed_resources = held.completed_resources;
@@ -226,13 +240,27 @@ impl Download<'_> {
     }
 
     /// Gets one resource into the region, however it has to.
-    fn take(&self, url: &str, summary: &mut Summary) -> Result<(), DownloadError> {
+    ///
+    /// The unit of work. Everything above this is scheduling, which is why it is public: a
+    /// caller with a worker pool fans this out itself rather than reimplementing what it does,
+    /// and there stays exactly one place that decides what a 404 means.
+    ///
+    /// Safe to call from several threads against one region. The fetch happens outside the
+    /// store's lock, so what serialises is the write and not the network — which is the whole
+    /// reason fanning it out is worth doing.
+    ///
+    /// # Errors
+    ///
+    /// [`DownloadError::Fetch`] on a transport failure, [`DownloadError::Status`] on a status
+    /// that is neither the resource nor a definite absence, [`DownloadError::Cache`] when the
+    /// store cannot be written.
+    pub fn fetch_one(&self, url: &str) -> Result<Got, DownloadError> {
         // Already held — by the ambient cache from ordinary use, by an earlier run of this
         // download, or by another region that overlaps. Claiming costs nothing, and is why a
         // resumed download is short and a region over familiar ground is cheap.
         if self.cache.get(url, self.now)?.is_some() {
             self.cache.claim(self.region, url)?;
-            return Ok(());
+            return Ok(Got::Held);
         }
 
         let response = self
@@ -242,24 +270,35 @@ impl Download<'_> {
                 url: url.to_string(),
                 source,
             })?;
-        match response.status {
-            200 => summary.fetched += 1,
+        let got = match response.status {
+            200 => Got::Fetched,
             // The origin has nothing there. For a tile at the edge of a source's coverage that
             // is the ordinary answer, so the empty response is stored as the answer it is: the
             // region reaches a hundred percent, and a resumed download does not ask the sea for
             // tiles a second time.
-            404 | 410 => summary.missing += 1,
+            404 | 410 => Got::Missing,
             status => {
                 return Err(DownloadError::Status {
                     url: url.to_string(),
                     status,
                 });
             }
-        }
+        };
         self.cache
             .put_region_resource(self.region, url, &response, self.now)?;
-        Ok(())
+        Ok(got)
     }
+}
+
+/// How one resource came to be in the region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Got {
+    /// Fetched from the origin.
+    Fetched,
+    /// Already in the store, and claimed.
+    Held,
+    /// The origin has nothing there, and the absence was recorded.
+    Missing,
 }
 
 /// Resolves every tiled source's manifest, so the plan can name its tiles.

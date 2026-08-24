@@ -30,6 +30,10 @@ default = ["std"]
 # The cold-start path needs threads and a clock; the rest of the crate does not, and stays
 # `no_std` so the discipline marker keeps meaning something.
 std = []
+# Region downloads, which need the SQLite store to pin what they fetch. Off by default for the
+# reason `tessella-storage`'s `cache` feature is: `rusqlite` bundles C, and the cross lane has
+# no toolchain for it.
+offline = ["std", "tessella-storage/cache"]
 
 [dev-dependencies]
 tessella-storage = { workspace = true, features = ["cache", "http"] }

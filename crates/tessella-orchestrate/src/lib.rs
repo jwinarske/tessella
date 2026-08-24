@@ -43,6 +43,8 @@ pub mod camera;
 pub mod counters;
 pub mod damage;
 pub mod emit;
+#[cfg(all(feature = "std", feature = "offline"))]
+pub mod offline;
 pub mod order;
 #[cfg(feature = "std")]
 pub mod pool;
