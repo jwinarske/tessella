@@ -28,11 +28,16 @@
 //! the decoder: the encoding is a property of the transfer, and a decoder that sniffed for gzip
 //! magic would then have to decide about a tile that is legitimately gzip-inside-protobuf.
 //!
+//! Sources: vector tiles by inline template or TileJSON, and GeoJSON inline or by URL. Not
+//! raster, not raster-dem, not `.pmtiles` archives read directly, and not the `maplibre://` and
+//! `mapbox://` scheme aliases mbgl expands through `TileServerOptions`.
+//!
 //! Not yet wired: the SQLite cache (`rusqlite`, also C), etag revalidation, and the
 //! speculative manifest fetch §12.5 wants ahead of layer compilation.
 
 #![forbid(unsafe_code)]
 
+pub mod geojson;
 #[cfg(feature = "http")]
 pub mod http;
 pub mod shared;
@@ -40,6 +45,7 @@ pub mod source;
 pub mod tileset;
 pub mod url;
 
+pub use geojson::{GeoJsonSourceError, Origin};
 #[cfg(feature = "http")]
 pub use http::HttpFileSource;
 pub use shared::{Abandoned, ShareStats, Shared};

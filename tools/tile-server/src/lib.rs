@@ -167,12 +167,7 @@ impl Server {
                     match listener.accept() {
                         Ok((stream, _)) => {
                             requests.fetch_add(1, Ordering::Relaxed);
-                            if let Some(path) = serve(stream, &routes) {
-                                paths
-                                    .lock()
-                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                    .push(path);
-                            }
+                            serve(stream, &routes, &paths);
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -223,8 +218,13 @@ impl Drop for Server {
     }
 }
 
-/// Reads one request and writes one response. Returns the path served.
-fn serve(stream: TcpStream, routes: &Routes) -> Option<String> {
+/// Reads one request and writes one response, recording the path *before* answering.
+///
+/// The ordering is the point. Recording after the response is written is a race a client can
+/// win: it reads the body, asks what was served, and is told nothing was — because the server
+/// thread has not pushed yet. That made two tests fail about half the time for a reason that
+/// had nothing to do with what they were testing.
+fn serve(stream: TcpStream, routes: &Routes, paths: &Mutex<Vec<String>>) -> Option<()> {
     stream.set_nonblocking(false).ok()?;
     let mut reader = BufReader::new(stream);
 
@@ -245,6 +245,11 @@ fn serve(stream: TcpStream, routes: &Routes) -> Option<String> {
 
     // The query string is not part of the route: a tile URL may carry an API key.
     let path = target.split('?').next().unwrap_or(&target).to_string();
+    paths
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(path.clone());
+
     let served = if method == "GET" {
         routes.resolve(&path)
     } else {
@@ -286,7 +291,7 @@ fn serve(stream: TcpStream, routes: &Routes) -> Option<String> {
     stream.write_all(head.as_bytes()).ok()?;
     stream.write_all(&body).ok()?;
     stream.flush().ok()?;
-    Some(path)
+    Some(())
 }
 
 /// Reads a file, for a caller assembling routes.

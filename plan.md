@@ -510,7 +510,9 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   fetched once: the bucket cache is consulted *before* the network, so a warm view costs no
   request at all — which matters because coalescing alone dedupes only *concurrent* fetches and
   is deliberately not a cache, so flatness across time waits on §12.6's byte cache or on a
-  caller that checks its own first.
+  caller that checks its own first. GeoJSON sources resolve by URL as well as inline — one
+  fetch feeds every tile of a cover, since the tiling is the client's — though `boot` still
+  covers vector sources only, and a style mixing the two draws just the vector half.
 - **R1.5** — four views over the same style (§13). Exit: §9.2 invariants green; §13.3
   four-view zoom benchmark green on RK3566; §13.1 fractional-zoom counters at zero.
 - **R2** — symbols: glyph manager, shaping, quads, per-view placement, collision, cross-tile
