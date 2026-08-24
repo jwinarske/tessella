@@ -204,6 +204,7 @@ pub fn build_features(features: &[&[Ring]]) -> FillBucket {
                 flat.push(f64::from(point[1]));
             }
         }
+        debug_assert_eq!(flat.len(), total_vertices * 2);
 
         let triangles = earcutr::earcut(&flat, &holes, 2).unwrap_or_default();
 

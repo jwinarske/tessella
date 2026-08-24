@@ -456,7 +456,7 @@ fn decode_geometry(commands: &[u32], layer: &str) -> Result<Vec<Vec<[i32; 2]>>, 
                     }
                 }
             }
-            // ClosePath takes no parameters and repeats a ring's first point.
+            // ClosePath takes no parameters and closes the ring by repeating its first point.
             7 => {
                 if count != 1 {
                     return Err(malformed("ClosePath with a count other than one"));
@@ -464,7 +464,15 @@ fn decode_geometry(commands: &[u32], layer: &str) -> Result<Vec<Vec<[i32; 2]>>, 
                 let first = *current
                     .first()
                     .ok_or_else(|| malformed("ClosePath with no ring"))?;
-                current.push(first);
+                // Only when it is not already closed. The spec says a ring should not repeat
+                // its first point, since ClosePath implies it — but real tiles do return to the
+                // start explicitly, and appending unconditionally then leaves a zero-length edge
+                // at the seam of every ring.
+                //
+                // That is not cosmetic: a degenerate edge is what makes ear-clipping spin.
+                if current.last() != Some(&first) {
+                    current.push(first);
+                }
                 out.push(core::mem::take(&mut current));
             }
             _ => return Err(malformed("unknown geometry command")),

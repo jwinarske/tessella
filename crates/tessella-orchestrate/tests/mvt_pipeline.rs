@@ -128,32 +128,24 @@ fn geometry_is_rescaled_onto_the_pipeline_grid() {
     assert_eq!(same, feature.geometry);
 }
 
-/// A real tile's water layer cannot be tessellated yet, and this records why.
+/// A real tile's water layer tessellates, which is what the fixtures cannot show.
 ///
-/// # What happens
+/// # What this caught
 ///
-/// `earcutr` does not return. Not slowly — at all: one polygon of 31 rings and 245 vertices
-/// spins indefinitely at full CPU.
+/// It did not, at first. `earcutr` spun indefinitely on one polygon of 31 rings and 245
+/// vertices, and the obvious reading — a library that cannot handle real geometry where
+/// `earcut.hpp` can — was wrong. The decoder was appending a ring's first point on `ClosePath`
+/// unconditionally, and this tile's rings already return to their start explicitly, so every one
+/// of the 186 rings ended in a zero-length edge. Ear-clipping does not terminate on those.
 ///
-/// # Whose fault it is
+/// The lesson is about where suspicion goes. A hang in a dependency on input a C++ equivalent
+/// handles is a plausible story, and the plausibility is what made it worth checking rather than
+/// believing: the input was mine and it was malformed.
 ///
-/// Not the decoder and not the classifier, both of which were checked. The feature carries 186
-/// rings, of which 10 have positive area and 173 negative, so `classify_rings` correctly yields
-/// ten polygons. One of them is a six-point exterior followed by thirty holes that cannot
-/// geometrically be inside it — degenerate input, and this is a tile from mbgl's own test
-/// fixtures, so mbgl's `earcut.hpp` evidently tolerates it.
-///
-/// The earlier measurement of earcutr against earcut.hpp compared triangulations on clean
-/// input, where the two agree. Real tile geometry is not clean, and that is the gap.
-///
-/// # Why this is a test rather than a bug report in a comment
-///
-/// It is a blocker for R1 fills, and it is the kind of thing that gets forgotten once the
-/// workaround is in place. Ignored so the suite stays green, and named so `--ignored` reproduces
-/// it in one command.
+/// A synthetic fixture would not have found this. The spec's own valid fixtures do not repeat
+/// the closing point, because the spec says not to — only a tile from the wild does.
 #[test]
-#[ignore = "earcutr does not terminate on this input; see the doc comment"]
-fn earcutr_hangs_on_real_tile_geometry() {
+fn a_real_tile_layer_tessellates() {
     let tile = Tile::decode(REAL_TILE).expect("decodes");
     let style = Style::parse(
         r##"{"version": 8, "sources": {"v": {"type": "vector"}}, "layers": [
@@ -163,12 +155,58 @@ fn earcutr_hangs_on_real_tile_geometry() {
     .expect("style parses");
 
     let buckets = build_mvt_tile(&style, TileId::new(0, 0, 0), &tile).expect("builds");
+    let fill = buckets
+        .iter()
+        .find(|b| b.layer_id == "f")
+        .and_then(|b| b.content.as_fill())
+        .expect("a fill bucket");
+
     assert!(
-        buckets
-            .iter()
-            .find(|b| b.layer_id == "f")
-            .and_then(|b| b.content.as_fill())
-            .is_some_and(|fill| !fill.indices.is_empty()),
-        "if this passes, earcutr has been fixed or replaced"
+        fill.vertices.len() > 1000,
+        "{} vertices",
+        fill.vertices.len()
     );
+    assert!(fill.indices.len() > 1000, "{} indices", fill.indices.len());
+    assert_eq!(fill.indices.len() % 3, 0, "whole triangles");
+}
+
+/// No ring ends in a zero-length edge at the seam, which is the shape that hung the tessellator.
+///
+/// Narrowly about the seam. This tile also repeats points *inside* rings — 4750 of them — and
+/// those are the writer's, not the decoder's: real geometry is dirty and a decoder that
+/// silently cleaned it would be editing the map. What the decoder controls is whether
+/// `ClosePath` adds one more, and the answer must be no when the ring already closes itself.
+///
+/// Asserted on the decoder rather than through the tessellator, because a tessellator that
+/// happens to survive the input is not the same as input that is right.
+#[test]
+fn closepath_does_not_duplicate_an_already_closed_ring() {
+    let tile = Tile::decode(REAL_TILE).expect("decodes");
+    let mut rings = 0;
+    for layer in &tile.layers {
+        for feature in &layer.features {
+            // Rings close; line strings do not, and this tile's `admin` layer is lines.
+            if feature.geom_type != tessella_source::mvt::GeomType::Polygon {
+                continue;
+            }
+            for ring in &feature.geometry {
+                rings += 1;
+                if ring.len() > 2 {
+                    assert_eq!(
+                        ring.first(),
+                        ring.last(),
+                        "{}: a closed ring ends where it began",
+                        layer.name
+                    );
+                    assert_ne!(
+                        ring[ring.len() - 2],
+                        ring[ring.len() - 1],
+                        "{}: the seam repeats a point, which is a zero-length edge",
+                        layer.name
+                    );
+                }
+            }
+        }
+    }
+    assert!(rings > 1000, "{rings} rings checked");
 }
