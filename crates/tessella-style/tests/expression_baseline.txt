@@ -54,6 +54,12 @@ greater_or_equal/string-and-value
 greater_or_equal/value
 has/basic
 id/basic
+in/assert-array
+in/assert-string
+index-of/assert-array
+index-of/assert-string
+index-of/basic-array
+index-of/invalid-haystack
 interpolate/cubic-bezier-3-args
 interpolate/cubic-bezier-5-args
 interpolate/cubic-bezier-invalid-control-point
@@ -89,6 +95,10 @@ legacy/interval/color-default
 legacy/interval/duplicate-stops
 legacy/interval/number-default
 legacy/interval/string-default
+length/array
+length/implicit
+length/invalid
+length/string
 less/boolean
 less/mismatch
 less/null
@@ -173,6 +183,11 @@ properties/basic
 rgb/basic
 rgba/basic
 round/basic
+slice/array-one-index
+slice/array-two-indexes
+slice/invalid-inputs
+slice/string-one-index
+slice/string-two-indexes
 step/basic
 step/duplicate_stops
 string/basic

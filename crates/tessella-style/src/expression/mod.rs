@@ -426,6 +426,33 @@ pub enum Expr {
         /// Used when the assertion fails, instead of erroring.
         fallback: Option<Box<Expr>>,
     },
+    /// `["length", v]`: the length of a string or array.
+    Length(Box<Expr>),
+    /// `["in", needle, haystack]`: membership in an array, or substring in a string.
+    In {
+        /// What is looked for.
+        needle: Box<Expr>,
+        /// Where it is looked for.
+        haystack: Box<Expr>,
+    },
+    /// `["index-of", needle, haystack, from?]`: where it is, or -1.
+    IndexOf {
+        /// What is looked for.
+        needle: Box<Expr>,
+        /// Where it is looked for.
+        haystack: Box<Expr>,
+        /// Index to start from, which may be negative.
+        from: Option<Box<Expr>>,
+    },
+    /// `["slice", v, start, end?]`: a sub-range of a string or array.
+    Slice {
+        /// What is sliced.
+        value: Box<Expr>,
+        /// First index, which may be negative.
+        start: Box<Expr>,
+        /// One past the last index, which may be negative.
+        end: Option<Box<Expr>>,
+    },
     /// `["rgb", r, g, b]` and `["rgba", r, g, b, a]`.
     ///
     /// Its own node rather than a function call because its *type* is what matters: a colour is
@@ -734,6 +761,8 @@ impl Expr {
                 CastKind::Color => Type::Color,
             },
             Self::Rgba { .. } => Type::Color,
+            Self::Length(_) | Self::IndexOf { .. } => Type::Number,
+            Self::In { .. } => Type::Boolean,
             // `get`, `id`, and everything whose type depends on data or on branches this does
             // not unify.
             _ => Type::Value,
@@ -782,6 +811,20 @@ fn classify(expr: &Expr) -> Dependency {
         // The binding it reads carries the dependency; the read itself has none.
         Expr::Var(_) => Dependency::None,
         Expr::Rgba { args } => join_all(args),
+        Expr::Length(inner) => classify(inner),
+        Expr::In { needle, haystack } => classify(needle).join(classify(haystack)),
+        Expr::IndexOf {
+            needle,
+            haystack,
+            from,
+        } => {
+            let base = classify(needle).join(classify(haystack));
+            from.as_ref().map_or(base, |from| base.join(classify(from)))
+        }
+        Expr::Slice { value, start, end } => {
+            let base = classify(value).join(classify(start));
+            end.as_ref().map_or(base, |end| base.join(classify(end)))
+        }
         Expr::Assert { args, .. } => join_all(args),
         Expr::AssertArray {
             value, fallback, ..

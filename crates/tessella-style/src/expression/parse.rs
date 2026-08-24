@@ -115,6 +115,41 @@ fn parse_with_default_in(
             })
         }
         "array" => parse_array_assertion(operator, args, scope),
+        "length" => {
+            expect_arity(operator, args, 1, 1)?;
+            Ok(Expr::Length(Box::new(parse_in(&args[0], scope)?)))
+        }
+        "in" => {
+            expect_arity(operator, args, 2, 2)?;
+            Ok(Expr::In {
+                needle: Box::new(parse_in(&args[0], scope)?),
+                haystack: Box::new(parse_in(&args[1], scope)?),
+            })
+        }
+        "index-of" => {
+            expect_arity(operator, args, 2, 3)?;
+            Ok(Expr::IndexOf {
+                needle: Box::new(parse_in(&args[0], scope)?),
+                haystack: Box::new(parse_in(&args[1], scope)?),
+                from: args
+                    .get(2)
+                    .map(|value| parse_in(value, scope))
+                    .transpose()?
+                    .map(Box::new),
+            })
+        }
+        "slice" => {
+            expect_arity(operator, args, 2, 3)?;
+            Ok(Expr::Slice {
+                value: Box::new(parse_in(&args[0], scope)?),
+                start: Box::new(parse_in(&args[1], scope)?),
+                end: args
+                    .get(2)
+                    .map(|value| parse_in(value, scope))
+                    .transpose()?
+                    .map(Box::new),
+            })
+        }
         "rgb" | "rgba" => {
             let arity = if operator == "rgb" { 3 } else { 4 };
             expect_arity(operator, args, arity, arity)?;

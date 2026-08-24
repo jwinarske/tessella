@@ -707,3 +707,88 @@ fn a_colour_property_coerces_its_result() {
         parsed.evaluate(None, None).expect("evaluates")
     );
 }
+
+/// `in`, `index-of`, `slice` and `length` work on both strings and arrays.
+#[test]
+fn the_membership_family_handles_strings_and_arrays() {
+    assert_eq!(
+        eval(r#"["in", "low", "helloworld"]"#, None, None),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        eval(r#"["in", "foo", "helloworld"]"#, None, None),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        eval(r#"["in", 9, ["literal", [9, 8, 7]]]"#, None, None),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        eval(r#"["index-of", "low", "helloworld"]"#, None, None),
+        Value::Number(3.0)
+    );
+    assert_eq!(
+        eval(r#"["index-of", "zzz", "helloworld"]"#, None, None),
+        Value::Number(-1.0),
+        "not found is -1, not an error"
+    );
+    assert_eq!(eval(r#"["length", "abc"]"#, None, None), Value::Number(3.0));
+    assert_eq!(
+        eval(r#"["length", ["literal", [1, 2]]]"#, None, None),
+        Value::Number(2.0)
+    );
+}
+
+/// Negative indices count from the end, and out-of-range ones clamp.
+///
+/// Clamping is what makes `["slice", s, -100]` the whole string rather than an error, and an
+/// inverted range empty rather than a panic — both are styles asking for something odd, and
+/// neither is worth failing a tile over.
+#[test]
+fn indices_count_from_the_end_and_clamp() {
+    assert_eq!(
+        eval(r#"["slice", "0123456789", 7]"#, None, None),
+        Value::String("789".to_string())
+    );
+    assert_eq!(
+        eval(r#"["slice", "0123456789", -3]"#, None, None),
+        Value::String("789".to_string())
+    );
+    assert_eq!(
+        eval(r#"["slice", "0123456789", -100]"#, None, None),
+        Value::String("0123456789".to_string())
+    );
+    assert_eq!(
+        eval(r#"["slice", "0123456789", 5, 2]"#, None, None),
+        Value::String(String::new()),
+        "an inverted range is empty"
+    );
+    assert_eq!(
+        eval(r#"["slice", ["literal", [1, 2, 3, 4, 5]], 2]"#, None, None),
+        eval(r#"["literal", [3, 4, 5]]"#, None, None)
+    );
+}
+
+/// A needle that is not there, or is null, finds nothing rather than erroring.
+///
+/// Styles write `["in", ["get", "x"], …]` on features that may not carry `x`, so this is the
+/// common path rather than the edge case.
+#[test]
+fn a_missing_needle_finds_nothing() {
+    assert_eq!(
+        eval(
+            r#"["in", ["get", "nope"], "helloworld"]"#,
+            None,
+            Some(&TestFeature::polygon(vec![]) as &dyn Feature)
+        ),
+        Value::Bool(false)
+    );
+    assert_eq!(
+        eval(
+            r#"["index-of", ["get", "nope"], ["literal", [1, 2]]]"#,
+            None,
+            Some(&TestFeature::polygon(vec![]) as &dyn Feature)
+        ),
+        Value::Number(-1.0)
+    );
+}

@@ -149,6 +149,58 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
                 channels[3],
             ]))
         }
+        Expr::Length(inner) => match evaluate(inner, context)? {
+            Value::String(text) => Ok(Value::Number(text.chars().count() as f64)),
+            Value::Array(items) => Ok(Value::Number(items.len() as f64)),
+            other => Err(EvaluationError::Type {
+                expected: "string or array",
+                got: other.type_name(),
+            }),
+        },
+        Expr::In { needle, haystack } => {
+            let needle = evaluate(needle, context)?;
+            let haystack = evaluate(haystack, context)?;
+            Ok(Value::Bool(find_in(&needle, &haystack, 0)?.is_some()))
+        }
+        Expr::IndexOf {
+            needle,
+            haystack,
+            from,
+        } => {
+            let needle = evaluate(needle, context)?;
+            let haystack = evaluate(haystack, context)?;
+            let length = sequence_length(&haystack)?;
+            let start = match from {
+                Some(from) => relative_index(expect_number(&evaluate(from, context)?)?, length),
+                None => 0,
+            };
+            #[allow(clippy::cast_precision_loss)]
+            Ok(Value::Number(
+                find_in(&needle, &haystack, start)?.map_or(-1.0, |index| index as f64),
+            ))
+        }
+        Expr::Slice { value, start, end } => {
+            let value = evaluate(value, context)?;
+            let length = sequence_length(&value)?;
+            let first = relative_index(expect_number(&evaluate(start, context)?)?, length);
+            let last = match end {
+                Some(end) => relative_index(expect_number(&evaluate(end, context)?)?, length),
+                None => length,
+            };
+            // An inverted or empty range is empty, not an error: `["slice", s, 5, 2]` is a
+            // style asking for nothing, and returning nothing is the answer.
+            let last = last.max(first);
+            Ok(match value {
+                Value::String(text) => {
+                    Value::String(text.chars().skip(first).take(last - first).collect())
+                }
+                Value::Array(items) => {
+                    Value::Array(items.into_iter().skip(first).take(last - first).collect())
+                }
+                // `sequence_length` already rejected anything else.
+                _ => unreachable!("checked by sequence_length"),
+            })
+        }
         Expr::LegacyFunction(function) => evaluate_legacy(function, context),
         Expr::Let { bindings, body } => {
             // Bindings are evaluated once, in order, each seeing the ones before it. Evaluating
@@ -374,6 +426,74 @@ fn locate(stops: &[(f64, Expr)], position: f64) -> Option<usize> {
     // Stops ascend — the parser rejects any list that does not — so a partition point is
     // exact rather than approximate.
     Some(stops.partition_point(|(stop, _)| *stop <= position) - 1)
+}
+
+/// The length of a string or array, in the units the spec indexes by.
+///
+/// Characters rather than UTF-16 code units, which is where this diverges from the reference
+/// implementation for text outside the basic multilingual plane. Recorded rather than papered
+/// over: a style slicing an emoji would disagree, and the fix is a different index space rather
+/// than a different bound.
+fn sequence_length(value: &Value) -> Result<usize, EvaluationError> {
+    match value {
+        Value::String(text) => Ok(text.chars().count()),
+        Value::Array(items) => Ok(items.len()),
+        other => Err(EvaluationError::Type {
+            expected: "string or array",
+            got: other.type_name(),
+        }),
+    }
+}
+
+/// Resolves an index that may be negative, counting from the end.
+///
+/// Clamped rather than wrapped: an index past either end lands at that end, which is what makes
+/// `["slice", s, -100]` the whole string rather than an error.
+fn relative_index(index: f64, length: usize) -> usize {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    if index < 0.0 {
+        let from_end = length as f64 + index;
+        if from_end < 0.0 { 0 } else { from_end as usize }
+    } else if index > length as f64 {
+        length
+    } else {
+        index as usize
+    }
+}
+
+/// Finds a needle in a string or array, starting at `from`.
+///
+/// A null needle finds nothing rather than erroring, which the suite pins: styles use `["in",
+/// ["get", "x"], …]` on features that may not carry `x`.
+fn find_in(
+    needle: &Value,
+    haystack: &Value,
+    from: usize,
+) -> Result<Option<usize>, EvaluationError> {
+    match haystack {
+        Value::String(text) => {
+            let Value::String(needle) = needle else {
+                return Ok(None);
+            };
+            let chars: Vec<char> = text.chars().collect();
+            let target: Vec<char> = needle.chars().collect();
+            if target.is_empty() {
+                return Ok(Some(from.min(chars.len())));
+            }
+            Ok((from..chars.len().saturating_sub(target.len()) + 1)
+                .find(|start| chars[*start..*start + target.len()] == target[..]))
+        }
+        Value::Array(items) => Ok(items
+            .iter()
+            .enumerate()
+            .skip(from)
+            .find(|(_, item)| *item == needle)
+            .map(|(index, _)| index)),
+        other => Err(EvaluationError::Type {
+            expected: "string or array",
+            got: other.type_name(),
+        }),
+    }
 }
 
 /// A colour, as the spec renders one: four channels in 0..1.
