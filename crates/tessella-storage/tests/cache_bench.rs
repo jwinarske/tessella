@@ -199,3 +199,79 @@ fn eviction_cost_against_a_large_region() {
         println!("{pins:>7} pinned: {each:?} per ambient write");
     }
 }
+
+/// Incremental auto-vacuum against plain `VACUUM`, on both the write and the reclaim.
+///
+/// The comparison that chose `SqliteCache::pack`'s strategy. Rounds alternate the order because
+/// they do not otherwise measure the same thing: the first database built in a process pays
+/// page-cache costs the second does not, and reading that as a difference between the two
+/// settings is exactly the mistake this alternation exists to prevent. An earlier version of
+/// this ran the two arms as separate parallel tests and reported a sixty-one per cent write
+/// penalty that does not exist.
+#[test]
+#[ignore = "a measurement, not a test"]
+fn autovacuum_against_vacuum() {
+    const TILES: usize = 200;
+
+    for round in 0..3 {
+        let order: [&str; 2] = if round % 2 == 0 {
+            ["NONE", "INCREMENTAL"]
+        } else {
+            ["INCREMENTAL", "NONE"]
+        };
+        for setting in order {
+            let directory = tempfile::tempdir().expect("a temp dir");
+            let path = directory.path().join("cache.sqlite");
+            let connection = rusqlite::Connection::open(&path).expect("opens");
+            connection
+                .execute_batch(&format!("PRAGMA auto_vacuum={setting}"))
+                .expect("sets");
+            connection
+                .query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))
+                .expect("wal");
+            connection
+                .execute_batch("CREATE TABLE r (url TEXT PRIMARY KEY, data BLOB)")
+                .expect("creates");
+
+            let started = Instant::now();
+            for index in 0..TILES {
+                connection
+                    .execute(
+                        "INSERT INTO r VALUES (?1, ?2)",
+                        rusqlite::params![index.to_string(), TILE],
+                    )
+                    .expect("stores");
+            }
+            let per_write = started.elapsed() / u32::try_from(TILES).expect("fits");
+
+            let mode: i64 = connection
+                .query_row("PRAGMA auto_vacuum", [], |row| row.get(0))
+                .expect("reads");
+            let before: i64 = connection
+                .query_row("PRAGMA page_count", [], |row| row.get(0))
+                .expect("reads");
+            connection.execute_batch("DELETE FROM r").expect("empties");
+
+            let started = Instant::now();
+            if mode == 2 {
+                // Stepped to the end: one page per row, and `execute_batch` would step once.
+                let mut statement = connection
+                    .prepare("PRAGMA incremental_vacuum")
+                    .expect("prepares");
+                let mut rows = statement.query([]).expect("runs");
+                while rows.next().expect("steps").is_some() {}
+            } else {
+                connection.execute_batch("VACUUM").expect("vacuums");
+            }
+            let reclaim = started.elapsed();
+            let after: i64 = connection
+                .query_row("PRAGMA page_count", [], |row| row.get(0))
+                .expect("reads");
+
+            println!(
+                "round {round} auto_vacuum={setting:<12} write {per_write:?}/tile  \
+                 reclaim {reclaim:?}  pages {before} -> {after}"
+            );
+        }
+    }
+}

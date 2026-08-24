@@ -258,6 +258,90 @@ impl SqliteCache {
         })
     }
 
+    /// The bytes the database file occupies, free space included.
+    ///
+    /// Distinct from [`Self::size`], which counts response bodies. The difference is what
+    /// deleting things has freed inside the file but not returned to the filesystem — on a
+    /// storage-constrained target that difference is the whole question.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Query`] when the statement fails.
+    pub fn file_size(&self) -> Result<u64, CacheError> {
+        let connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self::file_size_of(&connection)
+    }
+
+    fn file_size_of(connection: &Connection) -> Result<u64, CacheError> {
+        let pages: i64 = connection.query_row("PRAGMA page_count", [], |row| row.get(0))?;
+        let page_size: i64 = connection.query_row("PRAGMA page_size", [], |row| row.get(0))?;
+        Ok(u64::try_from(pages.saturating_mul(page_size)).unwrap_or(0))
+    }
+
+    /// Pages inside the file that hold nothing and have not been returned to the filesystem.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Query`] when the statement fails.
+    pub fn free_bytes(&self) -> Result<u64, CacheError> {
+        let connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let free: i64 = connection.query_row("PRAGMA freelist_count", [], |row| row.get(0))?;
+        let page_size: i64 = connection.query_row("PRAGMA page_size", [], |row| row.get(0))?;
+        Ok(u64::try_from(free.saturating_mul(page_size)).unwrap_or(0))
+    }
+
+    /// Returns freed space to the filesystem, and reports how much.
+    ///
+    /// # Why this is needed at all
+    ///
+    /// SQLite never shrinks a file on its own. Deleting a region marks its pages free *inside*
+    /// the file and the file stays the size it was, so on a device with no room left a user who
+    /// deleted a download to make space would find they had not made any.
+    ///
+    /// # Why `VACUUM` and not incremental auto-vacuum
+    ///
+    /// mbgl sets `auto_vacuum=INCREMENTAL` and reclaims a bit at a time, falling back to a full
+    /// rebuild once. Measured on this workload, `VACUUM` reaches the same end state around two
+    /// hundred and fifty times faster: emptying a 94 MB cache and reclaiming it took 169-201 us
+    /// against 41-52 ms, over alternating rounds, both finishing at three or four pages.
+    ///
+    /// The reason is the shape of the two. Incremental vacuum moves free pages one at a time,
+    /// so it costs what was *freed*. `VACUUM` rewrites the live rows, so it costs what
+    /// *survives* — and after a large delete almost nothing does. That is exactly the right way
+    /// round for "the user just deleted a lot and wants the space back".
+    ///
+    /// It is not a write-path argument. Maintaining the pointer-map pages that incremental
+    /// auto-vacuum needs turned out to cost nothing measurable per write (235/203/262 us
+    /// against 241/198/266 us across alternating rounds). An earlier reading of this said
+    /// sixty-one per cent; that was two benchmarks running in parallel and polluting each
+    /// other, not a real effect.
+    ///
+    /// # Why it is not automatic
+    ///
+    /// That cost is proportional to what stays, not to what went — about 1.4 us per KiB
+    /// surviving, so 69 ms with 47 MB still live and 256 ms with 189 MB. A user deleting one
+    /// small region from a two-gigabyte cache would pay a rewrite of every region they kept. So deletion frees rows and this returns the space, and the two are separate on
+    /// purpose. `VACUUM` also needs room for a second copy of the live data while it runs.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Query`] when a statement fails.
+    pub fn pack(&self) -> Result<u64, CacheError> {
+        let connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = Self::file_size_of(&connection)?;
+        connection.execute_batch("VACUUM")?;
+        Ok(before.saturating_sub(Self::file_size_of(&connection)?))
+    }
+
     /// Brings a database written by an earlier version up to the current shape.
     ///
     /// `CREATE TABLE IF NOT EXISTS` adds tables but never columns, so a cache file written
@@ -688,6 +772,10 @@ impl SqliteCache {
         transaction.commit()?;
         // The rows are unpinned now and may well put the cache over its bound.
         Self::evict_within(&connection, self.capacity)?;
+        // The pages those deletions freed stay inside the file until someone calls
+        // [`Self::pack`], and that is deliberate — its cost is proportional to what *survives*,
+        // so packing here would make deleting one small region from a large cache rewrite every
+        // region the user kept.
         Ok(())
     }
 

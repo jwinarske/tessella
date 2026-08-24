@@ -393,3 +393,197 @@ fn an_older_region_reads_as_a_box() {
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].region.area, berlin().area);
 }
+
+// --- Reclaiming space, which SQLite does not do on its own. ---
+
+/// Deleting a region and its bytes eventually returns the space to the filesystem.
+///
+/// The failure this closes: on a device with no room left, a user deletes a download to make
+/// space and finds they have not made any, because SQLite marks pages free inside the file and
+/// never shrinks it.
+#[test]
+fn packing_returns_space_to_the_filesystem() {
+    let directory = tempfile::tempdir().expect("a temp dir");
+    let path = directory.path().join("cache.sqlite");
+    let cache = SqliteCache::with_capacity(&path, 200 * 1024 * 1024).expect("opens");
+    let id = cache.create_region(&berlin(), None, 0).expect("creates");
+
+    for tile in 0..200 {
+        cache
+            .put_region_resource(
+                id,
+                &format!("https://host/z12/{tile}.mvt"),
+                &body(8 * 1024),
+                100,
+            )
+            .expect("stores");
+    }
+    let full = cache.file_size().expect("reads");
+    assert!(full > 1_000_000, "the file grew: {full}");
+
+    cache.delete_region(id).expect("deletes");
+    for tile in 0..200 {
+        cache
+            .remove(&format!("https://host/z12/{tile}.mvt"))
+            .expect("removes");
+    }
+
+    // Measured just before the pack, because deleting the region already reclaimed some.
+    let before_pack = cache.file_size().expect("reads");
+    let packed = cache.pack().expect("packs");
+    let after = cache.file_size().expect("reads");
+    assert_eq!(
+        before_pack - after,
+        packed,
+        "the report matches what the file did"
+    );
+    assert!(
+        after * 4 < full,
+        "most of the file came back: {after} of {full}"
+    );
+}
+
+/// A cache with nothing to reclaim is not shrunk further, and does not fail.
+#[test]
+fn packing_an_empty_cache_is_harmless() {
+    let cache = SqliteCache::in_memory().expect("opens");
+    assert_eq!(cache.pack().expect("packs"), 0);
+    assert_eq!(cache.pack().expect("packs again"), 0);
+}
+
+/// Deleting a region frees rows but not file space, until someone asks.
+///
+/// Packing costs time proportional to what *survives*, so doing it on every delete would make
+/// removing one small region from a large cache rewrite every region the user kept.
+#[test]
+fn deleting_a_region_does_not_pack_by_itself() {
+    let directory = tempfile::tempdir().expect("a temp dir");
+    let path = directory.path().join("cache.sqlite");
+    let cache = SqliteCache::with_capacity(&path, 200 * 1024 * 1024).expect("opens");
+    let id = cache.create_region(&berlin(), None, 0).expect("creates");
+
+    for tile in 0..200 {
+        cache
+            .put_region_resource(
+                id,
+                &format!("https://host/z12/{tile}.mvt"),
+                &body(8 * 1024),
+                100,
+            )
+            .expect("stores");
+    }
+    let full = cache.file_size().expect("reads");
+
+    for tile in 0..200 {
+        cache
+            .remove(&format!("https://host/z12/{tile}.mvt"))
+            .expect("removes");
+    }
+    cache.delete_region(id).expect("deletes");
+
+    assert_eq!(
+        cache.file_size().expect("reads"),
+        full,
+        "the file is still the size it was"
+    );
+    assert!(
+        cache.free_bytes().expect("reads") * 4 > full * 3,
+        "but nearly all of it is free space inside"
+    );
+
+    // Asking is what returns it.
+    assert!(cache.pack().expect("packs") > 0);
+    assert!(cache.file_size().expect("reads") * 4 < full);
+}
+
+/// Packing a database this never configured still works.
+///
+/// Cache files written by earlier versions, and files another tool made, are ordinary SQLite
+/// databases. `VACUUM` needs nothing set up in advance, which is part of why it is the right
+/// tool here — an incremental scheme would have needed a full rebuild first just to become
+/// possible.
+#[test]
+fn a_foreign_database_packs_too() {
+    let directory = tempfile::tempdir().expect("a temp dir");
+    let path = directory.path().join("cache.sqlite");
+
+    {
+        let connection = rusqlite::Connection::open(&path).expect("opens");
+        connection
+            .execute_batch("CREATE TABLE ballast (id INTEGER, data BLOB)")
+            .expect("prepares");
+        for id in 0..500 {
+            connection
+                .execute(
+                    "INSERT INTO ballast VALUES (?1, ?2)",
+                    rusqlite::params![id, vec![0u8; 4096]],
+                )
+                .expect("fills");
+        }
+        connection
+            .execute_batch("DELETE FROM ballast")
+            .expect("empties");
+    }
+
+    let cache = SqliteCache::with_capacity(&path, 200 * 1024 * 1024).expect("opens");
+    let before = cache.file_size().expect("reads");
+    assert!(before > 1_000_000, "the ballast is still in the file");
+
+    assert!(cache.pack().expect("packs") > 0);
+    assert!(cache.file_size().expect("reads") * 4 < before);
+    assert_eq!(cache.pack().expect("packs again"), 0, "nothing left");
+}
+
+/// Packing leaves everything that is still wanted.
+///
+/// `VACUUM` rewrites the file. A pack that lost a pinned region, or reset the pin counts that
+/// keep it, would free exactly the space the user was paying to keep.
+#[test]
+fn packing_keeps_what_is_still_claimed() {
+    let directory = tempfile::tempdir().expect("a temp dir");
+    let cache =
+        SqliteCache::with_capacity(&directory.path().join("cache.sqlite"), 200 * 1024 * 1024)
+            .expect("opens");
+    let id = cache
+        .create_region(&berlin(), Some("Berlin"), 7)
+        .expect("creates");
+    for tile in 0..40 {
+        cache
+            .put_region_resource(
+                id,
+                &format!("https://host/keep/{tile}.mvt"),
+                &body(4096),
+                100,
+            )
+            .expect("stores");
+    }
+    // And some ambient traffic that is then dropped, to give the pack something to do.
+    for tile in 0..200 {
+        cache
+            .put(&format!("https://host/drop/{tile}.mvt"), &body(4096), 100)
+            .expect("stores");
+        cache
+            .remove(&format!("https://host/drop/{tile}.mvt"))
+            .expect("removes");
+    }
+
+    let held = cache.region_progress(id).expect("reads");
+    assert!(cache.pack().expect("packs") > 0);
+
+    assert_eq!(cache.regions().expect("lists").len(), 1);
+    assert_eq!(cache.region_progress(id).expect("reads"), held);
+    assert!(
+        cache
+            .get("https://host/keep/0.mvt", 200)
+            .expect("reads")
+            .is_some()
+    );
+
+    // And the pins survived, so ambient pressure still cannot take the region.
+    for tile in 0..500 {
+        cache
+            .put(&format!("https://host/after/{tile}.mvt"), &body(4096), 300)
+            .expect("stores");
+    }
+    assert_eq!(cache.region_progress(id).expect("reads"), held);
+}

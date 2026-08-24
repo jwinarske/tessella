@@ -523,10 +523,15 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   latitudes then get a full-width bound each in their shared top row, the winding never returns
   to zero between them, and the gap fills in — two selected cities download the ocean between
   them. Every mbgl expectation still passes with the chains dropped.
+  `SqliteCache::pack` returns freed space to the filesystem, since SQLite never shrinks a file
+  on its own and a user who deletes a download to make room would otherwise find they had not
+  made any. It is a plain `VACUUM` rather than mbgl's incremental auto-vacuum: measured over
+  alternating rounds, emptying a 94 MB cache and reclaiming it took 169–201 µs against 41–52 ms,
+  both ending at three or four pages. The shapes differ — incremental vacuum costs what was
+  *freed*, `VACUUM` costs what *survives*, and after a large delete almost nothing does. Which
+  is also why packing is not automatic: with 47 MB still live it is 69 ms, and deleting one
+  small region from a large cache should not rewrite every region the user kept.
   Remaining on offline, none of it blocking R1 exit:
-  there is no `packDatabase` equivalent, so deleting a region unpins its bytes but SQLite does
-  not return the file size to the OS until something vacuums — which on a storage-constrained
-  target is the difference between a delete that frees space and one that only promises to;
   a region cannot be refreshed against its origin, so a snapshot stays the snapshot it was
   taken as;
   and `text-font` is disambiguated from an expression by a hand-listed operator set, standing
