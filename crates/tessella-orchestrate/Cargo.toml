@@ -21,6 +21,7 @@ tessella-layout.workspace = true
 tessella-place.workspace = true
 tessella-source.workspace = true
 tessella-style.workspace = true
+libm.workspace = true
 tessella-tile.workspace = true
 
 [dev-dependencies]

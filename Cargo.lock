@@ -701,6 +701,7 @@ version = "0.0.0"
 dependencies = [
  "crossbeam",
  "glam",
+ "libm",
  "log",
  "serde_json",
  "tessella-capture-abi",

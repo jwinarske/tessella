@@ -271,3 +271,138 @@ fn a_buffer_writes_one_envelope_with_its_bytes() {
     assert_eq!(record.kind, EnvelopeKind::UboUpdate);
     assert_eq!(record.payload, &packed[..], "the buffer travels inline");
 }
+
+/// The line drawable buffer matches the oracle: matrix, ratio and six mix factors.
+///
+/// One drawable per tile, not two — a line has no outline sublayer — at the line union's
+/// stride of 128 rather than the fill union's 96.
+#[test]
+fn the_line_drawable_buffer_matches_the_oracle() {
+    let oracle = oracle_buffers();
+    let (size, want) = oracle
+        .get(&(3, ubo_slots::ID_LINE_DRAWABLE_UBO))
+        .expect("the oracle writes a line drawable buffer");
+
+    let view = probe();
+    let entries: Vec<ubo::LineDrawableEntry> = cover::cover(&view)
+        .expect("covers")
+        .into_iter()
+        .map(|tile| {
+            ubo::LineDrawableEntry::for_tile(
+                &view, tile.z, tile.x, tile.y, tile.wrap, 3, 0,
+                // Nothing in the hermetic style's line paint varies with zoom.
+                [0.0; 6],
+            )
+            .expect("an unrotated camera")
+        })
+        .collect();
+
+    let stride = ubo_layouts::LINE_DRAWABLE_UNION_UBO.stride;
+    let packed = ubo::pack_line_drawable_buffer(&entries, stride);
+
+    assert_eq!(packed.len(), *size, "six entries at the union's stride");
+    assert_eq!(blocks(&packed), *want);
+}
+
+/// The ratio is tile units per screen pixel inverted, and it is `1/16` at a tile's own zoom.
+///
+/// The line shader turns `line-width` into an extrusion with it, so getting it wrong scales
+/// every line by a power of two — which looks like a projection bug rather than a uniform one.
+#[test]
+fn the_line_ratio_is_the_zoom_scale_over_sixteen() {
+    assert_eq!(ubo::line_ratio(13, 13.0), 0.0625);
+    assert_eq!(ubo::line_ratio(13, 14.0), 0.125);
+    assert_eq!(ubo::line_ratio(13, 12.0), 0.03125);
+    // A tile standing in above its own zoom scales up with the camera, not with itself.
+    assert_eq!(ubo::line_ratio(11, 13.0), 0.25);
+}
+
+/// The line evaluated properties match the oracle.
+///
+/// Every value is the constant-or-default, so the style's data-driven `line-color` and
+/// `line-width` contribute black and `1` here while their real values travel in the vertices.
+#[test]
+fn the_line_evaluated_props_match_the_oracle() {
+    let oracle = oracle_buffers();
+    let (size, want) = oracle
+        .get(&(3, ubo_slots::ID_LINE_EVALUATED_PROPS_UBO))
+        .expect("the oracle writes line evaluated props");
+
+    let packed = ubo::pack_line_props(
+        tessella_style::property::Color::black(),
+        0.0, // line-blur
+        1.0, // line-opacity
+        0.0, // line-gap-width
+        0.0, // line-offset
+        1.0, // line-width, data-driven, so its default
+        1.0, // line-floorwidth, likewise
+    );
+
+    assert_eq!(packed.len(), *size);
+    assert_eq!(blocks(&packed), *want);
+}
+
+/// The evaluated-props buffers derive from the style, not from hardcoded values.
+///
+/// Both layers of each kind are checked, because the data-driven one is where the rule bites:
+/// its colour and opacity are attributes, so this block must carry the *spec defaults* rather
+/// than either feature's value. A packer that evaluated the expression anyway would put one
+/// feature's colour into a layer-wide uniform and be right only where that feature happened to
+/// be drawn.
+#[test]
+fn the_props_buffers_derive_from_the_style() {
+    use tessella_style::Style;
+    let style = Style::parse(include_str!(
+        "../../tessella-style/tests/hermetic_style.json"
+    ))
+    .expect("style parses");
+    let paint = |id: &str| {
+        tessella_style::property::resolve_paint(style.layer(id).expect(id)).expect("resolves")
+    };
+
+    let oracle = oracle_buffers();
+
+    // The constant fill layer: its own colour and opacity, and they match the oracle's block.
+    let (size, want) = oracle
+        .get(&(1, ubo_slots::ID_FILL_EVALUATED_PROPS_UBO))
+        .expect("fill-constant props");
+    let packed = ubo::fill_props_from_paint(&paint("fill-constant"), 13.0);
+    assert_eq!(packed.len(), *size);
+    assert_eq!(blocks(&packed), *want, "fill-constant");
+
+    // The data-driven fill layer: black and one, the spec defaults.
+    let (size, want) = oracle
+        .get(&(2, ubo_slots::ID_FILL_EVALUATED_PROPS_UBO))
+        .expect("fill-datadriven props");
+    let packed = ubo::fill_props_from_paint(&paint("fill-datadriven"), 13.0);
+    assert_eq!(packed.len(), *size);
+    assert_eq!(blocks(&packed), *want, "fill-datadriven");
+
+    // And the line layer, whose colour and width are attributes.
+    let (size, want) = oracle
+        .get(&(3, ubo_slots::ID_LINE_EVALUATED_PROPS_UBO))
+        .expect("line props");
+    let packed = ubo::line_props_from_paint(&paint("line-datadriven"), 13.0);
+    assert_eq!(packed.len(), *size);
+    assert_eq!(blocks(&packed), *want, "line-datadriven");
+}
+
+/// The line tile-properties buffer is present, full size and empty.
+///
+/// Its union holds only the pattern and SDF variants, so a plain line has nothing to put in it
+/// — but the shader indexes it by the same entry number as the drawable buffer, so a short one
+/// would read past the end.
+#[test]
+fn the_line_tile_props_buffer_is_sized_and_empty() {
+    let oracle = oracle_buffers();
+    let (size, want) = oracle
+        .get(&(3, ubo_slots::ID_LINE_TILE_PROPS_UBO))
+        .expect("the oracle writes a line tile props buffer");
+
+    let stride = ubo_layouts::LINE_TILE_PROPS_UNION_UBO.stride;
+    let packed = ubo::pack_tile_props_buffer(6, stride);
+
+    assert_eq!(packed.len(), *size, "six entries at the union's stride");
+    assert_eq!(blocks(&packed), *want);
+    assert!(packed.iter().all(|byte| *byte == 0));
+}

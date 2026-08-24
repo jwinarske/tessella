@@ -121,45 +121,163 @@ fn emit_frame() -> Vec<EnvelopeKind> {
             stencil::write(producer, view_id, &set).expect("writes");
         }
 
-        let entries: Vec<DrawableEntry> = bindings
-            .iter()
-            .map(|binding| {
-                let tile = binding.tile.expect("a tiled drawable");
-                DrawableEntry::for_tile(
-                    &view,
-                    tile.z,
-                    tile.x,
-                    tile.y,
-                    i32::from(tile.wrap),
-                    *layer_index,
-                    binding.sub_layer_index,
-                )
-                .expect("an unrotated camera")
-            })
-            .collect();
-        let stride = if tiled {
-            tessella_capture_abi::generated::ubo_layouts::FILL_DRAWABLE_UNION_UBO.stride
-        } else {
-            tessella_capture_abi::generated::ubo_layouts::BACKGROUND_DRAWABLE_UNION_UBO.stride
-        };
-        let buffer = ubo::pack_drawable_buffer(&entries, stride);
-        ubo::write(
-            producer,
-            view_id,
-            *layer_index,
-            ubo::drawable_slot(),
-            &buffer,
-        )
-        .expect("writes");
+        // Each layer kind has its own drawable block, its own tile-properties block and its
+        // own evaluated-properties block, at its own slots and strides. Emitting the fill's for
+        // every tiled layer — which this did while the line layer did not exist — writes a
+        // line layer's uniforms into the shape a fill shader reads.
+        use tessella_capture_abi::generated::{ubo_layouts, ubo_slots};
+        use tessella_style::LayerKind;
 
-        let props = if tiled {
-            let fill = Color::parse("#2f6f4f").expect("a color");
-            ubo::pack_fill_props(fill, fill, 0.8, 1.0, 0.5, 1.0)
-        } else {
-            ubo::pack_background_props(Color::parse("#101418").expect("a color"), 1.0)
+        let layer = &style.layers[usize::try_from(*layer_index).expect("a layer index")];
+        let paint = tessella_style::property::resolve_paint(layer).expect("resolves");
+
+        let matrices = |sub_layer_index: i32| {
+            bindings
+                .iter()
+                .filter(move |binding| binding.sub_layer_index == sub_layer_index)
+                .map(|binding| binding.tile.expect("a tiled drawable"))
         };
-        let slot = tessella_capture_abi::generated::ubo_slots::ID_FILL_EVALUATED_PROPS_UBO;
-        ubo::write(producer, view_id, *layer_index, slot, &props).expect("writes");
+        let entries = |sub_layer_index: i32| {
+            matrices(sub_layer_index)
+                .map(|tile| {
+                    DrawableEntry::for_tile_with(
+                        &view,
+                        tile.z,
+                        tile.x,
+                        tile.y,
+                        i32::from(tile.wrap),
+                        *layer_index,
+                        sub_layer_index,
+                        ubo::fill_interpolations(
+                            &paint,
+                            f64::from(tile.z),
+                            view.zoom,
+                            sub_layer_index,
+                        ),
+                    )
+                    .expect("an unrotated camera")
+                })
+                .collect::<Vec<_>>()
+        };
+
+        match layer.kind {
+            LayerKind::Background => {
+                let buffer = ubo::pack_drawable_buffer(
+                    &entries(0),
+                    ubo_layouts::BACKGROUND_DRAWABLE_UNION_UBO.stride,
+                );
+                ubo::write(
+                    producer,
+                    view_id,
+                    *layer_index,
+                    ubo::drawable_slot(),
+                    &buffer,
+                )
+                .expect("writes");
+
+                let props =
+                    ubo::pack_background_props(Color::parse("#101418").expect("a color"), 1.0);
+                ubo::write(
+                    producer,
+                    view_id,
+                    *layer_index,
+                    ubo_slots::ID_BACKGROUND_PROPS_UBO,
+                    &props,
+                )
+                .expect("writes");
+            }
+            LayerKind::Fill => {
+                // Triangles then outline, which is the order the oracle's buffer is in.
+                let mut all = entries(1);
+                all.extend(entries(2));
+                let buffer =
+                    ubo::pack_drawable_buffer(&all, ubo_layouts::FILL_DRAWABLE_UNION_UBO.stride);
+                ubo::write(
+                    producer,
+                    view_id,
+                    *layer_index,
+                    ubo::drawable_slot(),
+                    &buffer,
+                )
+                .expect("writes");
+
+                let tile_props = ubo::pack_tile_props_buffer(
+                    all.len(),
+                    ubo_layouts::FILL_TILE_PROPS_UNION_UBO.stride,
+                );
+                ubo::write(
+                    producer,
+                    view_id,
+                    *layer_index,
+                    ubo_slots::ID_FILL_TILE_PROPS_UBO,
+                    &tile_props,
+                )
+                .expect("writes");
+
+                let props = ubo::fill_props_from_paint(&paint, view.zoom);
+                ubo::write(
+                    producer,
+                    view_id,
+                    *layer_index,
+                    ubo_slots::ID_FILL_EVALUATED_PROPS_UBO,
+                    &props,
+                )
+                .expect("writes");
+            }
+            LayerKind::Line => {
+                let line: Vec<ubo::LineDrawableEntry> = matrices(0)
+                    .map(|tile| {
+                        ubo::LineDrawableEntry::for_tile(
+                            &view,
+                            tile.z,
+                            tile.x,
+                            tile.y,
+                            i32::from(tile.wrap),
+                            *layer_index,
+                            0,
+                            ubo::line_interpolations(&paint, f64::from(tile.z), view.zoom),
+                        )
+                        .expect("an unrotated camera")
+                    })
+                    .collect();
+                let buffer = ubo::pack_line_drawable_buffer(
+                    &line,
+                    ubo_layouts::LINE_DRAWABLE_UNION_UBO.stride,
+                );
+                ubo::write(
+                    producer,
+                    view_id,
+                    *layer_index,
+                    ubo_slots::ID_LINE_DRAWABLE_UBO,
+                    &buffer,
+                )
+                .expect("writes");
+
+                let tile_props = ubo::pack_tile_props_buffer(
+                    line.len(),
+                    ubo_layouts::LINE_TILE_PROPS_UNION_UBO.stride,
+                );
+                ubo::write(
+                    producer,
+                    view_id,
+                    *layer_index,
+                    ubo_slots::ID_LINE_TILE_PROPS_UBO,
+                    &tile_props,
+                )
+                .expect("writes");
+
+                let props = ubo::line_props_from_paint(&paint, view.zoom);
+                ubo::write(
+                    producer,
+                    view_id,
+                    *layer_index,
+                    ubo_slots::ID_LINE_EVALUATED_PROPS_UBO,
+                    &props,
+                )
+                .expect("writes");
+            }
+            _ => {}
+        }
     }
 
     // The order, then the camera naming its epoch — never the other way round.
@@ -276,6 +394,22 @@ fn the_counts_agree_with_the_oracle() {
         .filter(|kind| **kind == EnvelopeKind::StencilTiles)
         .count();
     assert_eq!(mine, oracle_sets, "and so does this build");
+
+    // Every uniform buffer the oracle writes for a layer this build implements. The oracle's
+    // fourteen are one frame-wide block, two for the background, three each for the two fills
+    // and the line, and two for the circle layer this build does not draw — so twelve.
+    //
+    // Counted rather than assumed equal to the layer count, because the blocks are not uniform
+    // across kinds: a background has no tile-properties block and a line's sits at a different
+    // slot from a fill's. Emitting one shape everywhere was what this harness used to do, and
+    // it went unnoticed while every tiled layer happened to be a fill.
+    let oracle_ubos = DUMP.lines().filter(|line| line.starts_with("ubo ")).count();
+    assert_eq!(oracle_ubos, 14, "the oracle writes fourteen");
+    let mine = kinds
+        .iter()
+        .filter(|kind| **kind == EnvelopeKind::UboUpdate)
+        .count();
+    assert_eq!(mine, 12, "all but the circle layer's two");
 
     // Two placeholder textures, as the oracle lists.
     assert_eq!(

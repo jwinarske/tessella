@@ -30,7 +30,8 @@ use tessella_capture_abi::envelope::{Span, UboUpdate, ViewId, WireRecord};
 use tessella_capture_abi::generated::ubo_layouts;
 use tessella_capture_abi::generated::ubo_slots;
 use tessella_capture_abi::ring::{Full, Producer};
-use tessella_style::property::{Binding, Color, ResolvedProperty};
+use tessella_style::Value;
+use tessella_style::property::{Binding, Color, DefaultValue, ResolvedProperty};
 use tessella_tile::camera;
 use tessella_tile::cover::ViewTransform;
 
@@ -310,6 +311,259 @@ pub fn pack_fill_props(
         ubo_layouts::FILL_EVALUATED_PROPS_UBO.size as usize
     );
     out
+}
+
+/// One line drawable's entry.
+///
+/// Unlike a fill's, this carries a `ratio` as well as its mix factors — the line shader needs
+/// tile units per screen pixel to turn `line-width` into an extrusion, and that is a function
+/// of the camera's zoom against the tile's, so it cannot live in the vertex the way the width
+/// endpoints do.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LineDrawableEntry {
+    /// Tile-local to clip, as the shaders take it.
+    pub matrix: [f32; 16],
+    /// Screen pixels per tile unit, inverted.
+    pub ratio: f32,
+    /// Mix factors for colour, blur, opacity, gap width, offset and width, in that order.
+    pub interpolations: [f32; 6],
+}
+
+impl LineDrawableEntry {
+    /// The entry for a tile under a view.
+    ///
+    /// The argument list mirrors [`DrawableEntry::for_tile_with`] deliberately, so the two
+    /// paths read the same at their call sites; grouping them would make one of the pair
+    /// diverge in shape from the other for no gain.
+    ///
+    /// # Errors
+    ///
+    /// [`camera::CameraError`] when the view has bearing or pitch.
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_tile(
+        view: &ViewTransform,
+        z: u8,
+        x: u32,
+        y: u32,
+        wrap: i32,
+        layer_index: i32,
+        sub_layer_index: i32,
+        interpolations: [f32; 6],
+    ) -> Result<Self, camera::CameraError> {
+        let mut projection = camera::proj_matrix(view)?;
+        projection[14] -= f64::from(depth_offset(layer_index, sub_layer_index));
+        let matrix = camera::multiply(
+            &projection,
+            &camera::matrix_for_tile(z, x, y, wrap, view.zoom),
+        );
+
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(Self {
+            matrix: core::array::from_fn(|index| matrix[index] as f32),
+            ratio: line_ratio(z, view.zoom),
+            interpolations,
+        })
+    }
+}
+
+/// Tile units per screen pixel at this zoom, inverted — the line shader's `ratio`.
+///
+/// mbgl computes it as `1 / tileID.pixelsToTileUnits(1, zoom)`, which expands to
+/// `2^(zoom - z) * tileSize / EXTENT`, or `2^(zoom - z) / 16`. It is `0.0625` for a tile drawn
+/// at its own zoom, which is what the golden dump carries.
+///
+/// Computed in `f32` throughout, because mbgl does: the zoom reaches `pixelsToTileUnits` as a
+/// float and the extent and tile size are cast to float before the division.
+#[must_use]
+pub fn line_ratio(z: u8, zoom: f64) -> f32 {
+    #[allow(clippy::cast_possible_truncation)]
+    let (zoom, z) = (zoom as f32, f32::from(z));
+    // mbgl's EXTENT and tileSize_D, cast to float exactly as it casts them.
+    let tile_units_per_pixel = 8192.0f32 / (512.0f32 * libm::powf(2.0, zoom - z));
+    1.0 / tile_units_per_pixel
+}
+
+/// The six zoom-mix factors a line drawable's UBO carries.
+///
+/// The order is the UBO's, which is not the property table's: colour, blur, opacity, gap width,
+/// offset, width. `line-floorwidth` is absent — it mirrors `line-width` and the shader reads
+/// the width factor for both — so the seven binders map onto six slots.
+#[must_use]
+pub fn line_interpolations(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    bucket_zoom: f64,
+    view_zoom: f64,
+) -> [f32; 6] {
+    let factor = |name: &str| {
+        paint
+            .get(name)
+            .map_or(0.0, |property| match property.binding {
+                Binding::Attribute { interpolated: true } => {
+                    property.expression.zoom_mix_factor(bucket_zoom, view_zoom)
+                }
+                _ => 0.0,
+            })
+    };
+    [
+        factor("line-color"),
+        factor("line-blur"),
+        factor("line-opacity"),
+        factor("line-gap-width"),
+        factor("line-offset"),
+        factor("line-width"),
+    ]
+}
+
+/// Packs a layer's line drawable buffer at the union's stride.
+#[must_use]
+pub fn pack_line_drawable_buffer(entries: &[LineDrawableEntry], stride: u32) -> Vec<u8> {
+    let stride = stride as usize;
+    let mut out = Vec::with_capacity(entries.len() * stride);
+    for entry in entries {
+        let start = out.len();
+        push_f32s(&mut out, &entry.matrix);
+        push_f32s(&mut out, &[entry.ratio]);
+        push_f32s(&mut out, &entry.interpolations);
+        out.resize(start + stride, 0);
+    }
+    out
+}
+
+/// Packs `LineEvaluatedPropsUBO`.
+///
+/// # Not from the generated table
+///
+/// DR-6's generator lists this block in `UNPARSED`: it declines to model `LineExpressionMask`
+/// rather than guess at it. The offsets here are transcribed from `line_layer_ubo.hpp`'s own
+/// offset comments, and the size is asserted against the `3 * 16` its `static_assert` fixes.
+///
+/// # Every value is the constant-or-default
+///
+/// mbgl fills this with `evaluated.get<P>().constantOr(P::defaultValue())`, so a property that
+/// varies per feature contributes its *spec default* here and its real values through the
+/// vertex attributes. That is not a fallback for something missing: the shader reads this slot
+/// only for the properties the permutation left as uniforms, and writing the data-driven ones'
+/// evaluated values instead would put one feature's colour into a layer-wide uniform.
+///
+/// The expression mask is zero. It selects mbgl's Metal-only GPU expression evaluation, which
+/// the probe disables outright (§3.1 wants data-driven properties as attributes or UBO fields,
+/// not as trees the GPU walks).
+#[must_use]
+pub fn pack_line_props(
+    color: Color,
+    blur: f32,
+    opacity: f32,
+    gapwidth: f32,
+    offset: f32,
+    width: f32,
+    floorwidth: f32,
+) -> Vec<u8> {
+    const SIZE: usize = 48;
+    let mut out = Vec::with_capacity(SIZE);
+    push_color(&mut out, color);
+    push_f32s(
+        &mut out,
+        &[blur, opacity, gapwidth, offset, width, floorwidth],
+    );
+    // expressionMask and pad1.
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&0f32.to_le_bytes());
+    debug_assert_eq!(out.len(), SIZE);
+    out
+}
+
+/// A property's value as a layer-wide uniform, or `None` when it does not have one.
+///
+/// mbgl's `evaluated.get<P>().constantOr(P::defaultValue())` in two halves. A property bound as
+/// an attribute has no single value for the layer, so it yields `None` and the caller supplies
+/// the spec default — which is what the shader will read for it, and is *not* a stand-in for a
+/// missing value: the permutation tells the shader to take that property from the vertex.
+///
+/// A camera-only property does have one: it is constant across every feature at a given zoom,
+/// which is why it is a uniform at all, so it is evaluated here at the view's zoom.
+fn uniform_value(property: &ResolvedProperty, zoom: f64) -> Option<Value> {
+    match property.binding {
+        Binding::Attribute { .. } => None,
+        Binding::Uniform => property.expression.evaluate(Some(zoom), None).ok(),
+    }
+}
+
+/// A colour-typed property's uniform value, falling back to its spec default.
+fn uniform_color(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    name: &str,
+    zoom: f64,
+) -> Color {
+    let Some(property) = paint.get(name) else {
+        return Color::transparent();
+    };
+    let default = match property.spec.default {
+        DefaultValue::Color(color) => color,
+        _ => Color::transparent(),
+    };
+    uniform_value(property, zoom)
+        .and_then(|value| tessella_style::property::as_color(&value).ok())
+        .unwrap_or(default)
+}
+
+/// A number-typed property's uniform value, falling back to its spec default.
+fn uniform_number(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    name: &str,
+    zoom: f64,
+) -> f32 {
+    let Some(property) = paint.get(name) else {
+        return 0.0;
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    let default = match property.spec.default {
+        DefaultValue::Number(number) => number as f32,
+        _ => 0.0,
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    uniform_value(property, zoom)
+        .and_then(|value| value.as_number())
+        .map_or(default, |number| number as f32)
+}
+
+/// A line layer's evaluated properties, from its resolved paint.
+///
+/// The crossfade scalars a pattern would need are absent because a pattern is not implemented;
+/// this block has no room for them in any case, which is why the pattern variants are separate
+/// shaders with their own tile-props block.
+#[must_use]
+pub fn line_props_from_paint(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    zoom: f64,
+) -> Vec<u8> {
+    pack_line_props(
+        uniform_color(paint, "line-color", zoom),
+        uniform_number(paint, "line-blur", zoom),
+        uniform_number(paint, "line-opacity", zoom),
+        uniform_number(paint, "line-gap-width", zoom),
+        uniform_number(paint, "line-offset", zoom),
+        uniform_number(paint, "line-width", zoom),
+        uniform_number(paint, "line-floorwidth", zoom),
+    )
+}
+
+/// A fill layer's evaluated properties, from its resolved paint.
+///
+/// The two crossfade scalars are the pattern's, and are the values mbgl writes when no pattern
+/// is set: a fade of one and scales of one half and one.
+#[must_use]
+pub fn fill_props_from_paint(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    zoom: f64,
+) -> Vec<u8> {
+    pack_fill_props(
+        uniform_color(paint, "fill-color", zoom),
+        uniform_color(paint, "fill-outline-color", zoom),
+        uniform_number(paint, "fill-opacity", zoom),
+        1.0,
+        0.5,
+        1.0,
+    )
 }
 
 /// Packs `BackgroundPropsUBO`.
