@@ -1046,6 +1046,7 @@ dependencies = [
  "tempfile",
  "tessella-source",
  "tessella-style",
+ "tessella-tile",
  "thiserror",
  "tile-server",
  "ureq",

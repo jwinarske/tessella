@@ -115,3 +115,85 @@ fn read_path_costs() {
         sqlite.as_secs_f64() / read_only.as_secs_f64()
     );
 }
+
+/// What pinning a large region costs the ambient write path.
+///
+/// Eviction runs after every ambient write and has to exclude whatever regions claim. A user
+/// who downloads a country pins hundreds of thousands of URLs, and if the exclusion is walked
+/// per write then every tile the map fetches afterwards pays for the download that already
+/// finished.
+///
+/// With `url NOT IN (SELECT url FROM region_resources)` this measured 238 us at zero claims,
+/// 2.9 ms at ten thousand and 33 ms at a hundred thousand — linear, and past a frame. With a
+/// `pinned` count on the row and the `responses_evictable` index it is flat at about 150 us,
+/// which is also faster than the original because eviction now walks only the rows it may take.
+#[test]
+#[ignore = "a measurement, not a test"]
+fn eviction_cost_against_a_large_region() {
+    let directory = tempfile::tempdir().expect("a temp dir");
+    let cache = SqliteCache::with_capacity(&directory.path().join("cache.sqlite"), 4 * 1024 * 1024)
+        .expect("opens");
+
+    // Small bodies: the point is the number of claims, not the bytes.
+    let small = Response {
+        status: 200,
+        body: vec![0u8; 256],
+        ..Response::default()
+    };
+    let region = cache
+        .create_region(
+            &tessella_storage::offline::Region {
+                style_url: "https://host/style.json".into(),
+                bounds: tessella_tile::cover::Bounds::new(-5.0, 41.0, 9.0, 51.0),
+                min_zoom: 0.0,
+                max_zoom: 14.0,
+                pixel_ratio: 1.0,
+                include_ideographs: false,
+            },
+            Some("a country"),
+            0,
+        )
+        .expect("creates");
+
+    for pins in [0usize, 10_000, 100_000] {
+        // Top the region up to `pins` claims.
+        let existing: usize = usize::try_from(
+            cache
+                .region_progress(region)
+                .expect("reads")
+                .completed_resources,
+        )
+        .unwrap_or(0);
+        for index in existing..pins {
+            cache
+                .put_region_resource(
+                    region,
+                    &format!("https://host/pinned/{index}"),
+                    &small,
+                    1_000,
+                )
+                .expect("stores");
+        }
+
+        // Fill the ambient side so eviction actually has work to do.
+        let ambient = Response {
+            status: 200,
+            body: TILE.to_vec(),
+            ..Response::default()
+        };
+        for index in 0..40 {
+            cache
+                .put(&format!("https://host/warm/{index}"), &ambient, 2_000)
+                .expect("stores");
+        }
+
+        let started = Instant::now();
+        for index in 0..ROUNDS {
+            cache
+                .put(&format!("https://host/hot/{index}"), &ambient, 3_000)
+                .expect("stores");
+        }
+        let each = started.elapsed() / ROUNDS;
+        println!("{pins:>7} pinned: {each:?} per ambient write");
+    }
+}

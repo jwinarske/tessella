@@ -53,6 +53,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
+use tessella_tile::cover::Bounds;
+
+use crate::offline::Region;
 use crate::source::Response;
 
 /// Why a cache operation failed.
@@ -111,9 +114,33 @@ CREATE TABLE IF NOT EXISTS responses (
   etag            TEXT,
   data            BLOB,
   must_revalidate INTEGER NOT NULL DEFAULT 0,
-  accessed        INTEGER NOT NULL
+  accessed        INTEGER NOT NULL,
+  pinned          INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS responses_accessed ON responses (accessed);
+CREATE INDEX IF NOT EXISTS responses_evictable ON responses (pinned, accessed);
+
+CREATE TABLE IF NOT EXISTS regions (
+  id                 INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  style_url          TEXT NOT NULL,
+  west               REAL NOT NULL,
+  south              REAL NOT NULL,
+  east               REAL NOT NULL,
+  north              REAL NOT NULL,
+  min_zoom           REAL NOT NULL,
+  max_zoom           REAL NOT NULL,
+  pixel_ratio        REAL NOT NULL,
+  include_ideographs INTEGER NOT NULL,
+  description        TEXT,
+  created            INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS region_resources (
+  region_id INTEGER NOT NULL REFERENCES regions (id) ON DELETE CASCADE,
+  url       TEXT NOT NULL,
+  PRIMARY KEY (region_id, url)
+);
+CREATE INDEX IF NOT EXISTS region_resources_url ON region_resources (url);
 ";
 
 /// An SQLite-backed response cache, bounded by the bytes it holds.
@@ -192,11 +219,39 @@ impl SqliteCache {
         connection
             .query_row("PRAGMA journal_mode=WAL", [], |_| Ok(()))
             .map_err(CacheError::Open)?;
+        // Off by default in SQLite, and the region-to-resource mapping relies on it: deleting a
+        // region has to drop its claims, or the resources stay pinned forever and the ambient
+        // budget quietly shrinks by whatever the user once downloaded and later removed.
+        connection
+            .execute_batch("PRAGMA foreign_keys=ON")
+            .map_err(CacheError::Open)?;
         connection.execute_batch(SCHEMA).map_err(CacheError::Open)?;
+        Self::migrate(&connection)?;
         Ok(Self {
             connection: Mutex::new(connection),
             capacity,
         })
+    }
+
+    /// Brings a database written by an earlier version up to the current shape.
+    ///
+    /// `CREATE TABLE IF NOT EXISTS` adds tables but never columns, so a cache file written
+    /// before regions existed has a `responses` table without `pinned` and every statement that
+    /// names it fails. Rather than discard the user's cache — which on a metered connection is
+    /// real money — the column is added in place, defaulting to unclaimed, which is exactly what
+    /// every row in such a file is.
+    fn migrate(connection: &Connection) -> Result<(), CacheError> {
+        let has_pinned = connection
+            .prepare("SELECT 1 FROM pragma_table_info('responses') WHERE name = 'pinned'")
+            .map_err(CacheError::Open)?
+            .exists([])
+            .map_err(CacheError::Open)?;
+        if !has_pinned {
+            connection
+                .execute_batch("ALTER TABLE responses ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+                .map_err(CacheError::Open)?;
+        }
+        Ok(())
     }
 
     /// Looks a URL up, marking it as used.
@@ -273,9 +328,16 @@ impl SqliteCache {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         connection.execute(
+            // A row that arrives where a claim is already waiting is born pinned. Claims can
+            // outrun bodies — a region may claim a URL the cache does not hold yet, and
+            // `remove` drops a body while leaving the claims that named it — so the count is
+            // recomputed on insert rather than assumed zero. Without that, an ambient write
+            // could resurrect a claimed resource as evictable and the next fill would take it
+            // out from under the region that owns it. On conflict the existing count stands.
             "INSERT INTO responses
-                   (url, status, expires, modified, etag, data, must_revalidate, accessed)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?4)
+                   (url, status, expires, modified, etag, data, must_revalidate, accessed, pinned)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?4,
+                         (SELECT COUNT(*) FROM region_resources WHERE url = ?1))
                  ON CONFLICT(url) DO UPDATE SET
                    status = ?2, expires = ?3, modified = ?4, etag = ?5,
                    data = ?6, must_revalidate = ?7, accessed = ?4",
@@ -388,6 +450,25 @@ impl SqliteCache {
         // is the one thing LRU exists to keep. It rarely bites there because a real cache holds
         // thousands; it bites immediately in a test, which is how it was found. A window
         // function costs the same one statement and cannot over-delete.
+        //
+        // # Why pinned rows are excluded rather than ranked last
+        //
+        // A resource a region claims is not a cache entry that happens to be popular; it is the
+        // thing the user asked to have offline. Ranking it last would still evict it once the
+        // region outgrew the bound, which is exactly the case downloading a region is for. So
+        // it is outside the query, and outside the budget: a two-gigabyte download of Berlin
+        // does not cost the ambient cache its fifty megabytes, and driving for a week does not
+        // cost Berlin.
+        //
+        // # Why a count on the row rather than a join
+        //
+        // The obvious spelling is `url NOT IN (SELECT url FROM region_resources)`. Measured, it
+        // costs 238 us per ambient write with nothing pinned, 2.9 ms with ten thousand claims
+        // and 33 ms with a hundred thousand — linear in the size of the download, and paid on
+        // every tile the map writes forever after. A user who downloads a country would find
+        // that every subsequent write costs more than a frame. `pinned` is a count maintained
+        // where claims are made, so eviction reads a column on the row it already has and the
+        // `responses_evictable` index lets it walk only the rows it may take.
         let removed = connection.execute(
             "DELETE FROM responses WHERE url IN (
                SELECT url FROM (
@@ -396,6 +477,7 @@ impl SqliteCache {
                    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
                  ) AS running
                  FROM responses
+                 WHERE pinned = 0
                ) WHERE running > ?1)",
             params![i64::try_from(capacity).unwrap_or(i64::MAX)],
         )?;
@@ -424,6 +506,290 @@ impl SqliteCache {
     pub fn is_empty(&self) -> Result<bool, CacheError> {
         Ok(self.len()? == 0)
     }
+
+    /// The bytes held for regions, which are outside the ambient bound.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Query`] when the statement fails.
+    pub fn region_size(&self) -> Result<u64, CacheError> {
+        let bytes: i64 = self
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .query_row(
+                "SELECT COALESCE(SUM(LENGTH(data)), 0) FROM responses WHERE pinned > 0",
+                [],
+                |row| row.get(0),
+            )?;
+        Ok(u64::try_from(bytes).unwrap_or(0))
+    }
+
+    /// Records a region a user asked to have offline, and returns its identifier.
+    ///
+    /// Creating it claims nothing: the region exists with no resources until a download stores
+    /// them against it. That ordering is deliberate — a region that appears in the list the
+    /// moment it is asked for, at zero percent, is what makes a download resumable and
+    /// cancellable rather than all-or-nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Query`] when the statement fails.
+    pub fn create_region(
+        &self,
+        region: &Region,
+        description: Option<&str>,
+        now: i64,
+    ) -> Result<RegionId, CacheError> {
+        let connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        connection.execute(
+            "INSERT INTO regions
+               (style_url, west, south, east, north, min_zoom, max_zoom,
+                pixel_ratio, include_ideographs, description, created)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                region.style_url,
+                region.bounds.west,
+                region.bounds.south,
+                region.bounds.east,
+                region.bounds.north,
+                region.min_zoom,
+                region.max_zoom,
+                f64::from(region.pixel_ratio),
+                i64::from(region.include_ideographs),
+                description,
+                now,
+            ],
+        )?;
+        Ok(RegionId(connection.last_insert_rowid()))
+    }
+
+    /// Every region, oldest first.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Query`] when the statement fails.
+    pub fn regions(&self) -> Result<Vec<StoredRegion>, CacheError> {
+        let connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut statement = connection.prepare(
+            "SELECT id, style_url, west, south, east, north, min_zoom, max_zoom,
+                    pixel_ratio, include_ideographs, description, created
+             FROM regions ORDER BY id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(StoredRegion {
+                id: RegionId(row.get(0)?),
+                region: Region {
+                    style_url: row.get(1)?,
+                    bounds: Bounds::new(row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?),
+                    min_zoom: row.get(6)?,
+                    max_zoom: row.get(7)?,
+                    #[allow(clippy::cast_possible_truncation)]
+                    pixel_ratio: row.get::<_, f64>(8)? as f32,
+                    include_ideographs: row.get::<_, i64>(9)? != 0,
+                },
+                description: row.get(10)?,
+                created: row.get(11)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(CacheError::from)
+    }
+
+    /// Forgets a region, releasing its claim on every resource it held.
+    ///
+    /// The bytes are not deleted here. What the region held becomes ordinary cache, subject to
+    /// the ambient bound like anything else — so a user who removes a downloaded city and
+    /// immediately looks at it still sees it, and the space comes back as it is needed rather
+    /// than in one stall.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Query`] when the statement fails.
+    pub fn delete_region(&self, id: RegionId) -> Result<(), CacheError> {
+        let mut connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let transaction = connection.transaction()?;
+        // Before the cascade removes the mappings, so there is still something to count from.
+        // One linear pass over this region's claims, paid once when a user removes a download
+        // rather than on every write afterwards.
+        transaction.execute(
+            "UPDATE responses SET pinned = pinned - 1
+             WHERE url IN (SELECT url FROM region_resources WHERE region_id = ?1)",
+            params![id.0],
+        )?;
+        transaction.execute("DELETE FROM regions WHERE id = ?1", params![id.0])?;
+        transaction.commit()?;
+        // The rows are unpinned now and may well put the cache over its bound.
+        Self::evict_within(&connection, self.capacity)?;
+        Ok(())
+    }
+
+    /// Stores a resource and claims it for a region.
+    ///
+    /// Unlike [`Self::put`] this does not evict and is not bounded by [`Self::capacity`]: the
+    /// user asked for these bytes by name, and a download that silently dropped its own tail to
+    /// stay under an ambient cache limit would report success and produce a map with holes.
+    ///
+    /// A resource already held ambiently is claimed rather than refetched — which is why a
+    /// region covering somewhere the user has been downloads less than one covering somewhere
+    /// they have not.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Query`] when a statement fails.
+    pub fn put_region_resource(
+        &self,
+        id: RegionId,
+        url: &str,
+        response: &Response,
+        now: i64,
+    ) -> Result<(), CacheError> {
+        let mut connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // One transaction: a body stored without its claim is an unpinned tile that eviction
+        // may take before the download finishes, and a claim stored without its body is a
+        // region that reports complete and renders nothing.
+        let transaction = connection.transaction()?;
+        transaction.execute(
+            // As [`Self::put`]: the count comes from the claims, not from zero.
+            "INSERT INTO responses
+               (url, status, expires, modified, etag, data, must_revalidate, accessed, pinned)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?4,
+                     (SELECT COUNT(*) FROM region_resources WHERE url = ?1))
+             ON CONFLICT(url) DO UPDATE SET
+               status = ?2, expires = ?3, modified = ?4, etag = ?5,
+               data = ?6, must_revalidate = ?7, accessed = ?4",
+            params![
+                url,
+                i64::from(response.status),
+                response.expires(now),
+                now,
+                response.etag,
+                response.body,
+                i64::from(response.must_revalidate),
+            ],
+        )?;
+        Self::claim_within(&transaction, id, url)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Claims a resource the cache already holds for a region.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Query`] when the statement fails, including when no such region exists.
+    pub fn claim(&self, id: RegionId, url: &str) -> Result<(), CacheError> {
+        let mut connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let transaction = connection.transaction()?;
+        Self::claim_within(&transaction, id, url)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// Records one region's claim and keeps `responses.pinned` in step with it.
+    ///
+    /// The two have to move together or the count drifts, and a drifted count either evicts
+    /// something a region holds or holds space nothing claims — so this is only ever called
+    /// inside a transaction.
+    fn claim_within(
+        transaction: &rusqlite::Transaction<'_>,
+        id: RegionId,
+        url: &str,
+    ) -> Result<(), CacheError> {
+        let inserted = transaction.execute(
+            "INSERT OR IGNORE INTO region_resources (region_id, url) VALUES (?1, ?2)",
+            params![id.0, url],
+        )?;
+        // Only a claim that was actually new increments. Claiming twice from the same region is
+        // ordinary — a download that resumes re-walks tiles it already has — and must not leave
+        // the resource pinned twice over.
+        if inserted > 0 {
+            transaction.execute(
+                "UPDATE responses SET pinned = pinned + 1 WHERE url = ?1",
+                params![url],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// How far a region's download has got.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Query`] when the statement fails.
+    pub fn region_progress(&self, id: RegionId) -> Result<RegionProgress, CacheError> {
+        let connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A left join, not an inner one: a claim whose body has been lost should count as a
+        // resource still owed rather than vanish from the total and let the region read
+        // complete.
+        let (resources, bytes) = connection.query_row(
+            "SELECT COUNT(responses.url), COALESCE(SUM(LENGTH(responses.data)), 0)
+             FROM region_resources
+             LEFT JOIN responses ON responses.url = region_resources.url
+             WHERE region_resources.region_id = ?1",
+            params![id.0],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )?;
+        Ok(RegionProgress {
+            completed_resources: u64::try_from(resources).unwrap_or(0),
+            completed_bytes: u64::try_from(bytes).unwrap_or(0),
+        })
+    }
+}
+
+/// A region's identifier, as stored.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RegionId(i64);
+
+impl RegionId {
+    /// The underlying row identifier, for callers that have to name a region across a boundary.
+    #[must_use]
+    pub const fn get(self) -> i64 {
+        self.0
+    }
+}
+
+/// A region as recorded, with what the store knows about it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredRegion {
+    /// Its identifier.
+    pub id: RegionId,
+    /// What was asked for.
+    pub region: Region,
+    /// Whatever the caller labelled it, typically a name a user typed.
+    pub description: Option<String>,
+    /// When it was created, in seconds since the Unix epoch.
+    pub created: i64,
+}
+
+/// What a region has downloaded so far.
+///
+/// The other half of a progress bar is [`crate::offline::Estimate`], which says what it is
+/// working towards — and which is a lower bound until every source manifest has arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct RegionProgress {
+    /// Resources stored and claimed.
+    pub completed_resources: u64,
+    /// Bytes those resources occupy.
+    pub completed_bytes: u64,
 }
 
 /// Wraps a source so responses are served from, and written to, a cache.

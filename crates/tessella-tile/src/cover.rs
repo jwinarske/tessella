@@ -206,6 +206,134 @@ pub fn cover(view: &ViewTransform) -> Result<Vec<TileCoord>, CoverError> {
     Ok(tiles)
 }
 
+/// A geographic box, as a style or a user's selection states one.
+///
+/// `west` may exceed `east`, which is how a box crossing the antimeridian is written — the same
+/// convention a TileJSON `bounds` uses. Latitudes are clamped to the Mercator limit when
+/// projected, because the projection has no north or south pole.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Bounds {
+    /// Western longitude.
+    pub west: f64,
+    /// Southern latitude.
+    pub south: f64,
+    /// Eastern longitude.
+    pub east: f64,
+    /// Northern latitude.
+    pub north: f64,
+}
+
+impl Bounds {
+    /// A box from `[west, south, east, north]`, as TileJSON writes it.
+    #[must_use]
+    pub const fn new(west: f64, south: f64, east: f64, north: f64) -> Self {
+        Self {
+            west,
+            south,
+            east,
+            north,
+        }
+    }
+
+    /// The whole world.
+    #[must_use]
+    pub const fn world() -> Self {
+        Self::new(-180.0, -85.051_128_779_806_59, 180.0, 85.051_128_779_806_59)
+    }
+
+    /// Whether this box crosses the antimeridian.
+    ///
+    /// Written as `west > east`, which is not a mistake to reject but the only way to say
+    /// "from 170°E to 170°W" in two numbers.
+    #[must_use]
+    pub fn crosses_antimeridian(&self) -> bool {
+        self.west > self.east
+    }
+
+    /// The tile column and row range this box covers at `z`.
+    ///
+    /// Transcribed from mbgl's `util::tileCount(LatLngBounds, zoom)`: the west edge floors, the
+    /// east edge *ceils and subtracts one*, and the rows clamp to the world. The asymmetry is
+    /// deliberate — a box ending exactly on a tile boundary does not pull in the tile beyond it,
+    /// which at zoom 14 over a city is a whole column of tiles nobody asked to download.
+    fn ranges(&self, z: u8) -> (u32, u32, u32, u32) {
+        let world = f64::from(1u32 << z);
+        let sw = projection::tile_units(self.west, self.south, z);
+        let ne = projection::tile_units(self.east, self.north, z);
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let clamp = |value: f64| value.clamp(0.0, world - 1.0) as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let x0 = sw[0].floor().clamp(0.0, world - 1.0) as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let x1 = (ne[0].ceil() - 1.0).clamp(0.0, world - 1.0) as u32;
+        // North is a *smaller* row than south: the projection's y grows downward.
+        let y0 = clamp(ne[1].floor());
+        let y1 = clamp(sw[1].floor());
+        (x0, x1, y0, y1)
+    }
+
+    /// How many tiles this box covers at `z`, without enumerating them.
+    ///
+    /// Separate from [`Self::tiles`] because a region's *estimate* is wanted before its download
+    /// begins, and at zoom 16 over a country the count is in the millions — a caller asking
+    /// "how big is this" must not be answered by allocating it.
+    #[must_use]
+    pub fn tile_count(&self, z: u8) -> u64 {
+        if z == 0 {
+            return 1;
+        }
+        let world = u64::from(1u32 << z);
+        let (x0, x1, y0, y1) = self.ranges(z);
+        // Wrapping the antimeridian: the columns run from x0 to the edge and on from zero.
+        let dx = if x0 > x1 {
+            (world - u64::from(x0)) + u64::from(x1)
+        } else {
+            u64::from(x1) - u64::from(x0)
+        };
+        let dy = u64::from(y1) - u64::from(y0);
+        (dx + 1).saturating_mul(dy + 1)
+    }
+
+    /// The tiles this box covers at `z`.
+    ///
+    /// # Errors
+    ///
+    /// [`CoverError::TooLarge`] when the box covers more than `limit` tiles. The caller states
+    /// the limit because the answer differs by purpose: a viewport has [`MAX_TILES`], and a
+    /// download a user asked for legitimately runs to millions.
+    pub fn tiles(&self, z: u8, limit: u64) -> Result<Vec<TileCoord>, CoverError> {
+        let demanded = self.tile_count(z);
+        if demanded > limit {
+            return Err(CoverError::TooLarge { tiles: demanded });
+        }
+        if z == 0 {
+            return Ok(vec![TileCoord {
+                z: 0,
+                x: 0,
+                y: 0,
+                wrap: 0,
+            }]);
+        }
+
+        let world = 1u32 << z;
+        let (x0, x1, y0, y1) = self.ranges(z);
+        let columns = if x0 > x1 {
+            (x0..world).chain(0..=x1).collect::<Vec<u32>>()
+        } else {
+            (x0..=x1).collect()
+        };
+
+        let mut tiles = Vec::with_capacity(usize::try_from(demanded).unwrap_or(0));
+        for y in y0..=y1 {
+            for &x in &columns {
+                tiles.push(TileCoord { z, x, y, wrap: 0 });
+            }
+        }
+        Ok(tiles)
+    }
+}
+
 /// A viewport sample that no tile in a cover contains.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Gap {
