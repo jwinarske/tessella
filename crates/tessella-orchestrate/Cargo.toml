@@ -20,9 +20,16 @@ tessella-glyph.workspace = true
 tessella-layout.workspace = true
 tessella-place.workspace = true
 tessella-source.workspace = true
+tessella-storage.workspace = true
 tessella-style.workspace = true
 libm.workspace = true
 tessella-tile.workspace = true
+
+[features]
+default = ["std"]
+# The cold-start path needs threads and a clock; the rest of the crate does not, and stays
+# `no_std` so the discipline marker keeps meaning something.
+std = []
 
 [dev-dependencies]
 tessella-storage = { workspace = true, features = ["http"] }

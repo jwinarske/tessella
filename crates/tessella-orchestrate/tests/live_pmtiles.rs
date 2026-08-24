@@ -174,3 +174,60 @@ fn the_berlin_archive_builds_at_high_zoom() {
 fn the_berlin_archive_overscales_past_its_maximum() {
     run("berlin", "berlin_z15.json", 13.405, 52.52, 17.0);
 }
+
+/// Cold-boot-to-first-tile against real archives — R1's exit metric.
+///
+/// Reports the stage trace at several zooms and both serially and fanned out. The number that
+/// matters is `first_bucket`: the moment there is something to draw, which is what a person
+/// perceives as the map appearing.
+#[test]
+#[ignore = "needs a tile server; see the module docs"]
+fn cold_boot_to_first_tile() {
+    use tessella_orchestrate::boot::cold_start;
+
+    let origin = origin();
+    for (name, manifest, lon, lat, zoom) in [
+        ("world", "world_z7.json", 0.0, 20.0, 3.0),
+        ("berlin", "berlin_z15.json", 13.405, 52.52, 14.0),
+    ] {
+        let text = format!(
+            r##"{{"version": 8,
+                 "sources": {{"{name}": {{"type": "vector", "url": "{origin}/{manifest}"}}}},
+                 "layers": [
+                   {{"id": "bg", "type": "background",
+                     "paint": {{"background-color": "#a8c9e0"}}}},
+                   {{"id": "earth", "type": "fill", "source": "{name}",
+                     "source-layer": "earth", "paint": {{"fill-color": "#e9e4d8"}}}},
+                   {{"id": "water", "type": "fill", "source": "{name}",
+                     "source-layer": "water", "paint": {{"fill-color": "#a8c9e0"}}}},
+                   {{"id": "roads", "type": "line", "source": "{name}",
+                     "source-layer": "roads", "paint": {{"line-color": "#ffffff",
+                       "line-width": ["interpolate", ["linear"], ["zoom"],
+                          10, ["match", ["get", "kind"], "highway", 2.0, 0.5],
+                          16, ["match", ["get", "kind"], "highway", 8.0, 2.0]]}}}}]}}"##
+        );
+
+        for workers in [1usize, 8] {
+            let files = Coalescing::new(HttpFileSource::default());
+            let boot = cold_start(&text, &view(lon, lat, zoom), &files, workers)
+                .unwrap_or_else(|error| panic!("{error}\nis `pmtiles serve` running?"));
+            let t = boot.trace;
+            println!(
+                "{name} z{zoom} x{workers}: parse {:?}  sources {:?}  cover {:?}  \
+                 first fetch {:?}  FIRST BUCKET {:?}  complete {:?}  \
+                 ({} tiles, {} KiB, {} vertices)",
+                t.style_parsed,
+                t.sources_resolved - t.style_parsed,
+                t.cover_computed - t.sources_resolved,
+                t.first_fetch - t.cover_computed,
+                t.first_bucket,
+                t.complete,
+                boot.tiles.len(),
+                boot.bytes / 1024,
+                boot.vertices()
+            );
+            assert!(boot.vertices() > 0);
+            assert!(t.first_bucket <= t.complete);
+        }
+    }
+}

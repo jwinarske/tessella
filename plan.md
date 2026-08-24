@@ -6,7 +6,8 @@ permutation key, composite (zoom-interpolated) binding, the line layer's uniform
 the circle layer land — the hermetic style is now reproduced in full, 37 drawables and 14
 uniform buffers — and the network path lands with it: URL templating, TileJSON resolution,
 request coalescing and an HTTP file source, live against `tools/tile-server`; the probe gains
-`--zoom` and two further goldens; DR-19 gains the line-path confirmation that the rotation is wagyu's
+`--zoom` and two further goldens, one of them against a real style over real tiles; the
+cold-start path is traced; DR-19 gains the line-path confirmation that the rotation is wagyu's
 alone, the line buffers being byte-exact. §5.1's "camera-free bucket" is qualified: a bucket
 is keyed by the zoom it is used at, because a composite property's endpoints depend on it.
 rev 0.9: R0's stream complete and diffed against the probe envelope by envelope; DR-19 records
@@ -497,8 +498,11 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   toolchains, §16), cross-faded (pattern) binders, DR-11 evaluator, §12.5 startup path.
   Exit: probe parity on a *real* style sans symbols — **geometry half met**: nine tiles of a
   Protomaps planet extract at z5, all 21 drawables byte-identical to the probe, fills and lines
-  both, over the same live origin. Remaining for exit: cold-boot-to-first-tile traced and
-  within budget.
+  both, over the same live origin. Cold-boot-to-first-tile is traced (§12.5): style parse,
+  source resolution, cover, first fetch, first bucket, complete, with the cover fanned out
+  across workers. Against a local Protomaps extract a nine-tile cover reaches first geometry in
+  6.7 ms and completes in 22 ms, against 12.7/72 ms serially. Remaining for exit: a budget to
+  hold that number against, on the RK3566 lane rather than on a workstation loopback.
 - **R1.5** — four views over the same style (§13). Exit: §9.2 invariants green; §13.3
   four-view zoom benchmark green on RK3566; §13.1 fractional-zoom counters at zero.
 - **R2** — symbols: glyph manager, shaping, quads, per-view placement, collision, cross-tile

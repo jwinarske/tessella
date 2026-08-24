@@ -29,7 +29,14 @@
 
 extern crate alloc;
 
+// The crate is `no_std` for its own code; the cold-start path is the one part that genuinely
+// needs threads and a clock, and says so with a feature rather than by dropping the attribute.
+#[cfg(feature = "std")]
+extern crate std;
+
 pub mod binder;
+#[cfg(feature = "std")]
+pub mod boot;
 pub mod camera;
 pub mod counters;
 pub mod damage;
