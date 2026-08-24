@@ -249,3 +249,68 @@ fn cold_boot_to_first_tile() {
         }
     }
 }
+
+/// Cold versus warm start against real archives, with a response cache on disk.
+///
+/// The number §12.5 is about. A warm start is a *restart*: fresh bucket cache, same file on
+/// disk, so every tile is decoded and tessellated again and the only thing carried over is the
+/// bytes. What it should not cost is a single round trip.
+#[test]
+#[ignore = "needs a tile server; see the module docs"]
+fn cold_versus_warm_start() {
+    use tessella_orchestrate::boot::{ColdStart, Workers};
+    use tessella_orchestrate::cache::TileCache;
+    use tessella_storage::cache::{CachingFileSource, SqliteCache};
+
+    let origin = origin();
+    let text = format!(
+        r##"{{"version": 8,
+             "sources": {{"world": {{"type": "vector", "url": "{origin}/world_z7.json"}}}},
+             "layers": [
+               {{"id": "earth", "type": "fill", "source": "world", "source-layer": "earth",
+                 "paint": {{"fill-color": "#e9e4d8"}}}},
+               {{"id": "water", "type": "fill", "source": "world", "source-layer": "water",
+                 "paint": {{"fill-color": "#a8c9e0"}}}},
+               {{"id": "roads", "type": "line", "source": "world", "source-layer": "roads",
+                 "paint": {{"line-color": "#ffffff", "line-width": 1.0}}}}]}}"##
+    );
+
+    let directory = tempfile::tempdir().expect("a temp dir");
+    let path = directory.path().join("cache.sqlite");
+
+    for round in ["cold", "warm"] {
+        let files = Coalescing::new(CachingFileSource::new(
+            HttpFileSource::default(),
+            SqliteCache::open(&path).expect("opens"),
+        ));
+        // Fresh each round: a warm start is a restart, not a repeat.
+        let cache: TileCache<tessella_orchestrate::boot::BootError> = TileCache::new(256);
+        let boot = ColdStart {
+            style: &text,
+            view: &view(0.0, 20.0, 3.0),
+            files: &files,
+            cache: &cache,
+            workers: Workers::default(),
+            style_rev: 1,
+        }
+        .run()
+        .unwrap_or_else(|error| panic!("{error}\nis `pmtiles serve` running?"));
+
+        let stats = files.inner().stats();
+        println!(
+            "{round:>4}: first bucket {:?}  complete {:?}  \
+             ({} round trips, {} hits, {} KiB, {} vertices)",
+            boot.trace.first_bucket,
+            boot.trace.complete,
+            stats.round_trips(),
+            stats.hits(),
+            boot.bytes / 1024,
+            boot.vertices()
+        );
+
+        if round == "warm" {
+            assert_eq!(stats.round_trips(), 0, "a warm start touches no network");
+            assert!(boot.vertices() > 0, "and still draws the map");
+        }
+    }
+}

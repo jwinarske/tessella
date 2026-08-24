@@ -999,6 +999,7 @@ dependencies = [
  "libm",
  "log",
  "serde_json",
+ "tempfile",
  "tessella-capture-abi",
  "tessella-glyph",
  "tessella-layout",

@@ -101,7 +101,13 @@ pub struct Boot {
     pub sourceless: Vec<(TileId, Vec<LayerBucket>)>,
     /// Stage timings.
     pub trace: BootTrace,
-    /// Tile bodies fetched, in bytes.
+    /// Tile bodies handled, in bytes.
+    ///
+    /// *Handled*, not fetched. A cache hit returns a response indistinguishable from a fetched
+    /// one — that is what makes a cache transparent — so this counts bytes that reached the
+    /// decoder however they got there. Whether any of them crossed the network is a question
+    /// for the file source's own counters, which is where the answer actually is
+    /// (`CachingFileSource::stats`).
     pub bytes: usize,
 }
 

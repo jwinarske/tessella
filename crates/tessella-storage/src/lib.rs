@@ -37,8 +37,8 @@
 //! test lane and off in the cross one, which is checked rather than assumed — `cargo tree`
 //! shows `libsqlite3-sys` present with the feature and absent without it.
 //!
-//! Not yet wired: the cache into `boot`, an eviction policy driven by anything but an explicit
-//! call, and the speculative manifest fetch §12.5 wants ahead of layer compilation.
+//! Not yet wired: an eviction policy driven by anything but an explicit call, and the
+//! speculative manifest fetch §12.5 wants ahead of layer compilation.
 
 #![forbid(unsafe_code)]
 
@@ -53,7 +53,7 @@ pub mod tileset;
 pub mod url;
 
 #[cfg(feature = "cache")]
-pub use cache::{CacheError, CachingFileSource, Entry, SqliteCache};
+pub use cache::{CacheError, CacheStats, CachingFileSource, Entry, SqliteCache};
 pub use geojson::{GeoJsonSourceError, Origin};
 #[cfg(feature = "http")]
 pub use http::HttpFileSource;

@@ -31,6 +31,7 @@
 
 use std::path::Path;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -317,6 +318,55 @@ pub struct CachingFileSource<S> {
     inner: S,
     cache: SqliteCache,
     clock: fn() -> i64,
+    stats: CacheStats,
+}
+
+/// How each request was answered.
+///
+/// Without these a cache is invisible from above: a hit and a fetch return the same response,
+/// so a caller counting bytes cannot say whether any of them crossed the network. That is the
+/// number a warm start is judged on, and §9.3 counts the same kind of thing for the same
+/// reason.
+#[derive(Debug, Default)]
+pub struct CacheStats {
+    hits: AtomicU64,
+    revalidated: AtomicU64,
+    fetched: AtomicU64,
+    stale: AtomicU64,
+}
+
+impl CacheStats {
+    /// Served from the cache without asking the origin.
+    #[must_use]
+    pub fn hits(&self) -> u64 {
+        self.hits.load(Ordering::Relaxed)
+    }
+
+    /// Asked the origin, which confirmed the held copy with a `304`.
+    ///
+    /// A round trip but no body, which is the point of an etag.
+    #[must_use]
+    pub fn revalidated(&self) -> u64 {
+        self.revalidated.load(Ordering::Relaxed)
+    }
+
+    /// A body came from the origin.
+    #[must_use]
+    pub fn fetched(&self) -> u64 {
+        self.fetched.load(Ordering::Relaxed)
+    }
+
+    /// The origin could not be reached and a stale copy was served instead.
+    #[must_use]
+    pub fn stale(&self) -> u64 {
+        self.stale.load(Ordering::Relaxed)
+    }
+
+    /// Requests that reached the origin at all, whether or not a body came back.
+    #[must_use]
+    pub fn round_trips(&self) -> u64 {
+        self.revalidated() + self.fetched()
+    }
 }
 
 impl<S: crate::source::FileSource> CachingFileSource<S> {
@@ -326,6 +376,7 @@ impl<S: crate::source::FileSource> CachingFileSource<S> {
             inner,
             cache,
             clock: unix_now,
+            stats: CacheStats::default(),
         }
     }
 
@@ -338,12 +389,18 @@ impl<S: crate::source::FileSource> CachingFileSource<S> {
             inner,
             cache,
             clock,
+            stats: CacheStats::default(),
         }
     }
 
     /// The cache.
     pub fn cache(&self) -> &SqliteCache {
         &self.cache
+    }
+
+    /// How requests were answered.
+    pub fn stats(&self) -> &CacheStats {
+        &self.stats
     }
 
     /// The wrapped source.
@@ -371,6 +428,7 @@ impl<S: crate::source::FileSource> crate::source::FileSource for CachingFileSour
         if let Some(entry) = &held
             && entry.is_usable(now)
         {
+            self.stats.hits.fetch_add(1, Ordering::Relaxed);
             return Ok(entry.response.clone());
         }
 
@@ -382,6 +440,7 @@ impl<S: crate::source::FileSource> crate::source::FileSource for CachingFileSour
         match fetched {
             Ok(response) if response.is_not_modified() => {
                 // The held copy stands. Only its freshness moves, so the body is not rewritten.
+                self.stats.revalidated.fetch_add(1, Ordering::Relaxed);
                 let entry = held.expect("a 304 is only possible when something was held");
                 let _ =
                     self.cache
@@ -391,6 +450,7 @@ impl<S: crate::source::FileSource> crate::source::FileSource for CachingFileSour
             Ok(response) => {
                 // Only success is worth keeping. Caching a 404 would make a source's coverage
                 // permanent, and caching a 500 would make an outage so.
+                self.stats.fetched.fetch_add(1, Ordering::Relaxed);
                 if response.is_ok() {
                     let _ = self.cache.put(url, &response, now);
                 }
@@ -398,7 +458,10 @@ impl<S: crate::source::FileSource> crate::source::FileSource for CachingFileSour
             }
             Err(error) => match held {
                 // Stale is better than blank, unless the origin asked otherwise.
-                Some(entry) if !entry.response.must_revalidate => Ok(entry.response),
+                Some(entry) if !entry.response.must_revalidate => {
+                    self.stats.stale.fetch_add(1, Ordering::Relaxed);
+                    Ok(entry.response)
+                }
                 _ => Err(error),
             },
         }

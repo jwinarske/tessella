@@ -544,3 +544,114 @@ fn a_geojson_only_style_fetches_once() {
     );
     assert_eq!(started.bytes, 0, "no tile bodies were fetched");
 }
+
+/// A second process starts warm: same disk cache, fresh in-memory state, no network.
+///
+/// This is §12.5's warm start, and it needs both caches to be understood as different things.
+/// The bucket cache makes a second *view* free within a process. The response cache makes a
+/// second *process* free of the network — which is the case a restart is, and the one an
+/// in-memory cache cannot help with.
+///
+/// A fresh `TileCache` is what makes this a restart rather than a repeat: the buckets are gone,
+/// so every tile is decoded and tessellated again, and the only thing carried over is the
+/// bytes.
+#[test]
+fn a_second_process_starts_warm() {
+    use tessella_storage::cache::{CachingFileSource, SqliteCache};
+
+    let server = server();
+    let text = style(&server.origin());
+    let directory = tempfile::tempdir().expect("a temp dir");
+    let path = directory.path().join("cache.sqlite");
+
+    // First start: cold in every sense.
+    let cold_tiles;
+    let cold_vertices;
+    {
+        let files = Coalescing::new(CachingFileSource::new(
+            HttpFileSource::default(),
+            SqliteCache::open(&path).expect("opens"),
+        ));
+        let cache: TileCache<BootError> = TileCache::new(64);
+        let started = boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
+        cold_tiles = started.tiles.len();
+        cold_vertices = started.vertices();
+
+        assert!(cold_tiles > 0);
+        assert!(
+            files.inner().stats().fetched() > 0,
+            "it went to the network"
+        );
+        assert_eq!(files.inner().stats().hits(), 0, "nothing was there yet");
+    }
+    let requests_after_cold = server.requests();
+
+    // Second start: a new process would have a new bucket cache and the same file on disk.
+    let files = Coalescing::new(CachingFileSource::new(
+        HttpFileSource::default(),
+        SqliteCache::open(&path).expect("reopens"),
+    ));
+    let cache: TileCache<BootError> = TileCache::new(64);
+    let started = boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
+
+    assert_eq!(started.tiles.len(), cold_tiles, "the same map");
+    assert_eq!(started.vertices(), cold_vertices);
+    assert_eq!(
+        server.requests(),
+        requests_after_cold,
+        "and not one request to get it"
+    );
+    assert_eq!(files.inner().stats().round_trips(), 0, "no round trips");
+    assert!(files.inner().stats().hits() > 0, "served from disk");
+
+    // The buckets really were rebuilt: this is a restart, not a repeat.
+    assert_eq!(cache.builds() as usize, started.tiles.len());
+}
+
+/// The response cache also covers what a cold start needs before it has a cover.
+///
+/// A TileJSON manifest is a round trip on the critical path, and §12.5 calls it out as the
+/// thing serialising startup. It goes through the same file source as the tiles, so it is
+/// cached by the same mechanism — which is worth asserting rather than assuming, because the
+/// manifest is fetched on a different code path from the tiles.
+#[test]
+fn a_warm_start_does_not_refetch_the_manifest() {
+    use tessella_storage::cache::{CachingFileSource, SqliteCache};
+
+    let tiles = server();
+    let manifest = format!(
+        r#"{{"tilejson":"3.0.0","tiles":["{t}/{{z}}/{{x}}/{{y}}.pbf"],"minzoom":0,"maxzoom":6}}"#,
+        t = tiles.origin()
+    );
+    let manifests = tile_server::Server::start(tile_server::Routes::new().at(
+        "/tiles.json",
+        "application/json",
+        manifest.into_bytes(),
+    ))
+    .expect("binds");
+
+    let text = format!(
+        r##"{{"version": 8,
+             "sources": {{"v": {{"type": "vector", "url": "{m}/tiles.json"}}}},
+             "layers": [{{"id": "water", "type": "fill", "source": "v",
+                          "source-layer": "water", "paint": {{"fill-color": "#3050c0"}}}}]}}"##,
+        m = manifests.origin()
+    );
+
+    let directory = tempfile::tempdir().expect("a temp dir");
+    let path = directory.path().join("cache.sqlite");
+
+    for round in 0..2 {
+        let files = Coalescing::new(CachingFileSource::new(
+            HttpFileSource::default(),
+            SqliteCache::open(&path).expect("opens"),
+        ));
+        let cache: TileCache<BootError> = TileCache::new(64);
+        boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
+        assert_eq!(
+            manifests.requests(),
+            1,
+            "the manifest was fetched once, on round {round}"
+        );
+    }
+}
