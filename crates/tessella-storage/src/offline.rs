@@ -467,35 +467,6 @@ impl Plan {
     }
 }
 
-/// Expression operators the spec permits to head a `text-font`.
-///
-/// [`tessella_style::PropertyValue`] classifies syntactically — a non-empty array headed by a
-/// string is a call — and says so, leaving the meaning to whoever has an operator table. That
-/// is deliberate and it is why this table exists: `text-font`'s value is `array<string>`, so
-/// the overwhelmingly common `["Noto Sans Regular"]` is a *font stack* that happens to look
-/// exactly like a call to an operator named "Noto Sans Regular".
-///
-/// So the head is checked against the operators that can actually produce an `array<string>`,
-/// and an unrecognized head means a font name. That is the right direction to be wrong in: no
-/// font is named `step`, whereas reading every stack as an expression loses every glyph in the
-/// style and ships a region whose labels are all missing.
-const FONT_EXPRESSION_OPERATORS: &[&str] = &[
-    "array",
-    "at",
-    "case",
-    "coalesce",
-    "config",
-    "feature-state",
-    "get",
-    "global-state",
-    "let",
-    "literal",
-    "match",
-    "slice",
-    "step",
-    "var",
-];
-
 /// Collects the font stacks a style names, and says whether it found all of them.
 ///
 /// A `text-font` may be data-driven — `["get", "font"]`, or a `match` on a feature property —
@@ -514,24 +485,19 @@ pub fn font_stacks(style: &tessella_style::Style) -> (Vec<String>, bool) {
             continue;
         };
         let fonts = match value {
+            // A plain stack. `["Noto Sans Regular"]` reaches this arm rather than the other
+            // one because [`tessella_style::Value::looks_like_expression`] checks the operator
+            // registry, not merely the shape.
             tessella_style::PropertyValue::Literal(literal) => literal.as_array(),
-            tessella_style::PropertyValue::Expression(expression) => {
-                let call = expression.value().as_array();
-                let head = call
-                    .and_then(<[tessella_style::Value]>::first)
-                    .and_then(tessella_style::Value::as_str);
-                match head {
-                    // A stack whose first font shares a name with an operator, which is to say
-                    // an ordinary stack.
-                    Some(name) if !FONT_EXPRESSION_OPERATORS.contains(&name) => call,
-                    // `["literal", [...]]` is the one expression form whose fonts are stated
-                    // rather than computed.
-                    Some("literal") => call
-                        .and_then(|call| call.get(1))
-                        .and_then(tessella_style::Value::as_array),
-                    _ => None,
-                }
-            }
+            // `["literal", [...]]` is the one call whose fonts are stated rather than computed.
+            tessella_style::PropertyValue::Expression(expression) => expression
+                .value()
+                .as_array()
+                .filter(|call: &&[tessella_style::Value]| {
+                    call.first().and_then(tessella_style::Value::as_str) == Some("literal")
+                })
+                .and_then(|call| call.get(1))
+                .and_then(tessella_style::Value::as_array),
         };
         match fonts {
             Some(fonts) => {

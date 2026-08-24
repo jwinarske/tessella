@@ -107,15 +107,30 @@ impl Value {
         }
     }
 
-    /// True when this value could be the head of an expression.
+    /// True when this value is an expression call.
     ///
-    /// A style property is an expression when it is a non-empty array whose first element is
-    /// a string naming an operator. Everything else — including an array of numbers, which is
-    /// how a `line-dasharray` or a color triple is written — is a literal.
+    /// A style property is an expression when it is a non-empty array whose first element is a
+    /// string *naming a registered operator*. Everything else — including an array of numbers,
+    /// which is how a `line-dasharray` or a colour triple is written — is a literal.
+    ///
+    /// # Why the registry, and not just "starts with a string"
+    ///
+    /// That was the earlier rule, and it is the style spec's own words up to the last clause.
+    /// The spec spells it `expression[0] in expressions`: a lookup, not a shape test. Without
+    /// the lookup, `["Noto Sans Regular"]` — a font stack, and the ordinary way `text-font` is
+    /// written — reads as a call to an operator of that name. Nothing errors; the value is
+    /// simply classified wrong, and a caller that asks for its literal array gets nothing.
+    ///
+    /// The registry is [`crate::generated::operators::OPERATORS`], taken from mbgl rather than
+    /// written down here, because a list that drifts from the engine is wrong silently: the
+    /// symptom is a style that renders slightly differently, not a build that fails.
     #[must_use]
     pub fn looks_like_expression(&self) -> bool {
         match self {
-            Self::Array(items) => matches!(items.first(), Some(Self::String(_))),
+            Self::Array(items) => matches!(
+                items.first(),
+                Some(Self::String(head)) if crate::is_operator(head)
+            ),
             _ => false,
         }
     }

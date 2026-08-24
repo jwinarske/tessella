@@ -103,6 +103,9 @@ const UBO_OUTPUT: &str = "crates/tessella-capture-abi/src/generated/ubo_layouts.
 /// Path of the generated UBO slot ids.
 const SLOT_OUTPUT: &str = "crates/tessella-capture-abi/src/generated/ubo_slots.rs";
 
+/// Path of the generated expression operator registry.
+const OPERATOR_OUTPUT: &str = "crates/tessella-style/src/generated/operators.rs";
+
 /// One parsed C++ enumerator.
 struct Enumerator {
     name: String,
@@ -170,10 +173,19 @@ fn main() -> ExitCode {
         }
     };
 
+    let operators = match generate_operators(&mbgl).map(|text| rustfmt(&text)) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("{err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let out = workspace.join(OUTPUT);
     let shader_out = workspace.join(SHADER_OUTPUT);
     let ubo_out = workspace.join(UBO_OUTPUT);
     let slot_out = workspace.join(SLOT_OUTPUT);
+    let operator_out = workspace.join(OPERATOR_OUTPUT);
     if check {
         let mut stale = false;
         for (path, name, want) in [
@@ -181,6 +193,7 @@ fn main() -> ExitCode {
             (&shader_out, SHADER_OUTPUT, &shaders),
             (&ubo_out, UBO_OUTPUT, &ubos),
             (&slot_out, SLOT_OUTPUT, &slots),
+            (&operator_out, OPERATOR_OUTPUT, &operators),
         ] {
             let current = std::fs::read_to_string(path).unwrap_or_default();
             if current == *want {
@@ -197,17 +210,20 @@ fn main() -> ExitCode {
         };
     }
 
-    if let Some(parent) = out.parent()
-        && let Err(err) = std::fs::create_dir_all(parent)
-    {
-        eprintln!("creating {}: {err}", parent.display());
-        return ExitCode::FAILURE;
+    for path in [&out, &operator_out] {
+        if let Some(parent) = path.parent()
+            && let Err(err) = std::fs::create_dir_all(parent)
+        {
+            eprintln!("creating {}: {err}", parent.display());
+            return ExitCode::FAILURE;
+        }
     }
     for (path, name, text) in [
         (&out, OUTPUT, &generated),
         (&shader_out, SHADER_OUTPUT, &shaders),
         (&ubo_out, UBO_OUTPUT, &ubos),
         (&slot_out, SLOT_OUTPUT, &slots),
+        (&operator_out, OPERATOR_OUTPUT, &operators),
     ] {
         if let Err(err) = std::fs::write(path, text) {
             eprintln!("writing {}: {err}", path.display());
@@ -1812,4 +1828,144 @@ fn evaluate_slot_expression(
 /// Turns `idFillDrawableUBO` into `ID_FILL_DRAWABLE_UBO`.
 fn screaming_snake_ident(name: &str) -> String {
     screaming_snake(name)
+}
+
+/// Generates the expression operator registry (DR-6, DR-11).
+///
+/// # Why this has to be generated
+///
+/// The style spec says an array is an expression when its first element names a *registered
+/// operator*, and a value otherwise. That rule is the only thing separating
+/// `["Noto Sans Regular"]` — a font stack, and the overwhelmingly common spelling of
+/// `text-font` — from a call to an operator of that name. Get it wrong in the permissive
+/// direction and every font stack in every style is read as an expression, which loses the
+/// glyphs; get it wrong in the strict direction and a real expression is read as a literal
+/// array of strings.
+///
+/// A hand-maintained list is wrong the moment mbgl gains an operator, and wrong silently: the
+/// symptom is a style that renders slightly differently, not a build failure. So the list comes
+/// from mbgl's two registries and `--check` fails when they drift.
+///
+/// # The two registries
+///
+/// `parsing_context.cpp` holds the special forms — the ones with their own parse functions
+/// because their arguments are not all expressions (`let`'s bindings, `match`'s labels,
+/// `literal`'s payload). `compound_expression.cpp` holds everything else: the arithmetic, the
+/// lookups, the string and colour functions, each with one or more typed signatures.
+///
+/// Names beginning `filter-` are excluded. They are mbgl's internal spelling for the legacy
+/// filter syntax, generated when a legacy filter is converted, and never appear in a style
+/// document — including them would let `["filter-in", ...]` parse as an expression when the
+/// spec says it is not one.
+fn generate_operators(mbgl: &Path) -> Result<String, String> {
+    let revision = tree_revision(mbgl);
+
+    let special_path = mbgl.join("src/mbgl/style/expression/parsing_context.cpp");
+    let special_text = std::fs::read_to_string(&special_path)
+        .map_err(|err| format!("reading {}: {err}", special_path.display()))?;
+    let special = parse_registry(&special_text, "expressionRegistry");
+
+    let compound_path = mbgl.join("src/mbgl/style/expression/compound_expression.cpp");
+    let compound_text = std::fs::read_to_string(&compound_path)
+        .map_err(|err| format!("reading {}: {err}", compound_path.display()))?;
+    let compound = parse_registry(&compound_text, "compoundExpressionRegistry");
+
+    if special.is_empty() {
+        return Err(format!(
+            "found no operators in {}: has expressionRegistry been renamed?",
+            special_path.display()
+        ));
+    }
+    if compound.is_empty() {
+        return Err(format!(
+            "found no operators in {}: has compoundExpressionRegistry been renamed?",
+            compound_path.display()
+        ));
+    }
+
+    let mut names: Vec<String> = special
+        .into_iter()
+        .chain(compound)
+        // mbgl's spelling for converted legacy filters, which never appear in a style document.
+        .filter(|name| !name.starts_with("filter-"))
+        .collect();
+    names.sort();
+    names.dedup();
+
+    let mut out = String::new();
+    out.push_str("//! Expression operator names, generated from maplibre-native.\n");
+    out.push_str("//!\n");
+    out.push_str(&format!("//! Source revision: {revision}\n"));
+    out.push_str("//!\n");
+    out.push_str(
+        "//! Do not edit: regenerate with `cargo run -p mbgl-codegen -- --mbgl <tree>`.\n",
+    );
+    out.push_str("//!\n");
+    for line in wrap(
+        "Taken from `expressionRegistry` in `parsing_context.cpp` (the special forms, whose \
+         arguments are not all expressions) and `compoundExpressionRegistry` in \
+         `compound_expression.cpp` (everything else). Names beginning `filter-` are excluded: \
+         they are mbgl's internal spelling for converted legacy filters and never appear in a \
+         style document.",
+        96,
+    ) {
+        out.push_str(&format!("//! {line}\n"));
+    }
+    out.push('\n');
+
+    out.push_str("/// Every name that heads an expression call.\n");
+    out.push_str("///\n");
+    for line in wrap(
+        "Sorted, so `is_operator` can binary-search it and so a diff of this file is a diff of \
+         what mbgl supports rather than of the order two registries happened to be written in.",
+        96,
+    ) {
+        out.push_str(&format!("/// {line}\n"));
+    }
+    out.push_str(&format!(
+        "pub const OPERATORS: [&str; {}] = [\n",
+        names.len()
+    ));
+    for name in &names {
+        out.push_str(&format!("    {name:?},\n"));
+    }
+    out.push_str("];\n");
+
+    Ok(out)
+}
+
+/// Extracts the quoted keys of a `mapbox::eternal` map literal named `name`.
+///
+/// Regex-free, and deliberately narrow: it takes the text from the map's name to the closing
+/// `});` and reads the first string of each `{"key", value}` pair. A renamed or restructured
+/// registry yields nothing, which the caller turns into a hard error rather than a short table.
+fn parse_registry(text: &str, name: &str) -> Vec<String> {
+    let Some(start) = text.find(name) else {
+        return Vec::new();
+    };
+    let rest = &text[start..];
+    let end = rest.find("});").map_or(rest.len(), |at| at + 3);
+    let body = &rest[..end];
+
+    let mut names = Vec::new();
+    let bytes = body.as_bytes();
+    let mut at = 0usize;
+    while at < bytes.len() {
+        // Only a string that opens a pair counts, so the second element of `{"x", Foo::parse}`
+        // and any stray quoted text in a comment are not mistaken for operator names.
+        if bytes[at] == b'{'
+            && let Some(quote) = body[at + 1..]
+                .find('"')
+                .filter(|offset| body[at + 1..at + 1 + offset].trim().is_empty())
+        {
+            let from = at + 1 + quote + 1;
+            if let Some(len) = body[from..].find('"') {
+                names.push(body[from..from + len].to_string());
+                at = from + len + 1;
+                continue;
+            }
+        }
+        at += 1;
+    }
+    names
 }

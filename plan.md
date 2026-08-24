@@ -542,10 +542,18 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   which would otherwise stay pinned for the life of the region, outside the ambient bound and
   never used. A cancelled refresh releases nothing: it has not visited every URL, so what looks
   orphaned may simply not have been reached.
-  Remaining on offline, none of it blocking R1 exit:
-  `text-font` is disambiguated from an expression by a hand-listed operator set, standing
-  in for the table DR-11 will bring — `["Noto Sans Regular"]` is syntactically a call to an
-  operator of that name, and the style crate deliberately declines to guess which it is.
+  Telling a call from a literal array is a registry lookup, not a shape test — the spec spells
+  it `expression[0] in expressions` — and that registry is now generated from mbgl's two
+  (`expressionRegistry` for the special forms, `compoundExpressionRegistry` for the rest, minus
+  the `filter-` names mbgl invents when converting legacy filters). Eighty-six operators, under
+  DR-6 like the shader tables, because a hand-kept list is wrong silently: the symptom is a
+  style that renders slightly differently, not a build that fails. What it fixes is `text-font`,
+  whose value is an `array<string>`: `["Noto Sans Regular"]` is how every style writes a font
+  stack and is indistinguishable by shape from a call to an operator of that name. Read as a
+  call, its fonts cannot be enumerated and the style's labels lose their glyphs.
+  `Expression::parse` still names an unrecognized head rather than accepting it as an array of
+  strings — the spec catches those by type-checking against the property, which nothing at that
+  point knows.
   Exit: probe parity on a *real* style sans symbols — **geometry half met**: nine tiles of a
   Protomaps planet extract at z5, all 21 drawables byte-identical to the probe, fills and lines
   both, over the same live origin. Cold-boot-to-first-tile is traced (§12.5): style parse,

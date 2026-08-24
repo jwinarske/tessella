@@ -28,6 +28,7 @@ extern crate alloc;
 pub mod document;
 pub mod expression;
 pub mod filter;
+pub mod generated;
 pub mod light;
 pub mod property;
 pub mod value;
@@ -54,4 +55,18 @@ pub enum Error {
     /// into a confusing one.
     #[error("unsupported style spec version {0}; only version 8 is implemented")]
     UnsupportedVersion(u32),
+}
+
+/// Whether `name` heads an expression call.
+///
+/// The style spec's rule for telling a call from a literal array is a registry lookup — the
+/// spec spells it `expression[0] in expressions` — and this is that registry. It matters most
+/// for `text-font`, whose value is an `array<string>`: without the lookup the ordinary
+/// `["Noto Sans Regular"]` is indistinguishable from a call to an operator of that name.
+///
+/// The names come from mbgl (DR-6), so a version that gains an operator gains it here too
+/// rather than diverging silently.
+#[must_use]
+pub fn is_operator(name: &str) -> bool {
+    generated::operators::OPERATORS.binary_search(&name).is_ok()
 }

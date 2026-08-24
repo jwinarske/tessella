@@ -126,6 +126,20 @@ fn parse_rooted(
     // A value that is not a call is itself. This is what makes `["match", x, "a", 1, 2]`
     // work: the outputs are bare values, not nested calls.
     if !value.looks_like_expression() {
+        // Except an array headed by a string that names no operator. As a *value* that is a
+        // literal array of strings and perfectly legal — `["Noto Sans Regular"]` is the
+        // ordinary spelling of a font stack. But this function has been told the value is an
+        // expression, and the only way an unrecognized head gets here is a misspelling. The
+        // spec catches those a different way, by type-checking the array against the property
+        // it was written for; nothing here knows the property, so the name is reported instead
+        // of a `["gett", "x"]` quietly becoming a two-element array of strings.
+        if let Some(head) = value
+            .as_array()
+            .and_then(<[Value]>::first)
+            .and_then(Value::as_str)
+        {
+            return Err(ParseError::UnknownOperator(head.to_string()));
+        }
         return Ok(Expr::Literal(value.clone()));
     }
 
