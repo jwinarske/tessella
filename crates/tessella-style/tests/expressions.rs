@@ -65,7 +65,13 @@ fn zoom_makes_an_expression_camera_only() {
         dependency(r#"["interpolate", ["linear"], ["zoom"], 10, 1, 16, 4]"#),
         Dependency::Zoom
     );
-    assert_eq!(dependency(r#"["*", ["zoom"], 2]"#), Dependency::Zoom);
+    // Written as a curve, because the spec allows zoom only as a curve's input: `["*",
+    // ["zoom"], 2]` is rejected, which §12.1 explains — a camera-only expression is cached as
+    // interpolation endpoints, and zoom buried in arithmetic has no endpoints to cache.
+    assert_eq!(
+        dependency(r#"["step", ["zoom"], 0, 10, 20]"#),
+        Dependency::Zoom
+    );
 }
 
 #[test]
@@ -80,7 +86,7 @@ fn feature_access_makes_an_expression_data_driven() {
 #[test]
 fn zoom_and_feature_together_join_to_both() {
     assert_eq!(
-        dependency(r#"["*", ["zoom"], ["get", "scale"]]"#),
+        dependency(r#"["interpolate", ["linear"], ["zoom"], 0, ["get", "scale"], 1, 2]"#),
         Dependency::ZoomAndFeature
     );
     assert_eq!(
@@ -100,8 +106,11 @@ fn an_untaken_branch_still_counts() {
     let case_expr = r#"["case", false, ["get", "kind"], "fallback"]"#;
     assert_eq!(dependency(case_expr), Dependency::Feature);
 
-    // And the same for the fallback rather than the arms.
-    let fallback = r#"["match", ["zoom"], 1, "a", ["get", "kind"]]"#;
+    // And the same for the fallback rather than the arms. Wrapped in a zoom curve because the
+    // spec allows zoom only there, so a both-dependencies expression has to be written this
+    // way — which is itself the shape §12.1 is built around.
+    let fallback =
+        r#"["step", ["zoom"], ["match", ["get", "n"], 1, "a", ["get", "kind"]], 10, "x"]"#;
     assert_eq!(dependency(fallback), Dependency::ZoomAndFeature);
 }
 
@@ -507,13 +516,11 @@ fn a_let_inherits_its_bindings_dependencies() {
         Dependency::Feature
     );
     assert_eq!(
-        dependency(r#"["let", "a", ["zoom"], ["var", "a"]]"#),
+        dependency(r#"["let", "a", 1, ["step", ["zoom"], ["var", "a"], 10, 2]]"#),
         Dependency::Zoom
     );
     assert_eq!(
-        dependency(
-            r#"["let", "a", ["get", "x"], "b", ["zoom"], ["+", ["var", "a"], ["var", "b"]]]"#
-        ),
+        dependency(r#"["let", "a", ["get", "x"], ["step", ["zoom"], ["var", "a"], 10, 2]]"#),
         Dependency::ZoomAndFeature
     );
     assert_eq!(

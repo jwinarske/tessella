@@ -36,7 +36,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use crate::document::{Layer, LayerKind, PropertyValue};
-use crate::expression::{Dependency, Expression};
+use crate::expression::{self, Dependency, Expression};
 use crate::value::Value;
 
 /// A color, as the stream carries it.
@@ -401,25 +401,25 @@ fn resolve(
 ) -> Result<BTreeMap<&'static str, ResolvedProperty>, PropertyError> {
     let mut resolved = BTreeMap::new();
     for spec in specs {
+        // The expression parser needs what the *spec* says, not just what the style wrote: a
+        // legacy function falls back to the property's default, `identity` checks its value
+        // against the property's type, and a property typed as an array may be a bare constant
+        // rather than a call.
+        let context = expression_spec(spec);
+        let parse = |value: &Value| {
+            Expression::parse_for(value, &context).map_err(|source| PropertyError::Expression {
+                property: spec.name.to_string(),
+                source,
+            })
+        };
+
         let expression = match written.get(spec.name) {
-            Some(PropertyValue::Expression(expression)) => Expression::parse(expression.value())
-                .map_err(|source| PropertyError::Expression {
-                    property: spec.name.to_string(),
-                    source,
-                })?,
+            Some(PropertyValue::Expression(expression)) => parse(expression.value())?,
             Some(PropertyValue::Literal(value)) => {
                 check_literal(spec, value)?;
-                Expression::parse(value).map_err(|source| PropertyError::Expression {
-                    property: spec.name.to_string(),
-                    source,
-                })?
+                parse(value)?
             }
-            None => Expression::parse(&default_value(spec)).map_err(|source| {
-                PropertyError::Expression {
-                    property: spec.name.to_string(),
-                    source,
-                }
-            })?,
+            None => parse(&default_value(spec))?,
         };
 
         let dependency = expression.dependency();
@@ -488,6 +488,29 @@ fn check_literal(spec: &PropertySpec, value: &Value) -> Result<(), PropertyError
     }
 }
 
+/// What the expression parser needs to know about a property.
+///
+/// The two halves come from different places and both matter. The default is what a
+/// pre-expression function falls back to; the type is what `identity` checks against and what
+/// decides whether a bare array is a constant or a malformed call.
+fn expression_spec(spec: &PropertySpec) -> expression::PropertySpec {
+    expression::PropertySpec {
+        default: Some(default_value(spec)),
+        expected: Some(match spec.default {
+            DefaultValue::Color(_) => expression::Type::Color,
+            DefaultValue::Number(_) => expression::Type::Number,
+            DefaultValue::Boolean(_) => expression::Type::Boolean,
+            // An enum is a string with a value list. The list is checked elsewhere; the type is
+            // what the expression parser needs.
+            DefaultValue::Enum(_) => expression::Type::String,
+            DefaultValue::NumberPair(..) => expression::Type::Array,
+            // A property with no default has no type to enforce either. `Value` is the
+            // parser's "unknown", which is the honest answer rather than a guess.
+            DefaultValue::None => expression::Type::Value,
+        }),
+    }
+}
+
 fn default_value(spec: &PropertySpec) -> Value {
     match spec.default {
         // A default color goes back through the same string path a style would take, so the
@@ -516,6 +539,34 @@ fn default_value(spec: &PropertySpec) -> Value {
 ///
 /// [`PropertyError::Color`] when the value is not a color string.
 pub fn as_color(value: &Value) -> Result<Color, PropertyError> {
+    // A colour-typed property now arrives already resolved, as four channels in 0..1: the
+    // expression parser coerces the result, so `"red"` and a legacy function returning `"red"`
+    // both reach here as RGBA. The string form is still accepted, because a colour written
+    // inside an expression that is *not* colour-typed — a `match` output read by something
+    // else — has not been through that coercion.
+    if let Some(channels) = value.as_array()
+        && channels.len() == 4
+    {
+        let mut out = [0.0f32; 4];
+        for (slot, channel) in out.iter_mut().zip(channels) {
+            #[allow(clippy::cast_possible_truncation)]
+            let Some(number) = channel.as_number() else {
+                return Err(PropertyError::Type {
+                    property: String::new(),
+                    expected: "a color",
+                    got: channel.type_name(),
+                });
+            };
+            *slot = number as f32;
+        }
+        return Ok(Color {
+            r: out[0],
+            g: out[1],
+            b: out[2],
+            a: out[3],
+        });
+    }
+
     match value.as_str() {
         Some(text) => Color::parse(text),
         None => Err(PropertyError::Type {

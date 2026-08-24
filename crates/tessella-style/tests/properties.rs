@@ -147,11 +147,23 @@ fn unset_properties_carry_their_defaults() {
     let background = style.layer("bg").expect("bg");
     let paint = resolve_paint(background).expect("resolves");
 
-    // The style sets the color and nothing else.
-    assert_eq!(
-        paint["background-color"].as_constant(),
-        Some(Value::String("#101418".into()))
-    );
+    // The style sets the color and nothing else. It arrives resolved rather than as the
+    // string the style wrote: a colour-typed property is coerced at parse, so `"#101418"` and
+    // a function returning `"#101418"` reach a binder in the same form.
+    let colour = paint["background-color"]
+        .as_constant()
+        .expect("a constant colour");
+    let channels: Vec<f64> = colour
+        .as_array()
+        .expect("four channels")
+        .iter()
+        .filter_map(Value::as_number)
+        .collect();
+    assert_eq!(channels.len(), 4);
+    assert!((channels[0] - 16.0 / 255.0).abs() < 1e-6, "{channels:?}");
+    assert!((channels[1] - 20.0 / 255.0).abs() < 1e-6, "{channels:?}");
+    assert!((channels[2] - 24.0 / 255.0).abs() < 1e-6, "{channels:?}");
+    assert_eq!(channels[3], 1.0);
     assert_eq!(
         paint["background-opacity"].as_constant(),
         Some(Value::Number(1.0))

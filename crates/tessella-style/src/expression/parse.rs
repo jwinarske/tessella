@@ -56,7 +56,7 @@ pub enum ParseError {
 
 /// Parses a value in a scope.
 fn parse_in(value: &Value, scope: &[String]) -> Result<Expr, ParseError> {
-    parse_with_default_in(value, &PropertySpec::default(), scope)
+    parse_rooted(value, &PropertySpec::default(), scope, false)
 }
 
 /// Parses a value, carrying the property spec's default for pre-expression functions.
@@ -75,12 +75,52 @@ fn parse_with_default_in(
     spec: &PropertySpec,
     scope: &[String],
 ) -> Result<Expr, ParseError> {
+    parse_rooted(value, spec, scope, true)
+}
+
+/// Parses, knowing whether this is the whole property value or a nested position.
+fn parse_rooted(
+    value: &Value,
+    spec: &PropertySpec,
+    scope: &[String],
+    at_root: bool,
+) -> Result<Expr, ParseError> {
     // A pre-expression function is an object, which `looks_like_expression` does not recognize,
     // so without this check it falls through to `Expr::Literal` and a style that varies a
     // property by zoom silently gets the raw JSON object as the value. That is worse than an
     // error: it renders as a broken colour rather than as a message.
     if let Some(function) = parse_legacy_function(value, spec)? {
         return Ok(function);
+    }
+
+    // An array in expression position is always a call: the spec has no bare array literal, and
+    // data arrays are written `["literal", […]]`. Treating `[1, 2]` as data was too permissive,
+    // and silently so — a style meaning to call something and misspelling the operator got a
+    // constant array rather than a message.
+    //
+    // The exception is a property the spec *types* as an array, where the whole value may be a
+    // constant: `fill-translate`'s default is `[0, 0]`, which is data and not a call to an
+    // operator named `0`. So the check is skipped exactly where a bare array is a legal value,
+    // which is at the root of an array-typed property and nowhere else.
+    let array_valued_root = at_root && spec.expected == Some(Type::Array);
+    if let Some(items) = value.as_array()
+        && !array_valued_root
+    {
+        let Some(first) = items.first() else {
+            return Err(ParseError::Malformed {
+                operator: "expression".to_string(),
+                detail: "an empty array is not an expression".to_string(),
+            });
+        };
+        if first.as_str().is_none() {
+            return Err(ParseError::Malformed {
+                operator: "expression".to_string(),
+                detail: alloc::format!(
+                    "an expression starts with an operator name, got {}",
+                    first.type_name()
+                ),
+            });
+        }
     }
 
     // A value that is not a call is itself. This is what makes `["match", x, "a", 1, 2]`
@@ -154,6 +194,19 @@ fn parse_with_default_in(
             let arity = if operator == "rgb" { 3 } else { 4 };
             expect_arity(operator, args, arity, arity)?;
             Ok(Expr::Rgba {
+                args: parse_all(args, scope)?,
+            })
+        }
+        "to-string" | "to-boolean" => {
+            // Unlike `to-number` and `to-color`, these always succeed, so a fallback could
+            // never be reached and the spec treats one as a mistake rather than dead weight.
+            expect_arity(operator, args, 1, 1)?;
+            Ok(Expr::Cast {
+                to: if operator == "to-string" {
+                    CastKind::String
+                } else {
+                    CastKind::Boolean
+                },
                 args: parse_all(args, scope)?,
             })
         }
@@ -267,14 +320,6 @@ fn parse_with_default_in(
         "interpolate" => parse_interpolate(operator, args, scope),
         "to-number" => Ok(Expr::Cast {
             to: CastKind::Number,
-            args: parse_all(args, scope)?,
-        }),
-        "to-string" => Ok(Expr::Cast {
-            to: CastKind::String,
-            args: parse_all(args, scope)?,
-        }),
-        "to-boolean" => Ok(Expr::Cast {
-            to: CastKind::Boolean,
             args: parse_all(args, scope)?,
         }),
         "+" | "-" | "*" | "/" | "%" | "^" | "min" | "max" | "abs" | "floor" | "ceil" | "round" => {

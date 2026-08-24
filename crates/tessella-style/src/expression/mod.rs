@@ -205,12 +205,16 @@ impl Type {
         matches!(self, Self::Value | Self::Number | Self::String)
     }
 
-    /// Scalars can be compared for equality; aggregates cannot.
+    /// Scalars can be compared for equality; aggregates and colours cannot.
+    ///
+    /// A colour looks comparable and is not: two colours that render identically may hold
+    /// different channel values, so the spec declines to define equality on them rather than
+    /// pick a tolerance.
     #[must_use]
     pub const fn is_scalar(self) -> bool {
         matches!(
             self,
-            Self::Null | Self::Number | Self::String | Self::Boolean | Self::Color
+            Self::Null | Self::Number | Self::String | Self::Boolean
         )
     }
 
@@ -647,6 +651,9 @@ impl Expression {
             };
         }
 
+        // Checked before the colour wrapper is counted, on the tree the style actually wrote.
+        check_zoom_placement(&root)?;
+
         let dependency = classify(&root);
         let parsed = Self { root, dependency };
 
@@ -788,6 +795,185 @@ impl LegacyFunction {
         self.function_default
             .as_ref()
             .or(self.property_default.as_ref())
+    }
+}
+
+/// Rejects `zoom` outside the one place the spec allows it.
+///
+/// # The rule
+///
+/// A style property may vary with zoom in exactly one way: a single `step` or `interpolate`
+/// whose *input* is `["zoom"]`, sitting at the top of the expression. `let` bodies and
+/// `coalesce` arguments are transparent, so the curve may hide behind those, but nothing else
+/// is — a curve inside another curve's stops, or in a `let` *binding* rather than its body, or
+/// two curves side by side, are all rejected.
+///
+/// # Why the spec is this strict
+///
+/// §12.1 is the reason, arriving from the other side. A camera-only expression is evaluated once
+/// per `(layer, zoom interval)` and cached as interpolation endpoints, so every view at every
+/// fractional zoom costs one mix factor. That only works if the zoom dependence has a single
+/// known shape to precompute. An expression with zoom buried in arbitrary arithmetic has no
+/// endpoints to cache and would have to be re-walked per frame, which is exactly the cost DR-11
+/// exists to remove.
+fn check_zoom_placement(root: &Expr) -> Result<(), ParseError> {
+    let (allowed, total) = zoom_positions(root, true);
+    if total == 0 {
+        return Ok(());
+    }
+    if total > 1 {
+        return Err(ParseError::Malformed {
+            operator: "zoom".into(),
+            detail: alloc::format!("{total} zoom curves; a property may vary with zoom once"),
+        });
+    }
+    if allowed != total {
+        return Err(ParseError::Malformed {
+            operator: "zoom".into(),
+            detail: "zoom may only be the input of a top-level step or interpolate".into(),
+        });
+    }
+    Ok(())
+}
+
+/// Counts `zoom` references, and how many sit where the spec allows.
+///
+/// `at_curve` marks a position reachable from the root through transparent wrappers only.
+fn zoom_positions(expr: &Expr, at_curve: bool) -> (usize, usize) {
+    // A bare `["zoom"]` at a curve position is the property itself varying with zoom, which is
+    // allowed. The suite has no case for it either way, so this stops at what the six cases it
+    // does have establish rather than extrapolating a stricter rule from them.
+    if at_curve && matches!(expr, Expr::Zoom) {
+        return (1, 1);
+    }
+    let sum = |parts: &[(usize, usize)]| parts.iter().fold((0, 0), |(a, b), (c, d)| (a + c, b + d));
+
+    match expr {
+        Expr::Zoom => (0, 1),
+        // The curve's input may be `zoom` when the curve itself is where it is allowed. Its
+        // stops never are, whatever the curve's own position.
+        Expr::Step { input, base, stops } => {
+            let input = if at_curve && matches!(**input, Expr::Zoom) {
+                (1, 1)
+            } else {
+                zoom_positions(input, false)
+            };
+            let mut parts = alloc::vec![input, zoom_positions(base, false)];
+            parts.extend(stops.iter().map(|(_, out)| zoom_positions(out, false)));
+            sum(&parts)
+        }
+        Expr::Interpolate { input, stops, .. } => {
+            let input = if at_curve && matches!(**input, Expr::Zoom) {
+                (1, 1)
+            } else {
+                zoom_positions(input, false)
+            };
+            let mut parts = alloc::vec![input];
+            parts.extend(stops.iter().map(|(_, out)| zoom_positions(out, false)));
+            sum(&parts)
+        }
+        // Transparent: the curve may hide behind either.
+        Expr::Coalesce(args) => sum(&args
+            .iter()
+            .map(|arg| zoom_positions(arg, at_curve))
+            .collect::<Vec<_>>()),
+        Expr::Let { bindings, body } => {
+            // The body only. A binding is an ordinary expression position, which is why
+            // `["let", "x", <curve>, …]` is rejected while `["let", "x", …, <curve>]` is not.
+            let mut parts = alloc::vec![zoom_positions(body, at_curve)];
+            parts.extend(
+                bindings
+                    .iter()
+                    .map(|(_, value)| zoom_positions(value, false)),
+            );
+            sum(&parts)
+        }
+        other => sum(&children(other)
+            .into_iter()
+            .map(|child| zoom_positions(child, false))
+            .collect::<Vec<_>>()),
+    }
+}
+
+/// Every direct child of a node, for walks that treat all of them alike.
+fn children(expr: &Expr) -> Vec<&Expr> {
+    match expr {
+        Expr::Literal(_)
+        | Expr::Zoom
+        | Expr::GeometryType
+        | Expr::Id
+        | Expr::Properties
+        | Expr::Var(_)
+        | Expr::LegacyFunction(_) => Vec::new(),
+        Expr::Not(inner) | Expr::Length(inner) => alloc::vec![&**inner],
+        Expr::Get { key, object } | Expr::Has { key, object } => {
+            let mut out = alloc::vec![&**key];
+            out.extend(object.as_deref());
+            out
+        }
+        Expr::Compare { lhs, rhs, .. } => alloc::vec![&**lhs, &**rhs],
+        Expr::All(args)
+        | Expr::Any(args)
+        | Expr::Coalesce(args)
+        | Expr::Arithmetic { args, .. }
+        | Expr::Cast { args, .. }
+        | Expr::Assert { args, .. }
+        | Expr::Rgba { args } => args.iter().collect(),
+        Expr::AssertArray {
+            value, fallback, ..
+        } => {
+            let mut out = alloc::vec![&**value];
+            out.extend(fallback.as_deref());
+            out
+        }
+        Expr::In { needle, haystack } => alloc::vec![&**needle, &**haystack],
+        Expr::IndexOf {
+            needle,
+            haystack,
+            from,
+        } => {
+            let mut out = alloc::vec![&**needle, &**haystack];
+            out.extend(from.as_deref());
+            out
+        }
+        Expr::Slice { value, start, end } => {
+            let mut out = alloc::vec![&**value, &**start];
+            out.extend(end.as_deref());
+            out
+        }
+        Expr::Match {
+            input,
+            arms,
+            fallback,
+        } => {
+            let mut out = alloc::vec![&**input, &**fallback];
+            out.extend(arms.iter().map(|(_, output)| output));
+            out
+        }
+        Expr::Case { branches, fallback } => {
+            let mut out = alloc::vec![&**fallback];
+            for (test, output) in branches {
+                out.push(test);
+                out.push(output);
+            }
+            out
+        }
+        Expr::Step { input, base, stops } => {
+            let mut out = alloc::vec![&**input, &**base];
+            out.extend(stops.iter().map(|(_, output)| output));
+            out
+        }
+        Expr::Interpolate { input, stops, .. } => {
+            let mut out = alloc::vec![&**input];
+            out.extend(stops.iter().map(|(_, output)| output));
+            out
+        }
+        Expr::Let { bindings, body } => {
+            let mut out = alloc::vec![&**body];
+            out.extend(bindings.iter().map(|(_, value)| value));
+            out
+        }
+        Expr::FilterCompare { .. } | Expr::FilterHas { .. } | Expr::FilterIn { .. } => Vec::new(),
     }
 }
 
