@@ -39,6 +39,7 @@
 //! whether a regression is its own.
 
 use alloc::string::{String, ToString};
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -54,6 +55,7 @@ use tessella_style::{LayerKind, Source, Style};
 use tessella_tile::cover::{self, ViewTransform};
 
 use crate::cache::TileCache;
+use crate::pool::{Pool, Priority};
 use crate::tile::{LayerBucket, TileId, build_mvt_tile, build_tile};
 
 /// When each stage of a cold start finished, measured from the moment it began.
@@ -127,6 +129,16 @@ pub enum BootError {
         name: String,
         /// What went wrong.
         message: String,
+    },
+    /// A tile's work panicked.
+    ///
+    /// A bug rather than a tile that failed to load, and separate from the rest so it cannot be
+    /// mistaken for one: a start that quietly returned fewer tiles than it covered would show
+    /// up as a map with holes and no error anywhere.
+    #[error("{jobs} tile job(s) panicked")]
+    Panicked {
+        /// How many.
+        jobs: usize,
     },
     /// A tile could not be fetched.
     #[error("fetching `{url}`: {message}")]
@@ -276,18 +288,33 @@ impl Job {
 /// A struct rather than six arguments: `files` and `cache` are process-scoped and the rest are
 /// per-start, and a positional list of that shape is one whose call sites stop being readable
 /// after the third one.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct ColdStart<'a, S> {
     /// The style document.
     pub style: &'a str,
     /// The camera to cover.
     pub view: &'a ViewTransform,
     /// Where bytes come from. Shared between views, so one tile is fetched once.
-    pub files: &'a Coalescing<S>,
+    ///
+    /// Held by [`Arc`] rather than borrowed because the tile jobs outlive this call's stack
+    /// frame as far as the type system can see — they go to a pool that was running before this
+    /// start began. §5.5 already lists file sources as process-owned, so this is the ownership
+    /// the table describes rather than a concession to the pool.
+    pub files: Arc<Coalescing<S>>,
     /// Where built tiles live. Shared between views, so one tile is built once.
-    pub cache: &'a TileCache<BootError>,
-    /// How many threads share the tile work.
-    pub workers: Workers,
+    ///
+    /// [`Arc`] for the reason [`Self::files`] gives.
+    pub cache: Arc<TileCache<BootError>>,
+    /// Which threads run the tile work.
+    ///
+    /// Normally [`Pool::shared`]. A caller wanting the serial baseline a trace is compared
+    /// against passes a `Pool::new(Workers::serial())` of its own.
+    pub pool: &'a Pool,
+    /// Which class the tile work competes in.
+    ///
+    /// [`Priority::Foreground`] for a view someone is looking at, which is what a cold start
+    /// normally is.
+    pub priority: Priority,
     /// Which revision of the style this is.
     ///
     /// Part of the cache key: a bucket built against one style is not valid against another,
@@ -297,7 +324,7 @@ pub struct ColdStart<'a, S> {
     pub style_rev: u64,
 }
 
-impl<S: FileSource> ColdStart<'_, S> {
+impl<S: FileSource + 'static> ColdStart<'_, S> {
     /// Runs the start and reports how long each stage took.
     ///
     /// # Errors
@@ -321,13 +348,14 @@ impl<S: FileSource> ColdStart<'_, S> {
 /// # Errors
 ///
 /// [`BootError`] when the style, a source, or any tile of the cover fails.
-pub fn cold_start<S: FileSource>(config: &ColdStart<'_, S>) -> Result<Boot, BootError> {
+pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<Boot, BootError> {
     let &ColdStart {
         style: style_text,
         view,
-        files,
-        cache,
-        workers,
+        ref files,
+        ref cache,
+        pool,
+        priority,
         style_rev,
     } = config;
     let started = Instant::now();
@@ -448,128 +476,152 @@ pub fn cold_start<S: FileSource>(config: &ColdStart<'_, S>) -> Result<Boot, Boot
     // scheduled — a trace that reordered its tiles would make two runs incomparable.
     // `Arc`, because the cache owns the buckets and hands out shares of them: a second view
     // over the same cover gets the same allocation rather than a copy of it.
-    let done: Mutex<Vec<Option<alloc::sync::Arc<Vec<LayerBucket>>>>> =
-        Mutex::new((0..jobs.len()).map(|_| None).collect());
-    let next = AtomicUsize::new(0);
-    let bytes = AtomicUsize::new(0);
-    let first_fetch: Mutex<Option<Duration>> = Mutex::new(None);
-    let first_bucket: Mutex<Option<Duration>> = Mutex::new(None);
-    let failure: Mutex<Option<BootError>> = Mutex::new(None);
+    // Results are placed by index so the output order is the cover's however the work is
+    // scheduled — a trace that reordered its tiles would make two runs incomparable.
+    // `Arc`, because the cache owns the buckets and hands out shares of them: a second view
+    // over the same cover gets the same allocation rather than a copy of it.
+    let done: Arc<Mutex<Slots>> = Arc::new(Mutex::new((0..jobs.len()).map(|_| None).collect()));
+    let bytes = Arc::new(AtomicUsize::new(0));
+    let first_fetch: Arc<Mutex<Option<Duration>>> = Arc::new(Mutex::new(None));
+    let first_bucket: Arc<Mutex<Option<Duration>>> = Arc::new(Mutex::new(None));
+    let failure: Arc<Mutex<Option<BootError>>> = Arc::new(Mutex::new(None));
+    let style = Arc::new(style);
 
-    let record = |slot: &Mutex<Option<Duration>>| {
-        let mut held = slot
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if held.is_none() {
-            *held = Some(started.elapsed());
-        }
-    };
+    // What the tail needs from each job, kept back before the jobs themselves are moved into
+    // their closures. A `Job` owns its URL and its features, so cloning one per submission
+    // would copy a whole GeoJSON document per tile.
+    let meta: Vec<(TileId, String)> = jobs
+        .iter()
+        .map(|job| (job.tile, job.source.clone()))
+        .collect();
 
-    std::thread::scope(|scope| {
-        for _ in 0..workers.for_jobs(jobs.len()) {
-            scope.spawn(|| {
-                loop {
-                    let index = next.fetch_add(1, Ordering::Relaxed);
-                    let Some(job) = jobs.get(index) else {
-                        return;
-                    };
-                    // Stop taking work once something has failed; the first error is reported
-                    // and the rest would be noise.
-                    if failure
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .is_some()
-                    {
-                        return;
-                    }
+    let batch = pool.batch(priority);
+    for (index, job) in jobs.into_iter().enumerate() {
+        let style = Arc::clone(&style);
+        let files = Arc::clone(files);
+        let cache = Arc::clone(cache);
+        let done = Arc::clone(&done);
+        let bytes = Arc::clone(&bytes);
+        let first_fetch = Arc::clone(&first_fetch);
+        let first_bucket = Arc::clone(&first_bucket);
+        let failure = Arc::clone(&failure);
 
-                    // The cache is outermost: a tile whose buckets are already built costs
-                    // no fetch and no decode. Fetching first and consulting the cache after
-                    // would make a warm view pay the network for bytes it is about to throw
-                    // away — which is what a second view over the same cover mostly is.
-                    let built = cache.get_or_build(
-                        &job.key,
-                        || match &job.work {
-                            Work::Vector { url } => {
-                                let response =
-                                    files.fetch(url).map_err(|error| BootError::Fetch {
-                                        url: url.clone(),
-                                        message: error.to_string(),
-                                    })?;
-                                record(&first_fetch);
-                                bytes.fetch_add(response.body.len(), Ordering::Relaxed);
-
-                                // An absent tile is ordinary, not a failure: a source's
-                                // coverage is not a rectangle and the cover asks for the whole
-                                // viewport. It is cached as an empty tile so the next view does
-                                // not ask again.
-                                if response.is_absent() {
-                                    return Ok(Vec::new());
-                                }
-
-                                let decoded =
-                                    mvt::Tile::decode(&response.body).map_err(|error| {
-                                        BootError::Decode {
-                                            url: url.clone(),
-                                            message: error.to_string(),
-                                        }
-                                    })?;
-                                build_mvt_tile(&style, &job.source, job.tile, &decoded).map_err(
-                                    |error| BootError::Build {
-                                        url: url.clone(),
-                                        message: error.to_string(),
-                                    },
-                                )
-                            }
-                            // Nothing to fetch and nothing to decode: the document arrived
-                            // during source resolution, and this cuts a tile out of it.
-                            Work::Geojson { features } => build_tile(
-                                &style,
-                                &job.source,
-                                job.tile,
-                                features,
-                                TilingOptions::default(),
-                            )
-                            .map_err(|error| BootError::Build {
-                                url: job.what(),
-                                message: error.to_string(),
-                            }),
-                        },
-                        || BootError::Abandoned { url: job.what() },
-                    );
-                    let buckets = match built {
-                        Ok(built) => built.tile,
-                        Err(error) => {
-                            fail(&failure, error);
-                            return;
-                        }
-                    };
-                    record(&first_bucket);
-                    done.lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)[index] = Some(buckets);
+        batch.submit(move || {
+            let record = |slot: &Mutex<Option<Duration>>| {
+                let mut held = slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if held.is_none() {
+                    *held = Some(started.elapsed());
                 }
-            });
-        }
-    });
+            };
+
+            // Stop doing work once something has failed; the first error is reported and the
+            // rest would be noise. The jobs are all queued now rather than taken off a shared
+            // index, so this is a check per job rather than a way to stop taking them — the
+            // saving is the fetch and the decode, which is where the cost is.
+            if failure
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_some()
+            {
+                return;
+            }
+
+            // The cache is outermost: a tile whose buckets are already built costs
+            // no fetch and no decode. Fetching first and consulting the cache after
+            // would make a warm view pay the network for bytes it is about to throw
+            // away — which is what a second view over the same cover mostly is.
+            let built = cache.get_or_build(
+                &job.key,
+                || match &job.work {
+                    Work::Vector { url } => {
+                        let response = files.fetch(url).map_err(|error| BootError::Fetch {
+                            url: url.clone(),
+                            message: error.to_string(),
+                        })?;
+                        record(&first_fetch);
+                        bytes.fetch_add(response.body.len(), Ordering::Relaxed);
+
+                        // An absent tile is ordinary, not a failure: a source's
+                        // coverage is not a rectangle and the cover asks for the whole
+                        // viewport. It is cached as an empty tile so the next view does
+                        // not ask again.
+                        if response.is_absent() {
+                            return Ok(Vec::new());
+                        }
+
+                        let decoded = mvt::Tile::decode(&response.body).map_err(|error| {
+                            BootError::Decode {
+                                url: url.clone(),
+                                message: error.to_string(),
+                            }
+                        })?;
+                        build_mvt_tile(&style, &job.source, job.tile, &decoded).map_err(|error| {
+                            BootError::Build {
+                                url: url.clone(),
+                                message: error.to_string(),
+                            }
+                        })
+                    }
+                    // Nothing to fetch and nothing to decode: the document arrived
+                    // during source resolution, and this cuts a tile out of it.
+                    Work::Geojson { features } => build_tile(
+                        &style,
+                        &job.source,
+                        job.tile,
+                        features,
+                        TilingOptions::default(),
+                    )
+                    .map_err(|error| BootError::Build {
+                        url: job.what(),
+                        message: error.to_string(),
+                    }),
+                },
+                || BootError::Abandoned { url: job.what() },
+            );
+            let buckets = match built {
+                Ok(built) => built.tile,
+                Err(error) => {
+                    fail(&failure, error);
+                    return;
+                }
+            };
+            record(&first_bucket);
+            done.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)[index] = Some(buckets);
+        });
+    }
+
+    // A panicking decode is a bug, not a tile that failed to load, and it must not be reported
+    // as a start that quietly built fewer tiles than it covered.
+    if let Err(panicked) = batch.wait() {
+        return Err(BootError::Panicked {
+            jobs: panicked.jobs,
+        });
+    }
 
     if let Some(error) = failure
-        .into_inner()
+        .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
     {
         return Err(error);
     }
 
     let complete = started.elapsed();
-    let built = done
-        .into_inner()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let tiles = jobs
+    let built = core::mem::take(
+        &mut *done
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
+    let tiles = meta
         .into_iter()
         .zip(built)
-        .filter_map(|(job, buckets)| {
+        .filter_map(|((tile, source), buckets)| {
             buckets.map(|buckets| BuiltTile {
-                tile: job.tile,
-                source: job.source,
+                tile,
+                source,
                 buckets,
             })
         })
@@ -596,19 +648,25 @@ pub fn cold_start<S: FileSource>(config: &ColdStart<'_, S>) -> Result<Boot, Boot
             style_parsed,
             sources_resolved,
             cover_computed,
-            first_fetch: first_fetch
-                .into_inner()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .unwrap_or(cover_computed),
-            first_bucket: first_bucket
-                .into_inner()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .unwrap_or(cover_computed),
+            first_fetch: (*first_fetch
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner))
+            .unwrap_or(cover_computed),
+            first_bucket: (*first_bucket
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner))
+            .unwrap_or(cover_computed),
             complete,
         },
         bytes: bytes.load(Ordering::Relaxed),
     })
 }
+
+/// Built buckets by cover index, filled in as the jobs land.
+///
+/// The inner `Arc` is the cache's: it owns the buckets and hands out shares of them, so a second
+/// view over the same cover gets the same allocation rather than a copy.
+type Slots = Vec<Option<Arc<Vec<LayerBucket>>>>;
 
 /// Records the first failure, leaving any later one alone.
 fn fail(slot: &Mutex<Option<BootError>>, error: BootError) {

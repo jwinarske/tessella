@@ -103,7 +103,19 @@ struct Queues {
 impl Queues {
     /// The highest-priority job available, if any.
     fn take(&mut self) -> Option<Task> {
-        self.classes.iter_mut().find_map(VecDeque::pop_front)
+        self.take_above(Priority::Prefetch)
+    }
+
+    /// The highest-priority job available, ignoring anything below `floor`.
+    ///
+    /// For [`Batch::wait`], which helps rather than idles. A waiter that helped with *anything*
+    /// would let a foreground start, having run out of its own work, pick up an hours-long
+    /// region download and block first-tile behind a network fetch it never asked for. The
+    /// floor makes helping strictly a way of finishing sooner.
+    fn take_above(&mut self, floor: Priority) -> Option<Task> {
+        self.classes[..=floor.index()]
+            .iter_mut()
+            .find_map(VecDeque::pop_front)
     }
 }
 
@@ -184,12 +196,12 @@ impl Inner {
         panicked
     }
 
-    /// Takes one job if there is one, without blocking.
-    fn try_take(&self) -> Option<Task> {
+    /// Takes one job at or above `floor` if there is one, without blocking.
+    fn try_take(&self, floor: Priority) -> Option<Task> {
         self.queues
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
+            .take_above(floor)
     }
 }
 
@@ -406,9 +418,17 @@ impl Batch<'_> {
     ///
     /// The waiting thread runs queued work while it waits rather than idling. That is what
     /// stops a full pool from deadlocking when a job waits on a batch of its own, and it means
-    /// the submitting thread is a spare pair of hands instead of a blocked one. The work it
-    /// picks up is whatever is queued, not necessarily this batch's — the pool's work is the
-    /// pool's work, and clearing the queue in front of this batch still shortens its wait.
+    /// the submitting thread is a spare pair of hands instead of a blocked one.
+    ///
+    /// The work it picks up is not necessarily this batch's — the pool's work is the pool's
+    /// work, and clearing the queue in front of this batch still shortens its wait. It is never
+    /// work *below* this batch's class, though: a foreground start that ran out of its own jobs
+    /// would otherwise help by starting an hours-long region download, and block first-tile
+    /// behind a fetch it never asked for.
+    ///
+    /// The floor is *this batch's* class, not the calling thread's, so it always admits the
+    /// batch's own jobs. That is what keeps the rule from inverting into a deadlock when a
+    /// foreground job waits on a background batch of its own.
     ///
     /// # Errors
     ///
@@ -421,7 +441,7 @@ impl Batch<'_> {
                 return self.outcome();
             }
             // Help, rather than sleep.
-            if let Some(task) = self.pool.inner.try_take() {
+            if let Some(task) = self.pool.inner.try_take(self.priority) {
                 let _ = self.pool.inner.run(task);
                 continue;
             }

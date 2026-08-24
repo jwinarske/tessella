@@ -289,3 +289,92 @@ fn dropping_a_pool_stops_its_threads() {
     }
     assert_eq!(ran.load(Ordering::Acquire), 20);
 }
+
+/// A waiter helps with its own class and above, never below it.
+///
+/// The hazard this closes: a foreground start that has run out of its own jobs would otherwise
+/// help by picking up an hours-long region download, and block first-tile behind a network
+/// fetch nobody asked it to make.
+#[test]
+fn a_waiter_does_not_help_with_lower_priority_work() {
+    let pool = Pool::new(Workers::new(1));
+
+    // Occupy the only worker, so nothing below runs on a worker at all.
+    let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let gate = Arc::new(Barrier::new(2));
+    let held = Arc::clone(&gate);
+    let announce = Arc::clone(&started);
+    pool.submit(Priority::Foreground, move || {
+        announce.store(true, Ordering::Release);
+        held.wait();
+    });
+    until("the worker to pick the job up", || {
+        started.load(Ordering::Acquire)
+    });
+
+    // A background job nobody is waiting on. If a foreground waiter helped with it, it would
+    // run on the waiting thread below.
+    let stolen = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = Arc::clone(&stolen);
+    pool.submit(Priority::Background, move || {
+        flag.store(true, Ordering::Release);
+    });
+
+    // A foreground batch, which the waiter may and must run itself.
+    let mine = Arc::new(AtomicUsize::new(0));
+    let batch = pool.batch(Priority::Foreground);
+    let counted = Arc::clone(&mine);
+    batch.submit(move || {
+        counted.fetch_add(1, Ordering::AcqRel);
+    });
+    batch.wait().expect("no panics");
+
+    assert_eq!(mine.load(Ordering::Acquire), 1, "it ran its own work");
+    assert!(
+        !stolen.load(Ordering::Acquire),
+        "and left the background job alone"
+    );
+
+    // Released, the worker gets to it in its own time.
+    gate.wait();
+    until("the background job to run", || {
+        stolen.load(Ordering::Acquire)
+    });
+}
+
+/// A background waiter still helps with foreground work.
+///
+/// Helping upward is not a hazard: that work outranks the waiter's own, so running it is what
+/// the priority order asks for anyway.
+#[test]
+fn a_waiter_helps_with_higher_priority_work() {
+    let pool = Pool::new(Workers::new(1));
+
+    let started = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let gate = Arc::new(Barrier::new(2));
+    let held = Arc::clone(&gate);
+    let announce = Arc::clone(&started);
+    pool.submit(Priority::Foreground, move || {
+        announce.store(true, Ordering::Release);
+        held.wait();
+    });
+    until("the worker to pick the job up", || {
+        started.load(Ordering::Acquire)
+    });
+
+    let urgent = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = Arc::clone(&urgent);
+    pool.submit(Priority::Foreground, move || {
+        flag.store(true, Ordering::Release);
+    });
+
+    let batch = pool.batch(Priority::Prefetch);
+    batch.submit(|| {});
+    batch.wait().expect("no panics");
+
+    assert!(
+        urgent.load(Ordering::Acquire),
+        "the prefetch waiter ran the foreground job"
+    );
+    gate.wait();
+}

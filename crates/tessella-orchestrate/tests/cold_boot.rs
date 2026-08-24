@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use tessella_orchestrate::boot::{Boot, BootError, ColdStart, Workers};
 use tessella_orchestrate::cache::TileCache;
+use tessella_orchestrate::pool::{Pool, Priority};
 use tessella_storage::http::HttpFileSource;
 use tessella_storage::source::{Coalescing, FetchError, FileSource, Response};
 use tessella_tile::cover::ViewTransform;
@@ -67,19 +68,23 @@ fn view(zoom: f64) -> ViewTransform {
     })
 }
 
-fn boot<S: FileSource>(
+fn boot<S: FileSource + 'static>(
     style: &str,
     view: &ViewTransform,
-    files: &Coalescing<S>,
-    cache: &TileCache<BootError>,
+    files: &Arc<Coalescing<S>>,
+    cache: &Arc<TileCache<BootError>>,
     workers: Workers,
 ) -> Result<Boot, BootError> {
+    // A pool per call, not `Pool::shared`: the serial baseline a trace is compared against is
+    // exactly "this start with one worker", and the process pool cannot be resized to give it.
+    let pool = Pool::new(workers);
     ColdStart {
         style,
         view,
-        files,
-        cache,
-        workers,
+        files: Arc::clone(files),
+        cache: Arc::clone(cache),
+        pool: &pool,
+        priority: Priority::Foreground,
         style_rev: 1,
     }
     .run()
@@ -89,8 +94,8 @@ fn boot<S: FileSource>(
 #[test]
 fn a_cold_start_reaches_the_first_bucket() {
     let server = server();
-    let files = Coalescing::new(HttpFileSource::default());
-    let cache: TileCache<BootError> = TileCache::new(64);
+    let files = Arc::new(Coalescing::new(HttpFileSource::default()));
+    let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
     let started = boot(
         &style(&server.origin()),
         &view(4.0),
@@ -120,11 +125,11 @@ fn a_cold_start_reaches_the_first_bucket() {
 #[test]
 fn the_first_bucket_precedes_completion() {
     let server = server();
-    let files = Coalescing::new(Slow {
+    let files = Arc::new(Coalescing::new(Slow {
         inner: HttpFileSource::default(),
         delay: Duration::from_millis(20),
-    });
-    let cache: TileCache<BootError> = TileCache::new(64);
+    }));
+    let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
     let started = boot(
         &style(&server.origin()),
         &view(4.0),
@@ -154,13 +159,13 @@ fn the_cover_is_fetched_in_parallel() {
     let text = style(&server.origin());
 
     let run = |workers: Workers| {
-        let files = Coalescing::new(Slow {
+        let files = Arc::new(Coalescing::new(Slow {
             inner: HttpFileSource::default(),
             delay,
-        });
+        }));
         // A fresh cache each time: reusing one would make the second run a cache hit and
         // measure nothing.
-        let cache: TileCache<BootError> = TileCache::new(64);
+        let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
         boot(&text, &view(4.0), &files, &cache, workers)
             .expect("boots")
             .trace
@@ -193,8 +198,8 @@ fn an_unused_source_costs_no_round_trip() {
         origin = server.origin()
     );
 
-    let files = Coalescing::new(HttpFileSource::default());
-    let cache: TileCache<BootError> = TileCache::new(64);
+    let files = Arc::new(Coalescing::new(HttpFileSource::default()));
+    let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
     // If the unused source were resolved, its manifest would 404 and this would fail.
     let started = boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
     assert!(started.vertices() > 0);
@@ -215,8 +220,8 @@ fn a_dead_origin_fails_with_the_url() {
         let server = server();
         server.origin()
     };
-    let files = Coalescing::new(HttpFileSource::default());
-    let cache: TileCache<BootError> = TileCache::new(64);
+    let files = Arc::new(Coalescing::new(HttpFileSource::default()));
+    let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
     match boot(
         &style(&origin),
         &view(4.0),
@@ -249,8 +254,8 @@ fn the_worker_count_has_a_policy() {
 #[test]
 fn a_pool_larger_than_the_cover_is_harmless() {
     let server = server();
-    let files = Coalescing::new(HttpFileSource::default());
-    let cache: TileCache<BootError> = TileCache::new(64);
+    let files = Arc::new(Coalescing::new(HttpFileSource::default()));
+    let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
     let started = boot(
         &style(&server.origin()),
         &view(0.0),
@@ -338,8 +343,8 @@ fn four_views_over_one_cover_build_each_tile_once() {
 fn a_later_view_finds_the_cache_warm() {
     let server = server();
     let text = style(&server.origin());
-    let files = Coalescing::new(HttpFileSource::default());
-    let cache: TileCache<BootError> = TileCache::new(64);
+    let files = Arc::new(Coalescing::new(HttpFileSource::default()));
+    let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
 
     let first = boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
     let builds = cache.builds();
@@ -387,8 +392,8 @@ fn a_two_source_style_fetches_both() {
         l = local.origin()
     );
 
-    let files = Coalescing::new(HttpFileSource::default());
-    let cache: TileCache<BootError> = TileCache::new(64);
+    let files = Arc::new(Coalescing::new(HttpFileSource::default()));
+    let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
     let started = boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
 
     // Both origins were asked, and for the same number of tiles.
@@ -467,8 +472,8 @@ fn a_style_mixing_source_kinds_builds_both() {
         d = docs.origin()
     );
 
-    let files = Coalescing::new(HttpFileSource::default());
-    let cache: TileCache<BootError> = TileCache::new(64);
+    let files = Arc::new(Coalescing::new(HttpFileSource::default()));
+    let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
     let started = boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
 
     // The document was asked for exactly once, however many tiles were cut from it.
@@ -532,8 +537,8 @@ fn a_geojson_only_style_fetches_once() {
         d = docs.origin()
     );
 
-    let files = Coalescing::new(HttpFileSource::default());
-    let cache: TileCache<BootError> = TileCache::new(64);
+    let files = Arc::new(Coalescing::new(HttpFileSource::default()));
+    let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
     let started = boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
 
     assert_eq!(docs.requests(), 1, "the document, once");
@@ -568,11 +573,11 @@ fn a_second_process_starts_warm() {
     let cold_tiles;
     let cold_vertices;
     {
-        let files = Coalescing::new(CachingFileSource::new(
+        let files = Arc::new(Coalescing::new(CachingFileSource::new(
             HttpFileSource::default(),
             SqliteCache::open(&path).expect("opens"),
-        ));
-        let cache: TileCache<BootError> = TileCache::new(64);
+        )));
+        let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
         let started = boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
         cold_tiles = started.tiles.len();
         cold_vertices = started.vertices();
@@ -587,11 +592,11 @@ fn a_second_process_starts_warm() {
     let requests_after_cold = server.requests();
 
     // Second start: a new process would have a new bucket cache and the same file on disk.
-    let files = Coalescing::new(CachingFileSource::new(
+    let files = Arc::new(Coalescing::new(CachingFileSource::new(
         HttpFileSource::default(),
         SqliteCache::open(&path).expect("reopens"),
-    ));
-    let cache: TileCache<BootError> = TileCache::new(64);
+    )));
+    let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
     let started = boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
 
     assert_eq!(started.tiles.len(), cold_tiles, "the same map");
@@ -642,11 +647,11 @@ fn a_warm_start_does_not_refetch_the_manifest() {
     let path = directory.path().join("cache.sqlite");
 
     for round in 0..2 {
-        let files = Coalescing::new(CachingFileSource::new(
+        let files = Arc::new(Coalescing::new(CachingFileSource::new(
             HttpFileSource::default(),
             SqliteCache::open(&path).expect("opens"),
-        ));
-        let cache: TileCache<BootError> = TileCache::new(64);
+        )));
+        let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
         boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
         assert_eq!(
             manifests.requests(),
@@ -654,4 +659,47 @@ fn a_warm_start_does_not_refetch_the_manifest() {
             "the manifest was fetched once, on round {round}"
         );
     }
+}
+
+/// A start runs on the process pool, which is the shape production uses (§5.5).
+///
+/// Every other test here builds a pool of its own so it can pin the worker count. This one
+/// exercises the path that actually ships: no threads spawned per view, work queued at
+/// foreground onto threads that were already running.
+#[test]
+fn a_start_runs_on_the_process_pool() {
+    let server = server();
+    let files = Arc::new(Coalescing::new(HttpFileSource::default()));
+    let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
+    let text = style(&server.origin());
+
+    let started = ColdStart {
+        style: &text,
+        view: &view(4.0),
+        files: Arc::clone(&files),
+        cache: Arc::clone(&cache),
+        pool: Pool::shared(),
+        priority: Priority::Foreground,
+        style_rev: 1,
+    }
+    .run()
+    .expect("boots");
+
+    assert!(!started.tiles.is_empty());
+    assert!(started.tiles.iter().any(|tile| !tile.buckets.is_empty()));
+
+    // A second view over the same cover joins the shared pool rather than starting one, and
+    // finds the buckets already built.
+    let again = ColdStart {
+        style: &text,
+        view: &view(4.0),
+        files,
+        cache,
+        pool: Pool::shared(),
+        priority: Priority::Foreground,
+        style_rev: 1,
+    }
+    .run()
+    .expect("boots again");
+    assert_eq!(again.bytes, 0, "no network the second time");
 }

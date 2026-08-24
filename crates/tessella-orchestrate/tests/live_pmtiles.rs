@@ -188,8 +188,11 @@ fn the_berlin_archive_overscales_past_its_maximum() {
 #[test]
 #[ignore = "needs a tile server; see the module docs"]
 fn cold_boot_to_first_tile() {
+    use std::sync::Arc;
+
     use tessella_orchestrate::boot::{BootError, ColdStart, Workers};
     use tessella_orchestrate::cache::TileCache;
+    use tessella_orchestrate::pool::{Pool, Priority};
 
     let origin = origin();
     for (name, manifest, lon, lat, zoom) in [
@@ -214,16 +217,19 @@ fn cold_boot_to_first_tile() {
         );
 
         for workers in [Workers::serial(), Workers::default()] {
-            let files = Coalescing::new(HttpFileSource::default());
+            let files = Arc::new(Coalescing::new(HttpFileSource::default()));
             // A fresh cache per run: a shared one would make the second a cache hit and report
             // a startup time that no cold start ever sees.
-            let cache: TileCache<BootError> = TileCache::new(256);
+            let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(256));
+            // A pool per run, since the serial baseline is exactly this start with one worker.
+            let pool = Pool::new(workers);
             let boot = ColdStart {
                 style: &text,
                 view: &view(lon, lat, zoom),
-                files: &files,
-                cache: &cache,
-                workers,
+                files: Arc::clone(&files),
+                cache,
+                pool: &pool,
+                priority: Priority::Foreground,
                 style_rev: 1,
             }
             .run()
@@ -258,8 +264,11 @@ fn cold_boot_to_first_tile() {
 #[test]
 #[ignore = "needs a tile server; see the module docs"]
 fn cold_versus_warm_start() {
+    use std::sync::Arc;
+
     use tessella_orchestrate::boot::{ColdStart, Workers};
     use tessella_orchestrate::cache::TileCache;
+    use tessella_orchestrate::pool::{Pool, Priority};
     use tessella_storage::cache::{CachingFileSource, SqliteCache};
 
     let origin = origin();
@@ -279,18 +288,21 @@ fn cold_versus_warm_start() {
     let path = directory.path().join("cache.sqlite");
 
     for round in ["cold", "warm"] {
-        let files = Coalescing::new(CachingFileSource::new(
+        let files = Arc::new(Coalescing::new(CachingFileSource::new(
             HttpFileSource::default(),
             SqliteCache::open(&path).expect("opens"),
-        ));
+        )));
         // Fresh each round: a warm start is a restart, not a repeat.
-        let cache: TileCache<tessella_orchestrate::boot::BootError> = TileCache::new(256);
+        let cache: Arc<TileCache<tessella_orchestrate::boot::BootError>> =
+            Arc::new(TileCache::new(256));
+        let pool = Pool::new(Workers::default());
         let boot = ColdStart {
             style: &text,
             view: &view(0.0, 20.0, 3.0),
-            files: &files,
-            cache: &cache,
-            workers: Workers::default(),
+            files: Arc::clone(&files),
+            cache,
+            pool: &pool,
+            priority: Priority::Foreground,
             style_rev: 1,
         }
         .run()
