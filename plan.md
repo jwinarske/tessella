@@ -497,7 +497,8 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   lands behind an off-by-default feature, since `rusqlite` bundles C the cross lane has no
   toolchain for, and composes into the cold start: against a Protomaps extract a warm start
   reaches first geometry in 2.0 ms against 6.6 ms cold, with zero round trips.
-  Remaining: cache eviction on anything but an explicit call, TLS and reading `.pmtiles`
+  The cache is bounded by bytes and evicts least-recently-used on every write.
+  Remaining: TLS and reading `.pmtiles`
   archives directly (both held for the cross toolchains, §16), cross-faded (pattern) binders,
   DR-11 evaluator, §12.5 startup path.
   Exit: probe parity on a *real* style sans symbols — **geometry half met**: nine tiles of a

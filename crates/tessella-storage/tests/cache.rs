@@ -258,30 +258,162 @@ fn a_file_backed_cache_persists() {
     );
 }
 
-/// Eviction drops the least recently used first.
+/// Eviction drops the least recently used first, and runs without being asked.
 #[test]
 fn eviction_is_least_recently_used() {
-    let cache = SqliteCache::in_memory().expect("opens");
-    let response = Response {
+    // Room for three bodies of ten bytes, so the fourth write must drop something.
+    let cache = SqliteCache::in_memory_with_capacity(35).expect("opens");
+    let body = |n: u8| Response {
         status: 200,
-        body: BODY.to_vec(),
+        body: vec![n; 10],
         ..Response::default()
     };
-    for (index, url) in ["a", "b", "c", "d"].into_iter().enumerate() {
+
+    for (index, url) in ["a", "b", "c"].into_iter().enumerate() {
         cache
-            .put(url, &response, 1_000 + index as i64)
+            .put(url, &body(index as u8), 1_000 + index as i64)
             .expect("stores");
     }
-    // Touch the oldest, so recency and insertion order disagree.
-    cache.get("a", 9_999).expect("queries");
+    assert_eq!(cache.len().expect("counts"), 3);
+    assert_eq!(cache.size().expect("sizes"), 30);
 
-    assert_eq!(cache.evict_to(2).expect("evicts"), 2);
-    assert_eq!(cache.len().expect("counts"), 2);
+    // Touch the oldest so recency and insertion order disagree, then overflow.
+    cache.get("a", 9_000).expect("queries");
+    cache.put("d", &body(3), 9_001).expect("stores");
+
+    assert!(cache.size().expect("sizes") <= 35, "back inside the bound");
     assert!(
         cache.get("a", 10_000).expect("queries").is_some(),
         "touched"
     );
     assert!(cache.get("d", 10_000).expect("queries").is_some(), "newest");
-    assert!(cache.get("b", 10_000).expect("queries").is_none());
-    assert!(cache.get("c", 10_000).expect("queries").is_none());
+    assert!(
+        cache.get("b", 10_000).expect("queries").is_none(),
+        "least recently used went first"
+    );
+}
+
+/// A cache is bounded by bytes, not by entries.
+///
+/// A count would be meaningless: one tile can be worth thousands of manifests, and a limit that
+/// counts them the same bounds nothing that matters on a device with a storage budget.
+#[test]
+fn the_bound_is_bytes() {
+    let cache = SqliteCache::in_memory_with_capacity(1_000).expect("opens");
+    assert_eq!(cache.capacity(), 1_000);
+
+    let small = Response {
+        status: 200,
+        body: vec![0; 10],
+        ..Response::default()
+    };
+    for index in 0..50 {
+        cache
+            .put(&format!("small{index}"), &small, 1_000 + index)
+            .expect("stores");
+    }
+    assert_eq!(cache.len().expect("counts"), 50, "fifty small ones fit");
+    assert_eq!(cache.size().expect("sizes"), 500);
+
+    // One big one is worth many small ones, and eviction is measured in bytes.
+    let big = Response {
+        status: 200,
+        body: vec![0; 600],
+        ..Response::default()
+    };
+    cache.put("big", &big, 2_000).expect("stores");
+    assert!(cache.size().expect("sizes") <= 1_000);
+    assert!(cache.len().expect("counts") < 51, "small ones made way");
+    assert!(cache.get("big", 3_000).expect("queries").is_some());
+}
+
+/// An entry larger than the whole cache is not stored.
+///
+/// Storing it would evict everything to make room for something that cannot help, and on the
+/// next write it would go itself — having thrown away the tiles that were in use.
+#[test]
+fn an_entry_larger_than_the_cache_is_refused() {
+    let cache = SqliteCache::in_memory_with_capacity(100).expect("opens");
+    let keep = Response {
+        status: 200,
+        body: vec![0; 50],
+        ..Response::default()
+    };
+    cache.put("keep", &keep, 1_000).expect("stores");
+
+    let huge = Response {
+        status: 200,
+        body: vec![0; 1_000],
+        ..Response::default()
+    };
+    cache.put("huge", &huge, 2_000).expect("does not error");
+
+    assert!(
+        cache.get("huge", 3_000).expect("queries").is_none(),
+        "refused"
+    );
+    assert!(
+        cache.get("keep", 3_000).expect("queries").is_some(),
+        "and it did not take the useful entry with it"
+    );
+}
+
+/// The default bound is mbgl's.
+#[test]
+fn the_default_capacity_matches_mbgl() {
+    assert_eq!(SqliteCache::DEFAULT_CAPACITY, 50 * 1024 * 1024);
+    let cache = SqliteCache::in_memory().expect("opens");
+    assert_eq!(cache.capacity(), SqliteCache::DEFAULT_CAPACITY);
+}
+
+/// Eviction keeps what is in use, even when the cache holds fewer entries than a batch.
+///
+/// The case that found the flaw in the batched policy: with four entries and a batch of fifty,
+/// "the timestamp of the fiftieth-oldest" is the *newest* entry's, so deleting everything at or
+/// before it takes the whole cache — including the entry just touched, which is the one thing
+/// an LRU exists to keep.
+#[test]
+fn a_small_cache_does_not_evict_everything() {
+    let cache = SqliteCache::in_memory_with_capacity(25).expect("opens");
+    let body = |n: u8| Response {
+        status: 200,
+        body: vec![n; 10],
+        ..Response::default()
+    };
+
+    cache.put("old", &body(0), 1_000).expect("stores");
+    cache.put("new", &body(1), 2_000).expect("stores");
+    assert_eq!(cache.len().expect("counts"), 2);
+
+    // A third does not fit, so exactly one must go — not both.
+    cache.put("newest", &body(2), 3_000).expect("stores");
+    assert_eq!(cache.len().expect("counts"), 2, "one dropped, not all");
+    assert!(cache.get("old", 4_000).expect("queries").is_none());
+    assert!(cache.get("new", 4_000).expect("queries").is_some());
+    assert!(cache.get("newest", 4_000).expect("queries").is_some());
+}
+
+/// Eviction drops no more than it must.
+#[test]
+fn eviction_stops_at_the_bound() {
+    let cache = SqliteCache::in_memory_with_capacity(100).expect("opens");
+    let body = Response {
+        status: 200,
+        body: vec![0; 10],
+        ..Response::default()
+    };
+    for index in 0..10 {
+        cache
+            .put(&format!("u{index}"), &body, 1_000 + index)
+            .expect("stores");
+    }
+    assert_eq!(cache.len().expect("counts"), 10, "exactly full");
+
+    cache.put("one-more", &body, 2_000).expect("stores");
+    assert_eq!(
+        cache.len().expect("counts"),
+        10,
+        "one in, one out — not a batch of fifty"
+    );
+    assert_eq!(cache.size().expect("sizes"), 100);
 }

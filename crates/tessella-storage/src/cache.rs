@@ -96,20 +96,40 @@ CREATE TABLE IF NOT EXISTS responses (
 CREATE INDEX IF NOT EXISTS responses_accessed ON responses (accessed);
 ";
 
-/// An SQLite-backed response cache.
+/// An SQLite-backed response cache, bounded by the bytes it holds.
+///
+/// # Why bytes and not entries
+///
+/// A count is meaningless when a TileJSON is two hundred bytes and a dense z14 tile is half a
+/// megabyte: a thousand of one is nothing and a thousand of the other is half a gigabyte. What
+/// a storage-constrained target has a limit on is bytes, so that is what is bounded. mbgl
+/// bounds the same thing, and defaults to the same fifty megabytes.
 #[derive(Debug)]
 pub struct SqliteCache {
     connection: Mutex<Connection>,
+    capacity: u64,
 }
 
 impl SqliteCache {
-    /// Opens or creates a cache at `path`.
+    /// The default bound, which is mbgl's `DEFAULT_MAX_CACHE_SIZE`.
+    pub const DEFAULT_CAPACITY: u64 = 50 * 1024 * 1024;
+
+    /// Opens or creates a cache at `path`, bounded to [`Self::DEFAULT_CAPACITY`].
     ///
     /// # Errors
     ///
     /// [`CacheError::Open`] when the file cannot be opened or the schema cannot be applied.
     pub fn open(path: &Path) -> Result<Self, CacheError> {
-        Self::prepare(Connection::open(path).map_err(CacheError::Open)?)
+        Self::with_capacity(path, Self::DEFAULT_CAPACITY)
+    }
+
+    /// As [`Self::open`], bounded to `capacity` bytes of response bodies.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::open`].
+    pub fn with_capacity(path: &Path, capacity: u64) -> Result<Self, CacheError> {
+        Self::prepare(Connection::open(path).map_err(CacheError::Open)?, capacity)
     }
 
     /// A cache that lives only as long as this object.
@@ -118,10 +138,28 @@ impl SqliteCache {
     ///
     /// [`CacheError::Open`] when the database cannot be created.
     pub fn in_memory() -> Result<Self, CacheError> {
-        Self::prepare(Connection::open_in_memory().map_err(CacheError::Open)?)
+        Self::in_memory_with_capacity(Self::DEFAULT_CAPACITY)
     }
 
-    fn prepare(connection: Connection) -> Result<Self, CacheError> {
+    /// As [`Self::in_memory`], bounded to `capacity` bytes.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::in_memory`].
+    pub fn in_memory_with_capacity(capacity: u64) -> Result<Self, CacheError> {
+        Self::prepare(
+            Connection::open_in_memory().map_err(CacheError::Open)?,
+            capacity,
+        )
+    }
+
+    /// The bound, in bytes.
+    #[must_use]
+    pub const fn capacity(&self) -> u64 {
+        self.capacity
+    }
+
+    fn prepare(connection: Connection, capacity: u64) -> Result<Self, CacheError> {
         // WAL so a decode worker reading is not blocked by whichever worker is writing what it
         // just fetched. `query_row` rather than `execute`: the pragma returns the resulting
         // journal mode, and `execute` refuses a statement that returns rows.
@@ -131,6 +169,7 @@ impl SqliteCache {
         connection.execute_batch(SCHEMA).map_err(CacheError::Open)?;
         Ok(Self {
             connection: Mutex::new(connection),
+            capacity,
         })
     }
 
@@ -186,26 +225,38 @@ impl SqliteCache {
     ///
     /// [`CacheError::Query`] when the statement fails.
     pub fn put(&self, url: &str, response: &Response, now: i64) -> Result<(), CacheError> {
-        self.connection
+        // An entry larger than the whole cache is not stored. Storing it would evict everything
+        // else to make room for something that cannot help — and on the next write it would be
+        // evicted itself, having thrown away the tiles that were being used.
+        if response.body.len() as u64 > self.capacity {
+            return Ok(());
+        }
+
+        let connection = self
+            .connection
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .execute(
-                "INSERT INTO responses
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        connection.execute(
+            "INSERT INTO responses
                    (url, status, expires, modified, etag, data, must_revalidate, accessed)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?4)
                  ON CONFLICT(url) DO UPDATE SET
                    status = ?2, expires = ?3, modified = ?4, etag = ?5,
                    data = ?6, must_revalidate = ?7, accessed = ?4",
-                params![
-                    url,
-                    i64::from(response.status),
-                    response.expires(now),
-                    now,
-                    response.etag,
-                    response.body,
-                    i64::from(response.must_revalidate),
-                ],
-            )?;
+            params![
+                url,
+                i64::from(response.status),
+                response.expires(now),
+                now,
+                response.etag,
+                response.body,
+                i64::from(response.must_revalidate),
+            ],
+        )?;
+
+        // Every write, so a caller cannot forget. The common case costs one COUNT-like query
+        // and no deletes.
+        Self::evict_within(&connection, self.capacity)?;
         Ok(())
     }
 
@@ -250,20 +301,67 @@ impl SqliteCache {
         Ok(())
     }
 
-    /// Drops the least recently used entries until at most `keep` remain.
+    /// The bytes of response bodies held.
     ///
     /// # Errors
     ///
     /// [`CacheError::Query`] when the statement fails.
-    pub fn evict_to(&self, keep: usize) -> Result<usize, CacheError> {
+    pub fn size(&self) -> Result<u64, CacheError> {
         let connection = self
             .connection
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self::size_of(&connection)
+    }
+
+    fn size_of(connection: &Connection) -> Result<u64, CacheError> {
+        let bytes: i64 = connection.query_row(
+            "SELECT COALESCE(SUM(LENGTH(data)), 0) FROM responses",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(u64::try_from(bytes).unwrap_or(0))
+    }
+
+    /// Drops least-recently-used entries until the cache is inside its bound.
+    ///
+    /// Returns how many were dropped. Called automatically after every write, so a caller does
+    /// not have to remember to — an unbounded cache on a storage-constrained target is a defect
+    /// rather than a missing feature, and one that only shows up after a long drive.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Query`] when a statement fails.
+    pub fn evict(&self) -> Result<usize, CacheError> {
+        let connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Self::evict_within(&connection, self.capacity)
+    }
+
+    fn evict_within(connection: &Connection, capacity: u64) -> Result<usize, CacheError> {
+        // Keep the newest entries whose running total stays inside the bound, and drop the
+        // rest. One statement, and exactly the rows that do not fit.
+        //
+        // # Why not mbgl's batch
+        //
+        // mbgl takes the `accessed` of the fiftieth-oldest entry and deletes everything at or
+        // before it, looping. With fewer than fifty entries that timestamp is the *newest*
+        // one's, so the delete takes the whole cache — including the entry just touched, which
+        // is the one thing LRU exists to keep. It rarely bites there because a real cache holds
+        // thousands; it bites immediately in a test, which is how it was found. A window
+        // function costs the same one statement and cannot over-delete.
         let removed = connection.execute(
             "DELETE FROM responses WHERE url IN (
-               SELECT url FROM responses ORDER BY accessed DESC, url ASC LIMIT -1 OFFSET ?1)",
-            params![i64::try_from(keep).unwrap_or(i64::MAX)],
+               SELECT url FROM (
+                 SELECT url, SUM(LENGTH(data)) OVER (
+                   ORDER BY accessed DESC, url DESC
+                   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                 ) AS running
+                 FROM responses
+               ) WHERE running > ?1)",
+            params![i64::try_from(capacity).unwrap_or(i64::MAX)],
         )?;
         Ok(removed)
     }

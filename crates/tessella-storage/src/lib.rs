@@ -37,8 +37,9 @@
 //! test lane and off in the cross one, which is checked rather than assumed — `cargo tree`
 //! shows `libsqlite3-sys` present with the feature and absent without it.
 //!
-//! Not yet wired: an eviction policy driven by anything but an explicit call, and the
-//! speculative manifest fetch §12.5 wants ahead of layer compilation.
+//! Not yet wired: the speculative manifest fetch §12.5 wants ahead of layer compilation, and
+//! the tile identity that would keep an access token in a query string from defeating the
+//! cache.
 
 #![forbid(unsafe_code)]
 
