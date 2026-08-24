@@ -23,6 +23,7 @@
 //! got so the next attempt is shorter.
 
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use tessella_style::{Source, Style};
@@ -119,6 +120,15 @@ pub struct Summary {
     pub progress: Progress,
     /// Resources actually fetched this run, as opposed to already held.
     pub fetched: u64,
+    /// Resources the origin confirmed unchanged.
+    ///
+    /// Only a refresh produces these: a round trip each and no bytes, which is the whole reason
+    /// refreshing is affordable where re-downloading is not.
+    pub unchanged: u64,
+    /// Claims released because the plan no longer names them.
+    ///
+    /// Only a refresh produces these.
+    pub released: u64,
     /// Resources the origin said it did not have.
     ///
     /// Expected rather than alarming for tiles at the edge of a source's coverage; worth
@@ -208,6 +218,8 @@ impl Download<'_> {
                 ..Progress::default()
             },
             fetched: 0,
+            unchanged: 0,
+            released: 0,
             missing: 0,
             cancelled: false,
         };
@@ -227,6 +239,75 @@ impl Download<'_> {
             match self.fetch_one(url)? {
                 Got::Fetched => summary.fetched += 1,
                 Got::Missing => summary.missing += 1,
+                Got::Held | Got::Unchanged => {}
+            }
+
+            let held = self.cache.region_progress(self.region)?;
+            summary.progress.completed_resources = held.completed_resources;
+            summary.progress.completed_bytes = held.completed_bytes;
+            observe(summary.progress);
+        }
+
+        Ok(summary)
+    }
+
+    /// Brings a region up to date against its origin.
+    ///
+    /// # Why this is not just running the download again
+    ///
+    /// A download treats a held resource as done, which is what makes it resumable. Run twice,
+    /// it fills gaps and changes nothing else — mbgl's offline download works the same way and
+    /// has no refresh at all. So a region is a snapshot of the day it was taken, and stays one:
+    /// roads that have been built since are missing, and roads that have been removed are still
+    /// there, with nothing to tell the user either way.
+    ///
+    /// A refresh revalidates instead. Every resource is asked about with its stored etag, so an
+    /// unchanged tile costs one round trip and no bytes — a region whose area has not changed
+    /// costs its tile count in requests and almost nothing in transfer, which is what makes
+    /// this affordable on the connection a downloaded region exists to avoid needing.
+    ///
+    /// # Claims the plan no longer names
+    ///
+    /// A style can drop a layer, a source can lower its maximum zoom, a user can redraw an area
+    /// smaller. The resources those changes orphan are released here — they would otherwise
+    /// stay pinned for the life of the region: outside the ambient bound, never evicted, and
+    /// never used either. The bytes go when someone packs.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::run`].
+    pub fn refresh(
+        &self,
+        plan: &Plan,
+        cancel: &AtomicBool,
+        observe: &mut dyn FnMut(Progress),
+    ) -> Result<Summary, DownloadError> {
+        let mut summary = Summary {
+            progress: Progress {
+                required_resources: plan.len() as u64 + 1,
+                required_precise: plan.complete,
+                ..Progress::default()
+            },
+            fetched: 0,
+            unchanged: 0,
+            released: 0,
+            missing: 0,
+            cancelled: false,
+        };
+
+        let urls = core::iter::once(&self.definition.style_url)
+            .chain(&plan.assets)
+            .chain(&plan.tiles);
+
+        for url in urls {
+            if cancel.load(Ordering::Relaxed) {
+                summary.cancelled = true;
+                break;
+            }
+            match self.refresh_one(url)? {
+                Got::Fetched => summary.fetched += 1,
+                Got::Unchanged => summary.unchanged += 1,
+                Got::Missing => summary.missing += 1,
                 Got::Held => {}
             }
 
@@ -234,6 +315,17 @@ impl Download<'_> {
             summary.progress.completed_resources = held.completed_resources;
             summary.progress.completed_bytes = held.completed_bytes;
             observe(summary.progress);
+        }
+
+        // Only when the pass finished. A cancelled refresh has not visited every URL, so what
+        // looks orphaned may simply not have been reached — releasing those would turn an
+        // interrupted refresh into a partial delete.
+        if !summary.cancelled {
+            let keep: BTreeSet<&str> = core::iter::once(self.definition.style_url.as_str())
+                .chain(plan.assets.iter().map(String::as_str))
+                .chain(plan.tiles.iter().map(String::as_str))
+                .collect();
+            summary.released = self.cache.prune_claims(self.region, &keep)? as u64;
         }
 
         Ok(summary)
@@ -288,6 +380,70 @@ impl Download<'_> {
             .put_region_resource(self.region, url, &response, self.now)?;
         Ok(got)
     }
+
+    /// Brings one resource up to date, rather than accepting whatever is held.
+    ///
+    /// # How this differs from [`Self::fetch_one`]
+    ///
+    /// A download treats a held resource as done — that is what makes it resumable, and it is
+    /// what mbgl does too. A refresh does not: it asks the origin whether the copy is still
+    /// current, using the stored etag, so an unchanged tile costs a round trip and no bytes and
+    /// a changed one is replaced.
+    ///
+    /// # What a 404 means here
+    ///
+    /// That the origin no longer has it. The empty response is stored, exactly as a download
+    /// would store it, so the region stops claiming to hold a tile that has ceased to exist.
+    /// Leaving the old body would be the more comfortable choice and the wrong one: a user who
+    /// refreshed would keep seeing a road that has been removed, with nothing to tell them the
+    /// map is out of date.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::fetch_one`].
+    pub fn refresh_one(&self, url: &str) -> Result<Got, DownloadError> {
+        let Some(held) = self.cache.get(url, self.now)? else {
+            // Nothing to revalidate — a resource the plan gained since the region was taken, or
+            // one that was evicted from under it.
+            return self.fetch_one(url);
+        };
+
+        let response = self
+            .files
+            .fetch_conditional(url, held.response.etag.as_deref())
+            .map_err(|source| DownloadError::Fetch {
+                url: url.to_string(),
+                source,
+            })?;
+
+        if response.is_not_modified() {
+            // The body stands; only its freshness moves. Rewriting the blob would turn the
+            // saving back into a disk write of the whole tile, which is most of what a refresh
+            // exists to avoid.
+            self.cache.refresh(
+                url,
+                response.expires(self.now),
+                response.must_revalidate,
+                self.now,
+            )?;
+            self.cache.claim(self.region, url)?;
+            return Ok(Got::Unchanged);
+        }
+
+        let got = match response.status {
+            200 => Got::Fetched,
+            404 | 410 => Got::Missing,
+            status => {
+                return Err(DownloadError::Status {
+                    url: url.to_string(),
+                    status,
+                });
+            }
+        };
+        self.cache
+            .put_region_resource(self.region, url, &response, self.now)?;
+        Ok(got)
+    }
 }
 
 /// How one resource came to be in the region.
@@ -297,6 +453,12 @@ pub enum Got {
     Fetched,
     /// Already in the store, and claimed.
     Held,
+    /// Held, and the origin confirmed it is still current.
+    ///
+    /// Only a refresh produces this. It cost a round trip and no bytes, which is the entire
+    /// point of refreshing rather than re-downloading: a region whose tiles have not changed
+    /// costs its tile count in requests and nothing in transfer.
+    Unchanged,
     /// The origin has nothing there, and the absence was recorded.
     Missing,
 }

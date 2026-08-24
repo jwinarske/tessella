@@ -531,10 +531,19 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   *freed*, `VACUUM` costs what *survives*, and after a large delete almost nothing does. Which
   is also why packing is not automatic: with 47 MB still live it is 69 ms, and deleting one
   small region from a large cache should not rewrite every region the user kept.
+  A region can also be refreshed. mbgl has no equivalent — its download treats a held resource
+  as done, so re-running one fills gaps and changes nothing else, and a region stays a snapshot
+  of the day it was taken. A refresh revalidates every resource against its stored etag instead,
+  so an unchanged region costs its resource count in round trips and no bytes at all, which is
+  what makes it affordable over the connection a downloaded region exists to avoid needing. A
+  resource the origin has dropped is dropped rather than kept, so a user does not go on seeing a
+  road that has been removed; and a completed refresh releases claims the plan no longer names —
+  a style that lost a layer, a source that lowered its maximum zoom, an area redrawn smaller —
+  which would otherwise stay pinned for the life of the region, outside the ambient bound and
+  never used. A cancelled refresh releases nothing: it has not visited every URL, so what looks
+  orphaned may simply not have been reached.
   Remaining on offline, none of it blocking R1 exit:
-  a region cannot be refreshed against its origin, so a snapshot stays the snapshot it was
-  taken as;
-  and `text-font` is disambiguated from an expression by a hand-listed operator set, standing
+  `text-font` is disambiguated from an expression by a hand-listed operator set, standing
   in for the table DR-11 will bring — `["Noto Sans Regular"]` is syntactically a call to an
   operator of that name, and the style crate deliberately declines to guess which it is.
   Exit: probe parity on a *real* style sans symbols — **geometry half met**: nine tiles of a

@@ -47,6 +47,7 @@
 //! ordinary application: the readers are decode workers on the critical path of a cold start,
 //! and the writer is whichever of them happens to have just fetched something.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -871,6 +872,79 @@ impl SqliteCache {
             )?;
         }
         Ok(())
+    }
+
+    /// Releases one region's claim on a resource.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Query`] when a statement fails.
+    pub fn unclaim(&self, id: RegionId, url: &str) -> Result<(), CacheError> {
+        let mut connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let transaction = connection.transaction()?;
+        Self::unclaim_within(&transaction, id, url)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    /// As [`Self::unclaim`], keeping `pinned` in step. Only ever inside a transaction.
+    fn unclaim_within(
+        transaction: &rusqlite::Transaction<'_>,
+        id: RegionId,
+        url: &str,
+    ) -> Result<(), CacheError> {
+        let removed = transaction.execute(
+            "DELETE FROM region_resources WHERE region_id = ?1 AND url = ?2",
+            params![id.0, url],
+        )?;
+        // Only a claim that actually existed decrements, for the reason [`Self::claim_within`]
+        // gives in the other direction.
+        if removed > 0 {
+            transaction.execute(
+                "UPDATE responses SET pinned = pinned - 1 WHERE url = ?1",
+                params![url],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Drops every claim this region holds that is not in `keep`, and returns how many.
+    ///
+    /// What a refresh needs when the plan shrinks — a source that lowered its maximum zoom, a
+    /// layer removed from the style, an area the user redrew smaller. Without it those
+    /// resources stay pinned for the life of the region: outside the ambient bound, never
+    /// evicted, and never used either. On a storage-constrained target that is a leak with a
+    /// user-visible size.
+    ///
+    /// # Errors
+    ///
+    /// [`CacheError::Query`] when a statement fails.
+    pub fn prune_claims(&self, id: RegionId, keep: &BTreeSet<&str>) -> Result<usize, CacheError> {
+        let mut connection = self
+            .connection
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let transaction = connection.transaction()?;
+
+        // Read the claims out before deleting any, rather than deleting while iterating a live
+        // cursor over the table being written.
+        let stale: Vec<String> = {
+            let mut statement =
+                transaction.prepare("SELECT url FROM region_resources WHERE region_id = ?1")?;
+            let rows = statement.query_map(params![id.0], |row| row.get::<_, String>(0))?;
+            rows.filter_map(Result::ok)
+                .filter(|url| !keep.contains(url.as_str()))
+                .collect()
+        };
+
+        for url in &stale {
+            Self::unclaim_within(&transaction, id, url)?;
+        }
+        transaction.commit()?;
+        Ok(stale.len())
     }
 
     /// How far a region's download has got.

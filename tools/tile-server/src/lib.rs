@@ -159,6 +159,7 @@ pub struct Server {
     shutdown: Arc<AtomicBool>,
     requests: Arc<AtomicU64>,
     paths: Arc<Mutex<Vec<String>>>,
+    routes: Arc<Mutex<Routes>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -177,17 +178,22 @@ impl Server {
         let shutdown = Arc::new(AtomicBool::new(false));
         let requests = Arc::new(AtomicU64::new(0));
         let paths = Arc::new(Mutex::new(Vec::new()));
+        let routes = Arc::new(Mutex::new(routes));
 
         let thread = {
             let shutdown = Arc::clone(&shutdown);
             let requests = Arc::clone(&requests);
             let paths = Arc::clone(&paths);
+            let routes = Arc::clone(&routes);
             std::thread::spawn(move || {
                 while !shutdown.load(Ordering::Relaxed) {
                     match listener.accept() {
                         Ok((stream, _)) => {
                             requests.fetch_add(1, Ordering::Relaxed);
-                            serve(stream, &routes, &paths);
+                            let held = routes
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            serve(stream, &held, &paths);
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -203,8 +209,20 @@ impl Server {
             shutdown,
             requests,
             paths,
+            routes,
             thread: Some(thread),
         })
+    }
+
+    /// Replaces what the server answers with, from now on.
+    ///
+    /// Origins change: a tile is re-cut, a sprite is redrawn, a road is removed. Testing a
+    /// refresh against a server that cannot change would only test that nothing changed.
+    pub fn set_routes(&self, routes: Routes) {
+        *self
+            .routes
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = routes;
     }
 
     /// The origin to point a style at, as `http://127.0.0.1:<port>`.

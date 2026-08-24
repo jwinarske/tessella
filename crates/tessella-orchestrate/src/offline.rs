@@ -26,6 +26,7 @@
 //! progress bar that jumps backwards. So this counts into shared atomics and the caller reads
 //! them whenever it wants to draw — which is what a progress bar does anyway.
 
+use alloc::collections::BTreeSet;
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -39,6 +40,18 @@ use tessella_storage::source::FileSource;
 
 use crate::pool::{Pool, Priority};
 
+/// Which of the two passes a scatter is running.
+///
+/// The scheduling is identical and only the per-resource step differs, so this rides along
+/// rather than being two copies of the fan-out that could drift apart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pass {
+    /// Accept whatever is held.
+    Download,
+    /// Ask the origin whether what is held is still current.
+    Refresh,
+}
+
 /// What a download has got to, readable while it runs.
 ///
 /// Every field is an atomic read: a caller drawing a progress bar takes no lock and blocks no
@@ -51,6 +64,8 @@ pub struct Counters {
     pub fetched: AtomicU64,
     /// Of those, already held and merely claimed.
     pub held: AtomicU64,
+    /// Of those, confirmed unchanged by the origin. Only a refresh produces these.
+    pub unchanged: AtomicU64,
     /// Of those, absent at the origin.
     pub missing: AtomicU64,
     /// Resources the plan named.
@@ -77,6 +92,10 @@ pub struct Outcome {
     pub fetched: u64,
     /// Resources already held and merely claimed.
     pub held: u64,
+    /// Resources the origin confirmed unchanged. Only a refresh produces these.
+    pub unchanged: u64,
+    /// Claims released because the plan no longer names them. Only a refresh produces these.
+    pub released: u64,
     /// Resources the origin did not have.
     pub missing: u64,
     /// Whether it stopped because it was asked to.
@@ -116,6 +135,23 @@ impl<S: FileSource + 'static> RegionDownload<'_, S> {
     /// The first [`DownloadError`] any resource produced. Whatever was already stored stays
     /// stored, so running it again resumes rather than restarts.
     pub fn run(&self, plan: &Plan) -> Result<Outcome, DownloadError> {
+        self.pass(plan, Pass::Download)
+    }
+
+    /// Brings the region up to date against its origin, fanned out the same way.
+    ///
+    /// Unlike [`Self::run`], a held resource is revalidated rather than accepted — see
+    /// [`Download::refresh_one`] for why a download alone leaves a region a snapshot of the day
+    /// it was taken. A completed refresh also releases claims the plan no longer names.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::run`].
+    pub fn refresh(&self, plan: &Plan) -> Result<Outcome, DownloadError> {
+        self.pass(plan, Pass::Refresh)
+    }
+
+    fn pass(&self, plan: &Plan, pass: Pass) -> Result<Outcome, DownloadError> {
         self.counters
             .required
             .store(plan.len() as u64 + 1, Ordering::Release);
@@ -127,7 +163,7 @@ impl<S: FileSource + 'static> RegionDownload<'_, S> {
         let assets: Vec<&str> = core::iter::once(self.definition.style_url.as_str())
             .chain(plan.assets.iter().map(alloc::string::String::as_str))
             .collect();
-        self.scatter(&assets, &failure)?;
+        self.scatter(&assets, pass, &failure)?;
 
         // The barrier. A download cancelled during its assets never starts a tile, which is what
         // makes "assets first" a guarantee rather than a tendency.
@@ -137,14 +173,31 @@ impl<S: FileSource + 'static> RegionDownload<'_, S> {
                 .iter()
                 .map(alloc::string::String::as_str)
                 .collect();
-            self.scatter(&tiles, &failure)?;
+            self.scatter(&tiles, pass, &failure)?;
         }
+
+        let cancelled = self.cancelled();
+        // Only a completed refresh prunes. A cancelled one has not visited every URL, so what
+        // looks orphaned may simply not have been reached — releasing those would turn an
+        // interrupted refresh into a partial delete, which for a region downloaded over hours
+        // is the worst thing that could happen to it.
+        let released = if pass == Pass::Refresh && !cancelled {
+            let keep: BTreeSet<&str> = core::iter::once(self.definition.style_url.as_str())
+                .chain(plan.assets.iter().map(alloc::string::String::as_str))
+                .chain(plan.tiles.iter().map(alloc::string::String::as_str))
+                .collect();
+            self.cache.prune_claims(self.region, &keep)? as u64
+        } else {
+            0
+        };
 
         Ok(Outcome {
             fetched: self.counters.fetched.load(Ordering::Acquire),
             held: self.counters.held.load(Ordering::Acquire),
+            unchanged: self.counters.unchanged.load(Ordering::Acquire),
+            released,
             missing: self.counters.missing.load(Ordering::Acquire),
-            cancelled: self.cancelled(),
+            cancelled,
         })
     }
 
@@ -156,6 +209,7 @@ impl<S: FileSource + 'static> RegionDownload<'_, S> {
     fn scatter(
         &self,
         urls: &[&str],
+        pass: Pass,
         failure: &Arc<Mutex<Option<DownloadError>>>,
     ) -> Result<(), DownloadError> {
         let batch = self.pool.batch(Priority::Background);
@@ -192,11 +246,16 @@ impl<S: FileSource + 'static> RegionDownload<'_, S> {
                     definition: &definition,
                     now,
                 };
-                match download.fetch_one(&url) {
+                let outcome = match pass {
+                    Pass::Download => download.fetch_one(&url),
+                    Pass::Refresh => download.refresh_one(&url),
+                };
+                match outcome {
                     Ok(got) => {
                         let counted = match got {
                             Got::Fetched => &counters.fetched,
                             Got::Held => &counters.held,
+                            Got::Unchanged => &counters.unchanged,
                             Got::Missing => &counters.missing,
                         };
                         counted.fetch_add(1, Ordering::AcqRel);

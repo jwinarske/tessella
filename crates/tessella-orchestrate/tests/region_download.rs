@@ -327,3 +327,114 @@ fn a_download_does_not_block_foreground_work() {
         "foreground work waited {waited:?} behind a background download"
     );
 }
+
+/// A refresh fans out the same way a download does, and transfers nothing when nothing changed.
+#[test]
+fn a_refresh_runs_across_the_pool() {
+    let server = tile_server::Server::start(routes()).expect("binds");
+    let origin = server.origin();
+    let pool = Pool::new(tessella_orchestrate::boot::Workers::new(4));
+    let cache = Arc::new(SqliteCache::in_memory_with_capacity(4_000_000).expect("opens"));
+    let files = slow(Duration::from_millis(5));
+    let definition = region(&origin, 8.0);
+    let id = cache
+        .create_region(&definition, None, NOW)
+        .expect("creates");
+    let plan = plan_for(&cache, &files, &definition, id, &style(&origin));
+
+    let downloading = RegionDownload {
+        pool: &pool,
+        cache: Arc::clone(&cache),
+        files: Arc::clone(&files),
+        region: id,
+        definition: Arc::new(definition.clone()),
+        cancel: Arc::new(AtomicBool::new(false)),
+        now: NOW,
+        counters: Arc::new(Counters::default()),
+    };
+    let downloaded = downloading.run(&plan).expect("downloads");
+    assert!(downloaded.fetched > 3);
+
+    let counters = Arc::new(Counters::default());
+    let refreshed = RegionDownload {
+        pool: &pool,
+        cache: Arc::clone(&cache),
+        files: Arc::clone(&files),
+        region: id,
+        definition: Arc::new(definition),
+        cancel: Arc::new(AtomicBool::new(false)),
+        now: NOW + 7 * 24 * 3600,
+        counters: Arc::clone(&counters),
+    }
+    .refresh(&plan)
+    .expect("refreshes");
+
+    assert_eq!(refreshed.fetched, 0, "nothing was re-transferred");
+    assert_eq!(
+        refreshed.unchanged,
+        downloaded.fetched + downloaded.missing,
+        "every resource was confirmed"
+    );
+    assert_eq!(refreshed.released, 0, "and nothing was orphaned");
+    assert_eq!(
+        counters.completed.load(Ordering::Acquire),
+        plan.len() as u64 + 1
+    );
+}
+
+/// A refresh across the pool releases what a shrunken plan orphans.
+#[test]
+fn a_parallel_refresh_prunes_orphans() {
+    let server = tile_server::Server::start(routes()).expect("binds");
+    let origin = server.origin();
+    let pool = Pool::new(tessella_orchestrate::boot::Workers::new(4));
+    let cache = Arc::new(SqliteCache::in_memory_with_capacity(4_000_000).expect("opens"));
+    let files = slow(Duration::from_millis(2));
+    let definition = region(&origin, 9.0);
+    let id = cache
+        .create_region(&definition, None, NOW)
+        .expect("creates");
+    let plan = plan_for(&cache, &files, &definition, id, &style(&origin));
+
+    RegionDownload {
+        pool: &pool,
+        cache: Arc::clone(&cache),
+        files: Arc::clone(&files),
+        region: id,
+        definition: Arc::new(definition.clone()),
+        cancel: Arc::new(AtomicBool::new(false)),
+        now: NOW,
+        counters: Arc::new(Counters::default()),
+    }
+    .run(&plan)
+    .expect("downloads");
+    let before = cache
+        .region_progress(id)
+        .expect("reads")
+        .completed_resources;
+
+    let mut smaller = definition;
+    smaller.max_zoom = 6.0;
+    let smaller_plan = plan_for(&cache, &files, &smaller, id, &style(&origin));
+    assert!(smaller_plan.tiles.len() < plan.tiles.len());
+
+    let refreshed = RegionDownload {
+        pool: &pool,
+        cache,
+        files,
+        region: id,
+        definition: Arc::new(smaller),
+        cancel: Arc::new(AtomicBool::new(false)),
+        now: NOW + 7 * 24 * 3600,
+        counters: Arc::new(Counters::default()),
+    }
+    .refresh(&smaller_plan)
+    .expect("refreshes");
+
+    assert!(refreshed.released > 0);
+    assert_eq!(
+        before - (smaller_plan.len() as u64 + 1),
+        refreshed.released,
+        "exactly the orphans"
+    );
+}
