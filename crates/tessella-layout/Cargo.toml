@@ -19,6 +19,7 @@ unicode-linebreak.workspace = true
 tessella-glyph.workspace = true
 tessella-style.workspace = true
 tessella-tile.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
 

@@ -310,6 +310,126 @@ const FILL_PAINT: &[PropertySpec] = &[
     },
 ];
 
+/// Line paint properties, in mbgl's `LinePaintProperties` declaration order.
+///
+/// The order is load-bearing, not cosmetic: it is the order the data-driven properties are
+/// packed into the interleaved paint attribute buffer, so a table sorted differently produces a
+/// buffer the shader reads at the wrong offsets. It happens to coincide with alphabetical
+/// order here, which is why it must be stated rather than relied on.
+///
+/// `line-floorwidth` is in the table and is not in the style spec. mbgl carries it as a real
+/// paint property that mirrors `line-width` — `setLineWidth` assigns both — so it takes a slot
+/// in the buffer whenever the width is data-driven, and the golden dump shows it at offset 8 of
+/// a stride-16 line vertex. Omitting it gives a stride of 12 and every attribute after it
+/// misread.
+const LINE_PAINT: &[PropertySpec] = &[
+    PropertySpec {
+        name: "line-blur",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "line-color",
+        kind: PropertyKind::Color,
+        default: DefaultValue::Color(Color::black()),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "line-dasharray",
+        kind: PropertyKind::NumberArray(0),
+        default: DefaultValue::None,
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "line-floorwidth",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(1.0),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "line-gap-width",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "line-gradient",
+        kind: PropertyKind::Color,
+        default: DefaultValue::None,
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "line-offset",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "line-opacity",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(1.0),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "line-pattern",
+        kind: PropertyKind::Image,
+        default: DefaultValue::None,
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "line-translate",
+        kind: PropertyKind::NumberArray(2),
+        default: DefaultValue::NumberPair(0.0, 0.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "line-translate-anchor",
+        kind: PropertyKind::Enum,
+        default: DefaultValue::Enum("map"),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "line-width",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(1.0),
+        data_driven: true,
+    },
+];
+
+const LINE_LAYOUT: &[PropertySpec] = &[
+    PropertySpec {
+        name: "line-cap",
+        kind: PropertyKind::Enum,
+        default: DefaultValue::Enum("butt"),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "line-join",
+        kind: PropertyKind::Enum,
+        default: DefaultValue::Enum("miter"),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "line-miter-limit",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(2.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "line-round-limit",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(1.05),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "line-sort-key",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: true,
+    },
+];
+
 const FILL_LAYOUT: &[PropertySpec] = &[PropertySpec {
     name: "fill-sort-key",
     kind: PropertyKind::Number,
@@ -323,6 +443,7 @@ pub fn paint_specs(kind: &LayerKind) -> Option<&'static [PropertySpec]> {
     match kind {
         LayerKind::Background => Some(BACKGROUND_PAINT),
         LayerKind::Fill => Some(FILL_PAINT),
+        LayerKind::Line => Some(LINE_PAINT),
         _ => None,
     }
 }
@@ -333,6 +454,7 @@ pub fn layout_specs(kind: &LayerKind) -> Option<&'static [PropertySpec]> {
     match kind {
         LayerKind::Background => Some(&[]),
         LayerKind::Fill => Some(FILL_LAYOUT),
+        LayerKind::Line => Some(LINE_LAYOUT),
         _ => None,
     }
 }
@@ -358,28 +480,37 @@ pub fn resolve_paint(
 
 /// Applies the defaults that are layer logic rather than table entries.
 ///
-/// The spec says `fill-outline-color` defaults to `fill-color`, and mbgl implements that in the
-/// fill layer rather than in the property's default — which is why the table gives it
-/// transparent. Copying the *resolved* fill-color across, expression and binding together, is
-/// what makes it right: when `fill-color` is data-driven the outline is data-driven too, and
-/// needs a vertex attribute rather than a uniform.
+/// Two properties take their value from another property rather than from their own default,
+/// and mbgl implements both in the layer rather than in the table. `fill-outline-color` falls
+/// back to `fill-color` when the style does not set it; `line-floorwidth` mirrors `line-width`
+/// always, having no spelling of its own. Copying the *resolved* source across, expression and
+/// binding together, is what makes them right: when the source is data-driven the target is too,
+/// and needs a vertex attribute rather than a uniform.
 ///
 /// Found by the oracle rather than by reading the spec. The golden dump's data-driven fill
 /// drawable carries `fill-outline-color` as an attribute at offset 12 even though the style
 /// never mentions it, which is only explicable if it inherited the binding along with the
 /// value. Treating it as its own constant default gave a stride of 12 where the oracle has 20.
 fn apply_layer_rules(layer: &Layer, resolved: &mut BTreeMap<&'static str, ResolvedProperty>) {
-    if layer.kind != LayerKind::Fill || layer.paint.contains_key("fill-outline-color") {
-        return;
-    }
-    let Some(fill_color) = resolved.get("fill-color").cloned() else {
+    // `line-floorwidth` is unconditional where `fill-outline-color` is a fallback: mbgl's
+    // `setLineWidth` assigns both properties, so the mirror holds even when the style writes a
+    // width, and there is no `line-floorwidth` for a style to write in the first place.
+    let rule = match layer.kind {
+        LayerKind::Fill if !layer.paint.contains_key("fill-outline-color") => {
+            ("fill-color", "fill-outline-color")
+        }
+        LayerKind::Line => ("line-width", "line-floorwidth"),
+        _ => return,
+    };
+    let (from, to) = rule;
+
+    let Some(source) = resolved.get(from).cloned() else {
         return;
     };
-    if let Some(outline) = resolved.get_mut("fill-outline-color") {
-        // The spec entry belongs to `fill-outline-color`; only the value and how it binds are
-        // inherited.
-        outline.expression = fill_color.expression;
-        outline.binding = fill_color.binding;
+    if let Some(target) = resolved.get_mut(to) {
+        // The spec entry belongs to the target; only the value and how it binds are inherited.
+        target.expression = source.expression;
+        target.binding = source.binding;
     }
 }
 

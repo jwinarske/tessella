@@ -357,3 +357,105 @@ fn a_line_layer_strokes_polygon_features() {
         "no unextruded vertex"
     );
 }
+
+/// The interleaved data-driven paint buffers are byte-identical to the oracle's.
+///
+/// This is the whole binder in one assertion: which properties take a slot, in what order, at
+/// what stride, packed how, and which feature's value lands on which vertex. Every one of those
+/// changes the bytes, and three of them were established from these hashes rather than from the
+/// spec — the declaration ordering, the two-channels-per-float colour packing, and the slots for
+/// `fill-outline-color` and `line-floorwidth`, neither of which the style mentions.
+///
+/// The fill buffers survive the wagyu rotation that costs the fill's *vertex* buffer its byte
+/// comparison, because every vertex of a feature carries the same value: a rotation permutes
+/// identical bytes. Tile 4093 holds both polygons, so its buffer is the one that would catch a
+/// binder writing one feature's colour over the other's vertices.
+#[test]
+fn paint_buffers_are_byte_identical_to_the_oracle() {
+    let expected = [
+        (
+            (4092, 2723),
+            0x4418_65d5_7012_1082u64,
+            0xa731_16fc_cf05_bd25u64,
+        ),
+        ((4092, 2724), 0x4418_65d5_7012_1082, 0xa731_16fc_cf05_bd25),
+        ((4093, 2723), 0x38ce_690a_c651_8fbf, 0x0d03_c29e_6c81_4a25),
+        ((4093, 2724), 0x38ce_690a_c651_8fbf, 0x0d03_c29e_6c81_4a25),
+        ((4094, 2723), 0x8959_3ccd_071b_de44, 0x1714_d861_2903_5725),
+        ((4094, 2724), 0x8959_3ccd_071b_de44, 0x0d03_c29e_6c81_4a25),
+    ];
+
+    for ((x, y), fill_hash, line_hash) in expected {
+        let buckets = build(x, y);
+
+        let fill = bucket_for(&buckets, "fill-datadriven").expect("fill-datadriven");
+        assert_eq!(fill.binder.stride(), 20, "fill stride at {x}/{y}");
+        assert_eq!(
+            fnv1a(fill.binder.data()),
+            fill_hash,
+            "fill paint at {x}/{y}"
+        );
+
+        let line = bucket_for(&buckets, "line-datadriven").expect("line-datadriven");
+        assert_eq!(line.binder.stride(), 16, "line stride at {x}/{y}");
+        assert_eq!(
+            fnv1a(line.binder.data()),
+            line_hash,
+            "line paint at {x}/{y}"
+        );
+    }
+}
+
+/// A layer whose paint is all constant has no paint buffer at all.
+///
+/// The oracle's `fill-constant` drawable carries only its position attribute. Emitting a
+/// zero-stride buffer, or one full of repeated constants, would both draw correctly and would
+/// both be a per-tile allocation for something a uniform already says.
+#[test]
+fn a_constant_layer_has_no_paint_buffer() {
+    let buckets = build(4093, 2723);
+    let constant = bucket_for(&buckets, "fill-constant").expect("fill-constant");
+    assert_eq!(constant.binder.stride(), 0);
+    assert!(constant.binder.data().is_empty());
+    assert!(constant.binder.slots().is_empty());
+}
+
+/// The slots are in mbgl's property declaration order, at the oracle's offsets.
+///
+/// Named here so that a reordering fails with the property that moved rather than with a hash.
+#[test]
+fn paint_slots_sit_where_the_oracle_reads_them() {
+    let buckets = build(4093, 2723);
+
+    let fill = bucket_for(&buckets, "fill-datadriven").expect("fill-datadriven");
+    let layout: Vec<(&str, usize, usize)> = fill
+        .binder
+        .slots()
+        .iter()
+        .map(|s| (s.name, s.offset, s.width))
+        .collect();
+    assert_eq!(
+        layout,
+        [
+            ("fill-color", 0, 8),
+            ("fill-opacity", 8, 4),
+            ("fill-outline-color", 12, 8),
+        ]
+    );
+
+    let line = bucket_for(&buckets, "line-datadriven").expect("line-datadriven");
+    let layout: Vec<(&str, usize, usize)> = line
+        .binder
+        .slots()
+        .iter()
+        .map(|s| (s.name, s.offset, s.width))
+        .collect();
+    assert_eq!(
+        layout,
+        [
+            ("line-color", 0, 8),
+            ("line-floorwidth", 8, 4),
+            ("line-width", 12, 4),
+        ]
+    );
+}

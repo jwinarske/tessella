@@ -690,6 +690,7 @@ dependencies = [
  "tessella-glyph",
  "tessella-style",
  "tessella-tile",
+ "thiserror",
  "unicode-bidi",
  "unicode-linebreak",
 ]

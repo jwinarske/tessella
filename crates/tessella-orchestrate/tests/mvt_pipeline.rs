@@ -299,3 +299,61 @@ fn measure_the_real_tile_line_layer() {
         line.vertices.len()
     );
 }
+
+/// Data-driven paint binds over a real tile's features, at a cost worth knowing.
+///
+/// 17k features means 17k expression evaluations per data-driven property, and every vertex
+/// they produced carries a copy of the result. Both numbers are asserted: the buffer must be
+/// exactly one stride per vertex — the invariant the whole binder rests on — and the build must
+/// stay inside the §13 tile budget rather than quietly becoming the slowest stage.
+#[test]
+fn data_driven_paint_binds_over_a_real_tile() {
+    let tile = Tile::decode(REAL_TILE).expect("decodes");
+    let style = Style::parse(
+        r##"{"version": 8, "sources": {"v": {"type": "vector"}}, "layers": [
+             {"id": "l", "type": "line", "source": "v", "source-layer": "admin",
+              "paint": {"line-color": ["match", ["get", "maritime"], 1, "#ff0000", "#00ff00"],
+                        "line-width": ["match", ["get", "disputed"], 1, 0.5, 2.0]}}]}"##,
+    )
+    .expect("style parses");
+
+    let start = std::time::Instant::now();
+    let buckets = build_mvt_tile(&style, TileId::new(0, 0, 0), &tile).expect("builds");
+    let elapsed = start.elapsed();
+
+    let bucket = buckets
+        .iter()
+        .find(|b| b.layer_id == "l")
+        .expect("the layer");
+    let line = bucket.content.as_line().expect("a line bucket");
+
+    assert_eq!(bucket.binder.stride(), 16, "colour, floorwidth, width");
+    assert_eq!(
+        bucket.binder.data().len(),
+        line.vertices.len() * bucket.binder.stride(),
+        "exactly one paint entry per vertex"
+    );
+    println!(
+        "admin data-driven: {} vertices, {} paint bytes, {elapsed:?}",
+        line.vertices.len(),
+        bucket.binder.data().len()
+    );
+
+    // Both matches really varied per feature rather than collapsing to one branch — which a
+    // binder writing the first feature's value across every vertex would also pass every other
+    // assertion here. `maritime` and `disputed` are the two properties this tile's admin layer
+    // actually varies; `admin_level` is 2 throughout and would prove nothing.
+    let distinct = |range: core::ops::Range<usize>| {
+        bucket
+            .binder
+            .data()
+            .chunks_exact(bucket.binder.stride())
+            .map(|v| v[range.clone()].to_vec())
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+    };
+    assert_eq!(distinct(0..8), 2, "two colours");
+    assert_eq!(distinct(12..16), 2, "two widths");
+    // And floorwidth mirrors width, so it varies the same way.
+    assert_eq!(distinct(8..12), 2, "two floorwidths");
+}

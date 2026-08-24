@@ -37,10 +37,11 @@ use alloc::vec::Vec;
 
 use tessella_layout::fill::{self, FillBucket, Ring};
 use tessella_layout::line::{LineBucket, LineCap, LineJoin, LineOptions};
+use tessella_layout::paint::{BinderError, PaintBinder};
 use tessella_source::clip::{clip_line_to_box, clip_ring_to_box, round_to_tile_units};
 use tessella_source::geojson::{GeoJsonFeature, Geometry};
 use tessella_source::tiling::{EXTENT, TilingOptions};
-use tessella_style::property::{ResolvedProperty, resolve_paint};
+use tessella_style::property::{ResolvedProperty, paint_specs, resolve_paint};
 use tessella_style::{Filter, LayerKind, Style};
 use tessella_tile::projection;
 use tessella_tile::store::{Lookup, TileKey, TileStore};
@@ -79,6 +80,12 @@ pub struct LayerBucket {
     pub content: Content,
     /// Resolved paint properties, carrying each one's binding.
     pub paint: alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    /// The interleaved data-driven paint buffer, one entry per vertex.
+    ///
+    /// Empty-strided when every property is a uniform, which is the common case and is why it
+    /// is a field of the bucket rather than a variant of [`Content`]: whether a layer has one
+    /// is a property of its paint, not of its geometry.
+    pub binder: PaintBinder,
 }
 
 impl LayerBucket {
@@ -107,6 +114,14 @@ pub enum TileError {
         layer: String,
         /// What went wrong.
         source: tessella_style::FilterError,
+    },
+    /// A feature's data-driven paint value did not bind.
+    #[error("layer `{layer}`: {source}")]
+    Binder {
+        /// Layer id.
+        layer: String,
+        /// What went wrong.
+        source: BinderError,
     },
     /// A layer's paint properties did not resolve.
     #[error("layer `{layer}`: {source}")]
@@ -147,6 +162,8 @@ pub fn build_tile(
             source,
         })?;
 
+        let mut binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint);
+
         let content = match layer.kind {
             LayerKind::Background => Content::Background,
             LayerKind::Fill => {
@@ -162,6 +179,7 @@ pub fn build_tile(
                 // needs: handed a flat list it will attach one feature's hole to another
                 // feature's exterior, having nothing in the list to say where one ended.
                 let mut per_feature: Vec<Vec<Ring>> = Vec::new();
+                let mut kept: Vec<&GeoJsonFeature> = Vec::new();
                 for feature in features {
                     if !filter.matches(feature, None) {
                         continue;
@@ -188,10 +206,20 @@ pub fn build_tile(
                     }
                     if !rings.is_empty() {
                         per_feature.push(rings);
+                        kept.push(feature);
                     }
                 }
                 let borrowed: Vec<&[Ring]> = per_feature.iter().map(Vec::as_slice).collect();
-                Content::Fill(fill::build_features(&borrowed))
+                let (bucket, ends) = fill::build_features_tracked(&borrowed);
+                for (feature, end) in kept.iter().zip(&ends) {
+                    binder
+                        .push(*end, &paint, *feature)
+                        .map_err(|source| TileError::Binder {
+                            layer: layer.id.clone(),
+                            source,
+                        })?;
+                }
+                Content::Fill(bucket)
             }
             LayerKind::Line => {
                 let filter = match &layer.filter {
@@ -247,6 +275,14 @@ pub fn build_tile(
                         // A point has no length to extrude.
                         Geometry::Point(_) => continue,
                     }
+                    // After the feature's geometry, not before: the count is what says which
+                    // vertices are this feature's, and a clip may have produced none.
+                    binder
+                        .push(bucket.vertices.len(), &paint, feature)
+                        .map_err(|source| TileError::Binder {
+                            layer: layer.id.clone(),
+                            source,
+                        })?;
                 }
                 Content::Line(bucket)
             }
@@ -259,6 +295,7 @@ pub fn build_tile(
             layer_id: layer.id.clone(),
             content,
             paint,
+            binder,
         });
     }
 
@@ -299,6 +336,8 @@ pub fn build_mvt_tile(
             source,
         })?;
 
+        let mut binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint);
+
         let content = match layer.kind {
             LayerKind::Background => Content::Background,
             LayerKind::Fill => {
@@ -319,6 +358,7 @@ pub fn build_mvt_tile(
                     .and_then(|name| source.layer(name));
 
                 let mut per_feature: Vec<Vec<Ring>> = Vec::new();
+                let mut kept: Vec<&tessella_source::mvt::Feature> = Vec::new();
                 if let Some(named) = named {
                     for feature in &named.features {
                         if !filter.matches(feature, None) {
@@ -340,11 +380,21 @@ pub fn build_mvt_tile(
                         }
                         if !rings.is_empty() {
                             per_feature.push(rings);
+                            kept.push(feature);
                         }
                     }
                 }
                 let borrowed: Vec<&[Ring]> = per_feature.iter().map(Vec::as_slice).collect();
-                Content::Fill(fill::build_features(&borrowed))
+                let (bucket, ends) = fill::build_features_tracked(&borrowed);
+                for (feature, end) in kept.iter().zip(&ends) {
+                    binder
+                        .push(*end, &paint, *feature)
+                        .map_err(|source| TileError::Binder {
+                            layer: layer.id.clone(),
+                            source,
+                        })?;
+                }
+                Content::Fill(bucket)
             }
             LayerKind::Line => {
                 let filter = match &layer.filter {
@@ -387,6 +437,12 @@ pub fn build_mvt_tile(
                                 .collect();
                             bucket.add_geometry(&part, &options);
                         }
+                        binder
+                            .push(bucket.vertices.len(), &paint, feature)
+                            .map_err(|source| TileError::Binder {
+                                layer: layer.id.clone(),
+                                source,
+                            })?;
                     }
                 }
                 Content::Line(bucket)
@@ -399,6 +455,7 @@ pub fn build_mvt_tile(
             layer_id: layer.id.clone(),
             content,
             paint,
+            binder,
         });
     }
 
@@ -508,7 +565,9 @@ impl TileError {
     #[must_use]
     pub fn layer(&self) -> &str {
         match self {
-            Self::Filter { layer, .. } | Self::Property { layer, .. } => layer,
+            Self::Filter { layer, .. }
+            | Self::Property { layer, .. }
+            | Self::Binder { layer, .. } => layer,
         }
     }
 }

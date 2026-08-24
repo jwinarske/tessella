@@ -318,10 +318,47 @@ fn a_literal_of_the_wrong_type_is_rejected() {
 #[test]
 fn an_unimplemented_layer_type_resolves_empty() {
     let style = hermetic();
-    let line = style.layer("line-datadriven").expect("line-datadriven");
-    let paint = resolve_paint(line).expect("resolves");
+    let circle = style.layer("circle-constant").expect("circle-constant");
+    let paint = resolve_paint(circle).expect("resolves");
     assert!(paint.is_empty());
     assert!(is_all_uniform(&paint), "vacuously");
+}
+
+/// `line-floorwidth` is not a style-spec property and is a real one to mbgl.
+///
+/// `setLineWidth` assigns both, so the mirror is unconditional — unlike `fill-outline-color`,
+/// which only falls back when the style is silent. It is what puts the line paint buffer's
+/// stride at 16 rather than 12, and the golden dump shows it at offset 8 of a layer whose style
+/// never mentions it.
+#[test]
+fn line_floorwidth_mirrors_line_width() {
+    let style = hermetic();
+    let line = style.layer("line-datadriven").expect("line-datadriven");
+    let paint = resolve_paint(line).expect("resolves");
+
+    let width = paint.get("line-width").expect("line-width");
+    let floor = paint.get("line-floorwidth").expect("line-floorwidth");
+    assert_eq!(floor.expression, width.expression, "same expression");
+    assert_eq!(floor.binding, width.binding, "and the same binding");
+    assert!(
+        matches!(width.binding, Binding::Attribute { .. }),
+        "the style's width is a match on a feature property"
+    );
+
+    // The mirror is unconditional, so a constant width mirrors too — and stays a uniform.
+    let plain = Style::parse(
+        r#"{"version": 8, "sources": {}, "layers": [
+             {"id": "l", "type": "line", "source": "s", "paint": {"line-width": 3.0}}]}"#,
+    )
+    .expect("style parses");
+    let paint = resolve_paint(plain.layer("l").expect("l")).expect("resolves");
+    assert_eq!(
+        paint
+            .get("line-floorwidth")
+            .expect("line-floorwidth")
+            .binding,
+        Binding::Uniform
+    );
 }
 
 /// Colors are stored premultiplied, as mbgl stores them.

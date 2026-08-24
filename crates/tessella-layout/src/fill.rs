@@ -159,9 +159,32 @@ pub fn build(rings: &[Ring]) -> FillBucket {
 /// whichever `Vec` the caller happened to build.
 #[must_use]
 pub fn build_features(features: &[&[Ring]]) -> FillBucket {
-    let mut bucket = FillBucket::default();
+    build_features_tracked(features).0
+}
 
-    for polygon in features.iter().flat_map(|rings| classify_rings(rings)) {
+/// As [`build_features`], reporting the bucket's vertex count after each input feature.
+///
+/// The paint binder needs to know which vertices belong to which feature, and cannot work it
+/// out from the geometry: `classify_rings` may split one feature into several polygons and drops
+/// degenerate ones, so a feature's vertex count is not the sum of its rings' lengths. Taking the
+/// count from the bucket after each feature is the only reading that stays right when a ring is
+/// dropped — and a binder that guessed instead would paint every feature after the first
+/// dropped ring with its neighbour's colour.
+#[must_use]
+pub fn build_features_tracked(features: &[&[Ring]]) -> (FillBucket, Vec<usize>) {
+    let mut bucket = FillBucket::default();
+    let mut ends = Vec::with_capacity(features.len());
+
+    for rings in features {
+        build_polygons(&mut bucket, classify_rings(rings));
+        ends.push(bucket.vertices.len());
+    }
+
+    (bucket, ends)
+}
+
+fn build_polygons(bucket: &mut FillBucket, polygons: Vec<Vec<Ring>>) {
+    for polygon in polygons {
         let total_vertices: usize = polygon.iter().map(Vec::len).sum();
         if total_vertices == 0 {
             continue;
@@ -221,8 +244,6 @@ pub fn build_features(features: &[&[Ring]]) -> FillBucket {
             }
         }
     }
-
-    bucket
 }
 
 #[cfg(test)]

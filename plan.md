@@ -1,8 +1,9 @@
 # TESSELLA_PLAN — tessella: MapLibre-style-spec frontend in Rust, capture-stream producer
 
 rev 0.10 — 2026-08-24
-rev 0.10: R1 underway — MVT decode and the line layer land; DR-19 gains the line-path
-confirmation that the rotation is wagyu's alone, the line buffers being byte-exact.
+rev 0.10: R1 underway — MVT decode, the line layer and the data-driven paint binder land;
+DR-19 gains the line-path confirmation that the rotation is wagyu's alone, the line buffers
+being byte-exact.
 rev 0.9: R0's stream complete and diffed against the probe envelope by envelope; DR-19 records
 that GeoJSON polygon vertex *order* is wagyu's and is not ported, with the consequence for
 §9.1's diff; §10's R0 entry carries its status and its two qualifications.
@@ -477,10 +478,12 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   envelopes remain open for R2). Exit:
   stream matches the probe on the hermetic style; parked bytes == 0.
 - **R1** — *in progress.* Vector tiles decode and tessellate (MVT 2.1, no dependency); the line
-  layer is byte-exact against the oracle, six tiles of six, vertices and indices. Remaining:
-  network + cache with request coalescing, data-driven binders/permutations, DR-11 evaluator,
-  §12.5 startup path. Exit: probe parity on a real style sans symbols; cold-boot-to-first-tile
-  traced and within budget.
+  layer is byte-exact against the oracle, six tiles of six, vertices and indices; data-driven
+  paint binds into the interleaved per-layer buffer, byte-exact across all twelve of the golden
+  dump's paint buffers. Remaining: network + cache with request coalescing, zoom-interpolated
+  (composite) binders — refused today rather than half-written, and needed for a real style —
+  shader permutation keys, DR-11 evaluator, §12.5 startup path. Exit: probe parity on a real
+  style sans symbols; cold-boot-to-first-tile traced and within budget.
 - **R1.5** — four views over the same style (§13). Exit: §9.2 invariants green; §13.3
   four-view zoom benchmark green on RK3566; §13.1 fractional-zoom counters at zero.
 - **R2** — symbols: glyph manager, shaping, quads, per-view placement, collision, cross-tile
