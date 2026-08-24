@@ -12,8 +12,10 @@
 //! Vertex formats are i16 tile-local positions and u16 indices with u32 spill per segment
 //! (§12.4); the C++ formats are the floor, not the target.
 //!
-//! Status: fill buckets build from tile-local rings. Line, circle, pattern and symbol layout
-//! are not implemented.
+//! Status: fill and line buckets build from tile-local geometry. The line path is byte-exact
+//! against the oracle — vertex and index buffers both — which the fill path is not, because
+//! `fixupPolygons` rotates a fill's rings and does not touch lines. Circle, pattern and symbol
+//! layout are not implemented.
 
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), no_std)]
@@ -21,5 +23,7 @@
 extern crate alloc;
 
 pub mod fill;
+pub mod line;
 
 pub use fill::{FillBucket, Segment};
+pub use line::{ClipDistances, LineBucket, LineCap, LineJoin, LineOptions, LineVertex};

@@ -215,6 +215,17 @@ impl LayerKind {
     pub fn is_r0(&self) -> bool {
         matches!(self, Self::Background | Self::Fill)
     }
+
+    /// True for the layer types this build can turn into geometry.
+    ///
+    /// Kept separate from [`Self::is_r0`], which is a statement about the release's scope and
+    /// does not move as later releases add types. This one is what the tile builder gates on,
+    /// so the two disagree for exactly as long as a type is implemented ahead of, or behind,
+    /// the release that owns it.
+    #[must_use]
+    pub fn is_built(&self) -> bool {
+        matches!(self, Self::Background | Self::Fill | Self::Line)
+    }
 }
 
 /// A layer definition.

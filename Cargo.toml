@@ -31,6 +31,7 @@ tessella-tile = { version = "0.0.0", path = "crates/tessella-tile" }
 # green without a cross C toolchain (R-6, and DR-16's producer/soak/cross-compile lane).
 csscolorparser = "0.8"   # vendored csscolorparser
 earcutr = "0.5"          # earcut.hpp — output ordering matters for the §9.1 oracle diff
+libm = "0.2"            # core has no sqrt or round; the line generator needs both
 fontdue = "0.9"          # local glyph SDF path
 geo-types = "0.7"
 geojson = "1.0"

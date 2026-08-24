@@ -12,6 +12,7 @@ publish = false
 
 [dependencies]
 earcutr.workspace = true
+libm.workspace = true
 rustybuzz.workspace = true
 unicode-bidi.workspace = true
 unicode-linebreak.workspace = true

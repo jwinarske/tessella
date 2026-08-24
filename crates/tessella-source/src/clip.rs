@@ -158,6 +158,98 @@ pub fn clip_ring(ring: &[Position], lo: f64, hi: f64, axis: Axis) -> Ring {
     out
 }
 
+/// Clips an open line to `lo..=hi` on one axis, producing one piece per pass through the box.
+///
+/// A line is not a ring: it has ends, and a line that leaves the box and comes back is *two*
+/// drawn pieces, not one with a chord across the gap. So this returns a list where
+/// [`clip_ring`] returns a single ring, and the count matters downstream — each piece gets its
+/// own caps and its own strip, which is why a tile can hold twice the vertices of its neighbour
+/// for the same feature.
+///
+/// Ported from geojson-vt's `clipper::clipLine`. Its `lineMetrics` bookkeeping — `segStart`,
+/// `segEnd`, cumulative length — is not carried: those feed `line-gradient` and
+/// `mapbox_clip_start`/`mapbox_clip_end`, and inventing values for them would be worse than
+/// their absence, because the line generator reads them and would silently rescale every dash.
+#[must_use]
+pub fn clip_line(line: &[Position], lo: f64, hi: f64, axis: Axis) -> Vec<Ring> {
+    let mut slices: Vec<Ring> = Vec::new();
+    if line.len() < 2 {
+        return slices;
+    }
+
+    let mut slice: Ring = Vec::new();
+    let last_seg = line.len() - 2;
+    for (i, pair) in line.windows(2).enumerate() {
+        let (a, b) = (pair[0], pair[1]);
+        let (ak, bk) = (axis.of(a), axis.of(b));
+        let is_last_seg = i == last_seg;
+        let at = |k: f64| {
+            let t = (k - ak) / (bk - ak);
+            [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t]
+        };
+
+        if ak < lo {
+            if bk > hi {
+                // Crosses the whole box in one segment: that is a complete piece by itself.
+                slice.push(at(lo));
+                slice.push(at(hi));
+                slices.push(core::mem::take(&mut slice));
+            } else if bk > lo {
+                slice.push(at(lo));
+                if is_last_seg {
+                    slice.push(b);
+                }
+            } else if bk == lo && !is_last_seg {
+                // Touching the edge from outside starts a piece, but only if the line
+                // continues; a line that merely ends on the boundary draws nothing.
+                slice.push(b);
+            }
+        } else if ak > hi {
+            if bk < lo {
+                slice.push(at(hi));
+                slice.push(at(lo));
+                slices.push(core::mem::take(&mut slice));
+            } else if bk < hi {
+                slice.push(at(hi));
+                if is_last_seg {
+                    slice.push(b);
+                }
+            } else if bk == hi && !is_last_seg {
+                slice.push(b);
+            }
+        } else {
+            slice.push(a);
+            if bk < lo {
+                slice.push(at(lo));
+                slices.push(core::mem::take(&mut slice));
+            } else if bk > hi {
+                slice.push(at(hi));
+                slices.push(core::mem::take(&mut slice));
+            } else if is_last_seg {
+                slice.push(b);
+            }
+        }
+    }
+
+    if !slice.is_empty() {
+        slices.push(slice);
+    }
+    slices
+}
+
+/// Clips an open line to a box on both axes.
+///
+/// The y pass runs over each piece the x pass produced, so a line crossing a corner can split
+/// again; the pieces are flattened back into one list.
+#[must_use]
+pub fn clip_line_to_box(line: &[Position], lo: f64, hi: f64) -> Vec<Ring> {
+    let mut out = Vec::new();
+    for piece in clip_line(line, lo, hi, Axis::X) {
+        out.extend(clip_line(&piece, lo, hi, Axis::Y));
+    }
+    out
+}
+
 /// Clips a ring to a box on both axes.
 #[must_use]
 pub fn clip_ring_to_box(ring: &[Position], lo: f64, hi: f64) -> Ring {

@@ -13,8 +13,17 @@
 //! and would look correct until something set an outline color.
 //!
 //! Outlines are counted here but not yet built: they share the fill's vertices and need only
-//! their own index list, which is line-list rather than triangle-list and belongs with the line
-//! work.
+//! their own index list, which is line-list rather than triangle-list — note that this is *not*
+//! the extruded line the line layer builds, so the line generator does not supply it.
+//!
+//! # A line layer is one drawable, and byte-exact
+//!
+//! A line has no outline sublayer, so it is one drawable per tile at sublayer 0 where a fill is
+//! two at sublayers 1 and 2. Its buffers match the oracle byte for byte, which the fill's do
+//! not: mbgl runs every GeoJSON *polygon* through wagyu before bucketing and wagyu rotates the
+//! rings, while a LineString reaches the bucket in source order. So the line path is the one
+//! place the whole chain — projection, clip, rounding, join selection, extrusion, bit-packing —
+//! is checked against the oracle's own buffer hashes rather than up to a permutation.
 //!
 //! # Layer index is the style's order
 //!
@@ -27,7 +36,8 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use tessella_layout::fill::{self, FillBucket, Ring};
-use tessella_source::clip::{clip_ring_to_box, round_to_tile_units};
+use tessella_layout::line::{LineBucket, LineCap, LineJoin, LineOptions};
+use tessella_source::clip::{clip_line_to_box, clip_ring_to_box, round_to_tile_units};
 use tessella_source::geojson::{GeoJsonFeature, Geometry};
 use tessella_source::tiling::{EXTENT, TilingOptions};
 use tessella_style::property::{ResolvedProperty, resolve_paint};
@@ -54,6 +64,8 @@ pub enum Content {
     Background,
     /// Triangles, and a count of the outline drawable that accompanies them.
     Fill(FillBucket),
+    /// An extruded polyline.
+    Line(LineBucket),
 }
 
 /// One layer's contribution to one tile.
@@ -78,6 +90,9 @@ impl LayerBucket {
         match self.content {
             Content::Background => 1,
             Content::Fill(_) => 2,
+            // A line layer is one drawable per tile: unlike a fill it has no outline
+            // sublayer, because the extrusion already is the stroke.
+            Content::Line(_) => 1,
         }
     }
 }
@@ -123,7 +138,7 @@ pub fn build_tile(
     let mut buckets = Vec::new();
 
     for (layer_index, layer) in style.layers.iter().enumerate() {
-        if !layer.kind.is_r0() {
+        if !layer.kind.is_built() {
             continue;
         }
 
@@ -178,7 +193,64 @@ pub fn build_tile(
                 let borrowed: Vec<&[Ring]> = per_feature.iter().map(Vec::as_slice).collect();
                 Content::Fill(fill::build_features(&borrowed))
             }
-            // `is_r0` gates this, so anything else is unreachable rather than merely unhandled.
+            LayerKind::Line => {
+                let filter = match &layer.filter {
+                    Some(value) => Filter::parse(value).map_err(|source| TileError::Filter {
+                        layer: layer.id.clone(),
+                        source,
+                    })?,
+                    None => Filter::always(),
+                };
+
+                let options = line_options(layer);
+                let mut bucket = LineBucket::default();
+                let project =
+                    |p: &[f64; 2]| projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
+                for feature in features {
+                    if !filter.matches(feature, None) {
+                        continue;
+                    }
+                    match &feature.geometry {
+                        Geometry::LineString(lines) => {
+                            for line in lines {
+                                let projected: Vec<[f64; 2]> = line.iter().map(project).collect();
+                                // Each piece the clip returns is a separate polyline with its
+                                // own caps, not a continuation: a line that leaves the buffered
+                                // box and comes back must not be joined across the gap.
+                                for piece in clip_line_to_box(&projected, lo, hi) {
+                                    bucket.add_geometry(&to_tile_ring(&piece), &options);
+                                }
+                            }
+                        }
+                        // A line layer over polygons draws their outlines. mbgl takes the
+                        // feature's own type rather than the layer's, so this is not an odd
+                        // case to tolerate — it is how a style strokes a fill without a second
+                        // source. The rings clip as rings, not as lines: a ring that leaves the
+                        // box re-enters along the box edge, and clipping it open would draw the
+                        // detour as a visible chord.
+                        Geometry::Polygon(polygons) => {
+                            let options = LineOptions {
+                                closed: true,
+                                ..options
+                            };
+                            for polygon in polygons {
+                                for ring in polygon {
+                                    let projected: Vec<[f64; 2]> =
+                                        ring.iter().map(project).collect();
+                                    let clipped = clip_ring_to_box(&projected, lo, hi);
+                                    if !clipped.is_empty() {
+                                        bucket.add_geometry(&to_tile_ring(&clipped), &options);
+                                    }
+                                }
+                            }
+                        }
+                        // A point has no length to extrude.
+                        Geometry::Point(_) => continue,
+                    }
+                }
+                Content::Line(bucket)
+            }
+            // `is_built` gates this, so anything else is unreachable rather than merely unhandled.
             _ => continue,
         };
 
@@ -218,7 +290,7 @@ pub fn build_mvt_tile(
     let mut buckets = Vec::new();
 
     for (layer_index, layer) in style.layers.iter().enumerate() {
-        if !layer.kind.is_r0() {
+        if !layer.kind.is_built() {
             continue;
         }
 
@@ -274,6 +346,51 @@ pub fn build_mvt_tile(
                 let borrowed: Vec<&[Ring]> = per_feature.iter().map(Vec::as_slice).collect();
                 Content::Fill(fill::build_features(&borrowed))
             }
+            LayerKind::Line => {
+                let filter = match &layer.filter {
+                    Some(value) => Filter::parse(value).map_err(|source| TileError::Filter {
+                        layer: layer.id.clone(),
+                        source,
+                    })?,
+                    None => Filter::always(),
+                };
+
+                let named = layer
+                    .source_layer
+                    .as_deref()
+                    .and_then(|name| source.layer(name));
+
+                let options = line_options(layer);
+                let mut bucket = LineBucket::default();
+                if let Some(named) = named {
+                    for feature in &named.features {
+                        if !filter.matches(feature, None) {
+                            continue;
+                        }
+                        // Polygons are drawn by a line layer as their own outlines, which is
+                        // what `closed` in the generator means; points have no length to
+                        // extrude and are dropped the way mbgl drops them.
+                        let closed = match feature.geom_type {
+                            tessella_source::mvt::GeomType::LineString => false,
+                            tessella_source::mvt::GeomType::Polygon => true,
+                            _ => continue,
+                        };
+                        let options = LineOptions { closed, ..options };
+                        // Already tile-local and already clipped by whoever cut the tile, so
+                        // the geometry goes straight to the generator; see this function's
+                        // note on why that differs from the GeoJSON path.
+                        for part in feature.rings_scaled(named.extent, EXTENT) {
+                            #[allow(clippy::cast_possible_truncation)]
+                            let part: Ring = part
+                                .into_iter()
+                                .map(|point| [point[0] as i16, point[1] as i16])
+                                .collect();
+                            bucket.add_geometry(&part, &options);
+                        }
+                    }
+                }
+                Content::Line(bucket)
+            }
             _ => continue,
         };
 
@@ -302,6 +419,44 @@ fn to_tile_ring(clipped: &[[f64; 2]]) -> Ring {
         .collect()
 }
 
+/// Reads a line layer's layout properties.
+///
+/// Only the constant forms are read. `line-cap` and `line-join` are permitted to be
+/// zoom-dependent expressions, and `line-join` may additionally be data-driven; a layer using
+/// either falls back to the spec default here rather than silently evaluating at the wrong
+/// zoom, because the join type changes how many vertices a corner emits and getting it from
+/// the wrong zoom would be a structural error, not a cosmetic one.
+fn line_options(layer: &tessella_style::Layer) -> LineOptions {
+    let literal = |name: &str| match layer.layout.get(name) {
+        Some(tessella_style::PropertyValue::Literal(v)) => Some(v),
+        _ => None,
+    };
+    let number = |name: &str, default: f32| {
+        literal(name)
+            .and_then(tessella_style::Value::as_number)
+            .map_or(default, |v| v as f32)
+    };
+    let cap = match literal("line-cap").and_then(tessella_style::Value::as_str) {
+        Some("round") => LineCap::Round,
+        Some("square") => LineCap::Square,
+        _ => LineCap::Butt,
+    };
+    LineOptions {
+        join: match literal("line-join").and_then(tessella_style::Value::as_str) {
+            Some("bevel") => LineJoin::Bevel,
+            Some("round") => LineJoin::Round,
+            _ => LineJoin::Miter,
+        },
+        begin_cap: cap,
+        end_cap: cap,
+        miter_limit: number("line-miter-limit", 2.0),
+        round_limit: number("line-round-limit", 1.05),
+        overscaling: 1,
+        closed: false,
+        clip_distances: None,
+    }
+}
+
 /// Total drawables a tile's buckets become.
 #[must_use]
 pub fn drawable_count(buckets: &[LayerBucket]) -> usize {
@@ -320,7 +475,16 @@ impl Content {
     pub fn as_fill(&self) -> Option<&FillBucket> {
         match self {
             Self::Fill(bucket) => Some(bucket),
-            Self::Background => None,
+            Self::Background | Self::Line(_) => None,
+        }
+    }
+
+    /// The line bucket, if this is one.
+    #[must_use]
+    pub fn as_line(&self) -> Option<&LineBucket> {
+        match self {
+            Self::Line(bucket) => Some(bucket),
+            Self::Background | Self::Fill(_) => None,
         }
     }
 }

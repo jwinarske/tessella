@@ -380,6 +380,11 @@ pub fn bindings_for(
                 emit(1, view::fill_pass(), view::tiled_flags());
                 emit(2, view::fill_pass(), view::tiled_flags());
             }
+            // Sublayer 0, not 1: a fill's triangles and outline occupy 1 and 2 so that the
+            // outline sorts above the fill it belongs to, and a line has no such pair.
+            Content::Line(_) => {
+                emit(0, view::fill_pass(), view::tiled_flags());
+            }
         }
     }
     bindings

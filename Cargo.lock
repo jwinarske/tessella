@@ -685,6 +685,7 @@ name = "tessella-layout"
 version = "0.0.0"
 dependencies = [
  "earcutr",
+ "libm",
  "rustybuzz",
  "tessella-glyph",
  "tessella-style",

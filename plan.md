@@ -1,6 +1,8 @@
 # TESSELLA_PLAN — tessella: MapLibre-style-spec frontend in Rust, capture-stream producer
 
-rev 0.9 — 2026-08-23
+rev 0.10 — 2026-08-24
+rev 0.10: R1 underway — MVT decode and the line layer land; DR-19 gains the line-path
+confirmation that the rotation is wagyu's alone, the line buffers being byte-exact.
 rev 0.9: R0's stream complete and diffed against the probe envelope by envelope; DR-19 records
 that GeoJSON polygon vertex *order* is wagyu's and is not ported, with the consequence for
 §9.1's diff; §10's R0 entry carries its status and its two qualifications.
@@ -474,9 +476,11 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   struct shape, atomics, mode-bit positions, and conventions (field additions to existing
   envelopes remain open for R2). Exit:
   stream matches the probe on the hermetic style; parked bytes == 0.
-- **R1** — vector tiles, network + cache with request coalescing, line layer, data-driven
-  binders/permutations, DR-11 evaluator, §12.5 startup path. Exit: probe parity on a real
-  style sans symbols; cold-boot-to-first-tile traced and within budget.
+- **R1** — *in progress.* Vector tiles decode and tessellate (MVT 2.1, no dependency); the line
+  layer is byte-exact against the oracle, six tiles of six, vertices and indices. Remaining:
+  network + cache with request coalescing, data-driven binders/permutations, DR-11 evaluator,
+  §12.5 startup path. Exit: probe parity on a real style sans symbols; cold-boot-to-first-tile
+  traced and within budget.
 - **R1.5** — four views over the same style (§13). Exit: §9.2 invariants green; §13.3
   four-view zoom benchmark green on RK3566; §13.1 fractional-zoom counters at zero.
 - **R2** — symbols: glyph manager, shaping, quads, per-view placement, collision, cross-tile
@@ -829,6 +833,12 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
   mostly unaffected — mbgl runs `fixupPolygons` on them only for spec version 1, which is
   effectively extinct — so R1's diff against a real style can compare vertex sequences directly,
   and a v1 tile is the one case where it would have to fall back to cycles.
+  Confirmed from the other side by the line layer: `fixupPolygons` takes polygons only, so a
+  LineString reaches the bucket in source order, and the line path's vertex *and* index buffers
+  match the oracle's own FNV hashes byte for byte across all six tiles of the hermetic style.
+  That is the whole chain — projection, clip, rounding, join selection, extrusion, bit-packing —
+  compared as sequences, and it is what says the rotation is wagyu's alone and not something
+  upstream of it that the fill path's cycle comparison was hiding.
 
 ## 15. Risk register
 

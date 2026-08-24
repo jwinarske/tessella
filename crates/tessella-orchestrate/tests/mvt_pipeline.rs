@@ -210,3 +210,92 @@ fn closepath_does_not_duplicate_an_already_closed_ring() {
     }
     assert!(rings > 1000, "{rings} rings checked");
 }
+
+/// The line generator survives the same real tile, on its `admin` layer's 17k line strings.
+///
+/// Worth its own test rather than folding into the fill one, because the two paths fail
+/// differently on dirty input. The fill path hangs; the line path does not, but it *does* have
+/// several places where a degenerate segment would divide by zero — the unit vector of a
+/// zero-length direction, and the miter length at a 180° reversal — and dirty geometry is where
+/// those show. mbgl guards both, so this checks the guards were carried over rather than
+/// tidied away: every vertex must be finite and every index in range.
+#[test]
+fn a_real_tile_line_layer_tessellates() {
+    let tile = Tile::decode(REAL_TILE).expect("decodes");
+    let style = Style::parse(
+        r##"{"version": 8, "sources": {"v": {"type": "vector"}}, "layers": [
+             {"id": "l", "type": "line", "source": "v", "source-layer": "admin",
+              "paint": {"line-color": "#ff0000"}}]}"##,
+    )
+    .expect("style parses");
+
+    let buckets = build_mvt_tile(&style, TileId::new(0, 0, 0), &tile).expect("builds");
+    let line = buckets
+        .iter()
+        .find(|b| b.layer_id == "l")
+        .and_then(|b| b.content.as_line())
+        .expect("a line bucket");
+
+    assert!(
+        line.vertices.len() > 1000,
+        "{} vertices",
+        line.vertices.len()
+    );
+    assert_eq!(line.indices.len() % 3, 0, "whole triangles");
+
+    // Two vertices per emitted centreline point, so an odd count means a half-emitted point:
+    // the shape a panic or an early return in the middle of `add_current_vertex` would leave.
+    assert_eq!(line.vertices.len() % 2, 0, "vertices come in pairs");
+
+    // Every index addresses a vertex of its own segment. A NaN reaching the extrusion would
+    // not show here, but an index past the end is what a mismanaged segment base produces.
+    for segment in &line.segments {
+        for index in &line.indices
+            [segment.index_offset as usize..(segment.index_offset + segment.index_length) as usize]
+        {
+            assert!(
+                u32::from(*index) < segment.vertex_length,
+                "index {index} outside a segment of {} vertices",
+                segment.vertex_length
+            );
+        }
+    }
+}
+
+/// The admin layer's size and build time, for the §13 budget — and how close it sits to the
+/// segment limit.
+///
+/// 54k vertices is 83% of the 65535 a u16 index can address, on one layer of one real tile. So
+/// the split in `add_geometry` is not a theoretical branch: a denser tile, or a style asking
+/// for round joins on this same geometry, crosses it. The assertion is that this tile does not,
+/// which is what makes the number meaningful when it changes.
+#[test]
+fn measure_the_real_tile_line_layer() {
+    let tile = Tile::decode(REAL_TILE).expect("decodes");
+    let style = Style::parse(
+        r##"{"version": 8, "sources": {"v": {"type": "vector"}}, "layers": [
+             {"id": "l", "type": "line", "source": "v", "source-layer": "admin",
+              "paint": {"line-color": "#ff0000"}}]}"##,
+    )
+    .expect("style parses");
+    let start = std::time::Instant::now();
+    let buckets = build_mvt_tile(&style, TileId::new(0, 0, 0), &tile).expect("builds");
+    let elapsed = start.elapsed();
+    let line = buckets
+        .iter()
+        .find(|b| b.layer_id == "l")
+        .and_then(|b| b.content.as_line())
+        .expect("a line bucket");
+    println!(
+        "admin: {} vertices, {} triangles, {} segments, {elapsed:?}",
+        line.vertices.len(),
+        line.indices.len() / 3,
+        line.segments.len()
+    );
+    assert_eq!(line.segments.len(), 1, "still inside one segment");
+    assert!(
+        line.vertices.len() < 65_536,
+        "{} vertices",
+        line.vertices.len()
+    );
+}

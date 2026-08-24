@@ -96,22 +96,21 @@ fn both_fill_layers_produce_the_same_geometry() {
 }
 
 /// The oracle draws 37 drawables over six tiles: one background per tile, two per fill layer
-/// per tile, plus the line and circle layers R0 does not implement.
+/// per tile, one per line layer per tile, plus the circle layer this build does not implement.
 ///
-/// R0's share is the background and the two fills: `6 * (1 + 2 + 2)` = 30. The remaining seven
-/// are the line layer's six and the circle layer's one.
+/// This build's share is `6 * (1 + 2 + 2 + 1)` = 36. The one remaining is the circle layer's,
+/// which the oracle draws in a single tile.
 #[test]
-fn the_r0_drawable_count_matches_the_oracles_share() {
+fn the_drawable_count_matches_the_oracles_share() {
     let total: usize = COVER
         .iter()
         .map(|(x, y)| drawable_count(&build(*x, *y)))
         .sum();
-    assert_eq!(total, 30);
+    assert_eq!(total, 36);
 
-    // And the layers R0 does not implement are absent rather than empty, so nothing claims to
-    // have drawn them.
+    // And the layer this build does not implement is absent rather than empty, so nothing
+    // claims to have drawn it.
     let buckets = build(4093, 2724);
-    assert!(bucket_for(&buckets, "line-datadriven").is_none());
     assert!(bucket_for(&buckets, "circle-constant").is_none());
 }
 
@@ -136,11 +135,15 @@ fn a_fill_layer_is_two_drawables_and_a_background_is_one() {
 fn layer_indices_are_the_styles_own_order() {
     let buckets = build(4093, 2723);
     let indices: Vec<usize> = buckets.iter().map(|b| b.layer_index).collect();
-    assert_eq!(indices, [0, 1, 2], "bg, fill-constant, fill-datadriven");
+    assert_eq!(
+        indices,
+        [0, 1, 2, 3],
+        "bg, fill-constant, fill-datadriven, line-datadriven"
+    );
 
-    // The oracle's keys agree: background is L00000, the fills are L00001 and L00002, and the
-    // line and circle layers it does draw are L00003 and L00004 — indices this build skips
-    // without renumbering.
+    // The oracle's keys agree: background is L00000, the fills are L00001 and L00002, the line
+    // is L00003, and the circle layer this build skips is L00004 — an index left unoccupied
+    // rather than renumbered away.
     assert_eq!(bucket_for(&buckets, "bg").unwrap().layer_index, 0);
     assert_eq!(
         bucket_for(&buckets, "fill-constant").unwrap().layer_index,
@@ -220,5 +223,137 @@ fn a_tile_outside_the_data_builds_empty_rather_than_failing() {
     assert_eq!(
         bucket_for(&buckets, "bg").map(|b| &b.content),
         Some(&Content::Background)
+    );
+}
+
+/// Line vertex and index counts per tile, read out of the golden dump's `L00003` drawables.
+///
+/// These are the assertion that the join and cap decisions are mbgl's. Two vertices are emitted
+/// per centreline point and two triangles per segment, so 4/6 is a single segment, 6/12 is two
+/// segments joined, and 8/12 is *two separate pieces* of two vertices each — that last one is
+/// what says the line clip splits rather than bridging the gap, and it is the number a
+/// ring-style clip would get wrong.
+#[test]
+fn line_vertex_counts_match_the_oracle_per_tile() {
+    let expected = [
+        ((4092, 2723), (4, 6)),
+        ((4092, 2724), (4, 6)),
+        ((4093, 2723), (6, 12)),
+        ((4093, 2724), (6, 12)),
+        ((4094, 2723), (8, 12)),
+        ((4094, 2724), (6, 12)),
+    ];
+
+    for ((x, y), (vertices, indices)) in expected {
+        let buckets = build(x, y);
+        let bucket = bucket_for(&buckets, "line-datadriven")
+            .and_then(|b| b.content.as_line())
+            .unwrap_or_else(|| panic!("tile {x}/{y} has a line bucket"));
+        assert_eq!(
+            (bucket.vertices.len(), bucket.indices.len()),
+            (vertices, indices),
+            "tile {x}/{y}"
+        );
+    }
+}
+
+/// FNV-1a 64, the hash the probe uses over a raw buffer.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h = (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// The line vertex and index buffers are byte-identical to the oracle's.
+///
+/// This is a stronger claim than anything the fill path can make, and the reason is that
+/// `fixupPolygons` — the wagyu union that rotates a fill's rings and costs that path its
+/// byte comparison (see `tessella_source::clip`) — runs on polygons only. A LineString reaches
+/// the bucket in the order the source wrote it, so the whole chain is comparable: projection,
+/// clip, rounding, join selection, extrusion, and the bit-packing of the vertex.
+///
+/// The hashes are the probe's own, read out of the golden dump, over `count * stride` bytes.
+#[test]
+fn line_buffers_are_byte_identical_to_the_oracle() {
+    let expected = [
+        (
+            (4092, 2723),
+            0xe81e_b541_9b13_9fbdu64,
+            0x165c_900a_f128_06ceu64,
+        ),
+        ((4092, 2724), 0x6cda_c8da_b7de_969d, 0x165c_900a_f128_06ce),
+        ((4093, 2723), 0x5ad1_f8be_3e7d_95de, 0x671c_58d9_9b7d_8781),
+        ((4093, 2724), 0xdca5_04a7_b256_0d9e, 0x671c_58d9_9b7d_8781),
+        ((4094, 2723), 0x1a8d_c925_a30d_d65d, 0xdba4_ba8d_651c_5355),
+        ((4094, 2724), 0x95cc_f74d_3b20_b49e, 0x671c_58d9_9b7d_8781),
+    ];
+
+    for ((x, y), vertex_hash, index_hash) in expected {
+        let buckets = build(x, y);
+        let bucket = bucket_for(&buckets, "line-datadriven")
+            .and_then(|b| b.content.as_line())
+            .unwrap_or_else(|| panic!("tile {x}/{y} has a line bucket"));
+
+        let mut vertex_bytes = Vec::new();
+        for v in &bucket.vertices {
+            vertex_bytes.extend_from_slice(&v.pos_normal[0].to_le_bytes());
+            vertex_bytes.extend_from_slice(&v.pos_normal[1].to_le_bytes());
+            vertex_bytes.extend_from_slice(&v.data);
+        }
+        assert_eq!(fnv1a(&vertex_bytes), vertex_hash, "vertices at {x}/{y}");
+
+        let index_bytes: Vec<u8> = bucket
+            .indices
+            .iter()
+            .flat_map(|i| i.to_le_bytes())
+            .collect();
+        assert_eq!(fnv1a(&index_bytes), index_hash, "indices at {x}/{y}");
+    }
+}
+
+/// A line layer over polygon features draws their outlines.
+///
+/// mbgl takes the *feature's* geometry type, not the layer's, so a style can stroke a fill
+/// without a second source. Dropping polygons here would leave such a layer silently blank —
+/// and silently is the problem: the layer is present, its paint resolves, and it draws nothing.
+#[test]
+fn a_line_layer_strokes_polygon_features() {
+    let style = Style::parse(
+        r##"{"version": 8,
+             "sources": {"probe": {"type": "geojson", "data":
+               {"type": "Feature", "properties": {},
+                "geometry": {"type": "Polygon", "coordinates":
+                  [[[-0.2, 51.45], [-0.05, 51.45], [-0.05, 51.55], [-0.2, 51.55], [-0.2, 51.45]]]}}}},
+             "layers": [{"id": "stroke", "type": "line", "source": "probe",
+                         "paint": {"line-color": "#ff0000"}}]}"##,
+    )
+    .expect("style parses");
+    let Some(Source::Geojson(source)) = style.source("probe") else {
+        panic!("one geojson source");
+    };
+    let features = geojson::read(&source.data).expect("features read");
+
+    let buckets = build_tile(
+        &style,
+        TileId::new(13, 4093, 2723),
+        &features,
+        TilingOptions::default(),
+    )
+    .expect("tile builds");
+    let line = bucket_for(&buckets, "stroke")
+        .and_then(|b| b.content.as_line())
+        .expect("a line bucket");
+
+    assert!(!line.vertices.is_empty(), "the outline is drawn");
+    assert_eq!(line.indices.len() % 3, 0, "whole triangles");
+    // A closed ring joins at the seam rather than capping, so every vertex is extruded off the
+    // centreline; an unextruded pair would mean a cap was emitted where a join belongs.
+    assert!(
+        line.vertices
+            .iter()
+            .all(|v| v.data[0] != 128 || v.data[1] != 128),
+        "no unextruded vertex"
     );
 }

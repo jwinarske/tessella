@@ -259,9 +259,13 @@ fn the_counts_agree_with_the_oracle() {
         .iter()
         .filter(|kind| **kind == EnvelopeKind::ViewUse)
         .count();
-    assert_eq!(uses, 30, "six tiles: one background and two fills each");
+    assert_eq!(
+        uses, 36,
+        "six tiles: one background, two fills and one line each"
+    );
 
-    // The oracle emits a clip set for each of its three tiled layers; R0 implements two of them.
+    // The oracle emits a clip set for each of its three tiled layers — the two fills and the
+    // line — and this build now produces all three.
     let oracle_sets = DUMP
         .lines()
         .filter(|line| line.starts_with("stencil layer="))
@@ -271,7 +275,7 @@ fn the_counts_agree_with_the_oracle() {
         .iter()
         .filter(|kind| **kind == EnvelopeKind::StencilTiles)
         .count();
-    assert_eq!(mine, 2, "R0 implements two of them");
+    assert_eq!(mine, oracle_sets, "and so does this build");
 
     // Two placeholder textures, as the oracle lists.
     assert_eq!(
