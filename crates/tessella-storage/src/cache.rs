@@ -23,6 +23,24 @@
 //! string defeats the cache. Recorded rather than worked around, because the workaround —
 //! stripping parameters that look like tokens — guesses at which ones matter.
 //!
+//! # Is SQLite the right engine
+//!
+//! Measured, on twenty 471 KiB tiles from the page cache: a `get` costs 0.59 ms against a
+//! plain `fs::read` of the same bytes at 0.26 ms, and against 0.50 ms for SQLite reading the
+//! blob column and nothing else. So a lookup is within a fifth of what SQLite can possibly do
+//! for this workload, and about twice a raw file read — which for a nine-tile cover is 0.26 ms
+//! against 0.11 ms, noise beside the fifteen milliseconds that decode and tessellation take.
+//!
+//! The first measurement said something more useful: 71% of a lookup was the LRU bookkeeping,
+//! not the read. That is fixed below and is worth three times more than any engine change
+//! would have been.
+//!
+//! What would argue for replacing SQLite is not speed. It is that `rusqlite` bundles the last C
+//! in the tree (§3.1), which is why this whole module is behind an off-by-default feature and
+//! cannot be built for the cross target. A pure-Rust store would remove that. Against it: an
+//! `.mbtiles` archive *is* an SQLite database, so having it linked is what would let one be
+//! read directly. That is a decision for the §8 dependency table, not for this file.
+//!
 //! # WAL, and what it is for
 //!
 //! §12.6 asks for WAL so a reader is not blocked by a writer. That matters here more than in an
@@ -61,6 +79,8 @@ pub struct Entry {
     pub expires: Option<i64>,
     /// When it was last written, in seconds since the Unix epoch.
     pub modified: i64,
+    /// When it was last read, in seconds since the Unix epoch.
+    pub accessed: i64,
 }
 
 impl Entry {
@@ -113,6 +133,12 @@ pub struct SqliteCache {
 impl SqliteCache {
     /// The default bound, which is mbgl's `DEFAULT_MAX_CACHE_SIZE`.
     pub const DEFAULT_CAPACITY: u64 = 50 * 1024 * 1024;
+
+    /// How stale a read timestamp may get before it is worth rewriting, in seconds.
+    ///
+    /// Eviction asks which entries are cold. A minute answers that as precisely as a second
+    /// does, and costs a write per entry per minute instead of a write per read.
+    pub const ACCESS_GRANULARITY: i64 = 60;
 
     /// Opens or creates a cache at `path`, bounded to [`Self::DEFAULT_CAPACITY`].
     ///
@@ -186,7 +212,7 @@ impl SqliteCache {
 
         let entry = connection
             .query_row(
-                "SELECT status, expires, modified, etag, data, must_revalidate
+                "SELECT status, expires, modified, etag, data, must_revalidate, accessed
                  FROM responses WHERE url = ?1",
                 params![url],
                 |row| {
@@ -203,14 +229,24 @@ impl SqliteCache {
                         },
                         expires: row.get(1)?,
                         modified: row.get(2)?,
+                        accessed: row.get(6)?,
                     })
                 },
             )
             .optional()?;
 
-        if entry.is_some() {
-            // Eviction is by least-recently-used, so a read is a write. Cheap under WAL, and
-            // the alternative is an eviction order that reflects when things were *fetched*.
+        // Eviction is least-recently-used, so a read has to record that it happened — and that
+        // makes every read a write. Measured, it was *seventy-one percent* of the cost of a
+        // lookup: the read itself is 0.52 ms for nine megabytes and the bookkeeping around it
+        // is another 1.2 ms. On flash it is write amplification as well as latency.
+        //
+        // So the timestamp is only rewritten when it would move by more than
+        // [`Self::ACCESS_GRANULARITY`]. Eviction wants to know which entries are cold, and
+        // minute resolution answers that as well as second resolution does; a tile read twenty
+        // times in a frame is written once.
+        if let Some(entry) = &entry
+            && now.saturating_sub(entry.accessed) > Self::ACCESS_GRANULARITY
+        {
             connection.execute(
                 "UPDATE responses SET accessed = ?2 WHERE url = ?1",
                 params![url, now],

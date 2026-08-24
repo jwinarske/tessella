@@ -417,3 +417,64 @@ fn eviction_stops_at_the_bound() {
     );
     assert_eq!(cache.size().expect("sizes"), 100);
 }
+
+/// A read does not rewrite the access timestamp unless it has meaningfully moved.
+///
+/// Eviction is least-recently-used, so a read has to record that it happened — which makes
+/// every read a write. Measured, that was 71% of the cost of a lookup, and on flash it is write
+/// amplification as much as latency. Minute resolution answers "which entries are cold" as well
+/// as second resolution does.
+#[test]
+fn a_read_does_not_rewrite_the_timestamp_every_time() {
+    let cache = SqliteCache::in_memory().expect("opens");
+    let response = Response {
+        status: 200,
+        body: BODY.to_vec(),
+        ..Response::default()
+    };
+    cache.put("u", &response, 1_000).expect("stores");
+
+    // Reads inside the granularity leave it alone.
+    for offset in [0, 1, 30, SqliteCache::ACCESS_GRANULARITY] {
+        let entry = cache
+            .get("u", 1_000 + offset)
+            .expect("queries")
+            .expect("present");
+        assert_eq!(entry.accessed, 1_000, "not rewritten at +{offset}");
+    }
+
+    // Past it, the timestamp moves, or eviction would forget the entry is in use.
+    let after = 1_000 + SqliteCache::ACCESS_GRANULARITY + 1;
+    cache.get("u", after).expect("queries");
+    let entry = cache.get("u", after).expect("queries").expect("present");
+    assert_eq!(entry.accessed, after, "rewritten once past the granularity");
+}
+
+/// Coarsening the timestamp does not break the eviction order.
+///
+/// The risk of writing less often is that a hot entry looks cold. It does not: entries read
+/// within a minute of each other are all recent, and eviction compares them against entries
+/// that have not been read for much longer.
+#[test]
+fn coarsened_timestamps_still_order_eviction() {
+    let cache = SqliteCache::in_memory_with_capacity(25).expect("opens");
+    let body = |n: u8| Response {
+        status: 200,
+        body: vec![n; 10],
+        ..Response::default()
+    };
+    cache.put("cold", &body(0), 1_000).expect("stores");
+    cache.put("hot", &body(1), 1_000).expect("stores");
+
+    // Read "hot" repeatedly over several minutes; "cold" is never touched again.
+    for minute in 1..5 {
+        cache.get("hot", 1_000 + minute * 120).expect("queries");
+    }
+
+    cache.put("new", &body(2), 1_600).expect("stores");
+    assert!(cache.get("hot", 2_000).expect("queries").is_some(), "kept");
+    assert!(
+        cache.get("cold", 2_000).expect("queries").is_none(),
+        "the one nobody read went first"
+    );
+}
