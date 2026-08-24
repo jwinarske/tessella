@@ -20,7 +20,7 @@ ninja mbgl-capture-probe
 ./mbgl-capture-probe --dump=<tessella>/tests/golden/hermetic_style.dump
 ```
 
-Produced by `mbgl-capture-probe` at maplibre-native `796341e27793`, on the
+Produced by `mbgl-capture-probe` at maplibre-native `5af58b108d4a`, on the
 `capture-backend-phase0` branch whose base commit `b237943` plan.md pins. Byte-identical
 across six consecutive runs; if a regeneration produces a diff on unrelated lines, that is a
 determinism regression in the probe rather than a change in the frontend, and the four
