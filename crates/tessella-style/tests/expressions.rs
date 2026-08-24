@@ -799,3 +799,102 @@ fn a_missing_needle_finds_nothing() {
         Value::Number(-1.0)
     );
 }
+
+/// A legacy function with nothing to fall back to errors rather than yielding null.
+///
+/// The chain is the function's own default, then the property spec's, then a failure. Null would
+/// render as absent, which looks like the feature having no value rather than like the style and
+/// the data disagreeing about its type.
+#[test]
+fn a_legacy_function_with_no_default_errors() {
+    use tessella_style::expression::{PropertySpec, Type};
+
+    let spec = PropertySpec {
+        default: None,
+        expected: Some(Type::Number),
+    };
+    let value: Value =
+        serde_json::from_str(r#"{"type": "identity", "property": "p"}"#).expect("json");
+    let parsed = Expression::parse_for(&value, &spec).expect("parses");
+
+    let empty = TestFeature::polygon(vec![]);
+    assert!(
+        parsed.evaluate(None, Some(&empty as &dyn Feature)).is_err(),
+        "no property, no default, so no value"
+    );
+
+    let present = TestFeature::polygon(vec![("p", Value::Number(7.0))]);
+    assert_eq!(
+        parsed
+            .evaluate(None, Some(&present as &dyn Feature))
+            .expect("evaluates"),
+        Value::Number(7.0)
+    );
+}
+
+/// A default, from either source, is used instead of erroring.
+#[test]
+fn a_legacy_function_prefers_its_own_default_then_the_propertys() {
+    use tessella_style::expression::{PropertySpec, Type};
+
+    let spec = PropertySpec {
+        default: Some(Value::Number(-1.0)),
+        expected: Some(Type::Number),
+    };
+    let empty = TestFeature::polygon(vec![]);
+
+    // The property spec's default.
+    let from_spec: Value =
+        serde_json::from_str(r#"{"type": "identity", "property": "p"}"#).expect("json");
+    assert_eq!(
+        Expression::parse_for(&from_spec, &spec)
+            .expect("parses")
+            .evaluate(None, Some(&empty as &dyn Feature))
+            .expect("evaluates"),
+        Value::Number(-1.0)
+    );
+
+    // The function's own default wins over it.
+    let from_function: Value =
+        serde_json::from_str(r#"{"type": "identity", "property": "p", "default": -2}"#)
+            .expect("json");
+    assert_eq!(
+        Expression::parse_for(&from_function, &spec)
+            .expect("parses")
+            .evaluate(None, Some(&empty as &dyn Feature))
+            .expect("evaluates"),
+        Value::Number(-2.0)
+    );
+}
+
+/// Only scalars can be searched for. An aggregate needle is a question with no answer.
+///
+/// Reporting "not found" instead would be indistinguishable from a genuine miss, which is the
+/// distinction that makes this an error rather than a false.
+///
+/// Both paths are checked. A constant needle fails at parse, because constant folding evaluates
+/// it there and no input could rescue it; a needle read from a feature fails at evaluation,
+/// because whether it is an aggregate depends on the data.
+#[test]
+fn an_aggregate_needle_is_an_error() {
+    for text in [
+        r#"["in", ["literal", {}], "hello"]"#,
+        r#"["in", ["literal", [1]], ["literal", [1, 2]]]"#,
+        r#"["index-of", ["literal", {}], "hello"]"#,
+    ] {
+        let value: Value = serde_json::from_str(text).expect("json");
+        assert!(
+            Expression::parse(&value).is_err(),
+            "{text} folds to an error at parse"
+        );
+    }
+
+    let feature = TestFeature::polygon(vec![("needle", Value::Array(vec![Value::Number(1.0)]))]);
+    let data_driven = expr(r#"["in", ["get", "needle"], "hello"]"#);
+    assert!(
+        data_driven
+            .evaluate(None, Some(&feature as &dyn Feature))
+            .is_err(),
+        "and from a feature it fails at evaluation"
+    );
+}

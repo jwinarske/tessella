@@ -470,6 +470,16 @@ fn find_in(
     haystack: &Value,
     from: usize,
 ) -> Result<Option<usize>, EvaluationError> {
+    // Only scalars can be searched for. An object or array needle is a style asking a question
+    // with no answer — the spec rejects it rather than reporting "not found", which would be
+    // indistinguishable from a genuine miss.
+    if matches!(needle, Value::Object(_) | Value::Array(_)) {
+        return Err(EvaluationError::Type {
+            expected: "boolean, string, number or null",
+            got: needle.type_name(),
+        });
+    }
+
     match haystack {
         Value::String(text) => {
             let Value::String(needle) = needle else {
@@ -652,7 +662,17 @@ fn evaluate_legacy(
         None => Value::Number(context.zoom()?),
     };
 
-    let fallback = || function.fallback().cloned().unwrap_or(Value::Null);
+    // Function default, then the property's, then an error. Running out is not a null: a legacy
+    // function with nothing to fall back to has no value for this feature, and null would render
+    // as absent rather than report that the style and the data disagree.
+    let fallback = || -> Result<Value, EvaluationError> {
+        function.fallback().cloned().ok_or(EvaluationError::Type {
+            expected: function
+                .property_type
+                .map_or("a value", |expected| expected.name()),
+            got: "null",
+        })
+    };
 
     match function.kind {
         // Identity passes the property through, but only when it is the type the property spec
@@ -661,29 +681,29 @@ fn evaluate_legacy(
         // between identity and a bare `["get", …]`.
         LegacyKind::Identity => {
             if input == Value::Null {
-                return Ok(fallback());
+                return fallback();
             }
             let acceptable = function
                 .property_type
                 .is_none_or(|expected| matches_spec_type(expected, &input));
-            Ok(if acceptable { input } else { fallback() })
+            if acceptable { Ok(input) } else { fallback() }
         }
 
         // Exact equality against each stop input. Types are not coerced: the spec's own suite
         // has a case where the property is the number 0 and the stop is the string "0", and it
         // expects the default.
-        LegacyKind::Categorical => Ok(function
+        LegacyKind::Categorical => function
             .stops
             .iter()
             .find(|(stop, _)| *stop == input)
-            .map_or_else(fallback, |(_, output)| output.clone())),
+            .map_or_else(fallback, |(_, output)| Ok(output.clone())),
 
         // The output of the last stop at or below the input, clamping below the range to the
         // first stop rather than falling back. The fallback is for a property that is missing or
         // the wrong type; a property that is simply small is still in the function's domain.
         LegacyKind::Interval => {
             let Some(position) = input.as_number() else {
-                return Ok(fallback());
+                return fallback();
             };
             let mut chosen: Option<(f64, &Value)> = None;
             for (stop, output) in &function.stops {
@@ -699,19 +719,19 @@ fn evaluate_legacy(
                     chosen = Some((stop, output));
                 }
             }
-            Ok(match chosen {
-                Some((_, output)) => output.clone(),
+            match chosen {
+                Some((_, output)) => Ok(output.clone()),
                 // Below every stop: clamp to the first, if there is one.
                 None => function
                     .stops
                     .first()
-                    .map_or_else(fallback, |(_, output)| output.clone()),
-            })
+                    .map_or_else(fallback, |(_, output)| Ok(output.clone())),
+            }
         }
 
         LegacyKind::Exponential => {
             let Some(position) = input.as_number() else {
-                return Ok(fallback());
+                return fallback();
             };
             let numeric: Vec<(f64, &Value)> = function
                 .stops
@@ -719,7 +739,7 @@ fn evaluate_legacy(
                 .filter_map(|(stop, output)| stop.as_number().map(|s| (s, output)))
                 .collect();
             let Some(first) = numeric.first() else {
-                return Ok(fallback());
+                return fallback();
             };
 
             // Outside the range the value is clamped, matching `interpolate`.
