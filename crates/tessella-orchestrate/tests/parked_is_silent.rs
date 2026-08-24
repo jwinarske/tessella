@@ -10,7 +10,7 @@
 use tessella_capture_abi::envelope::GeometryId;
 use tessella_capture_abi::envelope::ViewId;
 use tessella_capture_abi::ring::{Producer, Ring};
-use tessella_orchestrate::binder::{FeatureVertices, layout, pack_attributes};
+use tessella_orchestrate::binder::{FILL_FAMILY, attribute_ids, layout, permutation_key};
 use tessella_orchestrate::damage::{CameraKey, DamageTracker, TrafficMeter};
 use tessella_orchestrate::tile::{TileId, bucket_for, build_tile};
 use tessella_orchestrate::{SlabArena, encode_fill};
@@ -55,40 +55,27 @@ fn emit_tile(producer: &mut Producer, arena: &mut SlabArena) {
     )
     .expect("tile builds");
 
-    let layer = style.layer("fill-datadriven").expect("the layer");
-    let paint = tessella_style::property::resolve_paint(layer).expect("resolves");
-    let ids = [
-        ("idFillColorVertexAttribute", 1u32),
-        ("idFillOpacityVertexAttribute", 2),
-        ("idFillOutlineColorVertexAttribute", 3),
-    ]
-    .into_iter()
-    .map(|(name, id)| (String::from(name), id))
-    .collect();
-    let vertex_layout = layout(&paint, &ids, |attr_id| {
+    // The layer bucket carries its own paint buffer, so nothing here re-derives which vertices
+    // belong to which feature — the tile builder already knew, and an estimate made here (the
+    // vertex count divided by the feature count) is wrong the moment a ring is clipped away.
+    let layer_bucket = bucket_for(&buckets, "fill-datadriven").expect("a fill layer");
+    let bucket = layer_bucket.content.as_fill().expect("a fill bucket");
+
+    let ids = attribute_ids(FILL_FAMILY);
+    let key = permutation_key(&layer_bucket.paint, &ids);
+    let vertex_layout = layout(&layer_bucket.binder, &ids, |attr_id| {
         tessella_capture_abi::declared_for(tessella_capture_abi::BuiltIn::FillShader, attr_id)
             .map(|attribute| (attribute.binding, attribute.declared))
     });
 
-    let bucket = bucket_for(&buckets, "fill-datadriven")
-        .and_then(|b| b.content.as_fill())
-        .expect("a fill bucket");
-
-    let polygons: Vec<_> = features
-        .iter()
-        .filter(|f| f.geometry.type_name() == "Polygon")
-        .collect();
-    let per_feature = bucket.vertices.len() / polygons.len().max(1);
-    let entries: Vec<FeatureVertices<'_>> = polygons
-        .iter()
-        .map(|feature| FeatureVertices {
-            feature: *feature,
-            vertices: per_feature,
-        })
-        .collect();
-
-    let packed = pack_attributes(&vertex_layout, &paint, &entries, None).expect("packs");
-    let encoded = encode_fill(arena, GeometryId(1), bucket, &vertex_layout, &packed);
+    let encoded = encode_fill(
+        arena,
+        GeometryId(1),
+        bucket,
+        &vertex_layout,
+        layer_bucket.binder.data(),
+        key,
+    );
     tessella_orchestrate::emit::write(producer, &encoded).expect("the ring takes it");
 }
 

@@ -236,3 +236,85 @@ fn the_drawable_section_is_sorted_not_ordered() {
     order_sorted.sort_unstable();
     assert_ne!(order, order_sorted, "the draw order is not");
 }
+
+/// The permutation key groups the hermetic style's layers exactly as the oracle's `pk` does.
+///
+/// The oracle's raw key is a hash of the uniform-property set together with the engine's
+/// compiled-in defines, so its value is a build artifact and the dump renumbers it. What
+/// survives renumbering is the *grouping* — which drawables want the same shader variant — and
+/// that is the whole of what a consumer needs. So the comparison is between two partitions,
+/// not two numbers.
+///
+/// The oracle groups by `(shader family, permutation)`; a bare permutation would compare the
+/// wrong thing, because keys are only meaningful within a family — mbgl's hash does not include
+/// the shader, and neither does this one.
+#[test]
+fn the_permutation_grouping_matches_the_oracle() {
+    use std::collections::{BTreeMap, BTreeSet};
+    use tessella_orchestrate::binder::{FILL_FAMILY, LINE_FAMILY, attribute_ids, permutation_key};
+
+    // The oracle's own partition: layer index -> the (shader, pk) pairs it drew under.
+    let mut oracle: BTreeMap<u32, BTreeSet<(u32, u32)>> = BTreeMap::new();
+    for line in DUMP.lines().filter(|l| l.starts_with("drawable L")) {
+        let key = line.split_whitespace().nth(1).expect("a key");
+        let layer: u32 = key[1..6].parse().expect("a layer index");
+        let shader: u32 = key[key.find(".sh").expect("sh") + 3..][..4]
+            .parse()
+            .expect("a shader");
+        let permutation: u32 = key[key.find(".pk").expect("pk") + 3..][..4]
+            .parse()
+            .expect("a permutation");
+        oracle
+            .entry(layer)
+            .or_default()
+            .insert((shader, permutation));
+    }
+
+    // Two layers of the same family sharing a permutation there must share one here, and two
+    // that differ must differ. The style's two fill layers are the pair that matters: same
+    // family, same shaders, different paint.
+    let style = Style::parse(HERMETIC).expect("style parses");
+    let key_for = |id: &str, family: &[tessella_capture_abi::BuiltIn]| {
+        let layer = style.layer(id).expect("the layer");
+        let paint = tessella_style::property::resolve_paint(layer).expect("resolves");
+        permutation_key(&paint, &attribute_ids(family))
+    };
+
+    let constant = key_for("fill-constant", FILL_FAMILY);
+    let driven = key_for("fill-datadriven", FILL_FAMILY);
+
+    // The oracle drew them under different permutations, and under the same two shaders.
+    let oracle_constant: BTreeSet<u32> = oracle[&1].iter().map(|(_, p)| *p).collect();
+    let oracle_driven: BTreeSet<u32> = oracle[&2].iter().map(|(_, p)| *p).collect();
+    assert_eq!(
+        oracle_constant.len(),
+        1,
+        "one permutation across both shaders"
+    );
+    assert_eq!(oracle_driven.len(), 1);
+    assert_ne!(oracle_constant, oracle_driven, "the oracle separates them");
+    assert_ne!(constant, driven, "and so does this build");
+
+    // Both of the fill layer's shaders take that one key, which is the property that says the
+    // key belongs to the layer's paint rather than to a shader.
+    let shaders: BTreeSet<u32> = oracle[&2].iter().map(|(s, _)| *s).collect();
+    assert_eq!(
+        shaders.len(),
+        2,
+        "triangles and outline are different shaders"
+    );
+
+    // The line layer is its own family, so its key is not comparable with the fills' — but it
+    // must still separate a driven line from a constant one.
+    let line_driven = key_for("line-datadriven", LINE_FAMILY);
+    let plain = Style::parse(
+        r#"{"version": 8, "sources": {}, "layers": [
+             {"id": "l", "type": "line", "source": "s", "paint": {"line-width": 3.0}}]}"#,
+    )
+    .expect("style parses");
+    let line_constant = permutation_key(
+        &tessella_style::property::resolve_paint(plain.layer("l").expect("l")).expect("resolves"),
+        &attribute_ids(LINE_FAMILY),
+    );
+    assert_ne!(line_driven, line_constant);
+}

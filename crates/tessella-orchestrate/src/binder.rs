@@ -1,4 +1,15 @@
-//! Packing data-driven paint properties into the interleaved vertex buffer.
+//! Describing the interleaved paint buffer on the wire, and naming its shader permutation.
+//!
+//! The bytes themselves are written by [`tessella_layout::paint::PaintBinder`]; this module
+//! turns what that produced into the wire's attribute descriptors, and derives the permutation
+//! key that says which of the shader's declared attributes this variant actually supplies.
+//!
+//! # One layout, not two
+//!
+//! Offsets and stride are read from the binder rather than recomputed here. They were computed
+//! once, when the bytes were written; deriving them a second time from the same property table
+//! agrees right up until one side changes, and then the descriptors point into the middle of a
+//! value. There is no second derivation to disagree with.
 //!
 //! # The layout, measured
 //!
@@ -35,11 +46,23 @@
 //! than rounds, which would be a bug if `255 * (n / 255)` ever came out below `n` — it does not,
 //! for any of the 256 values, in either f32 or f64, and there is a test that checks all of them
 //! rather than the handful that happen to appear in this style.
+//!
+//! # The permutation key is family-scoped
+//!
+//! [`permutation_key`] is a bitmask over a shader *family's* attribute ids, so two layers of
+//! different families may share a value and mean different things. That is correct and is what
+//! mbgl does — its hash has no shader in it either — because §2.2 makes the identity the
+//! *pair* of family and permutation. It is also why the id map unions the family: the plain
+//! fill shader does not declare `fill-outline-color`, so one shader's table is not the id
+//! space.
 
 use alloc::vec::Vec;
 
 use tessella_capture_abi::AttributeDataType;
-use tessella_style::property::{Binding, Color, PropertyKind, ResolvedProperty};
+use tessella_capture_abi::generated::mbgl_enums::BuiltIn;
+use tessella_capture_abi::generated::shader_attributes::attributes;
+use tessella_layout::paint::PaintBinder;
+use tessella_style::property::{Binding, Color, ResolvedProperty};
 
 /// Packs two 8-bit values into one float's integer range, as mbgl does.
 ///
@@ -101,21 +124,6 @@ impl VertexLayout {
     }
 }
 
-/// How many floats the buffer supplies for a property.
-///
-/// A colour is two, a number one, doubled when zoom-interpolated because the buffer then
-/// carries a packed min/max pair for the shader to mix.
-fn supplied_floats(kind: PropertyKind, interpolated: bool) -> Option<u32> {
-    let base = match kind {
-        PropertyKind::Color => 2,
-        PropertyKind::Number => 1,
-        // Only colours and numbers are data-driven-capable in a way that becomes a vertex
-        // attribute. A pattern is cross-faded and occupies two attributes; it is not handled.
-        _ => return None,
-    };
-    Some(if interpolated { base * 2 } else { base })
-}
-
 /// The attribute data type for a count of floats.
 fn float_type(count: u32) -> AttributeDataType {
     match count {
@@ -153,28 +161,29 @@ pub fn attribute_id_name(property: &str) -> Option<alloc::string::String> {
     Some(name)
 }
 
-/// Builds the interleaved layout for a layer's data-driven properties.
+/// Describes, for the wire, the interleaved layout a [`PaintBinder`] produced.
 ///
-/// `declared` resolves a property's attribute id to what the shader declares for it, which is
-/// the generated table's job. A property the shader does not declare still occupies its bytes —
-/// the same bucket may feed a second shader that does declare it — but binds at `-1`.
+/// # Why this reads the binder rather than recomputing
+///
+/// The offsets and stride here must be the ones the *bytes* were written at. Deriving them a
+/// second time from the same property table gives the same answer right up until one side
+/// changes — a new property kind, a composite that doubles its slot — and then the descriptors
+/// point into the middle of a value and the map draws in colours nothing chose. So this takes
+/// the binder's own slots as fact and adds only what the binder does not know: the shader's
+/// binding slot and declared type.
+///
+/// `declared` resolves an attribute id to what the shader declares for it, which is the
+/// generated table's job. A property the shader does not declare still occupies its bytes — the
+/// same bucket may feed a second shader that does declare it — but binds at `-1`.
 pub fn layout(
-    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    binder: &PaintBinder,
     ids: &alloc::collections::BTreeMap<alloc::string::String, u32>,
     declared: impl Fn(u32) -> Option<(i32, AttributeDataType)>,
 ) -> VertexLayout {
     let mut attributes = Vec::new();
-    let mut offset = 0u32;
 
-    // Spec order, which is what the map's key order gives and what the oracle's offsets follow.
-    for (name, property) in paint {
-        let Binding::Attribute { interpolated } = property.binding else {
-            continue;
-        };
-        let Some(floats) = supplied_floats(property.spec.kind, interpolated) else {
-            continue;
-        };
-        let Some(id_name) = attribute_id_name(name) else {
+    for slot in binder.slots() {
+        let Some(id_name) = attribute_id_name(slot.name) else {
             continue;
         };
         let Some(&attr_id) = ids.get(&id_name) else {
@@ -186,26 +195,154 @@ pub fn layout(
         let (binding, declared_type) =
             declared(attr_id).unwrap_or((-1, AttributeDataType::Invalid));
 
+        #[allow(clippy::cast_possible_truncation)]
         attributes.push(BoundAttribute {
-            property: name,
+            property: slot.name,
             attr_id,
             binding,
-            supplied: float_type(floats),
+            supplied: float_type(slot.width as u32 / 4),
             declared: declared_type,
-            offset,
+            offset: slot.offset as u32,
         });
-        offset += floats * 4;
     }
 
+    #[allow(clippy::cast_possible_truncation)]
     VertexLayout {
         attributes,
-        stride: offset,
+        stride: binder.stride() as u32,
     }
+}
+
+/// The name-to-id map for a shader family, from the generated attribute tables.
+///
+/// Built from the tables rather than written out, because they are generated from
+/// `shader_defines.hpp` and a hand-written map is a second copy that can disagree with them.
+///
+/// # Why a family and not one shader
+///
+/// The id space belongs to the family, not to any one member of it. The plain fill shader does
+/// not declare `fill-outline-color` and the plain line shader does not declare
+/// `line-floorwidth` — that is exactly why those bind at `-1` — so a map built from either
+/// alone is missing an id that the layer's paint genuinely has. Unioning the family is what
+/// makes the map the id space rather than one shader's view of it.
+#[must_use]
+pub fn attribute_ids(
+    family: &[BuiltIn],
+) -> alloc::collections::BTreeMap<alloc::string::String, u32> {
+    let mut ids = alloc::collections::BTreeMap::new();
+    for shader in family {
+        for attribute in attributes(*shader) {
+            ids.insert(
+                alloc::string::String::from(attribute.name),
+                attribute.attr_id,
+            );
+        }
+    }
+    ids
+}
+
+/// The fill shaders, which share one attribute id space.
+pub const FILL_FAMILY: &[BuiltIn] = &[
+    BuiltIn::FillShader,
+    BuiltIn::FillOutlineShader,
+    BuiltIn::FillPatternShader,
+    BuiltIn::FillOutlinePatternShader,
+    BuiltIn::FillOutlineTriangulatedShader,
+];
+
+/// The line shaders, which share one attribute id space.
+pub const LINE_FAMILY: &[BuiltIn] = &[
+    BuiltIn::LineShader,
+    BuiltIn::LineGradientShader,
+    BuiltIn::LinePatternShader,
+    BuiltIn::LineSDFShader,
+];
+
+/// The shader permutation a layer's paint requires.
+///
+/// # What the key means
+///
+/// A bit per shader attribute id, set when that property reaches the shader as a *uniform*
+/// rather than as a vertex attribute. That is mbgl's `propertiesAsUniforms` set, which is
+/// precisely what its shader group hashes to choose a permutation, and what its shaders filter
+/// their declared attribute list by.
+///
+/// # Why a mask and not a hash
+///
+/// mbgl's key is a hash of that set together with the engine's compiled-in defines, so it moves
+/// when a CMake option does and says nothing to a reader — the golden dump has to renumber it
+/// for that reason. §2.2 makes this pair, shader family and permutation, the whole of shader
+/// identity on the wire, which means a consumer has to *filter the attribute table by it*. A
+/// hash cannot be filtered by; a mask can be read directly, and is the same in every build.
+///
+/// What must match the oracle is the grouping, and it does: the key is a function of the
+/// layer's paint alone with no shader in it, which is why a fill layer's triangles and its
+/// outline — two different shaders — share one permutation there and here.
+#[must_use]
+pub fn permutation_key(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    ids: &alloc::collections::BTreeMap<alloc::string::String, u32>,
+) -> u64 {
+    let mut mask = 0u64;
+    for (name, property) in paint {
+        // A property that cannot vary per feature is a uniform in every variant, so a bit for
+        // it would be set everywhere and distinguish nothing.
+        if !property.spec.data_driven || matches!(property.binding, Binding::Attribute { .. }) {
+            continue;
+        }
+        for id_name in attribute_id_names(name) {
+            let Some(&attr_id) = ids.get(&id_name) else {
+                continue;
+            };
+            // A family with more than 64 attributes would need a wider key than the frozen ABI
+            // has. None comes close, and silently dropping a bit would merge two permutations
+            // into one, so it is asserted rather than ignored.
+            debug_assert!(attr_id < 64, "attribute id {attr_id} does not fit the key");
+            mask |= 1u64 << (attr_id % 64);
+        }
+    }
+    mask
+}
+
+/// Every shader attribute a property corresponds to.
+///
+/// One for most properties, and *two* for a cross-faded one: `fill-pattern` is
+/// `idFillPatternFromVertexAttribute` and `...To...`, because a pattern fades between zoom
+/// levels and the shader needs both ends.
+///
+/// [`attribute_id_name`] refuses the pattern case because a vertex layout has to know which of
+/// the two a slot is. The permutation key does not: it is a set, and both ends belong in it.
+/// Leaving them out would let two layers that differ only in whether their pattern is
+/// data-driven share a key, and so share a shader variant that binds the wrong things.
+#[must_use]
+fn attribute_id_names(property: &str) -> Vec<alloc::string::String> {
+    use alloc::string::String;
+
+    let camel = |words: &str| {
+        let mut name = String::from("id");
+        for word in words.split('-') {
+            let mut chars = word.chars();
+            if let Some(first) = chars.next() {
+                name.extend(first.to_uppercase());
+                name.push_str(chars.as_str());
+            }
+        }
+        name
+    };
+
+    if let Some(stem) = property.strip_suffix("-pattern") {
+        return alloc::vec![
+            camel(stem) + "PatternFromVertexAttribute",
+            camel(stem) + "PatternToVertexAttribute",
+        ];
+    }
+    alloc::vec![camel(property) + "VertexAttribute"]
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tessella_style::property::paint_specs;
 
     /// mbgl truncates rather than rounds when scaling a colour component, which is only safe if
     /// `255 * (n / 255)` never lands below `n`. Checked for every value rather than the few this
@@ -296,7 +433,8 @@ mod tests {
             _ => None,
         };
 
-        let layout = layout(&paint, &ids(), declared);
+        let binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint);
+        let layout = layout(&binder, &ids(), declared);
         assert_eq!(layout.stride, 20, "8 + 4 + 8");
 
         let names: Vec<&str> = layout.attributes.iter().map(|a| a.property).collect();
@@ -339,364 +477,103 @@ mod tests {
         let layer = style.layer("fill-constant").expect("the layer");
         let paint = tessella_style::property::resolve_paint(layer).expect("resolves");
 
-        let layout = layout(&paint, &ids(), |_| None);
+        let binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint);
+        let layout = layout(&binder, &ids(), |_| None);
         assert!(layout.is_empty());
         assert_eq!(layout.stride, 0);
     }
 
-    /// A zoom-interpolated property doubles its width: the buffer carries a packed min/max pair
-    /// for the shader to mix, rather than one value.
+    /// Supplied widths follow the binder's slot widths, which is the only place they are
+    /// decided now.
     #[test]
-    fn interpolation_doubles_the_supplied_width() {
-        assert_eq!(supplied_floats(PropertyKind::Color, false), Some(2));
-        assert_eq!(supplied_floats(PropertyKind::Color, true), Some(4));
-        assert_eq!(supplied_floats(PropertyKind::Number, false), Some(1));
-        assert_eq!(supplied_floats(PropertyKind::Number, true), Some(2));
-
+    fn a_slots_width_names_its_supplied_type() {
         assert_eq!(float_type(1), AttributeDataType::Float);
         assert_eq!(float_type(2), AttributeDataType::Float2);
         assert_eq!(float_type(4), AttributeDataType::Float4);
     }
-}
 
-/// One feature's contribution to a bucket: the feature itself, and how many vertices it added.
-///
-/// A paint property is evaluated once per *feature* but the buffer is per *vertex*, so each
-/// value is repeated across the vertices that feature contributed. The oracle confirms the
-/// arithmetic: five vertices at stride 20 is 100 bytes, ten is 200.
-pub struct FeatureVertices<'a> {
-    /// The feature to evaluate against.
-    pub feature: &'a dyn tessella_style::expression::Feature,
-    /// How many vertices it contributed.
-    pub vertices: usize,
-}
+    /// The attribute-id map is the generated table's, and it agrees with the oracle's numbering.
+    #[test]
+    fn attribute_ids_come_from_the_generated_table() {
+        let ids = attribute_ids(FILL_FAMILY);
+        assert_eq!(ids.get("idFillColorVertexAttribute"), Some(&1));
+        assert_eq!(ids.get("idFillOpacityVertexAttribute"), Some(&2));
+        assert_eq!(ids.get("idFillOutlineColorVertexAttribute"), Some(&3));
 
-/// A value that could not be packed into a vertex attribute.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum PackError {
-    /// A property evaluated to something its type cannot hold.
-    #[error("`{property}` evaluated to a value that is not {expected}")]
-    Type {
-        /// Property name.
-        property: &'static str,
-        /// What was needed.
-        expected: &'static str,
-    },
-    /// A zoom-interpolated attribute, which needs endpoints this does not yet compute.
+        let ids = attribute_ids(LINE_FAMILY);
+        assert_eq!(ids.get("idLineColorVertexAttribute"), Some(&2));
+        assert_eq!(ids.get("idLineWidthVertexAttribute"), Some(&7));
+        assert_eq!(ids.get("idLineFloorWidthVertexAttribute"), Some(&8));
+    }
+
+    /// The permutation key is the set of properties arriving as uniforms.
     ///
-    /// §12.1 evaluates a camera-varying property once per `(layer, integer-zoom interval)` and
-    /// caches the endpoints. The buffer then carries a packed min/max pair for the shader to
-    /// mix. That machinery does not exist yet, and packing one endpoint twice would produce a
-    /// property that does not change with zoom — wrong in a way that renders.
-    #[error("`{property}` is zoom-interpolated, which needs endpoints that are not computed yet")]
-    Interpolated {
-        /// Property name.
-        property: &'static str,
-    },
-}
-
-/// Packs every feature's data-driven values into the interleaved vertex buffer.
-///
-/// The result is `stride * total_vertices` bytes, or empty when nothing is data-driven.
-///
-/// # Errors
-///
-/// [`PackError`] when a property evaluates to the wrong type, or is zoom-interpolated.
-pub fn pack_attributes(
-    layout: &VertexLayout,
-    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
-    features: &[FeatureVertices<'_>],
-    zoom: Option<f64>,
-) -> Result<Vec<u8>, PackError> {
-    if layout.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let stride = layout.stride as usize;
-    let total: usize = features.iter().map(|f| f.vertices).sum();
-    let mut buffer = alloc::vec![0u8; stride * total];
-
-    let mut vertex = 0usize;
-    for entry in features {
-        // One evaluation per feature, then repeated across its vertices. Evaluating per vertex
-        // would give the same answer at N times the cost, since nothing here varies within a
-        // feature.
-        let mut packed: Vec<(usize, Vec<u8>)> = Vec::with_capacity(layout.attributes.len());
-        for attribute in &layout.attributes {
-            let property = paint.get(attribute.property).ok_or(PackError::Type {
-                property: attribute.property,
-                expected: "a resolved property",
-            })?;
-
-            if matches!(property.binding, Binding::Attribute { interpolated: true }) {
-                return Err(PackError::Interpolated {
-                    property: attribute.property,
-                });
-            }
-
-            let value = property
-                .expression
-                .evaluate(zoom, Some(entry.feature))
-                .map_err(|_| PackError::Type {
-                    property: attribute.property,
-                    expected: "evaluable against this feature",
-                })?;
-
-            let floats: Vec<f32> = match property.spec.kind {
-                PropertyKind::Color => {
-                    let color = tessella_style::property::as_color(&value).map_err(|_| {
-                        PackError::Type {
-                            property: attribute.property,
-                            expected: "a colour",
-                        }
-                    })?;
-                    pack_color(color).to_vec()
-                }
-                PropertyKind::Number => {
-                    #[allow(clippy::cast_possible_truncation)]
-                    let number = value.as_number().ok_or(PackError::Type {
-                        property: attribute.property,
-                        expected: "a number",
-                    })? as f32;
-                    alloc::vec![number]
-                }
-                _ => {
-                    return Err(PackError::Type {
-                        property: attribute.property,
-                        expected: "a colour or a number",
-                    });
-                }
-            };
-
-            let mut bytes = Vec::with_capacity(floats.len() * 4);
-            for float in floats {
-                bytes.extend_from_slice(&float.to_le_bytes());
-            }
-            packed.push((attribute.offset as usize, bytes));
-        }
-
-        for _ in 0..entry.vertices {
-            let base = vertex * stride;
-            for (offset, bytes) in &packed {
-                buffer[base + offset..base + offset + bytes.len()].copy_from_slice(bytes);
-            }
-            vertex += 1;
-        }
-    }
-
-    Ok(buffer)
-}
-
-#[cfg(test)]
-mod pack_tests {
-    use super::*;
-    use tessella_source::geojson;
-    use tessella_style::{Source, Style};
-
-    const HERMETIC: &str = include_str!("../../tessella-style/tests/hermetic_style.json");
-
-    fn hermetic_layout() -> (
-        VertexLayout,
-        alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
-    ) {
-        let style = Style::parse(HERMETIC).expect("style parses");
-        let layer = style.layer("fill-datadriven").expect("the layer");
-        let paint = tessella_style::property::resolve_paint(layer).expect("resolves");
-        let ids = [
-            ("idFillColorVertexAttribute", 1u32),
-            ("idFillOpacityVertexAttribute", 2),
-            ("idFillOutlineColorVertexAttribute", 3),
-        ]
-        .into_iter()
-        .map(|(name, id)| (alloc::string::String::from(name), id))
-        .collect();
-        let declared = |attr_id: u32| match attr_id {
-            1 => Some((1, AttributeDataType::Float4)),
-            2 => Some((2, AttributeDataType::Float2)),
-            _ => None,
-        };
-        (layout(&paint, &ids, declared), paint)
-    }
-
-    fn polygons() -> Vec<tessella_source::GeoJsonFeature> {
-        let style = Style::parse(HERMETIC).expect("style parses");
-        let Some(Source::Geojson(source)) = style.source("probe") else {
-            panic!("a geojson source");
-        };
-        geojson::read(&source.data)
-            .expect("features")
-            .into_iter()
-            .filter(|f| f.geometry.type_name() == "Polygon")
-            .collect()
-    }
-
-    /// Five vertices at stride 20 is 100 bytes, ten is 200 — which is exactly what the oracle's
-    /// one-polygon and two-polygon tiles carry.
+    /// A constant layer's data-driven-capable properties are all uniforms, so every one of
+    /// their bits is set; making a property data-driven clears its bit. That is the whole
+    /// content of the key, and it is what a consumer filters the attribute table by.
     #[test]
-    fn the_buffer_is_sized_as_the_oracles_is() {
-        let (layout, paint) = hermetic_layout();
-        let features = polygons();
+    fn the_permutation_key_names_the_uniforms() {
+        use tessella_style::Style;
 
-        let one = pack_attributes(
-            &layout,
-            &paint,
-            &[FeatureVertices {
-                feature: &features[0],
-                vertices: 5,
-            }],
-            None,
+        let style = Style::parse(include_str!(
+            "../../tessella-style/tests/hermetic_style.json"
+        ))
+        .expect("style parses");
+        let ids = attribute_ids(FILL_FAMILY);
+
+        let constant = tessella_style::property::resolve_paint(
+            style.layer("fill-constant").expect("fill-constant"),
         )
-        .expect("packs");
-        assert_eq!(one.len(), 100);
-
-        let two = pack_attributes(
-            &layout,
-            &paint,
-            &[
-                FeatureVertices {
-                    feature: &features[0],
-                    vertices: 5,
-                },
-                FeatureVertices {
-                    feature: &features[1],
-                    vertices: 5,
-                },
-            ],
-            None,
+        .expect("resolves");
+        let driven = tessella_style::property::resolve_paint(
+            style.layer("fill-datadriven").expect("fill-datadriven"),
         )
-        .expect("packs");
-        assert_eq!(two.len(), 200);
-    }
+        .expect("resolves");
 
-    /// A property is evaluated once per feature and repeated across its vertices. Every vertex
-    /// of one feature therefore carries identical bytes, and two features with different
-    /// property values carry different ones.
-    #[test]
-    fn a_features_value_repeats_across_its_vertices() {
-        let (layout, paint) = hermetic_layout();
-        let features = polygons();
-        let stride = layout.stride as usize;
+        let constant_key = permutation_key(&constant, &ids);
+        let driven_key = permutation_key(&driven, &ids);
 
-        let packed = pack_attributes(
-            &layout,
-            &paint,
-            &[
-                FeatureVertices {
-                    feature: &features[0],
-                    vertices: 3,
-                },
-                FeatureVertices {
-                    feature: &features[1],
-                    vertices: 2,
-                },
-            ],
-            None,
-        )
-        .expect("packs");
-
-        let vertex = |i: usize| &packed[i * stride..(i + 1) * stride];
-        assert_eq!(vertex(0), vertex(1), "same feature");
-        assert_eq!(vertex(1), vertex(2), "same feature");
-        assert_eq!(vertex(3), vertex(4), "same feature");
+        // Colour, opacity and outline colour are uniforms in the constant layer and attributes
+        // in the data-driven one. The pattern is a uniform in both, and contributes *two* bits,
+        // because a cross-faded property is two attributes.
+        // Colour 1, opacity 2, outline colour 3, and the pattern's two ends at 4 and 5.
+        assert_eq!(constant_key, 0b11_1110, "every one is a uniform");
+        // The three the style drives are attributes; the pattern's ends remain uniforms.
+        assert_eq!(driven_key, 0b11_0000, "only the pattern");
         assert_ne!(
-            vertex(2),
-            vertex(3),
-            "the two features have different `kind`, so different colours"
+            constant_key, driven_key,
+            "the two layers need different shader variants"
         );
     }
 
-    /// The colours the style's `match` selects, packed as the shader reads them.
+    /// A property that cannot vary per feature sets no bit.
     ///
-    /// Feature one is `kind: a`, which the style maps to `#c04030`; feature two is `kind: b`,
-    /// mapped to `#3050c0`. Checking the actual bytes rather than just that they differ is what
-    /// catches a packing that is self-consistently wrong.
+    /// It is a uniform in every variant, so a bit for it would be set in every key and would
+    /// distinguish nothing — while making the key depend on properties that have no attribute.
     #[test]
-    fn the_packed_colours_are_the_ones_the_style_selects() {
-        let (layout, paint) = hermetic_layout();
-        let features = polygons();
-        let stride = layout.stride as usize;
+    fn a_non_data_driven_property_is_not_part_of_the_key() {
+        use tessella_style::Style;
 
-        let packed = pack_attributes(
-            &layout,
-            &paint,
-            &[
-                FeatureVertices {
-                    feature: &features[0],
-                    vertices: 1,
-                },
-                FeatureVertices {
-                    feature: &features[1],
-                    vertices: 1,
-                },
-            ],
-            None,
+        let with = Style::parse(
+            r#"{"version": 8, "sources": {}, "layers": [
+                 {"id": "l", "type": "fill", "source": "s",
+                  "paint": {"fill-antialias": false, "fill-translate": [3, 4]}}]}"#,
         )
-        .expect("packs");
+        .expect("style parses");
+        let without = Style::parse(
+            r#"{"version": 8, "sources": {}, "layers": [
+                 {"id": "l", "type": "fill", "source": "s", "paint": {}}]}"#,
+        )
+        .expect("style parses");
 
-        let float_at = |vertex: usize, offset: usize| {
-            let base = vertex * stride + offset;
-            f32::from_le_bytes(packed[base..base + 4].try_into().expect("four bytes"))
+        let ids = attribute_ids(FILL_FAMILY);
+        let key = |style: &Style| {
+            permutation_key(
+                &tessella_style::property::resolve_paint(style.layer("l").expect("l"))
+                    .expect("resolves"),
+                &ids,
+            )
         };
-
-        // fill-color sits at offset 0.
-        let expected_a = pack_color(Color::parse("#c04030").expect("a colour"));
-        assert_eq!(float_at(0, 0), expected_a[0]);
-        assert_eq!(float_at(0, 4), expected_a[1]);
-
-        let expected_b = pack_color(Color::parse("#3050c0").expect("a colour"));
-        assert_eq!(float_at(1, 0), expected_b[0]);
-        assert_eq!(float_at(1, 4), expected_b[1]);
-
-        // fill-opacity at offset 8: 0.5 for `a`, 0.9 for `b`.
-        assert!((float_at(0, 8) - 0.5).abs() < 1e-6, "{}", float_at(0, 8));
-        assert!((float_at(1, 8) - 0.9).abs() < 1e-6, "{}", float_at(1, 8));
-
-        // fill-outline-color at offset 12 inherits fill-color, so it repeats those bytes.
-        assert_eq!(float_at(0, 12), expected_a[0]);
-        assert_eq!(float_at(0, 16), expected_a[1]);
-    }
-
-    /// A zoom-interpolated attribute is refused rather than packed with one endpoint twice,
-    /// which would render as a property that does not change with zoom.
-    #[test]
-    fn an_interpolated_attribute_is_refused_for_now() {
-        use tessella_style::Layer;
-
-        let layer: Layer = serde_json::from_str(
-            r#"{"id": "l", "type": "fill", "source": "s",
-                "paint": {"fill-opacity":
-                    ["interpolate", ["linear"], ["zoom"], 10, ["get", "o"], 16, 1]}}"#,
-        )
-        .expect("a layer");
-        let paint = tessella_style::property::resolve_paint(&layer).expect("resolves");
-        let ids = [("idFillOpacityVertexAttribute", 2u32)]
-            .into_iter()
-            .map(|(name, id)| (alloc::string::String::from(name), id))
-            .collect();
-        let layout = layout(&paint, &ids, |_| Some((2, AttributeDataType::Float2)));
-
-        let features = polygons();
-        let error = pack_attributes(
-            &layout,
-            &paint,
-            &[FeatureVertices {
-                feature: &features[0],
-                vertices: 1,
-            }],
-            Some(13.0),
-        )
-        .expect_err("not implemented");
-        assert!(matches!(error, PackError::Interpolated { .. }), "{error:?}");
-    }
-
-    #[test]
-    fn an_all_constant_layer_packs_nothing() {
-        let style = Style::parse(HERMETIC).expect("style parses");
-        let layer = style.layer("fill-constant").expect("the layer");
-        let paint = tessella_style::property::resolve_paint(layer).expect("resolves");
-        let layout = layout(&paint, &alloc::collections::BTreeMap::new(), |_| None);
-
-        let packed = pack_attributes(&layout, &paint, &[], None).expect("packs");
-        assert!(packed.is_empty());
+        assert_eq!(key(&with), key(&without));
     }
 }

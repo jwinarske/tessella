@@ -179,15 +179,18 @@ pub struct Encoded {
 /// The envelope carries no view: it is process-scoped and refcounted, and a `ViewUse` binds it
 /// into a view's draw order (§5.3).
 ///
-/// `layout` and `attributes` come from the binder. Every data-driven attribute references the
-/// *same* interleaved buffer at a different offset, which is what the oracle does — its three
-/// data-driven descriptors share one source hash and differ only in `off`.
+/// `layout`, `attributes` and `permutation_key` all come from the binder. Every data-driven
+/// attribute references the *same* interleaved buffer at a different offset, which is what the
+/// oracle does — its three data-driven descriptors share one source hash and differ only in
+/// `off`. The permutation key says which of the shader's declared attributes this variant
+/// actually supplies; see [`crate::binder::permutation_key`] for why it is a mask.
 pub fn encode_fill(
     arena: &mut SlabArena,
     geometry: GeometryId,
     bucket: &FillBucket,
     layout: &VertexLayout,
     attributes: &[u8],
+    permutation_key: u64,
 ) -> Encoded {
     let vertex_bytes = as_bytes_i16(&bucket.vertices);
     let index_bytes = as_bytes_u16(&bucket.indices);
@@ -251,10 +254,7 @@ pub fn encode_fill(
     #[allow(clippy::cast_possible_truncation)]
     let record = GeometryAdd {
         geometry,
-        // Zero until DR-6's generated permutation tables exist. A made-up key would select a
-        // shader variant at the consumer, so it is left at the "no permutation" value rather
-        // than guessed.
-        permutation_key: 0,
+        permutation_key,
         indexes,
         vertex_count: bucket.vertices.len() as u32,
         attrs,
@@ -421,6 +421,7 @@ mod tests {
             &bucket,
             &VertexLayout::default(),
             &[],
+            0,
         );
         arena.seal();
 
@@ -453,6 +454,7 @@ mod tests {
             &bucket,
             &VertexLayout::default(),
             &[],
+            0,
         );
         arena.seal();
 
@@ -485,6 +487,7 @@ mod tests {
             &bucket(),
             &VertexLayout::default(),
             &[],
+            0,
         );
         let len = encoded.payload.len();
 
@@ -504,10 +507,12 @@ mod tests {
 #[cfg(test)]
 mod descriptor_tests {
     use super::*;
-    use crate::binder::{FeatureVertices, layout, pack_attributes};
+    use crate::binder::{FILL_FAMILY, attribute_ids, layout, permutation_key};
     use tessella_capture_abi::envelope::WireRecord;
     use tessella_capture_abi::{AttributeDataType, declared_for};
+    use tessella_layout::paint::PaintBinder;
     use tessella_source::geojson;
+    use tessella_style::property::paint_specs;
     use tessella_style::{Source, Style};
 
     const HERMETIC: &str = include_str!("../../tessella-style/tests/hermetic_style.json");
@@ -526,20 +531,10 @@ mod descriptor_tests {
         let layer = style.layer("fill-datadriven").expect("the layer");
         let paint = tessella_style::property::resolve_paint(layer).expect("resolves");
 
-        let ids = [
-            ("idFillColorVertexAttribute", 1u32),
-            ("idFillOpacityVertexAttribute", 2),
-            ("idFillOutlineColorVertexAttribute", 3),
-        ]
-        .into_iter()
-        .map(|(name, id)| (alloc::string::String::from(name), id))
-        .collect();
-
-        // The declared types come from the generated table, not from the test.
-        let vertex_layout = layout(&paint, &ids, |attr_id| {
-            declared_for(BuiltIn::FillShader, attr_id)
-                .map(|attribute| (attribute.binding, attribute.declared))
-        });
+        // Ids come from the generated table rather than being written out here, so the test
+        // cannot disagree with `shader_defines.hpp` about what an attribute is called.
+        let ids = attribute_ids(FILL_FAMILY);
+        let key = permutation_key(&paint, &ids);
 
         let Some(Source::Geojson(source)) = style.source("probe") else {
             panic!("a geojson source");
@@ -557,19 +552,30 @@ mod descriptor_tests {
             [2942, 4820],
             [10240, 4820],
         ]]);
-        let packed = pack_attributes(
-            &vertex_layout,
-            &paint,
-            &[FeatureVertices {
-                feature: &features[0],
-                vertices: bucket.vertices.len(),
-            }],
-            None,
-        )
-        .expect("packs");
+
+        let mut binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint);
+        binder
+            .push(bucket.vertices.len(), &paint, &features[0])
+            .expect("binds");
+        let packed = binder.data().to_vec();
+
+        // The declared types come from the generated table; the offsets and stride come from
+        // the binder that wrote the bytes, so the descriptors cannot describe a layout the
+        // buffer does not have.
+        let vertex_layout = layout(&binder, &ids, |attr_id| {
+            declared_for(BuiltIn::FillShader, attr_id)
+                .map(|attribute| (attribute.binding, attribute.declared))
+        });
 
         let mut arena = SlabArena::new();
-        let encoded = encode_fill(&mut arena, GeometryId(1), &bucket, &vertex_layout, &packed);
+        let encoded = encode_fill(
+            &mut arena,
+            GeometryId(1),
+            &bucket,
+            &vertex_layout,
+            &packed,
+            key,
+        );
         arena.seal();
 
         assert_eq!(encoded.record.attrs.count, 4, "position plus three");
@@ -645,15 +651,10 @@ mod descriptor_tests {
         let style = Style::parse(HERMETIC).expect("style parses");
         let layer = style.layer("fill-datadriven").expect("the layer");
         let paint = tessella_style::property::resolve_paint(layer).expect("resolves");
-        let ids = [
-            ("idFillColorVertexAttribute", 1u32),
-            ("idFillOpacityVertexAttribute", 2),
-            ("idFillOutlineColorVertexAttribute", 3),
-        ]
-        .into_iter()
-        .map(|(name, id)| (alloc::string::String::from(name), id))
-        .collect();
-        let vertex_layout = layout(&paint, &ids, |attr_id| {
+        let ids = attribute_ids(FILL_FAMILY);
+        let key = permutation_key(&paint, &ids);
+        let binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint);
+        let vertex_layout = layout(&binder, &ids, |attr_id| {
             declared_for(BuiltIn::FillShader, attr_id)
                 .map(|attribute| (attribute.binding, attribute.declared))
         });
@@ -662,7 +663,14 @@ mod descriptor_tests {
         let bucket =
             tessella_layout::fill::build(&[alloc::vec![[0, 0], [10, 0], [10, 10], [0, 0]]]);
         let packed = alloc::vec![0u8; vertex_layout.stride as usize * bucket.vertices.len()];
-        let encoded = encode_fill(&mut arena, GeometryId(1), &bucket, &vertex_layout, &packed);
+        let encoded = encode_fill(
+            &mut arena,
+            GeometryId(1),
+            &bucket,
+            &vertex_layout,
+            &packed,
+            key,
+        );
 
         let (start, end) = encoded
             .record
