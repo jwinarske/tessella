@@ -476,3 +476,89 @@ fn decode_geometry(commands: &[u32], layer: &str) -> Result<Vec<Vec<[i32; 2]>>, 
     }
     Ok(out)
 }
+
+use tessella_style::Value as StyleValue;
+use tessella_style::expression::Feature as StyleFeature;
+
+impl Feature {
+    /// The feature's rings, rescaled from the layer's grid onto `target`.
+    ///
+    /// # Why rescaling rather than reading the extent everywhere
+    ///
+    /// A tile states its own grid, and 4096 is only a convention — the field exists because it
+    /// need not be. The rest of this frontend works on one grid (§ tiling's `EXTENT`), so the
+    /// conversion happens once, here, rather than every consumer carrying a divisor it might
+    /// forget. A forgotten divisor is a layer at the wrong scale, which renders as geometry in
+    /// the right shape and the wrong place.
+    ///
+    /// Rounded rather than truncated, for the reason the GeoJSON path rounds: truncation drifts
+    /// every coordinate the same direction, which reads as a projection error rather than as
+    /// rounding.
+    #[must_use]
+    pub fn rings_scaled(&self, from_extent: u32, target: i32) -> Vec<Vec<[i32; 2]>> {
+        if from_extent == 0 {
+            return Vec::new();
+        }
+        let scale = f64::from(target) / f64::from(from_extent);
+        self.geometry
+            .iter()
+            .map(|ring| {
+                ring.iter()
+                    .map(|point| {
+                        #[allow(clippy::cast_possible_truncation)]
+                        [
+                            (f64::from(point[0]) * scale).round() as i32,
+                            (f64::from(point[1]) * scale).round() as i32,
+                        ]
+                    })
+                    .collect()
+            })
+            .collect()
+    }
+}
+
+impl StyleFeature for Feature {
+    fn property(&self, key: &str) -> Option<StyleValue> {
+        self.properties
+            .iter()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| match value {
+                Value::String(text) => StyleValue::String(text.clone()),
+                Value::Number(number) => StyleValue::Number(*number),
+                Value::Bool(flag) => StyleValue::Bool(*flag),
+            })
+    }
+
+    fn geometry_type(&self) -> &str {
+        // The names the spec's `geometry-type` expression produces. A tile's `Unknown` maps to
+        // the same string a GeoJSON feature of no recognised type would give, so a filter reads
+        // one rule for both sources.
+        match self.geom_type {
+            GeomType::Point => "Point",
+            GeomType::LineString => "LineString",
+            GeomType::Polygon => "Polygon",
+            GeomType::Unknown => "Unknown",
+        }
+    }
+
+    fn id(&self) -> Option<StyleValue> {
+        #[allow(clippy::cast_precision_loss)]
+        self.id.map(|id| StyleValue::Number(id as f64))
+    }
+
+    fn properties(&self) -> StyleValue {
+        StyleValue::Object(
+            self.properties
+                .iter()
+                .map(|(key, value)| {
+                    let value = match value {
+                        Value::String(text) => StyleValue::String(text.clone()),
+                        Value::Number(number) => StyleValue::Number(*number),
+                        Value::Bool(flag) => StyleValue::Bool(*flag),
+                    };
+                    (key.clone(), value)
+                })
+                .collect(),
+        )
+    }
+}

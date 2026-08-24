@@ -29,7 +29,7 @@ use alloc::vec::Vec;
 use tessella_layout::fill::{self, FillBucket, Ring};
 use tessella_source::clip::{clip_ring_to_box, round_to_tile_units};
 use tessella_source::geojson::{GeoJsonFeature, Geometry};
-use tessella_source::tiling::TilingOptions;
+use tessella_source::tiling::{EXTENT, TilingOptions};
 use tessella_style::property::{ResolvedProperty, resolve_paint};
 use tessella_style::{Filter, LayerKind, Style};
 use tessella_tile::projection;
@@ -143,7 +143,10 @@ pub fn build_tile(
                     None => Filter::always(),
                 };
 
-                let mut rings: Vec<Ring> = Vec::new();
+                // Rings are kept per feature, because that is the boundary `classify_rings`
+                // needs: handed a flat list it will attach one feature's hole to another
+                // feature's exterior, having nothing in the list to say where one ended.
+                let mut per_feature: Vec<Vec<Ring>> = Vec::new();
                 for feature in features {
                     if !filter.matches(feature, None) {
                         continue;
@@ -154,6 +157,7 @@ pub fn build_tile(
                         // than treating a line as a degenerate ring.
                         continue;
                     };
+                    let mut rings: Vec<Ring> = Vec::new();
                     for polygon in polygons {
                         for ring in polygon {
                             let projected: Vec<[f64; 2]> = ring
@@ -167,10 +171,109 @@ pub fn build_tile(
                             rings.push(to_tile_ring(&clipped));
                         }
                     }
+                    if !rings.is_empty() {
+                        per_feature.push(rings);
+                    }
                 }
-                Content::Fill(fill::build(&rings))
+                let borrowed: Vec<&[Ring]> = per_feature.iter().map(Vec::as_slice).collect();
+                Content::Fill(fill::build_features(&borrowed))
             }
             // `is_r0` gates this, so anything else is unreachable rather than merely unhandled.
+            _ => continue,
+        };
+
+        buckets.push(LayerBucket {
+            layer_index,
+            layer_id: layer.id.clone(),
+            content,
+            paint,
+        });
+    }
+
+    Ok(buckets)
+}
+
+/// Builds a tile's buckets from a decoded vector tile.
+///
+/// # Why this is not `build_tile` with a different feature type
+///
+/// The two sources differ in what their coordinates *are*, not merely in how they are spelled.
+/// GeoJSON carries longitude and latitude, so it must be projected into the tile and then
+/// clipped to the buffered box. A vector tile arrives already tile-local, already clipped by
+/// whoever cut it, on a grid it states for itself — so projecting it would be meaningless and
+/// clipping it again would only round off the buffer the tiler deliberately included.
+///
+/// What they share is everything after that: the same filter, the same classification, the same
+/// tessellator. So the paths converge at `fill::build` rather than being unified before it.
+///
+/// # Errors
+///
+/// [`TileError`] when a layer's filter or paint properties do not compile.
+pub fn build_mvt_tile(
+    style: &Style,
+    tile: TileId,
+    source: &tessella_source::mvt::Tile,
+) -> Result<Vec<LayerBucket>, TileError> {
+    let _ = tile;
+    let mut buckets = Vec::new();
+
+    for (layer_index, layer) in style.layers.iter().enumerate() {
+        if !layer.kind.is_r0() {
+            continue;
+        }
+
+        let paint = resolve_paint(layer).map_err(|source| TileError::Property {
+            layer: layer.id.clone(),
+            source,
+        })?;
+
+        let content = match layer.kind {
+            LayerKind::Background => Content::Background,
+            LayerKind::Fill => {
+                let filter = match &layer.filter {
+                    Some(value) => Filter::parse(value).map_err(|source| TileError::Filter {
+                        layer: layer.id.clone(),
+                        source,
+                    })?,
+                    None => Filter::always(),
+                };
+
+                // A vector layer is addressed by `source-layer`, not by the style layer's own
+                // id. A style naming one the tile does not carry draws nothing, which is
+                // ordinary: one style serves many tiles and not every tile has every layer.
+                let named = layer
+                    .source_layer
+                    .as_deref()
+                    .and_then(|name| source.layer(name));
+
+                let mut per_feature: Vec<Vec<Ring>> = Vec::new();
+                if let Some(named) = named {
+                    for feature in &named.features {
+                        if !filter.matches(feature, None) {
+                            continue;
+                        }
+                        if feature.geom_type != tessella_source::mvt::GeomType::Polygon {
+                            continue;
+                        }
+                        let mut rings: Vec<Ring> = Vec::new();
+                        for ring in feature.rings_scaled(named.extent, EXTENT) {
+                            #[allow(clippy::cast_possible_truncation)]
+                            let ring: Ring = ring
+                                .into_iter()
+                                .map(|point| [point[0] as i16, point[1] as i16])
+                                .collect();
+                            if !ring.is_empty() {
+                                rings.push(ring);
+                            }
+                        }
+                        if !rings.is_empty() {
+                            per_feature.push(rings);
+                        }
+                    }
+                }
+                let borrowed: Vec<&[Ring]> = per_feature.iter().map(Vec::as_slice).collect();
+                Content::Fill(fill::build_features(&borrowed))
+            }
             _ => continue,
         };
 

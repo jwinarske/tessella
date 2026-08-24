@@ -137,9 +137,31 @@ pub fn classify_rings(rings: &[Ring]) -> Vec<Vec<Ring>> {
 /// indices appended relative to the current segment's vertex base.
 #[must_use]
 pub fn build(rings: &[Ring]) -> FillBucket {
+    build_features(core::slice::from_ref(&rings))
+}
+
+/// Builds a bucket from several features, each classified on its own.
+///
+/// # Why the feature boundary matters
+///
+/// `classify_rings` decides exterior from hole by winding, walking a ring list and starting a
+/// new polygon at each exterior. Handed every feature's rings at once it will happily attach one
+/// feature's hole to another feature's exterior, because from inside the list there is nothing
+/// to say where one feature ended. mbgl calls `classifyRings` per feature for exactly this
+/// reason.
+///
+/// It is also what makes the difference between tessellating a real tile and appearing to hang:
+/// a water layer with 47 features and 4875 rings becomes one polygon with 4874 holes, and earcut
+/// is not linear in holes.
+///
+/// The single-feature case is `build`, which is this with one entry — so there is one
+/// implementation and the boundary is explicit at every call site rather than implied by
+/// whichever `Vec` the caller happened to build.
+#[must_use]
+pub fn build_features(features: &[&[Ring]]) -> FillBucket {
     let mut bucket = FillBucket::default();
 
-    for polygon in classify_rings(rings) {
+    for polygon in features.iter().flat_map(|rings| classify_rings(rings)) {
         let total_vertices: usize = polygon.iter().map(Vec::len).sum();
         if total_vertices == 0 {
             continue;
