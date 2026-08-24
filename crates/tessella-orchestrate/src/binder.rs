@@ -433,7 +433,7 @@ mod tests {
             _ => None,
         };
 
-        let binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint);
+        let binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint, 13.0);
         let layout = layout(&binder, &ids(), declared);
         assert_eq!(layout.stride, 20, "8 + 4 + 8");
 
@@ -477,7 +477,7 @@ mod tests {
         let layer = style.layer("fill-constant").expect("the layer");
         let paint = tessella_style::property::resolve_paint(layer).expect("resolves");
 
-        let binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint);
+        let binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint, 13.0);
         let layout = layout(&binder, &ids(), |_| None);
         assert!(layout.is_empty());
         assert_eq!(layout.stride, 0);

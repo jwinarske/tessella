@@ -894,14 +894,17 @@ fn factor(interpolation: Interpolation, position: f64, lower: f64, upper: f64) -
 
 /// Blends two values.
 ///
-/// Numbers and equal-length numeric arrays only. Colors are deliberately absent: a color
-/// arrives here as the string the style wrote, and blending in string space is meaningless
-/// while blending in the wrong color space is subtly wrong everywhere. Color interpolation
-/// belongs with the typed property view, which knows a property is a color, and R0 does not
-/// need it — the hermetic style selects colors with `match` rather than interpolating them.
+/// Numbers and equal-length numeric arrays. A color reaches here as a four-element array,
+/// because a color-typed property has its curve's *stops* coerced rather than its result (see
+/// `coerce_to_color`), so blending them is the ordinary array case and needs no color-aware
+/// branch. The channels are premultiplied sRGB in 0..1, which is the space mbgl blends in.
+///
+/// The form is `a * (1 - t) + b * t`, not the algebraically equal `a + (b - a) * t`. Both the
+/// spec's reference implementation and mbgl use the first, and in floating point they differ in
+/// the last bits — which is a diff on every interpolated color and width.
 fn mix(lower: &Value, upper: &Value, t: f64) -> Result<Value, EvaluationError> {
     match (lower, upper) {
-        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a + (b - a) * t)),
+        (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a * (1.0 - t) + b * t)),
         (Value::Array(a), Value::Array(b)) if a.len() == b.len() => {
             let mut out = Vec::with_capacity(a.len());
             for (a, b) in a.iter().zip(b) {

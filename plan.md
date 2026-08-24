@@ -1,9 +1,11 @@
 # TESSELLA_PLAN — tessella: MapLibre-style-spec frontend in Rust, capture-stream producer
 
 rev 0.10 — 2026-08-24
-rev 0.10: R1 underway — MVT decode, the line layer, the data-driven paint binder and the
-shader permutation key land; DR-19 gains the line-path confirmation that the rotation is
-wagyu's alone, the line buffers being byte-exact.
+rev 0.10: R1 underway — MVT decode, the line layer, the data-driven paint binder, the shader
+permutation key and composite (zoom-interpolated) binding land; the probe gains `--zoom` and
+two further goldens; DR-19 gains the line-path confirmation that the rotation is wagyu's
+alone, the line buffers being byte-exact. §5.1's "camera-free bucket" is qualified: a bucket
+is keyed by the zoom it is used at, because a composite property's endpoints depend on it.
 rev 0.9: R0's stream complete and diffed against the probe envelope by envelope; DR-19 records
 that GeoJSON polygon vertex *order* is wagyu's and is not ported, with the consequence for
 §9.1's diff; §10's R0 entry carries its status and its two qualifications.
@@ -481,8 +483,9 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   layer is byte-exact against the oracle, six tiles of six, vertices and indices; data-driven
   paint binds into the interleaved per-layer buffer, byte-exact across all twelve of the golden
   dump's paint buffers; the shader permutation key is on the wire and groups as the oracle's
-  does. Remaining: network + cache with request coalescing, zoom-interpolated (composite)
-  binders — refused today rather than half-written, and needed for a real style — DR-11
+  does; zoom-interpolated (composite) properties carry both endpoints and their `_t` mix factor,
+  byte-exact against a second golden captured at a fractional zoom. Remaining: network + cache
+  with request coalescing, cross-faded (pattern) binders, the line drawable UBO, DR-11
   evaluator, §12.5 startup path. Exit: probe parity on a real style sans symbols;
   cold-boot-to-first-tile traced and within budget.
 - **R1.5** — four views over the same style (§13). Exit: §9.2 invariants green; §13.3

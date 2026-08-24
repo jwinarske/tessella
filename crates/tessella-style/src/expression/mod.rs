@@ -671,18 +671,17 @@ impl Expression {
     pub fn parse_for(value: &Value, spec: &PropertySpec) -> Result<Self, ParseError> {
         let mut root = parse::parse_with_default(value, spec)?;
 
+        // Checked on the tree the style actually wrote, before either wrapper below moves the
+        // root. A coerced tree has the curve one level down and would be rejected as though the
+        // style had buried it.
+        check_zoom_placement(&root)?;
+
         // A property the spec types as a colour gets its result coerced. The style writes
         // `"red"` or a function returning `"red"`, and what the renderer needs is RGBA — so the
         // conversion belongs at the boundary between the two rather than in every operator that
         // might produce a string.
-        //
-        // Skipped when the expression already produces a colour, because converting one again
-        // would read its normalized channels as 0..255 and darken it by a factor of 255.
-        if spec.expected == Some(Type::Color) && root.result_type() != Type::Color {
-            root = Expr::Cast {
-                to: CastKind::Color,
-                args: alloc::vec![root],
-            };
+        if spec.expected == Some(Type::Color) {
+            root = coerce_to_color(root);
         }
 
         // A property the spec types as formatted wraps whatever it got in a single section.
@@ -698,9 +697,6 @@ impl Expression {
                 }],
             };
         }
-
-        // Checked before the colour wrapper is counted, on the tree the style actually wrote.
-        check_zoom_placement(&root)?;
 
         let dependency = classify(&root);
         let parsed = Self { root, dependency };
@@ -845,6 +841,134 @@ impl LegacyFunction {
         self.function_default
             .as_ref()
             .or(self.property_default.as_ref())
+    }
+}
+
+impl Expression {
+    /// The shader's mix factor between this property's two zoom endpoints.
+    ///
+    /// A property that varies with zoom *and* per feature cannot be evaluated at the camera's
+    /// zoom when its buckets are built, so its value at `bucket_zoom` and at `bucket_zoom + 1`
+    /// goes into the vertex and the shader mixes between them by this scalar — recomputed per
+    /// view, per frame, which is the only place the camera's fractional zoom enters.
+    ///
+    /// Zero for anything that does not vary with zoom, and zero for a `step` curve: a step
+    /// selects rather than blends, so mbgl returns zero for it explicitly rather than letting
+    /// the endpoints mix.
+    ///
+    /// # Why this is not the same arithmetic as interpolating between stops
+    ///
+    /// It looks like the same formula and it is a different function in mbgl —
+    /// `util::interpolationFactor`, computed in `f32` from a camera zoom already narrowed to
+    /// `f32`, where stop interpolation runs in `double`. Sharing one implementation would be
+    /// right to within a rounding error, which is exactly the size of error the oracle diff
+    /// exists to catch.
+    #[must_use]
+    pub fn zoom_mix_factor(&self, bucket_zoom: f64, view_zoom: f64) -> f32 {
+        let Some(curve) = zoom_curve(&self.root) else {
+            return 0.0;
+        };
+        let Expr::Interpolate { interpolation, .. } = curve else {
+            // A step curve. See above.
+            return 0.0;
+        };
+
+        #[allow(clippy::cast_possible_truncation)]
+        let (min, max, z) = (
+            bucket_zoom as f32,
+            (bucket_zoom + 1.0) as f32,
+            view_zoom as f32,
+        );
+        let diff = max - min;
+        let progress = z - min;
+        if diff == 0.0 {
+            return 0.0;
+        }
+        let factor = match interpolation {
+            Interpolation::Linear => progress / diff,
+            Interpolation::Exponential { base } if (*base - 1.0).abs() < f64::EPSILON => {
+                progress / diff
+            }
+            Interpolation::Exponential { base } => {
+                // mbgl widens the base to double for the powers and narrows the quotient back,
+                // which is not the same as computing the whole thing in f32.
+                #[allow(clippy::cast_possible_truncation)]
+                let value =
+                    (base.powf(f64::from(progress)) - 1.0) / (base.powf(f64::from(diff)) - 1.0);
+                value as f32
+            }
+        };
+        factor.clamp(0.0, 1.0)
+    }
+}
+
+/// The zoom curve at the root, through the wrappers that are transparent to it.
+///
+/// The same set `check_zoom_placement` treats as transparent, and for the same reason: a curve
+/// behind a `coalesce` or in a `let` body is still the one curve the property varies by.
+fn zoom_curve(expr: &Expr) -> Option<&Expr> {
+    match expr {
+        Expr::Interpolate { input, .. } | Expr::Step { input, .. }
+            if matches!(**input, Expr::Zoom) =>
+        {
+            Some(expr)
+        }
+        Expr::Coalesce(args) => args.iter().find_map(zoom_curve),
+        Expr::Let { body, .. } => zoom_curve(body),
+        _ => None,
+    }
+}
+
+/// Coerces an expression to a colour, at the leaves rather than at the root.
+///
+/// # Why not simply wrap the whole thing
+///
+/// Because of interpolation. `["interpolate", ["linear"], ["zoom"], 13, "#c04030", 15, "#20a080"]`
+/// wrapped in a cast asks the mixer to blend two *strings* and then convert; there is no such
+/// blend, and the style is a perfectly ordinary one. mbgl builds an `InterpolateImpl<Color>`
+/// whose stops are already colours and mixes RGBA component-wise, so the conversion has to
+/// happen on the way *in* to the curve, not on the way out.
+///
+/// A curve's input is deliberately untouched: it is a number, and the property being a colour
+/// says nothing about it. Everything else — including a `match`, which is where the
+/// data-driven styles put their colours — is wrapped whole, because it selects a value rather
+/// than blending two.
+///
+/// An expression that already produces a colour is left alone: converting one again would read
+/// its normalized channels as 0..255 and darken it by a factor of 255.
+fn coerce_to_color(expr: Expr) -> Expr {
+    match expr {
+        Expr::Interpolate {
+            interpolation,
+            input,
+            stops,
+        } => Expr::Interpolate {
+            interpolation,
+            input,
+            stops: stops
+                .into_iter()
+                .map(|(at, out)| (at, coerce_to_color(out)))
+                .collect(),
+        },
+        Expr::Step { input, base, stops } => Expr::Step {
+            input,
+            base: Box::new(coerce_to_color(*base)),
+            stops: stops
+                .into_iter()
+                .map(|(at, out)| (at, coerce_to_color(out)))
+                .collect(),
+        },
+        // Transparent, as they are to the zoom-placement rule: the value may hide behind either.
+        Expr::Coalesce(args) => Expr::Coalesce(args.into_iter().map(coerce_to_color).collect()),
+        Expr::Let { bindings, body } => Expr::Let {
+            bindings,
+            body: Box::new(coerce_to_color(*body)),
+        },
+        other if other.result_type() == Type::Color => other,
+        other => Expr::Cast {
+            to: CastKind::Color,
+            args: alloc::vec![other],
+        },
     }
 }
 

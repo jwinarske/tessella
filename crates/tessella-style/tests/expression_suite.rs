@@ -234,9 +234,21 @@ fn run_case(case: &Value) -> Result<(), String> {
 ///
 /// Numbers compare with a tolerance, because the suite's expectations are decimal literals and
 /// several operators are transcendental. Everything else compares exactly.
+///
+/// # Why the tolerance is two units and not one
+///
+/// The fixtures carry six significant digits and are *truncated* to them, not rounded:
+/// `interpolate/exponential` expects `3.33333` for a value that is `3.3333333…`. So a correct
+/// result can be a full unit of the sixth digit away — a relative `1e-6` — and a tolerance of
+/// exactly `1e-6` puts that case on the boundary, where one ULP in the last bit of the
+/// computation decides whether it passes. It did exactly that: `a + (b - a) * t` landed just
+/// inside and mbgl's own `a * (1 - t) + b * t` just outside, which would have read as the
+/// correct formula regressing.
+const TOLERANCE: f64 = 2e-6;
+
 fn values_match(got: &Value, want: &Value) -> bool {
     match (got, want) {
-        (Value::Number(a), Value::Number(b)) => (a - b).abs() <= 1e-6 * a.abs().max(1.0),
+        (Value::Number(a), Value::Number(b)) => (a - b).abs() <= TOLERANCE * a.abs().max(1.0),
         (Value::Array(a), Value::Array(b)) => {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| values_match(x, y))
         }

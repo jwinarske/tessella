@@ -55,6 +55,14 @@ pub struct TileId {
     pub x: u32,
     /// Row.
     pub y: u32,
+    /// The zoom this tile is being *used* at, which is the zoom its buckets are built for.
+    ///
+    /// Equal to `z` for a tile drawn at its own zoom, and greater when one stands in above its
+    /// source's maxzoom or covers for a tile still loading. mbgl calls this `overscaledZ` and
+    /// passes it, not `z`, as the bucket zoom — so it is what a zoom-varying paint property's
+    /// endpoints are evaluated at, and therefore part of a bucket's identity rather than a
+    /// display detail.
+    pub overscaled_z: u8,
 }
 
 /// What a layer contributed to a tile.
@@ -162,7 +170,11 @@ pub fn build_tile(
             source,
         })?;
 
-        let mut binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint);
+        let mut binder = PaintBinder::new(
+            paint_specs(&layer.kind).unwrap_or(&[]),
+            &paint,
+            f64::from(tile.bucket_zoom()),
+        );
 
         let content = match layer.kind {
             LayerKind::Background => Content::Background,
@@ -323,7 +335,6 @@ pub fn build_mvt_tile(
     tile: TileId,
     source: &tessella_source::mvt::Tile,
 ) -> Result<Vec<LayerBucket>, TileError> {
-    let _ = tile;
     let mut buckets = Vec::new();
 
     for (layer_index, layer) in style.layers.iter().enumerate() {
@@ -336,7 +347,11 @@ pub fn build_mvt_tile(
             source,
         })?;
 
-        let mut binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint);
+        let mut binder = PaintBinder::new(
+            paint_specs(&layer.kind).unwrap_or(&[]),
+            &paint,
+            f64::from(tile.bucket_zoom()),
+        );
 
         let content = match layer.kind {
             LayerKind::Background => Content::Background,
@@ -547,16 +562,50 @@ impl Content {
 }
 
 impl TileId {
-    /// A tile at a zoom.
+    /// A tile drawn at its own zoom.
     #[must_use]
     pub const fn new(z: u8, x: u32, y: u32) -> Self {
-        Self { z, x, y }
+        Self {
+            z,
+            x,
+            y,
+            overscaled_z: z,
+        }
+    }
+
+    /// A tile standing in above its own zoom.
+    ///
+    /// # Panics
+    ///
+    /// When `overscaled_z` is below `z`, which is not overscaling but a different tile.
+    #[must_use]
+    pub const fn overscaled(z: u8, x: u32, y: u32, overscaled_z: u8) -> Self {
+        assert!(
+            overscaled_z >= z,
+            "overscaled_z is below the tile's own zoom"
+        );
+        Self {
+            z,
+            x,
+            y,
+            overscaled_z,
+        }
+    }
+
+    /// The zoom this tile's buckets are built for.
+    #[must_use]
+    pub const fn bucket_zoom(&self) -> u8 {
+        self.overscaled_z
     }
 }
 
 impl core::fmt::Display for TileId {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "{}/{}/{}", self.z, self.x, self.y)
+        write!(f, "{}/{}/{}", self.z, self.x, self.y)?;
+        if self.overscaled_z != self.z {
+            write!(f, "@{}", self.overscaled_z)?;
+        }
+        Ok(())
     }
 }
 

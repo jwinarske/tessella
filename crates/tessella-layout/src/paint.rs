@@ -29,12 +29,23 @@
 //! a feature whose range is off by one paints one vertex of its neighbour. So the ranges are
 //! taken from the bucket after each feature is added rather than predicted from its geometry.
 //!
+//! # A property that varies with zoom as well
+//!
+//! It cannot be a uniform, because it varies per feature; and it cannot be one value in the
+//! vertex, because the vertex is shared by views at different zooms. So the slot doubles and
+//! carries the property's value at each end of the tile's zoom range — `[bucket zoom, bucket
+//! zoom + 1]` — with a per-view `_t` uniform mixing between them at draw time.
+//!
+//! Two things about that are load-bearing. The ends are stored *grouped*, `[min…, max…]`, not
+//! interleaved per component. And the range is the *bucket's* zoom, which is the tile's
+//! overscaled zoom rather than the camera's — so the endpoints stay camera-free and shareable,
+//! and the bucket's identity gains that zoom (see `tessella_tile::store::TileKey`).
+//!
 //! # What is not implemented
 //!
-//! Zoom-interpolated (`composite`) functions, which supply two values per property to be mixed
-//! by a `_t` uniform, and would double each slot's width. [`Slot::interpolated`] records where
-//! that applies; [`PaintBinder::push`] refuses rather than silently writing half a value,
-//! because half a composite attribute is a plausible-looking buffer that draws wrong colours.
+//! Cross-faded properties — patterns, which are two attributes and a sprite lookup rather than
+//! one slot. The slot-width rule returns nothing for them, so they take no space and are absent from
+//! the buffer rather than present and wrong.
 
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
@@ -75,36 +86,35 @@ pub enum BinderError {
         /// What the slot needs.
         expected: &'static str,
     },
-    /// A zoom-interpolated property, which supplies two values per vertex.
-    #[error("property `{name}` is zoom-interpolated, which is not implemented")]
-    Interpolated {
-        /// Which property.
-        name: &'static str,
-    },
 }
 
 /// The interleaved paint attribute buffer for one layer of one tile.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct PaintBinder {
     slots: Vec<Slot>,
     stride: usize,
+    zoom: f64,
     data: Vec<u8>,
 }
 
-/// Bytes a property of this kind occupies when it varies per feature but not with zoom.
+/// Bytes a property of this kind occupies.
 ///
-/// A colour is two floats because of the channel packing, everything numeric is one. Anything
-/// else has no attribute form — a pattern is a sprite lookup and an enum is a uniform — and
-/// contributes no slot.
-fn slot_width(kind: PropertyKind) -> Option<usize> {
-    match kind {
-        PropertyKind::Color => Some(8),
-        PropertyKind::Number => Some(4),
+/// A colour is two floats because of the channel packing, everything numeric is one — and both
+/// double when the property varies with zoom as well as per feature, because the slot then
+/// carries the value at each end of the zoom range for the shader to mix between.
+///
+/// Anything else has no attribute form — a pattern is a sprite lookup and an enum is a uniform
+/// — and contributes no slot.
+fn slot_width(kind: PropertyKind, interpolated: bool) -> Option<usize> {
+    let unit = match kind {
+        PropertyKind::Color => 8,
+        PropertyKind::Number => 4,
         PropertyKind::Boolean
         | PropertyKind::Enum
         | PropertyKind::Image
-        | PropertyKind::NumberArray(_) => None,
-    }
+        | PropertyKind::NumberArray(_) => return None,
+    };
+    Some(if interpolated { unit * 2 } else { unit })
 }
 
 impl PaintBinder {
@@ -113,10 +123,16 @@ impl PaintBinder {
     /// `specs` must be the layer's spec table *in mbgl's declaration order*: that order is the
     /// layout, so passing a sorted or filtered list silently moves every attribute after the
     /// first difference.
+    /// `zoom` is the bucket's zoom — mbgl's `tileID.overscaledZ`, not the camera's. A property
+    /// that also varies with zoom is stored as its value at `zoom` and at `zoom + 1`, and the
+    /// shader mixes between them, so this is the one number that decides what a composite slot
+    /// contains. Passing the camera's zoom instead would bake one view's position into geometry
+    /// every view shares.
     #[must_use]
     pub fn new(
         specs: &[PropertySpec],
         resolved: &BTreeMap<&'static str, ResolvedProperty>,
+        zoom: f64,
     ) -> Self {
         let mut slots = Vec::new();
         let mut stride = 0usize;
@@ -127,7 +143,7 @@ impl PaintBinder {
             let Binding::Attribute { interpolated } = property.binding else {
                 continue;
             };
-            let Some(width) = slot_width(spec.kind) else {
+            let Some(width) = slot_width(spec.kind, interpolated) else {
                 continue;
             };
             // Every slot is a run of floats, so the buffer is four-byte aligned throughout and
@@ -145,8 +161,15 @@ impl PaintBinder {
         Self {
             slots,
             stride,
+            zoom,
             data: Vec::new(),
         }
+    }
+
+    /// The bucket zoom this binder's composite endpoints were evaluated at.
+    #[must_use]
+    pub fn zoom(&self) -> f64 {
+        self.zoom
     }
 
     /// The properties that take a slot, in buffer order.
@@ -200,20 +223,30 @@ impl PaintBinder {
 
         let mut vertex = alloc::vec![0u8; self.stride];
         for slot in &self.slots {
-            if slot.interpolated {
-                return Err(BinderError::Interpolated { name: slot.name });
-            }
             let property = resolved
                 .get(slot.name)
                 .expect("a slot exists only for a resolved property");
-            let value = property
-                .expression
-                .evaluate(None, Some(feature))
-                .map_err(|error| BinderError::Evaluate {
-                    name: slot.name,
-                    message: alloc::format!("{error}"),
-                })?;
-            let bytes = encode(slot, &value)?;
+            let at = |zoom: Option<f64>| {
+                property
+                    .expression
+                    .evaluate(zoom, Some(feature))
+                    .map_err(|error| BinderError::Evaluate {
+                        name: slot.name,
+                        message: alloc::format!("{error}"),
+                    })
+            };
+
+            // A source-only property is evaluated with no zoom at all, not with the bucket's:
+            // it does not read one, and offering it would let a mis-classified expression
+            // silently start depending on it. A composite property is evaluated at both ends
+            // of the range instead.
+            let bytes = if slot.interpolated {
+                let min = at(Some(self.zoom))?;
+                let max = at(Some(self.zoom + 1.0))?;
+                encode(slot, &min, Some(&max))?
+            } else {
+                encode(slot, &at(None)?, None)?
+            };
             vertex[slot.offset..slot.offset + slot.width].copy_from_slice(&bytes);
         }
 
@@ -226,31 +259,47 @@ impl PaintBinder {
     }
 }
 
-/// Encodes one evaluated value into its slot's bytes.
-fn encode(slot: &Slot, value: &Value) -> Result<Vec<u8>, BinderError> {
-    match slot.width {
-        8 => {
-            let color = as_color(value).map_err(|_| BinderError::Type {
-                name: slot.name,
-                expected: "color",
-            })?;
-            let packed = pack_color(color);
-            let mut bytes = Vec::with_capacity(8);
-            bytes.extend_from_slice(&packed[0].to_le_bytes());
-            bytes.extend_from_slice(&packed[1].to_le_bytes());
-            Ok(bytes)
+/// Encodes a slot's value — or its two zoom endpoints — into that slot's bytes.
+///
+/// The two endpoints are written *grouped by end*, not interleaved per component: mbgl's
+/// `zoomInterpolatedAttributeValue` lays out `[min…, max…]`, so a composite colour is the two
+/// floats of the low end followed by the two of the high end. Interleaving them component-wise
+/// produces a buffer of the right length that the shader reads as nonsense.
+fn encode(slot: &Slot, value: &Value, upper: Option<&Value>) -> Result<Vec<u8>, BinderError> {
+    let floats = |value: &Value| -> Result<Vec<f32>, BinderError> {
+        // The unit width, not the slot's: a composite slot is two of these.
+        match slot.width / if slot.interpolated { 2 } else { 1 } {
+            8 => {
+                let color = as_color(value).map_err(|_| BinderError::Type {
+                    name: slot.name,
+                    expected: "color",
+                })?;
+                Ok(pack_color(color).to_vec())
+            }
+            4 => {
+                let number = value.as_number().ok_or(BinderError::Type {
+                    name: slot.name,
+                    expected: "number",
+                })?;
+                #[allow(clippy::cast_possible_truncation)]
+                Ok(alloc::vec![number as f32])
+            }
+            // `slot_width` produces only these two units.
+            _ => unreachable!("a slot unit is four or eight bytes"),
         }
-        4 => {
-            let number = value.as_number().ok_or(BinderError::Type {
-                name: slot.name,
-                expected: "number",
-            })?;
-            #[allow(clippy::cast_possible_truncation)]
-            Ok((number as f32).to_le_bytes().to_vec())
-        }
-        // `slot_width` produces only 4 and 8.
-        _ => unreachable!("a slot is four or eight bytes"),
+    };
+
+    let mut values = floats(value)?;
+    if let Some(upper) = upper {
+        values.extend(floats(upper)?);
     }
+
+    let mut bytes = Vec::with_capacity(slot.width);
+    for float in values {
+        bytes.extend_from_slice(&float.to_le_bytes());
+    }
+    debug_assert_eq!(bytes.len(), slot.width, "slot `{}`", slot.name);
+    Ok(bytes)
 }
 
 /// Packs a colour into two floats, two channels each.
@@ -307,7 +356,7 @@ mod tests {
     #[test]
     fn a_layer_of_constants_lays_out_nothing() {
         let (specs, resolved) = layer(r##"{"fill-color": "#ff0000", "fill-opacity": 0.5}"##);
-        let binder = PaintBinder::new(&specs, &resolved);
+        let binder = PaintBinder::new(&specs, &resolved, 13.0);
         assert_eq!(binder.stride(), 0);
         assert!(binder.slots().is_empty());
     }
@@ -317,7 +366,7 @@ mod tests {
     #[test]
     fn pushing_to_an_empty_binder_is_a_no_op() {
         let (specs, resolved) = layer(r##"{"fill-color": "#ff0000"}"##);
-        let mut binder = PaintBinder::new(&specs, &resolved);
+        let mut binder = PaintBinder::new(&specs, &resolved, 13.0);
         binder.push(10, &resolved, &kind_a()).expect("pushes");
         assert!(binder.data().is_empty());
         assert_eq!(binder.vertex_count(), 0);
@@ -331,7 +380,7 @@ mod tests {
     fn a_feature_with_no_vertices_writes_nothing() {
         let (specs, resolved) =
             layer(r##"{"fill-color": ["match", ["get", "kind"], "a", "#ff0000", "#0000ff"]}"##);
-        let mut binder = PaintBinder::new(&specs, &resolved);
+        let mut binder = PaintBinder::new(&specs, &resolved, 13.0);
 
         binder.push(2, &resolved, &kind_a()).expect("first");
         // The second feature produced nothing: the count did not move.
@@ -359,7 +408,7 @@ mod tests {
     fn colour_channels_truncate() {
         let (specs, resolved) =
             layer(r##"{"fill-color": ["match", ["get", "kind"], "a", "#e0d040", "#000000"]}"##);
-        let mut binder = PaintBinder::new(&specs, &resolved);
+        let mut binder = PaintBinder::new(&specs, &resolved, 13.0);
         binder.push(1, &resolved, &kind_a()).expect("pushes");
 
         let mut first = [0u8; 4];
@@ -376,7 +425,7 @@ mod tests {
     fn a_wrong_typed_value_is_refused() {
         let (specs, resolved) =
             layer(r#"{"fill-opacity": ["match", ["get", "kind"], "a", 0.5, 0.9]}"#);
-        let binder = PaintBinder::new(&specs, &resolved);
+        let binder = PaintBinder::new(&specs, &resolved, 13.0);
         assert_eq!(binder.stride(), 4);
 
         // A feature the match cannot resolve falls to the fallback, so force the failure at the
@@ -388,34 +437,60 @@ mod tests {
             interpolated: false,
         };
         assert!(matches!(
-            encode(&slot, &Value::String(String::from("wide"))),
+            encode(&slot, &Value::String(String::from("wide")), None),
             Err(BinderError::Type { .. })
         ));
     }
 
-    /// A zoom-interpolated property is refused, not half-written.
+    /// A zoom-interpolated property takes a double-width slot holding both endpoints.
     ///
-    /// Half a composite attribute is a buffer of the right length holding the min value where
-    /// the shader expects a min/max pair, which draws plausible-but-wrong colours rather than
-    /// failing.
+    /// The two ends are grouped, `[min…, max…]`, not interleaved per component — mbgl's
+    /// `zoomInterpolatedAttributeValue` — and the low end is the value at the bucket zoom.
     #[test]
-    fn an_interpolated_property_is_refused() {
+    fn an_interpolated_property_carries_both_endpoints() {
         let (specs, resolved) = layer(
-            r#"{"fill-opacity": ["interpolate", ["linear"], ["zoom"],
-                 0, ["match", ["get", "kind"], "a", 0.1, 0.2],
-                 10, ["match", ["get", "kind"], "a", 0.8, 0.9]]}"#,
+            r##"{"fill-opacity": ["interpolate", ["linear"], ["zoom"],
+                 13, ["match", ["get", "kind"], "a", 0.1, 0.2],
+                 15, ["match", ["get", "kind"], "a", 0.9, 0.8]]}"##,
         );
-        let binder = PaintBinder::new(&specs, &resolved);
-        let slot = binder
-            .slots()
-            .first()
-            .expect("a composite property takes a slot");
-        assert!(slot.interpolated, "the expression reads zoom and a feature");
+        let mut binder = PaintBinder::new(&specs, &resolved, 13.0);
 
-        let mut binder = binder;
-        assert!(matches!(
-            binder.push(1, &resolved, &kind_a()),
-            Err(BinderError::Interpolated { .. })
-        ));
+        let slot = *binder.slots().first().expect("a slot");
+        assert!(slot.interpolated, "the expression reads zoom and a feature");
+        assert_eq!(slot.width, 8, "two floats, not one");
+        assert_eq!(binder.stride(), 8);
+
+        binder.push(1, &resolved, &kind_a()).expect("pushes");
+        let min = f32::from_le_bytes(binder.data()[0..4].try_into().expect("four bytes"));
+        let max = f32::from_le_bytes(binder.data()[4..8].try_into().expect("four bytes"));
+        // The curve runs 0.1 at zoom 13 to 0.9 at 15, so a bucket at 13 spans [0.1, 0.5].
+        assert!((min - 0.1).abs() < 1e-6, "{min}");
+        assert!((max - 0.5).abs() < 1e-6, "{max}");
+    }
+
+    /// The bucket zoom moves both endpoints, which is why it is part of a bucket's identity.
+    #[test]
+    fn the_bucket_zoom_selects_the_range() {
+        let (specs, resolved) = layer(
+            r##"{"fill-opacity": ["interpolate", ["linear"], ["zoom"],
+                 13, ["match", ["get", "kind"], "a", 0.1, 0.2],
+                 15, ["match", ["get", "kind"], "a", 0.9, 0.8]]}"##,
+        );
+        let ends = |zoom: f64| {
+            let mut binder = PaintBinder::new(&specs, &resolved, zoom);
+            binder.push(1, &resolved, &kind_a()).expect("pushes");
+            (
+                f32::from_le_bytes(binder.data()[0..4].try_into().expect("four bytes")),
+                f32::from_le_bytes(binder.data()[4..8].try_into().expect("four bytes")),
+            )
+        };
+        let (a_min, a_max) = ends(13.0);
+        let (b_min, b_max) = ends(14.0);
+        assert!(a_max > a_min && b_max > b_min);
+        assert!(b_min > a_min, "a later bucket starts higher up the curve");
+        assert!(
+            (b_min - a_max).abs() < 1e-6,
+            "and starts where the earlier one ended"
+        );
     }
 }

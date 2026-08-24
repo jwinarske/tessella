@@ -11,6 +11,27 @@ maplibre-native build. Regenerating them needs both.
 | file | style | camera |
 |---|---|---|
 | `hermetic_style.dump` | the probe's built-in inline GeoJSON style, no network | 51.505, -0.11 @ z13, 1024x768 |
+| `composite_style.dump` | `crates/tessella-style/tests/composite_style.json` | 51.505, -0.11 @ z13, 1024x768 |
+| `composite_style_z13_5.dump` | the same | 51.505, -0.11 @ **z13.5**, 1024x768 |
+
+### Why there are three
+
+The hermetic style has no paint property that varies with zoom *and* per feature, so it says
+nothing about how such a property binds. `composite_style.json` is a minimal delta from it —
+identical source geometry, identical layer count and order, two layers' paint turned into
+`interpolate` curves over `zoom` whose stops are `match` expressions on a feature property.
+The vertex and index buffers are byte-identical between the two dumps, which is what makes the
+paint buffers the only thing that differs.
+
+The third exists because at an exactly integer camera zoom over a tile of that zoom, the mix
+factor between a composite property's two endpoints is *zero* — so `composite_style.dump` and
+`hermetic_style.dump` have byte-identical uniform buffers, and an implementation that never
+computed the factor would pass against either. At 13.5 mbgl writes 0.5, and the difference
+becomes visible. It is also the only capture at a fractional zoom, so it is what checks the
+camera off an integer.
+
+The R0 reference is deliberately left alone: it is what the whole stream is diffed against and
+it is frozen, so a new question gets a new capture rather than an amended one.
 
 ## Regenerating
 
@@ -18,13 +39,19 @@ maplibre-native build. Regenerating them needs both.
 cd <maplibre-native>/build-capture
 ninja mbgl-capture-probe
 ./mbgl-capture-probe --dump=<tessella>/tests/golden/hermetic_style.dump
+./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/composite_style.json \
+    --dump=<tessella>/tests/golden/composite_style.dump
+./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/composite_style.json \
+    --zoom=13.5 --dump=<tessella>/tests/golden/composite_style_z13_5.dump
 ```
 
-Produced by `mbgl-capture-probe` at maplibre-native `5af58b108d4a`, on the
+Produced by `mbgl-capture-probe` at maplibre-native `5f9d3f77caac`, on the
 `capture-backend-phase0` branch whose base commit `b237943` plan.md pins. Byte-identical
 across six consecutive runs; if a regeneration produces a diff on unrelated lines, that is a
 determinism regression in the probe rather than a change in the frontend, and the four
-sources of variance already found are described in that commit.
+sources of variance already found are described in that commit. `5f9d3f77caac` added the
+`--zoom` flag; a capture without it is byte-identical to one from before, which was checked
+against `hermetic_style.dump` rather than assumed.
 
 ## Reading the actual values
 

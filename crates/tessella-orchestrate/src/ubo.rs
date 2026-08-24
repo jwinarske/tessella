@@ -30,7 +30,7 @@ use tessella_capture_abi::envelope::{Span, UboUpdate, ViewId, WireRecord};
 use tessella_capture_abi::generated::ubo_layouts;
 use tessella_capture_abi::generated::ubo_slots;
 use tessella_capture_abi::ring::{Full, Producer};
-use tessella_style::property::Color;
+use tessella_style::property::{Binding, Color, ResolvedProperty};
 use tessella_tile::camera;
 use tessella_tile::cover::ViewTransform;
 
@@ -173,6 +173,39 @@ impl DrawableEntry {
         layer_index: i32,
         sub_layer_index: i32,
     ) -> Result<Self, camera::CameraError> {
+        Self::for_tile_with(
+            view,
+            z,
+            x,
+            y,
+            wrap,
+            layer_index,
+            sub_layer_index,
+            [0.0, 0.0],
+        )
+    }
+
+    /// As [`Self::for_tile`], with the layer's zoom-mix factors.
+    ///
+    /// Split out rather than folded in because the factors need the layer's resolved paint and
+    /// the tile's bucket zoom, neither of which a matrix needs. Use
+    /// [`fill_interpolations`] to compute them; passing zeros is correct exactly when no paint
+    /// property of the layer varies with zoom.
+    ///
+    /// # Errors
+    ///
+    /// [`camera::CameraError`] when the view has bearing or pitch.
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_tile_with(
+        view: &ViewTransform,
+        z: u8,
+        x: u32,
+        y: u32,
+        wrap: i32,
+        layer_index: i32,
+        sub_layer_index: i32,
+        interpolations: [f32; 2],
+    ) -> Result<Self, camera::CameraError> {
         let mut projection = camera::proj_matrix(view)?;
         projection[14] -= f64::from(depth_offset(layer_index, sub_layer_index));
         let matrix = camera::multiply(
@@ -183,9 +216,50 @@ impl DrawableEntry {
         #[allow(clippy::cast_possible_truncation)]
         Ok(Self {
             matrix: core::array::from_fn(|index| matrix[index] as f32),
-            interpolations: [0.0, 0.0],
+            interpolations,
         })
     }
+}
+
+/// The two zoom-mix factors a fill drawable's UBO carries.
+///
+/// # The pair is not the same for both sublayers
+///
+/// A fill layer draws twice, and the two shaders read different properties: the triangles take
+/// `fill-color` and `fill-opacity`, the outline takes `fill-outline-color` and `fill-opacity`.
+/// They share the buffer and the opacity, and differ in the colour — so a single pair used for
+/// both would give the outline the fill's colour ramp. mbgl builds them separately in
+/// `FillLayerTweaker::execute`, and so does this.
+///
+/// `bucket_zoom` is the tile's overscaled zoom, the same one its endpoints were evaluated at;
+/// `view_zoom` is the camera's, which is where the fractional part enters. At an exactly
+/// integer camera zoom over a tile of that zoom every factor is zero, which is why a capture
+/// at integer zoom cannot tell a correct implementation from one that never computes this.
+#[must_use]
+pub fn fill_interpolations(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    bucket_zoom: f64,
+    view_zoom: f64,
+    sub_layer_index: i32,
+) -> [f32; 2] {
+    let factor = |name: &str| {
+        paint
+            .get(name)
+            .map_or(0.0, |property| match property.binding {
+                // Only an attribute mixes: a uniform already holds the value for this zoom.
+                Binding::Attribute { interpolated: true } => {
+                    property.expression.zoom_mix_factor(bucket_zoom, view_zoom)
+                }
+                _ => 0.0,
+            })
+    };
+
+    let color = if sub_layer_index == 2 {
+        "fill-outline-color"
+    } else {
+        "fill-color"
+    };
+    [factor(color), factor("fill-opacity")]
 }
 
 /// Packs a layer's drawable buffer at a union's stride.

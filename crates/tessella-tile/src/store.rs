@@ -3,9 +3,18 @@
 //! # What sharing means, concretely
 //!
 //! §5 puts ownership at the process rather than the view. A tile's decoded features and built
-//! buckets are functions of `(source, tile, style revision)` and nothing else — camera-free,
-//! because zoom interpolation lives in `_t` uniforms rather than in vertices — so two views
-//! looking at the same place want the *same object*, not two equal ones.
+//! buckets are functions of `(source, tile, zoom used, style revision)` and nothing else — so
+//! two views looking at the same place at the same zoom want the *same object*, not two equal
+//! ones.
+//!
+//! "Camera-free" is the usual shorthand and it is not quite true. A paint property that varies
+//! with zoom *as well as* per feature cannot be a uniform, and its per-feature part cannot be
+//! deferred to one, so its value at each end of the tile's zoom range is stored in the vertices
+//! and a `_t` uniform mixes between them per view per frame. The endpoints depend on the zoom
+//! the tile is *used* at — `overscaled_z`, not `z` — which is why that is in the key. What
+//! stays camera-free is everything continuous: fractional zoom, centre, bearing and pitch never
+//! reach a bucket, which is what makes sharing between views at different fractional zooms work
+//! at all.
 //!
 //! mbgl cannot do this: every `Map` owns its own style, tile pyramid, file sources, atlases and
 //! workers, so N views are N fetches, N decodes, N bucket builds. §5 calls the shared store R0
@@ -44,12 +53,24 @@ pub struct TileKey {
     pub x: u32,
     /// Row.
     pub y: u32,
+    /// The zoom the entry's buckets were built for — mbgl's `overscaledZ`.
+    ///
+    /// # Why this is part of the key and not a display detail
+    ///
+    /// A bucket is only shareable between views that would build it identically. That held
+    /// trivially while nothing in a bucket depended on zoom, and stops holding the moment a
+    /// paint property varies with it: a zoom-varying property is stored as its value at
+    /// `overscaled_z` and at `overscaled_z + 1`, so the same canonical tile standing in at two
+    /// different zooms is two different buckets. Keying only on `(z, x, y)` would hand one
+    /// view the other's endpoints — wrong colours and widths, and invisible at integer zoom,
+    /// which is where one would look first.
+    pub overscaled_z: u8,
     /// Style revision the entry was built against.
     pub style_rev: u64,
 }
 
 impl TileKey {
-    /// A key.
+    /// A key for a tile drawn at its own zoom.
     #[must_use]
     pub fn new(source: impl Into<String>, z: u8, x: u32, y: u32, style_rev: u64) -> Self {
         Self {
@@ -57,6 +78,35 @@ impl TileKey {
             z,
             x,
             y,
+            overscaled_z: z,
+            style_rev,
+        }
+    }
+
+    /// A key for a tile standing in above its own zoom.
+    ///
+    /// # Panics
+    ///
+    /// When `overscaled_z` is below `z`, which is not overscaling but a different tile.
+    #[must_use]
+    pub fn overscaled(
+        source: impl Into<String>,
+        z: u8,
+        x: u32,
+        y: u32,
+        overscaled_z: u8,
+        style_rev: u64,
+    ) -> Self {
+        assert!(
+            overscaled_z >= z,
+            "overscaled_z is below the tile's own zoom"
+        );
+        Self {
+            source: source.into(),
+            z,
+            x,
+            y,
+            overscaled_z,
             style_rev,
         }
     }
@@ -68,7 +118,11 @@ impl std::fmt::Display for TileKey {
             f,
             "{}@{}:{}/{}/{}",
             self.source, self.style_rev, self.z, self.x, self.y
-        )
+        )?;
+        if self.overscaled_z != self.z {
+            write!(f, "@{}", self.overscaled_z)?;
+        }
+        Ok(())
     }
 }
 
@@ -401,5 +455,50 @@ mod tests {
         store.release(&key(4092));
         store.release(&key(4092));
         assert_eq!(store.retain_count(&key(4092)), 0);
+    }
+}
+
+#[cfg(test)]
+mod overscale_tests {
+    use super::*;
+
+    /// The overscale factor discriminates. Two views using the same canonical tile at different
+    /// zooms must not be served each other's buckets, because a zoom-varying paint property's
+    /// endpoints are evaluated at that zoom.
+    #[test]
+    fn the_overscaled_zoom_is_part_of_the_key() {
+        let mut store: TileStore<u32> = TileStore::new(8);
+        let own = TileKey::new("s", 13, 4093, 2723, 1);
+        let stood_in = TileKey::overscaled("s", 13, 4093, 2723, 15, 1);
+
+        assert_ne!(own, stood_in);
+
+        let (first, a) = store.get_or_build(&own, || 1);
+        let (second, b) = store.get_or_build(&stood_in, || 2);
+        assert_eq!(a, Lookup::Miss);
+        assert_eq!(b, Lookup::Miss, "not served the other's bucket");
+        assert_eq!((*first, *second), (1, 2));
+        assert_eq!(store.len(), 2);
+
+        // And a second view wanting the same tile at the same zoom still shares.
+        let (third, c) = store.get_or_build(&own, || 3);
+        assert_eq!(c, Lookup::Hit);
+        assert_eq!(*third, 1);
+    }
+
+    /// A tile at its own zoom carries an overscale equal to its zoom, so the plain constructor
+    /// and the explicit one agree — sharing is not lost by spelling the same tile two ways.
+    #[test]
+    fn the_two_constructors_agree_at_a_tiles_own_zoom() {
+        assert_eq!(
+            TileKey::new("s", 13, 1, 2, 7),
+            TileKey::overscaled("s", 13, 1, 2, 13, 7)
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "below the tile's own zoom")]
+    fn an_overscale_below_the_tiles_zoom_is_refused() {
+        let _ = TileKey::overscaled("s", 13, 1, 2, 12, 7);
     }
 }

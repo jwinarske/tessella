@@ -553,7 +553,7 @@ mod descriptor_tests {
             [10240, 4820],
         ]]);
 
-        let mut binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint);
+        let mut binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint, 13.0);
         binder
             .push(bucket.vertices.len(), &paint, &features[0])
             .expect("binds");
@@ -653,7 +653,7 @@ mod descriptor_tests {
         let paint = tessella_style::property::resolve_paint(layer).expect("resolves");
         let ids = attribute_ids(FILL_FAMILY);
         let key = permutation_key(&paint, &ids);
-        let binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint);
+        let binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint, 13.0);
         let vertex_layout = layout(&binder, &ids, |attr_id| {
             declared_for(BuiltIn::FillShader, attr_id)
                 .map(|attribute| (attribute.binding, attribute.declared))
