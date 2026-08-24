@@ -22,6 +22,7 @@ default = []
 http = ["dep:ureq"]
 
 [dev-dependencies]
+flate2 = "1"
 tessella-source.workspace = true
 tile-server = { path = "../../tools/tile-server" }
 

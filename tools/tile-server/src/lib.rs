@@ -31,8 +31,8 @@ use std::thread::JoinHandle;
 #[derive(Debug, Default)]
 pub struct Routes {
     exact: HashMap<String, (u16, &'static str, Vec<u8>)>,
-    /// Body served for any path matching the tile pattern, when set.
-    tiles: Option<Vec<u8>>,
+    /// Body served for any path matching the tile pattern, when set, and its content encoding.
+    tiles: Option<(Vec<u8>, Option<&'static str>)>,
     /// Zooms the tile route answers for. Anything else is a 404.
     tile_zooms: Option<(u8, u8)>,
 }
@@ -57,26 +57,64 @@ impl Routes {
     /// One body for every tile is deliberate: what is under test is the plumbing, and a
     /// distinct body per tile would only make the assertions about the fixture instead.
     #[must_use]
-    pub fn tiles(mut self, body: Vec<u8>, zooms: Option<(u8, u8)>) -> Self {
-        self.tiles = Some(body);
+    pub fn tiles(self, body: Vec<u8>, zooms: Option<(u8, u8)>) -> Self {
+        self.tiles_encoded(body, None, zooms)
+    }
+
+    /// As [`Self::tiles`], declaring a `Content-Encoding` for the body.
+    ///
+    /// Real vector tile origins serve gzip — `pmtiles serve` and every hosted basemap do —
+    /// and the body then is not a tile until something has inflated it. Serving it here means
+    /// the decompression path is exercised without an external service to depend on.
+    #[must_use]
+    pub fn tiles_encoded(
+        mut self,
+        body: Vec<u8>,
+        encoding: Option<&'static str>,
+        zooms: Option<(u8, u8)>,
+    ) -> Self {
+        self.tiles = Some((body, encoding));
         self.tile_zooms = zooms;
         self
     }
 
-    fn resolve(&self, path: &str) -> (u16, &'static str, Vec<u8>) {
+    fn resolve(&self, path: &str) -> Served {
         if let Some((status, kind, body)) = self.exact.get(path) {
-            return (*status, kind, body.clone());
+            return Served {
+                status: *status,
+                content_type: kind,
+                encoding: None,
+                body: body.clone(),
+            };
         }
-        if let Some(body) = &self.tiles
+        if let Some((body, encoding)) = &self.tiles
             && let Some(z) = tile_zoom_of(path)
             && self
                 .tile_zooms
                 .is_none_or(|(min, max)| (min..=max).contains(&z))
         {
-            return (200, "application/x-protobuf", body.clone());
+            return Served {
+                status: 200,
+                content_type: "application/x-protobuf",
+                encoding: *encoding,
+                body: body.clone(),
+            };
         }
-        (404, "text/plain", b"not found".to_vec())
+        Served {
+            status: 404,
+            content_type: "text/plain",
+            encoding: None,
+            body: b"not found".to_vec(),
+        }
     }
+}
+
+/// One response.
+struct Served {
+    status: u16,
+    content_type: &'static str,
+    encoding: Option<&'static str>,
+    body: Vec<u8>,
 }
 
 /// The zoom of a `/{z}/{x}/{y}.pbf` path, or `None` if it is not one.
@@ -207,11 +245,22 @@ fn serve(stream: TcpStream, routes: &Routes) -> Option<String> {
 
     // The query string is not part of the route: a tile URL may carry an API key.
     let path = target.split('?').next().unwrap_or(&target).to_string();
-    let (status, content_type, body) = if method == "GET" {
+    let served = if method == "GET" {
         routes.resolve(&path)
     } else {
-        (405, "text/plain", b"method not allowed".to_vec())
+        Served {
+            status: 405,
+            content_type: "text/plain",
+            encoding: None,
+            body: b"method not allowed".to_vec(),
+        }
     };
+    let Served {
+        status,
+        content_type,
+        encoding,
+        body,
+    } = served;
 
     let reason = match status {
         200 => "OK",
@@ -219,9 +268,13 @@ fn serve(stream: TcpStream, routes: &Routes) -> Option<String> {
         405 => "Method Not Allowed",
         _ => "Unknown",
     };
+    let encoding = encoding.map_or_else(String::new, |value| {
+        format!("Content-Encoding: {value}\r\n")
+    });
     let head = format!(
         "HTTP/1.1 {status} {reason}\r\n\
          Content-Type: {content_type}\r\n\
+         {encoding}\
          Content-Length: {}\r\n\
          ETag: \"{status}-{}\"\r\n\
          Connection: close\r\n\r\n",

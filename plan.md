@@ -491,10 +491,12 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   buffers land; the circle layer closes the hermetic style, which this build now reproduces in
   full — all 37 drawables and all 14 uniform buffers. Tiles now come off a socket: URL
   templating, TileJSON resolution, request coalescing and an HTTP file source, tested end to
-  end against `tools/tile-server` on a loopback port. Remaining: the SQLite cache and etag
-  revalidation, TLS (held for the cross toolchains, §16), cross-faded (pattern) binders, DR-11
-  evaluator, §12.5 startup path. Exit: probe parity on a *real* style sans symbols;
-  cold-boot-to-first-tile traced and within budget.
+  end against `tools/tile-server` on a loopback port, and opt-in against a `pmtiles serve`
+  origin over real Protomaps planet extracts. Remaining: the SQLite cache and etag
+  revalidation, TLS and reading `.pmtiles` archives directly (both held for the cross
+  toolchains, §16), cross-faded (pattern) binders, DR-11 evaluator, §12.5 startup path.
+  Exit: probe parity on a *real* style sans symbols; cold-boot-to-first-tile traced and within
+  budget.
 - **R1.5** — four views over the same style (§13). Exit: §9.2 invariants green; §13.3
   four-view zoom benchmark green on RK3566; §13.1 fractional-zoom counters at zero.
 - **R2** — symbols: glyph manager, shaping, quads, per-view placement, collision, cross-tile

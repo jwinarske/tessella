@@ -15,11 +15,18 @@
 //! URL templating, source resolution, request coalescing and an online file source over plain
 //! HTTP. `tools/tile-server` is a local origin these are tested against over a real socket.
 //!
-//! `ureq` is behind the off-by-default `http` feature and pinned to `default-features = false`,
-//! which is pure Rust — no TLS, and so no `ring` and no C. That is what keeps the cross
-//! `cargo check` lane green, which has no C toolchain for the target. TLS is the change that
-//! brings C back and is deliberately held until the cross toolchains land (§16); `https://`
-//! fails at the transport rather than silently downgrading.
+//! `ureq` is behind the off-by-default `http` feature and pinned to `default-features = false`
+//! plus `gzip`, which is pure Rust throughout — `flate2` on `miniz_oxide`, no `ring`, no C.
+//! That is what keeps the cross `cargo check` lane green, which has no C toolchain for the
+//! target. TLS is the change that brings C back and is deliberately held until the cross
+//! toolchains land (§16); `https://` fails at the transport rather than silently downgrading.
+//!
+//! Gzip is not optional in practice. Every real vector-tile origin serves
+//! `Content-Encoding: gzip` — `pmtiles serve` and every hosted basemap — and without inflation
+//! the caller gets `1f 8b 08` and a decoder that correctly refuses it, reporting a protobuf
+//! wire-type error several steps from the cause. Decompression belongs to the transport, not
+//! the decoder: the encoding is a property of the transfer, and a decoder that sniffed for gzip
+//! magic would then have to decide about a tile that is legitimately gzip-inside-protobuf.
 //!
 //! Not yet wired: the SQLite cache (`rusqlite`, also C), etag revalidation, and the
 //! speculative manifest fetch §12.5 wants ahead of layer compilation.

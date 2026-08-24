@@ -165,3 +165,44 @@ fn concurrent_views_produce_one_request() {
     );
     assert_eq!(coalescing.stats().fetches(), server.requests());
 }
+
+/// A gzipped tile is inflated before it reaches the caller.
+///
+/// Every real vector-tile origin serves gzip — `pmtiles serve`, and every hosted basemap — so
+/// a client without decompression gets `1f 8b 08` and a decoder that correctly refuses it. The
+/// failure is far from its cause: the bytes arrive, the length is plausible, and the error is
+/// about protobuf wire types.
+///
+/// The transport is where this belongs, not the decoder. `Content-Encoding` is a property of
+/// the transfer, and a decoder that sniffed for gzip magic would also have to decide what to do
+/// about a tile that is genuinely gzip-in-protobuf.
+#[test]
+fn a_gzipped_tile_is_inflated() {
+    use std::io::Write as _;
+
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    encoder.write_all(FIXTURE).expect("compresses");
+    let gzipped = encoder.finish().expect("finishes");
+    assert_eq!(&gzipped[..3], &[0x1f, 0x8b, 0x08], "it really is gzip");
+    assert!(gzipped.len() < FIXTURE.len(), "and it really is smaller");
+
+    let server = tile_server::Server::start(tile_server::Routes::new().tiles_encoded(
+        gzipped,
+        Some("gzip"),
+        Some((0, 14)),
+    ))
+    .expect("binds");
+
+    let url = expand(
+        &format!("{}/{{z}}/{{x}}/{{y}}.pbf", server.origin()),
+        0,
+        0,
+        0,
+        Scheme::Xyz,
+        1.0,
+    );
+    let response = HttpFileSource::default().fetch(&url).expect("fetches");
+
+    assert_eq!(response.body, FIXTURE, "inflated back to the tile");
+    tessella_source::mvt::Tile::decode(&response.body).expect("and it decodes");
+}
