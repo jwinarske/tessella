@@ -22,6 +22,10 @@ coalesce/null
 collator/comparison-number-error
 collator/equals-non-string-error
 collator/non-object-error
+concat/arity-0
+concat/arity-1
+concat/basic
+concat/coercion
 constant-folding/to-color
 constant-folding/to-color-inferred
 constant-folding/var
@@ -76,6 +80,12 @@ interpolate/exponential-number-array
 interpolate/exponential-single-stop
 interpolate/infer-array-type
 interpolate/linear
+join/empty-array
+join/empty-item
+join/empty-separator
+join/non-array
+join/numbers
+join/property
 legacy/categorical/array
 legacy/categorical/array-default
 legacy/categorical/boolean

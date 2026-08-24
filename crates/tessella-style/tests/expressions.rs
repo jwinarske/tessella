@@ -357,13 +357,18 @@ fn to_number_falls_through_to_a_default() {
 
 // --- parse errors ---
 
-/// An unimplemented operator is named rather than ignored. Silently evaluating it to something
+/// An unknown operator is named rather than ignored. Silently evaluating it to something
 /// plausible would surface as wrong output rather than as a diagnostic.
+///
+/// The operator here is deliberately fictional. This test used to name a real one that was not
+/// implemented yet, and it broke the day that operator landed — which is a test measuring the
+/// wrong thing: what is asserted is that unknown names are reported, not which names happen to
+/// be unknown today.
 #[test]
 fn an_unknown_operator_is_reported() {
-    let value: Value = serde_json::from_str(r#"["concat", "a", "b"]"#).unwrap();
-    let error = Expression::parse(&value).expect_err("concat is not implemented");
-    assert!(format!("{error}").contains("concat"), "{error}");
+    let value: Value = serde_json::from_str(r#"["not-an-operator", "a", "b"]"#).unwrap();
+    let error = Expression::parse(&value).expect_err("no such operator");
+    assert!(format!("{error}").contains("not-an-operator"), "{error}");
 }
 
 #[test]
@@ -980,4 +985,45 @@ fn a_formatted_property_wraps_its_result() {
         1,
         "one section, not a section containing a formatted value"
     );
+}
+
+/// `concat` coerces its arguments; `join` does not.
+///
+/// The asymmetry is the spec's and it is deliberate. `concat` is how a style builds a label out
+/// of whatever a feature carries, so coercing is the point. `join` over an array of numbers is a
+/// style that has not decided how those numbers should read — one decimal place or three, comma
+/// or point — and the spec would rather ask than pick.
+#[test]
+fn concat_coerces_and_join_does_not() {
+    assert_eq!(
+        eval(r#"["concat", "a", 1, true]"#, None, None),
+        Value::String("a1true".to_string())
+    );
+    assert_eq!(
+        eval(r#"["concat"]"#, None, None),
+        Value::String(String::new()),
+        "no arguments is the empty string, the identity for concatenation"
+    );
+
+    assert_eq!(
+        eval(r#"["join", ["literal", ["1", "2", "3"]], "+"]"#, None, None),
+        Value::String("1+2+3".to_string())
+    );
+    assert_eq!(
+        eval(r#"["join", ["literal", []], ","]"#, None, None),
+        Value::String(String::new())
+    );
+
+    // Numbers in the array, and a non-array, are both errors. Constant here, so they are caught
+    // at parse by folding.
+    for text in [
+        r#"["join", ["literal", [1, 2]], "+"]"#,
+        r#"["join", "1+2", "+"]"#,
+    ] {
+        let value: Value = serde_json::from_str(text).expect("json");
+        assert!(
+            Expression::parse(&value).is_err(),
+            "{text} should not parse"
+        );
+    }
 }

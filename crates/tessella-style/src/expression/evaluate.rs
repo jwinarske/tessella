@@ -151,6 +151,41 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
                 channels[3],
             ]))
         }
+        Expr::Concat(args) => {
+            // Everything coerces, which is what makes `["concat", ["get", "name"], " (", …]`
+            // work on a property that might be a number. No arguments is the empty string, the
+            // identity for concatenation.
+            let mut out = String::new();
+            for arg in args {
+                out.push_str(&to_string(&evaluate(arg, context)?));
+            }
+            Ok(Value::String(out))
+        }
+        Expr::Join { items, separator } => {
+            let items = evaluate(items, context)?;
+            let separator = expect_string(&evaluate(separator, context)?)?;
+            let Value::Array(items) = items else {
+                return Err(EvaluationError::Type {
+                    expected: "array",
+                    got: items.type_name(),
+                });
+            };
+
+            // Elements must already be strings. Unlike `concat`, `join` does not coerce: an
+            // array of numbers is a style that has not decided how they should read, and the
+            // spec would rather ask than pick a format.
+            let mut parts = Vec::with_capacity(items.len());
+            for item in &items {
+                let Value::String(text) = item else {
+                    return Err(EvaluationError::Type {
+                        expected: "string",
+                        got: item.type_name(),
+                    });
+                };
+                parts.push(text.as_str());
+            }
+            Ok(Value::String(parts.join(&separator)))
+        }
         Expr::Length(inner) => match evaluate(inner, context)? {
             Value::String(text) => Ok(Value::Number(text.chars().count() as f64)),
             Value::Array(items) => Ok(Value::Number(items.len() as f64)),

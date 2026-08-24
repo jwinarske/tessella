@@ -155,6 +155,14 @@ fn parse_rooted(
             })
         }
         "array" => parse_array_assertion(operator, args, scope),
+        "concat" => Ok(Expr::Concat(parse_all(args, scope)?)),
+        "join" => {
+            expect_arity(operator, args, 2, 2)?;
+            Ok(Expr::Join {
+                items: Box::new(parse_in(&args[0], scope)?),
+                separator: Box::new(parse_in(&args[1], scope)?),
+            })
+        }
         "length" => {
             expect_arity(operator, args, 1, 1)?;
             Ok(Expr::Length(Box::new(parse_in(&args[0], scope)?)))

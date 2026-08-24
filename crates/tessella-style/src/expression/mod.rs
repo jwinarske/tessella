@@ -455,6 +455,15 @@ pub enum Expr {
         /// One entry per `content, options` pair.
         sections: Vec<FormatSection>,
     },
+    /// `["concat", …]`: the arguments, coerced to text and run together.
+    Concat(Vec<Expr>),
+    /// `["join", array, separator]`: an array of strings with a separator between.
+    Join {
+        /// The array joined.
+        items: Box<Expr>,
+        /// The separator placed between elements.
+        separator: Box<Expr>,
+    },
     /// `["length", v]`: the length of a string or array.
     Length(Box<Expr>),
     /// `["in", needle, haystack]`: membership in an array, or substring in a string.
@@ -809,6 +818,7 @@ impl Expr {
             Self::Rgba { .. } => Type::Color,
             Self::Format { .. } => Type::Formatted,
             Self::Length(_) | Self::IndexOf { .. } => Type::Number,
+            Self::Concat(_) | Self::Join { .. } => Type::String,
             Self::In { .. } => Type::Boolean,
             // `get`, `id`, and everything whose type depends on data or on branches this does
             // not unify.
@@ -968,7 +978,9 @@ fn children(expr: &Expr) -> Vec<&Expr> {
         | Expr::Arithmetic { args, .. }
         | Expr::Cast { args, .. }
         | Expr::Assert { args, .. }
-        | Expr::Rgba { args } => args.iter().collect(),
+        | Expr::Rgba { args }
+        | Expr::Concat(args) => args.iter().collect(),
+        Expr::Join { items, separator } => alloc::vec![&**items, &**separator],
         Expr::AssertArray {
             value, fallback, ..
         } => {
@@ -1058,6 +1070,8 @@ fn classify(expr: &Expr) -> Dependency {
             joined
         }),
         Expr::Length(inner) => classify(inner),
+        Expr::Concat(args) => join_all(args),
+        Expr::Join { items, separator } => classify(items).join(classify(separator)),
         Expr::In { needle, haystack } => classify(needle).join(classify(haystack)),
         Expr::IndexOf {
             needle,
