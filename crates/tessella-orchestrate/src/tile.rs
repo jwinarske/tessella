@@ -35,7 +35,8 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use tessella_layout::fill::{self, FillBucket, Ring};
+use tessella_layout::circle::CircleBucket;
+use tessella_layout::fill::{self, FillBucket, Position, Ring};
 use tessella_layout::line::{LineBucket, LineCap, LineJoin, LineOptions};
 use tessella_layout::paint::{BinderError, PaintBinder};
 use tessella_source::clip::{clip_line_to_box, clip_ring_to_box, round_to_tile_units};
@@ -75,6 +76,8 @@ pub enum Content {
     Fill(FillBucket),
     /// An extruded polyline.
     Line(LineBucket),
+    /// A quad per point, with the disc drawn inside it by the shader.
+    Circle(CircleBucket),
 }
 
 /// One layer's contribution to one tile.
@@ -102,12 +105,17 @@ impl LayerBucket {
     /// A fill is two — triangles and outline — and a background is one.
     #[must_use]
     pub fn drawable_count(&self) -> usize {
+        if !self.content.has_data() {
+            return 0;
+        }
         match self.content {
             Content::Background => 1,
             Content::Fill(_) => 2,
             // A line layer is one drawable per tile: unlike a fill it has no outline
             // sublayer, because the extrusion already is the stroke.
             Content::Line(_) => 1,
+            // As is a circle. Its stroke is a shader term, not a second draw.
+            Content::Circle(_) => 1,
         }
     }
 }
@@ -297,6 +305,43 @@ pub fn build_tile(
                         })?;
                 }
                 Content::Line(bucket)
+            }
+            LayerKind::Circle => {
+                let filter = match &layer.filter {
+                    Some(value) => Filter::parse(value).map_err(|source| TileError::Filter {
+                        layer: layer.id.clone(),
+                        source,
+                    })?,
+                    None => Filter::always(),
+                };
+
+                let mut bucket = CircleBucket::default();
+                for feature in features {
+                    if !filter.matches(feature, None) {
+                        continue;
+                    }
+                    let Geometry::Point(points) = &feature.geometry else {
+                        continue;
+                    };
+                    // Projected but *not* clipped: `add_geometry` drops points outside the tile
+                    // proper itself, and the buffered box a clip would use is wider than that.
+                    let projected: Vec<Position> = points
+                        .iter()
+                        .map(|p| {
+                            let local = projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
+                            #[allow(clippy::cast_possible_truncation)]
+                            [local[0].round() as i16, local[1].round() as i16]
+                        })
+                        .collect();
+                    bucket.add_geometry(&projected);
+                    binder
+                        .push(bucket.vertices.len(), &paint, feature)
+                        .map_err(|source| TileError::Binder {
+                            layer: layer.id.clone(),
+                            source,
+                        })?;
+                }
+                Content::Circle(bucket)
             }
             // `is_built` gates this, so anything else is unreachable rather than merely unhandled.
             _ => continue,
@@ -547,7 +592,7 @@ impl Content {
     pub fn as_fill(&self) -> Option<&FillBucket> {
         match self {
             Self::Fill(bucket) => Some(bucket),
-            Self::Background | Self::Line(_) => None,
+            Self::Background | Self::Line(_) | Self::Circle(_) => None,
         }
     }
 
@@ -556,7 +601,40 @@ impl Content {
     pub fn as_line(&self) -> Option<&LineBucket> {
         match self {
             Self::Line(bucket) => Some(bucket),
-            Self::Background | Self::Fill(_) => None,
+            Self::Background | Self::Fill(_) | Self::Circle(_) => None,
+        }
+    }
+
+    /// The circle bucket, if this is one.
+    #[must_use]
+    pub fn as_circle(&self) -> Option<&CircleBucket> {
+        match self {
+            Self::Circle(bucket) => Some(bucket),
+            Self::Background | Self::Fill(_) | Self::Line(_) => None,
+        }
+    }
+
+    /// Whether this contributed any geometry.
+    ///
+    /// mbgl's `Bucket::hasData`, which is `!segments.empty()` for every bucket type: a layer
+    /// whose features all fell outside a tile is still a layer of that tile, and still occupies
+    /// its index, but it produces no drawable.
+    ///
+    /// This only became observable with the circle layer. Every fill and line of the hermetic
+    /// style has geometry in all six tiles, so a bucket that drew nothing had never arisen —
+    /// while the style's single point lies inside exactly one tile and outside five. Emitting a
+    /// drawable for each of those five would put six circles on the stream where the oracle has
+    /// one, all but one of them empty.
+    ///
+    /// A background always has data: it is a viewport quad rather than anything read from a
+    /// source.
+    #[must_use]
+    pub fn has_data(&self) -> bool {
+        match self {
+            Self::Background => true,
+            Self::Fill(bucket) => !bucket.segments.is_empty(),
+            Self::Line(bucket) => !bucket.segments.is_empty(),
+            Self::Circle(bucket) => !bucket.segments.is_empty(),
         }
     }
 }

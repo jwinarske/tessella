@@ -16,6 +16,7 @@ use tessella_source::tiling::TilingOptions;
 use tessella_style::{Source, Style};
 
 const HERMETIC: &str = include_str!("../../tessella-style/tests/hermetic_style.json");
+const DUMP: &str = include_str!("../../../tests/golden/hermetic_style.dump");
 
 fn style() -> Style {
     Style::parse(HERMETIC).expect("style parses")
@@ -95,23 +96,42 @@ fn both_fill_layers_produce_the_same_geometry() {
     }
 }
 
-/// The oracle draws 37 drawables over six tiles: one background per tile, two per fill layer
-/// per tile, one per line layer per tile, plus the circle layer this build does not implement.
+/// Every drawable the oracle draws for this style, and no others.
 ///
-/// This build's share is `6 * (1 + 2 + 2 + 1)` = 36. The one remaining is the circle layer's,
-/// which the oracle draws in a single tile.
+/// `6 * (1 + 2 + 2 + 1) + 1` = 37, which is the oracle's own total: one background per tile,
+/// two per fill layer per tile, one per line layer per tile, and a *single* circle. The circle
+/// is one rather than six because its point lies inside one tile and outside five, and a bucket
+/// that drew nothing produces no drawable.
+///
+/// That last clause is the one this test is really for. Five of the six tiles hold a circle
+/// bucket that is present, correctly built and empty; counting them would give 42 and would
+/// have been indistinguishable from a correct implementation until something drew the result.
 #[test]
-fn the_drawable_count_matches_the_oracles_share() {
+fn the_drawable_count_matches_the_oracles() {
     let total: usize = COVER
         .iter()
         .map(|(x, y)| drawable_count(&build(*x, *y)))
         .sum();
-    assert_eq!(total, 36);
+    let oracle = DUMP
+        .lines()
+        .filter(|line| line.starts_with("drawable "))
+        .count();
+    assert_eq!(oracle, 37, "the oracle draws thirty-seven");
+    assert_eq!(total, oracle, "and so does this build");
 
-    // And the layer this build does not implement is absent rather than empty, so nothing
-    // claims to have drawn it.
-    let buckets = build(4093, 2724);
-    assert!(bucket_for(&buckets, "circle-constant").is_none());
+    // The circle is in exactly one tile, and the other five hold an empty bucket rather than
+    // no bucket: the layer is still a layer of those tiles.
+    let drawn: Vec<(u32, u32)> = COVER
+        .iter()
+        .copied()
+        .filter(|(x, y)| {
+            bucket_for(&build(*x, *y), "circle-constant")
+                .expect("every tile has the layer")
+                .content
+                .has_data()
+        })
+        .collect();
+    assert_eq!(drawn, [(4093, 2724)]);
 }
 
 /// A fill layer is two drawables — triangles and outline — which is how the oracle emits it.
@@ -137,13 +157,12 @@ fn layer_indices_are_the_styles_own_order() {
     let indices: Vec<usize> = buckets.iter().map(|b| b.layer_index).collect();
     assert_eq!(
         indices,
-        [0, 1, 2, 3],
-        "bg, fill-constant, fill-datadriven, line-datadriven"
+        [0, 1, 2, 3, 4],
+        "bg, fill-constant, fill-datadriven, line-datadriven, circle-constant"
     );
 
     // The oracle's keys agree: background is L00000, the fills are L00001 and L00002, the line
-    // is L00003, and the circle layer this build skips is L00004 — an index left unoccupied
-    // rather than renumbered away.
+    // is L00003 and the circle is L00004.
     assert_eq!(bucket_for(&buckets, "bg").unwrap().layer_index, 0);
     assert_eq!(
         bucket_for(&buckets, "fill-constant").unwrap().layer_index,
@@ -458,4 +477,36 @@ fn paint_slots_sit_where_the_oracle_reads_them() {
             ("line-width", 12, 4),
         ]
     );
+}
+
+/// The circle's vertex and index buffers are byte-identical to the oracle's.
+///
+/// A point goes through no clip and no tessellator, so this is the shortest chain in the build:
+/// project, round, double, add a corner bit. It is also the only one where a rounding
+/// disagreement of a single unit would move the whole quad, since the position *is* the datum
+/// rather than one of hundreds.
+#[test]
+fn circle_buffers_are_byte_identical_to_the_oracle() {
+    let buckets = build(4093, 2724);
+    let circle = bucket_for(&buckets, "circle-constant")
+        .and_then(|b| b.content.as_circle())
+        .expect("a circle bucket");
+
+    let vertex_bytes: Vec<u8> = circle
+        .vertices
+        .iter()
+        .flat_map(|v| [v[0].to_le_bytes(), v[1].to_le_bytes()])
+        .flatten()
+        .collect();
+    assert_eq!(fnv1a(&vertex_bytes), 0x95b0_7035_159b_ad05, "vertices");
+
+    let index_bytes: Vec<u8> = circle
+        .indices
+        .iter()
+        .flat_map(|i| i.to_le_bytes())
+        .collect();
+    assert_eq!(fnv1a(&index_bytes), 0xd9c4_3de0_596e_e04f, "indices");
+
+    assert_eq!(circle.vertices.len(), 4);
+    assert_eq!(circle.indices.len(), 6);
 }

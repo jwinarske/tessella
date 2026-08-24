@@ -69,6 +69,18 @@ pub fn background_pass() -> RenderPass {
     RenderPass::OPAQUE | RenderPass::TRANSLUCENT
 }
 
+/// Draw state for a circle.
+///
+/// Depth and colour but *no stencil*: a circle layer is not clipped to the tile mask. The
+/// oracle's circle drawable carries `flags=0011` where every fill and line carries `0111`, and
+/// the stencil section names three layers rather than four. A circle is drawn from a point
+/// whose quad may legitimately overhang the tile it belongs to, and the layout already dropped
+/// the points that belong to a neighbour — so the mask would only clip the overhang off.
+#[must_use]
+pub fn circle_flags() -> DrawFlags {
+    DrawFlags::ENABLE_DEPTH | DrawFlags::ENABLE_COLOR
+}
+
 /// The pass a fill draws in.
 #[must_use]
 pub fn fill_pass() -> RenderPass {

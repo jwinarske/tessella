@@ -566,6 +566,197 @@ pub fn fill_props_from_paint(
     )
 }
 
+/// One circle drawable's entry.
+///
+/// Its `extrude_scale` is the counterpart of a line's `ratio`: what turns `circle-radius` into
+/// a quad size. Which units it is in depends on `circle-pitch-alignment` — see
+/// [`circle_extrude_scale`].
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CircleDrawableEntry {
+    /// Tile-local to clip, as the shaders take it.
+    pub matrix: [f32; 16],
+    /// Radius units, per [`circle_extrude_scale`].
+    pub extrude_scale: [f32; 2],
+    /// Mix factors for colour, radius, blur, opacity, stroke colour, stroke width and stroke
+    /// opacity, in that order.
+    pub interpolations: [f32; 7],
+}
+
+impl CircleDrawableEntry {
+    /// The entry for a tile under a view.
+    ///
+    /// # Errors
+    ///
+    /// [`camera::CameraError`] when the view has bearing or pitch.
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_tile(
+        view: &ViewTransform,
+        z: u8,
+        x: u32,
+        y: u32,
+        wrap: i32,
+        layer_index: i32,
+        sub_layer_index: i32,
+        extrude_scale: [f32; 2],
+        interpolations: [f32; 7],
+    ) -> Result<Self, camera::CameraError> {
+        let mut projection = camera::proj_matrix(view)?;
+        projection[14] -= f64::from(depth_offset(layer_index, sub_layer_index));
+        let matrix = camera::multiply(
+            &projection,
+            &camera::matrix_for_tile(z, x, y, wrap, view.zoom),
+        );
+
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(Self {
+            matrix: core::array::from_fn(|index| matrix[index] as f32),
+            extrude_scale,
+            interpolations,
+        })
+    }
+}
+
+/// The units `circle-radius` is measured in, which the pitch alignment decides.
+///
+/// Aligned to the *viewport* — the spec's default, and the odd one out among the anchor-style
+/// enums — a circle keeps its size on screen however the map is pitched, so the scale is
+/// `pixelsToGLUnits`: two over the viewport's width and minus two over its height. Aligned to
+/// the *map* it lies flat and scales with the tile, so the scale is tile units per pixel on
+/// both axes.
+///
+/// Two different quantities behind one field, which is why this takes the alignment rather than
+/// defaulting it: a viewport-aligned circle given the map scale is wrong by the zoom factor and
+/// looks like a radius bug.
+#[must_use]
+pub fn circle_extrude_scale(pitch_with_map: bool, z: u8, view: &ViewTransform) -> [f32; 2] {
+    if pitch_with_map {
+        let tile_units = 1.0 / line_ratio(z, view.zoom);
+        [tile_units, tile_units]
+    } else {
+        #[allow(clippy::cast_possible_truncation)]
+        [2.0 / view.width as f32, -2.0 / view.height as f32]
+    }
+}
+
+/// The seven zoom-mix factors a circle drawable's UBO carries, in the UBO's own order.
+#[must_use]
+pub fn circle_interpolations(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    bucket_zoom: f64,
+    view_zoom: f64,
+) -> [f32; 7] {
+    let factor = |name: &str| {
+        paint
+            .get(name)
+            .map_or(0.0, |property| match property.binding {
+                Binding::Attribute { interpolated: true } => {
+                    property.expression.zoom_mix_factor(bucket_zoom, view_zoom)
+                }
+                _ => 0.0,
+            })
+    };
+    [
+        factor("circle-color"),
+        factor("circle-radius"),
+        factor("circle-blur"),
+        factor("circle-opacity"),
+        factor("circle-stroke-color"),
+        factor("circle-stroke-width"),
+        factor("circle-stroke-opacity"),
+    ]
+}
+
+/// Packs a layer's circle drawable buffer at the union's stride.
+#[must_use]
+pub fn pack_circle_drawable_buffer(entries: &[CircleDrawableEntry], stride: u32) -> Vec<u8> {
+    let stride = stride as usize;
+    let mut out = Vec::with_capacity(entries.len() * stride);
+    for entry in entries {
+        let start = out.len();
+        push_f32s(&mut out, &entry.matrix);
+        push_f32s(&mut out, &entry.extrude_scale);
+        push_f32s(&mut out, &entry.interpolations);
+        out.resize(start + stride, 0);
+    }
+    out
+}
+
+/// Packs `CircleEvaluatedPropsUBO`.
+///
+/// The two flags are integers, not floats, and are the only non-float fields in any of these
+/// blocks — so a packer that pushed them as `1.0` would write `0x3f800000` where the shader
+/// reads `1`.
+///
+/// The argument list is the block's field list, in the block's order. Grouping it would put a
+/// struct between the header's offsets and this function, which is the one place they have to
+/// be checkable against each other.
+#[must_use]
+#[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+pub fn pack_circle_props(
+    color: Color,
+    stroke_color: Color,
+    radius: f32,
+    blur: f32,
+    opacity: f32,
+    stroke_width: f32,
+    stroke_opacity: f32,
+    scale_with_map: bool,
+    pitch_with_map: bool,
+) -> Vec<u8> {
+    const SIZE: usize = 64;
+    let mut out = Vec::with_capacity(SIZE);
+    push_color(&mut out, color);
+    push_color(&mut out, stroke_color);
+    push_f32s(
+        &mut out,
+        &[radius, blur, opacity, stroke_width, stroke_opacity],
+    );
+    out.extend_from_slice(&i32::from(scale_with_map).to_le_bytes());
+    out.extend_from_slice(&i32::from(pitch_with_map).to_le_bytes());
+    out.extend_from_slice(&0f32.to_le_bytes());
+    debug_assert_eq!(out.len(), SIZE);
+    out
+}
+
+/// A circle layer's evaluated properties, from its resolved paint.
+#[must_use]
+pub fn circle_props_from_paint(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    zoom: f64,
+) -> Vec<u8> {
+    pack_circle_props(
+        uniform_color(paint, "circle-color", zoom),
+        uniform_color(paint, "circle-stroke-color", zoom),
+        uniform_number(paint, "circle-radius", zoom),
+        uniform_number(paint, "circle-blur", zoom),
+        uniform_number(paint, "circle-opacity", zoom),
+        uniform_number(paint, "circle-stroke-width", zoom),
+        uniform_number(paint, "circle-stroke-opacity", zoom),
+        uniform_enum(paint, "circle-pitch-scale", zoom) == "map",
+        uniform_enum(paint, "circle-pitch-alignment", zoom) == "map",
+    )
+}
+
+/// An enum-typed property's uniform value, falling back to its spec default.
+fn uniform_enum(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    name: &str,
+    zoom: f64,
+) -> alloc::string::String {
+    use alloc::string::ToString;
+
+    let Some(property) = paint.get(name) else {
+        return alloc::string::String::new();
+    };
+    let default = match property.spec.default {
+        DefaultValue::Enum(name) => name,
+        _ => "",
+    };
+    uniform_value(property, zoom)
+        .and_then(|value| value.as_str().map(ToString::to_string))
+        .unwrap_or_else(|| default.to_string())
+}
+
 /// Packs `BackgroundPropsUBO`.
 #[must_use]
 pub fn pack_background_props(color: Color, opacity: f32) -> Vec<u8> {

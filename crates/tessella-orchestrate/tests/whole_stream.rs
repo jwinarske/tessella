@@ -276,6 +276,49 @@ fn emit_frame() -> Vec<EnvelopeKind> {
                 )
                 .expect("writes");
             }
+            LayerKind::Circle => {
+                let pitch_with_map = false; // the style leaves the viewport default
+                let circles: Vec<ubo::CircleDrawableEntry> = matrices(0)
+                    .map(|tile| {
+                        ubo::CircleDrawableEntry::for_tile(
+                            &view,
+                            tile.z,
+                            tile.x,
+                            tile.y,
+                            i32::from(tile.wrap),
+                            *layer_index,
+                            0,
+                            ubo::circle_extrude_scale(pitch_with_map, tile.z, &view),
+                            ubo::circle_interpolations(&paint, f64::from(tile.z), view.zoom),
+                        )
+                        .expect("an unrotated camera")
+                    })
+                    .collect();
+                let buffer = ubo::pack_circle_drawable_buffer(
+                    &circles,
+                    ubo_layouts::CIRCLE_DRAWABLE_UBO.stride,
+                );
+                ubo::write(
+                    producer,
+                    view_id,
+                    *layer_index,
+                    ubo_slots::ID_CIRCLE_DRAWABLE_UBO,
+                    &buffer,
+                )
+                .expect("writes");
+
+                // No tile-properties block: a circle has no pattern variant to need one, which
+                // is why the oracle writes two blocks for this layer where a fill gets three.
+                let props = ubo::circle_props_from_paint(&paint, view.zoom);
+                ubo::write(
+                    producer,
+                    view_id,
+                    *layer_index,
+                    ubo_slots::ID_CIRCLE_EVALUATED_PROPS_UBO,
+                    &props,
+                )
+                .expect("writes");
+            }
             _ => {}
         }
     }
@@ -378,8 +421,8 @@ fn the_counts_agree_with_the_oracle() {
         .filter(|kind| **kind == EnvelopeKind::ViewUse)
         .count();
     assert_eq!(
-        uses, 36,
-        "six tiles: one background, two fills and one line each"
+        uses, 37,
+        "six tiles of background, two fills and a line, plus one circle"
     );
 
     // The oracle emits a clip set for each of its three tiled layers — the two fills and the
@@ -395,9 +438,8 @@ fn the_counts_agree_with_the_oracle() {
         .count();
     assert_eq!(mine, oracle_sets, "and so does this build");
 
-    // Every uniform buffer the oracle writes for a layer this build implements. The oracle's
-    // fourteen are one frame-wide block, two for the background, three each for the two fills
-    // and the line, and two for the circle layer this build does not draw — so twelve.
+    // Every uniform buffer the oracle writes. Its fourteen are one frame-wide block, two for
+    // the background, three each for the two fills and the line, and two for the circle.
     //
     // Counted rather than assumed equal to the layer count, because the blocks are not uniform
     // across kinds: a background has no tile-properties block and a line's sits at a different
@@ -409,7 +451,7 @@ fn the_counts_agree_with_the_oracle() {
         .iter()
         .filter(|kind| **kind == EnvelopeKind::UboUpdate)
         .count();
-    assert_eq!(mine, 12, "all but the circle layer's two");
+    assert_eq!(mine, oracle_ubos, "and so does this build");
 
     // Two placeholder textures, as the oracle lists.
     assert_eq!(

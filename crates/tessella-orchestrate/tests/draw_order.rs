@@ -144,15 +144,16 @@ fn resolved_order() -> Vec<Slot> {
         .collect()
 }
 
-/// The resolved order is the oracle's draw order restricted to the layers this build
-/// implements.
+/// The resolved order is the oracle's draw order, now that every layer of the style is drawn.
 ///
-/// A subsequence rather than a prefix, because the layers it does not implement are interleaved
-/// among the ones it does — the circle layer is drawn before every fill, being topmost. Taking a
-/// prefix would compare against a window that stops before the fills begin.
+/// It was a subsequence while the circle layer was unimplemented — the layers left out were
+/// interleaved among the ones drawn, the circle being topmost and so drawn before every fill —
+/// and the filter is kept rather than dropped because it is what states which layers are
+/// claimed. With all five listed it selects everything, and the comparison is now the whole
+/// draw order of the whole style.
 #[test]
 fn painter_order_matches_the_oracle() {
-    let implemented = [0u32, 1, 2, 3];
+    let implemented = [0u32, 1, 2, 3, 4];
     let oracle: Vec<Slot> = oracle_order()
         .into_iter()
         .filter(|(_, layer, ..)| implemented.contains(layer))
@@ -162,9 +163,9 @@ fn painter_order_matches_the_oracle() {
     // Asserted before the comparison, because an empty `mine` compares equal to an empty filter.
     assert_eq!(
         mine.len(),
-        42,
+        43,
         "six background twice for its two passes, two fills at two drawables per tile, \
-         and one line per tile"
+         one line per tile, and a single circle"
     );
     assert_eq!(oracle.len(), mine.len(), "same drawables, same count");
     assert_eq!(oracle, mine, "draw order diverges from the oracle");

@@ -356,6 +356,10 @@ pub fn bindings_for(
 ) -> Vec<GeometryBinding> {
     let mut bindings = Vec::new();
     for bucket in buckets {
+        // A bucket that drew nothing produces no drawable, the way mbgl's `hasData` gates one.
+        if !bucket.content.has_data() {
+            continue;
+        }
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let layer_index = bucket.layer_index as i32;
         let mut emit = |sub_layer_index, pass, flags| {
@@ -384,6 +388,10 @@ pub fn bindings_for(
             // outline sorts above the fill it belongs to, and a line has no such pair.
             Content::Line(_) => {
                 emit(0, view::fill_pass(), view::tiled_flags());
+            }
+            // Translucent like the others, and unstencilled unlike them — see `circle_flags`.
+            Content::Circle(_) => {
+                emit(0, view::fill_pass(), view::circle_flags());
             }
         }
     }

@@ -406,3 +406,101 @@ fn the_line_tile_props_buffer_is_sized_and_empty() {
     assert_eq!(blocks(&packed), *want);
     assert!(packed.iter().all(|byte| *byte == 0));
 }
+
+/// The circle drawable buffer matches the oracle: one entry, matrix and extrude scale.
+///
+/// One entry, not six — the style's point lies inside a single tile, and the layout drops
+/// points outside the tile proper rather than keeping the buffered box every other layer uses.
+#[test]
+fn the_circle_drawable_buffer_matches_the_oracle() {
+    let oracle = oracle_buffers();
+    let (size, want) = oracle
+        .get(&(4, ubo_slots::ID_CIRCLE_DRAWABLE_UBO))
+        .expect("the oracle writes a circle drawable buffer");
+
+    let view = probe();
+    // The tile the point falls in.
+    let entry = ubo::CircleDrawableEntry::for_tile(
+        &view,
+        13,
+        4093,
+        2724,
+        0,
+        4,
+        0,
+        // The style leaves `circle-pitch-alignment` at its viewport default.
+        ubo::circle_extrude_scale(false, 13, &view),
+        [0.0; 7],
+    )
+    .expect("an unrotated camera");
+
+    let stride = ubo_layouts::CIRCLE_DRAWABLE_UBO.stride;
+    let packed = ubo::pack_circle_drawable_buffer(&[entry], stride);
+
+    assert_eq!(packed.len(), *size, "one entry");
+    assert_eq!(blocks(&packed), *want);
+}
+
+/// The extrude scale is in screen units when the circle faces the viewport, tile units when it
+/// lies on the map.
+#[test]
+fn the_circle_extrude_scale_follows_the_pitch_alignment() {
+    let view = probe();
+    // `pixelsToGLUnits`: two over the width, minus two over the height.
+    assert_eq!(
+        ubo::circle_extrude_scale(false, 13, &view),
+        [2.0 / 1024.0, -2.0 / 768.0]
+    );
+    // Map-aligned: tile units per pixel, which is sixteen at a tile's own zoom.
+    assert_eq!(ubo::circle_extrude_scale(true, 13, &view), [16.0, 16.0]);
+}
+
+/// The circle evaluated properties match, flags included.
+#[test]
+fn the_circle_evaluated_props_match_the_oracle() {
+    use tessella_style::Style;
+    let oracle = oracle_buffers();
+    let (size, want) = oracle
+        .get(&(4, ubo_slots::ID_CIRCLE_EVALUATED_PROPS_UBO))
+        .expect("the oracle writes circle evaluated props");
+
+    let style = Style::parse(include_str!(
+        "../../tessella-style/tests/hermetic_style.json"
+    ))
+    .expect("style parses");
+    let paint = tessella_style::property::resolve_paint(
+        style.layer("circle-constant").expect("circle-constant"),
+    )
+    .expect("resolves");
+
+    let packed = ubo::circle_props_from_paint(&paint, 13.0);
+    assert_eq!(packed.len(), *size);
+    assert_eq!(blocks(&packed), *want);
+}
+
+/// The two flags are integers, and they are not the same value.
+///
+/// `circle-pitch-scale` defaults to `map` and `circle-pitch-alignment` to `viewport`, so the
+/// oracle's block has a one beside a zero — which is what catches a packer that defaulted both
+/// the same way, or that wrote them as floats.
+#[test]
+fn the_circle_flags_are_integers_and_differ() {
+    let packed = ubo::pack_circle_props(
+        tessella_style::property::Color::black(),
+        tessella_style::property::Color::black(),
+        5.0,
+        0.0,
+        1.0,
+        0.0,
+        1.0,
+        true,
+        false,
+    );
+    assert_eq!(&packed[52..56], &1i32.to_le_bytes(), "scale_with_map");
+    assert_eq!(&packed[56..60], &0i32.to_le_bytes(), "pitch_with_map");
+    assert_ne!(
+        &packed[52..56],
+        &1.0f32.to_le_bytes(),
+        "an integer one, not a float one"
+    );
+}

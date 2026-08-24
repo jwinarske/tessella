@@ -25,10 +25,12 @@
 
 extern crate alloc;
 
+pub mod circle;
 pub mod fill;
 pub mod line;
 pub mod paint;
 
+pub use circle::CircleBucket;
 pub use fill::{FillBucket, Segment};
 pub use line::{ClipDistances, LineBucket, LineCap, LineJoin, LineOptions, LineVertex};
 pub use paint::{BinderError, PaintBinder, Slot};

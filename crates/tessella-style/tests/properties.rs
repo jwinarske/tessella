@@ -317,11 +317,21 @@ fn a_literal_of_the_wrong_type_is_rejected() {
 /// line and circle layers, and they must not stop the fill layers from drawing (§1).
 #[test]
 fn an_unimplemented_layer_type_resolves_empty() {
-    let style = hermetic();
-    let circle = style.layer("circle-constant").expect("circle-constant");
-    let paint = resolve_paint(circle).expect("resolves");
-    assert!(paint.is_empty());
-    assert!(is_all_uniform(&paint), "vacuously");
+    // The hermetic style no longer contains one: background, fill, line and circle are all
+    // implemented, which is why this reaches for a type outside it. A layer type with no spec
+    // table resolves to nothing rather than to guessed defaults — the difference between "this
+    // build does not know what a raster layer's properties are" and "it thinks they are empty".
+    let style = Style::parse(
+        r#"{"version": 8, "sources": {}, "layers": [
+             {"id": "r", "type": "raster", "source": "s", "paint": {"raster-opacity": 0.5}},
+             {"id": "s", "type": "symbol", "source": "s"}]}"#,
+    )
+    .expect("style parses");
+    for id in ["r", "s"] {
+        let paint = resolve_paint(style.layer(id).expect(id)).expect("resolves");
+        assert!(paint.is_empty(), "{id}");
+        assert!(is_all_uniform(&paint), "vacuously, {id}");
+    }
 }
 
 /// `line-floorwidth` is not a style-spec property and is a real one to mbgl.

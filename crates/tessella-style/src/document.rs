@@ -224,7 +224,10 @@ impl LayerKind {
     /// the release that owns it.
     #[must_use]
     pub fn is_built(&self) -> bool {
-        matches!(self, Self::Background | Self::Fill | Self::Line)
+        matches!(
+            self,
+            Self::Background | Self::Fill | Self::Line | Self::Circle
+        )
     }
 }
 

@@ -2,8 +2,9 @@
 
 rev 0.10 — 2026-08-24
 rev 0.10: R1 underway — MVT decode, the line layer, the data-driven paint binder, the shader
-permutation key, composite (zoom-interpolated) binding and the line layer's uniform buffers
-land; the probe gains `--zoom` and two further goldens; DR-19 gains the line-path confirmation that the rotation is wagyu's
+permutation key, composite (zoom-interpolated) binding, the line layer's uniform buffers and
+the circle layer land — the hermetic style is now reproduced in full, 37 drawables and 14
+uniform buffers; the probe gains `--zoom` and two further goldens; DR-19 gains the line-path confirmation that the rotation is wagyu's
 alone, the line buffers being byte-exact. §5.1's "camera-free bucket" is qualified: a bucket
 is keyed by the zoom it is used at, because a composite property's endpoints depend on it.
 rev 0.9: R0's stream complete and diffed against the probe envelope by envelope; DR-19 records
@@ -485,10 +486,10 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   dump's paint buffers; the shader permutation key is on the wire and groups as the oracle's
   does; zoom-interpolated (composite) properties carry both endpoints and their `_t` mix factor,
   byte-exact against a second golden captured at a fractional zoom; the line layer's uniform
-  buffers land, and the frame emits twelve of the oracle's fourteen — all but the circle
-  layer's. Remaining: network + cache with request coalescing, cross-faded (pattern) binders,
-  the circle layer, DR-11 evaluator, §12.5 startup path. Exit: probe parity on a real style
-  sans symbols; cold-boot-to-first-tile traced and within budget.
+  buffers land; the circle layer closes the hermetic style, which this build now reproduces in
+  full — all 37 drawables and all 14 uniform buffers. Remaining: network + cache with request
+  coalescing, cross-faded (pattern) binders, DR-11 evaluator, §12.5 startup path. Exit: probe
+  parity on a *real* style sans symbols; cold-boot-to-first-tile traced and within budget.
 - **R1.5** — four views over the same style (§13). Exit: §9.2 invariants green; §13.3
   four-view zoom benchmark green on RK3566; §13.1 fractional-zoom counters at zero.
 - **R2** — symbols: glyph manager, shaping, quads, per-view placement, collision, cross-tile

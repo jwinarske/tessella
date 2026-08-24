@@ -430,6 +430,88 @@ const LINE_LAYOUT: &[PropertySpec] = &[
     },
 ];
 
+/// Circle paint properties, in mbgl's `CirclePaintProperties` declaration order.
+///
+/// As with the line table, the order is the interleaved paint buffer's layout and so is
+/// load-bearing rather than cosmetic.
+const CIRCLE_PAINT: &[PropertySpec] = &[
+    PropertySpec {
+        name: "circle-blur",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "circle-color",
+        kind: PropertyKind::Color,
+        default: DefaultValue::Color(Color::black()),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "circle-opacity",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(1.0),
+        data_driven: true,
+    },
+    PropertySpec {
+        // Viewport, not map — the odd one out among the anchor-style enums, and what makes a
+        // circle keep its screen size under pitch.
+        name: "circle-pitch-alignment",
+        kind: PropertyKind::Enum,
+        default: DefaultValue::Enum("viewport"),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "circle-pitch-scale",
+        kind: PropertyKind::Enum,
+        default: DefaultValue::Enum("map"),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "circle-radius",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(5.0),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "circle-stroke-color",
+        kind: PropertyKind::Color,
+        default: DefaultValue::Color(Color::black()),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "circle-stroke-opacity",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(1.0),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "circle-stroke-width",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "circle-translate",
+        kind: PropertyKind::NumberArray(2),
+        default: DefaultValue::NumberPair(0.0, 0.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "circle-translate-anchor",
+        kind: PropertyKind::Enum,
+        default: DefaultValue::Enum("map"),
+        data_driven: false,
+    },
+];
+
+const CIRCLE_LAYOUT: &[PropertySpec] = &[PropertySpec {
+    name: "circle-sort-key",
+    kind: PropertyKind::Number,
+    default: DefaultValue::Number(0.0),
+    data_driven: true,
+}];
+
 const FILL_LAYOUT: &[PropertySpec] = &[PropertySpec {
     name: "fill-sort-key",
     kind: PropertyKind::Number,
@@ -444,6 +526,7 @@ pub fn paint_specs(kind: &LayerKind) -> Option<&'static [PropertySpec]> {
         LayerKind::Background => Some(BACKGROUND_PAINT),
         LayerKind::Fill => Some(FILL_PAINT),
         LayerKind::Line => Some(LINE_PAINT),
+        LayerKind::Circle => Some(CIRCLE_PAINT),
         _ => None,
     }
 }
@@ -455,6 +538,7 @@ pub fn layout_specs(kind: &LayerKind) -> Option<&'static [PropertySpec]> {
         LayerKind::Background => Some(&[]),
         LayerKind::Fill => Some(FILL_LAYOUT),
         LayerKind::Line => Some(LINE_LAYOUT),
+        LayerKind::Circle => Some(CIRCLE_LAYOUT),
         _ => None,
     }
 }
