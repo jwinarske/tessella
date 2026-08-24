@@ -498,9 +498,36 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   toolchain for, and composes into the cold start: against a Protomaps extract a warm start
   reaches first geometry in 2.0 ms against 6.6 ms cold, with zero round trips.
   The cache is bounded by bytes and evicts least-recently-used on every write.
+  Offline regions land on top of it: a user picks a box and a zoom range, is shown what it
+  costs, and accepts or declines. `Region::tile_count` closes a formula and never allocates —
+  sizing a country is asked precisely so it can be refused, and answering by building the list
+  would make asking as expensive as agreeing. `Download::plan` turns the style into URLs and
+  `Download::run` fetches them, so the list shown is the list paid. A region's resources sit
+  outside the ambient bound in both directions and outside its freshness rules: a downloaded
+  tile is served without asking the origin however old it gets, because the user paid for a
+  snapshot, and deferring to `Cache-Control` there would blank the map offline and put a metered
+  user back on the network online. The exclusion is a count on the row, not a join — measured,
+  `NOT IN` against the claim table cost 238 us per ambient write at zero claims and 33 ms at a
+  hundred thousand, so a finished download taxed every tile fetched afterwards; the count is
+  flat at 150 us. Downloads are resumable rather than transactional, since a country at street
+  zoom is hours over a connection that will drop.
   Remaining: TLS and reading `.pmtiles`
   archives directly (both held for the cross toolchains, §16), cross-faded (pattern) binders,
   DR-11 evaluator, §12.5 startup path.
+  Remaining on offline, none of it blocking R1 exit:
+  the download runs serially on the calling thread, so it wants §5.4's pool at a background
+  priority class — for a country that is the difference between hours and rather fewer hours,
+  and it is the same pool the cover already needs;
+  only rectangles are supported, where mbgl also has `OfflineGeometryRegionDefinition` and
+  "draw the area you want" usually means a polygon;
+  there is no `packDatabase` equivalent, so deleting a region unpins its bytes but SQLite does
+  not return the file size to the OS until something vacuums — which on a storage-constrained
+  target is the difference between a delete that frees space and one that only promises to;
+  a region cannot be refreshed against its origin, so a snapshot stays the snapshot it was
+  taken as;
+  and `text-font` is disambiguated from an expression by a hand-listed operator set, standing
+  in for the table DR-11 will bring — `["Noto Sans Regular"]` is syntactically a call to an
+  operator of that name, and the style crate deliberately declines to guess which it is.
   Exit: probe parity on a *real* style sans symbols — **geometry half met**: nine tiles of a
   Protomaps planet extract at z5, all 21 drawables byte-identical to the probe, fills and lines
   both, over the same live origin. Cold-boot-to-first-tile is traced (§12.5): style parse,
