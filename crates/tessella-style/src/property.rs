@@ -519,6 +519,79 @@ const FILL_LAYOUT: &[PropertySpec] = &[PropertySpec {
     data_driven: true,
 }];
 
+/// A symbol layer's paint properties.
+///
+/// Ten of them reach the evaluated-props buffer, five for text and five for icons, and the icon
+/// half is present whether or not the layer draws icons — one shader serves both and the buffer
+/// is its interface. `icon-color` and `text-color` default to *opaque black*, not to nothing:
+/// a layer naming neither still writes both, and zeroing the half a layer does not use puts a
+/// transparent black on the wire where the oracle has an opaque one.
+///
+/// `text-translate` and its anchor are here for completeness of the spec surface; nothing reads
+/// them yet.
+const SYMBOL_PAINT: &[PropertySpec] = &[
+    PropertySpec {
+        name: "icon-color",
+        kind: PropertyKind::Color,
+        default: DefaultValue::Color(Color::black()),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "icon-halo-blur",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "icon-halo-color",
+        kind: PropertyKind::Color,
+        default: DefaultValue::Color(Color::transparent()),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "icon-halo-width",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "icon-opacity",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(1.0),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "text-color",
+        kind: PropertyKind::Color,
+        default: DefaultValue::Color(Color::black()),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "text-halo-blur",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "text-halo-color",
+        kind: PropertyKind::Color,
+        default: DefaultValue::Color(Color::transparent()),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "text-halo-width",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "text-opacity",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(1.0),
+        data_driven: true,
+    },
+];
+
 /// The paint properties a layer type accepts, or `None` for a type R0 does not implement.
 #[must_use]
 pub fn paint_specs(kind: &LayerKind) -> Option<&'static [PropertySpec]> {
@@ -527,6 +600,7 @@ pub fn paint_specs(kind: &LayerKind) -> Option<&'static [PropertySpec]> {
         LayerKind::Fill => Some(FILL_PAINT),
         LayerKind::Line => Some(LINE_PAINT),
         LayerKind::Circle => Some(CIRCLE_PAINT),
+        LayerKind::Symbol => Some(SYMBOL_PAINT),
         _ => None,
     }
 }

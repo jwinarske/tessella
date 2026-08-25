@@ -957,3 +957,139 @@ mod painter_order {
         );
     }
 }
+
+/// The symbol layer's uniform buffers, byte for byte.
+///
+/// The symbol capture has six: the global paint params, the background layer's two, and the
+/// symbol layer's three — the per-drawable array at slot 2, the tile props at slot 3 and the
+/// evaluated props at slot 5. The slot numbers are mbgl's own, generated into
+/// `ubo_slots.rs`, and the sizes follow from the layouts generated beside them.
+///
+/// Two of the three are here. The drawable array carries three matrices per entry — the tile
+/// matrix, the label-plane matrix and the GL coordinate matrix — and those are the projection
+/// stage, not a paint one; they are their own piece.
+mod symbol_ubos {
+    use std::collections::BTreeMap;
+
+    use tessella_capture_abi::generated::ubo_layouts::{
+        SYMBOL_DRAWABLE_UBO, SYMBOL_EVALUATED_PROPS_UBO, SYMBOL_TILE_PROPS_UBO,
+    };
+    use tessella_capture_abi::generated::ubo_slots::{
+        ID_SYMBOL_DRAWABLE_UBO, ID_SYMBOL_EVALUATED_PROPS_UBO, ID_SYMBOL_TILE_PROPS_UBO,
+    };
+    use tessella_orchestrate::ubo;
+    use tessella_style::property::resolve_paint;
+
+    const DUMP: &str = include_str!("../../../tests/golden/symbol_style.dump");
+
+    /// The oracle's buffers, keyed by layer and slot: the size and the sorted 16-byte blocks.
+    fn oracle() -> BTreeMap<(i32, u32), (usize, Vec<String>)> {
+        let mut out = BTreeMap::new();
+        for line in DUMP.lines() {
+            let Some(rest) = line.strip_prefix("ubo ") else {
+                continue;
+            };
+            let mut fields = rest.split(' ');
+            let key = fields.next().expect("a key");
+            let (kind, index) = key.split_once(':').expect("kind:index");
+            let layer = if kind == "global" {
+                -1
+            } else {
+                index.parse::<i32>().expect("layer number")
+            };
+            let slot: u32 = fields
+                .next()
+                .and_then(|field| field.strip_prefix("slot="))
+                .expect("a slot")
+                .parse()
+                .expect("slot number");
+            let size: usize = fields
+                .next()
+                .and_then(|field| field.strip_prefix("size="))
+                .expect("a size")
+                .parse()
+                .expect("size number");
+            let bytes = fields
+                .next()
+                .and_then(|field| field.strip_prefix("bytes="))
+                .expect("bytes");
+
+            let mut blocks: Vec<String> = bytes
+                .as_bytes()
+                .chunks(32)
+                .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
+                .collect();
+            blocks.sort();
+            out.insert((layer, slot), (size, blocks));
+        }
+        out
+    }
+
+    fn blocks(bytes: &[u8]) -> Vec<String> {
+        let mut blocks: Vec<String> = bytes
+            .chunks(16)
+            .map(|chunk| chunk.iter().map(|byte| format!("{byte:02x}")).collect())
+            .collect();
+        blocks.sort();
+        blocks
+    }
+
+    /// The slots and sizes are the generated tables', and the oracle agrees with both.
+    ///
+    /// A slot is where the shader looks: writing the evaluated props into the tile-props slot
+    /// binds one buffer where the other belongs, which draws nothing recognizable and is not an
+    /// error anywhere. The tables come from mbgl (DR-6), so this is the tables checked against a
+    /// capture of the code they were generated from.
+    #[test]
+    fn the_slots_and_sizes_are_the_generated_ones() {
+        let oracle = oracle();
+        let drawables = 2;
+
+        assert_eq!(
+            oracle[&(1, ID_SYMBOL_DRAWABLE_UBO)].0,
+            SYMBOL_DRAWABLE_UBO.stride as usize * drawables,
+            "the drawable array is one padded entry per drawable"
+        );
+        assert_eq!(
+            oracle[&(1, ID_SYMBOL_TILE_PROPS_UBO)].0,
+            SYMBOL_TILE_PROPS_UBO.stride as usize * drawables
+        );
+        assert_eq!(
+            oracle[&(1, ID_SYMBOL_EVALUATED_PROPS_UBO)].0,
+            SYMBOL_EVALUATED_PROPS_UBO.size as usize,
+            "the evaluated props are one buffer for the layer, not one per drawable"
+        );
+    }
+
+    /// The tile props buffer matches the oracle's.
+    #[test]
+    fn the_tile_props_match_the_oracle() {
+        let (size, expected) = &oracle()[&(1, ID_SYMBOL_TILE_PROPS_UBO)];
+        // Text, no halo, gamma one at pitch zero — two drawables, both the same.
+        let mine = ubo::pack_symbol_tile_props(2, true, false, 1.0);
+        assert_eq!(mine.len(), *size);
+        assert_eq!(&blocks(&mine), expected);
+    }
+
+    /// The evaluated props buffer matches the oracle's.
+    ///
+    /// Derived from the style's paint rather than written out, so it is the resolution being
+    /// checked and not a transcription of the dump. The style names only `text-color`; every
+    /// other value here is a spec default, and the icon half is the half that catches a
+    /// zero-filled shortcut — `icon-color` defaults to opaque black, not to nothing.
+    #[test]
+    fn the_evaluated_props_match_the_oracle() {
+        let style = super::through_the_builder::style();
+        let layer = style
+            .layers
+            .iter()
+            .find(|layer| layer.id == "labels")
+            .expect("the symbol layer");
+        let paint = resolve_paint(layer).expect("paint resolves");
+
+        let (size, expected) = &oracle()[&(1, ID_SYMBOL_EVALUATED_PROPS_UBO)];
+        let mine = ubo::symbol_props_from_paint(&paint, 13.0);
+        assert_eq!(mine.len(), *size);
+        assert_eq!(&blocks(&mine), expected);
+    }
+}

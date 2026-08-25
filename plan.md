@@ -1153,6 +1153,25 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   defensible guess. Writing it turned up the trap the section is full of: the `layer=` field of a
   draw line is mbgl's depth slot, which runs opposite the style index, and the style index is in
   the drawable key beside it. Reading the wrong one puts the background on top of everything.
+  Two of the symbol layer's three uniform buffers then land byte-exact: the tile props at slot 3
+  and the evaluated props at slot 5. The slots and the sizes come from the tables generated out
+  of mbgl (DR-6), so checking them against the capture is those tables checked against the code
+  they were generated from — `SymbolDrawableUBO` is 260 bytes at a stride of 272 and the oracle's
+  array is 544 for two drawables, which is the padding being the *stride* and not the size.
+  Writing them needed a symbol paint spec table, which did not exist. Ten properties, five for
+  text and five for icons, and the icon half is written whether or not a layer draws icons —
+  one shader serves both and the buffer is its interface. That half is what catches a zero-filled
+  shortcut: `icon-color` defaults to *opaque black*, so a buffer filled with zeros for the unused
+  half puts a transparent black on the wire where the oracle has an opaque one. The style names
+  only `text-color`; every other value in the buffer is a spec default, which is what makes this
+  a check of the resolution rather than a transcription of the dump.
+  `is_halo` is a second *drawable* over the same geometry rather than a flag on one — mbgl draws
+  the halo first and the fill over it, so a layer with `text-halo-width` emits twice — and
+  `gamma_scale` is one at pitch zero, left at one rather than given the pitched value mbgl scales
+  it by, since inventing that would put a number on the wire nothing produced.
+  The drawable array is the remaining one, and it is not a paint buffer: it carries three
+  matrices per entry — the tile matrix, the label-plane matrix and the GL coordinate matrix —
+  which is the projection stage and its own piece.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

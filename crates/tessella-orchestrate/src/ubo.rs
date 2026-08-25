@@ -757,6 +757,99 @@ fn uniform_enum(
         .unwrap_or_else(|| default.to_string())
 }
 
+/// Packs `SymbolTilePropsUBO`, one entry per drawable.
+///
+/// Sixteen bytes each: which of a symbol's two halves this drawable draws, whether it is the
+/// halo pass, and the gamma scale.
+///
+/// `is_halo` is a *second drawable over the same geometry*, not a flag on one — mbgl draws the
+/// halo first and the fill over it, so a layer with `text-halo-width` emits twice. This build
+/// draws no halo, which is why the oracle's two entries are both `is_halo = 0`.
+///
+/// `gamma_scale` is one at pitch zero. Pitched, mbgl scales it by the drawable's perspective
+/// ratio so distant text does not thin out; there is no pitch here, and inventing the pitched
+/// value would put a number on the wire nothing produced.
+#[must_use]
+pub fn pack_symbol_tile_props(
+    drawables: usize,
+    is_text: bool,
+    is_halo: bool,
+    gamma: f32,
+) -> Vec<u8> {
+    const STRIDE: usize = 16;
+    let mut out = Vec::with_capacity(drawables * STRIDE);
+    for _ in 0..drawables {
+        out.extend_from_slice(&i32::from(is_text).to_le_bytes());
+        out.extend_from_slice(&i32::from(is_halo).to_le_bytes());
+        out.extend_from_slice(&gamma.to_le_bytes());
+        out.extend_from_slice(&0f32.to_le_bytes());
+    }
+    debug_assert_eq!(out.len(), drawables * STRIDE);
+    out
+}
+
+/// Packs `SymbolEvaluatedPropsUBO`.
+///
+/// Ninety-six bytes: text colour, halo colour, opacity, halo width and blur, then the same five
+/// again for icons. Both halves are always present whether or not the layer draws icons, because
+/// one shader serves both and the buffer is its interface.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn pack_symbol_props(
+    text_color: Color,
+    text_halo_color: Color,
+    text_opacity: f32,
+    text_halo_width: f32,
+    text_halo_blur: f32,
+    icon_color: Color,
+    icon_halo_color: Color,
+    icon_opacity: f32,
+    icon_halo_width: f32,
+    icon_halo_blur: f32,
+) -> Vec<u8> {
+    const SIZE: usize = 96;
+    let mut out = Vec::with_capacity(SIZE);
+    push_color(&mut out, text_color);
+    push_color(&mut out, text_halo_color);
+    push_f32s(
+        &mut out,
+        &[text_opacity, text_halo_width, text_halo_blur, 0.0],
+    );
+    push_color(&mut out, icon_color);
+    push_color(&mut out, icon_halo_color);
+    push_f32s(
+        &mut out,
+        &[icon_opacity, icon_halo_width, icon_halo_blur, 0.0],
+    );
+    debug_assert_eq!(out.len(), SIZE);
+    out
+}
+
+/// A symbol layer's evaluated properties, from its resolved paint.
+///
+/// The icon half is filled from the style's own defaults rather than left zero. `icon-color`
+/// defaults to black and `text-color` to black too — a layer that names neither still has both,
+/// and writing zeros for the half a layer does not use would put a transparent black on the wire
+/// where the oracle has an opaque one.
+#[must_use]
+pub fn symbol_props_from_paint(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    zoom: f64,
+) -> Vec<u8> {
+    pack_symbol_props(
+        uniform_color(paint, "text-color", zoom),
+        uniform_color(paint, "text-halo-color", zoom),
+        uniform_number(paint, "text-opacity", zoom),
+        uniform_number(paint, "text-halo-width", zoom),
+        uniform_number(paint, "text-halo-blur", zoom),
+        uniform_color(paint, "icon-color", zoom),
+        uniform_color(paint, "icon-halo-color", zoom),
+        uniform_number(paint, "icon-opacity", zoom),
+        uniform_number(paint, "icon-halo-width", zoom),
+        uniform_number(paint, "icon-halo-blur", zoom),
+    )
+}
+
 /// Packs `BackgroundPropsUBO`.
 #[must_use]
 pub fn pack_background_props(color: Color, opacity: f32) -> Vec<u8> {
