@@ -457,7 +457,20 @@ historic note).
   at one camera.
 - Shared-store counters (fetches, decodes, bucket builds, atlas uploads) do not scale with
   view count for overlapping covers.
-- Screen-space UBO variants (R-2) differ per view over identical shared geometry.
+- Screen-space UBO variants (R-2) differ per view over identical shared geometry. Asserted in
+  `view_uniforms.rs`, and in both halves at once, since either alone is a property a wrong
+  implementation also has: over a tile four views share, the buckets are byte-identical while
+  the four drawable matrices are all distinct. "Uniforms differ" alone is satisfied by sharing
+  nothing, which is the arrangement §5 exists to escape. The converse is asserted too — two
+  views at one camera agree — without which the test would pass for a matrix that depended on a
+  view's *identity* rather than its camera. Held at every frame of the §13.3 sweep and not only
+  at its ends, since the views converge as it descends and convergence is where a shared uniform
+  stops being visible. The frame-wide block is checked against a scaled inset as well as a
+  reshaped one: 320x240 beside 1024x768 is the same 4:3, so a block distinguished by aspect
+  ratio alone would size an inset's geometry to the display. Stencil matrices are covered
+  separately, because they are deliberately not the drawable's — a mask left on a neighbour's
+  camera subtracts geometry rather than misplacing it. Each of the three paths was checked by
+  pinning it to one canonical camera and confirming that its own test, and only its own, fails.
 
 ### 9.3 Counters (CI assertions)
 
