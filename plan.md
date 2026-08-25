@@ -893,7 +893,18 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   a committed script so a regeneration still reproduces. The two per-frame attributes were stable
   across all ten and are *not* elided — eliding a stable line gives away a comparison for
   nothing. Byte-exact symbol vertices need the atlas packed deterministically on mbgl's side,
-  which is a change to the probe rather than to this.
+  which is a change to the probe rather than to this. Investigated and declined: the iteration
+  itself is deterministic — `std::map` by fontstack then glyph id — and what varies is *which*
+  glyphs have arrived when the first upload runs, since glyph loading is async. Making that
+  deterministic means changing mbgl's atlas behaviour rather than the probe's dump code, and an
+  oracle that represents a modified mbgl is worth less than one with seven elided lines.
+  The layout glue then moves into the library where it belongs: `build_symbols` takes a layer's
+  labels and a glyph source and produces one tile's buffers. One buffer per layer per tile, which
+  is what the golden shows mbgl doing — its twelve-glyph drawable is two labels, not two
+  drawables — so a second label's indices have to reach its own vertices and each label's
+  vertices carry its own anchor. A label whose glyphs are not all packed draws the ones that are
+  and still measures the whole for collision, because a map that waited for a font before drawing
+  anything would show nothing during a pan into new text.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

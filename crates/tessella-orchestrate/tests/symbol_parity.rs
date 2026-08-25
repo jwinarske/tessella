@@ -26,10 +26,8 @@
 use std::collections::BTreeMap;
 
 use tessella_glyph::atlas::Atlas;
-use tessella_glyph::pbf::{self, Glyph, Range};
-use tessella_glyph::quads::{self, Placed as QuadGlyph};
-use tessella_glyph::shaping::{self, Char, Options as ShapeOptions};
-use tessella_layout::symbol_bucket::{SizeRange, SymbolBuffers};
+use tessella_glyph::pbf::{self, Glyph, Metrics, Range};
+use tessella_layout::symbol_bucket::{Glyphs, Label, SymbolBuffers, SymbolOptions, build_symbols};
 
 const DUMP: &str = include_str!("../../../tests/golden/symbol_style.dump");
 const GLYPHS: &[u8] = include_bytes!("../../../tests/glyph-fixtures/TestFont/0-255.pbf");
@@ -125,60 +123,55 @@ fn golden_symbols() -> Vec<Golden> {
 /// The style's three labels. Which tile each lands in is what the golden's tile ids say.
 const LABELS: [&str; 3] = ["Alpha", "Bravo", "Charlie"];
 
-/// Shapes a label and turns it into symbol vertices, as the bucket would.
-fn build(text: &str, glyphs: &[Glyph], atlas: &mut Atlas, buffers: &mut SymbolBuffers) {
-    let chars: Vec<Char> = text
-        .chars()
-        .map(|character| {
-            let codepoint = character as u32;
-            match glyphs.iter().find(|glyph| glyph.id == codepoint) {
-                #[allow(clippy::cast_precision_loss)]
-                Some(glyph) if glyph.bitmap_size().is_some() => {
-                    Char::new(codepoint, glyph.metrics.advance as f32)
-                }
-                #[allow(clippy::cast_precision_loss)]
-                Some(glyph) => Char::blank(codepoint, glyph.metrics.advance as f32),
-                None => Char::blank(codepoint, 0.0),
+/// The vendored font, with the glyphs of every label packed.
+struct Font {
+    glyphs: Vec<Glyph>,
+    atlas: Atlas,
+}
+
+impl Font {
+    fn new() -> Self {
+        let glyphs = pbf::parse(
+            Range {
+                first: 0,
+                last: 255,
+            },
+            GLYPHS,
+        )
+        .expect("the range parses");
+        let mut atlas = Atlas::new(512, 512);
+        for glyph in &glyphs {
+            if LABELS
+                .iter()
+                .any(|label| label.chars().any(|character| character as u32 == glyph.id))
+            {
+                atlas.add(glyph.id, glyph);
             }
+        }
+        Self { glyphs, atlas }
+    }
+}
+
+impl Glyphs for Font {
+    fn metrics(&self, codepoint: u32) -> Option<(Metrics, bool)> {
+        let glyph = self.glyphs.iter().find(|glyph| glyph.id == codepoint)?;
+        Some((glyph.metrics, glyph.bitmap_size().is_some()))
+    }
+    fn rect(&self, codepoint: u32) -> Option<tessella_glyph::atlas::Rect> {
+        self.atlas.get(codepoint)
+    }
+}
+
+/// Builds one tile's symbol buffer from the labels that fall in it.
+fn build(labels: &[&str], font: &Font) -> SymbolBuffers {
+    let entries: Vec<Label> = labels
+        .iter()
+        .map(|text| Label {
+            text: (*text).to_string(),
+            anchor: (0.0, 0.0),
         })
         .collect();
-
-    let shaping = shaping::shape(&chars, &ShapeOptions::default());
-    for glyph in glyphs {
-        if text.chars().any(|character| character as u32 == glyph.id) {
-            atlas.add(glyph.id, glyph);
-        }
-    }
-
-    let quads = quads::glyph_quads(
-        &shaping,
-        |codepoint| {
-            let glyph = glyphs.iter().find(|glyph| glyph.id == codepoint)?;
-            Some(QuadGlyph {
-                rect: atlas.get(codepoint)?,
-                metrics: glyph.metrics,
-            })
-        },
-        &quads::Options::default(),
-    );
-
-    for quad in quads {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        buffers.add_quad(
-            (0.0, 0.0),
-            [quad.tl, quad.tr, quad.bl, quad.br],
-            0.0,
-            (
-                quad.tex.x as u16,
-                quad.tex.y as u16,
-                quad.tex.width as u16,
-                quad.tex.height as u16,
-            ),
-            SizeRange::constant(16.0),
-            true,
-            1.0,
-        );
-    }
+    build_symbols(&entries, font, &SymbolOptions::default()).0
 }
 
 /// The golden holds exactly the symbol drawables this style should produce.
@@ -205,14 +198,7 @@ fn the_oracle_drew_the_labels() {
 /// them are most of the ways a symbol bucket goes wrong.
 #[test]
 fn the_index_buffers_match_the_oracle() {
-    let glyphs = pbf::parse(
-        Range {
-            first: 0,
-            last: 255,
-        },
-        GLYPHS,
-    )
-    .expect("the range parses");
+    let font = Font::new();
     let symbols = golden_symbols();
 
     // The golden's two drawables hold five and twelve glyphs. Build each from the labels that
@@ -227,11 +213,7 @@ fn the_index_buffers_match_the_oracle() {
         let glyph_count = symbol.vertices / 4;
         let labels = groups.get(&glyph_count).expect("a known group");
 
-        let mut atlas = Atlas::new(512, 512);
-        let mut buffers = SymbolBuffers::default();
-        for label in labels {
-            build(label, &glyphs, &mut atlas, &mut buffers);
-        }
+        let buffers = build(labels, &font);
 
         assert_eq!(
             buffers.vertices.len(),
@@ -314,21 +296,10 @@ fn the_vertex_layout_matches_the_oracle() {
 /// label in isolation. That is R2's remaining work, and this is where it will be checked.
 #[test]
 fn the_per_frame_buffers_have_one_entry_per_vertex() {
-    let glyphs = pbf::parse(
-        Range {
-            first: 0,
-            last: 255,
-        },
-        GLYPHS,
-    )
-    .expect("the range parses");
+    let font = Font::new();
 
     for (glyph_count, labels) in [(5usize, vec!["Alpha"]), (12, vec!["Bravo", "Charlie"])] {
-        let mut atlas = Atlas::new(512, 512);
-        let mut buffers = SymbolBuffers::default();
-        for label in &labels {
-            build(label, &glyphs, &mut atlas, &mut buffers);
-        }
+        let buffers = build(&labels, &font);
 
         assert_eq!(buffers.glyphs(), glyph_count);
         assert_eq!(buffers.dynamic.len(), buffers.vertices.len());

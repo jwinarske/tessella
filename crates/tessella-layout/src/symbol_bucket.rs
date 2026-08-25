@@ -228,3 +228,162 @@ impl SymbolBuffers {
             .extend_from_slice(&[base, base + 1, base + 2, base + 1, base + 2, base + 3]);
     }
 }
+
+/// What a symbol layer needs to know about a glyph.
+///
+/// A trait rather than the glyph itself so a caller can answer from a manager, an atlas, or a
+/// test's table, and so that this crate does not decide how glyphs are stored. The two questions
+/// are separate because they are answered at different times: the advance is known as soon as
+/// the range is parsed, and the rectangle only once the glyph is packed.
+pub trait Glyphs {
+    /// How far the pen moves for this codepoint, and whether it has anything to draw.
+    ///
+    /// `None` when the font stack does not have it at all, which the shaper treats as a
+    /// zero-width blank rather than as a reason to abandon the label.
+    fn metrics(&self, codepoint: u32) -> Option<(tessella_glyph::pbf::Metrics, bool)>;
+
+    /// Where it sits in the atlas, once it is packed.
+    fn rect(&self, codepoint: u32) -> Option<tessella_glyph::atlas::Rect>;
+}
+
+/// A label to lay out: what it says and where it is anchored, in tile coordinates.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Label {
+    /// The text, already resolved from `text-field`.
+    pub text: alloc::string::String,
+    /// Its anchor, in tile units.
+    pub anchor: (f32, f32),
+}
+
+/// How a symbol layer sets its text.
+#[derive(Debug, Clone, Copy)]
+pub struct SymbolOptions {
+    /// `text-size`, in pixels.
+    pub size: f32,
+    /// `text-max-width`, in ems. Zero never wraps.
+    pub max_width_ems: f32,
+    /// `text-letter-spacing`, in pixels.
+    pub letter_spacing: f32,
+    /// Where the label sits relative to its anchor.
+    pub anchor: tessella_glyph::shaping::Anchor,
+    /// How its lines align.
+    pub justify: tessella_glyph::shaping::Justify,
+}
+
+impl Default for SymbolOptions {
+    fn default() -> Self {
+        Self {
+            size: 16.0,
+            max_width_ems: 10.0,
+            letter_spacing: 0.0,
+            anchor: tessella_glyph::shaping::Anchor::Center,
+            justify: tessella_glyph::shaping::Justify::Center,
+        }
+    }
+}
+
+/// One laid-out label: its geometry, and the box placement will compete with.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LaidOut {
+    /// Where it is anchored, in tile units.
+    pub anchor: (f32, f32),
+    /// The extent it occupies around that anchor, in pixels.
+    pub extent: (f32, f32, f32, f32),
+    /// How many glyphs it drew.
+    pub glyphs: usize,
+}
+
+/// Lays out a layer's labels into one tile's buffers.
+///
+/// Every label's quads go into the same buffers, in the order given, which is what makes the
+/// index arithmetic a running total and what the golden's single drawable per tile reflects —
+/// mbgl emits one buffer per layer per tile, not one per label.
+///
+/// A label whose glyphs are not all packed yet still lays out the ones that are. A map that
+/// waited for a whole font before drawing anything would show nothing during a pan into new
+/// text, and a partly-drawn label is what mbgl shows too.
+pub fn build_symbols<G: Glyphs + ?Sized>(
+    labels: &[Label],
+    glyphs: &G,
+    options: &SymbolOptions,
+) -> (SymbolBuffers, Vec<LaidOut>) {
+    use tessella_glyph::quads::{self, Placed};
+    use tessella_glyph::shaping::{self, Char, Options as ShapeOptions};
+    use tessella_glyph::text::ONE_EM;
+
+    let mut buffers = SymbolBuffers::default();
+    let mut out = Vec::with_capacity(labels.len());
+
+    for label in labels {
+        let chars: Vec<Char> = label
+            .text
+            .chars()
+            .map(|character| {
+                let codepoint = character as u32;
+                match glyphs.metrics(codepoint) {
+                    #[allow(clippy::cast_precision_loss)]
+                    Some((metrics, true)) => {
+                        Char::new(codepoint, metrics.advance as f32 + options.letter_spacing)
+                    }
+                    #[allow(clippy::cast_precision_loss)]
+                    Some((metrics, false)) => {
+                        Char::blank(codepoint, metrics.advance as f32 + options.letter_spacing)
+                    }
+                    // A codepoint the stack does not carry: no advance and nothing to draw, so
+                    // the rest of the label still sets correctly around the gap.
+                    None => Char::blank(codepoint, 0.0),
+                }
+            })
+            .collect();
+
+        let shaping = shaping::shape(
+            &chars,
+            &ShapeOptions {
+                max_width: options.max_width_ems * ONE_EM,
+                line_height: ONE_EM,
+                anchor: options.anchor,
+                justify: options.justify,
+                spacing: options.letter_spacing,
+            },
+        );
+
+        let before = buffers.glyphs();
+        let quads = quads::glyph_quads(
+            &shaping,
+            |codepoint| {
+                let (metrics, _) = glyphs.metrics(codepoint)?;
+                Some(Placed {
+                    rect: glyphs.rect(codepoint)?,
+                    metrics,
+                })
+            },
+            &quads::Options::default(),
+        );
+
+        for quad in quads {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            buffers.add_quad(
+                label.anchor,
+                [quad.tl, quad.tr, quad.bl, quad.br],
+                quad.glyph_offset.1,
+                (
+                    quad.tex.x as u16,
+                    quad.tex.y as u16,
+                    quad.tex.width as u16,
+                    quad.tex.height as u16,
+                ),
+                SizeRange::constant(options.size),
+                true,
+                1.0,
+            );
+        }
+
+        out.push(LaidOut {
+            anchor: label.anchor,
+            extent: (shaping.top, shaping.bottom, shaping.left, shaping.right),
+            glyphs: buffers.glyphs() - before,
+        });
+    }
+
+    (buffers, out)
+}
