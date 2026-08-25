@@ -28,6 +28,7 @@ use tessella_style::{Layer, Value};
 
 use tessella_glyph::fonts::Fonts;
 
+use crate::anchors::EXTENT;
 use crate::symbol::{self, GlyphDependencies};
 use crate::symbol_bucket::{
     Label, LaidOut, LineLabel, LineOptions, SymbolBuffers, SymbolOptions, build_line_symbols,
@@ -189,9 +190,21 @@ impl SymbolLayout {
                 if ring.len() < 2 {
                     continue;
                 }
+                // Not clipped: `get_anchors` tests each candidate position against the tile, so
+                // a road crossing a seam gets anchors on the near side from each tile and the
+                // two interleave rather than doubling up. Cutting the line here would instead
+                // give each side its own ends, and a name would appear at every seam.
                 Anchoring::Line(ring.clone())
             } else {
                 let Some(first) = ring.first() else { continue };
+                // A point label belongs to the tile it is in, and to no other. The features
+                // reaching this builder are the whole source rather than one tile's share, so
+                // without the test every tile of the cover draws every label — which looks
+                // right on the tile that owns it and wrong on its neighbours. Half-open, so a
+                // point on a boundary lands in exactly one tile.
+                if !(0.0..EXTENT).contains(&first.0) || !(0.0..EXTENT).contains(&first.1) {
+                    continue;
+                }
                 Anchoring::Point(*first)
             };
 

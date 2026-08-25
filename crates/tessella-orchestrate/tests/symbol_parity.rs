@@ -476,3 +476,206 @@ fn only_the_atlas_dependent_hashes_are_elided() {
         "only the symbol shader's attributes are elided"
     );
 }
+
+/// The same comparison, driven by the production path rather than by hand.
+///
+/// Every test above assembles the labels itself — it decides which two go in which tile, and it
+/// packs the atlas from a list it was given. That checks the *layout* against mbgl and says
+/// nothing about the path a frame actually takes: parse the style, cover the camera, build each
+/// tile, fetch the glyph ranges the tile declared, shape, encode. Each of those is a place a
+/// label can be lost, and the golden is the only thing that would notice.
+///
+/// So this runs it end to end, and the tile assignment is the projection's rather than a
+/// constant: the golden says which tiles carry labels and how many glyphs are in each, and the
+/// builder has to agree without being told.
+mod through_the_builder {
+    use super::{Golden, fnv1a, golden_symbols};
+
+    use tessella_capture_abi::envelope::GeometryId;
+    use tessella_glyph::fonts::{Dependencies, Fonts};
+    use tessella_orchestrate::emit::{SlabArena, encode_symbol};
+    use tessella_orchestrate::tile::{Content, TileId, build_tile};
+    use tessella_source::geojson;
+    use tessella_source::tiling::TilingOptions;
+    use tessella_storage::source::{FetchError, FileSource, Response};
+    use tessella_style::Style;
+
+    /// The style, with the checkout path substituted the way the capture does it.
+    fn style() -> Style {
+        let raw = include_str!("../../tessella-style/tests/symbol_style.json");
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+        serde_json::from_str(&raw.replace("TESSELLA", root)).expect("the style parses")
+    }
+
+    fn features() -> Vec<tessella_source::GeoJsonFeature> {
+        let style = style();
+        let Some(tessella_style::Source::Geojson(source)) = style.source("probe") else {
+            panic!("the probe style has one geojson source");
+        };
+        geojson::read(&source.data).expect("features read")
+    }
+
+    /// Serves the `file://` URLs the style's `glyphs` template builds.
+    ///
+    /// The capture reads the same font off the same disk, which is what makes the comparison a
+    /// comparison: a fixture served two different ways is two different fixtures.
+    struct Disk;
+
+    impl FileSource for Disk {
+        fn fetch(&self, url: &str) -> Result<Response, FetchError> {
+            let path = url.strip_prefix("file://").unwrap_or(url);
+            // A range the font does not have is a 200 with no body — an origin saying it has
+            // nothing there — not a transport failure.
+            let body = std::fs::read(path).unwrap_or_default();
+            Ok(Response {
+                status: 200,
+                body,
+                ..Response::default()
+            })
+        }
+    }
+
+    /// Builds every tile the golden names, in the golden's order.
+    fn built() -> Vec<(Golden, tessella_layout::symbol_layout::SymbolLayout)> {
+        let style = style();
+        let features = features();
+        golden_symbols()
+            .into_iter()
+            .map(|symbol| {
+                let (x, y) = symbol.tile;
+                let buckets = build_tile(
+                    &style,
+                    "probe",
+                    TileId::new(13, x, y),
+                    &features,
+                    TilingOptions::default(),
+                )
+                .expect("the tile builds");
+
+                let layout = buckets
+                    .iter()
+                    .find_map(|bucket| match &bucket.content {
+                        Content::Symbol(layout) => Some(layout.clone()),
+                        _ => None,
+                    })
+                    .expect("a symbol layer");
+                (symbol, layout)
+            })
+            .collect()
+    }
+
+    /// A store with every tile's declared glyphs fetched from the style's own `glyphs` URL.
+    fn fonts(layouts: &[(Golden, tessella_layout::symbol_layout::SymbolLayout)]) -> Fonts {
+        let url = style().glyphs.clone().expect("the style names a glyph URL");
+        let mut fonts = Fonts::new(url);
+
+        // Merged across tiles before anything is fetched, which is the whole point of a
+        // process-scoped store: two tiles of the same style share their letters.
+        let mut merged: Dependencies = Dependencies::new();
+        for (_, layout) in layouts {
+            for (stack, codepoints) in layout.dependencies() {
+                merged.entry(stack).or_default().extend(codepoints);
+            }
+        }
+        fonts.fetch(&merged, &Disk).expect("the font reads");
+        fonts
+    }
+
+    /// The builder puts the labels in the tiles the oracle put them in.
+    ///
+    /// Not asserted as a constant: the golden says five glyphs here and twelve there, and the
+    /// projection has to land the three features so that comes out. A label one tile off would
+    /// still shape and still encode, and only this notices.
+    #[test]
+    fn the_builder_lands_the_labels_where_the_oracle_did() {
+        let layouts = built();
+        let fonts = fonts(&layouts);
+        assert_eq!(layouts.len(), 2);
+
+        for (symbol, layout) in &layouts {
+            let (buffers, laid) = layout.lay_out(&fonts);
+            assert_eq!(
+                buffers.vertices.len(),
+                symbol.vertices,
+                "{} labels at {:?}: {:?}",
+                laid.len(),
+                symbol.tile,
+                layout
+                    .pending
+                    .iter()
+                    .map(|pending| pending.text.as_str())
+                    .collect::<Vec<_>>()
+            );
+            assert_eq!(
+                buffers.indices.len(),
+                symbol.indices,
+                "at {:?}",
+                symbol.tile
+            );
+        }
+    }
+
+    /// And the index bytes it produces are the oracle's, byte for byte.
+    #[test]
+    fn the_built_index_buffers_match_the_oracle() {
+        let layouts = built();
+        let fonts = fonts(&layouts);
+
+        for (symbol, layout) in &layouts {
+            let (buffers, _) = layout.lay_out(&fonts);
+            let bytes: Vec<u8> = buffers
+                .indices
+                .iter()
+                .flat_map(|index| index.to_le_bytes())
+                .collect();
+            assert_eq!(
+                fnv1a(&bytes),
+                symbol.index_hash,
+                "index bytes at {:?}",
+                symbol.tile
+            );
+        }
+    }
+
+    /// The encoded stream carries the oracle's five attributes, from a tile-built buffer.
+    ///
+    /// The last link. `symbol_emit` checks the encoder against a buffer it made up; this checks
+    /// it against one the builder made, so a layer that produced the right glyphs and reached
+    /// the wire with the wrong descriptors is caught.
+    #[test]
+    fn a_built_tile_encodes_the_oracle_s_attributes() {
+        let layouts = built();
+        let fonts = fonts(&layouts);
+
+        for (symbol, layout) in &layouts {
+            let (buffers, _) = layout.lay_out(&fonts);
+            let mut arena = SlabArena::default();
+            let encoded = encode_symbol(&mut arena, GeometryId(1), &buffers, 0, true);
+
+            let mut attributes: Vec<(u32, u32, u32, u32)> = encoded
+                .attributes()
+                .iter()
+                .map(|attribute| {
+                    (
+                        attribute.attr_id,
+                        u32::from(attribute.data_type),
+                        attribute.offset,
+                        attribute.stride,
+                    )
+                })
+                .collect();
+            let mut expected = symbol.attributes.clone();
+            attributes.sort_unstable();
+            expected.sort_unstable();
+            assert_eq!(attributes, expected, "at {:?}", symbol.tile);
+
+            // And the counts the descriptors imply are the oracle's.
+            assert_eq!(
+                encoded.segments()[0].vertex_length as usize,
+                symbol.vertices,
+                "at {:?}",
+                symbol.tile
+            );
+        }
+    }
+}

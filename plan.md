@@ -1101,6 +1101,23 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   the same amount. Getting that wrong writes one label's per-frame state over another's, which
   draws as a label that will not fade and errors nowhere. The join asserts the `u16` bound too,
   since two buffers each inside it can be outside it together.
+  The golden then reaches the *path* rather than the layout. Every symbol comparison until now
+  assembled its own labels — it decided which two went in which tile and packed the atlas from a
+  list it was handed — which checks the shaping against mbgl and says nothing about what a frame
+  actually does: parse the style, cover the camera, build each tile, fetch the ranges the tile
+  declared over the style's own `glyphs` URL, shape, encode. Each of those is a place a label can
+  be lost. Driven end to end, the index buffers are still the oracle's byte for byte, and the
+  encoder's five attribute descriptors are compared against the dump's rather than against
+  literals for the first time.
+  It found the gap immediately, which is what an end-to-end comparison is for. A point label was
+  not clipped to its tile — the builder is handed the whole GeoJSON source rather than one tile's
+  share, the way the fill and line arms are, and each of those clips for itself. So every tile of
+  the cover drew every label: right on the tile that owns it, wrong on its neighbours, and
+  invisible to any test that assembled its own tile assignment. The test is bounded half-open so
+  a point on a boundary lands in exactly one tile. A *line* label is deliberately not clipped —
+  `get_anchors` tests each candidate against the tile, so a road crossing a seam gets anchors on
+  the near side from each tile and the two interleave; cutting the line here would give each side
+  its own ends and put a name at every seam.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
