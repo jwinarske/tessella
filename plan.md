@@ -902,6 +902,17 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   glyphs have arrived when the first upload runs, since glyph loading is async. Making that
   deterministic means changing mbgl's atlas behaviour rather than the probe's dump code, and an
   oracle that represents a modified mbgl is worth less than one with seven elided lines.
+  The two per-frame buffers *are* comparable, which was nearly written off. They were assumed to
+  hold post-placement state that only a matching frame loop could reproduce; solving for their
+  contents showed otherwise. The position buffer is the label's anchor at build time with an
+  angle of zero — a **rounded** tile coordinate, since mbgl carries an anchor as an integral
+  `GeometryCoordinate` — so matching it byte for byte checks the projection from longitude and
+  latitude into tile units against mbgl's to the unit, and pins that a tile's labels sit in the
+  buffer in the order the layer offers them. The opacity buffer is uniformly zero, which decodes
+  as *not placed* rather than the `(true, 1.0)` written at build time: the probe's frames update
+  it from a placement holding no entry for these symbols. So it pins the encoding and the width
+  and says nothing about placement, and comparing real placement output needs a capture in which
+  the probe has placed something.
   The layout glue then moves into the library where it belongs: `build_symbols` takes a layer's
   labels and a glyph source and produces one tile's buffers. One buffer per layer per tile, which
   is what the golden shows mbgl doing — its twelve-glyph drawable is two labels, not two

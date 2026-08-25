@@ -48,6 +48,10 @@ struct Golden {
     vertices: usize,
     indices: usize,
     index_hash: u64,
+    /// The per-frame position buffer's hash.
+    position_hash: u64,
+    /// The per-frame opacity buffer's hash.
+    opacity_hash: u64,
     pass: u32,
     /// Attribute layout: (id, data type, offset, stride).
     attributes: Vec<(u32, u32, u32, u32)>,
@@ -89,6 +93,8 @@ fn golden_symbols() -> Vec<Golden> {
                 vertices: 0,
                 indices: count.parse().expect("a count"),
                 index_hash: u64::from_str_radix(hash, 16).expect("a hash"),
+                position_hash: 0,
+                opacity_hash: 0,
                 pass: field(line, "pass=")
                     .expect("a pass")
                     .parse()
@@ -109,6 +115,17 @@ fn golden_symbols() -> Vec<Golden> {
                 number("off="),
                 number("stride="),
             ));
+            // Attributes 3 and 4 are the per-frame buffers, which the golden does not elide.
+            if let Some(source) = field(line, "src=")
+                && let Some((_, hash)) = source.split_once(':')
+                && let Ok(hash) = u64::from_str_radix(hash, 16)
+            {
+                match number("id=") {
+                    3 => entry.position_hash = hash,
+                    4 => entry.opacity_hash = hash,
+                    _ => {}
+                }
+            }
         } else if line.starts_with("  seg ") && line.contains("sh0033") {
             let entry = out.last_mut().expect("a segment before its drawable");
             entry.vertices = field(line, "vlen=")
@@ -287,13 +304,95 @@ fn the_vertex_layout_matches_the_oracle() {
     }
 }
 
-/// This build produces the same number of per-frame vertices as the oracle.
+/// A tile's labels, each with its anchor in tile units.
+type TileLabels<'a> = Vec<(&'a str, (f32, f32))>;
+
+/// The per-frame position buffer matches the oracle byte for byte.
 ///
-/// One dynamic position and one opacity per layout vertex — the counts have to agree or the
-/// shader reads one label's opacity against another's geometry. Their *bytes* are not compared:
-/// the probe renders eight frames before dumping, so both buffers hold post-placement state,
-/// and matching them means driving placement through the same frame loop rather than shaping a
-/// label in isolation. That is R2's remaining work, and this is where it will be checked.
+/// This is a real parity check, and it was nearly written off as one that could not be made.
+/// The probe renders eight frames before dumping, so both per-frame buffers were assumed to
+/// hold post-placement state that only a matching frame loop could reproduce. Solving for their
+/// contents showed otherwise: the position buffer holds the label's anchor, written when the
+/// geometry was built, with an angle of zero.
+///
+/// What it pins is worth more than that assumption suggested. The anchor is a *rounded* tile
+/// coordinate, so this checks the projection from longitude and latitude into tile units against
+/// mbgl's to the unit. And it checks that a tile's labels sit in the buffer in the order the
+/// layer offers them: the twelve-glyph tile holds two labels, and the other order hashes
+/// differently.
+#[test]
+fn the_position_buffer_matches_the_oracle() {
+    let anchors = [
+        ("Alpha", -0.13_f64, 51.515_f64),
+        ("Bravo", -0.09, 51.495),
+        ("Charlie", -0.11, 51.505),
+    ];
+
+    let mut by_tile: BTreeMap<(u32, u32), TileLabels<'_>> = BTreeMap::new();
+    for (name, longitude, latitude) in anchors {
+        let (tile, anchor) = project(longitude, latitude, 13);
+        by_tile.entry(tile).or_default().push((name, anchor));
+    }
+
+    let font = Font::new();
+    let mut compared = 0;
+    for symbol in golden_symbols() {
+        let labels = by_tile.get(&symbol.tile).expect("a tile the golden names");
+        let entries: Vec<Label> = labels
+            .iter()
+            .map(|(text, anchor)| Label {
+                text: (*text).to_string(),
+                anchor: *anchor,
+            })
+            .collect();
+        let (_, laid) = build_symbols(&entries, &font, &SymbolOptions::default());
+
+        let mut bytes = Vec::new();
+        for (label, entry) in laid.iter().zip(&entries) {
+            for _ in label.vertices.clone() {
+                bytes.extend_from_slice(&entry.anchor.0.to_le_bytes());
+                bytes.extend_from_slice(&entry.anchor.1.to_le_bytes());
+                bytes.extend_from_slice(&0.0f32.to_le_bytes());
+            }
+        }
+
+        assert_eq!(bytes.len(), symbol.vertices * 12, "at {:?}", symbol.tile);
+        assert_eq!(
+            fnv1a(&bytes),
+            symbol.position_hash,
+            "position bytes at {:?} for {:?}",
+            symbol.tile,
+            labels.iter().map(|(name, _)| *name).collect::<Vec<_>>()
+        );
+        compared += 1;
+    }
+
+    assert_eq!(compared, 2, "both symbol drawables compared");
+}
+
+/// The opacity buffer matches too, and what it says is that placement never ran.
+///
+/// Every vertex is zero, which decodes as *not placed* at zero opacity — not the `(true, 1.0)`
+/// mbgl writes when the geometry is built. So the probe's frames update the buffer from a
+/// placement that holds no entry for these symbols, and write the default.
+///
+/// That makes this a weaker check than it looks: it pins the encoding and the buffer's width and
+/// says nothing about placement. Comparing real placement output needs a capture in which the
+/// probe has actually placed something, which is a change to the probe rather than to this.
+#[test]
+fn the_opacity_buffer_matches_the_oracle() {
+    for symbol in golden_symbols() {
+        let bytes = vec![0u8; symbol.vertices * 4];
+        assert_eq!(
+            fnv1a(&bytes),
+            symbol.opacity_hash,
+            "opacity bytes at {:?}",
+            symbol.tile
+        );
+    }
+}
+
+/// This build produces the same number of per-frame entries as the oracle.
 #[test]
 fn the_per_frame_buffers_have_one_entry_per_vertex() {
     let font = Font::new();
@@ -305,6 +404,28 @@ fn the_per_frame_buffers_have_one_entry_per_vertex() {
         assert_eq!(buffers.dynamic.len(), buffers.vertices.len());
         assert_eq!(buffers.opacity.len(), buffers.vertices.len());
     }
+}
+
+/// Web Mercator to a tile, and the rounded coordinate within it.
+///
+/// The rounding is not incidental: mbgl carries an anchor as a `GeometryCoordinate`, which is
+/// integral, so a projection that kept the fraction disagrees with the oracle on every label.
+fn project(longitude: f64, latitude: f64, zoom: u8) -> ((u32, u32), (f32, f32)) {
+    const EXTENT: f64 = 8192.0;
+    let scale = f64::from(1u32 << zoom);
+    let x = (longitude + 180.0) / 360.0 * scale;
+    let radians = latitude.to_radians();
+    let y =
+        (1.0 - (radians.tan() + 1.0 / radians.cos()).ln() / core::f64::consts::PI) / 2.0 * scale;
+
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let (tile_x, tile_y) = (x.floor() as u32, y.floor() as u32);
+    #[allow(clippy::cast_possible_truncation)]
+    let anchor = (
+        ((x - x.floor()) * EXTENT).round() as f32,
+        ((y - y.floor()) * EXTENT).round() as f32,
+    );
+    ((tile_x, tile_y), anchor)
 }
 
 /// Symbols are drawn in the translucent pass, after the background.
