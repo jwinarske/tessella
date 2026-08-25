@@ -29,6 +29,7 @@ pub mod circle;
 pub mod fill;
 pub mod line;
 pub mod paint;
+pub mod symbol;
 
 pub use circle::CircleBucket;
 pub use fill::{FillBucket, Segment};

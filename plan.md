@@ -846,6 +846,17 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   four-way `text-optional`/`icon-optional` combination is asserted as its whole sixteen-row truth
   table rather than at a few points, since a rule that is right for text alone and inverts when
   an icon is present looks correct on most styles.
+  Resolving a feature into a label starts the wiring back the other way. `text-field` has two
+  syntaxes and both are still in use, often in one document: the modern expression and the legacy
+  `"{name}"` template. A frontend reading only expressions would render half the basemaps on the
+  internet with no labels, so both are read — and tokens are resolved *after* an expression
+  evaluates too, which is what styles written against the old syntax and later wrapped in a
+  `concat` rely on. An unrecognised token survives verbatim, braces and all, the same rule the
+  tile URL templates follow: a label reading `{nmae}` is a typo somebody can see and fix, and a
+  label silently reduced to nothing is not. A feature with no name — which is most of them —
+  produces no label rather than an empty one, since an empty label still has an anchor, a
+  collision box and a place in the sort order, and would push real labels off the map to draw
+  nothing.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

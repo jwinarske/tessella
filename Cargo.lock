@@ -1050,6 +1050,7 @@ dependencies = [
  "earcutr",
  "libm",
  "rustybuzz",
+ "serde_json",
  "tessella-glyph",
  "tessella-style",
  "tessella-tile",
