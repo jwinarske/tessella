@@ -836,6 +836,16 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   unit, and two children that never contend. Four tests were built to discriminate, which needed
   a parent label placed exactly on the seam between two children before the lend-once guard is
   reachable at all.
+  The decision loop closes the per-view half. Candidates are offered in the style's order — by
+  `symbol-sort-key`, then feature order — and what fits is placed and inserted so it blocks
+  whatever comes after. There is no global optimisation, deliberately: a cartographer decides
+  what matters rather than an algorithm, and a set that re-optimised as the camera moved would be
+  a map where labels swap places while you watch. `allow-overlap` and `ignore-placement` are
+  different permissions — one skips the test, the other skips the insert — and a label with both
+  is drawn always and blocks nothing, which is how a style pins one that must never move. The
+  four-way `text-optional`/`icon-optional` combination is asserted as its whole sixteen-row truth
+  table rather than at a few points, since a rule that is right for text alone and inverts when
+  an icon is present looks correct on most styles.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

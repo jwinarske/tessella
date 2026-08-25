@@ -19,3 +19,4 @@ pub mod cross_tile;
 pub mod fade;
 pub mod feature;
 pub mod grid;
+pub mod placement;
