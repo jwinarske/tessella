@@ -1075,8 +1075,18 @@ is the realistic worst case, not a contrived one).
   a camera and the cover, the oracle parity and the tile keys all depend on it staying one, while
   hysteresis needs memory of the level currently held. The band is measured against that held
   level rather than against distance travelled, so a fly-to across nine levels still lands where
-  it was aimed. Not yet wired into the orchestrator — it is a value a caller keeps, and which
-  caller keeps it is the same question as where per-view cover state lives (§5.2).
+  it was aimed. Both it and the never-blank substitution are now held by
+  `orchestrate::viewcover::ViewCover`, which is the answer to where per-view cover state lives
+  (§5.2): one object per view, walked by §5.4's single pass. It answers §12.7 differently than
+  the section words it — predicting boundary crossings to skip the computation is not worth
+  doing, since `cover()` is 0.10 µs for nine tiles and four views at sixty frames spend
+  twenty-four microseconds a *second* on it. What is expensive is retain, release, bindings and
+  damage, so the cover is recomputed every frame and the *change* gates the rest. Measured, a
+  pan across one whole z14 tile changes it twice in two hundred frames — once per vertical edge
+  — and sixty frames of pinch either side of an integer zoom change it not at all. The delta is
+  reported rather than the set, so a tile another view holds is not released and re-retained
+  through zero, which would be an eviction and a rebuild for a tile that never stopped being
+  needed.
 - **Never-blank, acknowledged.** Ancestors retained until every covering descendant's buckets
   are consumer-**acknowledged** via the reverse-channel epoch — mbgl retains until *built*,
   and the build→GPU-upload gap is exactly where its single-frame holes come from. Per-tile

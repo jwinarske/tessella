@@ -58,6 +58,7 @@ pub mod texture;
 pub mod tile;
 pub mod ubo;
 pub mod view;
+pub mod viewcover;
 
 pub use binder::{BoundAttribute, VertexLayout, pack_color};
 pub use counters::{SharedCounters, SharedWork};
