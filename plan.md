@@ -658,8 +658,19 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   — are built once per tile rather than once per source. `boot` covers both kinds and their
   different lifecycles: a vector source is fetched once per tile because the server cut it up,
   a GeoJSON source once in total because this side does the cutting.
-- **R1.5** — four views over the same style (§13). Exit: §9.2 invariants green; §13.3
-  four-view zoom benchmark green on RK3566; §13.1 fractional-zoom counters at zero.
+- **R1.5** — *in progress.* Four views over the same style (§13). §9.2's three invariants are
+  green, the third — screen-space UBOs per view over shared geometry — asserted in both halves
+  at once, since either alone is a property a wrong implementation also has. §13.1's counters
+  are at zero. §13.3's sweep now runs through the real per-view state rather than recomputing
+  covers from scratch, against a pyramid where a tile takes six frames to arrive: without that
+  latency a sweep never enters the state a crossing is about, and cannot tell substitution from
+  holes. Sixty-five frames, complete from frame six — the fetch latency, and the earliest any
+  frame could be complete — and seventy tiles fetched in seventy calls across four views. Only a
+  `Required` retain fetches there, which is the necessity distinction asserted where it costs
+  something: if considering a substitute were enough to request it, a crossing's burst would be
+  a multiple of the cover that caused it. Exit: §13.3's four-view zoom benchmark on RK3566,
+  which is the remaining half and needs the board — frame budget, ring occupancy, and symbol
+  pops once R2 has symbols to pop.
 - **R2** — symbols: glyph manager, shaping, quads, per-view placement, collision, cross-tile
   index, fades. Largest phase; budget ≈ R0+R1.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
