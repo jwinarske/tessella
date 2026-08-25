@@ -807,7 +807,11 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   says as much — and it failed under a loaded workspace run while passing every time alone. It
   now counts how many manifest fetches are in flight at once, which does not move with load. The
   first version of that gauge counted *every* fetch and was satisfied by the tile phase whatever
-  the manifests did; making resolution strictly serial still passed until it was narrowed.
+  the manifests did; making resolution strictly serial still passed until it was narrowed. Its
+  sibling `the_cover_is_fetched_in_parallel` had the same flaw and duly failed on a shared CI
+  runner — four workers 881 ms against one worker's 714 ms — so it now counts overlapping *tile*
+  fetches instead. Manifests and tiles are gauged apart, because a boot fans out twice and a
+  single gauge is satisfied by whichever phase happened to overlap.
   Fades land next, which is where §6.5 is actually decided. Placement produces a boolean per
   symbol per frame; this turns it into the opacity it draws at, so a label that loses a collision
   leaves rather than vanishing between two frames. A fade is the one thing that keeps changing

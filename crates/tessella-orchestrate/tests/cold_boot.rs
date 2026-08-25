@@ -39,10 +39,32 @@ fn server() -> tile_server::Server {
 struct Slow {
     inner: HttpFileSource,
     delay: Duration,
-    /// Fetches currently running.
+    /// Manifest fetches currently running, and the most that ever ran at once.
+    manifests: Gauge,
+    /// The same for tiles.
+    tiles: Gauge,
+}
+
+/// How many of something ran at once, and the high-water mark.
+#[derive(Clone, Default)]
+struct Gauge {
     live: Arc<AtomicUsize>,
-    /// The most that ever ran at once.
     peak: Arc<AtomicUsize>,
+}
+
+impl Gauge {
+    fn enter(&self) {
+        let now = self.live.fetch_add(1, Ordering::AcqRel) + 1;
+        self.peak.fetch_max(now, Ordering::AcqRel);
+    }
+
+    fn leave(&self) {
+        self.live.fetch_sub(1, Ordering::AcqRel);
+    }
+
+    fn peak(&self) -> usize {
+        self.peak.load(Ordering::Acquire)
+    }
 }
 
 impl Slow {
@@ -50,27 +72,27 @@ impl Slow {
         Self {
             inner: HttpFileSource::default(),
             delay,
-            live: Arc::new(AtomicUsize::new(0)),
-            peak: Arc::new(AtomicUsize::new(0)),
+            manifests: Gauge::default(),
+            tiles: Gauge::default(),
         }
     }
 }
 
 impl FileSource for Slow {
     fn fetch(&self, url: &str) -> Result<Response, FetchError> {
-        // Manifests only. A boot fans its *tiles* out too, so a gauge over every fetch is
-        // satisfied by the tile phase whatever the manifests did — which it was: a mutation
-        // making the manifests strictly serial still passed until this narrowed.
-        let counted = url.ends_with(".json");
-        if counted {
-            let now = self.live.fetch_add(1, Ordering::AcqRel) + 1;
-            self.peak.fetch_max(now, Ordering::AcqRel);
-        }
+        // Manifests and tiles are gauged apart. A boot fans out twice — once over its sources
+        // and once over its cover — so a single gauge is satisfied by whichever phase happened
+        // to overlap, whatever the other did. That is not hypothetical: a gauge over every
+        // fetch passed a mutation making source resolution strictly serial.
+        let gauge = if url.ends_with(".json") {
+            &self.manifests
+        } else {
+            &self.tiles
+        };
+        gauge.enter();
         std::thread::sleep(self.delay);
         let response = self.inner.fetch(url);
-        if counted {
-            self.live.fetch_sub(1, Ordering::AcqRel);
-        }
+        gauge.leave();
         response
     }
 }
@@ -189,21 +211,30 @@ fn the_cover_is_fetched_in_parallel() {
     let text = style(&server.origin());
 
     let run = |workers: Workers| {
-        let files = Arc::new(Coalescing::new(Slow::new(delay)));
+        let slow = Slow::new(delay);
+        let tiles = slow.tiles.clone();
         // A fresh cache each time: reusing one would make the second run a cache hit and
         // measure nothing.
+        let files = Arc::new(Coalescing::new(slow));
         let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
-        boot(&text, &view(4.0), &files, &cache, workers)
-            .expect("boots")
-            .trace
-            .complete
+        boot(&text, &view(4.0), &files, &cache, workers).expect("boots");
+        tiles.peak()
     };
 
+    // How many tile fetches overlapped, not how long they took. A wall-clock bound here is a
+    // measurement of the machine — this one duly failed on a shared CI runner, where four
+    // workers took 881 ms against one worker's 714 ms — and the file's own header says these
+    // tests assert the shape of a startup rather than a budget.
     let serial = run(Workers::serial());
     let parallel = run(Workers::default());
+
     assert!(
-        parallel * 2 < serial,
-        "four workers took {parallel:?}, one took {serial:?}"
+        parallel > serial,
+        "four workers overlapped {parallel} tile fetches, one worker {serial}"
+    );
+    assert!(
+        parallel >= 2,
+        "the cover was fetched one tile at a time: {parallel}"
     );
 }
 
@@ -786,7 +817,7 @@ fn sources_resolve_together_rather_than_in_turn() {
     let text = format!(r#"{{"version": 8, "sources": {{{sources}}}, "layers": [{layers}]}}"#);
 
     let slow = Slow::new(DELAY);
-    let peak = Arc::clone(&slow.peak);
+    let manifests = slow.manifests.clone();
     let files = Arc::new(Coalescing::new(slow));
     let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
     let started = boot(&text, &view(4.0), &files, &cache, Workers::new(4)).expect("boots");
@@ -795,7 +826,7 @@ fn sources_resolve_together_rather_than_in_turn() {
     // that they overlap, not how long they took: a wall-clock bound here measures the machine,
     // and did — it failed under a loaded workspace run and passed alone every time.
     assert!(
-        peak.load(Ordering::Acquire) >= 2,
+        manifests.peak() >= 2,
         "the four manifests resolved one after another"
     );
     assert!(!started.tiles.is_empty(), "and the cover still built");
