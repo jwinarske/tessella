@@ -808,6 +808,19 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   now counts how many manifest fetches are in flight at once, which does not move with load. The
   first version of that gauge counted *every* fetch and was satisfied by the tile phase whatever
   the manifests did; making resolution strictly serial still passed until it was narrowed.
+  Fades land next, which is where §6.5 is actually decided. Placement produces a boolean per
+  symbol per frame; this turns it into the opacity it draws at, so a label that loses a collision
+  leaves rather than vanishing between two frames. A fade is the one thing that keeps changing
+  while nothing else does — camera stopped, tiles arrived, label still on its way to opaque — so
+  it counts as churn until it settles and then has to go completely silent; a fade that never
+  quite reached 1.0 would keep the map awake forever, and the counter that says so is asserted
+  to reach zero and stay there. mbgl's one-frame lag is transcribed rather than corrected: the
+  step takes its direction from the *previous* frame's placement, so a symbol that loses its
+  collision still brightens once before it starts leaving. That is what stops a label flickering
+  when a collision result oscillates, and smoothing it here would trade a rare stale frame for a
+  common flicker. State is keyed by cross-tile id, so a label arriving in a new tile at a zoom
+  crossing keeps the opacity it had — re-fading one that never left is exactly the symbol pop
+  §13.3 asks for zero of.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

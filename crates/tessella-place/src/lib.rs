@@ -15,5 +15,6 @@
 
 #![forbid(unsafe_code)]
 
+pub mod fade;
 pub mod feature;
 pub mod grid;
