@@ -758,6 +758,18 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   atlas. Three more tests were vacuous for want of a case — every one used zero spacing and no
   leading whitespace — so the trailing-spacing rule, the final advance in justification and the
   line trim all survived deletion until inputs that separate them were added.
+  The atlas under all of it is a port of `mapbox::ShelfPack`, which is what mbgl's dynamic
+  texture uses, with an R8 surface over it (§12.4: this is the largest texture the process
+  keeps, and three of four channels would hold copies of the one that matters). Shelves waste
+  the space above a short glyph on a tall row, and a general rectangle packer would waste less —
+  but glyphs from one font are nearly all one height, and what matters more is that insertions
+  stay *clustered*, since §6.4's damage is a list of rectangles and a scattering packer makes
+  every upload a union covering most of the texture. Slots are refcounted, so a glyph two tiles
+  want is one rectangle; a freed slot keeps its size rather than merging back into its shelf,
+  which is what lets the next glyph of that size land exactly where the old one was. Padding is
+  two pixels and one of them comes back inside the reported rectangle: the outer one stops
+  linear filtering pulling in a neighbour, the inner one gives the shader real distance field to
+  read at the glyph's own edge.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

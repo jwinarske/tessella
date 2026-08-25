@@ -16,6 +16,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod atlas;
 pub mod generated;
 pub mod manager;
 pub mod pbf;
