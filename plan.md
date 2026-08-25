@@ -574,10 +574,30 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   from localhost. Checked against the reference implementation the way everything else here is:
   six tiles spanning zoom 0 to 15, byte-identical to what `pmtiles serve` returns for the same
   archive, including the deep ones that are only reachable by following a leaf pointer.
+  The worker-count budget is taken on an RK3566 (Radxa Zero 3, quad Cortex-A55 at 1.8 GHz,
+  Debian bookworm), cross-built against that distribution's glibc rather than the host's, since
+  the workstation's is newer and its binaries will not load there. Two things it settled and one
+  it corrected.
+  What it corrected first: the benchmark's own baseline. `Workers::new(1)` is not a serial run —
+  `Batch::wait` makes the submitting thread help rather than idle, so "one worker" occupies 1.8
+  cores. Measured against that, a perfectly linear pool reports about half of linear, which
+  reads exactly like a lock somewhere. Every table now reports *cores busy* — process CPU time
+  over wall time — beside its ratio, and the serial baseline runs the jobs inline with no pool
+  at all. With that fixed, speedup tracks cores busy almost exactly (2.95× at 2.99 cores, 2.90×
+  at 2.95 cores on pure arithmetic), which is the statement that there is no serialization; it
+  is also robust to whatever else is on the machine, since both numbers move together.
+  What it settled: `Workers::DEFAULT` of 4 stands. Nothing above it helps, and it reaches the
+  highest cores-busy of any row. Below it there is a real loss. But the *reason* the curve
+  flattens is not the pool — a nine-tile z5 cover spans 301 bytes to 146 KB, and completion is
+  bounded below by the largest tile however many workers there are: 33% of the cover's bytes,
+  and the floor the table reaches from two workers onward. A cover of nine *identical* tiles
+  keeps scaling where the real one stops, which is how the two were told apart.
+  And a correction to §5.4: this SoC has no big cores. RK3566 is four A55s in one cluster, so
+  "decode workers on the little cores, big cores for orchestrator and Filament" describes an
+  RK3588 and not this board. On a homogeneous quad there is nothing to pin *to*; the bounded
+  constant still matters, for memory rather than for placement.
   Remaining: §12.6's connection reuse and session resumption, which are properties of how the
-  agent is pooled rather than of whether TLS is compiled in and want measuring over a real link;
-  and a worker-count budget taken on the RK3566 lane rather than on a workstation loopback, which
-  is the last thing R1's exit asks for and the one that genuinely needs the board.
+  agent is pooled rather than of whether TLS is compiled in and want measuring over a real link.
 
   Three things this list used to carry, and why they are not on it. **Cross-faded (pattern)
   binders** are blocked rather than deferred: no golden carries a pattern layer until R3 brings

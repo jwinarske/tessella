@@ -159,7 +159,7 @@ pub struct Server {
     shutdown: Arc<AtomicBool>,
     requests: Arc<AtomicU64>,
     paths: Arc<Mutex<Vec<String>>>,
-    routes: Arc<Mutex<Routes>>,
+    routes: Arc<Mutex<Arc<Routes>>>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -178,7 +178,7 @@ impl Server {
         let shutdown = Arc::new(AtomicBool::new(false));
         let requests = Arc::new(AtomicU64::new(0));
         let paths = Arc::new(Mutex::new(Vec::new()));
-        let routes = Arc::new(Mutex::new(routes));
+        let routes = Arc::new(Mutex::new(Arc::new(routes)));
 
         let thread = {
             let shutdown = Arc::clone(&shutdown);
@@ -190,10 +190,29 @@ impl Server {
                     match listener.accept() {
                         Ok((stream, _)) => {
                             requests.fetch_add(1, Ordering::Relaxed);
-                            let held = routes
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            serve(stream, &held, &paths);
+                            // One thread per connection, rather than serving inline.
+                            //
+                            // Serving on the accept loop makes the server a *serializer*: the
+                            // next connection is not accepted until this one has been written
+                            // in full. Any measurement of client-side parallelism over this
+                            // server then measures the server. It was found exactly that way —
+                            // a worker-count benchmark on the target reported that a second
+                            // worker helped and a third did not, which was this loop and not
+                            // the decoder.
+                            //
+                            // The route table is an `Arc` taken under the lock and released
+                            // before the write, for the same reason: a lock spanning the
+                            // response would put the serialization back one layer down. An
+                            // `Arc` and not a copy because a route table holds tile bodies, and
+                            // copying a hundred kilobytes per request would distort the
+                            // measurement in the other direction.
+                            let held = Arc::clone(
+                                &routes
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+                            );
+                            let paths = Arc::clone(&paths);
+                            std::thread::spawn(move || serve(stream, &held, &paths));
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -222,7 +241,7 @@ impl Server {
         *self
             .routes
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = routes;
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Arc::new(routes);
     }
 
     /// The origin to point a style at, as `http://127.0.0.1:<port>`.
