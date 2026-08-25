@@ -51,6 +51,8 @@ pub mod geojson;
 #[cfg(feature = "http")]
 pub mod http;
 pub mod offline;
+#[cfg(feature = "pmtiles")]
+pub mod pmtiles;
 pub mod shared;
 pub mod source;
 pub mod tileset;

@@ -18,6 +18,7 @@ tessella-tile.workspace = true
 thiserror.workspace = true
 rusqlite = { workspace = true, optional = true }
 ureq = { workspace = true, optional = true }
+flate2 = { version = "1", optional = true }
 
 [features]
 default = []
@@ -27,6 +28,10 @@ http = ["dep:ureq"]
 # and §16's cross lane checks the workspace with default features exactly so that it needs no
 # cross C toolchain. A feature nobody enables costs that lane nothing.
 tls = ["http", "ureq/rustls"]
+# Reading a `.pmtiles` archive in place, with no server in front of it. `flate2` defaults to
+# `miniz_oxide`, which is pure Rust, so this costs the cross lane nothing it could not already
+# afford — it is a feature only because not every build reads archives.
+pmtiles = ["dep:flate2"]
 
 [dev-dependencies]
 flate2 = "1"

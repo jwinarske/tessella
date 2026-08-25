@@ -546,11 +546,19 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   falling back to plaintext, which is asserted in both feature states — a tile request over a
   connection nobody agreed to leaks a user's position to anyone on the path, so refusing is the
   only safe way not to support something.
+  `.pmtiles` archives read directly too, as `tessella-storage/pmtiles`: header, Hilbert tile ids,
+  the varint directory format and leaf-directory descent, over a `RangeReader` so the same code
+  serves a file today and §12.6's HTTP range requests later. Nothing in it needs C — `flate2`
+  defaults to `miniz_oxide` — so §16's toolchain question never applied; §16 itself says "cheap
+  in Rust", and R1's line had borrowed TLS's reasoning by proximity. An embedded target with a
+  region on local storage now reads it rather than running a web server against itself to fetch
+  from localhost. Checked against the reference implementation the way everything else here is:
+  six tiles spanning zoom 0 to 15, byte-identical to what `pmtiles serve` returns for the same
+  archive, including the deep ones that are only reachable by following a leaf pointer.
   Remaining: §12.6's connection reuse and session resumption, which are properties of how the
   agent is pooled rather than of whether TLS is compiled in and want measuring over a real link;
-  reading `.pmtiles` archives directly, which still waits on §16; and a worker-count budget taken
-  on the RK3566 lane rather than on a workstation loopback, which is the last thing R1's exit
-  asks for and the one that genuinely needs the board.
+  and a worker-count budget taken on the RK3566 lane rather than on a workstation loopback, which
+  is the last thing R1's exit asks for and the one that genuinely needs the board.
 
   Three things this list used to carry, and why they are not on it. **Cross-faded (pattern)
   binders** are blocked rather than deferred: no golden carries a pattern layer until R3 brings
@@ -1222,8 +1230,10 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
 
 ## 16. Open questions (rev 0.4 targets)
 
-- PMTiles alongside mbtiles in tessella-storage (vendor tree already carries PMTiles; cheap in
-  Rust).
+- ~~PMTiles in tessella-storage~~ closed: `tessella-storage/pmtiles` reads a v3 archive in
+  place, byte-identical to `pmtiles serve` across zoom 0 to 15. It was cheap in Rust, as this
+  said. MBTiles is still open, and is a different shape — SQLite rather than a directory format,
+  so it lands on the `cache` feature's dependency rather than needing one of its own.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for
