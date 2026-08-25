@@ -395,3 +395,175 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
 
     (buffers, out)
 }
+
+/// A label that follows a line rather than sitting at a point.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LineLabel {
+    /// The text, already resolved from `text-field`.
+    pub text: alloc::string::String,
+    /// The line it follows, in tile units.
+    pub line: Vec<(f32, f32)>,
+}
+
+/// How a line-placed label repeats.
+#[derive(Debug, Clone, Copy)]
+pub struct LineOptions {
+    /// How the text itself is set.
+    pub symbol: SymbolOptions,
+    /// `symbol-spacing`, in tile units.
+    pub spacing: f32,
+    /// `text-max-angle`, in radians.
+    pub max_angle: f32,
+    /// The tile's overscale factor, which keeps a child's anchors aligned with its parent's.
+    pub overscaling: f32,
+    /// One label at the line's midpoint rather than a repeating run.
+    pub centred: bool,
+}
+
+impl Default for LineOptions {
+    fn default() -> Self {
+        Self {
+            symbol: SymbolOptions::default(),
+            spacing: 250.0,
+            max_angle: core::f32::consts::PI / 4.0,
+            overscaling: 1.0,
+            centred: false,
+        }
+    }
+}
+
+/// Lays out labels that follow lines.
+///
+/// One shaping per label however many times it repeats: the glyphs, their corners and their
+/// texture coordinates are identical at every anchor, and only the anchor differs. Shaping once
+/// per anchor would redo the same work for every repetition of a long road's name — which at
+/// street zoom is most of the labels on the tile.
+///
+/// The quads carry the along-line offset in `glyph_offset` rather than in their corners, because
+/// the shader projects a line-following label before placing each glyph. A builder that baked
+/// the offset into the corners would lay the label out flat and then bend it, putting every
+/// glyph but the first in the wrong place.
+pub fn build_line_symbols<G: Glyphs + ?Sized>(
+    labels: &[LineLabel],
+    glyphs: &G,
+    options: &LineOptions,
+) -> (SymbolBuffers, Vec<LaidOut>) {
+    use crate::anchors::{get_anchors, get_center_anchor};
+    use tessella_glyph::quads::{self, Placed};
+    use tessella_glyph::shaping::{self, Char, Options as ShapeOptions};
+    use tessella_glyph::text::ONE_EM;
+
+    let mut buffers = SymbolBuffers::default();
+    let mut out = Vec::new();
+
+    for label in labels {
+        let chars: Vec<Char> = label
+            .text
+            .chars()
+            .map(|character| {
+                let codepoint = character as u32;
+                match glyphs.metrics(codepoint) {
+                    #[allow(clippy::cast_precision_loss)]
+                    Some((metrics, true)) => Char::new(
+                        codepoint,
+                        metrics.advance as f32 + options.symbol.letter_spacing,
+                    ),
+                    #[allow(clippy::cast_precision_loss)]
+                    Some((metrics, false)) => Char::blank(
+                        codepoint,
+                        metrics.advance as f32 + options.symbol.letter_spacing,
+                    ),
+                    None => Char::blank(codepoint, 0.0),
+                }
+            })
+            .collect();
+
+        let shaping = shaping::shape(
+            &chars,
+            &ShapeOptions {
+                // A line-placed label does not wrap: it follows the line, and a second line of
+                // text would have to follow it too. mbgl sets the width to zero for the same
+                // reason.
+                max_width: 0.0,
+                line_height: ONE_EM,
+                anchor: options.symbol.anchor,
+                justify: options.symbol.justify,
+                spacing: options.symbol.letter_spacing,
+            },
+        );
+
+        // The label's extent decides both where it fits and how far the bend check looks.
+        let anchors = if options.centred {
+            get_center_anchor(
+                &label.line,
+                options.max_angle,
+                shaping.left,
+                shaping.right,
+                0.0,
+                0.0,
+                ONE_EM,
+                1.0,
+            )
+            .into_iter()
+            .collect()
+        } else {
+            get_anchors(
+                &label.line,
+                options.spacing,
+                options.max_angle,
+                shaping.left,
+                shaping.right,
+                0.0,
+                0.0,
+                ONE_EM,
+                1.0,
+                options.overscaling,
+            )
+        };
+
+        // Shaped once; emitted once per anchor.
+        let quads = quads::glyph_quads(
+            &shaping,
+            |codepoint| {
+                let (metrics, _) = glyphs.metrics(codepoint)?;
+                Some(Placed {
+                    rect: glyphs.rect(codepoint)?,
+                    metrics,
+                })
+            },
+            &quads::Options {
+                along_line: true,
+                ..quads::Options::default()
+            },
+        );
+
+        for anchor in anchors {
+            let before = buffers.glyphs();
+            for quad in &quads {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                buffers.add_quad(
+                    anchor.point,
+                    [quad.tl, quad.tr, quad.bl, quad.br],
+                    quad.glyph_offset.1,
+                    (
+                        quad.tex.x as u16,
+                        quad.tex.y as u16,
+                        quad.tex.width as u16,
+                        quad.tex.height as u16,
+                    ),
+                    SizeRange::constant(options.symbol.size),
+                    true,
+                    1.0,
+                );
+            }
+            out.push(LaidOut {
+                anchor: anchor.point,
+                extent: (shaping.top, shaping.bottom, shaping.left, shaping.right),
+                glyphs: buffers.glyphs() - before,
+                vertices: before * 4..buffers.vertices.len(),
+            });
+        }
+    }
+
+    (buffers, out)
+}

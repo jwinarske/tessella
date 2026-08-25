@@ -895,6 +895,15 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   mbgl's own expectation of an anchor at (-3, -3) pins. And a bend at the centre refuses the
   label outright rather than sliding it along: the caller asked for the centre, and answering
   with somewhere else would silently answer a different question.
+  `build_line_symbols` wires it through. One shaping serves every repetition — the glyphs, their
+  corners and their texels are identical at every anchor and only the anchor differs, so shaping
+  per anchor would redo the same work for every repetition of every road name on a street-zoom
+  tile. The along-line distance rides in `glyph_offset` rather than in the corners, because the
+  shader projects a line-following label before placing each glyph; baked into the corners it
+  would lay the label out flat and then bend it, putting every glyph but the first in the wrong
+  place. And a line label never wraps, at any width: it follows the line, and a second line of
+  text would have to follow it too, offset along a curve — which the along-line projection cannot
+  express and mbgl does not attempt.
   The chain then runs end to end, over a real tile: decode, resolve `text-field`, shape against
   a real glyph range, pack the atlas, build quads, derive a collision box, take a cross-tile
   identity, place, fade. Each link had its own tests and most were checked against mbgl, and none
