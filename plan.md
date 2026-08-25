@@ -905,6 +905,14 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   vertices carry its own anchor. A label whose glyphs are not all packed draws the ones that are
   and still measures the whole for collision, because a map that waited for a font before drawing
   anything would show nothing during a pan into new text.
+  Symbols then reach the wire: `encode_symbol` turns a laid-out layer into a `GeometryAdd` with
+  the five attribute descriptors the capture measured — three sharing one interleaved slab at
+  stride 24, and two per-frame buffers with slabs of their own. A consumer reads those
+  descriptors literally, so an attribute pointed at the wrong slab draws whatever is there and
+  nothing in the stream says it was wrong; each is asserted to read a slab holding exactly
+  `vertices × stride` bytes with the last vertex inside it. One segment, which is what the
+  capture shows and what a layer sharing one buffer implies. `Encoded` grew decoded accessors on
+  the way — three existing tests were hand-decoding spans out of the payload.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

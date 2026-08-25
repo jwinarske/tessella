@@ -36,6 +36,7 @@ use tessella_capture_abi::envelope::{
 use tessella_capture_abi::ring::{Full, Producer};
 use tessella_capture_abi::{AttributeDataType, BuiltIn, EnvelopeKind};
 use tessella_layout::fill::FillBucket;
+use tessella_layout::symbol_bucket::{SymbolBuffers, SymbolVertex};
 
 use crate::binder::VertexLayout;
 
@@ -48,6 +49,9 @@ pub const POSITION_ATTRIBUTE: u32 = 0;
 
 /// Bytes per position: two i16.
 const POSITION_STRIDE: u32 = 4;
+
+/// A symbol's interleaved layout vertex: three attributes of four shorts.
+const SYMBOL_STRIDE: u32 = 24;
 
 /// Default slab size. Large enough that a tile's geometry rarely spans two, small enough that a
 /// mostly-empty one is not worth worrying about.
@@ -174,6 +178,31 @@ pub struct Encoded {
     pub payload: Vec<u8>,
 }
 
+impl Encoded {
+    /// The attribute descriptors, decoded.
+    ///
+    /// The spans in the record address the payload, and reading them by hand is easy to get
+    /// subtly wrong — three tests were doing exactly that before this existed.
+    #[must_use]
+    pub fn attributes(&self) -> Vec<AttributeDesc> {
+        let size = core::mem::size_of::<AttributeDesc>();
+        let start = self.record.attrs.offset as usize;
+        (0..self.record.attrs.count as usize)
+            .filter_map(|index| AttributeDesc::from_bytes(&self.payload[start + index * size..]))
+            .collect()
+    }
+
+    /// The segments, decoded.
+    #[must_use]
+    pub fn segments(&self) -> Vec<AbiSegment> {
+        let size = core::mem::size_of::<AbiSegment>();
+        let start = self.record.segments.offset as usize;
+        (0..self.record.segments.count as usize)
+            .filter_map(|index| AbiSegment::from_bytes(&self.payload[start + index * size..]))
+            .collect()
+    }
+}
+
 /// Encodes a fill bucket into a geometry envelope, allocating its bytes into `arena`.
 ///
 /// The envelope carries no view: it is process-scoped and refcounted, and a `ViewUse` binds it
@@ -270,6 +299,132 @@ pub fn encode_fill(
     Encoded { record, payload }
 }
 
+/// Encodes a symbol layer's geometry.
+///
+/// Three attributes interleaved at a stride of 24, then two more in buffers of their own — the
+/// layout the golden capture measured rather than the one mbgl's source suggested. The two are
+/// separate because they change at different rates: the interleaved buffer is a function of the
+/// tile and the glyphs, and the other two are rewritten every frame placement runs.
+///
+/// `is_sdf` picks the shader. Text is always SDF; an icon may be either, and the flag is already
+/// packed into each vertex's size field, so this only decides which shader is named.
+pub fn encode_symbol(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    buffers: &SymbolBuffers,
+    permutation_key: u64,
+    is_sdf: bool,
+) -> Encoded {
+    let vertex_bytes = as_symbol_bytes(&buffers.vertices);
+    let index_bytes = as_bytes_u16(&buffers.indices);
+    let dynamic_bytes = as_bytes_f32_3(&buffers.dynamic);
+    let opacity_bytes = as_bytes_f32(&buffers.opacity);
+
+    let interleaved = arena.alloc(&vertex_bytes);
+    let indexes = arena.alloc(&index_bytes);
+    let dynamic = arena.alloc(&dynamic_bytes);
+    let opacity = arena.alloc(&opacity_bytes);
+
+    // The five attributes the capture shows, in the order it shows them. Offsets 0, 8 and 16
+    // share the interleaved buffer at stride 24; the last two are tightly packed buffers of
+    // their own, which is why their offset is zero and their stride is their own width.
+    let descriptors = alloc::vec![
+        AttributeDesc {
+            attr_id: 0,
+            binding: 0,
+            source: interleaved,
+            offset: 0,
+            vertex_offset: 0,
+            stride: SYMBOL_STRIDE,
+            data_type: AttributeDataType::Short4 as u8,
+            declared_data_type: AttributeDataType::Short4 as u8,
+            _pad: [0; 2],
+        },
+        AttributeDesc {
+            attr_id: 1,
+            binding: 1,
+            source: interleaved,
+            offset: 8,
+            vertex_offset: 0,
+            stride: SYMBOL_STRIDE,
+            data_type: AttributeDataType::UShort4 as u8,
+            declared_data_type: AttributeDataType::UShort4 as u8,
+            _pad: [0; 2],
+        },
+        AttributeDesc {
+            attr_id: 2,
+            binding: 2,
+            source: interleaved,
+            offset: 16,
+            vertex_offset: 0,
+            stride: SYMBOL_STRIDE,
+            data_type: AttributeDataType::Short4 as u8,
+            declared_data_type: AttributeDataType::Short4 as u8,
+            _pad: [0; 2],
+        },
+        AttributeDesc {
+            attr_id: 3,
+            binding: 3,
+            source: dynamic,
+            offset: 0,
+            vertex_offset: 0,
+            stride: 12,
+            data_type: AttributeDataType::Float3 as u8,
+            declared_data_type: AttributeDataType::Float3 as u8,
+            _pad: [0; 2],
+        },
+        AttributeDesc {
+            attr_id: 4,
+            binding: 4,
+            source: opacity,
+            offset: 0,
+            vertex_offset: 0,
+            stride: 4,
+            data_type: AttributeDataType::Float as u8,
+            declared_data_type: AttributeDataType::Float as u8,
+            _pad: [0; 2],
+        },
+    ];
+
+    let mut payload = Vec::new();
+    let attrs = push_span(&mut payload, &descriptors);
+    // One segment: the capture shows `segs=1` for both its symbol drawables, and a layer's
+    // labels share one buffer. A second segment appears only past what a u16 index reaches,
+    // which `SymbolBuffers::add_quad` refuses rather than wrapping into.
+    #[allow(clippy::cast_possible_truncation)]
+    let segments = push_span(
+        &mut payload,
+        &[AbiSegment {
+            vertex_offset: 0,
+            index_offset: 0,
+            vertex_length: buffers.vertices.len() as u32,
+            index_length: buffers.indices.len() as u32,
+        }],
+    );
+
+    #[allow(clippy::cast_possible_truncation)]
+    let record = GeometryAdd {
+        geometry,
+        permutation_key,
+        indexes,
+        vertex_count: buffers.vertices.len() as u32,
+        attrs,
+        instance_attrs: Span::default(),
+        segments,
+        texture_refs: Span::default(),
+        builtin_shader: if is_sdf {
+            BuiltIn::SymbolSDFShader as i32
+        } else {
+            BuiltIn::SymbolIconShader as i32
+        },
+        vertex_type: AttributeDataType::Short4 as u8,
+        reason: AddReason::Created as u8,
+        _pad: [0; 2],
+    };
+
+    Encoded { record, payload }
+}
+
 /// Writes an encoded envelope to the ring.
 ///
 /// # Errors
@@ -332,6 +487,45 @@ fn as_bytes_i16(values: &[[i16; 2]]) -> Vec<u8> {
 
 fn as_bytes_u16(values: &[u16]) -> Vec<u8> {
     let mut out = Vec::with_capacity(values.len() * 2);
+    for value in values {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    out
+}
+
+/// A symbol's interleaved vertices, in the order the three attributes are declared.
+///
+/// Written out rather than reinterpreted from the struct's memory: the layout the consumer reads
+/// is a property of the wire format, not of how Rust happens to lay a struct out, and a
+/// `repr(Rust)` reordering would be silent.
+fn as_symbol_bytes(values: &[SymbolVertex]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(values.len() * SYMBOL_STRIDE as usize);
+    for vertex in values {
+        for value in vertex.pos_offset {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in vertex.data {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in vertex.pixel_offset {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    out
+}
+
+fn as_bytes_f32_3(values: &[[f32; 3]]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(values.len() * 12);
+    for value in values {
+        for component in value {
+            out.extend_from_slice(&component.to_le_bytes());
+        }
+    }
+    out
+}
+
+fn as_bytes_f32(values: &[f32]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(values.len() * 4);
     for value in values {
         out.extend_from_slice(&value.to_le_bytes());
     }
