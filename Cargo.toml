@@ -51,6 +51,9 @@ thiserror = "2.0"
 # until the CI cross toolchains land (§16: emb manifest entries and cross toolchain pins).
 rusqlite = { version = "0.40", features = ["bundled"] }  # sqlite vendored (§3.1: the only surviving C)
 tempfile = "3"           # for tests that need a real file on disk
+# TLS is not in the default set. `rustls` pulls `ring`, which is C and assembly, and the cross
+# lane checks the workspace with default features precisely so it needs no cross C toolchain
+# (§16). Enabling it per-crate through `tessella-storage`'s `tls` feature keeps that true.
 ureq = { version = "3.4", default-features = false, features = ["gzip"] }  # cpp-httplib/curl (§12.6 wants HTTP/2 multiplexing — revisit at R1)
 zune-image = "0.5"       # SIMD raster decode straight into the texture slab (§12.2, R3)
 geozero = "0.15"         # interim MVT decode; §8 prefers a hand-rolled zero-copy varint reader

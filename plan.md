@@ -537,10 +537,20 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   sequence in front of the first tile request — four sources on a link where a round trip is
   40 ms was 160 ms of a cold start spent finding out what to ask for. They do not depend on each
   other, so they go to the pool as one batch.
-  Remaining: TLS and reading `.pmtiles` archives directly, both held for the cross toolchains
-  (§16); and a worker-count budget taken on the RK3566 lane rather than on a workstation
-  loopback, which is the last thing R1's exit asks for and the one that genuinely needs the
-  board.
+  TLS lands as `tessella-storage/tls`, off by default. The premise for holding it — that a
+  transitive C dependency would break the cross lane for every crate — turned out not to need
+  the toolchains after all: that lane checks the workspace with *default* features, `http` was
+  already outside the default set, and a feature nobody enables costs it nothing. Verified rather
+  than assumed: both cross targets check clean and `cargo tree` finds neither `ring` nor `rustls`
+  in either. Without the feature an `https://` URL is refused at the transport rather than
+  falling back to plaintext, which is asserted in both feature states — a tile request over a
+  connection nobody agreed to leaks a user's position to anyone on the path, so refusing is the
+  only safe way not to support something.
+  Remaining: §12.6's connection reuse and session resumption, which are properties of how the
+  agent is pooled rather than of whether TLS is compiled in and want measuring over a real link;
+  reading `.pmtiles` archives directly, which still waits on §16; and a worker-count budget taken
+  on the RK3566 lane rather than on a workstation loopback, which is the last thing R1's exit
+  asks for and the one that genuinely needs the board.
 
   Three things this list used to carry, and why they are not on it. **Cross-faded (pattern)
   binders** are blocked rather than deferred: no golden carries a pattern layer until R3 brings

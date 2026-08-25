@@ -23,6 +23,10 @@ ureq = { workspace = true, optional = true }
 default = []
 cache = ["dep:rusqlite"]
 http = ["dep:ureq"]
+# HTTPS. Off by default and deliberately so: `rustls` brings `ring`, which is C and assembly,
+# and §16's cross lane checks the workspace with default features exactly so that it needs no
+# cross C toolchain. A feature nobody enables costs that lane nothing.
+tls = ["http", "ureq/rustls"]
 
 [dev-dependencies]
 flate2 = "1"

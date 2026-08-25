@@ -1,17 +1,25 @@
 //! The online file source.
 //!
-//! # Why this is behind a feature
+//! # Why this is behind a feature, and TLS behind another
 //!
 //! `ureq` is pinned to `default-features = false`, which is HTTP without TLS and is pure Rust —
 //! no `ring`, no `rustls`, no C. That matters because the cross `cargo check` lane has no C
 //! toolchain for the target, and a transitive C dependency would break it for every crate
-//! rather than only this one. TLS is the piece that brings C back, so it is deliberately not
-//! enabled yet: §12.6 wants connection reuse and session resumption, and that is the change
-//! that has to arrive with the cross toolchains (§16) rather than ahead of them.
+//! rather than only this one.
 //!
-//! What works today is plain `http://`, which is what a local tile server speaks and what the
-//! live test uses. An `https://` URL will fail at the transport rather than silently falling
-//! back, because a map that quietly stops using TLS is worse than one that says it cannot.
+//! TLS is the piece that brings C back, so it is its own feature — `tls` — rather than part of
+//! `http`. The cross lane checks the workspace with *default* features and neither is in the
+//! default set, so a lane that needs no cross C toolchain keeps not needing one. A build that
+//! wants HTTPS asks for it, and pays for `ring` on the host, where a C compiler is not in doubt.
+//!
+//! Without `tls` an `https://` URL fails at the transport rather than silently falling back to
+//! plaintext, because a map that quietly stops using TLS is worse than one that says it cannot.
+//! That is the same reason it is not a fallback *with* the feature either: a certificate this
+//! does not trust is a refusal, not a downgrade.
+//!
+//! What is still outstanding is §12.6's connection reuse and session resumption. Both are
+//! properties of how the agent is pooled rather than of whether TLS is compiled in, and both
+//! want measuring against a real origin over a real link.
 //!
 //! # A 404 is a response
 //!

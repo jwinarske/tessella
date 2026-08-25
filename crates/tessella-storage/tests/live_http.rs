@@ -206,3 +206,44 @@ fn a_gzipped_tile_is_inflated() {
     assert_eq!(response.body, FIXTURE, "inflated back to the tile");
     tessella_source::mvt::Tile::decode(&response.body).expect("and it decodes");
 }
+
+/// Without the `tls` feature, an `https://` URL fails rather than falling back to plaintext.
+///
+/// The direction of the failure is the point. A transport that met `https://` with a plaintext
+/// request would produce a map that works, over a connection nobody agreed to — and on a tile
+/// request that leaks a user's position to anyone on the path. Refusing is the only safe way to
+/// not support something.
+#[cfg(not(feature = "tls"))]
+#[test]
+fn https_is_refused_when_tls_is_not_compiled_in() {
+    let source = HttpFileSource::default();
+    let error = source
+        .fetch("https://example.invalid/1/2/3.mvt")
+        .expect_err("https without tls must not succeed");
+    assert!(
+        matches!(error, FetchError::Transport { .. }),
+        "expected a transport refusal, got {error:?}"
+    );
+}
+
+/// With `tls`, an `https://` URL reaches the transport rather than being refused for its scheme.
+///
+/// It still fails — the host does not resolve — but on the network rather than on the scheme,
+/// which is what says the feature wired something up. Asserting against a real HTTPS origin
+/// would make the test suite depend on the internet.
+#[cfg(feature = "tls")]
+#[test]
+fn https_reaches_the_transport_when_tls_is_compiled_in() {
+    let source = HttpFileSource::default();
+    let error = source
+        .fetch("https://tls-is-wired-up.invalid/1/2/3.mvt")
+        .expect_err("the host does not exist");
+    let FetchError::Transport { message, .. } = &error else {
+        panic!("expected a transport error, got {error:?}");
+    };
+    // A scheme refusal names the scheme; a resolution failure names the host or the lookup.
+    assert!(
+        !message.contains("https") || message.contains("dns") || message.contains("resolve"),
+        "looks like a scheme refusal rather than a network one: {message}"
+    );
+}
