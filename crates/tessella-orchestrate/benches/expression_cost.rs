@@ -243,7 +243,7 @@ fn main() {
 
     println!("Tile: streets-10-163-395.mvt (maplibre-native's Parse_VectorTile fixture)");
     for layer in &decoded.layers {
-        println!("  {} : {} features", layer.name, layer.features.len());
+        println!("  {} : {} features", layer.name, layer.len());
     }
     println!();
 
@@ -273,7 +273,7 @@ fn main() {
     let features: usize = decoded
         .layers
         .iter()
-        .map(|layer| layer.features.len())
+        .map(|layer| layer.len())
         .sum();
     allocations("data-driven paint", features, || {
         let _ = build(&data_driven, &decoded, tile);
@@ -348,8 +348,8 @@ fn per_expression(decoded: &mvt::Tile) {
         ] {
             let run = || {
                 let mut sink = 0usize;
-                for feature in &layer.features {
-                    if StyleFeature::property(feature, key).is_some() {
+                for feature in layer.features() {
+                    if StyleFeature::property(&feature, key).is_some() {
                         sink += 1;
                     }
                 }
@@ -364,7 +364,7 @@ fn per_expression(decoded: &mvt::Tile) {
             }
             let (p50, _, _) = percentiles(samples);
             #[allow(clippy::cast_possible_truncation)]
-            let each = p50.as_nanos() as u64 / layer.features.len() as u64;
+            let each = p50.as_nanos() as u64 / layer.len() as u64;
             println!("  {label:<26} {p50:>9.2?} total  {each:>5} ns/feature");
         }
     }
@@ -376,7 +376,7 @@ fn per_expression(decoded: &mvt::Tile) {
         let value = tessella_style::Value::String("#ffcc00".into());
         let run = || {
             let mut sink = 0usize;
-            for _ in 0..layer.features.len() {
+            for _ in 0..layer.len() {
                 if tessella_style::property::as_color(&value).is_ok() {
                     sink += 1;
                 }
@@ -392,7 +392,7 @@ fn per_expression(decoded: &mvt::Tile) {
         }
         let (p50, _, _) = percentiles(samples);
         #[allow(clippy::cast_possible_truncation)]
-        let each = p50.as_nanos() as u64 / layer.features.len() as u64;
+        let each = p50.as_nanos() as u64 / layer.len() as u64;
         println!(
             "  {:<26} {p50:>9.2?} total  {each:>5} ns/feature",
             "as_color (hex parse)"
@@ -405,8 +405,8 @@ fn per_expression(decoded: &mvt::Tile) {
 
         let run = || {
             let mut sink = 0usize;
-            for feature in &layer.features {
-                if expression.evaluate(Some(13.5), Some(feature)).is_ok() {
+            for feature in layer.features() {
+                if expression.evaluate(Some(13.5), Some(&feature)).is_ok() {
                     sink += 1;
                 }
             }
@@ -421,7 +421,7 @@ fn per_expression(decoded: &mvt::Tile) {
         }
         let (p50, _, _) = percentiles(samples);
         #[allow(clippy::cast_possible_truncation)]
-        let each = p50.as_nanos() as u64 / layer.features.len() as u64;
+        let each = p50.as_nanos() as u64 / layer.len() as u64;
         println!("  {label:<26} {p50:>9.2?} total  {each:>5} ns/feature");
     }
 }

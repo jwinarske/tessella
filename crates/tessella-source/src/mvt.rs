@@ -28,6 +28,7 @@
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::ops::Range;
 
 use crate::protobuf::{Reader, WireError, WireType, zigzag};
 
@@ -218,50 +219,119 @@ impl Geometry {
         self.points.reserve(points);
         self.ends.reserve(rings);
     }
-
-    /// Where the ring currently being built starts.
-    fn open_at(&self) -> usize {
-        self.ends.last().map_or(0, |&end| end as usize)
-    }
-
-    /// The ring being built, which is everything after the last closed one.
-    ///
-    /// Decoding appends straight into the shared buffer and closes a ring by recording where it
-    /// ended. The alternative — accumulate a ring in its own vector and copy it in — writes
-    /// every coordinate of the tile twice, and a tile is tens of thousands of them.
-    fn open(&self) -> &[[i32; 2]] {
-        &self.points[self.open_at()..]
-    }
-
-    /// Appends a point to the ring being built.
-    fn push_point(&mut self, point: [i32; 2]) {
-        self.points.push(point);
-    }
-
-    /// Ends the ring being built, if it has anything in it.
-    fn close_ring(&mut self) {
-        if self.points.len() > self.open_at() {
-            #[allow(clippy::cast_possible_truncation)]
-            self.ends.push(self.points.len() as u32);
-        }
-    }
 }
 
 /// One feature.
+///
+/// Holds ranges rather than buffers. A tile's features are decoded together and read together,
+/// so their points and properties live in one buffer per [`Layer`] and a feature says which part
+/// of it is its own. Owning them per feature costs three allocations each — profiled at about a
+/// sixth of the instructions a decode executes, for data that is never resized after decoding
+/// and never outlives the layer.
+///
+/// Read one through [`Layer::feature`], which pairs it with the buffers it indexes.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Feature {
     /// The feature id, when it has one.
     pub id: Option<u64>,
     /// What it draws.
     pub geom_type: GeomType,
-    /// Properties, resolved against the layer's key and value tables.
+    /// This feature's slice of its layer's property list.
+    properties: Range<u32>,
+    /// This feature's slice of its layer's ring-end list.
+    rings: Range<u32>,
+}
+
+/// A feature together with the layer whose buffers it indexes.
+///
+/// What a caller actually works with: the ranges on [`Feature`] mean nothing without the layer,
+/// and pairing them here keeps that from being something every call site has to remember.
+#[derive(Debug, Clone, Copy)]
+pub struct FeatureRef<'a> {
+    layer: &'a Layer,
+    feature: &'a Feature,
+}
+
+impl<'a> FeatureRef<'a> {
+    /// The feature id, when it has one.
+    #[must_use]
+    pub const fn id(&self) -> Option<u64> {
+        self.feature.id
+    }
+
+    /// What it draws.
+    #[must_use]
+    pub const fn geom_type(&self) -> GeomType {
+        self.feature.geom_type
+    }
+
+    /// Its properties, resolved against the layer's key and value tables.
+    #[must_use]
+    pub fn properties(&self) -> &'a [(Arc<str>, Value)] {
+        let range = &self.feature.properties;
+        &self.layer.properties[range.start as usize..range.end as usize]
+    }
+
+    /// Its rings, as slices of the layer's point buffer.
+    pub fn rings(&self) -> impl Iterator<Item = &'a [[i32; 2]]> {
+        let ends = &self.layer.ends;
+        let range = self.feature.rings.clone();
+        // A ring starts where the one before it ended, and the ends are monotonic across the
+        // whole layer — so the first ring of a feature starts at its predecessor's end rather
+        // than at zero.
+        let mut start = if range.start == 0 {
+            0usize
+        } else {
+            ends[range.start as usize - 1] as usize
+        };
+        let points = &self.layer.points;
+        ends[range.start as usize..range.end as usize]
+            .iter()
+            .map(move |&end| {
+                let end = end as usize;
+                let ring = &points[start..end];
+                start = end;
+                ring
+            })
+    }
+
+    /// How many rings.
+    #[must_use]
+    pub fn ring_count(&self) -> usize {
+        (self.feature.rings.end - self.feature.rings.start) as usize
+    }
+
+    /// Its rings, scaled from the layer's extent onto `target`.
     ///
-    /// The key is shared with the table it came from: a layer names its keys once and every
-    /// feature refers to the same ones, so an owned `String` per feature per tag is a copy of
-    /// something that already exists.
-    pub properties: Vec<(Arc<str>, Value)>,
-    /// Geometry in tile-local units, as rings or line strings.
-    pub geometry: Geometry,
+    /// A vector tile states its own grid, and a tile written at 8192 draws at exactly half scale
+    /// against one written at 4096 unless somebody divides. So the conversion happens once,
+    /// here, rather than every consumer carrying a divisor it might forget. A forgotten divisor
+    /// is a layer at the wrong scale, which renders as geometry in the right shape and the wrong
+    /// place.
+    ///
+    /// Rounded rather than truncated, for the reason the GeoJSON path rounds: truncation drifts
+    /// every coordinate the same direction, which reads as a projection error rather than as
+    /// rounding.
+    #[must_use]
+    pub fn rings_scaled(&self, target: i32) -> Geometry {
+        let from_extent = self.layer.extent;
+        if from_extent == 0 {
+            return Geometry::default();
+        }
+        let scale = f64::from(target) / f64::from(from_extent);
+        let mut out = Geometry::default();
+        out.reserve(self.rings().map(<[[i32; 2]]>::len).sum(), self.ring_count());
+        for ring in self.rings() {
+            out.push_ring(ring.iter().map(|point| {
+                #[allow(clippy::cast_possible_truncation)]
+                [
+                    (f64::from(point[0]) * scale).round() as i32,
+                    (f64::from(point[1]) * scale).round() as i32,
+                ]
+            }));
+        }
+        out
+    }
 }
 
 /// One layer.
@@ -273,8 +343,124 @@ pub struct Layer {
     pub extent: u32,
     /// The spec version it declared.
     pub version: u32,
-    /// Its features.
-    pub features: Vec<Feature>,
+    /// Its features, each holding ranges into the buffers below.
+    features: Vec<Feature>,
+    /// Every point of every ring of every feature, in feature order.
+    points: Vec<[i32; 2]>,
+    /// Where each ring ends in `points`, exclusive and monotonic across the whole layer.
+    ends: Vec<u32>,
+    /// Every property of every feature, in feature order.
+    properties: Vec<(Arc<str>, Value)>,
+}
+
+impl Layer {
+    /// How many features.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.features.len()
+    }
+
+    /// True when the layer has no features.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.features.is_empty()
+    }
+
+    /// One feature, paired with the buffers it indexes.
+    #[must_use]
+    pub fn feature(&self, index: usize) -> Option<FeatureRef<'_>> {
+        self.features.get(index).map(|feature| FeatureRef {
+            layer: self,
+            feature,
+        })
+    }
+
+    /// Every feature, in the order the tile carried them.
+    pub fn features(&self) -> impl Iterator<Item = FeatureRef<'_>> {
+        self.features.iter().map(move |feature| FeatureRef {
+            layer: self,
+            feature,
+        })
+    }
+
+    /// A layer with no features yet.
+    #[must_use]
+    pub fn new(name: String, extent: u32, version: u32) -> Self {
+        Self {
+            name,
+            extent,
+            version,
+            ..Self::default()
+        }
+    }
+
+    /// Appends a feature whose geometry was decoded straight into this layer.
+    ///
+    /// `rings` is where its ring ends begin, from [`Self::open_rings`] before decoding started.
+    fn finish_feature(
+        &mut self,
+        id: Option<u64>,
+        geom_type: GeomType,
+        properties: impl IntoIterator<Item = (Arc<str>, Value)>,
+        rings: u32,
+    ) {
+        #[allow(clippy::cast_possible_truncation)]
+        let property_start = self.properties.len() as u32;
+        self.properties.extend(properties);
+        #[allow(clippy::cast_possible_truncation)]
+        let property_end = self.properties.len() as u32;
+        #[allow(clippy::cast_possible_truncation)]
+        let ring_end = self.ends.len() as u32;
+        self.features.push(Feature {
+            id,
+            geom_type,
+            properties: property_start..property_end,
+            rings: rings..ring_end,
+        });
+    }
+
+    /// Where the next feature's rings will start.
+    #[allow(clippy::cast_possible_truncation)]
+    fn open_rings(&self) -> u32 {
+        self.ends.len() as u32
+    }
+
+    /// Appends a feature, copying its parts into the layer's buffers.
+    ///
+    /// Public because a layer's fields are not: a caller assembling one — a test, or a source
+    /// that is not a `.mvt` — cannot write the ranges itself and should not have to know they
+    /// exist.
+    pub fn push_feature(
+        &mut self,
+        id: Option<u64>,
+        geom_type: GeomType,
+        properties: impl IntoIterator<Item = (Arc<str>, Value)>,
+        geometry: &Geometry,
+    ) {
+        #[allow(clippy::cast_possible_truncation)]
+        let property_start = self.properties.len() as u32;
+        self.properties.extend(properties);
+        #[allow(clippy::cast_possible_truncation)]
+        let property_end = self.properties.len() as u32;
+
+        #[allow(clippy::cast_possible_truncation)]
+        let ring_start = self.ends.len() as u32;
+        // The feature's ends are relative to its own buffer; the layer's are absolute, so they
+        // shift by wherever this feature's points begin.
+        #[allow(clippy::cast_possible_truncation)]
+        let base = self.points.len() as u32;
+        self.points.extend_from_slice(&geometry.points);
+        self.ends.extend(geometry.ends.iter().map(|end| end + base));
+        #[allow(clippy::cast_possible_truncation)]
+        let ring_end = self.ends.len() as u32;
+
+        self.features.push(Feature {
+            id,
+            geom_type,
+            properties: property_start..property_end,
+            rings: ring_start..ring_end,
+        });
+    }
 }
 
 /// A decoded tile.
@@ -378,20 +564,31 @@ fn decode_layer(data: &[u8]) -> Result<Layer, MvtError> {
         });
     }
 
-    let mut features = Vec::with_capacity(raw_features.len());
-    let mut scratch = Scratch::default();
-    for raw in raw_features {
-        features.push(decode_feature(raw, &name, &keys, &values, &mut scratch)?);
-    }
-
-    Ok(Layer {
+    let mut out = Layer {
         name,
         // The default is the spec's, and it is 4096 rather than the 8192 mbgl uses internally:
         // the tile says what grid it is on, and the frontend rescales.
         extent: extent.unwrap_or(DEFAULT_EXTENT),
         version,
-        features,
-    })
+        features: Vec::with_capacity(raw_features.len()),
+        ..Layer::default()
+    };
+    // One reservation for the layer, from the bytes its features occupy. A point costs at least
+    // two varints of at least one byte, so half the total bounds it — and growing the shared
+    // buffer per feature instead copies everything already in it each time it doubles, which is
+    // the cost that reappeared as `memcpy` the moment the buffers became per-layer.
+    let bytes: usize = raw_features.iter().map(|raw| raw.len()).sum();
+    out.points.reserve(bytes / 2);
+    out.ends.reserve(raw_features.len() * 2);
+    out.properties.reserve(raw_features.len() * 2);
+
+    let mut scratch = Scratch::default();
+    let name = out.name.clone();
+    for raw in raw_features {
+        decode_feature(raw, &name, &keys, &values, &mut scratch, &mut out)?;
+    }
+
+    Ok(out)
 }
 
 fn decode_value(data: &[u8], layer: &str) -> Result<Value, MvtError> {
@@ -453,17 +650,21 @@ fn decode_value(data: &[u8], layer: &str) -> Result<Value, MvtError> {
 struct Scratch {
     tags: Vec<u32>,
     geometry: Vec<u32>,
+    properties: Vec<(Arc<str>, Value)>,
 }
 
 fn decode_feature(
     data: &[u8],
-    layer: &str,
+    name: &str,
     keys: &[Arc<str>],
     values: &[Value],
     scratch: &mut Scratch,
-) -> Result<Feature, MvtError> {
+    out: &mut Layer,
+) -> Result<(), MvtError> {
+    let layer = name;
     let mut reader = Reader::new(data);
-    let mut feature = Feature::default();
+    let mut id: Option<u64> = None;
+    let mut geom_type = GeomType::Unknown;
     // Cleared, not reallocated: `clear` keeps the capacity, so after the first few features
     // neither of these grows again.
     scratch.tags.clear();
@@ -474,10 +675,10 @@ fn decode_feature(
     while let Some(field) = reader.next_field() {
         let (number, wire) = field?;
         match (number, wire) {
-            (1, WireType::Varint) => feature.id = Some(reader.varint()?),
+            (1, WireType::Varint) => id = Some(reader.varint()?),
             (2, _) => reader.packed_varints(wire, tags)?,
             (3, WireType::Varint) => {
-                feature.geom_type = match reader.varint()? {
+                geom_type = match reader.varint()? {
                     1 => GeomType::Point,
                     2 => GeomType::LineString,
                     3 => GeomType::Polygon,
@@ -510,7 +711,8 @@ fn decode_feature(
         });
     }
     // Two entries per property, and the count is known before any of them is read.
-    feature.properties.reserve_exact(tags.len() / 2);
+    scratch.properties.clear();
+    scratch.properties.reserve(tags.len() / 2);
     for [key, value] in tags.as_chunks::<2>().0 {
         let (key, value) = (*key, *value);
         let key = keys
@@ -529,26 +731,50 @@ fn decode_feature(
                 index: value,
             })?
             .clone();
-        feature.properties.push((key, value));
+        scratch.properties.push((key, value));
     }
 
-    feature.geometry = decode_geometry(geometry, layer)?;
-    Ok(feature)
+    let rings = out.open_rings();
+    // Straight into the layer's buffers. Decoding into a per-feature `Geometry` and copying it
+    // in afterwards allocates once per feature and then memcpys every coordinate — which is the
+    // pair of costs this arrangement exists to remove, so paying them on the way in would be
+    // most of the point thrown away.
+    decode_geometry_into(geometry, layer, &mut out.points, &mut out.ends)?;
+    out.finish_feature(id, geom_type, scratch.properties.drain(..), rings);
+    Ok(())
 }
 
 /// Walks the command stream into rings.
-fn decode_geometry(commands: &[u32], layer: &str) -> Result<Geometry, MvtError> {
+/// Walks the command stream into rings, appending into buffers that may already hold others.
+///
+/// The ring ends are absolute offsets into `points`, and monotonic across everything already
+/// there — so "the ring being built" is whatever follows the last recorded end, whether that end
+/// belongs to this feature or the one before it.
+fn decode_geometry_into(
+    commands: &[u32],
+    layer: &str,
+    points: &mut Vec<[i32; 2]>,
+    ends: &mut Vec<u32>,
+) -> Result<(), MvtError> {
     let malformed = |detail: &'static str| MvtError::Geometry {
         layer: layer.into(),
         detail,
     };
 
-    let mut out = Geometry::default();
     // Once, from the command stream's own length, rather than per ring. A point costs at least
     // two varints of at least one byte each, so this bounds the count — and reserving per
     // `MoveTo` instead means a feature of eighteen rings reallocates its buffers eighteen times
     // on the way up.
-    out.reserve(commands.len() / 2, 4);
+    // Everything after the last recorded end is the ring being built.
+    let open_at = |points: &Vec<[i32; 2]>, ends: &Vec<u32>| -> usize {
+        ends.last().map_or(0, |&end| end as usize).min(points.len())
+    };
+    let close = |points: &Vec<[i32; 2]>, ends: &mut Vec<u32>| {
+        if points.len() > open_at(points, ends) {
+            #[allow(clippy::cast_possible_truncation)]
+            ends.push(points.len() as u32);
+        }
+    };
     let (mut x, mut y) = (0i32, 0i32);
     let mut index = 0;
 
@@ -562,9 +788,9 @@ fn decode_geometry(commands: &[u32], layer: &str) -> Result<Geometry, MvtError> 
             // MoveTo starts a new ring or emits a point.
             1 | 2 => {
                 if id == 1 {
-                    out.close_ring();
+                    close(points, ends);
                 }
-                if id == 2 && out.open().is_empty() {
+                if id == 2 && points.len() == open_at(points, ends) {
                     return Err(malformed("LineTo before any MoveTo"));
                 }
                 for _ in 0..count {
@@ -583,11 +809,11 @@ fn decode_geometry(commands: &[u32], layer: &str) -> Result<Geometry, MvtError> 
                     y = y
                         .checked_add(zigzag(dy))
                         .ok_or_else(|| malformed("coordinate overflow"))?;
-                    out.push_point([x, y]);
+                    points.push([x, y]);
                     // Each MoveTo in a run starts its own geometry, which is how a multipoint
                     // travels: one command with a count, not one command each.
                     if id == 1 && count > 1 {
-                        out.close_ring();
+                        close(points, ends);
                     }
                 }
             }
@@ -596,7 +822,7 @@ fn decode_geometry(commands: &[u32], layer: &str) -> Result<Geometry, MvtError> 
                 if count != 1 {
                     return Err(malformed("ClosePath with a count other than one"));
                 }
-                let open = out.open();
+                let open = &points[open_at(points, ends)..];
                 let first = *open
                     .first()
                     .ok_or_else(|| malformed("ClosePath with no ring"))?;
@@ -608,59 +834,24 @@ fn decode_geometry(commands: &[u32], layer: &str) -> Result<Geometry, MvtError> 
                 //
                 // That is not cosmetic: a degenerate edge is what makes ear-clipping spin.
                 if last != Some(first) {
-                    out.push_point(first);
+                    points.push(first);
                 }
-                out.close_ring();
+                close(points, ends);
             }
             _ => return Err(malformed("unknown geometry command")),
         }
     }
 
-    out.close_ring();
-    Ok(out)
+    close(points, ends);
+    Ok(())
 }
 
 use tessella_style::Value as StyleValue;
 use tessella_style::expression::Feature as StyleFeature;
 
-impl Feature {
-    /// The feature's rings, rescaled from the layer's grid onto `target`.
-    ///
-    /// # Why rescaling rather than reading the extent everywhere
-    ///
-    /// A tile states its own grid, and 4096 is only a convention — the field exists because it
-    /// need not be. The rest of this frontend works on one grid (§ tiling's `EXTENT`), so the
-    /// conversion happens once, here, rather than every consumer carrying a divisor it might
-    /// forget. A forgotten divisor is a layer at the wrong scale, which renders as geometry in
-    /// the right shape and the wrong place.
-    ///
-    /// Rounded rather than truncated, for the reason the GeoJSON path rounds: truncation drifts
-    /// every coordinate the same direction, which reads as a projection error rather than as
-    /// rounding.
-    #[must_use]
-    pub fn rings_scaled(&self, from_extent: u32, target: i32) -> Geometry {
-        if from_extent == 0 {
-            return Geometry::default();
-        }
-        let scale = f64::from(target) / f64::from(from_extent);
-        let mut out = Geometry::default();
-        out.reserve(self.geometry.points(), self.geometry.len());
-        for ring in self.geometry.rings() {
-            out.push_ring(ring.iter().map(|point| {
-                #[allow(clippy::cast_possible_truncation)]
-                [
-                    (f64::from(point[0]) * scale).round() as i32,
-                    (f64::from(point[1]) * scale).round() as i32,
-                ]
-            }));
-        }
-        out
-    }
-}
-
-impl StyleFeature for Feature {
+impl StyleFeature for FeatureRef<'_> {
     fn property(&self, key: &str) -> Option<StyleValue> {
-        self.properties
+        self.properties()
             .iter()
             .find(|(name, _)| &**name == key)
             .map(|(_, value)| match value {
@@ -674,7 +865,7 @@ impl StyleFeature for Feature {
         // The names the spec's `geometry-type` expression produces. A tile's `Unknown` maps to
         // the same string a GeoJSON feature of no recognised type would give, so a filter reads
         // one rule for both sources.
-        match self.geom_type {
+        match self.geom_type() {
             GeomType::Point => "Point",
             GeomType::LineString => "LineString",
             GeomType::Polygon => "Polygon",
@@ -684,12 +875,12 @@ impl StyleFeature for Feature {
 
     fn id(&self) -> Option<StyleValue> {
         #[allow(clippy::cast_precision_loss)]
-        self.id.map(|id| StyleValue::Number(id as f64))
+        self.id().map(|id| StyleValue::Number(id as f64))
     }
 
     fn properties(&self) -> StyleValue {
         StyleValue::Object(
-            self.properties
+            self.properties()
                 .iter()
                 .map(|(key, value)| {
                     let value = match value {

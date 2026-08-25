@@ -732,7 +732,8 @@ is the larger part. What remains at 12 ns is the walk
 itself: recursive non-inlined `evaluate` calls returning a 40-byte
 `Result<Value, EvaluationError>` by memory to carry what is nearly always an 8-byte `f64`, plus
 the wrapping and the drops on the way back. The VM's target is the walk, not the data access.
-**Against mbgl, on the same bytes: 0.61x — forty per cent faster, having started 1.40x behind.** `crates/tessella-source/benches/decode.rs` does what
+**Against mbgl, on the same bytes: 0.49x by instruction count — half the work, having started
+1.40x behind.** `crates/tessella-source/benches/decode.rs` does what
 `Parse_VectorTile` does — the same tile, the same accounting — and run alternately with
 maplibre-native's own benchmark runner the ratio held at 1.40 across minima, medians, means and
 the median of paired ratios, at a coefficient of variation under two per cent. mbgl decodes
@@ -761,8 +762,25 @@ reservation up front replaces all of them: 187 µs against mbgl's 307, ratio 0.6
 decode allocates 567 KiB where it allocated 1146. `memcpy` left the profile altogether, which is
 the reallocation copying that instruction counts undercount and a stopwatch does not.
 
-What is left, by instruction share: the inlined decode body at 46 %, the packed reader at 26 %,
-the allocator at about 15 %. The allocator share is the three vectors a
+Then the buffers moved off the feature and onto the *layer*. A feature holds ranges — into the
+layer's points, its ring ends, its properties — and reads them through a `FeatureRef` that pairs
+it with the layer, which is also where the `Feature` trait impl now lives. Decoding writes
+straight into those buffers rather than building a per-feature `Geometry` and copying it in;
+doing the latter would have paid the allocation and the `memcpy` this arrangement exists to
+remove. One reservation per layer, from the bytes its features occupy, rather than per feature:
+growing a shared buffer per feature copies everything already in it, which is exactly what
+reappeared as `memcpy` the moment the buffers became per-layer. Decode allocates 4.7 times a
+feature, from 17.1 when this started.
+
+The final comparison is by instruction count, not by stopwatch. mbgl's benchmark body compiled as
+a standalone program over the same fixture, both under callgrind: 110 308 089 instructions
+against 224 763 669, and both print the same total so they are provably doing the same work. That
+matters because a stopwatch on this machine flatters the result — mbgl proved about 1.8x more
+sensitive to load than this decoder, so the wall-clock ratio drifts from 0.61 to 0.43 as the
+machine fills up while the instruction ratio does not move at all.
+
+What is left, by instruction share: the inlined decode body at 53 %, the packed reader at 27 %,
+`memcpy` at 6 %, and the allocator no longer in the profile. The allocator share is the three vectors a
 feature still owns — its properties, its points and its ring ends — which one buffer per *layer*
 with features holding ranges into it would take to nothing amortised.
 
@@ -770,9 +788,8 @@ SIMD is a candidate but not the next one. The simd-json approach does not port: 
 structural characters in parallel, and protobuf has none — a field's position depends on decoding
 the one before it. What does port is Masked VByte over the *packed* runs, which is exactly what
 MVT geometry commands and tags are, and which published results put at 2–3x on that portion. At
-26 % of instructions that is worth perhaps a tenth overall, against three code paths — x86, NEON
-and scalar — since `std::simd` is nightly and DR-17 pins the toolchain. The per-layer buffers are
-a larger share for less machinery.
+27 % of instructions that is worth perhaps a tenth overall, against three code paths — x86, NEON
+and scalar — since `std::simd` is nightly and DR-17 pins the toolchain. 
 
 `benches/expression_cost.rs` holds the rest of the measurement, against the zoom-10 tile
 `benchmark/parse/vector_tile.benchmark.cpp` decodes in mbgl's own `Parse_VectorTile` — so the

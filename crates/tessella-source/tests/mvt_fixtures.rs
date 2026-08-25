@@ -82,24 +82,24 @@ fn the_valid_fixtures_carry_their_geometry() {
 
     let point = decode("Feature-single-point");
     let layer = point.layers.first().expect("a layer");
-    let feature = layer.features.first().expect("a feature");
-    assert_eq!(feature.geom_type, GeomType::Point);
-    assert_eq!(feature.geometry.len(), 1, "one point");
-    assert_eq!(feature.geometry.rings().next().expect("a ring").len(), 1);
+    let feature = layer.feature(0).expect("a feature");
+    assert_eq!(feature.geom_type(), GeomType::Point);
+    assert_eq!(feature.ring_count(), 1, "one point");
+    assert_eq!(feature.rings().next().expect("a ring").len(), 1);
 
     let line = decode("Feature-single-linestring");
-    let feature = &line.layers[0].features[0];
-    assert_eq!(feature.geom_type, GeomType::LineString);
+    let feature = line.layers[0].feature(0).expect("a feature");
+    assert_eq!(feature.geom_type(), GeomType::LineString);
     assert!(
-        feature.geometry.rings().next().expect("a ring").len() >= 2,
+        feature.rings().next().expect("a ring").len() >= 2,
         "a line needs two points: {:?}",
-        feature.geometry
+        feature.rings().collect::<Vec<_>>()
     );
 
     let polygon = decode("Feature-single-polygon");
-    let feature = &polygon.layers[0].features[0];
-    assert_eq!(feature.geom_type, GeomType::Polygon);
-    let ring = feature.geometry.rings().next().expect("a ring");
+    let feature = polygon.layers[0].feature(0).expect("a feature");
+    assert_eq!(feature.geom_type(), GeomType::Polygon);
+    let ring = feature.rings().next().expect("a ring");
     assert_eq!(
         ring.first(),
         ring.last(),
@@ -107,9 +107,9 @@ fn the_valid_fixtures_carry_their_geometry() {
     );
 
     let multipoint = decode("Feature-single-multipoint");
-    let feature = &multipoint.layers[0].features[0];
+    let feature = multipoint.layers[0].feature(0).expect("a feature");
     assert!(
-        feature.geometry.len() > 1,
+        feature.ring_count() > 1,
         "a multipoint is several geometries, not one with several points"
     );
 }
@@ -131,7 +131,7 @@ fn every_value_type_decodes() {
     ] {
         let bytes = by_name.get(name).unwrap_or_else(|| panic!("{name}"));
         let tile = Tile::decode(bytes).unwrap_or_else(|err| panic!("{name}: {err}"));
-        let properties = &tile.layers[0].features[0].properties;
+        let properties = tile.layers[0].feature(0).expect("a feature").properties();
         assert_eq!(properties.len(), 1, "{name}");
 
         // The spec has seven numeric encodings and a style has one number type, so all of the
@@ -146,7 +146,12 @@ fn every_value_type_decodes() {
 
     let all = Tile::decode(by_name.get("Values-all-types").expect("vendored")).expect("decodes");
     assert!(
-        all.layers[0].features[0].properties.len() > 1,
+        all.layers[0]
+            .feature(0)
+            .expect("a feature")
+            .properties()
+            .len()
+            > 1,
         "the all-types fixture carries several"
     );
 }

@@ -18,6 +18,14 @@
 //!     --benchmark_repetitions=12
 //! ```
 //!
+//! Better still, compile that benchmark's *body* as a standalone program over the same fixture
+//! and count instructions on both sides with `valgrind --tool=callgrind`. That answers the
+//! question the wall clock cannot on a shared machine: it is deterministic, and it showed mbgl
+//! to be roughly 1.8x more sensitive to load than this decoder is, which flatters the ratio a
+//! stopwatch reports under contention. Both programs print the same total — the sum of every
+//! feature's ring count and property count — so a mismatch there means they are not doing the
+//! same work and no timing of them means anything.
+//!
 //! # Why the minimum, and why alternating
 //!
 //! Interference is one-sided: another process can take time from a run and cannot give any back.
@@ -55,9 +63,9 @@ fn once() -> usize {
     let tile = mvt::Tile::decode(TILE).expect("decodes");
     let mut length = 0usize;
     for layer in &tile.layers {
-        for feature in &layer.features {
-            length += feature.geometry.len();
-            length += feature.properties.len();
+        for feature in layer.features() {
+            length += feature.ring_count();
+            length += feature.properties().len();
         }
     }
     length

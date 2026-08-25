@@ -23,7 +23,7 @@ fn a_real_tile_decodes_into_layers() {
         "every layer is named"
     );
     assert!(
-        tile.layers.iter().any(|layer| !layer.features.is_empty()),
+        tile.layers.iter().any(|layer| !layer.is_empty()),
         "and some carry features"
     );
 
@@ -39,26 +39,17 @@ fn a_real_tile_decodes_into_layers() {
 /// tessellated yet: see `earcutr_hangs_on_real_tile_geometry` below.
 #[test]
 fn a_fill_layer_tessellates_a_vector_source() {
-    use tessella_source::mvt::{Feature, GeomType, Layer, Value};
+    use tessella_source::mvt::{GeomType, Layer, Value};
 
+    let mut water = Layer::new("water".to_string(), 4096, 2);
+    water.push_feature(
+        Some(1),
+        GeomType::Polygon,
+        [("kind".into(), Value::String("lake".into()))],
+        &Geometry::from_rings([vec![[0, 0], [2048, 0], [2048, 2048], [0, 2048], [0, 0]]]),
+    );
     let tile = Tile {
-        layers: vec![Layer {
-            name: "water".to_string(),
-            extent: 4096,
-            version: 2,
-            features: vec![Feature {
-                id: Some(1),
-                geom_type: GeomType::Polygon,
-                properties: vec![("kind".into(), Value::String("lake".into()))],
-                geometry: Geometry::from_rings([vec![
-                    [0, 0],
-                    [2048, 0],
-                    [2048, 2048],
-                    [0, 2048],
-                    [0, 0],
-                ]]),
-            }],
-        }],
+        layers: vec![water],
     };
 
     let style = Style::parse(
@@ -114,18 +105,16 @@ fn an_absent_source_layer_draws_nothing() {
 /// a projection bug rather than a units bug.
 #[test]
 fn geometry_is_rescaled_onto_the_pipeline_grid() {
-    use tessella_source::mvt::{Feature, GeomType};
+    use tessella_source::mvt::{GeomType, Layer};
     use tessella_source::tiling::EXTENT;
 
-    let feature = Feature {
-        id: None,
-        geom_type: GeomType::Polygon,
-        properties: Vec::new(),
-        // A unit square on a 4096 grid.
-        geometry: Geometry::from_rings([vec![[0, 0], [4096, 0], [4096, 4096], [0, 4096], [0, 0]]]),
-    };
+    // A unit square on a 4096 grid.
+    let square = Geometry::from_rings([vec![[0, 0], [4096, 0], [4096, 4096], [0, 4096], [0, 0]]]);
+    let mut layer = Layer::new("l".to_string(), 4096, 2);
+    layer.push_feature(None, GeomType::Polygon, [], &square);
+    let feature = layer.feature(0).expect("a feature");
 
-    let scaled = feature.rings_scaled(4096, EXTENT);
+    let scaled = feature.rings_scaled(EXTENT);
     assert_eq!(
         scaled.rings().next().expect("a ring")[2],
         [EXTENT, EXTENT],
@@ -134,8 +123,7 @@ fn geometry_is_rescaled_onto_the_pipeline_grid() {
 
     // A layer already on the pipeline's grid is unchanged, so the rescale is not a lossy pass
     // over data that did not need it.
-    let same = feature.rings_scaled(4096, 4096);
-    assert_eq!(same, feature.geometry);
+    assert_eq!(feature.rings_scaled(4096), square);
 }
 
 /// A real tile's water layer tessellates, which is what the fixtures cannot show.
@@ -194,12 +182,12 @@ fn closepath_does_not_duplicate_an_already_closed_ring() {
     let tile = Tile::decode(REAL_TILE).expect("decodes");
     let mut rings = 0;
     for layer in &tile.layers {
-        for feature in &layer.features {
+        for feature in layer.features() {
             // Rings close; line strings do not, and this tile's `admin` layer is lines.
-            if feature.geom_type != tessella_source::mvt::GeomType::Polygon {
+            if feature.geom_type() != tessella_source::mvt::GeomType::Polygon {
                 continue;
             }
-            for ring in feature.geometry.rings() {
+            for ring in feature.rings() {
                 rings += 1;
                 if ring.len() > 2 {
                     assert_eq!(

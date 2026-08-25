@@ -491,10 +491,10 @@ pub fn build_mvt_tile(
                     .and_then(|name| decoded.layer(name));
 
                 let mut per_feature: Vec<Vec<Ring>> = Vec::new();
-                let mut kept: Vec<&tessella_source::mvt::Feature> = Vec::new();
+                let mut kept: Vec<tessella_source::mvt::FeatureRef<'_>> = Vec::new();
                 if let Some(named) = named {
-                    for feature in &named.features {
-                        if !filter.matches(feature, None) {
+                    for feature in named.features() {
+                        if !filter.matches(&feature, None) {
                             continue;
                         }
                         // No geometry-type check, deliberately. `FillBucket::addFeature` has
@@ -505,7 +505,7 @@ pub fn build_mvt_tile(
                         // a single missing vertex in a `water` layer whose one point feature
                         // mbgl draws and this did not.
                         let mut rings: Vec<Ring> = Vec::new();
-                        let scaled = feature.rings_scaled(named.extent, EXTENT);
+                        let scaled = feature.rings_scaled(EXTENT);
                         for ring in scaled.rings() {
                             #[allow(clippy::cast_possible_truncation)]
                             let ring: Ring = ring
@@ -526,7 +526,7 @@ pub fn build_mvt_tile(
                 let (bucket, ends) = fill::build_features_tracked(&borrowed);
                 for (feature, end) in kept.iter().zip(&ends) {
                     binder
-                        .push(*end, &paint, *feature)
+                        .push(*end, &paint, feature)
                         .map_err(|source| TileError::Binder {
                             layer: layer.id.clone(),
                             source,
@@ -551,14 +551,14 @@ pub fn build_mvt_tile(
                 let options = line_options(layer);
                 let mut bucket = LineBucket::default();
                 if let Some(named) = named {
-                    for feature in &named.features {
-                        if !filter.matches(feature, None) {
+                    for feature in named.features() {
+                        if !filter.matches(&feature, None) {
                             continue;
                         }
                         // Polygons are drawn by a line layer as their own outlines, which is
                         // what `closed` in the generator means; points have no length to
                         // extrude and are dropped the way mbgl drops them.
-                        let closed = match feature.geom_type {
+                        let closed = match feature.geom_type() {
                             tessella_source::mvt::GeomType::LineString => false,
                             tessella_source::mvt::GeomType::Polygon => true,
                             _ => continue,
@@ -567,7 +567,7 @@ pub fn build_mvt_tile(
                         // Already tile-local and already clipped by whoever cut the tile, so
                         // the geometry goes straight to the generator; see this function's
                         // note on why that differs from the GeoJSON path.
-                        let scaled = feature.rings_scaled(named.extent, EXTENT);
+                        let scaled = feature.rings_scaled(EXTENT);
                         for part in scaled.rings() {
                             #[allow(clippy::cast_possible_truncation)]
                             let part: Ring = part
@@ -577,7 +577,7 @@ pub fn build_mvt_tile(
                             bucket.add_geometry(&part, &options);
                         }
                         binder
-                            .push(bucket.vertices.len(), &paint, feature)
+                            .push(bucket.vertices.len(), &paint, &feature)
                             .map_err(|source| TileError::Binder {
                                 layer: layer.id.clone(),
                                 source,
