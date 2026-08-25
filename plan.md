@@ -731,6 +731,22 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   other is a network that blinked. The stack is part of the key as well as the URL, so a bold
   face never answers for a regular one — the right letter in the wrong weight, which nothing
   errors about.
+  Line breaking lands next, which is where a label stops being a string. It is a shortest-path
+  problem and not a greedy fill: every break opportunity is a node, a line's cost is how far its
+  width sits from the *average* line width, and the answer is the cheapest path. Aiming at the
+  maximum instead would fill each line to the brim and leave the last one short, which is the
+  greedy result by another route and conspicuous on a label sitting under a symbol. Penalties
+  carry the typography — fifty for an opening parenthesis left at the end of a line, a hundred
+  and fifty for breaking between ideographs when the server has already suggested breaks with
+  zero-width spaces, and minus ten thousand for a newline, which the badness function squares
+  and *subtracts* so that an author's break outweighs any raggedness it causes.
+  Checked against mbgl's `Shaping.ZWSP`, which fixes the line count for four inputs at four
+  widths. The Unicode blocks that permit a break without a space are generated from mbgl's own
+  table under DR-6 rather than from Unicode's `Blocks.txt`: mbgl comments out the blocks it does
+  not consult, and a table built from the standard would break lines where mbgl does not.
+  Three of the tests around it were vacuous — the parenthesis penalty, the short-last-line
+  preference and the whitespace rule all survived being deleted — so the discriminating inputs
+  were searched for rather than guessed at, and all five rules now fail when removed.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

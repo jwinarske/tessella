@@ -106,6 +106,9 @@ const SLOT_OUTPUT: &str = "crates/tessella-capture-abi/src/generated/ubo_slots.r
 /// Path of the generated expression operator registry.
 const OPERATOR_OUTPUT: &str = "crates/tessella-style/src/generated/operators.rs";
 
+/// Where the Unicode block table lands.
+const BLOCK_OUTPUT: &str = "crates/tessella-glyph/src/generated/blocks.rs";
+
 /// One parsed C++ enumerator.
 struct Enumerator {
     name: String,
@@ -181,11 +184,20 @@ fn main() -> ExitCode {
         }
     };
 
+    let blocks = match generate_unicode_blocks(&mbgl).map(|text| rustfmt(&text)) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("{err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let out = workspace.join(OUTPUT);
     let shader_out = workspace.join(SHADER_OUTPUT);
     let ubo_out = workspace.join(UBO_OUTPUT);
     let slot_out = workspace.join(SLOT_OUTPUT);
     let operator_out = workspace.join(OPERATOR_OUTPUT);
+    let block_out = workspace.join(BLOCK_OUTPUT);
     if check {
         let mut stale = false;
         for (path, name, want) in [
@@ -194,6 +206,7 @@ fn main() -> ExitCode {
             (&ubo_out, UBO_OUTPUT, &ubos),
             (&slot_out, SLOT_OUTPUT, &slots),
             (&operator_out, OPERATOR_OUTPUT, &operators),
+            (&block_out, BLOCK_OUTPUT, &blocks),
         ] {
             let current = std::fs::read_to_string(path).unwrap_or_default();
             if current == *want {
@@ -210,7 +223,7 @@ fn main() -> ExitCode {
         };
     }
 
-    for path in [&out, &operator_out] {
+    for path in [&out, &operator_out, &block_out] {
         if let Some(parent) = path.parent()
             && let Err(err) = std::fs::create_dir_all(parent)
         {
@@ -224,6 +237,7 @@ fn main() -> ExitCode {
         (&ubo_out, UBO_OUTPUT, &ubos),
         (&slot_out, SLOT_OUTPUT, &slots),
         (&operator_out, OPERATOR_OUTPUT, &operators),
+        (&block_out, BLOCK_OUTPUT, &blocks),
     ] {
         if let Err(err) = std::fs::write(path, text) {
             eprintln!("writing {}: {err}", path.display());
@@ -1968,4 +1982,119 @@ fn parse_registry(text: &str, name: &str) -> Vec<String> {
         at += 1;
     }
     names
+}
+
+/// The Unicode blocks mbgl's `allowsIdeographicBreaking` consults, and their bounds.
+///
+/// Taken from `i18n.cpp`'s `DEFINE_IS_IN_UNICODE_BLOCK` table rather than from Blocks.txt, so
+/// that this agrees with the engine rather than with the standard — mbgl comments out the
+/// blocks it does not use, and a table built from the standard would silently include them.
+///
+/// Twenty ranges of four hex digits each is precisely the material that transcribes wrongly:
+/// a bound one out is a line break that appears in the wrong place for one script, in one
+/// language, and nowhere else.
+fn generate_unicode_blocks(mbgl: &Path) -> Result<String, String> {
+    let revision = tree_revision(mbgl);
+    let path = mbgl.join("src/mbgl/util/i18n.cpp");
+    let text = std::fs::read_to_string(&path)
+        .map_err(|err| format!("reading {}: {err}", path.display()))?;
+
+    // The blocks named by `allowsIdeographicBreaking`, which is the predicate that decides
+    // where a line may break without a space.
+    const IDEOGRAPHIC: &[&str] = &[
+        "Bopomofo",
+        "BopomofoExtended",
+        "CJKCompatibility",
+        "CJKCompatibilityForms",
+        "CJKCompatibilityIdeographs",
+        "CJKRadicalsSupplement",
+        "CJKStrokes",
+        "CJKSymbolsandPunctuation",
+        "CJKUnifiedIdeographs",
+        "CJKUnifiedIdeographsExtensionA",
+        "EnclosedCJKLettersandMonths",
+        "HalfwidthandFullwidthForms",
+        "Hiragana",
+        "IdeographicDescriptionCharacters",
+        "KangxiRadicals",
+        "Katakana",
+        "KatakanaPhoneticExtensions",
+        "VerticalForms",
+        "YiRadicals",
+        "YiSyllables",
+    ];
+
+    let mut found: Vec<(String, u32, u32)> = Vec::new();
+    for line in text.lines() {
+        let line = line.trim();
+        // Commented-out blocks are ones mbgl does not use; skip them exactly as it does.
+        if line.starts_with("//") {
+            continue;
+        }
+        let Some(rest) = line.strip_prefix("DEFINE_IS_IN_UNICODE_BLOCK(") else {
+            continue;
+        };
+        let Some(rest) = rest.split(')').next() else {
+            continue;
+        };
+        let parts: Vec<&str> = rest.split(',').map(str::trim).collect();
+        if parts.len() != 3 {
+            continue;
+        }
+        let name = parts[0].to_string();
+        if !IDEOGRAPHIC.contains(&name.as_str()) {
+            continue;
+        }
+        let parse = |value: &str| {
+            u32::from_str_radix(value.trim_start_matches("0x").trim_start_matches("0X"), 16)
+        };
+        match (parse(parts[1]), parse(parts[2])) {
+            (Ok(first), Ok(last)) => found.push((name, first, last)),
+            _ => return Err(format!("{}: could not read {rest}", path.display())),
+        }
+    }
+
+    let missing: Vec<&str> = IDEOGRAPHIC
+        .iter()
+        .copied()
+        .filter(|name| !found.iter().any(|(found, _, _)| found == name))
+        .collect();
+    if !missing.is_empty() {
+        return Err(format!(
+            "{}: no DEFINE_IS_IN_UNICODE_BLOCK for {missing:?} — has i18n.cpp changed shape, or \
+             has mbgl commented these out?",
+            path.display()
+        ));
+    }
+
+    found.sort_by_key(|(_, first, _)| *first);
+
+    let mut out = String::new();
+    out.push_str("//! Unicode blocks that permit a line break without a space, generated from\n");
+    out.push_str("//! maplibre-native.\n");
+    out.push_str("//!\n");
+    out.push_str(&format!("//! Source revision: {revision}\n"));
+    out.push_str("//!\n");
+    out.push_str(
+        "//! Taken from `i18n.cpp`'s own table rather than from Unicode's Blocks.txt: mbgl\n",
+    );
+    out.push_str(
+        "//! comments out the blocks it does not consult, and a table built from the standard\n",
+    );
+    out.push_str("//! would include them and break lines where mbgl does not.\n");
+    out.push_str("//!\n");
+    out.push_str("//! Generated by `cargo run -p mbgl-codegen`. Do not edit.\n\n");
+    out.push_str("/// A Unicode block, inclusive at both ends.\n");
+    out.push_str("pub type Block = (u32, u32);\n\n");
+    out.push_str("/// Every block `allowsIdeographicBreaking` consults, in codepoint order.\n");
+    out.push_str(&format!(
+        "pub const IDEOGRAPHIC_BLOCKS: [Block; {}] = [\n",
+        found.len()
+    ));
+    for (name, first, last) in &found {
+        out.push_str(&format!("    // {name}\n"));
+        out.push_str(&format!("    (0x{first:04X}, 0x{last:04X}),\n"));
+    }
+    out.push_str("];\n");
+    Ok(out)
 }
