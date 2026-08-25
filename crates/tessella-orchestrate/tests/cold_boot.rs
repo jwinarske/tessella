@@ -703,3 +703,73 @@ fn a_start_runs_on_the_process_pool() {
     .expect("boots again");
     assert_eq!(again.bytes, 0, "no network the second time");
 }
+
+/// Four sources cost one round trip to resolve, not four (§12.5).
+///
+/// A source described by a TileJSON URL has to be fetched before anything is known about what it
+/// offers, and those fetches sat one after another in front of the first tile request. They do
+/// not depend on each other. On a link where a round trip is 40 ms — which is an ordinary mobile
+/// connection, not a bad one — four sources was 160 ms of a cold start spent finding out what to
+/// ask for.
+#[test]
+fn sources_resolve_together_rather_than_in_turn() {
+    const DELAY: Duration = Duration::from_millis(40);
+
+    let manifest = |origin: &str| {
+        serde_json::to_vec(&serde_json::json!({
+            "tilejson": "2.2.0",
+            "tiles": [format!("{origin}/{{z}}/{{x}}/{{y}}.pbf")],
+            "minzoom": 0,
+            "maxzoom": 6,
+        }))
+        .expect("a manifest")
+    };
+
+    // Started first, then told what to serve: a TileJSON has to name the origin it is served
+    // from, and the port is not known until the socket is bound.
+    let server = tile_server::Server::start(tile_server::Routes::new()).expect("binds");
+    let origin = server.origin();
+    {
+        let mut routes = tile_server::Routes::new();
+        for name in ["a", "b", "c", "d"] {
+            routes = routes.at(
+                &format!("/{name}.json"),
+                "application/json",
+                manifest(&origin),
+            );
+        }
+        server.set_routes(routes.tiles(FIXTURE.to_vec(), Some((0, 6))));
+    }
+
+    let sources: String = ["a", "b", "c", "d"]
+        .iter()
+        .map(|name| format!(r#""{name}": {{"type": "vector", "url": "{origin}/{name}.json"}}"#))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let layers: String = ["a", "b", "c", "d"]
+        .iter()
+        .map(|name| {
+            format!(
+                r##"{{"id": "l{name}", "type": "fill", "source": "{name}",
+                      "source-layer": "water", "paint": {{"fill-color": "#3050c0"}}}}"##
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let text = format!(r#"{{"version": 8, "sources": {{{sources}}}, "layers": [{layers}]}}"#);
+
+    let files = Arc::new(Coalescing::new(Slow {
+        inner: HttpFileSource::default(),
+        delay: DELAY,
+    }));
+    let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
+    let started = boot(&text, &view(4.0), &files, &cache, Workers::new(4)).expect("boots");
+
+    // Four serial round trips would be 160 ms. One batch of four is one, plus scheduling.
+    let resolving = started.trace.sources_resolved - started.trace.style_parsed;
+    assert!(
+        resolving < DELAY * 3,
+        "four manifests took {resolving:?}, which is more than one round trip's worth"
+    );
+    assert!(!started.tiles.is_empty(), "and the cover still built");
+}

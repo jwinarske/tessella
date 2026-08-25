@@ -248,6 +248,14 @@ impl Default for Workers {
     }
 }
 
+/// What resolving one source produced.
+enum Resolved {
+    /// A tiled source's manifest.
+    Tiles(TileSet),
+    /// A GeoJSON document, already read into features.
+    Document(alloc::sync::Arc<Vec<GeoJsonFeature>>),
+}
+
 /// One tile's work, resolved before any of it is done.
 /// What a tile's work needs, which differs by source kind.
 ///
@@ -374,39 +382,80 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
     wanted.sort_unstable();
     wanted.dedup();
 
-    let mut sets: Vec<(String, TileSet)> = Vec::new();
-    let mut documents: Vec<(String, alloc::sync::Arc<Vec<GeoJsonFeature>>)> = Vec::new();
+    // Resolved together rather than one after another. A source described by a TileJSON URL
+    // costs a round trip to find out what it offers, and every one of those sat on the critical
+    // path in front of the first tile request — four sources on a 40 ms link was 160 ms before
+    // anything was asked for. They do not depend on each other, so §12.5's "issue the moment
+    // sources parse" starts here.
+    let resolved: Arc<Mutex<Vec<(String, Resolved)>>> = Arc::new(Mutex::new(Vec::new()));
+    let failure: Arc<Mutex<Option<BootError>>> = Arc::new(Mutex::new(None));
+    let batch = pool.batch(priority);
     for name in wanted {
-        match style.source(name) {
-            Some(Source::Vector(source)) => {
-                let set =
-                    tileset::resolve(source, files.inner()).map_err(|error| BootError::Source {
-                        name: name.to_string(),
-                        message: error.to_string(),
-                    })?;
-                sets.push((name.to_string(), set));
-            }
-            Some(Source::Geojson(source)) => {
+        let Some(source) = style.source(name).cloned() else {
+            continue;
+        };
+        let name = name.to_string();
+        let files = Arc::clone(files);
+        let resolved = Arc::clone(&resolved);
+        let failure = Arc::clone(&failure);
+        batch.submit(move || {
+            let outcome = match &source {
+                Source::Vector(source) => tileset::resolve(source, files.inner())
+                    .map(Resolved::Tiles)
+                    .map_err(|error| error.to_string()),
                 // One fetch for the whole document, or none at all if it is inline. The tiling
                 // is this side's, so there is nothing per-tile to ask for afterwards.
-                let document =
-                    tessella_storage::geojson::resolve(source, files.inner()).map_err(|error| {
-                        BootError::Source {
-                            name: name.to_string(),
-                            message: error.to_string(),
-                        }
-                    })?;
-                let features = tessella_source::geojson::read(&document).map_err(|error| {
-                    BootError::Source {
-                        name: name.to_string(),
-                        message: error.to_string(),
-                    }
-                })?;
-                documents.push((name.to_string(), alloc::sync::Arc::new(features)));
+                Source::Geojson(source) => {
+                    tessella_storage::geojson::resolve(source, files.inner())
+                        .map_err(|error| error.to_string())
+                        .and_then(|document| {
+                            tessella_source::geojson::read(&document)
+                                .map_err(|error| error.to_string())
+                        })
+                        .map(|features| Resolved::Document(alloc::sync::Arc::new(features)))
+                }
+                _ => return,
+            };
+            match outcome {
+                Ok(outcome) => resolved
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push((name, outcome)),
+                Err(message) => fail(&failure, BootError::Source { name, message }),
             }
-            _ => continue,
+        });
+    }
+    if let Err(panicked) = batch.wait() {
+        return Err(BootError::Panicked {
+            jobs: panicked.jobs,
+        });
+    }
+    if let Some(error) = failure
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
+    {
+        return Err(error);
+    }
+
+    let mut sets: Vec<(String, TileSet)> = Vec::new();
+    let mut documents: Vec<(String, alloc::sync::Arc<Vec<GeoJsonFeature>>)> = Vec::new();
+    {
+        let mut held = resolved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Sorted, because the order jobs finished in is whatever the scheduler decided and the
+        // cover below is built from these — a trace that reordered its tiles run to run would
+        // make two runs incomparable.
+        held.sort_by(|a, b| a.0.cmp(&b.0));
+        for (name, outcome) in held.drain(..) {
+            match outcome {
+                Resolved::Tiles(set) => sets.push((name, set)),
+                Resolved::Document(features) => documents.push((name, features)),
+            }
         }
     }
+
     let sources_resolved = started.elapsed();
 
     let cover = cover::cover(view).map_err(|_| BootError::Uncovered)?;

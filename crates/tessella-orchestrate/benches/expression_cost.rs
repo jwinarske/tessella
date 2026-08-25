@@ -270,11 +270,7 @@ fn main() {
 
     println!();
     println!("Allocations for one build:");
-    let features: usize = decoded
-        .layers
-        .iter()
-        .map(|layer| layer.len())
-        .sum();
+    let features: usize = decoded.layers.iter().map(|layer| layer.len()).sum();
     allocations("data-driven paint", features, || {
         let _ = build(&data_driven, &decoded, tile);
     });

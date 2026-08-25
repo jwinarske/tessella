@@ -511,6 +511,11 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   hundred thousand, so a finished download taxed every tile fetched afterwards; the count is
   flat at 150 us. Downloads are resumable rather than transactional, since a country at street
   zoom is hours over a connection that will drop.
+  §12.5's first piece lands: a style's sources resolve together rather than one after another. A
+  source given by TileJSON URL costs a round trip to learn what it offers, and those sat in
+  sequence in front of the first tile request — four sources on a link where a round trip is
+  40 ms was 160 ms of a cold start spent finding out what to ask for. They do not depend on each
+  other, so they go to the pool as one batch.
   Remaining: TLS and reading `.pmtiles`
   archives directly (both held for the cross toolchains, §16), cross-faded (pattern) binders,
   DR-11's bytecode VM — classification, constant folding and the direct evaluator are done and
