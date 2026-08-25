@@ -821,6 +821,21 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   common flicker. State is keyed by cross-tile id, so a label arriving in a new tile at a zoom
   crossing keeps the opacity it had — re-fading one that never left is exactly the symbol pop
   §13.3 asks for zero of.
+  The index that assigns those ids follows: mbgl's `CrossTileSymbolLayerIndex`. At a crossing
+  every tile is replaced by four children, and the label that was "Detroit" in the parent is a
+  different symbol instance in the child — different tile, different buffer, nothing saying it is
+  the same label. Matching is by text and by position rounded onto a four-pixel grid, since a
+  label does not land on the same coordinate at two zooms. The rounding is also the bound: two
+  genuinely distinct labels with the same text within four pixels become one, which is the right
+  trade, since two identical labels that close together are a data error and treating them as one
+  is nicer than blinking.
+  mbgl's `addBucket` fixture is reproduced id for id, and **four separate mutations survived
+  it** — dropping the tile origin from a position, dropping the rounding, letting a parent lend
+  one label to every child, and never releasing a removed tile's claims. The fixture is
+  degenerate in ways it never had to care about: perfectly aligned tiles, an offset of one tile
+  unit, and two children that never contend. Four tests were built to discriminate, which needed
+  a parent label placed exactly on the seam between two children before the lend-once guard is
+  reachable at all.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
