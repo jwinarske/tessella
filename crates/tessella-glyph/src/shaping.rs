@@ -43,6 +43,36 @@ pub struct Char {
     pub codepoint: u32,
     /// How far the pen moves for it, already scaled and spaced.
     pub advance: f32,
+    /// Whether there is a glyph to draw for it.
+    ///
+    /// False for a zero-width space and for any codepoint the font stack does not have. mbgl
+    /// expresses this by failing the glyph lookup and skipping the character; here the lookup
+    /// has already happened, so the outcome is carried. It is not the same as a zero advance —
+    /// a space has no glyph *and* an advance, and both facts matter.
+    pub drawable: bool,
+}
+
+impl Char {
+    /// A character with a glyph behind it.
+    #[must_use]
+    pub const fn new(codepoint: u32, advance: f32) -> Self {
+        Self {
+            codepoint,
+            advance,
+            drawable: true,
+        }
+    }
+
+    /// A character with an advance but nothing to draw — a space, or a codepoint the font
+    /// stack does not carry.
+    #[must_use]
+    pub const fn blank(codepoint: u32, advance: f32) -> Self {
+        Self {
+            codepoint,
+            advance,
+            drawable: false,
+        }
+    }
 }
 
 /// A break candidate and the cheapest path that reaches it.
@@ -219,4 +249,274 @@ pub fn split_lines(text: &[Char], max_width: f32) -> Vec<Vec<Char>> {
         lines.push(text.to_vec());
     }
     lines
+}
+
+/// Where a label sits relative to its anchor point.
+///
+/// mbgl's `SymbolAnchorType`. The name says which part of the label touches the anchor, so
+/// `Top` puts the label *below* the point.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Anchor {
+    /// Centred on the point.
+    #[default]
+    Center,
+    /// The label's left edge is at the point.
+    Left,
+    /// Its right edge.
+    Right,
+    /// Its top edge.
+    Top,
+    /// Its bottom edge.
+    Bottom,
+    /// Its top-left corner.
+    TopLeft,
+    /// Its top-right corner.
+    TopRight,
+    /// Its bottom-left corner.
+    BottomLeft,
+    /// Its bottom-right corner.
+    BottomRight,
+}
+
+impl Anchor {
+    /// How far along the label's width and height the anchor sits, each in 0..1.
+    #[must_use]
+    pub const fn alignment(self) -> (f32, f32) {
+        let horizontal = match self {
+            Self::Right | Self::TopRight | Self::BottomRight => 1.0,
+            Self::Left | Self::TopLeft | Self::BottomLeft => 0.0,
+            _ => 0.5,
+        };
+        let vertical = match self {
+            Self::Bottom | Self::BottomLeft | Self::BottomRight => 1.0,
+            Self::Top | Self::TopLeft | Self::TopRight => 0.0,
+            _ => 0.5,
+        };
+        (horizontal, vertical)
+    }
+
+    /// The justification a label takes when its style does not state one.
+    ///
+    /// mbgl's `getAnchorJustification`: text anchored on its left edge reads left-justified,
+    /// and the alternative — centring a left-anchored label — leaves it ragged on the side that
+    /// touches the point.
+    #[must_use]
+    pub const fn justification(self) -> Justify {
+        match self {
+            Self::Right | Self::TopRight | Self::BottomRight => Justify::Right,
+            Self::Left | Self::TopLeft | Self::BottomLeft => Justify::Left,
+            _ => Justify::Center,
+        }
+    }
+}
+
+/// How lines are aligned against each other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Justify {
+    /// Ragged right.
+    Left,
+    /// Ragged both.
+    #[default]
+    Center,
+    /// Ragged left.
+    Right,
+}
+
+impl Justify {
+    /// The factor mbgl multiplies a line's length by: left 0, centre a half, right 1.
+    const fn factor(self) -> f32 {
+        match self {
+            Self::Left => 0.0,
+            Self::Center => 0.5,
+            Self::Right => 1.0,
+        }
+    }
+}
+
+/// The baseline's offset from the top of a line box.
+///
+/// mbgl's `Shaping::yOffset`, and it is -17 for the same reason the border is 3: it is what the
+/// ecosystem's glyphs were encoded against.
+pub const Y_OFFSET: f32 = -17.0;
+
+/// One glyph, placed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PositionedGlyph {
+    /// Which glyph.
+    pub codepoint: u32,
+    /// Horizontal position, relative to the anchor.
+    pub x: f32,
+    /// Vertical position, relative to the anchor.
+    pub y: f32,
+}
+
+/// A shaped label: its glyphs in lines, and the box they occupy.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Shaping {
+    /// The lines, each a list of placed glyphs.
+    pub lines: Vec<Vec<PositionedGlyph>>,
+    /// Top of the bounding box, relative to the anchor.
+    pub top: f32,
+    /// Bottom of the bounding box.
+    pub bottom: f32,
+    /// Left of the bounding box.
+    pub left: f32,
+    /// Right of the bounding box.
+    pub right: f32,
+}
+
+impl Shaping {
+    /// Whether anything was placed.
+    ///
+    /// A label of nothing but zero-width spaces shapes into lines that hold no glyphs, which is
+    /// not the same as no lines: the lines still take vertical space, and mbgl's own test
+    /// asserts five of them.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.lines.iter().all(Vec::is_empty)
+    }
+}
+
+/// What a label is being shaped against.
+#[derive(Debug, Clone, Copy)]
+pub struct Options {
+    /// Wrap at this width, in the same units as the advances. Zero means never.
+    pub max_width: f32,
+    /// Distance between baselines.
+    pub line_height: f32,
+    /// Where the label sits relative to its point.
+    pub anchor: Anchor,
+    /// How the lines align against each other.
+    pub justify: Justify,
+    /// Extra tracking between characters.
+    pub spacing: f32,
+}
+
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            max_width: 0.0,
+            line_height: crate::text::ONE_EM,
+            anchor: Anchor::Center,
+            justify: Justify::Center,
+            spacing: 0.0,
+        }
+    }
+}
+
+/// Drops leading and trailing whitespace from a line.
+///
+/// A line that ends at a space keeps that space, and a line that starts after one begins with
+/// it. Neither is drawn, and leaving them in shifts the line by their width — which is exactly
+/// the amount a centred label would be off by.
+fn trim(line: &[Char]) -> &[Char] {
+    let start = line
+        .iter()
+        .position(|character| !text::is_whitespace(character.codepoint));
+    let Some(start) = start else {
+        return &line[..0];
+    };
+    let end = line
+        .iter()
+        .rposition(|character| !text::is_whitespace(character.codepoint))
+        .map_or(start, |index| index + 1);
+    &line[start..end]
+}
+
+/// Shifts a line so its justification lands where it should.
+///
+/// mbgl's `justifyLine`. The indent is the line's *drawn* extent times the justify factor, and
+/// the drawn extent includes the last glyph's advance — a right-justified line ends where its
+/// last glyph's pen ends, not where that glyph starts.
+fn justify_line(glyphs: &mut [PositionedGlyph], last_advance: f32, justify: f32) {
+    if justify == 0.0 {
+        return;
+    }
+    let Some(last) = glyphs.last() else {
+        return;
+    };
+    let indent = (last.x + last_advance) * justify;
+    for glyph in glyphs.iter_mut() {
+        glyph.x -= indent;
+    }
+}
+
+/// Lays a label out: breaks it into lines, places its glyphs, and aligns the result.
+///
+/// A transcription of mbgl's `shapeLines` for horizontal text in one font stack. Vertical
+/// writing, images in text and per-section scaling are not implemented; each of those changes
+/// the line's height as well as its width, and none has an oracle until R3 brings the sprite
+/// atlas.
+#[must_use]
+pub fn shape(text: &[Char], options: &Options) -> Shaping {
+    let justify = options.justify.factor();
+    let (horizontal_align, vertical_align) = options.anchor.alignment();
+
+    let mut shaping = Shaping::default();
+    let mut y = Y_OFFSET;
+    let mut max_line_length = 0.0f32;
+    let mut max_line_height = 0.0f32;
+
+    let broken = split_lines(text, options.max_width);
+    let line_count = broken.len();
+
+    for line in &broken {
+        let line = trim(line);
+        let mut glyphs: Vec<PositionedGlyph> = Vec::with_capacity(line.len());
+        let mut x = 0.0f32;
+        let mut last_advance = 0.0f32;
+
+        for character in line {
+            if character.drawable {
+                glyphs.push(PositionedGlyph {
+                    codepoint: character.codepoint,
+                    x,
+                    y,
+                });
+                last_advance = character.advance;
+            }
+            // A zero-advance glyph is a combining mark sitting on the one before it, and must
+            // not push the pen along or take the spacing.
+            if character.advance > 0.01 {
+                x += character.advance + options.spacing;
+            }
+        }
+
+        if !glyphs.is_empty() {
+            // The trailing spacing is not part of the line: it is the gap before a character
+            // that never came.
+            max_line_length = max_line_length.max(x - options.spacing);
+            justify_line(&mut glyphs, last_advance, justify);
+        }
+
+        y += options.line_height;
+        max_line_height = max_line_height.max(options.line_height);
+        shaping.lines.push(glyphs);
+    }
+
+    let height = y - Y_OFFSET;
+    let shift_x = (justify - horizontal_align) * max_line_length;
+    // With every line the same height the offset is a whole number of lines from the middle;
+    // the other branch is for lines that grew, which needs the per-section scaling this does
+    // not implement yet.
+    let shift_y = if (max_line_height - options.line_height).abs() > f32::EPSILON {
+        -height * vertical_align - Y_OFFSET
+    } else {
+        #[allow(clippy::cast_precision_loss)]
+        let lines = line_count as f32;
+        (-vertical_align * lines + 0.5) * options.line_height
+    };
+
+    for line in &mut shaping.lines {
+        for glyph in line.iter_mut() {
+            glyph.x += shift_x;
+            glyph.y += shift_y;
+        }
+    }
+
+    shaping.top = -vertical_align * height;
+    shaping.bottom = shaping.top + height;
+    shaping.left = -horizontal_align * max_line_length;
+    shaping.right = shaping.left + max_line_length;
+    shaping
 }

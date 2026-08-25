@@ -17,13 +17,14 @@ const CJK_ADVANCE: f32 = 21.0;
 /// advance of zero, which is what `getGlyphAdvance` returns for a glyph it does not hold.
 fn cjk(text: &str) -> Vec<Char> {
     text.chars()
-        .map(|character| Char {
-            codepoint: character as u32,
-            advance: if character == '\u{4e2d}' {
-                CJK_ADVANCE
+        .map(|character| {
+            if character == '\u{4e2d}' {
+                Char::new(character as u32, CJK_ADVANCE)
             } else {
-                0.0
-            },
+                // Only U+4E2D is in mbgl's glyph map for this test; everything else has no
+                // glyph and no advance.
+                Char::blank(character as u32, 0.0)
+            }
         })
         .collect()
 }
@@ -31,10 +32,7 @@ fn cjk(text: &str) -> Vec<Char> {
 /// Latin text with one advance per character, for the cases mbgl does not cover.
 fn latin(text: &str, advance: f32) -> Vec<Char> {
     text.chars()
-        .map(|character| Char {
-            codepoint: character as u32,
-            advance,
-        })
+        .map(|character| Char::new(character as u32, advance))
         .collect()
 }
 

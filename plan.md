@@ -747,6 +747,17 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   Three of the tests around it were vacuous — the parenthesis penalty, the short-last-line
   preference and the whitespace rule all survived being deleted — so the discriminating inputs
   were searched for rather than guessed at, and all five rules now fail when removed.
+  Laying the lines out follows: glyph positions, justification and anchor alignment, which is
+  mbgl's `shapeLines` for horizontal text in one font stack. The anchor names the part of the
+  label that touches the point, so it moves the box without changing its extent — a shaper whose
+  extent varied by anchor would make placement's collision box depend on where the label
+  happened to be anchored. Checked against `Shaping.ZWSP`'s four bounding boxes, which between
+  them pin the line count, the line height, the widest line and the anchor's effect on all of
+  it. Vertical writing, images in text and per-section scaling are not implemented: each changes
+  a line's height as well as its width, and none has an oracle here until R3 brings the sprite
+  atlas. Three more tests were vacuous for want of a case — every one used zero spacing and no
+  leading whitespace — so the trailing-spacing rule, the final advance in justification and the
+  line trim all survived deletion until inputs that separate them were added.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
