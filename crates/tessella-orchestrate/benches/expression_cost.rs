@@ -52,7 +52,71 @@
 //!
 //! Dependency-free and percentile-reporting for the reasons `four_view_sweep` gives.
 
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+
+/// Counts allocations, so "how much churn is left" is a number rather than a grep.
+///
+/// Two of this session's wins in the build path were allocations nobody had counted — a key
+/// string cloned twice per `get`, and three vectors per feature in the binder.
+///
+/// # Why the counting is switched off for the timed sections
+///
+/// Two atomic read-modify-writes on every allocation are not free, and they are least free
+/// exactly where allocation is the thing under test: with the counter unconditionally on, the
+/// `literal string` case read 12 ns against its true 7, because the `String` clone it exists to
+/// show now carried the counter as well. A benchmark that changes what it measures in
+/// proportion to what it is measuring is worse than no benchmark. The flag is checked instead,
+/// which is a predictable branch and stays off for every timed run.
+struct Counting;
+
+static ALLOCATIONS: AtomicU64 = AtomicU64::new(0);
+static BYTES: AtomicU64 = AtomicU64::new(0);
+static COUNTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+// SAFETY: every method forwards to `System` unchanged; the counters are the only addition and
+// they touch no allocator state.
+unsafe impl GlobalAlloc for Counting {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        if COUNTING.load(Ordering::Relaxed) {
+            ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+            BYTES.fetch_add(layout.size() as u64, Ordering::Relaxed);
+        }
+        unsafe { System.alloc(layout) }
+    }
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        unsafe { System.dealloc(ptr, layout) };
+    }
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        if COUNTING.load(Ordering::Relaxed) {
+            ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+            BYTES.fetch_add(new_size as u64, Ordering::Relaxed);
+        }
+        unsafe { System.realloc(ptr, layout, new_size) }
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: Counting = Counting;
+
+/// Runs `body` once and reports what it allocated.
+fn allocations(label: &str, features: usize, mut body: impl FnMut()) {
+    let before = (
+        ALLOCATIONS.load(Ordering::Relaxed),
+        BYTES.load(Ordering::Relaxed),
+    );
+    COUNTING.store(true, Ordering::Relaxed);
+    body();
+    COUNTING.store(false, Ordering::Relaxed);
+    let count = ALLOCATIONS.load(Ordering::Relaxed) - before.0;
+    let bytes = BYTES.load(Ordering::Relaxed) - before.1;
+    println!(
+        "  {label:<26} {count:>9} allocations  {:>7} KiB  {:>5.1} per feature",
+        bytes / 1024,
+        count as f64 / features as f64
+    );
+}
 
 use tessella_source::mvt;
 use tessella_style::Style;
@@ -152,6 +216,20 @@ fn main() {
     time("constant paint", || build(&constant, &decoded, tile));
 
     let _ = LIVE;
+
+    println!();
+    println!("Allocations for one build:");
+    let features: usize = decoded
+        .layers
+        .iter()
+        .map(|layer| layer.features.len())
+        .sum();
+    allocations("data-driven paint", features, || {
+        let _ = build(&data_driven, &decoded, tile);
+    });
+    allocations("constant paint", features, || {
+        let _ = build(&constant, &decoded, tile);
+    });
 
     println!();
     println!("One expression, evaluated once per feature over the same 17154:");

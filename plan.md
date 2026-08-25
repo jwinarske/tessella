@@ -727,7 +727,12 @@ is the larger part. What remains at 12 ns is the walk
 itself: recursive non-inlined `evaluate` calls returning a 40-byte
 `Result<Value, EvaluationError>` by memory to carry what is nearly always an 8-byte `f64`, plus
 the wrapping and the drops on the way back. The VM's target is the walk, not the data access.
-`benches/expression_cost.rs` holds the measurement.
+`benches/expression_cost.rs` holds the measurement, and counts allocations as well as timing:
+a build with data-driven paint does 99 231 of them and one with constant paint 75 045, so the
+data-driven surcharge is about 24 000 — roughly one per feature, most of it colour literals,
+which arrive as `Value::String` cloned per feature and are then hex-parsed per feature in
+`encode`. The 75 045 that remain are decode and tessellation, four and a half per feature before
+any expression is involved at all, and the larger absolute target of the two.
 
 - **Strict classification at compile time.** Constant → folded at style parse. Camera-only →
   evaluated once per (layer, integer-zoom interval), process-wide, cached as interpolation
