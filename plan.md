@@ -784,12 +784,20 @@ What is left, by instruction share: the inlined decode body at 53 %, the packed 
 feature still owns — its properties, its points and its ring ends — which one buffer per *layer*
 with features holding ranges into it would take to nothing amortised.
 
-SIMD is a candidate but not the next one. The simd-json approach does not port: it finds
-structural characters in parallel, and protobuf has none — a field's position depends on decoding
-the one before it. What does port is Masked VByte over the *packed* runs, which is exactly what
-MVT geometry commands and tags are, and which published results put at 2–3x on that portion. At
-27 % of instructions that is worth perhaps a tenth overall, against three code paths — x86, NEON
-and scalar — since `std::simd` is nightly and DR-17 pins the toolchain. 
+**SIMD: deferred, with the analysis kept so it need not be redone.** The simd-json approach does
+not port — it finds structural characters in parallel and protobuf has none, a field's position
+depending on decoding the one before it. What does port is Masked VByte over the *packed* runs,
+which is exactly what MVT geometry commands and tags are, and which published results put at
+2–3x on that portion. The packed reader is 27 % of instructions, so that is worth perhaps a tenth
+overall.
+
+Not taken, for now. It buys one tenth against three code paths — x86, NEON and scalar — because
+`std::simd` is nightly and DR-17 pins the toolchain, and riscv64 vector support is not somewhere
+to be relying on (§16). The decoder is already at half of mbgl's instruction count, which is the
+bar this was chasing, and the same effort spent on symbols or the startup path buys more than a
+tenth of a decode. Revisit if a profile on the RK3566 lane says decode is the thing missing a
+budget — the argument above is what to pick up, and the standalone callgrind comparison in
+`crates/tessella-source/benches/decode.rs` is how to tell whether it worked. 
 
 `benches/expression_cost.rs` holds the rest of the measurement, against the zoom-10 tile
 `benchmark/parse/vector_tile.benchmark.cpp` decodes in mbgl's own `Parse_VectorTile` — so the
