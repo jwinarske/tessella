@@ -54,6 +54,7 @@ pub mod order;
 pub mod pool;
 pub mod stencil;
 pub mod sweep;
+pub mod symbols;
 pub mod texture;
 pub mod tile;
 pub mod ubo;

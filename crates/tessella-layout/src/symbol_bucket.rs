@@ -287,10 +287,17 @@ impl Default for SymbolOptions {
 pub struct LaidOut {
     /// Where it is anchored, in tile units.
     pub anchor: (f32, f32),
-    /// The extent it occupies around that anchor, in pixels.
+    /// The extent it occupies around that anchor, in pixels: top, bottom, left, right.
     pub extent: (f32, f32, f32, f32),
     /// How many glyphs it drew.
     pub glyphs: usize,
+    /// Which vertices of the shared buffer are this label's.
+    ///
+    /// A layer's labels share one buffer, so per-frame state — the opacity a fade produced, the
+    /// position placement chose — has to be written into a *slice* of it. Without the range a
+    /// caller would have to re-derive it from glyph counts, which is the kind of arithmetic that
+    /// is right until one label draws fewer glyphs than its text has characters.
+    pub vertices: core::ops::Range<usize>,
 }
 
 /// Lays out a layer's labels into one tile's buffers.
@@ -382,6 +389,7 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
             anchor: label.anchor,
             extent: (shaping.top, shaping.bottom, shaping.left, shaping.right),
             glyphs: buffers.glyphs() - before,
+            vertices: before * 4..buffers.vertices.len(),
         });
     }
 

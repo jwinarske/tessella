@@ -917,6 +917,17 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   `vertices × stride` bytes with the last vertex inside it. One segment, which is what the
   capture shows and what a layer sharing one buffer implies. `Encoded` grew decoded accessors on
   the way — three existing tests were hand-decoding spans out of the payload.
+  The two halves then join: `ViewSymbols::frame` runs per view per frame — project the anchors,
+  compete for space, advance the fades — and writes the result back into the two per-frame
+  buffers. Layout runs once per tile and is shared (§5.1); this is the per-view cost centre §5.2
+  names. The projection is the caller's, because placement happens in screen space and the
+  camera is per view: the same two labels collide at z5 and not at z14, and on a phone and not
+  on a wall display, which is asserted as behaviour rather than described. A label's per-frame
+  state is written into the slice of the shared buffer that layout recorded for it, since a
+  layer's labels share one buffer and a range that is off writes one label's opacity over its
+  neighbour's — which draws as a label that will not fade, and errors nowhere. Fades stay keyed
+  by cross-tile id rather than by buffer position, so a tile rebuilt at a crossing does not
+  re-fade the labels that never moved.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
