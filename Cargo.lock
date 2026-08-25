@@ -1051,6 +1051,7 @@ dependencies = [
  "libm",
  "rustybuzz",
  "serde_json",
+ "tessella-capture-abi",
  "tessella-glyph",
  "tessella-style",
  "tessella-tile",

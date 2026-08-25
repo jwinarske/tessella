@@ -869,6 +869,16 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   before a box is built. The cross-tile index stays in tile coordinates, and that is right for
   the opposite reason: identity is about where a label is on the ground, and the ground does not
   move when the camera does. With the projection in, 32 of 75 place at z5.
+  Symbol vertices land last: mbgl's `layoutVertex`, in the byte layout `SymbolIconShader`
+  declares. The anchor and the corner offset share one `Short4` because some devices allow only
+  eight vertex attributes — mbgl says so in a comment, and it is why the packing looks arbitrary.
+  Everything is fixed point at three different scales: the corner offset in 1/32 of a pixel, the
+  pixel offset in 1/16, the minimum font scale in 1/256, each the precision that term needs
+  against the range it covers. Confusing two is a silent power of two — a label in the right
+  place at the wrong size. The size carries `isSDF` in the low bit it vacates when shifted, which
+  is why sizes cap at 255: `255 * 128 << 1` is the largest that still fits a `u16`. The
+  attributes being filled are checked against the generated table, so an upstream layout change
+  fails the build rather than quietly producing vertices the shader no longer reads.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
