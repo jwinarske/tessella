@@ -6,8 +6,10 @@
 //! geometry decoded straight into the slab arena, and no intermediate feature
 //! materialization for layers that never read properties.
 //!
-//! Status: GeoJSON features read from inline style data. MVT decode, clustering, and the
-//! network path are not implemented.
+//! Status: GeoJSON features read from inline style data or a URL, and MVT tiles decode — the
+//! decoder is checked against the spec's conformance fixtures and benchmarked against the tile
+//! maplibre-native benchmarks, where it runs at about half the instruction count. The network
+//! path lives in `tessella-storage`. Clustering is not implemented.
 
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), no_std)]

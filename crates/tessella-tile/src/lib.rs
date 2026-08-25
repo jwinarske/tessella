@@ -11,9 +11,10 @@
 //! Cover decisions are per view; the store beneath them is not (§5.5). Watch R-11: unified
 //! retain lets one view's zoom behavior inflate another's tile lifetimes.
 //!
-//! Status: the Mercator projection, the process-scoped tile store with refcounted retain, and
-//! cover computation for unpitched views. Pitched cover and the retain-chain machinery of
-//! §13.2 are not implemented.
+//! Status: the Mercator projection, the process-scoped tile store with refcounted retain, cover
+//! computation for unpitched views — by rectangle or by arbitrary shape, the latter a port of
+//! mbgl's scanline — and the boundary hysteresis of §13.2. Pitched cover and the rest of §13.2's
+//! retain-chain machinery are not implemented.
 
 //! # This crate uses std, deliberately
 //!

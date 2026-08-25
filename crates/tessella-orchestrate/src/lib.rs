@@ -17,9 +17,13 @@
 //! orchestrator does not run a frame for a view whose transform is unchanged and whose
 //! sources report no churn (§6.5).
 //!
-//! Status: one tile's buckets build from a style and its features, encode into geometry
-//! envelopes on the ring, and are gated by damage so a parked view emits nothing. Draw order
-//! and UBO packing are not implemented.
+//! Status: R1's exit criterion is met. Tiles build from a style and its features, encode into
+//! geometry envelopes on the ring, and are gated by damage so a parked view emits nothing; draw
+//! order, the camera block and every uniform buffer match the oracle on a real style as well as
+//! on the hermetic one. The process-scoped worker pool of §5.4 exists with its three priority
+//! classes, and the cold start runs on it. Not implemented: symbols and their placement (R2),
+//! patterns and raster (R3), and the predictive pre-warm and acknowledged never-blank of §13.2,
+//! which need the reverse channel to carry zoom velocity and consumer acknowledgement.
 
 // Not `forbid`: `emit` reinterprets `#[repr(C)]` envelope records as bytes to put them on the
 // ring, which is the one thing this crate does that cannot be expressed safely. Everything

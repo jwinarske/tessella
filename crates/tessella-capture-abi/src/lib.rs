@@ -41,8 +41,11 @@
 //! which return `None` for anything unrecognized. Never `transmute` a discriminant, and
 //! never `as`-cast one into an enum.
 //!
-//! Status: envelope records, the mbgl mirrors, the ring, coalescing, the reverse channel, and
-//! the generated C header are in. What remains for R0 is a producer that emits through them.
+//! Status: complete for R0 and R1. Envelope records, the mbgl mirrors, the ring, coalescing,
+//! the reverse channel and the generated C header are in, and a producer emits through them —
+//! the whole stream is diffed against the oracle on both the hermetic style and a real one. The
+//! ABI froze at R0 exit: struct shape, atomics, mode-bit positions and conventions are fixed,
+//! while field additions to existing envelopes stay open for R2.
 
 // Not `forbid(unsafe_code)`: the ring and the `#[repr(C)]` envelope mirrors need it. Every
 // other crate in the workspace forbids it outright.

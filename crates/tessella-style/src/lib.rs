@@ -15,10 +15,10 @@
 //!
 //! Conformance is the style-spec expression test corpus plus the §9.1 oracle diff (R-3).
 //!
-//! Status: the style document parses; expressions parse, classify and evaluate; filters
-//! compile in both syntaxes; and paint and layout properties resolve against the R0 layer
-//! types with their binding decided. The bytecode VM (R1) and the layer types beyond
-//! background and fill are not implemented.
+//! Status: the style document parses; expressions parse, classify and evaluate; filters compile
+//! in both syntaxes; and paint and layout properties resolve for background, fill, line and
+//! circle with their binding decided. DR-11's bytecode VM was built and measured slower than the
+//! walk it replaced — §12.1 records why, and what has to come first. Symbol layers are R2.
 
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), no_std)]
