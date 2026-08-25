@@ -45,10 +45,17 @@
 //! `Result<Value, EvaluationError>` by memory, to carry what is nearly always an 8-byte `f64`,
 //! plus the `Option`/`Result` wrapping and the drops on the way back out.
 //!
-//! That is what DR-11's bytecode VM has to fix, and it is a claim about the walk rather than
-//! about any one part of it. An earlier reading of these numbers named the 40-byte `Result` as
-//! *the* cause; that was inference from a lookup cost nobody had measured, and measuring it at
-//! 2 ns is what made the rest attributable.
+//! That was taken as DR-11's bytecode VM's target. Building one showed it is not: a flat
+//! evaluator over an operand stack of `Value` measured slower than the walk at every frame size,
+//! because `Value` has a destructor and a frame is therefore initialised and dropped per
+//! evaluation — `get` at 46, 22, 17 and 14 ns for frames of 32, 8, 4 and 2 slots, against the
+//! walk's 9. The walk is not slow because it recurses; it is slow because of what it moves, and
+//! a stack moves the same things. §12.1 records the conclusion: a compact `Copy` value comes
+//! before any VM.
+//!
+//! An earlier reading of these numbers named the 40-byte `Result` as *the* cause; that was
+//! inference from a lookup cost nobody had measured, and measuring it at 2 ns is what made the
+//! rest attributable.
 //!
 //! Dependency-free and percentile-reporting for the reasons `four_view_sweep` gives.
 

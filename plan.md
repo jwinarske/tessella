@@ -743,7 +743,23 @@ before any expression is involved at all, and the larger absolute target of the 
   re-walks per frame per map). Data-driven → per feature at build, never per frame.
 - **Bytecode VM for the data-driven residue.** Flat bytecode, no virtual dispatch, no
   per-eval allocation. JIT (cranelift-class) rejected for embedded code size; bytecode gets
-  ~80% of it.
+  ~80% of it. **Tried, and it lost.** A flat evaluator with an operand stack of `Value` —
+  compiling `get`/`has`/`match`/`case`/`coalesce`/comparison/arithmetic, leaving zoom curves to
+  the walk so their shape stays readable — measured *slower* than the tree at every size: `get`
+  46 ns against the walk's 9, `match` 60 against 20, the build 7.9 ms against 5.6.
+
+  The cost was the operand frame. `Value` is 32 bytes and has a destructor, so a fixed frame is
+  initialised and dropped on every evaluation: `get` measured 46, 22, 17 and 14 ns for frames of
+  32, 8, 4 and 2 slots — about 1.3 ns a slot — which puts a *free* frame at roughly 10 ns,
+  still no better than the walk. The walk is not slow because it recurses; it is slow because of
+  what it moves, and a VM moves the same things through a stack instead of through returns.
+
+  So the prerequisite is not the VM. It is a runtime value that is `Copy`, has no destructor and
+  fits in a register pair — a compact representation with strings and objects interned or boxed
+  behind an index. With that, a frame costs nothing to set up and stack traffic is register
+  moves; without it, flattening the walk buys nothing. That ordering is the correction: DR-11
+  schedules the VM and does not mention the value representation, and the representation is the
+  part that decides whether the VM can win at all.
 - **Columnar evaluation.** One expression batched across a tile's feature array rather than
   expressions interleaved per feature — cache-resident program, SIMD-ready arithmetic.
 
@@ -901,6 +917,10 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
 - **DR-11 Expression classification + bytecode VM.** Constant folded at parse; camera-only
   evaluated once per (layer, zoom interval) process-wide; data-driven compiled to flat
   bytecode, evaluated columnar per tile. JIT rejected for embedded code size (§12.1).
+  *Amended:* classification, folding and the direct evaluator are done; the VM was built and
+  measured slower than the walk it replaced, because `Value` has a destructor and an operand
+  frame therefore is not free. A compact `Copy` runtime value comes first — §12.1 has the
+  numbers.
 - **DR-12 Build posture.** panic=abort, fat LTO, opt-level=s on non-hot crates, dyn boundary
   at style parse; binary size tracked per target in CI (§12.9).
 - **DR-13 Consumer-neutral ABI, proved by two mirrors.** The stream must contain nothing
