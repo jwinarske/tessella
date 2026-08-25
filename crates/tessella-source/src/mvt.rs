@@ -544,6 +544,11 @@ fn decode_geometry(commands: &[u32], layer: &str) -> Result<Geometry, MvtError> 
     };
 
     let mut out = Geometry::default();
+    // Once, from the command stream's own length, rather than per ring. A point costs at least
+    // two varints of at least one byte each, so this bounds the count — and reserving per
+    // `MoveTo` instead means a feature of eighteen rings reallocates its buffers eighteen times
+    // on the way up.
+    out.reserve(commands.len() / 2, 4);
     let (mut x, mut y) = (0i32, 0i32);
     let mut index = 0;
 
@@ -559,9 +564,6 @@ fn decode_geometry(commands: &[u32], layer: &str) -> Result<Geometry, MvtError> 
                 if id == 1 {
                     out.close_ring();
                 }
-                // The command header carries how many points follow, so the buffer grows once
-                // rather than doubling into place.
-                out.reserve(count, 1);
                 if id == 2 && out.open().is_empty() {
                     return Err(malformed("LineTo before any MoveTo"));
                 }
