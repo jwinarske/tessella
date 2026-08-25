@@ -536,7 +536,7 @@ mod through_the_builder {
     }
 
     /// Builds every tile the golden names, in the golden's order.
-    fn built() -> Vec<(Golden, tessella_layout::symbol_layout::SymbolLayout)> {
+    pub(super) fn built() -> Vec<(Golden, tessella_layout::symbol_layout::SymbolLayout)> {
         let style = style();
         let features = features();
         golden_symbols()
@@ -565,7 +565,9 @@ mod through_the_builder {
     }
 
     /// A store with every tile's declared glyphs fetched from the style's own `glyphs` URL.
-    fn fonts(layouts: &[(Golden, tessella_layout::symbol_layout::SymbolLayout)]) -> Fonts {
+    pub(super) fn fonts(
+        layouts: &[(Golden, tessella_layout::symbol_layout::SymbolLayout)],
+    ) -> Fonts {
         let url = style().glyphs.clone().expect("the style names a glyph URL");
         let mut fonts = Fonts::new(url);
 
@@ -677,5 +679,119 @@ mod through_the_builder {
                 symbol.tile
             );
         }
+    }
+}
+
+/// The glyph atlas reaches the stream as the texture the oracle describes.
+///
+/// `symbol_style.dump` lists three textures where the hermetic style lists two: mbgl's `0x0`
+/// pattern placeholder, its `1x1` transparent image, and the glyph atlas at `512x512 fmt=1`.
+/// The atlas hash is elided because its packing order is not deterministic — the dimensions and
+/// the format are not, and they are on the wire.
+mod atlas_texture {
+    use super::through_the_builder::{built, fonts};
+
+    use tessella_capture_abi::TexturePixelType;
+    use tessella_capture_abi::envelope::TextureId;
+    use tessella_glyph::fonts::ATLAS_SIZE;
+    use tessella_orchestrate::texture;
+
+    const DUMP: &str = include_str!("../../../tests/golden/symbol_style.dump");
+
+    /// The `WxH fmt=N` the golden lists for the atlas.
+    fn golden_atlas() -> (u32, u32, u8) {
+        let line = DUMP
+            .lines()
+            .filter(|line| line.starts_with("texture "))
+            // The two placeholders are 0x0 and 1x1; the atlas is the one with area.
+            .find(|line| !line.contains(" 0x0 ") && !line.contains(" 1x1 "))
+            .expect("the symbol capture has a glyph atlas");
+
+        let mut parts = line.split_whitespace().skip(1);
+        let size = parts.next().expect("dimensions");
+        let (width, height) = size.split_once('x').expect("WxH");
+        let format = line
+            .split_whitespace()
+            .find_map(|token| token.strip_prefix("fmt="))
+            .expect("a format")
+            .parse()
+            .expect("a number");
+        (
+            width.parse().expect("a number"),
+            height.parse().expect("a number"),
+            format,
+        )
+    }
+
+    /// The oracle lists three textures, and only the symbol capture does.
+    #[test]
+    fn the_symbol_capture_adds_a_texture() {
+        let count: usize = DUMP
+            .lines()
+            .find_map(|line| line.strip_prefix("textures "))
+            .expect("a texture count")
+            .parse()
+            .expect("a number");
+        assert_eq!(count, 3, "two placeholders and the glyph atlas");
+    }
+
+    /// This build's atlas is the size and format the oracle's is.
+    ///
+    /// The size is not a free choice: it is on the wire, and a consumer sizing its allocation
+    /// from the first upload gets a different texture from the one the oracle describes. It was
+    /// picked as 2048 on a hunch before this test existed, and the oracle says 512.
+    #[test]
+    fn the_atlas_matches_the_oracle_s_texture() {
+        let (width, height, format) = golden_atlas();
+        assert_eq!((ATLAS_SIZE, ATLAS_SIZE), (width, height));
+        assert_eq!(
+            texture::GLYPH_ATLAS_FORMAT,
+            TexturePixelType::from_repr(format).expect("a known format")
+        );
+        assert_eq!(
+            texture::GLYPH_ATLAS_FORMAT,
+            TexturePixelType::Alpha,
+            "the largest texture the process keeps is single-channel (12.4)"
+        );
+    }
+
+    /// A tile's glyphs produce an upload of that texture, and only once.
+    ///
+    /// The second half is §6.5: a settled view emits nothing. Re-uploading a quarter of a
+    /// megabyte of unchanged glyphs every frame would make a still map the most expensive one.
+    #[test]
+    fn packing_uploads_and_settling_does_not() {
+        let layouts = built();
+        let mut fonts = fonts(&layouts);
+
+        let stack = vec!["TestFont".to_string()];
+        let dirty = fonts.take_dirty(&stack);
+        assert!(!dirty.is_empty(), "packing the labels dirtied nothing");
+
+        let atlas = fonts.atlas(&stack).expect("an atlas");
+        let upload = texture::glyph_atlas(TextureId(1), atlas, &dirty).expect("an upload");
+        assert_eq!(upload.record.size.width, ATLAS_SIZE);
+        assert_eq!(upload.record.size.height, ATLAS_SIZE);
+        assert_eq!(upload.record.format, texture::GLYPH_ATLAS_FORMAT as u8);
+
+        // Every dirty rectangle is inside the texture it belongs to.
+        for rect in &upload.record.rects[..upload.record.rect_count as usize] {
+            assert!(
+                u32::from(rect.x) + u32::from(rect.w) <= ATLAS_SIZE,
+                "{rect:?} runs off the atlas"
+            );
+            assert!(
+                u32::from(rect.y) + u32::from(rect.h) <= ATLAS_SIZE,
+                "{rect:?}"
+            );
+        }
+
+        // Nothing moved since, so nothing is owed.
+        let settled = fonts.take_dirty(&stack);
+        let atlas = fonts.atlas(&stack).expect("an atlas");
+        assert!(
+            texture::glyph_atlas(TextureId(1), atlas, &settled).is_none(),
+            "a settled atlas still emitted an upload"
+        );
     }
 }

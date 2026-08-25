@@ -165,6 +165,80 @@ pub fn write(producer: &mut Producer, upload: &Upload) -> Result<(), Full> {
     )
 }
 
+/// The pixel format a glyph atlas is uploaded in.
+///
+/// Alpha, not RGBA. §12.4's point: this is the largest texture the process keeps, and three of
+/// four channels would hold copies of the one that matters. The oracle agrees — the symbol
+/// capture's atlas is `fmt=1`.
+pub const GLYPH_ATLAS_FORMAT: TexturePixelType = TexturePixelType::Alpha;
+
+/// The upload for a glyph atlas, carrying only what changed since the last one.
+///
+/// `dirty` is what [`Fonts::take_dirty`] returned. Empty means nothing moved and there is
+/// nothing to send — which is the common case once a view settles, and is why this answers
+/// `None` rather than a whole-texture upload: §6.5's still frame is a frame with no envelopes in
+/// it, and re-uploading a megabyte of unchanged glyphs every frame would make a settled map the
+/// most expensive one.
+///
+/// Past [`TEXTURE_RECT_CAP`] the rects collapse to their union, which costs bandwidth and never
+/// pixels.
+///
+/// [`Fonts::take_dirty`]: tessella_glyph::fonts::Fonts::take_dirty
+#[must_use]
+pub fn glyph_atlas(
+    texture: TextureId,
+    atlas: &tessella_glyph::atlas::Atlas,
+    dirty: &[tessella_glyph::atlas::Rect],
+) -> Option<Upload> {
+    if dirty.is_empty() {
+        return None;
+    }
+
+    let (width, height) = atlas.size();
+    let size = Extent { width, height };
+
+    // The atlas measures in `u32` and the envelope in `u16`. The atlas is 512 square, so the
+    // narrowing cannot lose a coordinate — and it is bounded rather than cast, because an atlas
+    // grown past a `u16` would otherwise wrap a rectangle onto the wrong pixels silently.
+    let narrow = |value: u32| -> u16 { u16::try_from(value).unwrap_or(u16::MAX) };
+    let rects: Vec<Rect16> = dirty
+        .iter()
+        .map(|rect| Rect16 {
+            x: narrow(rect.x),
+            y: narrow(rect.y),
+            w: narrow(rect.width),
+            h: narrow(rect.height),
+        })
+        .collect();
+
+    // The whole image goes with it: the rects say which parts the consumer must re-read, and
+    // the pixels behind them are read out of the atlas at those coordinates. Sending only the
+    // rect pixels would need a packing the envelope does not describe.
+    Some(
+        regions(texture, size, GLYPH_ATLAS_FORMAT, &rects, atlas.pixels()).unwrap_or_else(|_| {
+            // Past the cap: one rect covering everything that changed. Lossy in bandwidth and
+            // not in pixels — the union is a superset of what moved.
+            let union = union_of(&rects);
+            regions(texture, size, GLYPH_ATLAS_FORMAT, &[union], atlas.pixels())
+                .expect("one rect is inside any cap")
+        }),
+    )
+}
+
+/// The smallest rectangle containing all of these.
+fn union_of(rects: &[Rect16]) -> Rect16 {
+    let min_x = rects.iter().map(|rect| rect.x).min().unwrap_or(0);
+    let min_y = rects.iter().map(|rect| rect.y).min().unwrap_or(0);
+    let max_x = rects.iter().map(|rect| rect.x + rect.w).max().unwrap_or(0);
+    let max_y = rects.iter().map(|rect| rect.y + rect.h).max().unwrap_or(0);
+    Rect16 {
+        x: min_x,
+        y: min_y,
+        w: max_x - min_x,
+        h: max_y - min_y,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

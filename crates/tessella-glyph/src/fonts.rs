@@ -36,10 +36,15 @@ use crate::pbf::Metrics;
 
 /// The width and height of a glyph atlas.
 ///
-/// mbgl's `GlyphAtlas` grows; this does not. A fixed page keeps the texture upload a fixed cost
-/// and the rectangle stable once packed, and 2048 square at a three-pixel border holds several
-/// thousand glyphs — more than a Latin style's whole repertoire.
-pub const ATLAS_SIZE: u32 = 2048;
+/// Five hundred and twelve, because that is what the oracle emits: `symbol_style.dump` lists a
+/// `512x512 fmt=1` texture beside mbgl's two placeholders. A fixed page rather than one that
+/// grows — growing a texture the consumer has already uploaded would invalidate every rectangle
+/// handed out for it, so mbgl opens another texture when one fills instead, which is the note
+/// `ShelfPack` carries.
+///
+/// It is not a number to change on a hunch: it is on the wire, and a consumer sizing its
+/// allocation from the first upload gets a different texture from the one the oracle describes.
+pub const ATLAS_SIZE: u32 = 512;
 
 /// What a set of layouts needs, per font stack.
 ///
