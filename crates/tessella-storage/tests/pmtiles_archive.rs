@@ -24,16 +24,16 @@ fn archive_path() -> Option<std::path::PathBuf> {
 fn tile_ids_match_the_reference() {
     // The spec's own worked examples: the single tile at zoom 0, then the four at zoom 1 in
     // Hilbert rather than raster order.
-    assert_eq!(tile_id(0, 0, 0), 0);
-    assert_eq!(tile_id(1, 0, 0), 1);
-    assert_eq!(tile_id(1, 0, 1), 2);
-    assert_eq!(tile_id(1, 1, 1), 3);
-    assert_eq!(tile_id(1, 1, 0), 4);
+    assert_eq!(tile_id(0, 0, 0), Some(0));
+    assert_eq!(tile_id(1, 0, 0), Some(1));
+    assert_eq!(tile_id(1, 0, 1), Some(2));
+    assert_eq!(tile_id(1, 1, 1), Some(3));
+    assert_eq!(tile_id(1, 1, 0), Some(4));
 
     // Zoom 2 begins after zoom 0 and 1, so after 1 + 4 tiles.
-    assert_eq!(tile_id(2, 0, 0), 5);
+    assert_eq!(tile_id(2, 0, 0), Some(5));
     // And zoom 3 after 1 + 4 + 16.
-    assert_eq!(tile_id(3, 0, 0), 21);
+    assert_eq!(tile_id(3, 0, 0), Some(21));
 }
 
 /// Every tile of a level has a distinct id, and they fill the level's range exactly.
@@ -44,11 +44,11 @@ fn tile_ids_match_the_reference() {
 fn a_level_is_a_permutation_of_its_range() {
     for z in 0..=6u8 {
         let side = 1u32 << z;
-        let base = tile_id(z, 0, 0);
+        let base = tile_id(z, 0, 0).expect("in range");
         let mut seen: Vec<u64> = Vec::with_capacity((side * side) as usize);
         for x in 0..side {
             for y in 0..side {
-                seen.push(tile_id(z, x, y));
+                seen.push(tile_id(z, x, y).expect("in range"));
             }
         }
         seen.sort_unstable();
@@ -69,7 +69,7 @@ fn consecutive_ids_are_adjacent_tiles() {
     let mut by_id: Vec<((u32, u32), u64)> = Vec::new();
     for x in 0..side {
         for y in 0..side {
-            by_id.push(((x, y), tile_id(z, x, y)));
+            by_id.push(((x, y), tile_id(z, x, y).expect("in range")));
         }
     }
     by_id.sort_by_key(|(_, id)| *id);
@@ -174,4 +174,36 @@ fn a_missing_tile_is_absent() {
     assert!(archive.tile(14, 100, 100).expect("no error").is_none());
     // And a zoom the archive does not carry.
     assert!(archive.tile(20, 0, 0).expect("no error").is_none());
+}
+
+/// A coordinate off the edge of its zoom must not resolve to a tile that is on it.
+///
+/// The Hilbert walk masks one bit at a time against `s < 2^z`, so an `x` with a bit above that
+/// range loses it and walks exactly as `x` without it does. Before this was checked, `z1/x2/y0`
+/// returned the id of `z1/x0/y0` — not an error and not an empty result, but a different
+/// tile's bytes, which is the kind of wrong that gets drawn rather than reported.
+#[test]
+fn an_out_of_range_coordinate_has_no_id() {
+    assert_eq!(tile_id(1, 0, 0), Some(1));
+    assert_eq!(tile_id(1, 2, 0), None);
+    assert_eq!(tile_id(1, 0, 2), None);
+    assert_eq!(tile_id(0, 1, 0), None);
+
+    // The last zoom whose level fits a u64, and the first that does not. `1 << (2 * z)` is a
+    // shift past the width for `z > 31`: a panic in a debug build, a wrap in a release one.
+    assert!(tile_id(31, 0, 0).is_some());
+    assert_eq!(tile_id(32, 0, 0), None);
+    assert_eq!(tile_id(255, 0, 0), None);
+}
+
+/// And the archive answers "no such tile" rather than handing back its aliased neighbour.
+#[test]
+fn an_out_of_range_coordinate_reads_no_tile() {
+    let Some(path) = archive_path() else {
+        return;
+    };
+    let archive = Archive::open(std::fs::File::open(path).expect("open")).expect("archive");
+    assert!(archive.tile(0, 0, 0).expect("read").is_some());
+    assert!(archive.tile(0, 1, 0).expect("read").is_none());
+    assert!(archive.tile(32, 0, 0).expect("read").is_none());
 }

@@ -548,7 +548,13 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   only safe way not to support something.
   `.pmtiles` archives read directly too, as `tessella-storage/pmtiles`: header, Hilbert tile ids,
   the varint directory format and leaf-directory descent, over a `RangeReader` so the same code
-  serves a file today and §12.6's HTTP range requests later. Nothing in it needs C — `flate2`
+  serves a file today and §12.6's HTTP range requests later, and behind a `FileSource` so a
+  style names one with `"url": "pmtiles:///data/planet.pmtiles"` and nothing above
+  `tileset::resolve` learns a second shape. The manifest is synthesised from the header and the
+  metadata document the way mbgl's `request_tilejson` does, so an archive needs no `.json`
+  beside it. A `Router` dispatches by URL — mbgl's `MainResourceLoader` asking each source
+  `canRequest` — which is what lets one style take its tiles from an archive and its glyphs from
+  an origin. Nothing in it needs C — `flate2`
   defaults to `miniz_oxide` — so §16's toolchain question never applied; §16 itself says "cheap
   in Rust", and R1's line had borrowed TLS's reasoning by proximity. An embedded target with a
   region on local storage now reads it rather than running a web server against itself to fetch

@@ -28,9 +28,10 @@
 //! the decoder: the encoding is a property of the transfer, and a decoder that sniffed for gzip
 //! magic would then have to decide about a tile that is legitimately gzip-inside-protobuf.
 //!
-//! Sources: vector tiles by inline template or TileJSON, and GeoJSON inline or by URL. Not
-//! raster, not raster-dem, not `.pmtiles` archives read directly, and not the `maplibre://` and
-//! `mapbox://` scheme aliases mbgl expands through `TileServerOptions`.
+//! Sources: vector tiles by inline template or TileJSON, GeoJSON inline or by URL, and
+//! `.pmtiles` archives on local storage behind the `pmtiles` feature. Not raster, not
+//! raster-dem, not a *remote* archive — that wants §12.6's range requests — and not the
+//! `maplibre://` and `mapbox://` scheme aliases mbgl expands through `TileServerOptions`.
 //!
 //! An SQLite response cache with etag revalidation sits behind the off-by-default `cache`
 //! feature, for the same reason: `rusqlite` bundles SQLite's C. Both features are on in the
@@ -69,7 +70,9 @@ pub use geojson::{GeoJsonSourceError, Origin};
 #[cfg(feature = "http")]
 pub use http::HttpFileSource;
 pub use offline::{Area, AreaError, Estimate, Region, SourceContribution, SourceKind, StyleAssets};
+#[cfg(feature = "pmtiles")]
+pub use pmtiles::source::PmtilesFileSource;
 pub use shared::{Abandoned, ShareStats, Shared};
-pub use source::{Coalescing, FetchError, Fetched, FileSource, Response};
+pub use source::{Coalescing, FetchError, Fetched, FileSource, Response, Router};
 pub use tileset::{ResolveError, TileSet, resolve};
 pub use url::{Scheme, ZoomRange, expand, fetch_zoom, percent_encode};

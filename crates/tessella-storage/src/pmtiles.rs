@@ -76,8 +76,52 @@ impl Compression {
     }
 }
 
-/// The 127-byte header at the front of every v3 archive.
+/// What the tiles in an archive are.
+///
+/// Worth reading rather than assuming: an archive of PNG rasters and one of vector tiles are
+/// the same container, and handing raster bytes to the MVT decoder produces a parse error
+/// several layers away from the thing that was actually wrong.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TileType {
+    /// The archive does not say.
+    Unknown,
+    /// Mapbox Vector Tile.
+    Mvt,
+    /// PNG.
+    Png,
+    /// JPEG.
+    Jpeg,
+    /// WebP.
+    Webp,
+    /// AVIF.
+    Avif,
+    /// MapLibre Tile, which nothing here decodes yet.
+    Mlt,
+    /// A type postdating this reader. Carried rather than refused: the directory format does
+    /// not depend on it, so an unknown type is only a problem for whoever decodes the bytes.
+    Other(u8),
+}
+
+impl TileType {
+    const fn from_byte(byte: u8) -> Self {
+        match byte {
+            0 => Self::Unknown,
+            1 => Self::Mvt,
+            2 => Self::Png,
+            3 => Self::Jpeg,
+            4 => Self::Webp,
+            5 => Self::Avif,
+            6 => Self::Mlt,
+            other => Self::Other(other),
+        }
+    }
+}
+
+/// The 127-byte header at the front of every v3 archive.
+///
+/// Not `Eq`: the geographic fields are floats. They are exact — every one is an `i32` divided
+/// by a power of ten — but a type is not `Eq` because its values happen to be.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Header {
     /// Where the root directory starts, and how long it is.
     pub root: (u64, u64),
@@ -91,10 +135,18 @@ pub struct Header {
     pub internal_compression: Compression,
     /// How the tiles themselves are compressed.
     pub tile_compression: Compression,
+    /// What the tiles are.
+    pub tile_type: TileType,
     /// Lowest zoom the archive holds.
     pub min_zoom: u8,
     /// Highest zoom the archive holds.
     pub max_zoom: u8,
+    /// West, south, east, north, in degrees.
+    pub bounds: [f64; 4],
+    /// Longitude and latitude the archive suggests opening at, in degrees.
+    pub center: [f64; 2],
+    /// Zoom the archive suggests opening at.
+    pub center_zoom: u8,
 }
 
 impl Header {
@@ -123,6 +175,14 @@ impl Header {
             eight.copy_from_slice(&bytes[offset..offset + 8]);
             u64::from_le_bytes(eight)
         };
+        // The geographic fields are stored as degrees times ten million, signed, which is what
+        // keeps them exact in four bytes and what makes reading them as unsigned put every
+        // western longitude on the far side of the world.
+        let degrees = |offset: usize| {
+            let mut four = [0u8; 4];
+            four.copy_from_slice(&bytes[offset..offset + 4]);
+            f64::from(i32::from_le_bytes(four)) / 1e7
+        };
         Ok(Self {
             root: (at(8), at(16)),
             metadata: (at(24), at(32)),
@@ -130,8 +190,12 @@ impl Header {
             tiles: (at(56), at(64)),
             internal_compression: Compression::from_byte(bytes[97])?,
             tile_compression: Compression::from_byte(bytes[98])?,
+            tile_type: TileType::from_byte(bytes[99]),
             min_zoom: bytes[100],
             max_zoom: bytes[101],
+            bounds: [degrees(102), degrees(106), degrees(110), degrees(114)],
+            center: [degrees(119), degrees(123)],
+            center_zoom: bytes[118],
         })
     }
 }
@@ -142,8 +206,24 @@ impl Header {
 /// from the PMTiles reference implementation rather than derived: the curve has several
 /// conventions that differ in which corner they start from, and picking the wrong one produces
 /// ids that are plausible, contiguous, and address the wrong tiles.
+///
+/// `None` when the coordinate is not one: `x` or `y` at or past `2^z`, or a zoom past 31, where
+/// the level's id range no longer fits a `u64`.
+///
+/// # Why this is an `Option` and not a precondition
+///
+/// The walk masks `x` and `y` one bit at a time against `s < 2^z`, so a coordinate with a bit
+/// above that range simply loses it: `z1/x2/y0` walks identically to `z1/x0/y0` and returns its
+/// id. Not an error, not an empty result — *a different tile's bytes*, which is the failure
+/// that gets drawn rather than reported. Once a tile URL is parsed from a string, `x` is
+/// whatever the string said, so the range check has to live where the id is computed. The zoom
+/// bound is the more ordinary hazard: `1 << (2 * z)` is a shift past the width for `z > 31`,
+/// which panics in a debug build and wraps in a release one.
 #[must_use]
-pub fn tile_id(z: u8, x: u32, y: u32) -> u64 {
+pub fn tile_id(z: u8, x: u32, y: u32) -> Option<u64> {
+    if z > 31 || u64::from(x) >= 1u64 << u32::from(z) || u64::from(y) >= 1u64 << u32::from(z) {
+        return None;
+    }
     // Every level below this one, which is `sum(4^i)` for `i < z`.
     let base = ((1u64 << (2 * u32::from(z))) - 1) / 3;
 
@@ -163,7 +243,7 @@ pub fn tile_id(z: u8, x: u32, y: u32) -> u64 {
         }
         s >>= 1;
     }
-    base + d
+    Some(base + d)
 }
 
 /// One directory entry: a run of tiles, or a pointer to a leaf directory.
@@ -317,6 +397,8 @@ fn decompress(bytes: Vec<u8>, compression: Compression) -> Result<Vec<u8>, Pmtil
     }
 }
 
+pub mod source;
+
 /// A PMTiles archive, read in place.
 #[derive(Debug)]
 pub struct Archive<R> {
@@ -379,7 +461,9 @@ impl<R: RangeReader> Archive<R> {
         if z < self.header.min_zoom || z > self.header.max_zoom {
             return Ok(None);
         }
-        let id = tile_id(z, x, y);
+        let Some(id) = tile_id(z, x, y) else {
+            return Ok(None);
+        };
 
         let mut entries = self.root.clone();
         // Leaf directories may nest. The reference implementation caps the walk at three levels
@@ -396,6 +480,14 @@ impl<R: RangeReader> Archive<R> {
                 return decompress(raw, self.header.tile_compression).map(Some);
             }
             // A run of zero is a pointer to the directory that covers this range.
+            //
+            // Not cached, unlike mbgl, which holds a hundred directories. Measured on a Berlin
+            // z15 archive: a z14 tile costs 210us end to end and 195us of that is inflating the
+            // tile body, so the whole walk — this read, its gunzip, and both lookups — is under
+            // 15us. A cache would buy under 5%, which is less than the spread between two
+            // adjacent tiles. That arithmetic is a property of *local* reads: once §12.6's
+            // range requests give this a remote reader, a leaf read becomes a round trip and
+            // the cache stops being optional.
             let raw = self
                 .source
                 .read_at(self.header.leaves.0 + entry.offset, entry.length as usize)?;

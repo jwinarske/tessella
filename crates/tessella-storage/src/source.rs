@@ -207,3 +207,98 @@ impl<S: FileSource> Coalescing<S> {
             })
     }
 }
+
+/// Whether a route claims a URL.
+type Accepts = Box<dyn Fn(&str) -> bool + Send + Sync>;
+
+/// A source that dispatches by URL, so one style can name several kinds of origin.
+///
+/// mbgl's `MainResourceLoader` holds a list of file sources and asks each `canRequest` until one
+/// says yes. This is the same arrangement: routes are tried in order, and the last source added
+/// without a predicate answers whatever nothing else claimed.
+///
+/// # Why the predicate belongs to the route and not to the source
+///
+/// A source knows how to read something; it does not know whether it is the one that should.
+/// The same [`crate::pmtiles::source::PmtilesFileSource`] serves whichever archives the caller
+/// points it at, and a caller that wants two of them — one for a region and one for the world —
+/// distinguishes them by URL and not by asking either source to disown the other.
+///
+/// # Ordering, and the wrapper it has to sit inside
+///
+/// A route added earlier wins, which matters when one predicate is a prefix of another. And a
+/// router goes *inside* the coalescing and caching wrappers rather than outside: dispatch is
+/// per-URL, so a router of caches would give each origin its own in-flight table and lose the
+/// property §9.3's flatness counters assert.
+pub struct Router {
+    routes: Vec<(Accepts, Box<dyn FileSource>)>,
+    fallback: Option<Box<dyn FileSource>>,
+}
+
+impl Router {
+    /// A router that claims nothing yet.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            routes: Vec::new(),
+            fallback: None,
+        }
+    }
+
+    /// Routes every URL the predicate accepts to `source`.
+    #[must_use]
+    pub fn route(
+        mut self,
+        accepts: impl Fn(&str) -> bool + Send + Sync + 'static,
+        source: impl FileSource + 'static,
+    ) -> Self {
+        self.routes.push((Box::new(accepts), Box::new(source)));
+        self
+    }
+
+    /// Sends whatever no route claimed to `source`.
+    ///
+    /// Replaces any previous fallback, since there can only be one.
+    #[must_use]
+    pub fn otherwise(mut self, source: impl FileSource + 'static) -> Self {
+        self.fallback = Some(Box::new(source));
+        self
+    }
+
+    /// The source that would answer for `url`.
+    fn pick(&self, url: &str) -> Option<&dyn FileSource> {
+        self.routes
+            .iter()
+            .find(|(accepts, _)| accepts(url))
+            .map(|(_, source)| source.as_ref())
+            .or(self.fallback.as_deref())
+    }
+}
+
+impl Default for Router {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FileSource for Router {
+    fn fetch(&self, url: &str) -> Result<Response, FetchError> {
+        match self.pick(url) {
+            Some(source) => source.fetch(url),
+            // A URL nothing claimed is a configuration fault, and it is reported as one rather
+            // than as a 404: "no route" and "the origin does not have it" want different fixes,
+            // and a 404 would be quietly absorbed as an edge of coverage.
+            None => Err(FetchError::Transport {
+                url: url.to_string(),
+                message: "no source is configured for this url".to_string(),
+            }),
+        }
+    }
+
+    fn fetch_conditional(&self, url: &str, etag: Option<&str>) -> Result<Response, FetchError> {
+        match self.pick(url) {
+            Some(source) => source.fetch_conditional(url, etag),
+            None => self.fetch(url),
+        }
+    }
+}
