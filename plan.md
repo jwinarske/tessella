@@ -874,6 +874,20 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   advances, advances need glyphs, and glyphs cross the network — discovering a missing glyph
   mid-shape turns one round trip per tile into one per label. Measured on the fixture: seventy-five
   labels, thirty-odd distinct codepoints, one range.
+  Line placement lands: `getAnchors` and `checkMaxAngle`, which is what puts a name along a road
+  rather than at a point. Three things have to hold at once for a position to be kept — the whole
+  label fits between the line's ends, it lies inside the tile, and the line does not bend too
+  sharply under it — and the last is `text-max-angle`, which is why a name vanishes from a hairpin
+  instead of wrapping round it. The bend check sums the turn over a sliding *window* rather than
+  at one corner, because it is accumulated curvature that makes text unreadable, not any single
+  turn. Two details carry more than they look: the spacing is widened when a label is long
+  relative to it, so labels do not overlap along the line and give collision work done only to be
+  discarded; and the first anchor sits half a *spacing* in on a line continued from the next tile
+  and half a *label* plus two glyph widths in on one that starts inside, which is what makes two
+  tiles' labels interleave at the seam rather than double up. Checked against all six of mbgl's
+  expectations — position, angle and segment index — including the invariant that an overscaled
+  tile's anchors are a superset of its parent's, which is what stops every label jumping at a
+  zoom crossing.
   The chain then runs end to end, over a real tile: decode, resolve `text-field`, shape against
   a real glyph range, pack the atlas, build quads, derive a collision box, take a cross-tile
   identity, place, fade. Each link had its own tests and most were checked against mbgl, and none

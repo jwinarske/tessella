@@ -25,6 +25,7 @@
 
 extern crate alloc;
 
+pub mod anchors;
 pub mod circle;
 pub mod fill;
 pub mod line;
