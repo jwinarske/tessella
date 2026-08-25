@@ -721,6 +721,16 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   accepted them all would pass a test written against a real font, because a real font has no
   bad glyphs. Two rejections survived deleting the checks anyway, since that fixture happens not
   to carry a glyph complete but for one field; those cases are hand-encoded in the test.
+  The manager above it is mbgl's `GlyphManager`: the `{fontstack}`/`{range}` URL, one entry per
+  font stack, and the bookkeeping that decides what to ask for. Absence is remembered per
+  *range*, not per glyph, which is the distinction the whole thing turns on — a font does not
+  contain every codepoint in a range it serves, and "missing because unfetched" and "missing
+  because the font lacks it" look identical in the glyph table. Without it every label carrying
+  one unusual character re-requests its whole range on every tile, forever, and succeeds every
+  time. An empty answer settles a range and a transport error does not: one is knowledge, the
+  other is a network that blinked. The stack is part of the key as well as the URL, so a bold
+  face never answers for a regular one — the right letter in the wrong weight, which nothing
+  errors about.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
