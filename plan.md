@@ -1132,6 +1132,19 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   `get_anchors` tests each candidate against the tile, so a road crossing a seam gets anchors on
   the near side from each tile and the two interleave; cutting the line here would give each side
   its own ends and put a name at every seam.
+  The atlas then reaches the stream, which is the third texture the symbol capture has and the
+  hermetic one does not: mbgl's `0x0` pattern placeholder, its `1x1` transparent image, and a
+  glyph atlas at `512x512 fmt=1`. The hash is elided with the rest of the packing-order lines;
+  the dimensions and the format are not, and both are on the wire. The atlas had been sized 2048
+  on a hunch when the store was written — the oracle says 512, and a consumer sizing its
+  allocation from the first upload would have got a different texture from the one the capture
+  describes. `fmt=1` is Alpha, which is §12.4's point measured rather than argued: this is the
+  largest texture the process keeps and three of four channels would hold copies of the one that
+  matters.
+  The upload carries dirty rectangles rather than the image, and answers *nothing* when nothing
+  moved — §6.5's still frame is a frame with no envelopes in it, and re-uploading a quarter of a
+  megabyte of unchanged glyphs every frame would make a settled map the most expensive one. Past
+  §4's rect cap they collapse to their union, which costs bandwidth and never pixels.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
