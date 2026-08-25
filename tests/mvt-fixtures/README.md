@@ -77,3 +77,21 @@ Worth noting how the earlier mistake happened: `real-world-0-0-0.mvt` is byte-id
 maplibre-native's `0-0-0.vector.pbf`, its *test* fixture. They benchmark the zoom-10 tile and
 test with the zoom-0 one. We vendored the test tile and benchmarked against it, which is how a
 zoom-0 view of the whole world came to weigh every optimisation decision.
+
+## `../live-fixtures/` — the real-style parity corpus
+
+Nine zoom-5 tiles over London and the TileJSON that names them, cut from a Protomaps planet
+extract (Protomaps schema; OpenStreetMap data, ODbL) and stored inflated. They are the exact
+tiles `live_parity.rs` covers, and the golden `live_protomaps_z5.dump` was captured against the
+same bytes.
+
+They are vendored for the reason a test corpus usually is, and the reason arrived the hard way.
+Those parity assertions used to require a 187 MB archive and `pmtiles serve` running, so they
+were `#[ignore]`d. Then the MVT decoder was rewritten — flat geometry, per-layer buffers, a
+varint fast path — and the byte-exact test that would have caught a regression was the one test
+not running. It passed when finally run, which is luck rather than process.
+
+434 KB, less than the world tile beside them, and `tools/tile-server` already ships in this
+repository — so the test starts its own origin and runs wherever `cargo test` does. Setting
+`TESSELLA_LIVE_ORIGIN` still points it at a real `pmtiles serve`, which is how the fixtures were
+checked to agree with the archive.

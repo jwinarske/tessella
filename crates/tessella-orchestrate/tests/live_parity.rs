@@ -1,5 +1,10 @@
 //! Oracle parity on a *real* style, over real tiles — R1's exit criterion (§9.1, §10).
 //!
+//! Runs anywhere `cargo test` does: the tiles the cover asks for are vendored in
+//! `tests/live-fixtures/` and served by `tools/tile-server`, so no archive and no external
+//! server are needed. `TESSELLA_LIVE_ORIGIN` points it at a real `pmtiles serve` instead, which
+//! is how the fixtures were checked to agree with the archive they came from.
+//!
 //! Every earlier oracle diff is against the hermetic style: four hand-written features chosen
 //! to be tractable. This one is against a Protomaps planet extract at zoom 5 — nine tiles,
 //! thousands of features, geometry nobody chose. The golden is captured by running the probe
@@ -139,13 +144,99 @@ fn oracle_indices() -> BTreeMap<(u32, u32, u32, u32), (usize, u64)> {
 }
 
 /// Builds every tile of the cover from the live server.
+/// The nine tiles the probe's cover asks for, and the manifest that names them.
+///
+/// # Why these are vendored rather than fetched
+///
+/// The golden was captured against `pmtiles serve` over a 187 MB planet archive, and for a long
+/// time these tests were `#[ignore]`d because reproducing that meant having the archive and the
+/// server. The consequence is worse than inconvenience: the decoder was rewritten substantially
+/// — flat geometry, per-layer buffers, a varint fast path — and the byte-exact test that would
+/// have caught a regression was the one test not running.
+///
+/// What the test needs is not the server. It is these bytes. Nine tiles inflate to 434 KB, which
+/// is less than the world tile already vendored beside them, and `tools/tile-server` is a
+/// dependency-free crate in this repository — so the test starts its own origin and runs
+/// wherever `cargo test` does.
+/// One vendored tile: its coordinate and its inflated bytes.
+type Fixture = ((u8, u32, u32), &'static [u8]);
+
+const TILES: &[Fixture] = &[
+    (
+        (5, 14, 9),
+        include_bytes!("../../../tests/live-fixtures/world_z7-5-14-9.mvt"),
+    ),
+    (
+        (5, 14, 10),
+        include_bytes!("../../../tests/live-fixtures/world_z7-5-14-10.mvt"),
+    ),
+    (
+        (5, 14, 11),
+        include_bytes!("../../../tests/live-fixtures/world_z7-5-14-11.mvt"),
+    ),
+    (
+        (5, 15, 9),
+        include_bytes!("../../../tests/live-fixtures/world_z7-5-15-9.mvt"),
+    ),
+    (
+        (5, 15, 10),
+        include_bytes!("../../../tests/live-fixtures/world_z7-5-15-10.mvt"),
+    ),
+    (
+        (5, 15, 11),
+        include_bytes!("../../../tests/live-fixtures/world_z7-5-15-11.mvt"),
+    ),
+    (
+        (5, 16, 9),
+        include_bytes!("../../../tests/live-fixtures/world_z7-5-16-9.mvt"),
+    ),
+    (
+        (5, 16, 10),
+        include_bytes!("../../../tests/live-fixtures/world_z7-5-16-10.mvt"),
+    ),
+    (
+        (5, 16, 11),
+        include_bytes!("../../../tests/live-fixtures/world_z7-5-16-11.mvt"),
+    ),
+];
+
+const MANIFEST: &str = include_str!("../../../tests/live-fixtures/world_z7.json");
+
+/// Serves the vendored tiles, with the manifest pointing at wherever the socket landed.
+fn fixture_server() -> tile_server::Server {
+    let server = tile_server::Server::start(tile_server::Routes::new()).expect("binds");
+    let origin = server.origin();
+    let mut routes = tile_server::Routes::new().at(
+        "/world_z7.json",
+        "application/json",
+        MANIFEST.replace("ORIGIN", &origin).into_bytes(),
+    );
+    for ((z, x, y), body) in TILES {
+        routes = routes.at(
+            &format!("/world_z7/{z}/{x}/{y}.mvt"),
+            "application/x-protobuf",
+            body.to_vec(),
+        );
+    }
+    server.set_routes(routes);
+    server
+}
+
 fn build_cover() -> BTreeMap<(u32, u32), Vec<tessella_orchestrate::LayerBucket>> {
     let style = Style::parse(STYLE).expect("style parses");
-    let origin =
-        std::env::var("TESSELLA_LIVE_ORIGIN").unwrap_or_else(|_| "http://127.0.0.1:8080".into());
 
-    // The style names the origin the golden was captured against; honour an override by
-    // rewriting the manifest URL rather than by keeping two styles in step.
+    // An override points at a real `pmtiles serve`; without one the test serves the tiles it
+    // vendors, which is the same bytes over a socket it owns.
+    let server = std::env::var("TESSELLA_LIVE_ORIGIN")
+        .is_err()
+        .then(fixture_server);
+    let origin = std::env::var("TESSELLA_LIVE_ORIGIN").unwrap_or_else(|_| {
+        server
+            .as_ref()
+            .expect("a fixture server when no origin is given")
+            .origin()
+    });
+
     let Some(Source::Vector(vector)) = style.source("world") else {
         panic!("the style has one vector source");
     };
@@ -157,7 +248,7 @@ fn build_cover() -> BTreeMap<(u32, u32), Vec<tessella_orchestrate::LayerBucket>>
     let files = Coalescing::new(HttpFileSource::default());
     let set = match tileset::resolve(&vector, files.inner()) {
         Ok(set) => set,
-        Err(error) => panic!("{origin}: {error}\nis `pmtiles serve` running?"),
+        Err(error) => panic!("{origin}: {error}"),
     };
 
     let view = probe_view();
@@ -185,7 +276,6 @@ fn build_cover() -> BTreeMap<(u32, u32), Vec<tessella_orchestrate::LayerBucket>>
 
 /// The cover is the oracle's, tile for tile.
 #[test]
-#[ignore = "needs the tile server the golden was captured against"]
 fn the_cover_matches_the_oracle() {
     let mine: Vec<(u32, u32)> = build_cover().keys().copied().collect();
     let mut theirs: Vec<(u32, u32)> = oracle_positions()
@@ -204,7 +294,6 @@ fn the_cover_matches_the_oracle() {
 /// rings reach the bucket in the tile's own order and the sequences compare directly — which
 /// the GeoJSON path cannot do.
 #[test]
-#[ignore = "needs the tile server the golden was captured against"]
 fn fill_buffers_are_byte_identical_to_the_oracle() {
     let built = build_cover();
     let positions = oracle_positions();
@@ -255,7 +344,6 @@ fn fill_buffers_are_byte_identical_to_the_oracle() {
 
 /// Every layer the oracle draws, this build draws — and with the same vertex counts.
 #[test]
-#[ignore = "needs the tile server the golden was captured against"]
 fn every_layer_matches_the_oracle() {
     let built = build_cover();
     let positions = oracle_positions();

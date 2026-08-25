@@ -1,0 +1,22 @@
+{
+ "tilejson": "3.0.0",
+ "tiles": [
+  "ORIGIN/world_z7/{z}/{x}/{y}.mvt"
+ ],
+ "minzoom": 0,
+ "maxzoom": 7,
+ "scheme": "xyz",
+ "bounds": [
+  -180,
+  -85.0511287,
+  180,
+  85.0511287
+ ],
+ "center": [
+  0,
+  0,
+  0
+ ],
+ "attribution": "<a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\">&copy; OpenStreetMap</a>",
+ "name": "Protomaps Basemap"
+}
