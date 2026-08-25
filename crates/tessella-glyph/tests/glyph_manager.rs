@@ -11,7 +11,7 @@ use tessella_glyph::manager::{FontStack, GlyphManager, LoadError};
 use tessella_glyph::pbf::Range;
 use tessella_storage::source::{FetchError, FileSource, Response};
 
-const REAL: &[u8] = include_bytes!("../../../tests/glyph-fixtures/glyphs.pbf");
+const REAL: &[u8] = include_bytes!("../../../tests/glyph-fixtures/TestFont/0-255.pbf");
 
 /// How a scripted origin answers one request.
 type Answer = Box<dyn Fn(&str) -> Result<Response, FetchError>>;

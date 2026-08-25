@@ -879,6 +879,21 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   is why sizes cap at 255: `255 * 128 << 1` is the largest that still fits a `u16`. The
   attributes being filled are checked against the generated table, so an upstream layout change
   fails the build rather than quietly producing vertices the shader no longer reads.
+  §9.1's oracle then reaches symbols: `symbol_style.dump`, the first capture with a symbol layer,
+  against a vendored font both sides read. It confirmed the vertex packing from mbgl's *output*
+  rather than from its source — three interleaved attributes at 0, 8 and 16 with a stride of 24,
+  plus two more in buffers of their own, which is how the dynamic and opacity buffers were shown
+  to be separate rather than assumed. The index buffers match byte for byte.
+  It is also the first capture that does not fully reproduce. mbgl packs the glyph atlas in the
+  order glyphs arrive and that order is not deterministic: over ten consecutive captures of an
+  identical style the symbol vertex hashes and the atlas texture hash each took four or five
+  distinct values, one dominating, while every other line of the eighty-seven was identical every
+  time. The vertex hashes follow the atlas, since the `data` attribute carries texture
+  coordinates. Seven lines are elided the way `symbol_fade_change` already is, and the elision is
+  a committed script so a regeneration still reproduces. The two per-frame attributes were stable
+  across all ten and are *not* elided — eliding a stable line gives away a comparison for
+  nothing. Byte-exact symbol vertices need the atlas packed deterministically on mbgl's side,
+  which is a change to the probe rather than to this.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

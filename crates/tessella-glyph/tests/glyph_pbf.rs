@@ -8,7 +8,7 @@
 use tessella_glyph::pbf::{self, BORDER, Range};
 
 const FAKE: &[u8] = include_bytes!("../../../tests/glyph-fixtures/fake_glyphs-0-255.pbf");
-const REAL: &[u8] = include_bytes!("../../../tests/glyph-fixtures/glyphs.pbf");
+const REAL: &[u8] = include_bytes!("../../../tests/glyph-fixtures/TestFont/0-255.pbf");
 
 /// mbgl `GlyphPBF.Parsing`: of everything in the fixture, exactly one glyph survives.
 #[test]

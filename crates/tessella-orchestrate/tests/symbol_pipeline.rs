@@ -28,7 +28,7 @@ use tessella_style::Layer;
 use tessella_tile::renderables::DataTileId;
 
 const TILE: &[u8] = include_bytes!("../../../tests/live-fixtures/world_z7-5-16-11.mvt");
-const GLYPHS: &[u8] = include_bytes!("../../../tests/glyph-fixtures/glyphs.pbf");
+const GLYPHS: &[u8] = include_bytes!("../../../tests/glyph-fixtures/TestFont/0-255.pbf");
 
 /// A symbol layer labelling the `places` layer's points.
 fn places_layer() -> Layer {
