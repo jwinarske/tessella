@@ -17,9 +17,27 @@
 #![forbid(unsafe_code)]
 
 pub mod atlas;
+pub mod fonts;
 pub mod generated;
 pub mod manager;
 pub mod pbf;
 pub mod quads;
 pub mod shaping;
 pub mod text;
+
+/// What a symbol layer needs to know about a glyph.
+///
+/// A trait rather than the glyph itself so a caller can answer from a manager, an atlas, or a
+/// test's table, and so that layout does not decide how glyphs are stored. The two questions are
+/// separate because they are answered at different times: the advance is known as soon as the
+/// range is parsed, and the rectangle only once the glyph is packed.
+pub trait Glyphs {
+    /// How far the pen moves for this codepoint, and whether it has anything to draw.
+    ///
+    /// `None` when the font stack does not have it at all, which the shaper treats as a
+    /// zero-width blank rather than as a reason to abandon the label.
+    fn metrics(&self, codepoint: u32) -> Option<(crate::pbf::Metrics, bool)>;
+
+    /// Where it sits in the atlas, once it is packed.
+    fn rect(&self, codepoint: u32) -> Option<crate::atlas::Rect>;
+}

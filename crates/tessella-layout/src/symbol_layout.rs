@@ -26,10 +26,12 @@ use tessella_style::document::PropertyValue;
 use tessella_style::expression::{Expression, Feature};
 use tessella_style::{Layer, Value};
 
+use tessella_glyph::fonts::Fonts;
+
 use crate::symbol::{self, GlyphDependencies};
 use crate::symbol_bucket::{
-    Glyphs, Label, LaidOut, LineLabel, LineOptions, SymbolBuffers, SymbolOptions,
-    build_line_symbols, build_symbols,
+    Label, LaidOut, LineLabel, LineOptions, SymbolBuffers, SymbolOptions, build_line_symbols,
+    build_symbols,
 };
 
 /// One layout property, evaluated at a zoom with no feature.
@@ -225,43 +227,84 @@ impl SymbolLayout {
         self.pending.is_empty()
     }
 
+    /// The distinct font stacks this layout's labels are set in.
+    ///
+    /// Usually one. `text-font` is evaluated per feature, so a data-driven one gives a layer
+    /// several — which is why laying out takes the whole store rather than one stack's glyphs.
+    #[must_use]
+    pub fn stacks(&self) -> Vec<Vec<String>> {
+        let mut out: Vec<Vec<String>> = Vec::new();
+        for pending in &self.pending {
+            if !out.contains(&pending.fonts) {
+                out.push(pending.fonts.clone());
+            }
+        }
+        out
+    }
+
     /// The second phase: shape the labels and build the vertex buffers.
     ///
     /// A label whose glyphs are not all packed draws the ones that are and still measures the
     /// whole for collision, so a pan into new text draws what it has rather than nothing.
     ///
-    /// Point-placed and line-placed labels go into *separate* buffers even though a layer has
-    /// one of each at most, because the two builders assign vertex ranges against their own
-    /// buffer and a range from one does not address the other. A layer mixing them would be a
-    /// layer with two `symbol-placement` values, which the spec does not have.
+    /// Labels are grouped by font stack and each group shaped against its own glyphs, then
+    /// joined — mbgl hands `prepareSymbols` the whole `GlyphMap` and looks up per feature, which
+    /// is the same thing from the other end. With one stack, which is the common case, there is
+    /// one group and no join.
+    ///
+    /// # Panics
+    ///
+    /// When the joined buffers would exceed what a `u16` index reaches. See
+    /// [`SymbolBuffers::append`].
     #[must_use]
-    pub fn lay_out<G: Glyphs + ?Sized>(&self, glyphs: &G) -> (SymbolBuffers, Vec<LaidOut>) {
-        if self.placement.along_line() {
-            let labels: Vec<LineLabel> = self
-                .pending
-                .iter()
-                .filter_map(|pending| match &pending.anchoring {
-                    Anchoring::Line(line) => Some(LineLabel {
-                        text: pending.text.to_string(),
-                        line: line.clone(),
-                    }),
-                    Anchoring::Point(_) => None,
-                })
-                .collect();
-            build_line_symbols(&labels, glyphs, &self.line)
-        } else {
-            let labels: Vec<Label> = self
-                .pending
-                .iter()
-                .filter_map(|pending| match pending.anchoring {
-                    Anchoring::Point(anchor) => Some(Label {
-                        text: pending.text.to_string(),
-                        anchor,
-                    }),
-                    Anchoring::Line(_) => None,
-                })
-                .collect();
-            build_symbols(&labels, glyphs, &self.symbol)
+    pub fn lay_out(&self, fonts: &Fonts) -> (SymbolBuffers, Vec<LaidOut>) {
+        let mut buffers = SymbolBuffers::default();
+        let mut laid = Vec::new();
+
+        for stack in self.stacks() {
+            let glyphs = fonts.stack(&stack);
+            let mine = |pending: &&Pending| pending.fonts == stack;
+
+            let (built, entries) = if self.placement.along_line() {
+                let labels: Vec<LineLabel> = self
+                    .pending
+                    .iter()
+                    .filter(mine)
+                    .filter_map(|pending| match &pending.anchoring {
+                        Anchoring::Line(line) => Some(LineLabel {
+                            text: pending.text.to_string(),
+                            line: line.clone(),
+                        }),
+                        Anchoring::Point(_) => None,
+                    })
+                    .collect();
+                build_line_symbols(&labels, &glyphs, &self.line)
+            } else {
+                let labels: Vec<Label> = self
+                    .pending
+                    .iter()
+                    .filter(mine)
+                    .filter_map(|pending| match pending.anchoring {
+                        Anchoring::Point(anchor) => Some(Label {
+                            text: pending.text.to_string(),
+                            anchor,
+                        }),
+                        Anchoring::Line(_) => None,
+                    })
+                    .collect();
+                build_symbols(&labels, &glyphs, &self.symbol)
+            };
+
+            // Each group's ranges address its own buffer, so they shift by what was already
+            // here. Getting this wrong writes one label's per-frame state over another's, which
+            // draws as a label that will not fade and errors nowhere.
+            let base = buffers.append(&built);
+            laid.extend(entries.into_iter().map(|mut entry| {
+                entry.vertices = entry.vertices.start + base..entry.vertices.end + base;
+                entry
+            }));
         }
+
+        (buffers, laid)
     }
 }

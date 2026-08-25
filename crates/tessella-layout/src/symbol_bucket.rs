@@ -176,6 +176,41 @@ impl SymbolBuffers {
         self.vertices.is_empty()
     }
 
+    /// Appends another buffer's contents, offsetting its indices onto these vertices.
+    ///
+    /// A layer whose `text-font` is data-driven resolves to more than one font stack, and each
+    /// stack is shaped against its own glyphs — so the layer's buffers are built per stack and
+    /// joined here. mbgl reaches the same place from the other direction, handing
+    /// `prepareSymbols` the whole `GlyphMap` and looking up per feature.
+    ///
+    /// Returns how many vertices were already here, which is what a caller shifts the appended
+    /// labels' vertex ranges by.
+    ///
+    /// # Panics
+    ///
+    /// When the join would put a vertex past what a `u16` index reaches. The same bound
+    /// [`Self::add_quad`] asserts, and it has to be checked here too: two buffers each inside it
+    /// can be outside it together.
+    pub fn append(&mut self, other: &Self) -> usize {
+        let base = self.vertices.len();
+        assert!(
+            base + other.vertices.len() <= usize::from(u16::MAX),
+            "a symbol buffer past what a u16 index reaches needs a new segment"
+        );
+
+        self.vertices.extend_from_slice(&other.vertices);
+        self.dynamic.extend_from_slice(&other.dynamic);
+        self.opacity.extend_from_slice(&other.opacity);
+        self.glyph_offsets.extend_from_slice(&other.glyph_offsets);
+
+        #[allow(clippy::cast_possible_truncation)]
+        let offset = base as u16;
+        self.indices
+            .extend(other.indices.iter().map(|index| index + offset));
+
+        base
+    }
+
     /// Adds one glyph's quad: four vertices and two triangles.
     ///
     /// The corners are given in mbgl's order — top-left, top-right, bottom-left, bottom-right —
@@ -240,20 +275,10 @@ impl SymbolBuffers {
 
 /// What a symbol layer needs to know about a glyph.
 ///
-/// A trait rather than the glyph itself so a caller can answer from a manager, an atlas, or a
-/// test's table, and so that this crate does not decide how glyphs are stored. The two questions
-/// are separate because they are answered at different times: the advance is known as soon as
-/// the range is parsed, and the rectangle only once the glyph is packed.
-pub trait Glyphs {
-    /// How far the pen moves for this codepoint, and whether it has anything to draw.
-    ///
-    /// `None` when the font stack does not have it at all, which the shaper treats as a
-    /// zero-width blank rather than as a reason to abandon the label.
-    fn metrics(&self, codepoint: u32) -> Option<(tessella_glyph::pbf::Metrics, bool)>;
-
-    /// Where it sits in the atlas, once it is packed.
-    fn rect(&self, codepoint: u32) -> Option<tessella_glyph::atlas::Rect>;
-}
+/// Re-exported from `tessella-glyph`, which is where it lives: the crate that *answers* these
+/// questions is the one that should declare them, and it could not implement a trait declared
+/// here without depending on this crate, which depends on it.
+pub use tessella_glyph::Glyphs;
 
 /// A label to lay out: what it says and where it is anchored, in tile coordinates.
 #[derive(Debug, Clone, PartialEq)]

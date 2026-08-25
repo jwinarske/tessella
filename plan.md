@@ -1073,6 +1073,34 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   real tile produced an empty bucket and nothing anywhere said so. It draws now. Its geometry
   type is not checked, the way a fill's is not: mbgl's `CircleBucket::addFeature` takes whatever
   the feature carries, so a line's vertices each get a disc.
+  The store between the two phases then lands as `tessella-glyph/fonts`: the manager knows which
+  ranges are held and the atlas knows where a glyph sits, and neither is something a bucket
+  builder can shape against. Pairing them turns "the ranges arrived" into the `Glyphs` layout
+  wants. One atlas per font stack, which is §5's and mbgl's — a rectangle is a position in a
+  *texture*, so the same codepoint in two fonts is two rectangles and one atlas per style would
+  have the second stack read the first's pixels.
+  Only what was asked for is packed. A range file is 256 codepoints and a label uses a handful,
+  so packing on arrival would fill the atlas with glyphs nothing draws and evict the ones that
+  are drawn; packing is driven by the dependencies the layouts declared. That is also why the
+  atlas fills in the order labels ask rather than in codepoint order — the same order mbgl's
+  fills in, and the reason its packing is not reproducible. A space is the case that has to go
+  both ways at once: it keeps its advance and is *not* packed, since a zero-area rectangle takes
+  a shelf slot and hands the shaper something to draw, which is a blank quad per space on every
+  label of the map.
+  Asserted where it pays: the street fixture's symbol layer resolves 873 labels over 1773 roads
+  and every one is ASCII, so the whole tile costs *one* request and the next tile costs none. A
+  store keyed per label, or per tile, would work perfectly while spending a round trip a label.
+  The `Glyphs` trait moved to `tessella-glyph` on the way, re-exported from where it was. The
+  crate that answers the question should declare it, and it could not implement a trait declared
+  in `tessella-layout` without depending on the crate that depends on it.
+  Laying out then resolves per font stack rather than against one. `text-font` is evaluated per
+  feature, so a data-driven one gives a layer several stacks, and mbgl reaches the same place
+  from the other end by handing `prepareSymbols` the whole `GlyphMap`. Labels are grouped by
+  stack, each group shaped against its own glyphs, and the buffers joined — which needs the
+  appended indices offset onto the existing vertices and each group's vertex *ranges* shifted by
+  the same amount. Getting that wrong writes one label's per-frame state over another's, which
+  draws as a label that will not fade and errors nowhere. The join asserts the `u16` bound too,
+  since two buffers each inside it can be outside it together.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

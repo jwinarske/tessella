@@ -6,52 +6,64 @@
 //! vertices come later — which is what these check, along with the part that is easy to get
 //! wrong once the phases are separate: that the same tile, laid out twice, says the same thing.
 
-use tessella_glyph::atlas::{Atlas, Rect};
-use tessella_glyph::pbf::{self, Glyph, Metrics, Range};
-use tessella_layout::symbol_bucket::Glyphs;
+use std::cell::RefCell;
+
+use tessella_glyph::fonts::Fonts;
 use tessella_layout::symbol_layout::{Anchoring, Placement};
 use tessella_orchestrate::tile::{TileId, build_mvt_tile};
 use tessella_source::mvt::Tile;
+use tessella_storage::source::{FetchError, FileSource, Response};
 use tessella_style::Style;
 
 const STREETS: &[u8] = include_bytes!("../../../tests/mvt-fixtures/streets-10-163-395.mvt");
 const GLYPHS: &[u8] = include_bytes!("../../../tests/glyph-fixtures/TestFont/0-255.pbf");
 
-struct Font {
-    glyphs: Vec<Glyph>,
-    atlas: Atlas,
+/// An origin serving the vendored font, and counting what was asked of it.
+struct Origin {
+    asked: RefCell<Vec<String>>,
 }
 
-impl Font {
-    /// Packs every glyph the layout asked for, which is the point of asking.
-    fn for_dependencies(wanted: impl IntoIterator<Item = u32>) -> Self {
-        let glyphs = pbf::parse(
-            Range {
-                first: 0,
-                last: 255,
-            },
-            GLYPHS,
-        )
-        .expect("the range parses");
-        let wanted: std::collections::BTreeSet<u32> = wanted.into_iter().collect();
-        let mut atlas = Atlas::new(512, 512);
-        for glyph in &glyphs {
-            if wanted.contains(&glyph.id) {
-                atlas.add(glyph.id, glyph);
-            }
+impl Origin {
+    fn new() -> Self {
+        Self {
+            asked: RefCell::new(Vec::new()),
         }
-        Self { glyphs, atlas }
+    }
+
+    fn asked(&self) -> Vec<String> {
+        self.asked.borrow().clone()
     }
 }
 
-impl Glyphs for Font {
-    fn metrics(&self, codepoint: u32) -> Option<(Metrics, bool)> {
-        let glyph = self.glyphs.iter().find(|glyph| glyph.id == codepoint)?;
-        Some((glyph.metrics, glyph.bitmap_size().is_some()))
+impl FileSource for Origin {
+    fn fetch(&self, url: &str) -> Result<Response, FetchError> {
+        self.asked.borrow_mut().push(url.to_string());
+        // One font, one range. Anything else is a 404, which is a response and not an error.
+        let body = if url.contains("TestFont") && url.contains("0-255") {
+            GLYPHS.to_vec()
+        } else {
+            Vec::new()
+        };
+        Ok(Response {
+            status: 200,
+            body,
+            ..Response::default()
+        })
     }
-    fn rect(&self, codepoint: u32) -> Option<Rect> {
-        self.atlas.get(codepoint)
-    }
+}
+
+// `FileSource` is `Send + Sync`; the `RefCell` here is single-threaded test bookkeeping.
+unsafe impl Sync for Origin {}
+unsafe impl Send for Origin {}
+
+/// A store with this layout's glyphs fetched and packed.
+fn fonts_for(layout: &tessella_layout::symbol_layout::SymbolLayout) -> (Fonts, Origin) {
+    let origin = Origin::new();
+    let mut fonts = Fonts::new("https://example.com/fonts/{fontstack}/{range}.pbf");
+    fonts
+        .fetch(&layout.dependencies(), &origin)
+        .expect("the origin answers");
+    (fonts, origin)
 }
 
 /// A style labelling the fixture's roads by their type, since the fixture's roads have no name.
@@ -154,8 +166,8 @@ fn the_glyphs_turn_the_layout_into_vertices() {
     let buckets = build_mvt_tile(&road_style("point"), "v", ID, &tile()).expect("the tile builds");
     let layout = buckets[0].content.as_symbol().expect("a symbol layout");
 
-    let font = Font::for_dependencies(layout.dependencies().values().flatten().copied());
-    let (buffers, laid) = layout.lay_out(&font);
+    let (fonts, _) = fonts_for(layout);
+    let (buffers, laid) = layout.lay_out(&fonts);
 
     assert!(!laid.is_empty(), "nothing was laid out");
     assert_eq!(buffers.vertices.len(), buffers.glyphs() * 4);
@@ -184,10 +196,10 @@ fn the_glyphs_turn_the_layout_into_vertices() {
 fn laying_out_twice_gives_the_same_thing() {
     let buckets = build_mvt_tile(&road_style("point"), "v", ID, &tile()).expect("the tile builds");
     let layout = buckets[0].content.as_symbol().expect("a symbol layout");
-    let font = Font::for_dependencies(layout.dependencies().values().flatten().copied());
+    let (fonts, _) = fonts_for(layout);
 
-    let (first, first_laid) = layout.lay_out(&font);
-    let (second, second_laid) = layout.lay_out(&font);
+    let (first, first_laid) = layout.lay_out(&fonts);
+    let (second, second_laid) = layout.lay_out(&fonts);
     assert_eq!(first, second, "the same layout produced different buffers");
     assert_eq!(first_laid, second_laid);
 }
@@ -224,9 +236,9 @@ fn placement_decides_point_or_line() {
     // short to hold its name gets none, and a long one gets several -- on this fixture at a
     // spacing of 400 the two effects together give 873 from 1773 roads, so a count alone says
     // nothing about whether repetition happens.
-    let font = Font::for_dependencies(line.dependencies().values().flatten().copied());
-    let (_, point_laid) = point.lay_out(&font);
-    let (_, line_laid) = line.lay_out(&font);
+    let (fonts, _) = fonts_for(line);
+    let (_, point_laid) = point.lay_out(&fonts);
+    let (_, line_laid) = line.lay_out(&fonts);
     assert_eq!(point_laid.len(), point.pending.len());
     assert!(
         !line_laid.is_empty(),
@@ -237,7 +249,7 @@ fn placement_decides_point_or_line() {
     let closer =
         build_mvt_tile(&road_style_spaced("line", 100.0), "v", ID, &tile()).expect("builds");
     let closer = closer[0].content.as_symbol().expect("a symbol layout");
-    let (_, closer_laid) = closer.lay_out(&font);
+    let (_, closer_laid) = closer.lay_out(&fonts);
     assert!(
         closer_laid.len() > line_laid.len() * 2,
         "{} at spacing 400 and {} at 100",
@@ -246,7 +258,7 @@ fn placement_decides_point_or_line() {
     );
 
     // And a line-placed label records where along its road each glyph sits.
-    let (buffers, _) = line.lay_out(&font);
+    let (buffers, _) = line.lay_out(&fonts);
     assert!(
         buffers.glyph_offsets.iter().any(|offset| *offset != 0.0),
         "a line label recorded no along-line distances"
@@ -292,4 +304,33 @@ fn a_feature_without_the_property_produces_no_label() {
         "{} roads were labelled with a name they do not have",
         layout.pending.len()
     );
+}
+
+/// A tile's whole symbol layer costs one request.
+///
+/// §5.1's store, asserted where it pays: the layer resolves 873 labels over 1773 roads and every
+/// one of them is ASCII, so one range answers all of them. A store keyed per label — or per
+/// tile — would ask once each, and the map would work while spending a round trip a label.
+#[test]
+fn a_tile_of_labels_costs_one_request() {
+    let buckets = build_mvt_tile(&road_style("point"), "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+    assert!(layout.pending.len() > 100, "too few labels to be a test");
+
+    let (mut fonts, origin) = fonts_for(layout);
+    assert_eq!(origin.asked().len(), 1, "{:?}", origin.asked());
+
+    // And a second tile of the same style asks for nothing more.
+    let again = build_mvt_tile(&road_style("line"), "v", ID, &tile()).expect("builds");
+    let again = again[0].content.as_symbol().expect("a symbol layout");
+    let fetched = fonts
+        .fetch(&again.dependencies(), &origin)
+        .expect("the origin answers");
+    assert_eq!(fetched, 0, "the same letters were fetched again");
+    assert_eq!(origin.asked().len(), 1);
+
+    // The store answers for it without another byte off the network.
+    let (buffers, laid) = again.lay_out(&fonts);
+    assert!(!laid.is_empty());
+    assert!(!buffers.is_empty());
 }
