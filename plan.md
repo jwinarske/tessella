@@ -1081,6 +1081,19 @@ is the realistic worst case, not a contrived one).
   are consumer-**acknowledged** via the reverse-channel epoch — mbgl retains until *built*,
   and the build→GPU-upload gap is exactly where its single-frame holes come from. Per-tile
   handoff as descendants land; stencil resolves overlap.
+  The substitution itself lands as `tessella_tile::renderables`, a transcription of mbgl's
+  `algorithm::updateRenderables`: an ideal tile that is not ready falls back to its children if
+  *all four* are ready — three children and a hole is a hole — otherwise to the nearest ready
+  ancestor, which is almost always what was on screen a moment ago. The map goes momentarily
+  blurry rather than momentarily empty. Necessity is carried separately from retention because
+  it decides what may be *fetched*: an ideal tile is required, a substitute optional, since a
+  request for a stopgap competes with the tile that would make it unnecessary. Checked against
+  all eighteen of mbgl's own expectations, whole action logs rather than final state — what the
+  algorithm declines to ask for (the ancestry a sibling already walked, the request it does not
+  spend on a substitute) is as much of the contract as what it draws. The acknowledged part of
+  the bullet is *not* yet done: `TileState::renderable` still means built, which is the caller's
+  to define and does not change the algorithm, and making it mean acknowledged needs the
+  reverse-channel epoch of R4.
 - **Bounded, prioritized burst.** Decode/layout center-out within visible cover, foreground
   view class first; the tick geometry budget (§11.2) amortizes buffer creation across 2–3
   frames while ancestors still cover. Symbols cross-fade through placement; fades count as

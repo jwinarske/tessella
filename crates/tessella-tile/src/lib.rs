@@ -13,8 +13,11 @@
 //!
 //! Status: the Mercator projection, the process-scoped tile store with refcounted retain, cover
 //! computation for unpitched views — by rectangle or by arbitrary shape, the latter a port of
-//! mbgl's scanline — and the boundary hysteresis of §13.2. Pitched cover and the rest of §13.2's
-//! retain-chain machinery are not implemented.
+//! mbgl's scanline — the boundary hysteresis of §13.2, and its never-blank substitution, which
+//! decides what to draw for an ideal tile that is not ready yet. Pitched cover is not
+//! implemented, and neither is the acknowledged half of never-blank: substitution asks whether a
+//! tile is renderable, and making that mean consumer-acknowledged rather than built needs the
+//! reverse-channel epoch.
 
 //! # This crate uses std, deliberately
 //!
@@ -35,6 +38,7 @@ pub mod camera;
 pub mod cover;
 pub mod polygon;
 pub mod projection;
+pub mod renderables;
 pub mod store;
 
 pub use cover::{CoverError, TileCoord, ViewTransform, cover};

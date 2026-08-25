@@ -220,7 +220,7 @@ type Accepts = Box<dyn Fn(&str) -> bool + Send + Sync>;
 /// # Why the predicate belongs to the route and not to the source
 ///
 /// A source knows how to read something; it does not know whether it is the one that should.
-/// The same [`crate::pmtiles::source::PmtilesFileSource`] serves whichever archives the caller
+/// The same `pmtiles` feature's `PmtilesFileSource` serves whichever archives the caller
 /// points it at, and a caller that wants two of them — one for a region and one for the world —
 /// distinguishes them by URL and not by asking either source to disown the other.
 ///
