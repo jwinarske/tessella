@@ -794,6 +794,20 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   the reason the grid exists. It now reports how many shapes share a cell with a query, and that
   is asserted directly: one for a one-cell query over a hundred spread shapes, four for a
   four-cell query.
+  A label's collision box follows: mbgl's `CollisionFeature` for point placement. Scale then pad,
+  in that order, which is what keeps `text-padding` a constant number of screen pixels instead of
+  something that widens as the map zooms in. A rotated label reserves the upright box that
+  contains it, since the index is axis-aligned — mbgl notes it "may be quite large for wide
+  labels rotated 45 degrees", and a long label on a diagonal duly reserves close to a square.
+  A label that occupies nothing gets *no* box rather than an empty one: a zero-sized box at the
+  anchor still collides with whatever covers that point, so a label still waiting for its glyphs
+  would push a visible one off the map.
+  One flaky test was fixed on the way. `sources_resolve_together_rather_than_in_turn` bounded a
+  fan-out by wall clock, which is a measurement of the machine it ran on — this file's own header
+  says as much — and it failed under a loaded workspace run while passing every time alone. It
+  now counts how many manifest fetches are in flight at once, which does not move with load. The
+  first version of that gauge counted *every* fetch and was satisfied by the tile phase whatever
+  the manifests did; making resolution strictly serial still passed until it was narrowed.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

@@ -9,6 +9,7 @@
 //! something.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use tessella_orchestrate::boot::{Boot, BootError, ColdStart, Workers};
@@ -25,20 +26,52 @@ fn server() -> tile_server::Server {
         .expect("binds")
 }
 
-/// Wraps a source so each fetch takes a known minimum time.
+/// Wraps a source so each fetch takes a known minimum time, and counts how many run at once.
 ///
-/// Without one, a loopback fetch is faster than the thread that issues it: a serial cold start
-/// finishes before a parallel one has spun its workers up, and the fan-out would measure as a
-/// pessimisation. The delay is what turns "did the work overlap" into an observation.
+/// Without the delay, a loopback fetch is faster than the thread that issues it: a serial cold
+/// start finishes before a parallel one has spun its workers up, and the fan-out would measure
+/// as a pessimisation. The delay is what turns "did the work overlap" into an observation.
+///
+/// The gauge is what that observation should actually be. A wall-clock bound on a fan-out is a
+/// measurement of the machine it ran on — this file's own header says so — and it duly failed
+/// under a loaded workspace run while passing every time in isolation. How many fetches were in
+/// flight at once is the property, and it does not move with the load.
 struct Slow {
     inner: HttpFileSource,
     delay: Duration,
+    /// Fetches currently running.
+    live: Arc<AtomicUsize>,
+    /// The most that ever ran at once.
+    peak: Arc<AtomicUsize>,
+}
+
+impl Slow {
+    fn new(delay: Duration) -> Self {
+        Self {
+            inner: HttpFileSource::default(),
+            delay,
+            live: Arc::new(AtomicUsize::new(0)),
+            peak: Arc::new(AtomicUsize::new(0)),
+        }
+    }
 }
 
 impl FileSource for Slow {
     fn fetch(&self, url: &str) -> Result<Response, FetchError> {
+        // Manifests only. A boot fans its *tiles* out too, so a gauge over every fetch is
+        // satisfied by the tile phase whatever the manifests did — which it was: a mutation
+        // making the manifests strictly serial still passed until this narrowed.
+        let counted = url.ends_with(".json");
+        if counted {
+            let now = self.live.fetch_add(1, Ordering::AcqRel) + 1;
+            self.peak.fetch_max(now, Ordering::AcqRel);
+        }
         std::thread::sleep(self.delay);
-        self.inner.fetch(url)
+        let response = self.inner.fetch(url);
+        if counted {
+            self.live.fetch_sub(1, Ordering::AcqRel);
+        }
+        response
     }
 }
 
@@ -125,10 +158,7 @@ fn a_cold_start_reaches_the_first_bucket() {
 #[test]
 fn the_first_bucket_precedes_completion() {
     let server = server();
-    let files = Arc::new(Coalescing::new(Slow {
-        inner: HttpFileSource::default(),
-        delay: Duration::from_millis(20),
-    }));
+    let files = Arc::new(Coalescing::new(Slow::new(Duration::from_millis(20))));
     let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
     let started = boot(
         &style(&server.origin()),
@@ -159,10 +189,7 @@ fn the_cover_is_fetched_in_parallel() {
     let text = style(&server.origin());
 
     let run = |workers: Workers| {
-        let files = Arc::new(Coalescing::new(Slow {
-            inner: HttpFileSource::default(),
-            delay,
-        }));
+        let files = Arc::new(Coalescing::new(Slow::new(delay)));
         // A fresh cache each time: reusing one would make the second run a cache hit and
         // measure nothing.
         let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
@@ -758,18 +785,18 @@ fn sources_resolve_together_rather_than_in_turn() {
         .join(", ");
     let text = format!(r#"{{"version": 8, "sources": {{{sources}}}, "layers": [{layers}]}}"#);
 
-    let files = Arc::new(Coalescing::new(Slow {
-        inner: HttpFileSource::default(),
-        delay: DELAY,
-    }));
+    let slow = Slow::new(DELAY);
+    let peak = Arc::clone(&slow.peak);
+    let files = Arc::new(Coalescing::new(slow));
     let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
     let started = boot(&text, &view(4.0), &files, &cache, Workers::new(4)).expect("boots");
 
-    // Four serial round trips would be 160 ms. One batch of four is one, plus scheduling.
-    let resolving = started.trace.sources_resolved - started.trace.style_parsed;
+    // Four manifests that resolve in turn are never more than one in flight. The assertion is
+    // that they overlap, not how long they took: a wall-clock bound here measures the machine,
+    // and did — it failed under a loaded workspace run and passed alone every time.
     assert!(
-        resolving < DELAY * 3,
-        "four manifests took {resolving:?}, which is more than one round trip's worth"
+        peak.load(Ordering::Acquire) >= 2,
+        "the four manifests resolved one after another"
     );
     assert!(!started.tiles.is_empty(), "and the cover still built");
 }

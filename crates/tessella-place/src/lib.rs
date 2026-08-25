@@ -15,4 +15,5 @@
 
 #![forbid(unsafe_code)]
 
+pub mod feature;
 pub mod grid;
