@@ -569,9 +569,14 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   `Expression::parse` still names an unrecognized head rather than accepting it as an array of
   strings — the spec catches those by type-checking against the property, which nothing at that
   point knows.
-  Exit: probe parity on a *real* style sans symbols — **geometry half met**: nine tiles of a
+  Exit: probe parity on a *real* style sans symbols — **met**: nine tiles of a
   Protomaps planet extract at z5, all 21 drawables byte-identical to the probe, fills and lines
-  both, over the same live origin. Cold-boot-to-first-tile is traced (§12.5): style parse,
+  both, over the same live origin. The uniforms match too, which was the half outstanding: the
+  frame-wide paint parameters at that camera, every layer's drawable buffer, both fills'
+  evaluated properties and their sized-and-empty tile props, and the line layer's `ratio` and
+  defaults — all twelve buffers the golden carries. Those read the drawable list out of the
+  dump's own ids rather than rebuilding a cover, so they need no tile server; which tiles the
+  cover holds is a separate assertion that does. Cold-boot-to-first-tile is traced (§12.5): style parse,
   source resolution, cover, first fetch, first bucket, complete, with the cover fanned out
   across workers. Against a local Protomaps extract a nine-tile cover reaches first geometry in
   1.9 ms and completes in 3.7 ms, against 4.1/9.1 ms serially — where the same measurement read
