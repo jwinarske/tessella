@@ -789,3 +789,100 @@ mod tests {
         }
     }
 }
+
+/// The zoom level a view covers at, with hysteresis at the boundaries (§13.2).
+///
+/// # Why this is not [`ViewTransform::tile_zoom`]
+///
+/// That is a pure function of a camera and has to stay one: the cover, the oracle parity and the
+/// tile keys all depend on the same zoom being derived the same way from the same view. What
+/// hysteresis needs is memory — which level is *currently* being covered — so it lives in a value
+/// the caller keeps rather than in the derivation.
+///
+/// # What it prevents
+///
+/// A crossing is a burst: new cover, fetch, decode, layout, buffer creation, and with four views
+/// possibly all at once (§13.2). A pinch that settles near an integer zoom does not cross once.
+/// It crosses on whichever frames the user's fingers happen to wobble across the boundary — at
+/// gesture rate, sixty times a second, each one discarding the level it just built and
+/// rebuilding the one before it. The tiles are all in the store, so nothing looks wrong; the
+/// device simply does a level transition per frame for as long as the user holds still.
+///
+/// A dead band of [`Self::DEFAULT_MARGIN`] either side means the level changes when the user
+/// meant it to and not when their hand shook.
+///
+/// # Why a jump still snaps
+///
+/// The band is checked against the level currently held, not against the distance travelled, so
+/// a fly-to from zoom 5 to zoom 14 passes the threshold on its first frame and lands on 14
+/// directly. Hysteresis is for the boundary a camera is sitting on, not a tax on going anywhere.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ZoomLatch {
+    level: u8,
+    margin: f64,
+}
+
+impl ZoomLatch {
+    /// The dead band either side of an integer level, in zoom units.
+    ///
+    /// §13.2 asks for 0.1–0.2. The lower end: the band is dead in both directions, so 0.1 gives
+    /// a level that holds across a fifth of a zoom level of wobble, and anything wider starts
+    /// being noticeable as a level that should have changed and did not.
+    pub const DEFAULT_MARGIN: f64 = 0.1;
+
+    /// A latch starting at the level `zoom` would cover.
+    #[must_use]
+    pub fn new(zoom: f64) -> Self {
+        Self::with_margin(zoom, Self::DEFAULT_MARGIN)
+    }
+
+    /// As [`Self::new`], with a chosen dead band.
+    #[must_use]
+    pub fn with_margin(zoom: f64, margin: f64) -> Self {
+        Self {
+            level: ViewTransform {
+                longitude: 0.0,
+                latitude: 0.0,
+                zoom,
+                width: 1.0,
+                height: 1.0,
+                bearing: 0.0,
+                pitch: 0.0,
+            }
+            .tile_zoom(),
+            margin: margin.max(0.0),
+        }
+    }
+
+    /// The level currently held, without considering a new zoom.
+    #[must_use]
+    pub const fn level(&self) -> u8 {
+        self.level
+    }
+
+    /// The level to cover at now, moving the latch if the zoom has left the dead band.
+    pub fn update(&mut self, zoom: f64) -> u8 {
+        let target = ViewTransform {
+            longitude: 0.0,
+            latitude: 0.0,
+            zoom,
+            width: 1.0,
+            height: 1.0,
+            bearing: 0.0,
+            pitch: 0.0,
+        }
+        .tile_zoom();
+
+        let held = f64::from(self.level);
+        if target > self.level {
+            // Rising: hold until the zoom is past the top of this level *and* the band.
+            if zoom >= held + 1.0 + self.margin {
+                self.level = target;
+            }
+        } else if target < self.level && zoom < held - self.margin {
+            // Falling: hold until it is below the bottom of this level and the band.
+            self.level = target;
+        }
+        self.level
+    }
+}

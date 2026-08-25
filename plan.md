@@ -1023,7 +1023,13 @@ is the realistic worst case, not a contrived one).
   neighbors briefly on gesture reversal. Converts the burst from crossing-synchronous to
   background-priority work.
 - **Hysteresis** (~0.1–0.2 z) on cover recomputation at the boundary; pinch oscillation
-  around an integer zoom must not rebuild cover at gesture rate.
+  around an integer zoom must not rebuild cover at gesture rate. `cover::ZoomLatch` holds it, at
+  0.1 by default. Separate from `ViewTransform::tile_zoom` on purpose: that is a pure function of
+  a camera and the cover, the oracle parity and the tile keys all depend on it staying one, while
+  hysteresis needs memory of the level currently held. The band is measured against that held
+  level rather than against distance travelled, so a fly-to across nine levels still lands where
+  it was aimed. Not yet wired into the orchestrator — it is a value a caller keeps, and which
+  caller keeps it is the same question as where per-view cover state lives (§5.2).
 - **Never-blank, acknowledged.** Ancestors retained until every covering descendant's buckets
   are consumer-**acknowledged** via the reverse-channel epoch — mbgl retains until *built*,
   and the build→GPU-upload gap is exactly where its single-frame holes come from. Per-tile
