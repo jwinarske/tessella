@@ -983,7 +983,7 @@ mod symbol_ubos {
     const DUMP: &str = include_str!("../../../tests/golden/symbol_style.dump");
 
     /// The oracle's buffers, keyed by layer and slot: the size and the sorted 16-byte blocks.
-    fn oracle() -> BTreeMap<(i32, u32), (usize, Vec<String>)> {
+    pub(super) fn oracle() -> BTreeMap<(i32, u32), (usize, Vec<String>)> {
         let mut out = BTreeMap::new();
         for line in DUMP.lines() {
             let Some(rest) = line.strip_prefix("ubo ") else {
@@ -1025,7 +1025,7 @@ mod symbol_ubos {
         out
     }
 
-    fn blocks(bytes: &[u8]) -> Vec<String> {
+    pub(super) fn blocks(bytes: &[u8]) -> Vec<String> {
         let mut blocks: Vec<String> = bytes
             .chunks(16)
             .map(|chunk| chunk.iter().map(|byte| format!("{byte:02x}")).collect())
@@ -1091,5 +1091,103 @@ mod symbol_ubos {
         let mine = ubo::symbol_props_from_paint(&paint, 13.0);
         assert_eq!(mine.len(), *size);
         assert_eq!(&blocks(&mine), expected);
+    }
+}
+
+/// The symbol layer's per-drawable buffer, byte for byte.
+///
+/// The third and last of the capture's symbol buffers, and the one that is not a paint buffer:
+/// three matrices per entry, in three different spaces. It is where the label-plane and GL
+/// coordinate matrices are checked at all — nothing else in this build produces them, and a
+/// point label draws correctly with either one wrong, because the walk between them is what a
+/// *line* label needs.
+mod symbol_drawable_ubo {
+    use tessella_capture_abi::generated::ubo_layouts::SYMBOL_DRAWABLE_UBO;
+    use tessella_orchestrate::ubo::{self, SymbolDrawableEntry};
+    use tessella_tile::cover::ViewTransform;
+
+    use super::symbol_ubos::{blocks, oracle};
+
+    fn probe() -> ViewTransform {
+        ViewTransform {
+            longitude: -0.11,
+            latitude: 51.505,
+            zoom: 13.0,
+            width: 1024.0,
+            height: 768.0,
+            bearing: 0.0,
+            pitch: 0.0,
+        }
+    }
+
+    /// The two tiles the golden's symbol drawables sit on, in the order it lists them.
+    const TILES: [(u32, u32); 2] = [(4093, 2723), (4093, 2724)];
+
+    #[test]
+    fn the_drawable_buffer_matches_the_oracle() {
+        let view = probe();
+        let entries: Vec<SymbolDrawableEntry> = TILES
+            .iter()
+            .map(|(x, y)| {
+                SymbolDrawableEntry::for_tile(
+                    &view,
+                    13,
+                    *x,
+                    *y,
+                    0,
+                    // The symbol layer is style index 1, sublayer 0.
+                    1,
+                    0,
+                    [512.0, 512.0],
+                    16.0,
+                )
+                .expect("the probe has no bearing or pitch")
+            })
+            .collect();
+
+        let mine = ubo::pack_symbol_drawable_buffer(&entries, SYMBOL_DRAWABLE_UBO.stride);
+        let (size, expected) = &oracle()[&(1, 2)];
+        assert_eq!(mine.len(), *size, "the array is one stride per drawable");
+        assert_eq!(&blocks(&mine), expected);
+    }
+
+    /// The coordinate matrix carries no tile, so both entries share it.
+    ///
+    /// Stated separately because the buffer comparison sorts its blocks and would pass if the
+    /// two matrices were swapped between entries. This one is the viewport's alone — half the
+    /// viewport on each axis with y flipped — and a version that folded in the tile would still
+    /// draw a point label correctly.
+    #[test]
+    fn the_coordinate_matrix_is_the_viewport_s_alone() {
+        let view = probe();
+        let first =
+            SymbolDrawableEntry::for_tile(&view, 13, 4093, 2723, 0, 1, 0, [512.0, 512.0], 16.0)
+                .expect("no bearing");
+        let second =
+            SymbolDrawableEntry::for_tile(&view, 13, 4093, 2724, 0, 1, 0, [512.0, 512.0], 16.0)
+                .expect("no bearing");
+
+        assert_eq!(first.coord_matrix, second.coord_matrix);
+        assert_ne!(
+            first.matrix, second.matrix,
+            "two different tiles share a placement matrix"
+        );
+        assert_ne!(
+            first.label_plane_matrix, second.label_plane_matrix,
+            "the label plane does not follow the tile"
+        );
+
+        // Two over the viewport on each axis, y negated. Written out because it is the one
+        // matrix here with no camera in it, so a wrong one is a constant that is simply wrong.
+        assert!((first.coord_matrix[0] - 2.0 / 1024.0).abs() < 1e-9);
+        assert!((first.coord_matrix[5] + 2.0 / 768.0).abs() < 1e-9);
+        assert_eq!(
+            [
+                first.coord_matrix[12],
+                first.coord_matrix[13],
+                first.coord_matrix[15]
+            ],
+            [-1.0, 1.0, 1.0]
+        );
     }
 }

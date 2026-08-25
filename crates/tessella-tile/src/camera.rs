@@ -420,6 +420,47 @@ pub fn settled(view: &ViewTransform) -> ViewTransform {
         ..*view
     }
 }
+/// mbgl's `getLabelPlaneMatrix`, for a label aligned to the viewport.
+///
+/// The space a line label's glyphs are walked along. Symbols are laid out in *screen* units and
+/// projected before being placed on the line, so this takes tile coordinates to the plane the
+/// layout measured in: half the viewport on each axis, y flipped, shifted so the origin is the
+/// top left, then through the tile's own projection.
+///
+/// Only the viewport-aligned branch. `text-pitch-alignment` defaults to `viewport` for point
+/// placement, and the map-aligned branch scales by tile units per pixel and rotates by the
+/// bearing — which needs a bearing this build refuses (DR-19's second qualification), so
+/// producing it would put a matrix on the wire nothing has checked.
+#[must_use]
+pub fn label_plane_matrix(pos_matrix: &Mat4, width: f64, height: f64) -> Mat4 {
+    let mut m = scale(&identity(), width / 2.0, -(height / 2.0), 1.0);
+    translate_in_place(&mut m, 1.0, -1.0, 0.0);
+    multiply(&m, pos_matrix)
+}
+
+/// mbgl's `getGlCoordMatrix`, for a label aligned to the viewport.
+///
+/// The inverse trip: from the label plane back to clip space. It carries no tile and no camera,
+/// so it is the same matrix for every drawable of a frame — which is why it looks like a
+/// constant in the capture and is not one, since it is the viewport's.
+#[must_use]
+pub fn gl_coord_matrix(width: f64, height: f64) -> Mat4 {
+    let mut m = scale(&identity(), 1.0, -1.0, 1.0);
+    translate_in_place(&mut m, -1.0, -1.0, 0.0);
+    scale(&m, 2.0 / width, 2.0 / height, 1.0)
+}
+
+/// The 4x4 identity.
+#[must_use]
+pub const fn identity() -> Mat4 {
+    [
+        1.0, 0.0, 0.0, 0.0, //
+        0.0, 1.0, 0.0, 0.0, //
+        0.0, 0.0, 1.0, 0.0, //
+        0.0, 0.0, 0.0, 1.0,
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1169,9 +1169,26 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   the halo first and the fill over it, so a layer with `text-halo-width` emits twice — and
   `gamma_scale` is one at pitch zero, left at one rather than given the pitched value mbgl scales
   it by, since inventing that would put a number on the wire nothing produced.
-  The drawable array is the remaining one, and it is not a paint buffer: it carries three
-  matrices per entry — the tile matrix, the label-plane matrix and the GL coordinate matrix —
-  which is the projection stage and its own piece.
+  The drawable array follows, and it is the one that is not a paint buffer: three matrices per
+  entry, because a symbol is drawn in three spaces at once. `matrix` places the tile the way
+  every other layer's does; `label_plane_matrix` takes tile coordinates into the screen units the
+  label was *laid out* in, which is where a line label's glyphs are walked along; and
+  `coord_matrix` takes that plane back to clip. Baking them into one works for a point label and
+  puts every glyph of a line label in the wrong place, since the walk has to happen between the
+  two — which is the same fact the along-line projection is built on, arriving from the other
+  side.
+  Both are mbgl's viewport-aligned branch only. `text-pitch-alignment` defaults to `viewport` for
+  point placement; the map-aligned branch scales by tile units per pixel and rotates by the
+  bearing, which needs a bearing this build refuses, so producing it would put a matrix on the
+  wire nothing has checked. The coordinate matrix carries no tile and no camera at all — it is
+  the viewport's alone, two over the width and minus two over the height — so it is the same for
+  every drawable of a frame, and a version that folded in the tile would still draw a point label
+  correctly. That is asserted separately, because the buffer comparison sorts its blocks and
+  would pass with the two matrices swapped between entries.
+  With that, `symbol_style.dump` reproduces in full but for its seven elided lines: the drawable
+  identities, the index buffers, the five attribute descriptors, the atlas texture's size and
+  format, the painter order and all three uniform buffers. What remains elided is the atlas
+  packing order, which is mbgl's to make deterministic.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

@@ -757,6 +757,144 @@ fn uniform_enum(
         .unwrap_or_else(|| default.to_string())
 }
 
+/// One entry of a symbol layer's `SymbolDrawableUBO` array.
+///
+/// Three matrices, because a symbol is drawn in three spaces at once. `matrix` places the tile
+/// the way every other layer's does; `label_plane_matrix` takes tile coordinates into the screen
+/// units the label was *laid out* in, which is where a line label's glyphs are walked along; and
+/// `coord_matrix` takes that plane back to clip space. Baking them into one would work for a
+/// point label and put every glyph of a line label in the wrong place, since the walk has to
+/// happen between the two.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SymbolDrawableEntry {
+    /// Tile-local to clip.
+    pub matrix: [f32; 16],
+    /// Tile-local to the plane the label was laid out in.
+    pub label_plane_matrix: [f32; 16],
+    /// That plane back to clip.
+    pub coord_matrix: [f32; 16],
+    /// The glyph atlas, in pixels.
+    pub texsize: [f32; 2],
+    /// The icon atlas, in pixels. Zero while there are no icons.
+    pub texsize_icon: [f32; 2],
+    /// Whether this drawable is the text half rather than the icon half.
+    pub is_text: bool,
+    /// `text-rotation-alignment: map` under a viewport-aligned pitch.
+    pub rotate_symbol: bool,
+    /// `text-pitch-alignment: map`.
+    pub pitch_with_map: bool,
+    /// Whether the size is the same at every zoom, and the same for every feature.
+    ///
+    /// Two separate flags because the shader takes three paths: a constant needs no
+    /// interpolation, a zoom curve interpolates between the two packed sizes, and a data-driven
+    /// one reads the size out of the vertex. Setting the wrong pair draws every label at the
+    /// wrong size in a way that looks like a font problem.
+    pub is_size_zoom_constant: bool,
+    /// Whether the size is constant across features.
+    pub is_size_feature_constant: bool,
+    /// Whether `text-offset` is set.
+    pub is_offset: bool,
+    /// Where between the two packed sizes this zoom falls.
+    pub size_t: f32,
+    /// The size itself, when it is constant.
+    pub size: f32,
+    /// Mix factors for fill colour, halo colour, opacity, halo width and halo blur.
+    pub interpolations: [f32; 5],
+}
+
+impl SymbolDrawableEntry {
+    /// The entry for one tile's symbols under a view.
+    ///
+    /// # Errors
+    ///
+    /// [`camera::CameraError`] when the view has bearing or pitch.
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_tile(
+        view: &ViewTransform,
+        z: u8,
+        x: u32,
+        y: u32,
+        wrap: i32,
+        layer_index: i32,
+        sub_layer_index: i32,
+        texsize: [f32; 2],
+        size: f32,
+    ) -> Result<Self, camera::CameraError> {
+        let mut projection = camera::proj_matrix(view)?;
+        projection[14] -= f64::from(depth_offset(layer_index, sub_layer_index));
+        let tile = camera::multiply(
+            &projection,
+            &camera::matrix_for_tile(z, x, y, wrap, view.zoom),
+        );
+
+        // The label plane is built from the tile matrix *without* the depth offset — mbgl passes
+        // the drawable's own matrix, and the offset is already in it. Passing an unoffset one
+        // would put the label plane a hair in front of the geometry it belongs to.
+        let plane = camera::label_plane_matrix(&tile, view.width, view.height);
+        let coord = camera::gl_coord_matrix(view.width, view.height);
+
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(Self {
+            matrix: core::array::from_fn(|index| tile[index] as f32),
+            label_plane_matrix: core::array::from_fn(|index| plane[index] as f32),
+            coord_matrix: core::array::from_fn(|index| coord[index] as f32),
+            texsize,
+            texsize_icon: [0.0, 0.0],
+            is_text: true,
+            rotate_symbol: false,
+            pitch_with_map: false,
+            // A constant `text-size` is constant in both senses, which is the common case and
+            // the only one this build produces.
+            is_size_zoom_constant: true,
+            is_size_feature_constant: true,
+            is_offset: false,
+            size_t: 0.0,
+            size,
+            interpolations: [0.0; 5],
+        })
+    }
+}
+
+/// Packs the `SymbolDrawableUBO` array.
+///
+/// `stride` is the layout's, which is 272 against a size of 260 — the padding is between
+/// entries, not inside one, and using the size as the stride puts every entry after the first
+/// twelve bytes early.
+#[must_use]
+pub fn pack_symbol_drawable_buffer(entries: &[SymbolDrawableEntry], stride: u32) -> Vec<u8> {
+    let stride = stride as usize;
+    let mut out = alloc::vec![0u8; entries.len() * stride];
+    for (entry, slot) in entries.iter().zip(out.chunks_mut(stride)) {
+        let mut at = 0usize;
+        let put_f32s = |slot: &mut [u8], at: &mut usize, values: &[f32]| {
+            for value in values {
+                slot[*at..*at + 4].copy_from_slice(&value.to_le_bytes());
+                *at += 4;
+            }
+        };
+        put_f32s(slot, &mut at, &entry.matrix);
+        put_f32s(slot, &mut at, &entry.label_plane_matrix);
+        put_f32s(slot, &mut at, &entry.coord_matrix);
+        put_f32s(slot, &mut at, &entry.texsize);
+        put_f32s(slot, &mut at, &entry.texsize_icon);
+        for flag in [
+            entry.is_text,
+            entry.rotate_symbol,
+            entry.pitch_with_map,
+            entry.is_size_zoom_constant,
+            entry.is_size_feature_constant,
+            entry.is_offset,
+        ] {
+            slot[at..at + 4].copy_from_slice(&i32::from(flag).to_le_bytes());
+            at += 4;
+        }
+        put_f32s(slot, &mut at, &[entry.size_t, entry.size]);
+        put_f32s(slot, &mut at, &entry.interpolations);
+        debug_assert_eq!(at, 260);
+    }
+    out
+}
+
 /// Packs `SymbolTilePropsUBO`, one entry per drawable.
 ///
 /// Sixteen bytes each: which of a symbol's two halves this drawable draws, whether it is the
