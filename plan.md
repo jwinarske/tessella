@@ -586,12 +586,20 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   at all. With that fixed, speedup tracks cores busy almost exactly (2.95× at 2.99 cores, 2.90×
   at 2.95 cores on pure arithmetic), which is the statement that there is no serialization; it
   is also robust to whatever else is on the machine, since both numbers move together.
-  What it settled: `Workers::DEFAULT` of 4 stands. Nothing above it helps, and it reaches the
-  highest cores-busy of any row. Below it there is a real loss. But the *reason* the curve
-  flattens is not the pool — a nine-tile z5 cover spans 301 bytes to 146 KB, and completion is
-  bounded below by the largest tile however many workers there are: 33% of the cover's bytes,
-  and the floor the table reaches from two workers onward. A cover of nine *identical* tiles
-  keeps scaling where the real one stops, which is how the two were told apart.
+  What it settled: `Workers::DEFAULT` of 4 stands. On an idle board, nine real z5 tiles decode
+  and build in 54.5 ms inline, 30.9 ms on one worker, 20.6 ms on two and 18.5 ms on four — where
+  it stops. Six and eight add nothing. Pure arithmetic on the same pool reaches 3.86× at 3.90
+  cores busy, so the pool itself is linear to within the measurement; the decode table's 2.95× at
+  3.79 cores is the gap unevenness and allocation leave. A nine-tile z5 cover spans 301 bytes to
+  146 KB, and completion is bounded below by the largest tile however many workers there are —
+  33% of the cover's bytes. A cover of nine *identical* tiles keeps scaling where the real one
+  stops, which is how the two were told apart. Cold start on the board, four workers: parse
+  120 µs, sources 2.67 ms, cover 2.71 ms, first fetch 5.61 ms, first bucket 6.07 ms, complete
+  34.5 ms.
+  Board measurements are worth only the quiet they were taken in: a first pass reported
+  1.7–2.1× where an idle board reports 2.95–3.86×, because another project's test suite held two
+  of the four cores. The cores-busy column is what makes that detectable rather than merely
+  disappointing, since a ratio against a contended baseline still looks plausible.
   And a correction to §5.4: this SoC has no big cores. RK3566 is four A55s in one cluster, so
   "decode workers on the little cores, big cores for orchestrator and Filament" describes an
   RK3588 and not this board. On a homogeneous quad there is nothing to pin *to*; the bounded
@@ -688,9 +696,16 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   frame could be complete — and seventy tiles fetched in seventy calls across four views. Only a
   `Required` retain fetches there, which is the necessity distinction asserted where it costs
   something: if considering a substitute were enough to request it, a crossing's burst would be
-  a multiple of the cover that caused it. Exit: §13.3's four-view zoom benchmark on RK3566,
-  which is the remaining half and needs the board — frame budget, ring occupancy, and symbol
-  pops once R2 has symbols to pop.
+  a multiple of the cover that caused it. §13.3's benchmark is now taken on the RK3566 as well, and everything it can
+  check before symbols exist is green. Sixty-five frames, four views, seventy tiles built once
+  between them: per-frame producer cost — cover, clip masks, drawable matrices, uniform writes,
+  the work §5.2 calls irreducibly per-view — is 1.5 ms minimum, 2.3 ms median, 3.5 ms at the 95th
+  percentile and 5.1 ms at worst, against 16.7 ms of a sixty-hertz frame. The worst frames are
+  the crossings, which is the case §13.3 names. Ring occupancy peaks at 39 KB against a consumer
+  draining once per frame, and 239 envelopes in the busiest frame — that is the high-water mark
+  §4 wants a ring sized against, for this style; a style with more layers scales it, but the
+  order of magnitude is settled. Exit: zero symbol pops, which needs R2 to have symbols that
+  could pop.
 - **R2** — symbols: glyph manager, shaping, quads, per-view placement, collision, cross-tile
   index, fades. Largest phase; budget ≈ R0+R1.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
