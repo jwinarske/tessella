@@ -1145,6 +1145,14 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   moved — §6.5's still frame is a frame with no envelopes in it, and re-uploading a quarter of a
   megabyte of unchanged glyphs every frame would make a settled map the most expensive one. Past
   §4's rect cap they collapse to their union, which costs bandwidth and never pixels.
+  Painter order for a style with symbols in it then joins the fill and line layers': all fourteen
+  entries of the symbol capture's `order` section, compared entry for entry the way the hermetic
+  style's forty-three already are. It is the only place the symbol layer's pass and sublayer are
+  *checked* rather than chosen — they were chosen, since the dump shows sublayer 0 in the
+  translucent pass while symbols overhanging tile edges would make leaving the stencil off the
+  defensible guess. Writing it turned up the trap the section is full of: the `layer=` field of a
+  draw line is mbgl's depth slot, which runs opposite the style index, and the style index is in
+  the drawable key beside it. Reading the wrong one puts the background on top of everything.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

@@ -501,7 +501,7 @@ mod through_the_builder {
     use tessella_style::Style;
 
     /// The style, with the checkout path substituted the way the capture does it.
-    fn style() -> Style {
+    pub(super) fn style() -> Style {
         let raw = include_str!("../../tessella-style/tests/symbol_style.json");
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
         serde_json::from_str(&raw.replace("TESSELLA", root)).expect("the style parses")
@@ -792,6 +792,168 @@ mod atlas_texture {
         assert!(
             texture::glyph_atlas(TextureId(1), atlas, &settled).is_none(),
             "a settled atlas still emitted an upload"
+        );
+    }
+}
+
+/// Painter order for a style with a symbol layer in it.
+///
+/// `draw_order` pins the hermetic style's forty-three entries. This is the same comparison over
+/// the one style that has symbols, and it is the only place the symbol layer's *pass* and
+/// *sublayer* are checked against the oracle rather than chosen. They were chosen: the layer
+/// emits at sublayer 0 in the translucent pass because that is what the dump shows, and symbols
+/// overhanging tile edges would make leaving the stencil off the defensible guess. The oracle
+/// settles it, and nothing but this notices if it stops agreeing.
+mod painter_order {
+    use super::through_the_builder::style;
+
+    use std::collections::BTreeMap;
+
+    use tessella_capture_abi::envelope::ViewId;
+    use tessella_orchestrate::order::{self, DrawOrder};
+    use tessella_orchestrate::tile::{TileId as BuildTile, build_sourceless, build_tile};
+    use tessella_source::geojson;
+    use tessella_source::tiling::TilingOptions;
+    use tessella_tile::cover::{self, ViewTransform};
+
+    const DUMP: &str = include_str!("../../../tests/golden/symbol_style.dump");
+
+    /// `(pass, layer, sublayer, x, y)` for one entry.
+    type Slot = (u8, u32, i32, u32, u32);
+
+    /// The camera the capture was taken at.
+    fn probe() -> ViewTransform {
+        ViewTransform {
+            longitude: -0.11,
+            latitude: 51.505,
+            zoom: 13.0,
+            width: 1024.0,
+            height: 768.0,
+            bearing: 0.0,
+            pitch: 0.0,
+        }
+    }
+
+    fn parse_key(key: &str) -> (u32, i32, u32, u32) {
+        let mut parts = key.strip_prefix('L').expect("a layer prefix").split('.');
+        let layer: u32 = parts.next().expect("layer").parse().expect("layer number");
+        let sub: i32 = parts
+            .next()
+            .and_then(|part| part.strip_prefix('S'))
+            .expect("sublayer")
+            .parse()
+            .expect("sublayer number");
+        let mut fields = parts
+            .next()
+            .and_then(|tile| tile.strip_prefix('t'))
+            .expect("a tile field")
+            .split('_');
+        fields.next();
+        let x: u32 = fields.next().expect("x").parse().expect("x number");
+        let y: u32 = fields.next().expect("y").parse().expect("y number");
+        (layer, sub, x, y)
+    }
+
+    fn oracle_order() -> Vec<Slot> {
+        DUMP.lines()
+            .filter_map(|line| line.strip_prefix("draw "))
+            .map(|rest| {
+                let mut fields = rest.split(' ');
+                fields.next();
+                let key = fields.next().expect("a drawable key");
+                let pass: u8 = fields
+                    .next()
+                    .and_then(|field| field.strip_prefix("pass="))
+                    .expect("a pass")
+                    .parse()
+                    .expect("pass number");
+                let (layer, sub, x, y) = parse_key(key);
+                (pass, layer, sub, x, y)
+            })
+            .collect()
+    }
+
+    fn resolved_order() -> Vec<Slot> {
+        let style = style();
+        let Some(tessella_style::Source::Geojson(source)) = style.source("probe") else {
+            panic!("a geojson source");
+        };
+        let features = geojson::read(&source.data).expect("features");
+
+        #[allow(clippy::cast_possible_truncation)]
+        let mut order = DrawOrder::new(style.layers.len() as u32);
+        let mut next_id = 0;
+        let mut tile_of_geometry = BTreeMap::new();
+
+        for tile in cover::cover(&probe()).expect("covers") {
+            let at = BuildTile::new(tile.z, tile.x, tile.y);
+            let mut buckets = build_tile(&style, "probe", at, &features, TilingOptions::default())
+                .expect("tile builds");
+            buckets.extend(build_sourceless(&style, at).expect("background builds"));
+            buckets.sort_by_key(|bucket| bucket.layer_index);
+
+            for binding in order::bindings_for(
+                ViewId(0),
+                order::tile_of(tile.z, tile.x, tile.y),
+                &buckets,
+                &mut next_id,
+            ) {
+                tile_of_geometry.insert(binding.geometry.0, (tile.x, tile.y));
+                order.bind(binding);
+            }
+        }
+
+        order
+            .resolve()
+            .iter()
+            .map(|entry| {
+                let (x, y) = tile_of_geometry[&entry.geometry.0];
+                (
+                    entry.pass.bits(),
+                    entry.layer_index,
+                    entry.sub_layer_index,
+                    x,
+                    y,
+                )
+            })
+            .collect()
+    }
+
+    /// The symbol style's draw order is the oracle's, entry for entry.
+    #[test]
+    fn the_symbol_style_draws_in_the_oracle_s_order() {
+        let oracle = oracle_order();
+        assert_eq!(oracle.len(), 14, "the capture's order section");
+        assert_eq!(resolved_order(), oracle, "draw order diverges");
+    }
+
+    /// The symbol layer draws once, in the translucent pass, above the background.
+    ///
+    /// Stated separately because the whole-order comparison would also pass if both were wrong
+    /// in the same way. The background is `Opaque | Translucent` and is genuinely drawn twice;
+    /// the symbol layer is translucent only, and it precedes the background's second pass —
+    /// which is mbgl ordering by a depth slot that runs opposite the style index.
+    #[test]
+    fn the_symbol_layer_draws_once_above_the_background() {
+        let order = resolved_order();
+        let symbols: Vec<&Slot> = order.iter().filter(|slot| slot.1 == 1).collect();
+        assert_eq!(symbols.len(), 2, "one per tile that carries labels");
+        assert!(
+            symbols.iter().all(|slot| slot.0 == 2 && slot.2 == 0),
+            "{symbols:?} is not translucent at sublayer 0"
+        );
+
+        let first_symbol = order.iter().position(|slot| slot.1 == 1).expect("a symbol");
+        // Layer 0 in the key is the style's first layer, the background. Note that is *not* the
+        // `layer=` field of a draw line: that is mbgl's depth slot, which runs opposite the
+        // style index, and reading it as the style index would have the background on top.
+        let last_background = order
+            .iter()
+            .rposition(|slot| slot.1 == 0)
+            .expect("a background");
+        assert!(
+            first_symbol < last_background,
+            "the background's translucent pass drew over the labels"
         );
     }
 }
