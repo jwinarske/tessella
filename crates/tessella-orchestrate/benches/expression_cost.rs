@@ -17,8 +17,14 @@
 //!
 //! # What it found
 //!
-//! Over the fixture's 17154-feature `admin` layer: 7.9 ms data-driven against 2.0 ms constant,
-//! so evaluation is about three quarters of bucket build. §12.1's claim holds here, emphatically.
+//! Over the fixture's 17154-feature `admin` layer: 6.8 ms data-driven against 2.1 ms constant,
+//! so having data-driven paint is about two thirds of bucket build. §12.1's claim holds here.
+//!
+//! "Data-driven" is not the same as "evaluation", and the gap between the two arms is the first
+//! and not the second. It was 8.5 ms against 2.2 ms until the binder stopped allocating a
+//! scratch vector per feature and two more per slot inside `encode` — a quarter of the
+//! surcharge, in the path that runs only when a property is data-driven and so was easy to read
+//! as evaluation cost.
 //!
 //! The first version of this measured the 48-feature `water` layer instead and read 19 %, which
 //! would have argued against building the VM at all. The layer a benchmark picks is not a

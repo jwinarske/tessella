@@ -706,8 +706,11 @@ Bucket build evaluates expressions per feature; mbgl walks a boxed AST. Largest 
 item after tessellation, and the one place a rewrite beats mbgl outright:
 
 Measured on this port, against the fixture's 17154-feature `admin` layer with every paint
-property data-driven: 7.9 ms to build against 2.0 ms with the same properties constant, so
-evaluation is about three quarters of bucket build. §12.1's premise holds here.
+property data-driven: 6.8 ms to build against 2.1 ms with the same properties constant. §12.1's
+premise holds here. But "data-driven" is not "evaluation": the gap was 8.5 ms against 2.2 ms
+until the binder stopped allocating a scratch vector per feature and two more per slot inside
+`encode`, which was a quarter of the surcharge and no evaluation at all. It ran only when a
+property was data-driven, which is what made it easy to read as evaluation cost.
 
 Where that cost sits is worth knowing before building the VM. `Feature::property` called
 directly — the same dyn-dispatched call `["get", k]` makes, same scan, same owned `Value` — is

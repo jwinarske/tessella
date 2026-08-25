@@ -95,6 +95,14 @@ pub struct PaintBinder {
     stride: usize,
     zoom: f64,
     data: Vec<u8>,
+    /// One feature's bytes, reused across features.
+    ///
+    /// [`Self::push`] runs once per feature and used to allocate this each time, along with a
+    /// `Vec` per slot inside `encode` and another inside that. Three properties over a
+    /// seventeen-thousand-feature layer is a hundred and fifty thousand allocations to build
+    /// bytes that are copied out immediately — none of it expression evaluation, though it only
+    /// happens when a property is data-driven and so was easy to read as evaluation cost.
+    scratch: Vec<u8>,
 }
 
 /// Bytes a property of this kind occupies.
@@ -163,6 +171,7 @@ impl PaintBinder {
             stride,
             zoom,
             data: Vec::new(),
+            scratch: Vec::new(),
         }
     }
 
@@ -221,7 +230,8 @@ impl PaintBinder {
             return Ok(());
         }
 
-        let mut vertex = alloc::vec![0u8; self.stride];
+        self.scratch.clear();
+        self.scratch.resize(self.stride, 0);
         for slot in &self.slots {
             let property = resolved
                 .get(slot.name)
@@ -240,20 +250,20 @@ impl PaintBinder {
             // it does not read one, and offering it would let a mis-classified expression
             // silently start depending on it. A composite property is evaluated at both ends
             // of the range instead.
-            let bytes = if slot.interpolated {
+            let out = &mut self.scratch[slot.offset..slot.offset + slot.width];
+            if slot.interpolated {
                 let min = at(Some(self.zoom))?;
                 let max = at(Some(self.zoom + 1.0))?;
-                encode(slot, &min, Some(&max))?
+                encode(slot, &min, Some(&max), out)?;
             } else {
-                encode(slot, &at(None)?, None)?
-            };
-            vertex[slot.offset..slot.offset + slot.width].copy_from_slice(&bytes);
+                encode(slot, &at(None)?, None, out)?;
+            }
         }
 
         let start = self.vertex_count();
         self.data.reserve((vertex_count - start) * self.stride);
         for _ in start..vertex_count {
-            self.data.extend_from_slice(&vertex);
+            self.data.extend_from_slice(&self.scratch);
         }
         Ok(())
     }
@@ -265,8 +275,15 @@ impl PaintBinder {
 /// `zoomInterpolatedAttributeValue` lays out `[min…, max…]`, so a composite colour is the two
 /// floats of the low end followed by the two of the high end. Interleaving them component-wise
 /// produces a buffer of the right length that the shader reads as nonsense.
-fn encode(slot: &Slot, value: &Value, upper: Option<&Value>) -> Result<Vec<u8>, BinderError> {
-    let floats = |value: &Value| -> Result<Vec<f32>, BinderError> {
+fn encode(
+    slot: &Slot,
+    value: &Value,
+    upper: Option<&Value>,
+    out: &mut [u8],
+) -> Result<(), BinderError> {
+    // Into a fixed buffer rather than a `Vec`: a slot is one float or two, this runs once per
+    // slot per feature, and the values are copied straight out again.
+    let floats = |value: &Value, into: &mut [f32; 2]| -> Result<usize, BinderError> {
         // The unit width, not the slot's: a composite slot is two of these.
         match slot.width / if slot.interpolated { 2 } else { 1 } {
             8 => {
@@ -274,7 +291,8 @@ fn encode(slot: &Slot, value: &Value, upper: Option<&Value>) -> Result<Vec<u8>, 
                     name: slot.name,
                     expected: "color",
                 })?;
-                Ok(pack_color(color).to_vec())
+                *into = pack_color(color);
+                Ok(2)
             }
             4 => {
                 let number = value.as_number().ok_or(BinderError::Type {
@@ -282,24 +300,34 @@ fn encode(slot: &Slot, value: &Value, upper: Option<&Value>) -> Result<Vec<u8>, 
                     expected: "number",
                 })?;
                 #[allow(clippy::cast_possible_truncation)]
-                Ok(alloc::vec![number as f32])
+                {
+                    into[0] = number as f32;
+                }
+                Ok(1)
             }
             // `slot_width` produces only these two units.
             _ => unreachable!("a slot unit is four or eight bytes"),
         }
     };
 
-    let mut values = floats(value)?;
+    let mut unit = [0f32; 2];
+    let mut written = 0usize;
+    let mut put = |values: &[f32], written: &mut usize| {
+        for float in values {
+            out[*written..*written + 4].copy_from_slice(&float.to_le_bytes());
+            *written += 4;
+        }
+    };
+
+    let used = floats(value, &mut unit)?;
+    put(&unit[..used], &mut written);
     if let Some(upper) = upper {
-        values.extend(floats(upper)?);
+        let used = floats(upper, &mut unit)?;
+        put(&unit[..used], &mut written);
     }
 
-    let mut bytes = Vec::with_capacity(slot.width);
-    for float in values {
-        bytes.extend_from_slice(&float.to_le_bytes());
-    }
-    debug_assert_eq!(bytes.len(), slot.width, "slot `{}`", slot.name);
-    Ok(bytes)
+    debug_assert_eq!(written, slot.width, "slot `{}`", slot.name);
+    Ok(())
 }
 
 /// Packs a colour into two floats, two channels each.
@@ -436,8 +464,9 @@ mod tests {
             width: 4,
             interpolated: false,
         };
+        let mut out = [0u8; 4];
         assert!(matches!(
-            encode(&slot, &Value::String(String::from("wide")), None),
+            encode(&slot, &Value::String(String::from("wide")), None, &mut out),
             Err(BinderError::Type { .. })
         ));
     }
