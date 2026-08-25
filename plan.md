@@ -734,8 +734,16 @@ had no runtime type: `Type::Color` existed statically, but the value was a `Valu
 four numbers, so every evaluation allocated a `Vec` for sixteen bytes of channel and a colour
 was indistinguishable from a plain array of the same numbers. Giving it a variant removed 12 116
 of those allocations, took `["rgb", …]` from 38 ns to 27, and left the golden dumps byte for
-byte identical. The 75 045 underneath are decode and tessellation, four and a half per feature
-before any expression is involved at all, and the larger absolute target of the two.
+byte identical. The 75 042 underneath are tessellation and bucket building, four and a half per
+feature before any expression is involved.
+
+Decode is bigger than either and was invisible to that measurement, which decodes once outside
+the timed section: 3.9 ms and 282 186 allocations for the same tile — 16.4 per feature, against
+the whole build's 5.1. Three of those per feature were the property keys. MVT keeps a layer's
+keys in one table and has features refer to them by index precisely so a key is stored once, and
+decode was cloning a `String` out of it per tag per feature. Sharing them took decode to 3.4 ms
+and 230 677 allocations, lower in every alternating round. What is left is dominated by the
+per-feature geometry, which is a `Vec` of `Vec`s and could be one buffer with ring offsets.
 
 - **Strict classification at compile time.** Constant → folded at style parse. Camera-only →
   evaluated once per (layer, integer-zoom interval), process-wide, cached as interpolation

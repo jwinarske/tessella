@@ -49,7 +49,7 @@ fn a_fill_layer_tessellates_a_vector_source() {
             features: vec![Feature {
                 id: Some(1),
                 geom_type: GeomType::Polygon,
-                properties: vec![("kind".to_string(), Value::String("lake".to_string()))],
+                properties: vec![("kind".into(), Value::String("lake".into()))],
                 geometry: vec![vec![[0, 0], [2048, 0], [2048, 2048], [0, 2048], [0, 0]]],
             }],
         }],

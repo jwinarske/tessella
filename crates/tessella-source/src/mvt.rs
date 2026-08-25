@@ -26,6 +26,7 @@
 //! a mis-stepped cursor produces coordinates thousands of units away, which is at least loud.
 
 use alloc::string::String;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use crate::protobuf::{Reader, WireError, WireType, zigzag};
@@ -135,7 +136,12 @@ pub enum GeomType {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     /// A string.
-    String(String),
+    ///
+    /// Shared rather than owned. A tile's string values live in one per-layer table and are
+    /// referenced by index precisely so a value repeated across ten thousand features is stored
+    /// once; copying one into every feature that mentions it throws that away, and it was
+    /// measured doing so — see [`Tile::decode`].
+    String(Arc<str>),
     /// A float, double, int, uint or sint — all of which a style sees as one number type.
     Number(f64),
     /// A boolean.
@@ -150,7 +156,11 @@ pub struct Feature {
     /// What it draws.
     pub geom_type: GeomType,
     /// Properties, resolved against the layer's key and value tables.
-    pub properties: Vec<(String, Value)>,
+    ///
+    /// The key is shared with the table it came from: a layer names its keys once and every
+    /// feature refers to the same ones, so an owned `String` per feature per tag is a copy of
+    /// something that already exists.
+    pub properties: Vec<(Arc<str>, Value)>,
     /// Geometry in tile-local units, as rings or line strings.
     pub geometry: Vec<Vec<[i32; 2]>>,
 }
@@ -214,7 +224,7 @@ fn decode_layer(data: &[u8]) -> Result<Layer, MvtError> {
     let mut name: Option<String> = None;
     let mut version: Option<u32> = None;
     let mut extent: Option<u32> = None;
-    let mut keys: Vec<String> = Vec::new();
+    let mut keys: Vec<Arc<str>> = Vec::new();
     let mut values: Vec<Value> = Vec::new();
     // Features are decoded after the tables, because a feature's tags index into them and the
     // spec does not require the tables to come first.
@@ -228,7 +238,9 @@ fn decode_layer(data: &[u8]) -> Result<Layer, MvtError> {
             }
             (2, WireType::Delimited) => raw_features.push(reader.delimited()?),
             (3, WireType::Delimited) => {
-                keys.push(String::from_utf8_lossy(reader.delimited()?).into_owned());
+                keys.push(Arc::from(
+                    String::from_utf8_lossy(reader.delimited()?).as_ref(),
+                ));
             }
             (4, WireType::Delimited) => values.push(decode_value(reader.delimited()?, "")?),
             (5, WireType::Varint) => {
@@ -290,9 +302,9 @@ fn decode_value(data: &[u8], layer: &str) -> Result<Value, MvtError> {
     while let Some(field) = reader.next_field() {
         let (number, wire) = field?;
         let value = match (number, wire) {
-            (1, WireType::Delimited) => {
-                Value::String(String::from_utf8_lossy(reader.delimited()?).into_owned())
-            }
+            (1, WireType::Delimited) => Value::String(Arc::from(
+                String::from_utf8_lossy(reader.delimited()?).as_ref(),
+            )),
             (2, WireType::Fixed32) => Value::Number(f64::from(f32::from_bits(reader.fixed32()?))),
             (3, WireType::Fixed64) => Value::Number(f64::from_bits(reader.fixed64()?)),
             #[allow(clippy::cast_possible_wrap, clippy::cast_precision_loss)]
@@ -333,7 +345,7 @@ fn decode_value(data: &[u8], layer: &str) -> Result<Value, MvtError> {
 fn decode_feature(
     data: &[u8],
     layer: &str,
-    keys: &[String],
+    keys: &[Arc<str>],
     values: &[Value],
 ) -> Result<Feature, MvtError> {
     let mut reader = Reader::new(data);
@@ -529,9 +541,9 @@ impl StyleFeature for Feature {
     fn property(&self, key: &str) -> Option<StyleValue> {
         self.properties
             .iter()
-            .find(|(name, _)| name == key)
+            .find(|(name, _)| &**name == key)
             .map(|(_, value)| match value {
-                Value::String(text) => StyleValue::String(text.clone()),
+                Value::String(text) => StyleValue::String(text.as_ref().into()),
                 Value::Number(number) => StyleValue::Number(*number),
                 Value::Bool(flag) => StyleValue::Bool(*flag),
             })
@@ -560,11 +572,11 @@ impl StyleFeature for Feature {
                 .iter()
                 .map(|(key, value)| {
                     let value = match value {
-                        Value::String(text) => StyleValue::String(text.clone()),
+                        Value::String(text) => StyleValue::String(text.as_ref().into()),
                         Value::Number(number) => StyleValue::Number(*number),
                         Value::Bool(flag) => StyleValue::Bool(*flag),
                     };
-                    (key.clone(), value)
+                    (String::from(key.as_ref()), value)
                 })
                 .collect(),
         )

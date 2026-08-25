@@ -217,6 +217,10 @@ fn main() {
     }
     println!();
 
+    time("decode", || {
+        mvt::Tile::decode(TILE).expect("decodes").layers.len()
+    });
+
     let data_driven = Style::parse(DATA_DRIVEN).expect("parses");
     let constant = Style::parse(CONSTANT).expect("parses");
     time("data-driven paint", || build(&data_driven, &decoded, tile));
@@ -236,6 +240,10 @@ fn main() {
     });
     allocations("constant paint", features, || {
         let _ = build(&constant, &decoded, tile);
+    });
+
+    allocations("decode alone", features, || {
+        let _ = mvt::Tile::decode(TILE).expect("decodes");
     });
 
     println!();
