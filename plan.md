@@ -861,6 +861,19 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   produces no label rather than an empty one, since an empty label still has an anchor, a
   collision box and a place in the sort order, and would push real labels off the map to draw
   nothing.
+  A token in `text-field` is a `get`, not a substitution: mbgl converts `"{name}"` at parse time
+  into `toString(get("name"))`, so a feature without the property yields an *empty* label and
+  therefore no symbol. This is deliberately not the tile URL rule, where an unrecognised token
+  survives verbatim so a 404 says why — a label cannot do that, and leaving the token writes a
+  literal `{name}` across the map on every unnamed feature. Which is what it did until an
+  end-to-end test asked a water layer for its glyph dependencies and got seventy-five labels
+  back from features with no names.
+  Which glyphs a tile needs is collected in one pass before anything is shaped, as mbgl's
+  `GlyphDependencies`: what to fetch is a property of the *data* rather than of the style, since
+  one font stack needs a handful of ranges over Iceland and hundreds over Japan. Shaping needs
+  advances, advances need glyphs, and glyphs cross the network — discovering a missing glyph
+  mid-shape turns one round trip per tile into one per label. Measured on the fixture: seventy-five
+  labels, thirty-odd distinct codepoints, one range.
   The chain then runs end to end, over a real tile: decode, resolve `text-field`, shape against
   a real glyph range, pack the atlas, build quads, derive a collision box, take a cross-tile
   identity, place, fade. Each link had its own tests and most were checked against mbgl, and none

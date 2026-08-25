@@ -11,9 +11,20 @@
 //! wild use both, often in the same document, and a frontend that read only expressions would
 //! render half the basemaps on the internet with no labels at all.
 //!
-//! An unknown token is left in place, braces and all, which is `util::replaceTokens`' rule and
-//! the same one the tile URL templates follow. A label reading `{nmae}` on the map is a typo
-//! somebody can see and fix; a label silently reduced to nothing is one they cannot.
+//! # A token is a `get`, not a substitution
+//!
+//! mbgl converts `"{name}"` at style-parse time into `toString(get("name"))`, so a feature
+//! without the property yields an *empty* label and therefore no symbol at all.
+//!
+//! This is where `text-field` and a tile URL part company, and the difference is not cosmetic.
+//! `util::replaceTokens` leaves an unrecognised token in place, braces and all, because a URL
+//! may legitimately contain braces and a request that 404s with `{nmae}` in it says why. A label
+//! cannot do that: most features in a symbol source have no name, so leaving the token would
+//! write a literal `{name}` across the map on every unnamed feature. Which is what this did
+//! until an end-to-end test asked a water layer for its labels and got seventy-five of them.
+//!
+//! A brace with no closing brace is not a token and stays literal, which is mbgl's rule too —
+//! its scan stops at the next `{` or `}` and treats anything unterminated as text.
 //!
 //! # A feature with no text is not a symbol
 //!
@@ -21,6 +32,7 @@
 //! empty one — an empty label still has an anchor, a collision box and a place in the sort
 //! order, and would push real labels off the map to draw nothing.
 
+use alloc::collections::BTreeSet;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
@@ -49,11 +61,13 @@ pub struct Label {
     pub fonts: Vec<String>,
 }
 
-/// Replaces `{token}` with the feature's property of that name.
+/// Resolves `{token}` against the feature's properties.
 ///
-/// mbgl's `replaceTokens`. An unrecognised token survives verbatim, braces included — the same
-/// rule the tile URL templates follow, and for the same reason: a visible `{nmae}` is a typo
-/// somebody can fix, and a silently empty label is not.
+/// Each token is a `get`: present becomes its value, absent becomes nothing. That is what mbgl's
+/// conversion to `toString(get(...))` does, and it is *not* the tile URL rule — see the module
+/// note for why the two differ.
+///
+/// A brace that is never closed, or one closed by another `{`, is not a token and stays literal.
 #[must_use]
 pub fn replace_tokens(template: &str, feature: &dyn Feature) -> String {
     let mut out = String::with_capacity(template.len());
@@ -61,16 +75,24 @@ pub fn replace_tokens(template: &str, feature: &dyn Feature) -> String {
     while let Some(open) = rest.find('{') {
         out.push_str(&rest[..open]);
         rest = &rest[open..];
-        let Some(close) = rest.find('}') else {
-            // An unclosed brace is not a token; the rest of the string is literal.
-            break;
-        };
-        let name = &rest[1..close];
-        match feature.property(name) {
-            Some(value) => out.push_str(&stringify(&value)),
-            None => out.push_str(&rest[..=close]),
+
+        // mbgl scans to the next reserved character rather than to the next `}`, so `{a{b}` is
+        // a literal `{a` followed by the token `{b}` rather than a token named `a{b`.
+        let end = rest[1..].find(['{', '}']).map(|index| index + 1);
+        match end {
+            Some(close) if rest.as_bytes()[close] == b'}' => {
+                if let Some(value) = feature.property(&rest[1..close]) {
+                    out.push_str(&stringify(&value));
+                }
+                rest = &rest[close + 1..];
+            }
+            // Unterminated, or terminated by another brace: literal up to that point.
+            Some(close) => {
+                out.push_str(&rest[..close]);
+                rest = &rest[close..];
+            }
+            None => break,
         }
-        rest = &rest[close + 1..];
     }
     out.push_str(rest);
     out
@@ -153,4 +175,59 @@ pub fn label(layer: &Layer, zoom: f64, feature: &dyn Feature) -> Option<Label> {
         text,
         fonts: font_stack(layer, zoom, feature),
     })
+}
+
+/// Which glyphs a tile's symbol layers need, per font stack.
+///
+/// mbgl's `GlyphDependencies`. The manager cannot fetch until it knows what to fetch, and what
+/// to fetch is not a property of the style — it is a property of the *data*: which characters
+/// appear in this tile's labels. A style naming one font stack over a world of tiles needs a
+/// handful of ranges in Iceland and hundreds in Japan.
+///
+/// # It is collected before anything is shaped
+///
+/// Shaping needs advances, advances come from glyphs, and glyphs arrive over the network. So a
+/// tile is walked once to find out what it will need, the ranges are fetched, and only then is
+/// anything laid out. Doing it the other way — shaping and discovering a missing glyph — turns
+/// one round trip per tile into one per label.
+pub type GlyphDependencies = alloc::collections::BTreeMap<Vec<String>, BTreeSet<u32>>;
+
+/// Collects the glyphs every symbol layer of `style` needs for these features.
+///
+/// `draws_from` decides which layers read this source, so a caller passes the same predicate the
+/// tile builder uses rather than this crate guessing at source matching.
+///
+/// Codepoints above the Basic Multilingual Plane are collected like any other. The manager
+/// declines to request them — there is no range file up there — and that decision belongs to the
+/// manager rather than being anticipated here, since a local rasterizer will want them.
+pub fn glyph_dependencies<'a, F, I>(
+    layers: I,
+    zoom: f64,
+    features: &[&dyn Feature],
+    mut wanted: F,
+) -> GlyphDependencies
+where
+    I: IntoIterator<Item = &'a Layer>,
+    F: FnMut(&Layer) -> bool,
+{
+    let mut out = GlyphDependencies::new();
+    for layer in layers {
+        if !wanted(layer) {
+            continue;
+        }
+        for feature in features {
+            let Some(label) = label(layer, zoom, *feature) else {
+                continue;
+            };
+            // A stack the layer names but that resolves to nothing has no glyphs to ask for,
+            // and an entry under an empty key would build a URL of `//0-255.pbf`.
+            if label.fonts.is_empty() {
+                continue;
+            }
+            out.entry(label.fonts)
+                .or_default()
+                .extend(label.text.chars().map(|character| character as u32));
+        }
+    }
+    out
 }

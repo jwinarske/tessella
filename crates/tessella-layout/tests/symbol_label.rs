@@ -60,15 +60,25 @@ fn text_around_a_token_is_kept() {
     assert_eq!(resolved.text, "★ Oslo ★");
 }
 
-/// An unknown token is left in place, braces and all.
+/// A token naming a property the feature does not have resolves to nothing.
 ///
-/// mbgl's `replaceTokens` rule. A label reading `{nmae}` on the map is a typo somebody can see
-/// and fix; a label silently reduced to nothing is one they cannot.
+/// mbgl converts `"{name}"` into `toString(get("name"))` at style-parse time, so an absent
+/// property is an empty string and the label disappears. This is deliberately *not* the tile URL
+/// rule, where an unrecognised token survives verbatim so a 404 can say why: most features in a
+/// symbol source have no name, and leaving the token would write a literal `{name}` across the
+/// map on every one of them.
 #[test]
-fn an_unknown_token_survives_verbatim() {
-    let layer = layer(r#"{"text-field": "{nmae}"}"#);
-    let resolved = label(&layer, 10.0, &named("Oslo")).expect("a label");
-    assert_eq!(resolved.text, "{nmae}");
+fn an_unknown_token_resolves_to_nothing() {
+    let missing = layer(r#"{"text-field": "{nmae}"}"#);
+    assert!(
+        label(&missing, 10.0, &named("Oslo")).is_none(),
+        "a label of only an absent token is no label"
+    );
+
+    // And it leaves the text around it alone.
+    let decorated = layer(r#"{"text-field": "★{nmae}★"}"#);
+    let resolved = label(&decorated, 10.0, &named("Oslo")).expect("a label");
+    assert_eq!(resolved.text, "★★");
 }
 
 /// The modern expression syntax resolves too.
@@ -162,9 +172,15 @@ fn token_replacement_handles_awkward_strings() {
 
     assert_eq!(replace_tokens("", &feature), "");
     assert_eq!(replace_tokens("no tokens", &feature), "no tokens");
+    assert_eq!(replace_tokens("{name} {name}", &feature), "Oslo Oslo");
+
     // An unclosed brace is not a token, and the rest of the string is literal.
     assert_eq!(replace_tokens("{name", &feature), "{name");
-    assert_eq!(replace_tokens("{name} {name}", &feature), "Oslo Oslo");
-    // An empty token names no property, so it survives.
-    assert_eq!(replace_tokens("{}", &feature), "{}");
+
+    // mbgl's scan stops at the next reserved character rather than the next `}`, so a brace
+    // closed by another brace is literal up to it.
+    assert_eq!(replace_tokens("{a{name}", &feature), "{aOslo");
+
+    // An empty token names a property nothing has, so it resolves to nothing.
+    assert_eq!(replace_tokens("{}", &feature), "");
 }
