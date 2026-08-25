@@ -44,3 +44,21 @@ specification.
 
 Re-copy from a maplibre-native checkout. Nothing here is edited, which is what keeps a failure a
 statement about this decoder rather than about a fixture someone adjusted.
+
+## A real tile, for measurement rather than conformance
+
+`protomaps-berlin-14-8802-5373.mvt` is not from the conformance suite. It is one zoom-14 tile
+over Berlin, cut from a Protomaps planet extract (Protomaps schema; OpenStreetMap data, ODbL),
+inflated from the gzip the archive stores it as.
+
+It exists because the benchmark had been measuring `real-world-0-0-0.mvt`, and that tile is a
+zoom-0 view of the whole world: 17 202 features, of which 17 153 are one `admin` layer. A real
+tile at a zoom anyone looks at has 934 to 3 160 features spread over seven layers, and two to
+three properties each rather than three on a single dense layer. Both are valid tiles; only one
+is shaped like the thing being optimised.
+
+Measured against it, decode is about 0.21 us per feature plus 0.016 us per point — so on a tile
+of dense polygons the geometry is roughly sixty per cent of the work and on a tile of scattered
+points it is twenty. The world tile suggests neither ratio.
+
+Conformance still runs against the vendored suite. This one is for numbers.

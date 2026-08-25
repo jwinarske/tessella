@@ -17,41 +17,35 @@
 //!
 //! # What it found
 //!
-//! Over the fixture's 17154-feature `admin` layer: 6.8 ms data-driven against 2.1 ms constant,
-//! so having data-driven paint is about two thirds of bucket build. §12.1's claim holds here.
+//! On a real zoom-14 tile: decode 455 us, build 1.12 ms with every paint property data-driven
+//! against 711 us with them constant. So the data-driven surcharge is about a third of the
+//! build, and the build is about two and a half times the decode.
 //!
-//! "Data-driven" is not the same as "evaluation", and the gap between the two arms is the first
-//! and not the second. It was 8.5 ms against 2.2 ms until the binder stopped allocating a
-//! scratch vector per feature and two more per slot inside `encode` — a quarter of the
-//! surcharge, in the path that runs only when a property is data-driven and so was easy to read
-//! as evaluation cost.
-//!
-//! The first version of this measured the 48-feature `water` layer instead and read 19 %, which
-//! would have argued against building the VM at all. The layer a benchmark picks is not a
-//! detail.
+//! Those proportions are the second set. The first were taken against
+//! `real-world-0-0-0.mvt` — a zoom-0 view of the whole world, 17 202 features with 17 153 of
+//! them in one dense `admin` layer — where the same measurement said the surcharge was three
+//! quarters of the build. Both tiles are valid; only one is shaped like the thing being
+//! optimised, and the difference is a factor of two in what the numbers recommend. The world
+//! tile is still decoded here, beside the real one, so the gap stays visible.
 //!
 //! The per-expression numbers say where the cost is, and the first two lines are there so it is
 //! attributable rather than inferred.
 //!
 //! `Feature::property` called directly — the same dyn-dispatched call `["get", k]` makes, with
-//! the same scan and the same owned `Value` built — is 2 ns per feature, present or absent. The
-//! data access is not the cost. A bare literal number is 3 ns, which is the loop and one
-//! `evaluate` call; a literal string is 7 ns, the extra 4 being the `String` clone that
-//! `Expr::Literal` does on every evaluation.
+//! the same scan and the same owned `Value` built — is a few nanoseconds per feature. The data
+//! access is not the cost. A bare literal number is the loop and one `evaluate` call; a literal
+//! string costs more, the difference being the `String` clone that `Expr::Literal` does on every
+//! evaluation.
 //!
-//! `["get", "admin_level"]` is 26 ns. Two of those are the lookup and about seven are evaluating
-//! the key — itself a string literal, cloned per feature — which leaves most of it in the walk:
-//! recursive non-inlined `evaluate` calls returning a 40-byte
-//! `Result<Value, EvaluationError>` by memory, to carry what is nearly always an 8-byte `f64`,
-//! plus the `Option`/`Result` wrapping and the drops on the way back out.
+//! `["get", k]` costs several times a literal. A little of that is the lookup and a little the
+//! key, which leaves most of it in the walk: recursive non-inlined `evaluate` calls returning a
+//! 40-byte `Result<Value, EvaluationError>` by memory, to carry what is nearly always an 8-byte
+//! `f64`, plus the `Option`/`Result` wrapping and the drops on the way back out.
 //!
 //! That was taken as DR-11's bytecode VM's target. Building one showed it is not: a flat
 //! evaluator over an operand stack of `Value` measured slower than the walk at every frame size,
 //! because `Value` has a destructor and a frame is therefore initialised and dropped per
-//! evaluation — `get` at 46, 22, 17 and 14 ns for frames of 32, 8, 4 and 2 slots, against the
-//! walk's 9. The walk is not slow because it recurses; it is slow because of what it moves, and
-//! a stack moves the same things. §12.1 records the conclusion: a compact `Copy` value comes
-//! before any VM.
+//! evaluation. §12.1 records the conclusion: a compact `Copy` value comes before any VM.
 //!
 //! An earlier reading of these numbers named the 40-byte `Result` as *the* cause; that was
 //! inference from a lookup cost nobody had measured, and measuring it at 2 ns is what made the
@@ -128,7 +122,17 @@ fn allocations(label: &str, features: usize, mut body: impl FnMut()) {
 use tessella_source::mvt;
 use tessella_style::Style;
 
-const TILE: &[u8] = include_bytes!("../../../tests/mvt-fixtures/real-world-0-0-0.mvt");
+/// A zoom-14 tile over Berlin: 934 features across seven layers, which is the shape of a tile
+/// anyone actually looks at.
+const TILE: &[u8] = include_bytes!("../../../tests/mvt-fixtures/protomaps-berlin-14-8802-5373.mvt");
+
+/// The zoom-0 world tile this used to measure, kept for contrast.
+///
+/// 17 202 features, 17 153 of them in one `admin` layer. Every decision in the optimisation
+/// thread above was weighed against it before anyone checked what a real tile looks like — the
+/// wins were real, but their relative sizes were not. Reported beside the real tile so the
+/// difference stays visible rather than being a thing to rediscover.
+const WORLD_TILE: &[u8] = include_bytes!("../../../tests/mvt-fixtures/real-world-0-0-0.mvt");
 const LIVE: &str = include_str!("../../tessella-style/tests/live_style.json");
 
 /// A style whose paint properties are all data-driven, to put evaluation at its worst.
@@ -136,20 +140,20 @@ const DATA_DRIVEN: &str = r##"{
   "version": 8,
   "sources": { "src": { "type": "vector", "tiles": ["http://x/{z}/{x}/{y}.mvt"] } },
   "layers": [
-    { "id": "water", "type": "fill", "source": "src", "source-layer": "water",
+    { "id": "landuse", "type": "fill", "source": "src", "source-layer": "landuse",
       "paint": {
         "fill-color": ["interpolate", ["linear"], ["zoom"],
            0, ["match", ["get", "class"], "lake", "#001133", "#002244"],
            16, ["match", ["get", "class"], "lake", "#0044aa", "#0055bb"]],
         "fill-opacity": ["case", ["has", "class"], 0.9, 0.5]
       } },
-    { "id": "admin", "type": "line", "source": "src", "source-layer": "admin",
+    { "id": "roads", "type": "line", "source": "src", "source-layer": "roads",
       "paint": {
-        "line-color": ["match", ["get", "admin_level"], 2, "#ffcc00", "#ffffff"],
+        "line-color": ["match", ["get", "kind"], "highway", "#ffcc00", "#ffffff"],
         "line-width": ["interpolate", ["linear"], ["zoom"],
-           10, ["match", ["get", "admin_level"], 2, 2.0, 0.5],
-           16, ["match", ["get", "admin_level"], 2, 8.0, 2.0]],
-        "line-opacity": ["case", ["==", ["get", "admin_level"], 2], 1.0, 0.7]
+           10, ["match", ["get", "kind"], "highway", 2.0, 0.5],
+           16, ["match", ["get", "kind"], "highway", 8.0, 2.0]],
+        "line-opacity": ["case", ["==", ["get", "kind"], "highway"], 1.0, 0.7]
       } }
   ]
 }"##;
@@ -159,9 +163,9 @@ const CONSTANT: &str = r##"{
   "version": 8,
   "sources": { "src": { "type": "vector", "tiles": ["http://x/{z}/{x}/{y}.mvt"] } },
   "layers": [
-    { "id": "water", "type": "fill", "source": "src", "source-layer": "water",
+    { "id": "landuse", "type": "fill", "source": "src", "source-layer": "landuse",
       "paint": { "fill-color": "#002244", "fill-opacity": 0.9 } },
-    { "id": "admin", "type": "line", "source": "src", "source-layer": "admin",
+    { "id": "roads", "type": "line", "source": "src", "source-layer": "roads",
       "paint": { "line-color": "#ffffff", "line-width": 2.0, "line-opacity": 1.0 } }
   ]
 }"##;
@@ -211,14 +215,17 @@ fn main() {
     let decoded = mvt::Tile::decode(TILE).expect("decodes");
     let tile = tessella_orchestrate::tile::TileId::new(0, 0, 0);
 
-    println!("Tile: real-world-0-0-0.mvt");
+    println!("Tile: protomaps-berlin-14-8802-5373.mvt");
     for layer in &decoded.layers {
         println!("  {} : {} features", layer.name, layer.features.len());
     }
     println!();
 
-    time("decode", || {
+    time("decode (z14 Berlin)", || {
         mvt::Tile::decode(TILE).expect("decodes").layers.len()
+    });
+    time("decode (z0 world)", || {
+        mvt::Tile::decode(WORLD_TILE).expect("decodes").layers.len()
     });
 
     let data_driven = Style::parse(DATA_DRIVEN).expect("parses");
@@ -247,7 +254,7 @@ fn main() {
     });
 
     println!();
-    println!("One expression, evaluated once per feature over the same 17154:");
+    println!("One expression, evaluated once per feature over the layer's features:");
     per_expression(&decoded);
 }
 
@@ -259,18 +266,18 @@ fn per_expression(decoded: &mvt::Tile) {
     let layer = decoded
         .layers
         .iter()
-        .find(|layer| layer.name == "admin")
+        .find(|layer| layer.name == "roads")
         .expect("the dense layer");
 
     let cases: &[(&str, &str)] = &[
         ("literal number", "4.0"),
-        ("literal string", r#""admin_level""#),
+        ("literal string", r#""kind""#),
         ("literal short string", r#""a""#),
-        ("get", r#"["get", "admin_level"]"#),
-        ("has", r#"["has", "admin_level"]"#),
+        ("get", r#"["get", "kind"]"#),
+        ("has", r#"["has", "kind"]"#),
         (
             "match on number",
-            r#"["match", ["get", "admin_level"], 2, 2.0, 0.5]"#,
+            r#"["match", ["get", "kind"], "highway", 2.0, 0.5]"#,
         ),
         (
             "match on string",
@@ -278,7 +285,7 @@ fn per_expression(decoded: &mvt::Tile) {
         ),
         (
             "case",
-            r#"["case", ["==", ["get", "admin_level"], 2], 1.0, 0.7]"#,
+            r#"["case", ["==", ["get", "kind"], "highway"], 1.0, 0.7]"#,
         ),
         (
             "interpolate (zoom only)",
@@ -287,14 +294,14 @@ fn per_expression(decoded: &mvt::Tile) {
         (
             "interpolate over match",
             r#"["interpolate", ["linear"], ["zoom"],
-                10, ["match", ["get", "admin_level"], 2, 2.0, 0.5],
-                16, ["match", ["get", "admin_level"], 2, 8.0, 2.0]]"#,
+                10, ["match", ["get", "kind"], "highway", 2.0, 0.5],
+                16, ["match", ["get", "kind"], "highway", 8.0, 2.0]]"#,
         ),
         ("rgb", r#"["rgb", 255, 204, 0]"#),
-        ("rgb over get", r#"["rgb", ["get", "admin_level"], 204, 0]"#),
+        ("rgb over get", r#"["rgb", ["get", "kind"], 204, 0]"#),
         (
             "colour match",
-            r##"["match", ["get", "admin_level"], 2, "#ffcc00", "#ffffff"]"##,
+            r##"["match", ["get", "kind"], "highway", "#ffcc00", "#ffffff"]"##,
         ),
     ];
 
@@ -302,10 +309,7 @@ fn per_expression(decoded: &mvt::Tile) {
     // timed directly, so what the expression costs above and beyond it is attributable.
     {
         use tessella_style::expression::Feature as StyleFeature;
-        for (label, key) in [
-            ("property (present)", "admin_level"),
-            ("property (absent)", "zzz"),
-        ] {
+        for (label, key) in [("property (present)", "kind"), ("property (absent)", "zzz")] {
             let run = || {
                 let mut sink = 0usize;
                 for feature in &layer.features {

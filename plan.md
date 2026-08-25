@@ -705,9 +705,14 @@ easy pass).
 Bucket build evaluates expressions per feature; mbgl walks a boxed AST. Largest pure-CPU line
 item after tessellation, and the one place a rewrite beats mbgl outright:
 
-Measured on this port, against the fixture's 17154-feature `admin` layer with every paint
-property data-driven: 6.8 ms to build against 2.1 ms with the same properties constant. §12.1's
-premise holds here. But "data-driven" is not "evaluation": the gap was 8.5 ms against 2.2 ms
+Measured on this port, against a real zoom-14 Protomaps tile with every paint property
+data-driven: 1.13 ms to build against 0.72 ms with the same properties constant, over a 0.48 ms
+decode. §12.1's premise holds, at about a third of the build rather than the three quarters the
+first measurement gave — that one used `real-world-0-0-0.mvt`, a zoom-0 view of the whole world
+whose 17 202 features are 17 153 of them in one dense `admin` layer. Both tiles are valid; only
+one is shaped like a tile anyone looks at, and the difference is a factor of two in what the
+numbers recommend. Every conclusion below the first was reached against the world tile; the wins
+are real, the weights were not. But "data-driven" is not "evaluation": the gap was 8.5 ms against 2.2 ms
 until the binder stopped allocating a scratch vector per feature and two more per slot inside
 `encode`, which was a quarter of the surcharge and no evaluation at all. It ran only when a
 property was data-driven, which is what made it easy to read as evaluation cost.
@@ -737,8 +742,8 @@ of those allocations, took `["rgb", …]` from 38 ns to 27, and left the golden 
 byte identical. The 75 042 underneath are tessellation and bucket building, four and a half per
 feature before any expression is involved.
 
-Decode is bigger than either and was invisible to that measurement, which decodes once outside
-the timed section: 3.9 ms and 282 186 allocations for the same tile — 16.4 per feature, against
+Decode was invisible to that measurement, which decodes once outside
+the timed section: on the world tile, 3.9 ms and 282 186 allocations — 16.4 per feature, against
 the whole build's 5.1. Three of those per feature were the property keys. MVT keeps a layer's
 keys in one table and has features refer to them by index precisely so a key is stored once, and
 decode was cloning a `String` out of it per tag per feature. Sharing them took decode to 3.4 ms
@@ -755,6 +760,18 @@ allocations, without changing what is decoded.
 The next structural step is the geometry, still a `Vec` of `Vec`s at roughly 2.5 allocations per
 feature: one buffer per tile with ring offsets would take that to nothing amortised, which is the
 same shape as the tessellation output and the layout buffers below it.
+
+**Lazy decode is not worth it, measured.** mbgl decodes lazily and memoised — `getLayer(name)`
+for the layers a style names, `getValue(key)` for one property rather than a map, and a filter
+that runs before `getGeometries()` so a rejected feature never decodes its geometry. This port
+decodes eagerly, which was never a decision so much as what a straightforward decoder looks like.
+On three real Berlin tiles at z12, z14 and z15, a real style reads 100 %, 99 % and 80 % of the
+points and 91 %, 83 % and 25 % of the features — so skipping unnamed layers saves between nothing
+and a fifth of decode, and the layers it would skip are `places` and `pois`, which is precisely
+what R2's symbols will need. Decode costs about 0.21 µs a feature plus 0.016 µs a point, so
+geometry is between a fifth and two thirds of it depending on the tile; filter-before-geometry
+has a real ceiling there, but no style available here carries a filter to measure the rejection
+rate against. Revisit when symbols land and filters are in play.
 
 - **Strict classification at compile time.** Constant → folded at style parse. Camera-only →
   evaluated once per (layer, integer-zoom interval), process-wide, cached as interpolation
