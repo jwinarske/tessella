@@ -104,7 +104,6 @@ fn two_labels_share_a_buffer_without_sharing_vertices() {
 
     // And every index reaches a vertex that exists.
     let count = buffers.vertices.len();
-    #[allow(clippy::cast_possible_truncation)]
     assert!(
         buffers
             .indices
