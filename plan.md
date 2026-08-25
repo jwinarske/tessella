@@ -448,6 +448,13 @@ historic note).
 ### 9.2 Multi-view invariants (Rust-native; the C++ probe cannot oracle rev 2)
 
 - Per-view stream ≡ a single-view run at the same camera, modulo the geometry namespace.
+  Asserted in `view_independence.rs`: a view's bindings — layer, sublayer, tile, pass, flags and
+  their order — are identical whether it runs alone or among four, against a group chosen to mix
+  exact overlap, partial overlap and disjointness. Geometry ids are renumbered by first
+  appearance before comparing, since they are handed out process-wide and comparing them raw
+  would assert the allocation order rather than the invariant. Checked for a view that is not the
+  first built, which is the case a shared counter makes visible, and symmetrically for two views
+  at one camera.
 - Shared-store counters (fetches, decodes, bucket builds, atlas uploads) do not scale with
   view count for overlapping covers.
 - Screen-space UBO variants (R-2) differ per view over identical shared geometry.
