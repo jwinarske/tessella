@@ -4,7 +4,7 @@
 //! reaches geometry: a real tile, a style naming its layers, and triangles at the end.
 
 use tessella_orchestrate::tile::{TileId, build_mvt_tile};
-use tessella_source::mvt::Tile;
+use tessella_source::mvt::{Geometry, Tile};
 use tessella_style::Style;
 
 const REAL_TILE: &[u8] = include_bytes!("../../../tests/mvt-fixtures/real-world-0-0-0.mvt");
@@ -50,7 +50,13 @@ fn a_fill_layer_tessellates_a_vector_source() {
                 id: Some(1),
                 geom_type: GeomType::Polygon,
                 properties: vec![("kind".into(), Value::String("lake".into()))],
-                geometry: vec![vec![[0, 0], [2048, 0], [2048, 2048], [0, 2048], [0, 0]]],
+                geometry: Geometry::from_rings([vec![
+                    [0, 0],
+                    [2048, 0],
+                    [2048, 2048],
+                    [0, 2048],
+                    [0, 0],
+                ]]),
             }],
         }],
     };
@@ -116,11 +122,15 @@ fn geometry_is_rescaled_onto_the_pipeline_grid() {
         geom_type: GeomType::Polygon,
         properties: Vec::new(),
         // A unit square on a 4096 grid.
-        geometry: vec![vec![[0, 0], [4096, 0], [4096, 4096], [0, 4096], [0, 0]]],
+        geometry: Geometry::from_rings([vec![[0, 0], [4096, 0], [4096, 4096], [0, 4096], [0, 0]]]),
     };
 
     let scaled = feature.rings_scaled(4096, EXTENT);
-    assert_eq!(scaled[0][2], [EXTENT, EXTENT], "the far corner scales");
+    assert_eq!(
+        scaled.rings().next().expect("a ring")[2],
+        [EXTENT, EXTENT],
+        "the far corner scales"
+    );
 
     // A layer already on the pipeline's grid is unchanged, so the rescale is not a lossy pass
     // over data that did not need it.
@@ -189,7 +199,7 @@ fn closepath_does_not_duplicate_an_already_closed_ring() {
             if feature.geom_type != tessella_source::mvt::GeomType::Polygon {
                 continue;
             }
-            for ring in &feature.geometry {
+            for ring in feature.geometry.rings() {
                 rings += 1;
                 if ring.len() > 2 {
                     assert_eq!(

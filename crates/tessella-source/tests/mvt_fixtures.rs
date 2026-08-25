@@ -85,13 +85,13 @@ fn the_valid_fixtures_carry_their_geometry() {
     let feature = layer.features.first().expect("a feature");
     assert_eq!(feature.geom_type, GeomType::Point);
     assert_eq!(feature.geometry.len(), 1, "one point");
-    assert_eq!(feature.geometry[0].len(), 1);
+    assert_eq!(feature.geometry.rings().next().expect("a ring").len(), 1);
 
     let line = decode("Feature-single-linestring");
     let feature = &line.layers[0].features[0];
     assert_eq!(feature.geom_type, GeomType::LineString);
     assert!(
-        feature.geometry[0].len() >= 2,
+        feature.geometry.rings().next().expect("a ring").len() >= 2,
         "a line needs two points: {:?}",
         feature.geometry
     );
@@ -99,7 +99,7 @@ fn the_valid_fixtures_carry_their_geometry() {
     let polygon = decode("Feature-single-polygon");
     let feature = &polygon.layers[0].features[0];
     assert_eq!(feature.geom_type, GeomType::Polygon);
-    let ring = &feature.geometry[0];
+    let ring = feature.geometry.rings().next().expect("a ring");
     assert_eq!(
         ring.first(),
         ring.last(),

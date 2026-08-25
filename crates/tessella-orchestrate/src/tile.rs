@@ -505,10 +505,11 @@ pub fn build_mvt_tile(
                         // a single missing vertex in a `water` layer whose one point feature
                         // mbgl draws and this did not.
                         let mut rings: Vec<Ring> = Vec::new();
-                        for ring in feature.rings_scaled(named.extent, EXTENT) {
+                        let scaled = feature.rings_scaled(named.extent, EXTENT);
+                        for ring in scaled.rings() {
                             #[allow(clippy::cast_possible_truncation)]
                             let ring: Ring = ring
-                                .into_iter()
+                                .iter()
                                 .map(|point| [point[0] as i16, point[1] as i16])
                                 .collect();
                             if !ring.is_empty() {
@@ -566,10 +567,11 @@ pub fn build_mvt_tile(
                         // Already tile-local and already clipped by whoever cut the tile, so
                         // the geometry goes straight to the generator; see this function's
                         // note on why that differs from the GeoJSON path.
-                        for part in feature.rings_scaled(named.extent, EXTENT) {
+                        let scaled = feature.rings_scaled(named.extent, EXTENT);
+                        for part in scaled.rings() {
                             #[allow(clippy::cast_possible_truncation)]
                             let part: Ring = part
-                                .into_iter()
+                                .iter()
                                 .map(|point| [point[0] as i16, point[1] as i16])
                                 .collect();
                             bucket.add_geometry(&part, &options);

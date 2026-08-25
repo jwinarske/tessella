@@ -732,18 +732,24 @@ is the larger part. What remains at 12 ns is the walk
 itself: recursive non-inlined `evaluate` calls returning a 40-byte
 `Result<Value, EvaluationError>` by memory to carry what is nearly always an 8-byte `f64`, plus
 the wrapping and the drops on the way back. The VM's target is the walk, not the data access.
-**Against mbgl, on the same bytes: 1.40x.** `crates/tessella-source/benches/decode.rs` does what
+**Against mbgl, on the same bytes: 0.97x — level, having started 1.40x behind.** `crates/tessella-source/benches/decode.rs` does what
 `Parse_VectorTile` does — the same tile, the same accounting — and run alternately with
 maplibre-native's own benchmark runner the ratio held at 1.40 across minima, medians, means and
 the median of paired ratios, at a coefficient of variation under two per cent. mbgl decodes
 lazily and this port eagerly, but that benchmark touches every feature's geometries and
 properties, so both do a full decode.
 
-That is the first number this project has had for "is the rewrite worth it", and it says the
-decoder is behind rather than ahead. Where the remaining 40 % sits is not yet measured; the
-per-feature geometry `Vec` of `Vec`s is the obvious suspect, since mbgl returns a
-`GeometryCollection` built the same way and does not pay the property-table copies this one no
-longer pays either.
+The forty per cent was the geometry. A feature averages 6.6 rings of 7.2 points on that tile, and
+`Vec<Vec<[i32; 2]>>` asks the allocator for one vector per ring — 3937 of them, of 58 bytes, to
+decode 593 features. One buffer with the ring ends beside it is two allocations a feature however
+many rings it has, and it took the ratio from 1.40 to 1.00. Writing the points straight into that
+buffer rather than accumulating each ring separately and copying it in — a tile is tens of
+thousands of coordinates, and they were each written twice — took it to 0.97. Decode allocations
+went from 17.1 a feature to 9.1 across the two changes.
+
+Level is not ahead. What is left per feature is three vectors — the properties, the points, the
+ring ends — which one buffer per *layer* with features holding ranges into it would take to
+nothing amortised.
 
 `benches/expression_cost.rs` holds the rest of the measurement, against the zoom-10 tile
 `benchmark/parse/vector_tile.benchmark.cpp` decodes in mbgl's own `Parse_VectorTile` — so the
