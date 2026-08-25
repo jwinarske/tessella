@@ -770,6 +770,16 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   two pixels and one of them comes back inside the reported rectangle: the outer one stops
   linear filtering pulling in a neighbour, the inner one gives the shader real distance field to
   read at the glyph's own edge.
+  Quads follow, which is where a shaped label becomes geometry: four corners per glyph in
+  label-local pixels plus the atlas rectangle to sample. The quad is deliberately larger than
+  the ink — the encoder's three-pixel border plus the atlas' one — because a distance field is
+  only useful where the shader can read *outside* the letter, and sizing the quad to the ink
+  clips the falloff that is the antialiasing. mbgl's own numbers pin it: a 24×24 glyph with
+  `top` -8 and a 32×32 rectangle gives a quad from (-4, 4) to (28, 36), which fixes the buffer,
+  the sign of `top` and the half-advance cancellation together. That cancellation is kept in
+  mbgl's un-reduced form on purpose: for a label following a line the second half moves into
+  `glyph_offset` so the shader can apply it after projecting, and writing the reduced form makes
+  that a rewrite rather than a branch.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

@@ -20,5 +20,6 @@ pub mod atlas;
 pub mod generated;
 pub mod manager;
 pub mod pbf;
+pub mod quads;
 pub mod shaping;
 pub mod text;
