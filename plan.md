@@ -985,7 +985,12 @@ made mechanical by the §13.3 benchmark; four is a number to budget against, not
 - Camera-only expressions: shared endpoints per (layer, zoom interval) (§12.1); per-view
   per-frame work is one mix factor.
 - **Policed invariant (CI):** zero `AttributesModified`, zero geometry envelopes, during any
-  zoom that does not cross an integer level.
+  zoom that does not cross an integer level. Asserted in `parked_is_silent.rs`: sixty frames of
+  13.0 → 13.9, every one at a new zoom, every one owing camera bytes and none of them geometry,
+  with the ring head unmoved. The fact it rests on is asserted separately — a cover is the same
+  set of tiles across a whole integer level and changes at the boundary — because that is a
+  property of the cover and not of the damage tracker, whose `geometry` flag means "something
+  landed" rather than "the camera crossed a level".
 
 ### 13.2 Integer crossings — where flawless is earned
 

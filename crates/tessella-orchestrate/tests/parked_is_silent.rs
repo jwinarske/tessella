@@ -189,3 +189,101 @@ fn one_views_churn_does_not_wake_another() {
     }
     assert!(meter.traffic(producer.head()).is_silent());
 }
+
+/// A zoom that stays between two integer levels emits camera bytes and no geometry (§13.1).
+///
+/// # Why this is a guarantee rather than an optimisation
+///
+/// Fractional zoom is the commonest thing a map does: every pinch, every fly-to, every inertial
+/// settle spends most of its frames between integer levels. The cover does not change there —
+/// the same tiles serve the whole interval — so nothing about the geometry is different, only
+/// where the camera is looking from. DR-9 has Filament re-project, and §13.1 says the producer's
+/// share is interpolation state only: mix factors and screen-space sizing, hundreds of bytes.
+///
+/// Emitting geometry anyway would not look wrong. It would cost a tile's worth of ring traffic
+/// per frame during the one interaction a user performs most, which on a DVFS-governed part is
+/// the difference between a gesture costing a few hundred bytes and one costing megabytes. That
+/// is why the assertion is zero envelopes rather than a byte threshold: a threshold is satisfied
+/// by re-emitting something slightly smaller.
+#[test]
+fn a_fractional_zoom_emits_no_geometry() {
+    let mut ring = Ring::new(64 * 1024);
+    let producer = ring.producer();
+    let mut arena = SlabArena::new();
+    let mut tracker = DamageTracker::new();
+
+    let at = |zoom: f64| CameraKey { zoom, ..camera() };
+
+    // Settle at 13.0 with everything emitted.
+    let first = tracker.begin_frame(VIEW, at(13.0));
+    assert!(first.camera && first.geometry);
+    emit_tile(producer, &mut arena);
+    let settled = producer.head();
+
+    // Now zoom 13.0 → 13.9 without crossing 14. Sixty frames, the length of a real gesture, and
+    // every one of them at a zoom the previous frame was not at.
+    let mut geometry_frames = 0;
+    let mut camera_frames = 0;
+    for frame in 1..=60 {
+        let zoom = 13.0 + 0.9 * (f64::from(frame) / 60.0);
+        let work = tracker.begin_frame(VIEW, at(zoom));
+        if work.geometry {
+            geometry_frames += 1;
+            emit_tile(producer, &mut arena);
+        }
+        if work.camera {
+            camera_frames += 1;
+        }
+    }
+
+    assert_eq!(
+        geometry_frames, 0,
+        "nothing landed, so no frame of the zoom should want geometry"
+    );
+    assert_eq!(
+        camera_frames, 60,
+        "every frame moved the camera, so every frame owes camera bytes"
+    );
+    assert_eq!(producer.head(), settled, "and no geometry reached the ring");
+}
+
+/// The cover is the same set of tiles across a whole integer level, and changes at the boundary.
+///
+/// This is the fact the invariant above rests on, and it lives here rather than being inferred
+/// from it. The damage tracker knows nothing about zoom levels — its `geometry` flag means
+/// "something landed", not "the camera crossed a level" — so a test that asked the *tracker*
+/// whether crossing 14 wants geometry would be asking the wrong component, and would pass or
+/// fail for reasons unrelated to what §13.1 promises. What actually makes a crossing expensive
+/// is that the cover changes and new tiles have to be fetched and built.
+#[test]
+fn a_cover_is_constant_within_an_integer_level() {
+    let tiles = |zoom: f64| {
+        let view = tessella_tile::cover::ViewTransform {
+            longitude: -0.11,
+            latitude: 51.505,
+            zoom,
+            width: 1024.0,
+            height: 768.0,
+            bearing: 0.0,
+            pitch: 0.0,
+        };
+        let mut out: Vec<_> = tessella_tile::cover::cover(&view)
+            .expect("covers")
+            .into_iter()
+            .map(|tile| (tile.z, tile.x, tile.y))
+            .collect();
+        out.sort_unstable();
+        out
+    };
+
+    let base = tiles(13.0);
+    assert!(!base.is_empty());
+    for zoom in [13.01, 13.25, 13.5, 13.75, 13.99] {
+        assert_eq!(tiles(zoom), base, "the cover moved at zoom {zoom}");
+    }
+    assert_ne!(
+        tiles(14.0),
+        base,
+        "crossing into the next level is where the cover changes"
+    );
+}
