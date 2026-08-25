@@ -791,7 +791,13 @@ growing a shared buffer per feature copies everything already in it, which is ex
 reappeared as `memcpy` the moment the buffers became per-layer. Decode allocates 4.7 times a
 feature, from 17.1 when this started.
 
-The final comparison is by instruction count, not by stopwatch. mbgl's benchmark body compiled as
+Confirmed on a quiet machine, which took most of a day to get: 14 alternating rounds pinned to
+one core read 151 µs against mbgl's 306 by minima, a ratio of 0.494 — against callgrind's 0.491.
+The two methods agree to within half a per cent, which is what says neither is measuring the
+machine. Under load 30 the same wall-clock comparison read 0.43, flattering this side by about a
+tenth.
+
+The comparison below is by instruction count, not by stopwatch. mbgl's benchmark body compiled as
 a standalone program over the same fixture, both under callgrind: 110 308 089 instructions
 against 224 763 669, and both print the same total so they are provably doing the same work. That
 matters because a stopwatch on this machine flatters the result — mbgl proved about 1.8x more
