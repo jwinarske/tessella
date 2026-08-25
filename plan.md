@@ -1068,8 +1068,11 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   different builder than one over GeoJSON, and that builder ended in a wildcard arm — so enabling
   the layer type in `is_built` would have had it silently draw nothing from every real tile. The
   wildcard is now spelled out per type, which is what turns the next such gap into a compile
-  error. And the circle layer turns out to have been in exactly that position already: enabled,
-  and built from GeoJSON only.
+  error. And the circle layer turned out to have been in exactly that position already —
+  enabled in `is_built`, an arm in the GeoJSON builder, and nothing in the vector one, so every
+  real tile produced an empty bucket and nothing anywhere said so. It draws now. Its geometry
+  type is not checked, the way a fill's is not: mbgl's `CircleBucket::addFeature` takes whatever
+  the feature carries, so a line's vertices each get a disc.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

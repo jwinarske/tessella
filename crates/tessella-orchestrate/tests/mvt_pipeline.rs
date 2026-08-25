@@ -397,3 +397,62 @@ fn a_layer_is_built_only_from_its_own_source() {
     let ids: Vec<&str> = buckets.iter().map(|b| b.layer_id.as_str()).collect();
     assert_eq!(ids, ["from-b"]);
 }
+
+/// A circle layer draws from a vector tile.
+///
+/// It did not, and nothing said so: `is_built` listed the type, the GeoJSON builder had an arm
+/// for it, and the vector builder ended in a wildcard — so every real tile produced an empty
+/// bucket. The wildcard is now spelled out per layer type, which makes the next such omission a
+/// compile error rather than a layer that quietly draws nothing.
+#[test]
+fn a_circle_layer_draws_from_a_vector_tile() {
+    // The world fixture rather than `real-world-0-0-0`, which carries no point features at all.
+    const POINTS: &[u8] = include_bytes!("../../../tests/live-fixtures/world_z7-5-16-11.mvt");
+    let tile = Tile::decode(POINTS).expect("the fixture decodes");
+    let named = tile
+        .layers
+        .iter()
+        .find(|layer| {
+            layer
+                .features()
+                .any(|feature| feature.geom_type() == tessella_source::mvt::GeomType::Point)
+        })
+        .expect("the fixture has a point layer");
+    let points: usize = named
+        .features()
+        .filter(|feature| feature.geom_type() == tessella_source::mvt::GeomType::Point)
+        .count();
+
+    let style: Style = serde_json::from_str(&format!(
+        r#"{{"version": 8, "sources": {{"src": {{"type": "vector", "tiles": []}}}},
+            "layers": [{{"id": "dots", "type": "circle", "source": "src",
+                         "source-layer": "{}"}}]}}"#,
+        named.name
+    ))
+    .expect("a style");
+
+    let buckets = build_mvt_tile(&style, "src", TileId::new(5, 16, 11), &tile).expect("builds");
+    assert_eq!(buckets.len(), 1);
+
+    let bucket = buckets[0]
+        .content
+        .as_circle()
+        .expect("a circle layer builds a circle bucket");
+    assert!(
+        !bucket.vertices.is_empty(),
+        "{points} points produced no vertices"
+    );
+
+    // Four vertices a disc, and two triangles.
+    assert_eq!(bucket.vertices.len() % 4, 0);
+    assert_eq!(bucket.indices.len(), bucket.vertices.len() / 4 * 6);
+    assert!(!bucket.segments.is_empty());
+
+    // No more discs than points: a point outside the tile proper is dropped rather than drawn
+    // at the edge, which is what keeps a disc from appearing twice on neighbouring tiles.
+    assert!(
+        bucket.vertices.len() / 4 <= points,
+        "{} discs from {points} points",
+        bucket.vertices.len() / 4
+    );
+}

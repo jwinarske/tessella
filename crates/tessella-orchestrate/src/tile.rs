@@ -702,11 +702,57 @@ pub fn build_mvt_tile(
                 }
                 Content::Symbol(layout)
             }
-            // The circle layer is built from GeoJSON only. Spelled out rather than left to a
-            // wildcard: a wildcard here is what let a layer type be enabled in `is_built` and
-            // silently draw nothing from a vector tile, which is the quietest kind of gap.
-            LayerKind::Circle => continue,
-            _ => continue,
+            LayerKind::Circle => {
+                let filter = match &layer.filter {
+                    Some(value) => Filter::parse(value).map_err(|source| TileError::Filter {
+                        layer: layer.id.clone(),
+                        source,
+                    })?,
+                    None => Filter::always(),
+                };
+
+                let named = layer
+                    .source_layer
+                    .as_deref()
+                    .and_then(|name| decoded.layer(name));
+
+                let mut bucket = CircleBucket::default();
+                if let Some(named) = named {
+                    for feature in named.features() {
+                        if !filter.matches(&feature, None) {
+                            continue;
+                        }
+                        // A circle layer draws points, and mbgl's `CircleBucket::addFeature`
+                        // takes the feature's geometry whatever its type — a line's vertices
+                        // each get a disc. So the type is not checked here, the way it is not
+                        // checked for a fill.
+                        let scaled = feature.rings_scaled(EXTENT);
+                        #[allow(clippy::cast_possible_truncation)]
+                        let points: Vec<Position> = scaled
+                            .rings()
+                            .flatten()
+                            .map(|point| [point[0] as i16, point[1] as i16])
+                            .collect();
+                        bucket.add_geometry(&points);
+                        binder
+                            .push(bucket.vertices.len(), &paint, &feature)
+                            .map_err(|source| TileError::Binder {
+                                layer: layer.id.clone(),
+                                source,
+                            })?;
+                    }
+                }
+                Content::Circle(bucket)
+            }
+            // Every built type has an arm above. Spelled out rather than left to a wildcard:
+            // a wildcard here is what let a layer type be enabled in `is_built` and silently
+            // draw nothing from a vector tile, which is the quietest kind of gap.
+            LayerKind::Raster
+            | LayerKind::FillExtrusion
+            | LayerKind::Heatmap
+            | LayerKind::Hillshade
+            | LayerKind::Custom
+            | LayerKind::Other(_) => continue,
         };
 
         buckets.push(LayerBucket {
