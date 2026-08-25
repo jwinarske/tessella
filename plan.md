@@ -704,8 +704,22 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   the crossings, which is the case §13.3 names. Ring occupancy peaks at 39 KB against a consumer
   draining once per frame, and 239 envelopes in the busiest frame — that is the high-water mark
   §4 wants a ring sized against, for this style; a style with more layers scales it, but the
-  order of magnitude is settled. Exit: zero symbol pops, which needs R2 to have symbols that
-  could pop.
+  order of magnitude is settled. Exit: zero symbol pops — **met**, once R2 had symbols that could
+  pop. The sweep runs again with a symbol layer over a grid of labelled points: build each cover
+  tile, take identities from the process-scoped cross-tile index, place per view, step the fades,
+  and record what every label drew at on every frame of every view.
+  Stating it took two goes, and the first was wrong in a way worth keeping. A pop is a label that
+  keeps existing on the ground and loses its history, so the obvious assertion is continuity —
+  no label's opacity moves by more than one fade increment between frames. That passes when the
+  cross-tile index is deleted outright. Every frame the label is handed a fresh identity, so
+  every frame it is a *new* label starting a new fade, every step is exactly one increment, and
+  nothing ever jumps. What it never does is arrive: it sits at a quarter opacity forever. So the
+  assertion that carries the criterion is that a label placed for long enough becomes opaque —
+  a pop is the absence of history, and only asking whether a label has *finished* tests for
+  history. Keyed by the label's text rather than by its identity, for the same reason: identity
+  is what the implementation claims and text is what the ground says.
+  Verified by deleting the index: three of the five fail, including that one. Continuity alone
+  does not, which is why it is not the criterion.
 - **R2** — *in progress.* Symbols: glyph manager, shaping, quads, per-view placement,
   collision, cross-tile index, fades. Largest phase; budget ≈ R0+R1.
   The SDF glyph range format reads, as `tessella-glyph/pbf`: `{fontstack}/{first}-{last}.pbf`,
