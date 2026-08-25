@@ -243,6 +243,7 @@ impl Type {
             Value::String(_) => Self::String,
             Value::Array(_) => Self::Array,
             Value::Object(_) => Self::Object,
+            Value::Color(_) => Self::Color,
         }
     }
 

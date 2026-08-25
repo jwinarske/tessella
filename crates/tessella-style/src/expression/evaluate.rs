@@ -578,7 +578,16 @@ fn find_in(
 
 /// A colour, as the spec renders one: four channels in 0..1.
 fn colour_value(channels: [f64; 4]) -> Value {
-    Value::Array(channels.iter().copied().map(Value::Number).collect())
+    // Inline, not a four-element `Value::Array`. The array spelling cost a heap allocation for
+    // sixteen bytes of channel, paid once per feature for every colour property a layer
+    // data-drives, to rebuild something the style fixed when it was parsed.
+    #[allow(clippy::cast_possible_truncation)]
+    Value::Color(crate::property::Color {
+        r: channels[0] as f32,
+        g: channels[1] as f32,
+        b: channels[2] as f32,
+        a: channels[3] as f32,
+    })
 }
 
 /// Converts a value to colour channels, or reports that it is not one.
@@ -590,6 +599,12 @@ fn colour_value(channels: [f64; 4]) -> Value {
 /// here a second time.
 fn to_colour(value: &Value) -> Option<[f64; 4]> {
     match value {
+        Value::Color(color) => Some([
+            f64::from(color.r),
+            f64::from(color.g),
+            f64::from(color.b),
+            f64::from(color.a),
+        ]),
         Value::String(text) => {
             let parsed = crate::property::Color::parse(text).ok()?;
             Some([
@@ -895,10 +910,11 @@ fn factor(interpolation: Interpolation, position: f64, lower: f64, upper: f64) -
 
 /// Blends two values.
 ///
-/// Numbers and equal-length numeric arrays. A color reaches here as a four-element array,
-/// because a color-typed property has its curve's *stops* coerced rather than its result (see
-/// `coerce_to_color`), so blending them is the ordinary array case and needs no color-aware
-/// branch. The channels are premultiplied sRGB in 0..1, which is the space mbgl blends in.
+/// Numbers, colours, and equal-length numeric arrays. A colour-typed property has its curve's
+/// *stops* coerced rather than its result (see `coerce_to_color`), so both ends arrive as
+/// colours. The channels are premultiplied sRGB in 0..1, which is the space mbgl blends in, and
+/// they are blended channel-wise exactly as the four-element array they used to be — the
+/// arithmetic is unchanged, only the container is.
 ///
 /// The form is `a * (1 - t) + b * t`, not the algebraically equal `a + (b - a) * t`. Both the
 /// spec's reference implementation and mbgl use the first, and in floating point they differ in
@@ -906,6 +922,22 @@ fn factor(interpolation: Interpolation, position: f64, lower: f64, upper: f64) -
 fn mix(lower: &Value, upper: &Value, t: f64) -> Result<Value, EvaluationError> {
     match (lower, upper) {
         (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a * (1.0 - t) + b * t)),
+        (Value::Color(a), Value::Color(b)) => {
+            // Through `f64` and back, so the rounding matches what the four-element array did
+            // bit for bit. Blending in `f32` would be a diff on every interpolated colour.
+            let blend = |a: f32, b: f32| {
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    (f64::from(a) * (1.0 - t) + f64::from(b) * t) as f32
+                }
+            };
+            Ok(Value::Color(crate::property::Color {
+                r: blend(a.r, b.r),
+                g: blend(a.g, b.g),
+                b: blend(a.b, b.b),
+                a: blend(a.a, b.a),
+            }))
+        }
         (Value::Array(a), Value::Array(b)) if a.len() == b.len() => {
             let mut out = Vec::with_capacity(a.len());
             for (a, b) in a.iter().zip(b) {
@@ -1072,6 +1104,19 @@ fn write_json(out: &mut String, value: &Value) {
             }
             out.push('}');
         }
+        // The spec's `to-string` on a colour gives its `rgba(...)` form, and JSON has no colour,
+        // so the string conversion is the one that carries meaning here.
+        Value::Color(color) => {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let byte = |channel: f32| (channel * 255.0).round() as u8;
+            out.push_str(&alloc::format!(
+                "\"rgba({},{},{},{})\"",
+                byte(color.r),
+                byte(color.g),
+                byte(color.b),
+                color.a
+            ));
+        }
     }
 }
 
@@ -1085,7 +1130,8 @@ fn truthy(value: &Value) -> bool {
         Value::Bool(flag) => *flag,
         Value::Number(number) => *number != 0.0 && !number.is_nan(),
         Value::String(text) => !text.is_empty(),
-        Value::Array(_) | Value::Object(_) => true,
+        // An empty array and an empty object are true, and so is any colour.
+        Value::Array(_) | Value::Object(_) | Value::Color(_) => true,
     }
 }
 

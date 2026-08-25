@@ -759,6 +759,11 @@ pub fn as_color(value: &Value) -> Result<Color, PropertyError> {
     // both reach here as RGBA. The string form is still accepted, because a colour written
     // inside an expression that is *not* colour-typed — a `match` output read by something
     // else — has not been through that coercion.
+    // The common path: a colour-typed expression coerces its result, so a colour property
+    // arrives here already resolved.
+    if let Value::Color(color) = value {
+        return Ok(*color);
+    }
     if let Some(channels) = value.as_array()
         && channels.len() == 4
     {

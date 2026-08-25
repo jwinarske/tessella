@@ -252,6 +252,19 @@ fn values_match(got: &Value, want: &Value) -> bool {
         (Value::Array(a), Value::Array(b)) => {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| values_match(x, y))
         }
+        // The suite's expectations are JSON, and JSON has no colour: the spec writes a colour
+        // result as its four channels. That is a spelling of the same value, so the comparison
+        // unwraps it rather than the evaluator giving colours back as arrays to suit a test
+        // harness.
+        (Value::Color(color), Value::Array(_)) => values_match(
+            &Value::Array(
+                [color.r, color.g, color.b, color.a]
+                    .into_iter()
+                    .map(|channel| Value::Number(f64::from(channel)))
+                    .collect(),
+            ),
+            want,
+        ),
         _ => got == want,
     }
 }

@@ -729,10 +729,13 @@ itself: recursive non-inlined `evaluate` calls returning a 40-byte
 the wrapping and the drops on the way back. The VM's target is the walk, not the data access.
 `benches/expression_cost.rs` holds the measurement, and counts allocations as well as timing:
 a build with data-driven paint does 99 231 of them and one with constant paint 75 045, so the
-data-driven surcharge is about 24 000 — roughly one per feature, most of it colour literals,
-which arrive as `Value::String` cloned per feature and are then hex-parsed per feature in
-`encode`. The 75 045 that remain are decode and tessellation, four and a half per feature before
-any expression is involved at all, and the larger absolute target of the two.
+data-driven surcharge was about 24 000 — roughly one per feature, half of it colours. A colour
+had no runtime type: `Type::Color` existed statically, but the value was a `Value::Array` of
+four numbers, so every evaluation allocated a `Vec` for sixteen bytes of channel and a colour
+was indistinguishable from a plain array of the same numbers. Giving it a variant removed 12 116
+of those allocations, took `["rgb", …]` from 38 ns to 27, and left the golden dumps byte for
+byte identical. The 75 045 underneath are decode and tessellation, four and a half per feature
+before any expression is involved at all, and the larger absolute target of the two.
 
 - **Strict classification at compile time.** Constant → folded at style parse. Camera-only →
   evaluated once per (layer, integer-zoom interval), process-wide, cached as interpolation

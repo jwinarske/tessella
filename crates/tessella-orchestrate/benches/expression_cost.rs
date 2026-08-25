@@ -275,6 +275,8 @@ fn per_expression(decoded: &mvt::Tile) {
                 10, ["match", ["get", "admin_level"], 2, 2.0, 0.5],
                 16, ["match", ["get", "admin_level"], 2, 8.0, 2.0]]"#,
         ),
+        ("rgb", r#"["rgb", 255, 204, 0]"#),
+        ("rgb over get", r#"["rgb", ["get", "admin_level"], 204, 0]"#),
         (
             "colour match",
             r##"["match", ["get", "admin_level"], 2, "#ffcc00", "#ffffff"]"##,
@@ -310,6 +312,36 @@ fn per_expression(decoded: &mvt::Tile) {
             let each = p50.as_nanos() as u64 / layer.features.len() as u64;
             println!("  {label:<26} {p50:>9.2?} total  {each:>5} ns/feature");
         }
+    }
+
+    // The colour parse on its own. `encode` calls this per feature per colour slot, on a string
+    // the style fixed at parse time, so it bounds what folding colours into a first-class value
+    // could win — together with the clone that the `colour match` case above shows.
+    {
+        let value = tessella_style::Value::String("#ffcc00".into());
+        let run = || {
+            let mut sink = 0usize;
+            for _ in 0..layer.features.len() {
+                if tessella_style::property::as_color(&value).is_ok() {
+                    sink += 1;
+                }
+            }
+            sink
+        };
+        let _ = run();
+        let mut samples = Vec::with_capacity(20);
+        for _ in 0..20 {
+            let started = Instant::now();
+            let _ = run();
+            samples.push(started.elapsed());
+        }
+        let (p50, _, _) = percentiles(samples);
+        #[allow(clippy::cast_possible_truncation)]
+        let each = p50.as_nanos() as u64 / layer.features.len() as u64;
+        println!(
+            "  {:<26} {p50:>9.2?} total  {each:>5} ns/feature",
+            "as_color (hex parse)"
+        );
     }
 
     for (label, source) in cases {

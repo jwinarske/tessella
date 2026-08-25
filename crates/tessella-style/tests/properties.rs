@@ -153,17 +153,13 @@ fn unset_properties_carry_their_defaults() {
     let colour = paint["background-color"]
         .as_constant()
         .expect("a constant colour");
-    let channels: Vec<f64> = colour
-        .as_array()
-        .expect("four channels")
-        .iter()
-        .filter_map(Value::as_number)
-        .collect();
-    assert_eq!(channels.len(), 4);
-    assert!((channels[0] - 16.0 / 255.0).abs() < 1e-6, "{channels:?}");
-    assert!((channels[1] - 20.0 / 255.0).abs() < 1e-6, "{channels:?}");
-    assert!((channels[2] - 24.0 / 255.0).abs() < 1e-6, "{channels:?}");
-    assert_eq!(channels[3], 1.0);
+    let Value::Color(colour) = colour else {
+        panic!("a colour, got {colour:?}");
+    };
+    assert!((colour.r - 16.0 / 255.0).abs() < 1e-6, "{colour:?}");
+    assert!((colour.g - 20.0 / 255.0).abs() < 1e-6, "{colour:?}");
+    assert!((colour.b - 24.0 / 255.0).abs() < 1e-6, "{colour:?}");
+    assert_eq!(colour.a, 1.0);
     assert_eq!(
         paint["background-opacity"].as_constant(),
         Some(Value::Number(1.0))

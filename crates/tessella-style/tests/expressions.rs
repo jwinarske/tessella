@@ -639,12 +639,12 @@ fn to_string_serializes_aggregates_as_json() {
 /// `to-color` reads CSS strings and 0..255 channel arrays, and errors on neither.
 #[test]
 fn to_color_converts_strings_and_channel_arrays() {
-    let red = Value::Array(vec![
-        Value::Number(1.0),
-        Value::Number(0.0),
-        Value::Number(0.0),
-        Value::Number(1.0),
-    ]);
+    let red = Value::Color(tessella_style::property::Color {
+        r: 1.0,
+        g: 0.0,
+        b: 0.0,
+        a: 1.0,
+    });
     assert_eq!(eval(r#"["to-color", "red"]"#, None, None), red);
     assert_eq!(
         eval(r#"["to-color", ["literal", [255, 0, 0, 1]]]"#, None, None),
@@ -701,12 +701,12 @@ fn a_colour_property_coerces_its_result() {
     let parsed = Expression::parse_for(&value, &spec).expect("parses");
     assert_eq!(
         parsed.evaluate(None, None).expect("evaluates"),
-        Value::Array(vec![
-            Value::Number(1.0),
-            Value::Number(0.0),
-            Value::Number(0.0),
-            Value::Number(1.0),
-        ])
+        Value::Color(tessella_style::property::Color {
+            r: 1.0,
+            g: 0.0,
+            b: 0.0,
+            a: 1.0
+        })
     );
 
     // And an expression already producing a colour is left alone rather than rescaled.
@@ -1026,4 +1026,43 @@ fn concat_coerces_and_join_does_not() {
             "{text} should not parse"
         );
     }
+}
+
+/// A colour reports itself as a colour, which is what the spec says and what the static side
+/// already believed.
+///
+/// `Type::Color` has existed since colour-typed properties were coerced, but at runtime a
+/// colour was four numbers in a `Value::Array` — indistinguishable from a plain array of the
+/// same four numbers, and every evaluation allocated a `Vec` for sixteen bytes of channel.
+/// (`typeof` would be the spec's way to ask; it is not implemented yet, so this asks the value.)
+#[test]
+fn a_colour_is_typed_as_one() {
+    for source in [r#"["to-color", "red"]"#, r#"["rgb", 255, 0, 0]"#] {
+        assert_eq!(eval(source, None, None).type_name(), "color", "{source}");
+    }
+    // And is not the array of its channels, which is what it used to be indistinguishable from.
+    assert_ne!(
+        eval(r#"["rgb", 255, 0, 0]"#, None, None),
+        eval(r#"["literal", [1, 0, 0, 1]]"#, None, None)
+    );
+}
+
+/// Interpolating between colours blends channel-wise, unchanged by the representation.
+///
+/// The arithmetic goes through `f64` exactly as the four-element array did: blending in `f32`
+/// would be a diff on every interpolated colour, and the golden oracle would find it.
+#[test]
+fn colours_still_blend_channel_wise() {
+    let midpoint = eval(
+        r#"["interpolate", ["linear"], ["zoom"], 0, ["rgb", 0, 0, 0], 10, ["rgb", 255, 0, 0]]"#,
+        Some(5.0),
+        None,
+    );
+    let Value::Color(colour) = midpoint else {
+        panic!("a colour, got {midpoint:?}");
+    };
+    assert!((colour.r - 0.5).abs() < 1e-6, "{colour:?}");
+    assert_eq!(colour.g, 0.0);
+    assert_eq!(colour.b, 0.0);
+    assert_eq!(colour.a, 1.0);
 }

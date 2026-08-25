@@ -37,6 +37,19 @@ pub enum Value {
     Array(Vec<Value>),
     /// An object, in key order.
     Object(BTreeMap<String, Value>),
+    /// A colour, as four channels in 0..1.
+    ///
+    /// # Why the runtime has a colour and JSON does not
+    ///
+    /// The spec has a colour type — `["typeof", ["to-color", "red"]]` is `"color"` — and the
+    /// static side already knew it as [`crate::expression::Type::Color`]. The runtime did not:
+    /// a colour was a `Value::Array` of four numbers, which is a heap allocation for sixteen
+    /// bytes of channel, built afresh for every feature a colour property is evaluated against.
+    ///
+    /// Nothing deserializes into this; a style document has no syntax for it, and the parser
+    /// produces one only by coercing a colour-typed expression. That asymmetry is the same one
+    /// mbgl has, which keeps its document values and its expression values apart entirely.
+    Color(crate::property::Color),
 }
 
 impl Value {
@@ -104,6 +117,7 @@ impl Value {
             Self::String(_) => "string",
             Self::Array(_) => "array",
             Self::Object(_) => "object",
+            Self::Color(_) => "color",
         }
     }
 
@@ -145,6 +159,10 @@ impl Serialize for Value {
             Self::String(value) => serializer.serialize_str(value),
             Self::Array(values) => values.serialize(serializer),
             Self::Object(entries) => entries.serialize(serializer),
+            // As the four-channel array it used to be. A colour never round-trips through a
+            // style document — nothing deserializes into this variant — so what matters is that
+            // a serialized colour stays readable by anything that reads the array form.
+            Self::Color(color) => [color.r, color.g, color.b, color.a].serialize(serializer),
         }
     }
 }
