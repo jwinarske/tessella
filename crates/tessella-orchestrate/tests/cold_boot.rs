@@ -773,3 +773,48 @@ fn sources_resolve_together_rather_than_in_turn() {
     );
     assert!(!started.tiles.is_empty(), "and the cover still built");
 }
+
+/// Where a cold start's time goes, as a measurement rather than an assertion (§12.5).
+///
+/// Run with
+/// `cargo test -p tessella-orchestrate --all-features --release --test cold_boot -- --ignored --nocapture where_a_cold_start`.
+///
+/// The stages are cumulative from the start, which is how [`BootTrace`] records them, so the
+/// interesting number is each one's distance from the one before it. Against a loopback server
+/// the network is close to free, which is the point: what is left is this side's own work, and
+/// on a real link every stage before the first fetch is time the user spends looking at nothing.
+#[test]
+#[ignore = "a measurement, not a test"]
+fn where_a_cold_start_goes() {
+    // The zoom-10 streets tile, not the zoom-0 world tile `server()` serves: nine copies of a
+    // whole-world tile is 4 MB of a shape no cover ever asks for, and it was the difference
+    // between a 13 ms start and a 3 ms one.
+    const REAL: &[u8] = include_bytes!("../../../tests/mvt-fixtures/streets-10-163-395.mvt");
+    let server =
+        tile_server::Server::start(tile_server::Routes::new().tiles(REAL.to_vec(), Some((0, 14))))
+            .expect("binds");
+    let text = style(&server.origin());
+    let files = Arc::new(Coalescing::new(HttpFileSource::default()));
+    // Shared, so the second pass is genuinely warm: a fresh cache each time measures two cold
+    // starts and calls one of them warm.
+    let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
+
+    for label in ["cold", "warm"] {
+        let started = boot(&text, &view(4.0), &files, &cache, Workers::default()).expect("boots");
+        let t = &started.trace;
+        println!(
+            "{label:>5}: parse {:>9.2?}  sources +{:>9.2?}  cover +{:>9.2?}  \
+             first fetch +{:>9.2?}  first bucket +{:>9.2?}  complete +{:>9.2?}   \
+             ({} tiles, {} KiB)",
+            t.style_parsed,
+            t.sources_resolved - t.style_parsed,
+            t.cover_computed - t.sources_resolved,
+            t.first_fetch - t.cover_computed,
+            t.first_bucket - t.first_fetch,
+            t.complete - t.first_bucket,
+            started.tiles.len(),
+            started.bytes / 1024,
+        );
+        let _ = label;
+    }
+}

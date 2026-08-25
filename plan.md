@@ -496,7 +496,8 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   origin over real Protomaps planet extracts. An SQLite response cache with etag revalidation
   lands behind an off-by-default feature, since `rusqlite` bundles C the cross lane has no
   toolchain for, and composes into the cold start: against a Protomaps extract a warm start
-  reaches first geometry in 2.0 ms against 6.6 ms cold, with zero round trips.
+  reaches first geometry in 0.4 ms and completes in 2.0 ms against 3.8/6.6 ms cold, with zero
+  round trips against ten.
   The cache is bounded by bytes and evicts least-recently-used on every write.
   Offline regions land on top of it: a user picks a box and a zoom range, is shown what it
   costs, and accepts or declines. `Region::tile_count` closes a formula and never allocates —
@@ -511,7 +512,14 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   hundred thousand, so a finished download taxed every tile fetched afterwards; the count is
   flat at 150 us. Downloads are resumable rather than transactional, since a country at street
   zoom is hours over a connection that will drop.
-  §12.5's first piece lands: a style's sources resolve together rather than one after another. A
+  §12.5's first piece lands: a style's sources resolve together rather than one after another.
+  What the trace says afterwards, on loopback with a real zoom-10 tile: parse 26 µs, sources
+  +10 µs, cover +15 µs, first fetch +1.14 ms, first bucket +0.82 ms, complete +1.03 ms — about
+  3 ms cold and 40 µs warm. Style parse and paint resolution together are under two per cent of
+  that, so §12.5's compiled-style cache is not worth building yet: it would save a fraction of a
+  fiftieth. Against a real link the picture differs in one place that matters — the manifest
+  round trip is 1–3 ms and sits alone in front of everything, which is what speculative fetch
+  exists to hide and what a single-source style gives it nothing to hide behind. A
   source given by TileJSON URL costs a round trip to learn what it offers, and those sat in
   sequence in front of the first tile request — four sources on a link where a round trip is
   40 ms was 160 ms of a cold start spent finding out what to ask for. They do not depend on each
@@ -566,7 +574,8 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   both, over the same live origin. Cold-boot-to-first-tile is traced (§12.5): style parse,
   source resolution, cover, first fetch, first bucket, complete, with the cover fanned out
   across workers. Against a local Protomaps extract a nine-tile cover reaches first geometry in
-  6.7 ms and completes in 22 ms, against 12.7/72 ms serially. The worker count is a bounded
+  1.9 ms and completes in 3.7 ms, against 4.1/9.1 ms serially — where the same measurement read
+  6.7/22 ms and 12.7/72 ms before the decoder work below. The worker count is a bounded
   constant rather than the host's core count, for the reason §5.4 gives — decode belongs on the
   little cores and a host-derived number makes a workstation measurement say nothing about the
   device. §5.4's one process-scoped pool now exists, with the three
