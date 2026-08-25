@@ -202,11 +202,10 @@ impl PaintBinder {
     /// Vertices written so far.
     #[must_use]
     pub fn vertex_count(&self) -> usize {
-        if self.stride == 0 {
-            0
-        } else {
-            self.data.len() / self.stride
-        }
+        // A stride of zero is the ordinary case, not an edge one: a layer whose paint is
+        // entirely uniform binds no per-vertex data at all, so the buffer is empty and there is
+        // nothing to divide.
+        self.data.len().checked_div(self.stride).unwrap_or(0)
     }
 
     /// Writes one feature's values for every vertex up to `vertex_count`.

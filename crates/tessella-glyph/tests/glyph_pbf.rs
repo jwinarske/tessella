@@ -71,7 +71,7 @@ fn a_real_range_parses_whole() {
 
     // ASCII letters and digits are what a range 0-255 is mostly for; if the parse quietly kept
     // only the punctuation this would still have passed the count above.
-    for codepoint in [b'A', b'a', b'0', b'z'] {
+    for codepoint in *b"Aa0z" {
         assert!(
             glyphs.iter().any(|glyph| glyph.id == u32::from(codepoint)),
             "{} is missing",
