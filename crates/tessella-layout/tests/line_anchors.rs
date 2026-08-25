@@ -243,3 +243,56 @@ fn a_lines_length_is_its_segments() {
     assert_eq!(line_length(&[(0.0, 0.0), (3.0, 4.0)]), 5.0);
     assert_eq!(line_length(&[]), 0.0);
 }
+
+/// mbgl `getAnchors.GetCenterAnchor`.
+#[test]
+fn the_centre_anchor_matches_mbgl() {
+    let line = [(1.0, 1.0), (1.0, 3.0), (3.0, 6.0), (4.0, 7.0)];
+    let anchor = centre(&line, core::f32::consts::PI).expect("a centre");
+
+    assert_eq!(anchor.point, (2.0, 4.0));
+    assert!(
+        (anchor.angle - 0.982_793_8).abs() < 1e-6,
+        "{}",
+        anchor.angle
+    );
+    assert_eq!(anchor.segment, 1);
+}
+
+/// mbgl `getAnchors.GetCenterAnchorOutsideTileBounds`.
+///
+/// A centred label belongs to its feature rather than to a position, so a line whose middle
+/// falls outside the tile still gets one. That is the opposite of the repeating case, where an
+/// anchor outside the tile is dropped because the neighbouring tile will draw it.
+#[test]
+fn a_centre_outside_the_tile_is_still_placed() {
+    let line = [(-10.0, -10.0), (5.0, 5.0)];
+    let anchor = centre(&line, core::f32::consts::PI).expect("a centre");
+
+    assert_eq!(anchor.point, (-3.0, -3.0));
+    assert!((anchor.angle - core::f32::consts::FRAC_PI_4).abs() < 1e-6);
+    assert_eq!(anchor.segment, 0);
+}
+
+/// mbgl `getAnchors.GetCenterAnchorFailMaxAngle`.
+///
+/// A right angle at the middle refuses the label outright rather than sliding it along. The
+/// caller asked for the centre; answering with somewhere else would silently answer a different
+/// question.
+#[test]
+fn a_bend_at_the_centre_refuses_it() {
+    let line = [(1.0, 1.0), (1.0, 3.0), (3.0, 3.0)];
+    assert!(centre(&line, core::f32::consts::PI / 4.0).is_none());
+}
+
+/// An empty line has no centre.
+#[test]
+fn an_empty_line_has_no_centre() {
+    assert!(centre(&[], core::f32::consts::PI).is_none());
+}
+
+fn centre(line: &[(f32, f32)], max_angle: f32) -> Option<tessella_layout::anchors::Anchor> {
+    tessella_layout::anchors::get_center_anchor(
+        line, max_angle, TEXT_LEFT, TEXT_RIGHT, ICON_LEFT, ICON_RIGHT, GLYPH_SIZE, 1.0,
+    )
+}

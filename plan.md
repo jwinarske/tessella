@@ -888,6 +888,13 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   expectations — position, angle and segment index — including the invariant that an overscaled
   tile's anchors are a superset of its parent's, which is what stops every label jumping at a
   zoom crossing.
+  `line-center` comes with it: one anchor at the line's midpoint, for a river or a boundary whose
+  name should appear once rather than march along the feature. It deliberately has *no*
+  tile-bounds test, unlike the repeating case — a centred label belongs to its feature rather
+  than to a position, so a line whose middle falls outside this tile still gets its name, which
+  mbgl's own expectation of an anchor at (-3, -3) pins. And a bend at the centre refuses the
+  label outright rather than sliding it along: the caller asked for the centre, and answering
+  with somewhere else would silently answer a different question.
   The chain then runs end to end, over a real tile: decode, resolve `text-field`, shape against
   a real glyph range, pack the atlas, build quads, derive a collision box, take a cross-tile
   identity, place, fade. Each link had its own tests and most were checked against mbgl, and none

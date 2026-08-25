@@ -276,3 +276,62 @@ pub fn get_anchors(
         false,
     )
 }
+
+/// The single anchor at a line's midpoint, for `symbol-placement: line-center`.
+///
+/// One label per line rather than a repeating run, which is what a river or a boundary wants:
+/// the name appears once, in the middle, and does not march along the feature.
+///
+/// `None` when the line is empty, or when it bends too sharply at its middle. The second is not
+/// a failure to fall back from — a caller asked for the centre specifically, and putting the
+/// label somewhere else instead would silently answer a different question.
+#[must_use]
+#[allow(clippy::too_many_arguments)]
+pub fn get_center_anchor(
+    line: &[(f32, f32)],
+    max_angle: f32,
+    text_left: f32,
+    text_right: f32,
+    icon_left: f32,
+    icon_right: f32,
+    glyph_size: f32,
+    box_scale: f32,
+) -> Option<Anchor> {
+    if line.is_empty() {
+        return None;
+    }
+
+    let angle_window = angle_window_size(text_left, text_right, glyph_size, box_scale);
+    let label_length = (text_right - text_left).max(icon_right - icon_left) * box_scale;
+    let centre = line_length(line) / 2.0;
+    let mut travelled = 0.0f32;
+
+    for (segment, pair) in line.windows(2).enumerate() {
+        let (a, b) = (pair[0], pair[1]);
+        let segment_distance = distance(a, b);
+
+        if travelled + segment_distance > centre {
+            let t = (centre - travelled) / segment_distance;
+            let anchor = Anchor {
+                point: (
+                    (a.0 + (b.0 - a.0) * t).round(),
+                    (a.1 + (b.1 - a.1) * t).round(),
+                ),
+                angle: angle_to(b, a),
+                segment,
+            };
+
+            // Note there is no tile-bounds test here, unlike the repeating case. A centred
+            // label belongs to its feature rather than to a position, so a river whose middle
+            // falls outside this tile still gets its name — which is mbgl's behaviour and is
+            // why its own test asserts an anchor at (-3, -3).
+            return (angle_window == 0.0
+                || check_max_angle(line, &anchor, label_length, angle_window, max_angle))
+            .then_some(anchor);
+        }
+
+        travelled += segment_distance;
+    }
+
+    None
+}
