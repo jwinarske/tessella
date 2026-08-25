@@ -857,6 +857,18 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   produces no label rather than an empty one, since an empty label still has an anchor, a
   collision box and a place in the sort order, and would push real labels off the map to draw
   nothing.
+  The chain then runs end to end, over a real tile: decode, resolve `text-field`, shape against
+  a real glyph range, pack the atlas, build quads, derive a collision box, take a cross-tile
+  identity, place, fade. Each link had its own tests and most were checked against mbgl, and none
+  of that says the links *fit*. This found the mismatch immediately, and it is the one worth
+  writing down: **placement happens in screen space**. Anchors arrive in tile coordinates,
+  0..8192 across, and a shaped label measures in screen pixels and is tens across; mixed, every
+  label is a speck on a vast plane, nothing ever collides, and all seventy-five place. Labels
+  compete for screen and not for ground — two towns a kilometre apart collide at z5 and not at
+  z14, and the same two collide on a phone and not on a wall display — so the anchor is projected
+  before a box is built. The cross-tile index stays in tile coordinates, and that is right for
+  the opposite reason: identity is about where a label is on the ground, and the ground does not
+  move when the camera does. With the projection in, 32 of 75 place at z5.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
