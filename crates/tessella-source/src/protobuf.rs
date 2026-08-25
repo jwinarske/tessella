@@ -231,10 +231,44 @@ impl<'a> Reader<'a> {
         match wire {
             WireType::Delimited => {
                 let bytes = self.delimited()?;
-                let mut inner = Self::new(bytes);
-                while !inner.is_empty() {
+                // A varint is at least one byte, so the run holds at most this many. The buffer
+                // is reused across a layer's features, so the reservation happens once and the
+                // per-element capacity check afterwards is against a bound already met.
+                out.reserve(bytes.len());
+
+                let mut at = 0usize;
+                while at < bytes.len() {
+                    let first = bytes[at];
+                    // The overwhelmingly common case, and the reason this is not a call to
+                    // `varint`. Geometry deltas are zigzagged small numbers and tag entries are
+                    // table indices, so nearly every varint in a tile is one byte — which the
+                    // general decoder still reaches through a ten-iteration loop with a bounds
+                    // check and an `Option` per byte. Profiled before this, `varint` and
+                    // `packed_varints` were 39 % of the instructions a decode executes.
+                    if first < 0x80 {
+                        out.push(u32::from(first));
+                        at += 1;
+                        continue;
+                    }
+
+                    let offset = at;
+                    let mut value: u64 = u64::from(first & 0x7f);
+                    let mut shift = 7u32;
+                    at += 1;
+                    loop {
+                        if shift >= 70 {
+                            return Err(WireError::VarintTooLong { offset });
+                        }
+                        let byte = *bytes.get(at).ok_or(WireError::Truncated { offset })?;
+                        at += 1;
+                        value |= u64::from(byte & 0x7f) << shift;
+                        if byte & 0x80 == 0 {
+                            break;
+                        }
+                        shift += 7;
+                    }
                     #[allow(clippy::cast_possible_truncation)]
-                    out.push(inner.varint()? as u32);
+                    out.push(value as u32);
                 }
                 Ok(())
             }

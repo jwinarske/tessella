@@ -732,7 +732,7 @@ is the larger part. What remains at 12 ns is the walk
 itself: recursive non-inlined `evaluate` calls returning a 40-byte
 `Result<Value, EvaluationError>` by memory to carry what is nearly always an 8-byte `f64`, plus
 the wrapping and the drops on the way back. The VM's target is the walk, not the data access.
-**Against mbgl, on the same bytes: 0.97x — level, having started 1.40x behind.** `crates/tessella-source/benches/decode.rs` does what
+**Against mbgl, on the same bytes: 0.70x — thirty per cent faster, having started 1.40x behind.** `crates/tessella-source/benches/decode.rs` does what
 `Parse_VectorTile` does — the same tile, the same accounting — and run alternately with
 maplibre-native's own benchmark runner the ratio held at 1.40 across minima, medians, means and
 the median of paired ratios, at a coefficient of variation under two per cent. mbgl decodes
@@ -747,9 +747,25 @@ buffer rather than accumulating each ring separately and copying it in — a til
 thousands of coordinates, and they were each written twice — took it to 0.97. Decode allocations
 went from 17.1 a feature to 9.1 across the two changes.
 
-Level is not ahead. What is left per feature is three vectors — the properties, the points, the
-ring ends — which one buffer per *layer* with features holding ranges into it would take to
-nothing amortised.
+Level was not ahead, and callgrind said where the rest was — deterministically, which on a
+machine at load 14 is worth more than a stopwatch. Varint decoding was 38.8 % of the
+instructions a decode executes: `varint` walked a ten-iteration loop with a bounds check and an
+`Option` per byte, and nearly every varint in a tile is *one byte*, geometry deltas being
+zigzagged small numbers and tags being table indices. A single-byte fast path in the packed
+reader cut total instructions 21.5 %, halved varint work, and took the ratio to 0.70.
+
+What is left, by instruction share: the inlined decode body at 42 %, the packed reader at 22 %,
+the allocator at about 17 % and `memcpy` at 4 %. The allocator share is the three vectors a
+feature still owns — its properties, its points and its ring ends — which one buffer per *layer*
+with features holding ranges into it would take to nothing amortised.
+
+SIMD is a candidate but not the next one. The simd-json approach does not port: it finds
+structural characters in parallel, and protobuf has none — a field's position depends on decoding
+the one before it. What does port is Masked VByte over the *packed* runs, which is exactly what
+MVT geometry commands and tags are, and which published results put at 2–3x on that portion. At
+22 % of instructions that is worth perhaps a tenth overall, against three code paths — x86, NEON
+and scalar — since `std::simd` is nightly and DR-17 pins the toolchain. The per-layer buffers are
+a larger share for less machinery.
 
 `benches/expression_cost.rs` holds the rest of the measurement, against the zoom-10 tile
 `benchmark/parse/vector_tile.benchmark.cpp` decodes in mbgl's own `Parse_VectorTile` — so the
