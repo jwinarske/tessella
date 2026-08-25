@@ -52,7 +52,7 @@ impl Glyphs for Font {
 }
 
 /// Lays out labels at the tile anchors given, and pairs them with identities.
-fn lay_out(entries: &[(&str, (f32, f32))]) -> (SymbolBuffers, Vec<FrameLabel>) {
+fn lay_out(entries: &[(&str, (f32, f32))]) -> (SymbolBuffers, Vec<FrameLabel<'static>>) {
     let packed: String = entries.iter().map(|(text, _)| *text).collect();
     let font = Font::new(&packed);
     let labels: Vec<Label> = entries
@@ -70,6 +70,7 @@ fn lay_out(entries: &[(&str, (f32, f32))]) -> (SymbolBuffers, Vec<FrameLabel>) {
         .map(|(index, laid_out)| FrameLabel {
             cross_tile_id: index as u32 + 1,
             laid_out,
+            line: &[],
         })
         .collect();
     (buffers, frame)
@@ -347,4 +348,82 @@ fn the_layers_padding_reaches_placement() {
 
     assert_eq!(apart.drawn, 2, "they clear each other unpadded");
     assert_eq!(crowded.drawn, 1, "and crowd each other padded");
+}
+
+/// A line label reserves the road it follows, not the box around it.
+///
+/// The reason line labels collide as circles at all. A name along a diagonal has a bounding box
+/// close to a square — mbgl says as much about rotated labels — and reserving that square blanks
+/// everything in the quadrants either side of the road, which no one is standing on. Placed as
+/// circles it reserves a band along the road and nothing else.
+///
+/// Asserted as the difference between the two shapes rather than against a fixed answer: what
+/// matters is that the reservation follows the line.
+#[test]
+fn a_line_label_reserves_its_road_and_not_its_box() {
+    use tessella_layout::symbol_bucket::{LineLabel, LineOptions, build_line_symbols};
+
+    // A road running diagonally across the tile.
+    let road: Vec<(f32, f32)> = (0..=18i16)
+        .map(|index| (f32::from(index) * 200.0, f32::from(index) * 200.0))
+        .collect();
+
+    let font = Font::new("Diagonal Road Beside");
+    let (_, laid) = build_line_symbols(
+        &[LineLabel {
+            text: "Diagonal Road".to_string(),
+            line: road.clone(),
+        }],
+        &font,
+        &LineOptions {
+            centred: true,
+            ..LineOptions::default()
+        },
+    );
+    assert_eq!(laid.len(), 1, "one centred label");
+
+    // And a point label beside the road, well clear of it, but inside the square its upright
+    // bounding box would cover.
+    let (_, beside) = build_symbols(
+        &[Label {
+            text: "Beside".to_string(),
+            anchor: (2880.0, 1600.0),
+        }],
+        &font,
+        &SymbolOptions::default(),
+    );
+
+    let placed = |line: &[(f32, f32)]| {
+        let labels = vec![
+            FrameLabel {
+                cross_tile_id: 1,
+                laid_out: laid[0].clone(),
+                line,
+            },
+            FrameLabel {
+                cross_tile_id: 2,
+                laid_out: beside[0].clone(),
+                line: &[],
+            },
+        ];
+        let mut view = ViewSymbols::new();
+        let result = view.frame(&labels, to_screen, &FrameOptions::default());
+        result
+            .placed
+            .iter()
+            .find(|symbol| symbol.cross_tile_id == 2)
+            .expect("the label beside the road was offered")
+            .text
+    };
+
+    // An empty line means the label is point-placed, so it reserves its box — and the box
+    // reaches the label beside the road.
+    assert!(
+        !placed(&[]),
+        "the box did not block anything, so the comparison says nothing"
+    );
+    assert!(
+        placed(&road),
+        "the road's circles blocked a label the road does not pass"
+    );
 }

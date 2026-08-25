@@ -7,7 +7,7 @@
 
 use tessella_place::feature::{Extent, Padding, collision_box};
 use tessella_place::grid::GridIndex;
-use tessella_place::placement::{Candidate, Placed, Rules, place};
+use tessella_place::placement::{Candidate, Placed, Rules, Shape, place};
 
 /// A label 40 by 20, anchored where asked.
 fn label(anchor: (f32, f32)) -> tessella_place::feature::CollisionBox {
@@ -29,7 +29,7 @@ fn label(anchor: (f32, f32)) -> tessella_place::feature::CollisionBox {
 fn text_only(id: u32, anchor: (f32, f32)) -> Candidate {
     Candidate {
         cross_tile_id: id,
-        text: Some(label(anchor)),
+        text: Some(Shape::Box(label(anchor))),
         icon: None,
     }
 }
@@ -261,8 +261,8 @@ fn the_two_halves_combine_by_the_optional_rules() {
 
         let candidate = Candidate {
             cross_tile_id: 1,
-            text: Some(label((100.0, 100.0))),
-            icon: Some(label((300.0, 100.0))),
+            text: Some(Shape::Box(label((100.0, 100.0)))),
+            icon: Some(Shape::Box(label((300.0, 100.0)))),
         };
         let rules = Rules {
             text_optional,
@@ -301,7 +301,7 @@ fn an_icon_only_symbol_places_without_text() {
     let candidate = Candidate {
         cross_tile_id: 1,
         text: None,
-        icon: Some(label((100.0, 100.0))),
+        icon: Some(Shape::Box(label((100.0, 100.0)))),
     };
     let placed = place(&[candidate], &Rules::default(), &mut grid());
     assert!(placed[0].icon);

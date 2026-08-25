@@ -22,7 +22,7 @@ use tessella_place::cross_tile::{CrossTileIndex, Symbol};
 use tessella_place::fade::Fades;
 use tessella_place::feature::{Extent, Padding, collision_box};
 use tessella_place::grid::GridIndex;
-use tessella_place::placement::{Candidate, Rules, place};
+use tessella_place::placement::{Candidate, Rules, Shape, place};
 use tessella_source::mvt::{GeomType, Tile};
 use tessella_style::Layer;
 use tessella_tile::renderables::DataTileId;
@@ -297,7 +297,7 @@ fn a_tile_of_labels_places_and_settles() {
         .zip(&boxes)
         .map(|(symbol, placed)| Candidate {
             cross_tile_id: symbol.cross_tile_id,
-            text: Some(*placed),
+            text: Some(Shape::Box(*placed)),
             icon: None,
         })
         .collect();

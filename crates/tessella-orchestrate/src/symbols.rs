@@ -25,17 +25,23 @@ use alloc::vec::Vec;
 
 use tessella_layout::symbol_bucket::{LaidOut, SymbolBuffers, opacity_vertex};
 use tessella_place::fade::{Fades, Joint};
-use tessella_place::feature::{Extent, Padding, collision_box};
+use tessella_place::feature::{Extent, Padding, collision_box, collision_circles};
 use tessella_place::grid::GridIndex;
-use tessella_place::placement::{Candidate, Placed, Rules, place};
+use tessella_place::placement::{Candidate, Placed, Rules, Shape, place};
 
 /// A label offered to placement this frame.
 #[derive(Debug, Clone)]
-pub struct FrameLabel {
+pub struct FrameLabel<'a> {
     /// Its identity, from the cross-tile index.
     pub cross_tile_id: u32,
     /// Where layout put it, and which vertices are its own.
     pub laid_out: LaidOut,
+    /// The line it follows, in tile units, or empty when it is point-placed.
+    ///
+    /// A borrow rather than a copy: a street tile has thousands of these and the geometry is
+    /// already in the tile's buffers, so cloning each road per label per *frame* would be the
+    /// most expensive thing placement does.
+    pub line: &'a [(f32, f32)],
 }
 
 /// What one view's symbols did this frame.
@@ -60,6 +66,8 @@ pub struct FrameOptions {
     pub increment: f32,
     /// The viewport, in pixels, which is the extent the collision grid covers.
     pub viewport: (f32, f32),
+    /// The tile's overscaling, which widens a line label's padding circles.
+    pub overscaling: f32,
 }
 
 impl Default for FrameOptions {
@@ -69,6 +77,7 @@ impl Default for FrameOptions {
             padding: Padding::uniform(2.0),
             increment: 1.0,
             viewport: (1024.0, 768.0),
+            overscaling: 1.0,
         }
     }
 }
@@ -95,7 +104,7 @@ impl ViewSymbols {
     /// offered in the order given, which is the style's, and the first to fit wins.
     pub fn frame<P>(
         &mut self,
-        labels: &[FrameLabel],
+        labels: &[FrameLabel<'_>],
         project: P,
         options: &FrameOptions,
     ) -> FrameResult
@@ -117,15 +126,31 @@ impl ViewSymbols {
                     left,
                     right,
                 };
-                Candidate {
-                    cross_tile_id: label.cross_tile_id,
-                    text: collision_box(
+                let anchor = project(label.laid_out.anchor);
+
+                // A line-placed label reserves a run of circles following the road; a point
+                // label reserves one box. Both in screen space, because that is where labels
+                // compete for room.
+                let text = if label.line.is_empty() {
+                    collision_box(extent, anchor, 1.0, options.padding, 0.0).map(Shape::Box)
+                } else {
+                    let line: Vec<(f32, f32)> =
+                        label.line.iter().map(|point| project(*point)).collect();
+                    collision_circles(
                         extent,
-                        project(label.laid_out.anchor),
+                        &line,
+                        anchor,
+                        label.laid_out.segment,
                         1.0,
                         options.padding,
-                        0.0,
-                    ),
+                        options.overscaling,
+                    )
+                    .map(Shape::Circles)
+                };
+
+                Candidate {
+                    cross_tile_id: label.cross_tile_id,
+                    text,
                     icon: None,
                 }
             })
@@ -165,7 +190,7 @@ impl ViewSymbols {
     /// label and the shader reads it per vertex. A label with no fade state is one that has
     /// faded away entirely; its vertices are set transparent rather than left holding whatever
     /// they last drew at, which would be a ghost that never clears.
-    pub fn write_opacity(&self, labels: &[FrameLabel], buffers: &mut SymbolBuffers) {
+    pub fn write_opacity(&self, labels: &[FrameLabel<'_>], buffers: &mut SymbolBuffers) {
         for label in labels {
             let (placed, opacity) = match self.fades.get(label.cross_tile_id) {
                 Some(state) => (state.text.placed, state.text.opacity),
@@ -189,8 +214,12 @@ impl ViewSymbols {
     ///
     /// The position the shader projects against, which is why it is per frame at all: the
     /// geometry is tile-local and shared, and this is where the camera enters.
-    pub fn write_positions<P>(&self, labels: &[FrameLabel], project: P, buffers: &mut SymbolBuffers)
-    where
+    pub fn write_positions<P>(
+        &self,
+        labels: &[FrameLabel<'_>],
+        project: P,
+        buffers: &mut SymbolBuffers,
+    ) where
         P: Fn((f32, f32)) -> (f32, f32),
     {
         for label in labels {

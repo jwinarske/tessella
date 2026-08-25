@@ -1021,10 +1021,32 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   short answers "no room" rather than "needs flipping", so the caller is not sent round the loop
   to discover the same thing twice. And `text-keep-upright` off has to *place* rather than
   refuse, since the property exists for symbols meant to follow the line whichever way it runs.
-  What still makes a street tile dense is that nothing culls the overlaps: a line label collides
-  as a run of circles following the line, which `collision_box` says outright it does not build.
-  The grid already indexes circles and tests them against boxes and each other; what is missing
-  is mbgl's `bboxifyLabel`, which is the piece between them.
+  Placement then reaches line labels, which is what turns a street tile from a solid block of
+  text into a map: mbgl's `bboxifyLabel`, the run of circles a label following a road reserves.
+  A name on a diagonal has a bounding box close to a square, and reserving that square blanks
+  everything in the quadrants either side of a road no one is standing on — which is the same
+  cost the point path pays for a rotated label, except that a line label is rotated by definition
+  and often more than once within its own length. The grid already indexed circles and tested
+  them against boxes; what was missing was the piece between. A candidate now reserves a *shape*
+  — one box, or a run of circles — because the two are never mixed and never both present, which
+  is what an enum says and mbgl's `alongLine` flag does not.
+  Three details in it are mbgl's and none is obvious. The walk backwards to the label's first
+  segment starts at the vertex *after* the anchor's segment, so its first step measures from the
+  anchor itself; starting at the segment skips that step, and an anchor most of the way along a
+  long segment is then treated as sitting at the near end of it, which puts the whole run at the
+  start of the line — found by a right-angled road whose label came out on the wrong arm. The run
+  extends past the label, because a pitched camera draws a distant label *larger* than the box it
+  was laid out for and a label that has outgrown its collision shape overlaps its neighbour with
+  nothing detecting it; the padding grows with overscaling but only slowly, since an overscaled
+  tile places labels closer together and each extra circle costs a query. And the padding
+  *before* the label survives only when the line's vertices are coarse enough that the walk
+  overshoots — on a finely divided line it is skipped, which mbgl's own comment concedes "could
+  allow for line collisions on distant tiles". That asymmetry is asserted rather than tidied,
+  because it is exactly what a later reader corrects on sight.
+  Any circle hitting refuses the whole label rather than drawing part of a road name, and the
+  per-circle distance from the anchor — padded down by a fifth, mbgl's "conservative padding" —
+  is what a pitched camera will use to test a *prefix* of the run. On the street fixture 425
+  repetitions become 173.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

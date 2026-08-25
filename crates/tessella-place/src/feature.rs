@@ -26,7 +26,7 @@
 //! still collide with anything covering that point, so an invisible label would push a visible
 //! one off the map.
 
-use crate::grid::Bounds;
+use crate::grid::{Bounds, Circle};
 
 /// Padding around a collision box, in screen pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -125,8 +125,7 @@ fn rotate(point: (f32, f32), radians: f32) -> (f32, f32) {
 /// shaped to nothing must not collide with anything, and a zero-sized box at the anchor still
 /// would.
 ///
-/// Along-line placement is not built here. It replaces the single box with a run of circles
-/// following the line, which needs the anchors along that line — a separate piece.
+/// Along-line placement is [`line_circles`] instead: a run of circles following the line.
 #[must_use]
 pub fn collision_box(
     extent: Extent,
@@ -188,4 +187,206 @@ pub fn collision_box(
         x2: max_x,
         y2: max_y,
     })
+}
+
+/// One circle of a line label's collision run.
+///
+/// The distance is what lets placement use a *prefix* of the run: a label that is only partly
+/// on screen, or that shrinks with pitch, tests the circles near its anchor and ignores the
+/// rest, and it needs to know how far out each one is to do that.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LineCircle {
+    /// Where it sits, in the coordinates the line was given in.
+    pub circle: Circle,
+    /// How far from the anchor it is, signed and padded down by a fifth.
+    ///
+    /// mbgl's `signedDistanceFromAnchor`. The fifth is deliberate slack — the comment calls it
+    /// "a little bit of conservative padding in choosing which boxes to use" — so a circle near
+    /// the edge of what is being tested is included rather than dropped.
+    pub distance_from_anchor: f32,
+}
+
+/// The circles a line-following label collides as.
+///
+/// A transcription of mbgl's `CollisionFeature::bboxifyLabel`. `label_length` is the label's
+/// width and `box_size` its height, both already scaled to the zoom being placed at;
+/// `overscaling` is the tile's, which widens the padding run.
+///
+/// # Why a run of circles rather than one box
+///
+/// A road name follows the road. Its upright bounding box is most of a square once the road
+/// bends, and reserving that square would stop labels appearing on any of the streets nearby —
+/// the same cost the point path pays for a rotated label, except that a line label is rotated by
+/// definition and often more than once within its own length. Circles follow the bend, and a
+/// circle-circle test is one distance.
+///
+/// # The run extends past the label
+///
+/// mbgl adds padding circles either side, because a pitched camera makes distant labels *larger*
+/// on screen than the box they were laid out for, and a label that has grown past its collision
+/// shape overlaps its neighbour with nothing detecting it. The padding grows with overscaling,
+/// slowly — `1 + 0.4 * log2(overscaling)` — because an overscaled tile places labels closer
+/// together and each extra circle costs a query.
+///
+/// Empty when the line is too short to hold the run, which is not the same as "collides with
+/// nothing": a label that could not be bboxified was already refused by the bend check.
+#[must_use]
+pub fn line_circles(
+    line: &[(f32, f32)],
+    anchor: (f32, f32),
+    segment: usize,
+    label_length: f32,
+    box_size: f32,
+    overscaling: f32,
+) -> Vec<LineCircle> {
+    let mut out = Vec::new();
+    if box_size <= 0.0 || line.len() < 2 {
+        return out;
+    }
+
+    let step = box_size / 2.0;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let count = ((label_length / step).floor() as isize).max(1);
+
+    // The padding run, widened for overscaled tiles.
+    let padding_factor = 0.4f32.mul_add(overscaling.max(1.0).log2(), 1.0);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    #[allow(clippy::cast_precision_loss)]
+    let padding = (count as f32 * padding_factor / 2.0).floor() as isize;
+
+    // The first circle's centre is half a box in, so the *edge* of the run is the edge of the
+    // label rather than half a box past it.
+    let first_offset = -box_size / 2.0;
+    let label_start = -label_length / 2.0;
+
+    // Walk backwards to the segment the label actually begins on. The anchor is somewhere in the
+    // middle of the label, so the run starts before it, possibly several segments before.
+    //
+    // It starts at the vertex *after* the anchor's segment, so the first step back measures from
+    // the anchor itself to that segment's near vertex. Starting at the segment skips that step,
+    // and an anchor most of the way along a long segment is then treated as if it sat at the
+    // near end of it — which puts the whole run at the start of the line.
+    let mut index = (segment + 1).min(line.len() - 1);
+    let mut point = anchor;
+    let mut anchor_distance = first_offset;
+    loop {
+        if index == 0 {
+            if anchor_distance > label_start {
+                // The line does not reach back far enough to hold the label at all. mbgl notes
+                // the bend check should already have caught this.
+                return out;
+            }
+            // Far enough for the label, if not for all of the padding.
+            break;
+        }
+        index -= 1;
+        anchor_distance -= (line[index].0 - point.0).hypot(line[index].1 - point.1);
+        point = line[index];
+        if anchor_distance <= label_start {
+            break;
+        }
+    }
+
+    let mut segment_length =
+        (line[index + 1].0 - line[index].0).hypot(line[index + 1].1 - line[index].1);
+
+    for i in -padding..count + padding {
+        #[allow(clippy::cast_precision_loss)]
+        let box_offset = i as f32 * step;
+        let mut distance = label_start + box_offset;
+
+        // The padding circles are spread further apart than the label's own, which is what makes
+        // a short run of them cover the distance a pitched label grows by.
+        if box_offset < 0.0 {
+            distance += box_offset;
+        }
+        if box_offset > label_length {
+            distance += box_offset - label_length;
+        }
+
+        if distance < anchor_distance {
+            // The line does not extend back this far; skip rather than refuse.
+            continue;
+        }
+
+        // Advance to the segment this circle falls on.
+        while anchor_distance + segment_length < distance {
+            anchor_distance += segment_length;
+            index += 1;
+            if index + 1 >= line.len() {
+                // The line ran out before the run did.
+                return out;
+            }
+            segment_length =
+                (line[index + 1].0 - line[index].0).hypot(line[index + 1].1 - line[index].1);
+        }
+
+        if segment_length <= 0.0 {
+            continue;
+        }
+        let into_segment = distance - anchor_distance;
+        let (from, to) = (line[index], line[index + 1]);
+        let t = into_segment / segment_length;
+        let center = (
+            (to.0 - from.0).mul_add(t, from.0),
+            (to.1 - from.1).mul_add(t, from.1),
+        );
+
+        // A circle within one step of the anchor is forced to distance zero, so even a
+        // zero-width label reserves one circle rather than none.
+        let from_anchor = distance - first_offset;
+        let distance_from_anchor = if from_anchor.abs() < step {
+            0.0
+        } else {
+            from_anchor * 0.8
+        };
+
+        out.push(LineCircle {
+            circle: Circle::new(center, box_size / 2.0),
+            distance_from_anchor,
+        });
+    }
+
+    out
+}
+
+/// The circles a line-following label collides as, scaled and padded for this zoom.
+///
+/// mbgl's `CollisionFeature` along-line branch: the same scale-then-pad the point path does,
+/// and then [`line_circles`]. `None` when the label occupies nothing, for the same reason
+/// [`collision_box`] answers `None`.
+///
+/// The height has a floor of ten times `box_scale`. A short label — one or two glyphs — would
+/// otherwise reserve circles smaller than the gap between them, and a run of circles that does
+/// not overlap is a dotted line rather than a covering.
+#[must_use]
+pub fn collision_circles(
+    extent: Extent,
+    line: &[(f32, f32)],
+    anchor: (f32, f32),
+    segment: usize,
+    box_scale: f32,
+    padding: Padding,
+    overscaling: f32,
+) -> Option<Vec<LineCircle>> {
+    if extent.is_empty() {
+        return None;
+    }
+
+    let y1 = extent.top * box_scale - padding.top;
+    let y2 = extent.bottom * box_scale + padding.bottom;
+    let x1 = extent.left * box_scale - padding.left;
+    let x2 = extent.right * box_scale + padding.right;
+
+    let height = y2 - y1;
+    if height <= 0.0 {
+        return None;
+    }
+    let height = height.max(10.0 * box_scale);
+
+    let circles = line_circles(line, anchor, segment, x2 - x1, height, overscaling);
+    if circles.is_empty() {
+        return None;
+    }
+    Some(circles)
 }

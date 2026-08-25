@@ -28,7 +28,7 @@
 //! says it does not block others: it skips the insert. A label with both is drawn always and
 //! blocks nothing, which is how a style pins a label that must never move.
 
-use crate::feature::CollisionBox;
+use crate::feature::{CollisionBox, LineCircle};
 use crate::grid::GridIndex;
 
 /// What a layer's style says about how its symbols compete.
@@ -49,14 +49,56 @@ pub struct Rules {
 }
 
 /// One symbol offered for placement.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Candidate {
     /// Its identity, from the cross-tile index — what the fade will be keyed by.
     pub cross_tile_id: u32,
-    /// The text's collision box, if it has text.
-    pub text: Option<CollisionBox>,
-    /// The icon's collision box, if it has one.
-    pub icon: Option<CollisionBox>,
+    /// The shape the text reserves, if it has text.
+    pub text: Option<Shape>,
+    /// The shape the icon reserves, if it has one.
+    pub icon: Option<Shape>,
+}
+
+/// What a symbol reserves: one box, or a run of circles along a line.
+///
+/// mbgl's `CollisionFeature` carries both under one `alongLine` flag rather than two types, but
+/// the two are never mixed and never both present, which is what an enum says and a flag does
+/// not. The distinction is not cosmetic: a road name's upright bounding box is most of a square
+/// once the road bends, and reserving that square blanks every street inside it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Shape {
+    /// A point-placed label: one axis-aligned rectangle.
+    Box(CollisionBox),
+    /// A line-placed label: the circles `line_circles` produced.
+    Circles(Vec<LineCircle>),
+}
+
+impl Shape {
+    /// Whether anything already placed is in the way.
+    #[must_use]
+    pub fn collides(&self, grid: &GridIndex<u32>) -> bool {
+        match self {
+            Self::Box(box_) => grid.hit_test_box(box_.bounds()),
+            // Any circle hitting is the whole label refused. A partial run would draw part of a
+            // road name, and mbgl uses the per-circle distance to pick a *prefix* under pitch
+            // rather than to accept a label whose middle is covered.
+            Self::Circles(circles) => circles
+                .iter()
+                .any(|entry| grid.hit_test_circle(entry.circle)),
+        }
+    }
+
+    /// Reserves it, so later labels collide with it.
+    pub fn insert(&self, grid: &mut GridIndex<u32>, id: u32) {
+        match self {
+            Self::Box(box_) => grid.insert_box(id, box_.bounds()),
+            Self::Circles(circles) => {
+                for entry in circles {
+                    grid.insert_circle(id, entry.circle);
+                }
+            }
+        }
+    }
 }
 
 /// What placement decided about one symbol.
@@ -90,13 +132,13 @@ pub fn place(candidates: &[Candidate], rules: &Rules, grid: &mut GridIndex<u32>)
 
     for candidate in candidates {
         // A half with no box is nothing to draw, and nothing to test.
-        let mut place_text = match candidate.text {
+        let mut place_text = match &candidate.text {
             None => false,
-            Some(box_) => rules.text_allow_overlap || !grid.hit_test_box(box_.bounds()),
+            Some(shape) => rules.text_allow_overlap || !shape.collides(grid),
         };
-        let mut place_icon = match candidate.icon {
+        let mut place_icon = match &candidate.icon {
             None => false,
-            Some(box_) => rules.icon_allow_overlap || !grid.hit_test_box(box_.bounds()),
+            Some(shape) => rules.icon_allow_overlap || !shape.collides(grid),
         };
 
         // Whether each half can stand without the other, in mbgl's spelling.
@@ -118,15 +160,15 @@ pub fn place(candidates: &[Candidate], rules: &Rules, grid: &mut GridIndex<u32>)
         // Only what was placed goes in, and only if it is meant to block.
         if place_text
             && !rules.text_ignore_placement
-            && let Some(box_) = candidate.text
+            && let Some(shape) = &candidate.text
         {
-            grid.insert_box(candidate.cross_tile_id, box_.bounds());
+            shape.insert(grid, candidate.cross_tile_id);
         }
         if place_icon
             && !rules.icon_ignore_placement
-            && let Some(box_) = candidate.icon
+            && let Some(shape) = &candidate.icon
         {
-            grid.insert_box(candidate.cross_tile_id, box_.bounds());
+            shape.insert(grid, candidate.cross_tile_id);
         }
 
         out.push(Placed {

@@ -195,6 +195,7 @@ fn draw_a_frame() {
         .map(|(index, laid_out)| FrameLabel {
             cross_tile_id: index as u32 + 1,
             laid_out,
+            line: &[],
         })
         .collect();
 
@@ -452,56 +453,87 @@ fn draw_line_labels() {
 
     let project = |point: (f32, f32)| ((point.0 - ORIGIN.0) * scale, (point.1 - ORIGIN.1) * scale);
 
+    // Placement, over the run of circles each road name reserves along its road. Without it
+    // every repetition draws and a street tile is a solid block of text.
+    let mut frame_labels: Vec<FrameLabel> = Vec::new();
+    let mut repetition = 0usize;
+    for label in &labels {
+        while repetition < laid.len() && on_line(&label.line, laid[repetition].anchor) {
+            frame_labels.push(FrameLabel {
+                #[allow(clippy::cast_possible_truncation)]
+                cross_tile_id: frame_labels.len() as u32 + 1,
+                laid_out: laid[repetition].clone(),
+                line: &label.line,
+            });
+            repetition += 1;
+        }
+    }
+
+    let mut view = ViewSymbols::new();
+    let result = view.frame(
+        &frame_labels,
+        project,
+        &FrameOptions {
+            padding: Padding::uniform(2.0),
+            increment: 1.0,
+            #[allow(clippy::cast_precision_loss)]
+            viewport: (CANVAS as f32, CANVAS as f32),
+            ..FrameOptions::default()
+        },
+    );
+    let placed: BTreeSet<u32> = result
+        .placed
+        .iter()
+        .filter(|symbol| symbol.text)
+        .map(|symbol| symbol.cross_tile_id)
+        .collect();
+
     let mut drawn = 0usize;
     let mut flipped = 0usize;
     let mut no_room = 0usize;
-    let mut repetition = 0usize;
-    for label in &labels {
+    for entry in &frame_labels {
+        if !placed.contains(&entry.cross_tile_id) {
+            continue;
+        }
+
         // The line goes into screen space before anything is placed on it. Text draws at its own
         // size, so the distances layout recorded are screen pixels, and walking a line in tile
         // units with them would put every glyph in the wrong place by the scale factor.
-        let screen: Vec<(f32, f32)> = label.line.iter().map(|point| project(*point)).collect();
+        let screen: Vec<(f32, f32)> = entry.line.iter().map(|point| project(*point)).collect();
 
-        // Repetitions appear in label order, so walk them in step.
-        while repetition < laid.len() {
-            let entry = &laid[repetition];
-            if !on_line(&label.line, entry.anchor) {
-                break;
-            }
-            repetition += 1;
+        let laid_out = &entry.laid_out;
+        let quads = laid_out.vertices.start / 4..laid_out.vertices.end / 4;
+        let (placement, was_flipped) = place_upright(
+            &screen,
+            project(laid_out.anchor),
+            laid_out.segment,
+            &buffers.glyph_offsets[quads],
+            &LineOffsets::default(),
+        );
+        let Placement::Placed(glyphs) = placement else {
+            no_room += 1;
+            continue;
+        };
+        flipped += usize::from(was_flipped);
 
-            let quads = entry.vertices.start / 4..entry.vertices.end / 4;
-            let (placement, was_flipped) = place_upright(
-                &screen,
-                project(entry.anchor),
-                entry.segment,
-                &buffers.glyph_offsets[quads],
-                &LineOffsets::default(),
-            );
-            let Placement::Placed(glyphs) = placement else {
-                no_room += 1;
-                continue;
-            };
-            flipped += usize::from(was_flipped);
-
-            blit_along(
-                &mut canvas,
-                &buffers,
-                &font.atlas,
-                entry.vertices.clone(),
-                &glyphs,
-            );
-            drawn += 1;
-        }
+        blit_along(
+            &mut canvas,
+            &buffers,
+            &font.atlas,
+            laid_out.vertices.clone(),
+            &glyphs,
+        );
+        drawn += 1;
     }
 
     let path = std::env::var("TESSELLA_LINE_PREVIEW")
         .unwrap_or_else(|_| "/tmp/tessella-roads.png".to_string());
     write_png(&path, CANVAS, CANVAS, &canvas);
     println!(
-        "\n  {} roads, {drawn} label repetitions along them ({flipped} turned upright, \
+        "\n  {} roads, {} repetitions, {drawn} drawn after collision ({flipped} turned upright, \
          {no_room} with no room), written to {path}\n",
-        labels.len()
+        labels.len(),
+        frame_labels.len()
     );
     assert!(drawn > 0);
 }
