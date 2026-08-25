@@ -1073,11 +1073,20 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   blank tiles when a font is slow.
   `symbol-placement` decides which builder runs and what geometry is kept — one anchor per ring
   for a point label, the whole ring for a line one — and the layout properties are evaluated at
-  the bucket zoom, since `text-size` interpolated over zoom is in most styles. What is *not* done
-  is per-feature layout properties: the spec allows `text-size` to be data-driven, and a layer
-  using that draws every label at the layer's size. That is a real gap rather than a
-  simplification of the model, and it is a small one — the vertex already carries a size per
-  quad, so what is missing is a size per label and not anything about the encoding.
+  the bucket zoom, since `text-size` interpolated over zoom is in most styles.
+  Data-driven layout properties then land, which was the gap that piece left. `text-size`,
+  `text-max-width` and `text-letter-spacing` are evaluated per *feature*, not per layer, because
+  that is the granularity the spec gives them and what a style uses to set a capital larger than
+  a town on the same layer. Nothing about the encoding had to change: the vertex already carried
+  a size per quad, and what was missing was a size per label.
+  Laying out is now by *runs* — the longest stretch of consecutive labels sharing a font stack
+  and a set of text options — rather than by grouping. That fixes a divergence the font-stack
+  grouping had introduced: a layer's labels sit in its buffer in the order the layer offers them,
+  which the golden pins because a tile's per-frame state is written into the slice layout
+  recorded for each label. Gathering every label of one stack together produces identical
+  geometry in a different order, which is byte-for-byte wrong against the oracle and looks like
+  nothing at all until a second stack or a second size appears. With one of each, which is the
+  common case, there is one run and no join.
   Two things fell out of wiring it up. A symbol layer over a *vector* tile went through a
   different builder than one over GeoJSON, and that builder ended in a wildcard arm — so enabling
   the layer type in `is_built` would have had it silently draw nothing from every real tile. The

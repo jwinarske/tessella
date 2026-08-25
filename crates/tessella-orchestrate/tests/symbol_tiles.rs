@@ -7,6 +7,7 @@
 //! wrong once the phases are separate: that the same tile, laid out twice, says the same thing.
 
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 
 use tessella_glyph::fonts::Fonts;
 use tessella_layout::symbol_layout::{Anchoring, Placement};
@@ -333,4 +334,104 @@ fn a_tile_of_labels_costs_one_request() {
     let (buffers, laid) = again.lay_out(&fonts);
     assert!(!laid.is_empty());
     assert!(!buffers.is_empty());
+}
+
+/// A data-driven `text-size` gives each feature its own size.
+///
+/// The spec allows it and styles use it — a capital set larger than a town on the same layer.
+/// Held per label rather than per layer because that is the granularity the spec gives it, and
+/// because the vertex already carries a size per quad: what was missing was a size per *label*,
+/// not anything about the encoding.
+#[test]
+fn text_size_can_vary_per_feature() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "l", "type": "symbol", "source": "v", "source-layer": "road",
+                        "layout": {"text-field": "{type}", "text-font": ["TestFont"],
+                                   "text-size": ["match", ["get", "type"],
+                                                 "motorway", 24, "primary", 18, 10]}}]}"#,
+    )
+    .expect("a style");
+
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+
+    let size_of = |text: &str| {
+        layout
+            .pending
+            .iter()
+            .find(|pending| pending.text == text)
+            .map(|pending| pending.symbol.size)
+    };
+    assert_eq!(size_of("motorway"), Some(24.0));
+    assert_eq!(size_of("primary"), Some(18.0));
+    assert_eq!(size_of("tertiary"), Some(10.0), "the match fallback");
+
+    // And the sizes reach the vertices, packed the way the shader reads them.
+    let (fonts, _) = fonts_for(layout);
+    let (buffers, laid) = layout.lay_out(&fonts);
+    let unpack = |vertex: &tessella_layout::symbol_bucket::SymbolVertex| {
+        // The minimum size is the size times 128, shifted up one with `isSDF` in the low bit.
+        f32::from(vertex.data[2] >> 1) / 128.0
+    };
+
+    let mut seen: BTreeSet<u32> = BTreeSet::new();
+    for (entry, pending) in laid.iter().zip(&layout.pending) {
+        let drawn = unpack(&buffers.vertices[entry.vertices.start]);
+        assert!(
+            (drawn - pending.symbol.size).abs() < 0.01,
+            "{:?} was laid out at {drawn} and asked for {}",
+            pending.text,
+            pending.symbol.size
+        );
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        seen.insert(drawn as u32);
+    }
+    assert!(
+        seen.len() >= 3,
+        "only {seen:?} distinct sizes, so the match collapsed"
+    );
+}
+
+/// Labels stay in the order the layer offered them, whatever varies between them.
+///
+/// A layer's labels share one buffer, and per-frame state is written into the slice layout
+/// recorded for each — so the buffer's order is part of the contract, and the golden pins it.
+/// Laying out by *grouping* labels that share a size or a font would produce identical geometry
+/// in a different order, which is byte-for-byte wrong against the oracle and looks like nothing
+/// at all until a second size appears.
+#[test]
+fn a_varying_size_does_not_reorder_the_buffer() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "l", "type": "symbol", "source": "v", "source-layer": "road",
+                        "layout": {"text-field": "{type}", "text-font": ["TestFont"],
+                                   "text-size": ["match", ["get", "type"],
+                                                 "motorway", 24, "primary", 18, 10]}}]}"#,
+    )
+    .expect("a style");
+
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+    let (fonts, _) = fonts_for(layout);
+    let (buffers, laid) = layout.lay_out(&fonts);
+
+    // The sizes are interleaved rather than sorted, which is what says nothing was gathered.
+    let sizes: Vec<f32> = layout
+        .pending
+        .iter()
+        .map(|pending| pending.symbol.size)
+        .collect();
+    assert!(
+        sizes.windows(2).any(|pair| pair[1] < pair[0]),
+        "every size is in ascending order, so the run was sorted"
+    );
+
+    // And the ranges still tile the buffer in order, without gaps.
+    let mut next = 0usize;
+    for entry in &laid {
+        assert_eq!(entry.vertices.start, next, "a gap or an overlap");
+        next = entry.vertices.end;
+    }
+    assert_eq!(next, buffers.vertices.len());
 }

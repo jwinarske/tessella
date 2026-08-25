@@ -40,13 +40,40 @@ use crate::symbol_bucket::{
 /// A layout property may be a plain value or an expression, and an expression over zoom is the
 /// common case — `text-size` interpolated across a range is in most styles. Evaluating it at
 /// build time is what makes the size the one this tile draws at.
-fn layout_value(layer: &Layer, key: &str, zoom: f64) -> Option<Value> {
+fn layout_value(
+    layer: &Layer,
+    key: &str,
+    zoom: f64,
+    feature: Option<&dyn Feature>,
+) -> Option<Value> {
     match layer.layout.get(key)? {
         PropertyValue::Literal(literal) => Some(literal.clone()),
         PropertyValue::Expression(expression) => Expression::parse(expression.value())
             .ok()?
-            .evaluate(Some(zoom), None)
+            .evaluate(Some(zoom), feature)
             .ok(),
+    }
+}
+
+/// How a layer sets its text, at a zoom and optionally for one feature.
+///
+/// The spec allows `text-size`, `text-max-width` and `text-letter-spacing` to be data-driven, so
+/// two features of one layer can be set differently. Evaluating without a feature gives the
+/// layer's own values, which is what a layout is constructed with and what a layer with no
+/// data-driven property resolves to for every feature.
+fn text_options(layer: &Layer, zoom: f64, feature: Option<&dyn Feature>) -> SymbolOptions {
+    #[allow(clippy::cast_possible_truncation)]
+    let number = |key: &str| {
+        layout_value(layer, key, zoom, feature)
+            .as_ref()
+            .and_then(Value::as_number)
+            .map(|value| value as f32)
+    };
+    SymbolOptions {
+        size: number("text-size").unwrap_or(16.0),
+        max_width_ems: number("text-max-width").unwrap_or(10.0),
+        letter_spacing: number("text-letter-spacing").unwrap_or(0.0),
+        ..SymbolOptions::default()
     }
 }
 
@@ -69,7 +96,7 @@ impl Placement {
     /// newer spec must still draw, and mbgl's enum conversion does the same.
     #[must_use]
     pub fn of(layer: &Layer, zoom: f64) -> Self {
-        match layout_value(layer, "symbol-placement", zoom)
+        match layout_value(layer, "symbol-placement", zoom, None)
             .as_ref()
             .and_then(Value::as_str)
         {
@@ -104,6 +131,13 @@ pub struct Pending {
     pub fonts: Vec<String>,
     /// Where it goes.
     pub anchoring: Anchoring,
+    /// How *this feature's* text is set.
+    ///
+    /// The layer's, unless a layout property is data-driven — `text-size` is the one styles
+    /// actually use that way, to make a capital larger than a town on the same layer. Held per
+    /// label rather than per layer because that is the granularity the spec gives it, and the
+    /// vertex already carries a size per quad.
+    pub symbol: SymbolOptions,
 }
 
 /// A symbol layer's contribution to one tile, before glyphs.
@@ -125,27 +159,19 @@ impl SymbolLayout {
     /// `overscaling` is the tile's, which line placement needs so a child tile's anchors stay
     /// aligned with its parent's — without it every label jumps at a zoom crossing.
     ///
-    /// Layout properties are evaluated at the zoom and *not* per feature. The spec allows
-    /// `text-size` and several others to be data-driven, and a layer that uses that draws its
-    /// labels at the layer's size rather than each feature's. It is a real gap and not a
-    /// simplification of the model: the vertex already carries a size per quad, so what is
-    /// missing is a size per label rather than anything about the encoding.
+    /// The layer's own values are held here; each label carries whatever its own feature
+    /// evaluated to, which is the same thing unless a property is data-driven.
     #[must_use]
     pub fn new(layer: &Layer, zoom: f64, overscaling: f32) -> Self {
         #[allow(clippy::cast_possible_truncation)]
         let number = |key: &str| {
-            layout_value(layer, key, zoom)
+            layout_value(layer, key, zoom, None)
                 .as_ref()
                 .and_then(Value::as_number)
                 .map(|value| value as f32)
         };
 
-        let symbol = SymbolOptions {
-            size: number("text-size").unwrap_or(16.0),
-            max_width_ems: number("text-max-width").unwrap_or(10.0),
-            letter_spacing: number("text-letter-spacing").unwrap_or(0.0),
-            ..SymbolOptions::default()
-        };
+        let symbol = text_options(layer, zoom, None);
         let placement = Placement::of(layer, zoom);
 
         Self {
@@ -212,6 +238,7 @@ impl SymbolLayout {
                 text: label.text.clone(),
                 fonts: label.fonts.clone(),
                 anchoring,
+                symbol: text_options(layer, zoom, Some(feature)),
             });
         }
     }
@@ -260,10 +287,16 @@ impl SymbolLayout {
     /// A label whose glyphs are not all packed draws the ones that are and still measures the
     /// whole for collision, so a pan into new text draws what it has rather than nothing.
     ///
-    /// Labels are grouped by font stack and each group shaped against its own glyphs, then
-    /// joined — mbgl hands `prepareSymbols` the whole `GlyphMap` and looks up per feature, which
-    /// is the same thing from the other end. With one stack, which is the common case, there is
-    /// one group and no join.
+    /// Labels are laid out in *runs* — the longest stretch of consecutive labels sharing a font
+    /// stack and a set of text options — and the runs joined. mbgl reaches the same place from
+    /// the other end, handing `prepareSymbols` the whole `GlyphMap` and evaluating layout
+    /// properties per feature.
+    ///
+    /// Consecutive, not grouped. A layer's labels sit in its buffer in the order the layer
+    /// offers them — the golden pins that, since a tile's per-frame state is written into the
+    /// slice layout recorded — so gathering every label of one font stack together would
+    /// reorder the buffer against the oracle the moment a second stack appeared. With one stack
+    /// and one size, which is the common case, there is one run and no join.
     ///
     /// # Panics
     ///
@@ -274,15 +307,20 @@ impl SymbolLayout {
         let mut buffers = SymbolBuffers::default();
         let mut laid = Vec::new();
 
-        for stack in self.stacks() {
-            let glyphs = fonts.stack(&stack);
-            let mine = |pending: &&Pending| pending.fonts == stack;
+        let mut start = 0usize;
+        while start < self.pending.len() {
+            let head = &self.pending[start];
+            let end = self.pending[start..]
+                .iter()
+                .position(|pending| pending.fonts != head.fonts || pending.symbol != head.symbol)
+                .map_or(self.pending.len(), |offset| start + offset);
+            let run = &self.pending[start..end];
+            start = end;
 
+            let glyphs = fonts.stack(&head.fonts);
             let (built, entries) = if self.placement.along_line() {
-                let labels: Vec<LineLabel> = self
-                    .pending
+                let labels: Vec<LineLabel> = run
                     .iter()
-                    .filter(mine)
                     .filter_map(|pending| match &pending.anchoring {
                         Anchoring::Line(line) => Some(LineLabel {
                             text: pending.text.to_string(),
@@ -291,12 +329,14 @@ impl SymbolLayout {
                         Anchoring::Point(_) => None,
                     })
                     .collect();
-                build_line_symbols(&labels, &glyphs, &self.line)
+                let options = LineOptions {
+                    symbol: head.symbol,
+                    ..self.line
+                };
+                build_line_symbols(&labels, &glyphs, &options)
             } else {
-                let labels: Vec<Label> = self
-                    .pending
+                let labels: Vec<Label> = run
                     .iter()
-                    .filter(mine)
                     .filter_map(|pending| match pending.anchoring {
                         Anchoring::Point(anchor) => Some(Label {
                             text: pending.text.to_string(),
@@ -305,12 +345,12 @@ impl SymbolLayout {
                         Anchoring::Line(_) => None,
                     })
                     .collect();
-                build_symbols(&labels, &glyphs, &self.symbol)
+                build_symbols(&labels, &glyphs, &head.symbol)
             };
 
-            // Each group's ranges address its own buffer, so they shift by what was already
-            // here. Getting this wrong writes one label's per-frame state over another's, which
-            // draws as a label that will not fade and errors nowhere.
+            // Each run's ranges address its own buffer, so they shift by what was already here.
+            // Getting this wrong writes one label's per-frame state over another's, which draws
+            // as a label that will not fade and errors nowhere.
             let base = buffers.append(&built);
             laid.extend(entries.into_iter().map(|mut entry| {
                 entry.vertices = entry.vertices.start + base..entry.vertices.end + base;
