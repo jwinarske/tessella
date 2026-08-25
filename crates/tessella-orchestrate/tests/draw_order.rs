@@ -22,6 +22,7 @@
 use std::collections::BTreeMap;
 
 use tessella_capture_abi::envelope::ViewId;
+use tessella_capture_abi::ring::Ring;
 use tessella_orchestrate::order::{self, DrawOrder};
 use tessella_orchestrate::tile::{TileId as BuildTile, build_sourceless, build_tile};
 use tessella_source::geojson;
@@ -335,4 +336,141 @@ fn the_permutation_grouping_matches_the_oracle() {
         &attribute_ids(LINE_FAMILY),
     );
     assert_ne!(line_driven, line_constant);
+}
+
+// --- §9.3: OrderUpdate count == order-change count ---
+
+/// Bindings for the probe's cover, so an order can be built and rebuilt.
+fn probe_bindings() -> Vec<tessella_orchestrate::view::GeometryBinding> {
+    let style = Style::parse(HERMETIC).expect("style parses");
+    let Some(Source::Geojson(source)) = style.source("probe") else {
+        panic!("a geojson source");
+    };
+    let features = geojson::read(&source.data).expect("features");
+
+    let mut next_id = 0u64;
+    let mut out = Vec::new();
+    for tile in cover::cover(&probe()).expect("covers") {
+        let build = BuildTile::new(tile.z, tile.x, tile.y);
+        let buckets = build_all(&style, "probe", build, &features);
+        out.extend(order::bindings_for(
+            ViewId(0),
+            order::tile_of(tile.z, tile.x, tile.y),
+            &buckets,
+            &mut next_id,
+        ));
+    }
+    out
+}
+
+/// Re-emitting an unchanged order writes nothing, and says so.
+///
+/// # Why this is the point of §6.3
+///
+/// Rev 1 sent the camera and the painter order in one record, so a view that merely moved
+/// re-sent the whole order — every drawable, every frame, for a camera that had changed and an
+/// order that had not. Splitting them (§6.3) is only worth anything if the order half then
+/// stays quiet, and "stays quiet" is a property of this suppression rather than of the split.
+///
+/// The order is resolved and compared against what was last emitted, so the check is against the
+/// bytes a consumer would receive rather than against a dirty flag somebody has to remember to
+/// clear. A flag is what makes this kind of suppression wrong later: it is set correctly for a
+/// year and then not, by a change nowhere near it.
+#[test]
+fn an_unchanged_order_emits_nothing() {
+    let mut ring = Ring::new(1 << 20);
+    let producer = ring.producer();
+
+    let mut order = DrawOrder::new(8);
+    for binding in probe_bindings() {
+        order.bind(binding);
+    }
+
+    let first = order.emit(producer, ViewId(0)).expect("emits");
+    assert!(first.changed, "the first order is new");
+    assert!(first.entries > 0);
+    let after_first = producer.head();
+    let epoch = first.epoch;
+
+    // Fifty frames in which nothing about the order changes.
+    for frame in 0..50 {
+        let again = order.emit(producer, ViewId(0)).expect("emits");
+        assert!(!again.changed, "frame {frame} re-sent an unchanged order");
+        assert_eq!(again.epoch, epoch, "frame {frame} bumped the epoch");
+    }
+    assert_eq!(
+        producer.head(),
+        after_first,
+        "fifty frames of an unchanged order moved the ring"
+    );
+}
+
+/// An order that does change emits once, and once per change.
+///
+/// The companion: suppression that never lifted would pass the test above and draw the first
+/// frame forever.
+#[test]
+fn a_changed_order_emits_once_per_change() {
+    let mut ring = Ring::new(1 << 20);
+    let producer = ring.producer();
+    let bindings = probe_bindings();
+    assert!(bindings.len() > 2, "enough to drop one and notice");
+
+    let mut order = DrawOrder::new(8);
+    for binding in &bindings {
+        order.bind(*binding);
+    }
+    let first = order.emit(producer, ViewId(0)).expect("emits");
+    assert!(first.changed);
+    let mut head = producer.head();
+    let mut epoch = first.epoch;
+
+    // Rebuild with one fewer drawable — a tile leaving the cover, in miniature.
+    for dropped in 1..=3 {
+        order.clear();
+        for binding in &bindings[dropped..] {
+            order.bind(*binding);
+        }
+
+        let changed = order.emit(producer, ViewId(0)).expect("emits");
+        assert!(changed.changed, "dropping {dropped} changed nothing");
+        assert!(changed.epoch > epoch, "the epoch did not advance");
+        assert!(producer.head() > head, "nothing reached the ring");
+        epoch = changed.epoch;
+        head = producer.head();
+
+        // And it settles again immediately.
+        let settled = order.emit(producer, ViewId(0)).expect("emits");
+        assert!(!settled.changed, "it did not settle after the change");
+        assert_eq!(producer.head(), head);
+    }
+}
+
+/// Rebuilding the same order from scratch is not a change.
+///
+/// A view recomputes its order every frame; that the *inputs* were rebuilt says nothing about
+/// whether the result differs. Suppression keyed on "did anyone call `bind` again" rather than
+/// on the resolved bytes would emit every frame while looking correct.
+#[test]
+fn rebuilding_an_identical_order_is_not_a_change() {
+    let mut ring = Ring::new(1 << 20);
+    let producer = ring.producer();
+    let bindings = probe_bindings();
+
+    let mut order = DrawOrder::new(8);
+    for binding in &bindings {
+        order.bind(*binding);
+    }
+    order.emit(producer, ViewId(0)).expect("emits");
+    let head = producer.head();
+
+    for frame in 0..10 {
+        order.clear();
+        for binding in &bindings {
+            order.bind(*binding);
+        }
+        let again = order.emit(producer, ViewId(0)).expect("emits");
+        assert!(!again.changed, "frame {frame} called a rebuild a change");
+    }
+    assert_eq!(producer.head(), head);
 }

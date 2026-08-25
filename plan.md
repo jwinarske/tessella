@@ -462,7 +462,10 @@ historic note).
 ### 9.3 Counters (CI assertions)
 
 Extend the LogFrameSink-stats pattern: bytes/frame parked == 0; bytes/frame during pure pan ≤
-camera-block budget; OrderUpdate count == order-change count; AttributesModified == 0 on a
+camera-block budget; OrderUpdate count == order-change count (asserted in `draw_order.rs`: fifty frames of an
+unchanged order move the ring not at all, three successive changes emit once each and settle
+immediately after, and rebuilding an identical order from scratch is not a change — the
+suppression compares the resolved bytes rather than tracking whether anyone called `bind`); AttributesModified == 0 on a
 static scene; dirty-rect coverage ratio (uploaded px / changed px) bounded. Zoom (§13.1): zero
 geometry envelopes and zero AttributesModified during non-crossing zoom. Flatness (§5.5):
 fetches, decodes, bucket builds, shaped labels, atlas uploads, material compilations flat in
