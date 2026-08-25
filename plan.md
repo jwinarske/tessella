@@ -732,12 +732,34 @@ is the larger part. What remains at 12 ns is the walk
 itself: recursive non-inlined `evaluate` calls returning a 40-byte
 `Result<Value, EvaluationError>` by memory to carry what is nearly always an 8-byte `f64`, plus
 the wrapping and the drops on the way back. The VM's target is the walk, not the data access.
-`benches/expression_cost.rs` holds the measurement, against the zoom-10 tile
+**Against mbgl, on the same bytes: 1.40x.** `crates/tessella-source/benches/decode.rs` does what
+`Parse_VectorTile` does — the same tile, the same accounting — and run alternately with
+maplibre-native's own benchmark runner the ratio held at 1.40 across minima, medians, means and
+the median of paired ratios, at a coefficient of variation under two per cent. mbgl decodes
+lazily and this port eagerly, but that benchmark touches every feature's geometries and
+properties, so both do a full decode.
+
+That is the first number this project has had for "is the rewrite worth it", and it says the
+decoder is behind rather than ahead. Where the remaining 40 % sits is not yet measured; the
+per-feature geometry `Vec` of `Vec`s is the obvious suspect, since mbgl returns a
+`GeometryCollection` built the same way and does not pay the property-table copies this one no
+longer pays either.
+
+`benches/expression_cost.rs` holds the rest of the measurement, against the zoom-10 tile
 `benchmark/parse/vector_tile.benchmark.cpp` decodes in mbgl's own `Parse_VectorTile` — so the
 two sides can be compared on the same bytes rather than argued about. Every absolute figure in
 this section was taken on a machine that also measured the same decode at 455 µs and 812 µs an
 hour apart under somebody else's build; the with-and-without ratios were alternated across
 rounds and held, the absolutes wandered by a factor of two. Read the ratios.
+
+Averaging more runs does not fix that, and is worth being precise about because it is the
+obvious thing to reach for. Interference is one-sided — another process can take time from a run
+and never give any back — so the distribution has a floor at the true cost and a tail above it.
+The mean is biased upward by exactly the contamination it is supposed to average out, and more
+samples converge on the biased figure rather than the true one: under load, mbgl's own harness
+reported a mean of 414 µs where its minimum was 345 and the quiet-machine number is 302. The
+minimum is the estimator of the floor; alternating the two things being compared is what makes
+the *ratio* trustworthy while neither absolute is.
 It counts allocations as well as timing:
 a build with data-driven paint does 99 231 of them and one with constant paint 75 045, so the
 data-driven surcharge was about 24 000 — roughly one per feature, half of it colours. A colour
