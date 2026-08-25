@@ -253,6 +253,37 @@ fn draw_a_frame() {
     assert!(drawn > 0);
 }
 
+/// The atlas, sampled bilinearly and normalised to 0..1.
+///
+/// A distance field is meant to be interpolated — that is what makes it scale — so sampling it
+/// nearest-neighbour throws away most of the precision the encoding exists to carry.
+fn sample(pixels: &[u8], width: u32, x: f32, y: f32) -> f32 {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let (x0, y0) = (x.floor().max(0.0) as u32, y.floor().max(0.0) as u32);
+    let (fx, fy) = (x - x.floor(), y - y.floor());
+    let at = |px: u32, py: u32| {
+        pixels
+            .get((py * width + px) as usize)
+            .map_or(0.0, |value| f32::from(*value) / 255.0)
+    };
+    let top = at(x0, y0).mul_add(1.0 - fx, at(x0 + 1, y0) * fx);
+    let bottom = at(x0, y0 + 1).mul_add(1.0 - fx, at(x0 + 1, y0 + 1) * fx);
+    top.mul_add(1.0 - fy, bottom * fy)
+}
+
+/// The shader's `smoothstep`: `t * t * (3 - 2t)`.
+///
+/// Written plainly. It was written as a `mul_add` to satisfy a lint, which changed it to
+/// `t * t * (1 - 2t)` — negative for anything past the halfway point, so the *inside* of every
+/// glyph came out with negative alpha and was skipped, leaving only the faint edge ramp. A
+/// clippy suggestion is a suggestion about style, and applying one to an expression whose exact
+/// shape is the point is how arithmetic quietly changes.
+#[allow(clippy::suboptimal_flops)]
+fn smoothstep(low: f32, high: f32, value: f32) -> f32 {
+    let t = ((value - low) / (high - low)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// Draws one label's quads, decoding the corners and texels back out of the packed vertices.
 fn blit(
     canvas: &mut [u8],
@@ -300,17 +331,18 @@ fn blit(
                 if !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
                     continue;
                 }
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let sx = (f32::from(tex_left) + u * f32::from(tex_right - tex_left)) as u32;
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let sy = (f32::from(tex_top) + v * f32::from(tex_bottom - tex_top)) as u32;
-                let distance = atlas.pixels()[(sy * atlas_width + sx) as usize];
+                let sx = f32::from(tex_left) + u * f32::from(tex_right - tex_left);
+                let sy = f32::from(tex_top) + v * f32::from(tex_bottom - tex_top);
+                let distance = sample(atlas.pixels(), atlas_width, sx, sy);
 
-                // The distance field encodes the edge at 128 and falls off either side. A
-                // narrow ramp around it is what makes the letter's edge smooth rather than
-                // stepped, which is the entire reason a distance field is used at all.
-                let alpha = f32::from(distance).mul_add(1.0 / 16.0, -(128.0 / 16.0) + 0.5);
-                let alpha = alpha.clamp(0.0, 1.0);
+                // The shader's own constants. The edge sits at (256 - 64) / 256 -- *not* at the
+                // midpoint, which is the mistake that makes every letter several pixels too fat
+                // and reads as hopelessly blurry text. EDGE_GAMMA is the half-width of the ramp
+                // either side of it, and 0.105 is the value at a device pixel ratio of one,
+                // which is what drawing a glyph at its native size means.
+                const INNER_EDGE: f32 = (256.0 - 64.0) / 256.0;
+                const EDGE_GAMMA: f32 = 0.105;
+                let alpha = smoothstep(INNER_EDGE - EDGE_GAMMA, INNER_EDGE + EDGE_GAMMA, distance);
                 if alpha <= 0.0 {
                     continue;
                 }
