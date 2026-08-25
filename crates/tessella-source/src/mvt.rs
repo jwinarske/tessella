@@ -280,8 +280,9 @@ fn decode_layer(data: &[u8]) -> Result<Layer, MvtError> {
     }
 
     let mut features = Vec::with_capacity(raw_features.len());
+    let mut scratch = Scratch::default();
     for raw in raw_features {
-        features.push(decode_feature(raw, &name, &keys, &values)?);
+        features.push(decode_feature(raw, &name, &keys, &values, &mut scratch)?);
     }
 
     Ok(Layer {
@@ -342,23 +343,40 @@ fn decode_value(data: &[u8], layer: &str) -> Result<Value, MvtError> {
     })
 }
 
+/// Buffers reused across the features of a layer.
+///
+/// A feature's tags and geometry commands are packed varints that have to be unpacked before
+/// they can be read, and both were a fresh `Vec` per feature grown by pushing — so a tile of
+/// seventeen thousand features allocated and freed thirty-four thousand vectors, and reallocated
+/// each of them a few times on the way up. Neither buffer outlives the feature it decodes, which
+/// is exactly the shape a scratch buffer fits: cleared and refilled rather than rebuilt.
+#[derive(Default)]
+struct Scratch {
+    tags: Vec<u32>,
+    geometry: Vec<u32>,
+}
+
 fn decode_feature(
     data: &[u8],
     layer: &str,
     keys: &[Arc<str>],
     values: &[Value],
+    scratch: &mut Scratch,
 ) -> Result<Feature, MvtError> {
     let mut reader = Reader::new(data);
     let mut feature = Feature::default();
-    let mut tags: Vec<u32> = Vec::new();
-    let mut geometry: Vec<u32> = Vec::new();
+    // Cleared, not reallocated: `clear` keeps the capacity, so after the first few features
+    // neither of these grows again.
+    scratch.tags.clear();
+    scratch.geometry.clear();
+    let (tags, geometry) = (&mut scratch.tags, &mut scratch.geometry);
     let mut geometry_fields = 0;
 
     while let Some(field) = reader.next_field() {
         let (number, wire) = field?;
         match (number, wire) {
             (1, WireType::Varint) => feature.id = Some(reader.varint()?),
-            (2, _) => reader.packed_varints(wire, &mut tags)?,
+            (2, _) => reader.packed_varints(wire, tags)?,
             (3, WireType::Varint) => {
                 feature.geom_type = match reader.varint()? {
                     1 => GeomType::Point,
@@ -370,7 +388,7 @@ fn decode_feature(
             }
             (4, _) => {
                 geometry_fields += 1;
-                reader.packed_varints(wire, &mut geometry)?;
+                reader.packed_varints(wire, geometry)?;
             }
             _ => reader.skip(wire)?,
         }
@@ -392,6 +410,8 @@ fn decode_feature(
             count: tags.len(),
         });
     }
+    // Two entries per property, and the count is known before any of them is read.
+    feature.properties.reserve_exact(tags.len() / 2);
     for [key, value] in tags.as_chunks::<2>().0 {
         let (key, value) = (*key, *value);
         let key = keys
@@ -413,7 +433,7 @@ fn decode_feature(
         feature.properties.push((key, value));
     }
 
-    feature.geometry = decode_geometry(&geometry, layer)?;
+    feature.geometry = decode_geometry(geometry, layer)?;
     Ok(feature)
 }
 
@@ -441,6 +461,9 @@ fn decode_geometry(commands: &[u32], layer: &str) -> Result<Vec<Vec<[i32; 2]>>, 
                 if id == 1 && !current.is_empty() {
                     out.push(core::mem::take(&mut current));
                 }
+                // The command header carries how many points follow, so a ring is sized once
+                // rather than doubled into place.
+                current.reserve(count);
                 if id == 2 && current.is_empty() {
                     return Err(malformed("LineTo before any MoveTo"));
                 }

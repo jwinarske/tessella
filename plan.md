@@ -742,8 +742,19 @@ the timed section: 3.9 ms and 282 186 allocations for the same tile — 16.4 per
 the whole build's 5.1. Three of those per feature were the property keys. MVT keeps a layer's
 keys in one table and has features refer to them by index precisely so a key is stored once, and
 decode was cloning a `String` out of it per tag per feature. Sharing them took decode to 3.4 ms
-and 230 677 allocations, lower in every alternating round. What is left is dominated by the
-per-feature geometry, which is a `Vec` of `Vec`s and could be one buffer with ring offsets.
+and 230 677 allocations, lower in every alternating round.
+
+The rest of the gap was growth, not structure. A feature's own vectors — its properties, its
+geometry, and the ring inside it — are 3.3 allocations per feature, against the 13.4 measured, so
+ten were the packed-varint scratch buffers rebuilt per feature and the reallocation of everything
+grown by pushing. Reusing the scratch across a layer's features and pre-sizing from counts the
+format states before the data — a feature's tag count, a ring's point count — took decode to
+2.6 ms and 160 317 allocations. Against where it started, a third off the time and 43 % of the
+allocations, without changing what is decoded.
+
+The next structural step is the geometry, still a `Vec` of `Vec`s at roughly 2.5 allocations per
+feature: one buffer per tile with ring offsets would take that to nothing amortised, which is the
+same shape as the tessellation output and the layout buffers below it.
 
 - **Strict classification at compile time.** Constant → folded at style parse. Camera-only →
   evaluated once per (layer, integer-zoom interval), process-wide, cached as interpolation
