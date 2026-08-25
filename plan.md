@@ -780,6 +780,20 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   mbgl's un-reduced form on purpose: for a label following a line the second half moves into
   `glyph_offset` so the shader can apply it after projecting, and writing the reduced form makes
   that a rewrite rather than a branch.
+  The per-view half starts with the collision grid, a transcription of mbgl's `GridIndex`:
+  boxes and circles in a plane, cut into cells, so a candidate is compared against what is near
+  it rather than against every symbol already placed — which at street zoom is thousands per
+  tile. Two of mbgl's quirks are transcribed rather than tidied: its box test is inclusive at the
+  edges while its circle test is strict, and placement's output depends on the asymmetry. One is
+  *not* transcribed — its circle query lacks the `return` its box query has after the whole-grid
+  shortcut, so it reports every element twice; nothing catches that there because the only caller
+  reaching the path stops at the first result.
+  All five of mbgl's `GridIndex` tests pass, and they were not enough. Mis-sizing the cells so
+  the grid collapses to one cell leaves every result *correct* — everything becomes a candidate
+  and the exact tests filter it — so no assertion about query results can see it. What is lost is
+  the reason the grid exists. It now reports how many shapes share a cell with a query, and that
+  is asserted directly: one for a one-cell query over a hundred spread shapes, four for a
+  four-cell query.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

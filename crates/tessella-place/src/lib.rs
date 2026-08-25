@@ -9,7 +9,10 @@
 //! Fades count as churn while fading and then settle to silence, which is what keeps the
 //! §6.5 still-frame guarantee honest.
 //!
-//! Status: scaffold. No implementation yet. Largest phase in §10 (R2), and R-1 is the risk
+//! Status: the collision grid is in. Placement, the cross-tile index and fades are not.
+//! Largest phase in §10 (R2), and R-1 is the risk
 //! that it is still underestimated.
 
 #![forbid(unsafe_code)]
+
+pub mod grid;
