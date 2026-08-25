@@ -52,6 +52,18 @@
 //! rest attributable.
 //!
 //! Dependency-free and percentile-reporting for the reasons `four_view_sweep` gives.
+//!
+//! # Read ratios, not absolutes
+//!
+//! The same decode measured 455 us and 812 us an hour apart on this machine, and the world tile
+//! 2.6 ms and 6.4 ms, with nothing in between but somebody else's build: load average was 25 on
+//! 32 cores. Nothing here pins a core or asks for one.
+//!
+//! So a figure quoted from a single run means very little. What survives is a comparison taken
+//! *within* one run, or a with-and-without pair alternated across several — which is how every
+//! change this file drove was measured, and why those held while the absolutes wandered by a
+//! factor of two. A number from here belongs in a commit message with the thing it was compared
+//! against, never on its own.
 
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -122,9 +134,23 @@ fn allocations(label: &str, features: usize, mut body: impl FnMut()) {
 use tessella_source::mvt;
 use tessella_style::Style;
 
-/// A zoom-14 tile over Berlin: 934 features across seven layers, which is the shape of a tile
-/// anyone actually looks at.
-const TILE: &[u8] = include_bytes!("../../../tests/mvt-fixtures/protomaps-berlin-14-8802-5373.mvt");
+/// mbgl's own benchmark tile: zoom 10, Mapbox Streets schema, 593 features over fourteen layers
+/// and 28 156 points.
+///
+/// Chosen because `benchmark/parse/vector_tile.benchmark.cpp` decodes exactly this file and
+/// touches every feature's geometries and properties, so a number here and a number there are
+/// about the same work on the same bytes. Anything else makes a comparison an argument about
+/// fixtures.
+const TILE: &[u8] = include_bytes!("../../../tests/mvt-fixtures/streets-10-163-395.mvt");
+
+/// A zoom-14 Protomaps tile over Berlin: 934 features, seven layers, 20 980 points.
+///
+/// Kept beside the streets tile because the two are dense in different things — Berlin carries
+/// 3.4 properties per feature against 2.0, and the streets tile 47 points per feature against
+/// 22. An optimisation that helps one need not help the other, which is the same lesson the
+/// world tile taught more expensively.
+const BERLIN_TILE: &[u8] =
+    include_bytes!("../../../tests/mvt-fixtures/protomaps-berlin-14-8802-5373.mvt");
 
 /// The zoom-0 world tile this used to measure, kept for contrast.
 ///
@@ -147,13 +173,13 @@ const DATA_DRIVEN: &str = r##"{
            16, ["match", ["get", "class"], "lake", "#0044aa", "#0055bb"]],
         "fill-opacity": ["case", ["has", "class"], 0.9, 0.5]
       } },
-    { "id": "roads", "type": "line", "source": "src", "source-layer": "roads",
+    { "id": "roads", "type": "line", "source": "src", "source-layer": "road",
       "paint": {
-        "line-color": ["match", ["get", "kind"], "highway", "#ffcc00", "#ffffff"],
+        "line-color": ["match", ["get", "class"], "highway", "#ffcc00", "#ffffff"],
         "line-width": ["interpolate", ["linear"], ["zoom"],
-           10, ["match", ["get", "kind"], "highway", 2.0, 0.5],
-           16, ["match", ["get", "kind"], "highway", 8.0, 2.0]],
-        "line-opacity": ["case", ["==", ["get", "kind"], "highway"], 1.0, 0.7]
+           10, ["match", ["get", "class"], "highway", 2.0, 0.5],
+           16, ["match", ["get", "class"], "highway", 8.0, 2.0]],
+        "line-opacity": ["case", ["==", ["get", "class"], "highway"], 1.0, 0.7]
       } }
   ]
 }"##;
@@ -165,7 +191,7 @@ const CONSTANT: &str = r##"{
   "layers": [
     { "id": "landuse", "type": "fill", "source": "src", "source-layer": "landuse",
       "paint": { "fill-color": "#002244", "fill-opacity": 0.9 } },
-    { "id": "roads", "type": "line", "source": "src", "source-layer": "roads",
+    { "id": "roads", "type": "line", "source": "src", "source-layer": "road",
       "paint": { "line-color": "#ffffff", "line-width": 2.0, "line-opacity": 1.0 } }
   ]
 }"##;
@@ -215,14 +241,21 @@ fn main() {
     let decoded = mvt::Tile::decode(TILE).expect("decodes");
     let tile = tessella_orchestrate::tile::TileId::new(0, 0, 0);
 
-    println!("Tile: protomaps-berlin-14-8802-5373.mvt");
+    println!("Tile: streets-10-163-395.mvt (maplibre-native's Parse_VectorTile fixture)");
     for layer in &decoded.layers {
         println!("  {} : {} features", layer.name, layer.features.len());
     }
     println!();
 
-    time("decode (z14 Berlin)", || {
+    // The first of these is what `Parse_VectorTile` measures in maplibre-native.
+    time("decode (z10 streets)", || {
         mvt::Tile::decode(TILE).expect("decodes").layers.len()
+    });
+    time("decode (z14 Berlin)", || {
+        mvt::Tile::decode(BERLIN_TILE)
+            .expect("decodes")
+            .layers
+            .len()
     });
     time("decode (z0 world)", || {
         mvt::Tile::decode(WORLD_TILE).expect("decodes").layers.len()
@@ -266,18 +299,18 @@ fn per_expression(decoded: &mvt::Tile) {
     let layer = decoded
         .layers
         .iter()
-        .find(|layer| layer.name == "roads")
+        .find(|layer| layer.name == "landcover")
         .expect("the dense layer");
 
     let cases: &[(&str, &str)] = &[
         ("literal number", "4.0"),
         ("literal string", r#""kind""#),
         ("literal short string", r#""a""#),
-        ("get", r#"["get", "kind"]"#),
+        ("get", r#"["get", "class"]"#),
         ("has", r#"["has", "kind"]"#),
         (
             "match on number",
-            r#"["match", ["get", "kind"], "highway", 2.0, 0.5]"#,
+            r#"["match", ["get", "class"], "highway", 2.0, 0.5]"#,
         ),
         (
             "match on string",
@@ -285,7 +318,7 @@ fn per_expression(decoded: &mvt::Tile) {
         ),
         (
             "case",
-            r#"["case", ["==", ["get", "kind"], "highway"], 1.0, 0.7]"#,
+            r#"["case", ["==", ["get", "class"], "highway"], 1.0, 0.7]"#,
         ),
         (
             "interpolate (zoom only)",
@@ -294,14 +327,14 @@ fn per_expression(decoded: &mvt::Tile) {
         (
             "interpolate over match",
             r#"["interpolate", ["linear"], ["zoom"],
-                10, ["match", ["get", "kind"], "highway", 2.0, 0.5],
-                16, ["match", ["get", "kind"], "highway", 8.0, 2.0]]"#,
+                10, ["match", ["get", "class"], "highway", 2.0, 0.5],
+                16, ["match", ["get", "class"], "highway", 8.0, 2.0]]"#,
         ),
         ("rgb", r#"["rgb", 255, 204, 0]"#),
-        ("rgb over get", r#"["rgb", ["get", "kind"], 204, 0]"#),
+        ("rgb over get", r#"["rgb", ["get", "class"], 204, 0]"#),
         (
             "colour match",
-            r##"["match", ["get", "kind"], "highway", "#ffcc00", "#ffffff"]"##,
+            r##"["match", ["get", "class"], "highway", "#ffcc00", "#ffffff"]"##,
         ),
     ];
 
@@ -309,7 +342,10 @@ fn per_expression(decoded: &mvt::Tile) {
     // timed directly, so what the expression costs above and beyond it is attributable.
     {
         use tessella_style::expression::Feature as StyleFeature;
-        for (label, key) in [("property (present)", "kind"), ("property (absent)", "zzz")] {
+        for (label, key) in [
+            ("property (present)", "class"),
+            ("property (absent)", "zzz"),
+        ] {
             let run = || {
                 let mut sink = 0usize;
                 for feature in &layer.features {

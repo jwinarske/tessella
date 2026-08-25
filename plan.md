@@ -732,7 +732,13 @@ is the larger part. What remains at 12 ns is the walk
 itself: recursive non-inlined `evaluate` calls returning a 40-byte
 `Result<Value, EvaluationError>` by memory to carry what is nearly always an 8-byte `f64`, plus
 the wrapping and the drops on the way back. The VM's target is the walk, not the data access.
-`benches/expression_cost.rs` holds the measurement, and counts allocations as well as timing:
+`benches/expression_cost.rs` holds the measurement, against the zoom-10 tile
+`benchmark/parse/vector_tile.benchmark.cpp` decodes in mbgl's own `Parse_VectorTile` — so the
+two sides can be compared on the same bytes rather than argued about. Every absolute figure in
+this section was taken on a machine that also measured the same decode at 455 µs and 812 µs an
+hour apart under somebody else's build; the with-and-without ratios were alternated across
+rounds and held, the absolutes wandered by a factor of two. Read the ratios.
+It counts allocations as well as timing:
 a build with data-driven paint does 99 231 of them and one with constant paint 75 045, so the
 data-driven surcharge was about 24 000 — roughly one per feature, half of it colours. A colour
 had no runtime type: `Type::Color` existed statically, but the value was a `Value::Array` of

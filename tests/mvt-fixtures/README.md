@@ -62,3 +62,18 @@ of dense polygons the geometry is roughly sixty per cent of the work and on a ti
 points it is twenty. The world tile suggests neither ratio.
 
 Conformance still runs against the vendored suite. This one is for numbers.
+
+## `streets-10-163-395.mvt` — the tile maplibre-native benchmarks
+
+Copied from `test/fixtures/api/assets/streets/10-163-395.vector.pbf`, which is the file
+`benchmark/parse/vector_tile.benchmark.cpp` decodes in `Parse_VectorTile`. Zoom 10, Mapbox
+Streets schema, 593 features over fourteen layers, 28 156 points.
+
+It is here so a decode number on this side and a decode number on that side are about the same
+work on the same bytes. Comparing against anything else turns a performance question into an
+argument about fixtures.
+
+Worth noting how the earlier mistake happened: `real-world-0-0-0.mvt` is byte-identical to
+maplibre-native's `0-0-0.vector.pbf`, its *test* fixture. They benchmark the zoom-10 tile and
+test with the zoom-0 one. We vendored the test tile and benchmarked against it, which is how a
+zoom-0 view of the whole world came to weigh every optimisation decision.
