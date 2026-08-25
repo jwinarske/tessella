@@ -12,7 +12,9 @@ publish = false
 
 [dependencies]
 fontdue.workspace = true
+tessella-source.workspace = true
 tessella-storage.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

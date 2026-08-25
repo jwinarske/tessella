@@ -11,6 +11,9 @@
 //! single-channel, not RGBA: 4x on the largest persistent texture (§12.4). The shelf
 //! allocator keeps insertions clustered so the §6.4 dirty-rect list rarely spills to union.
 //!
-//! Status: scaffold. No implementation yet.
+//! Status: the glyph range format is read. Shaping, the atlas and local rasterization are
+//! not implemented.
 
 #![forbid(unsafe_code)]
+
+pub mod pbf;

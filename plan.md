@@ -706,8 +706,21 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   §4 wants a ring sized against, for this style; a style with more layers scales it, but the
   order of magnitude is settled. Exit: zero symbol pops, which needs R2 to have symbols that
   could pop.
-- **R2** — symbols: glyph manager, shaping, quads, per-view placement, collision, cross-tile
-  index, fades. Largest phase; budget ≈ R0+R1.
+- **R2** — *in progress.* Symbols: glyph manager, shaping, quads, per-view placement,
+  collision, cross-tile index, fades. Largest phase; budget ≈ R0+R1.
+  The SDF glyph range format reads, as `tessella-glyph/pbf`: `{fontstack}/{first}-{last}.pbf`,
+  256 codepoints a file, metrics and a distance field with the ecosystem's three-pixel border.
+  Almost all of it is rejection, and that is the part that matters — proto2 makes every field
+  optional on the wire, so a glyph missing `advance` parses perfectly and then lays out on top
+  of its neighbour. A declared width and height that disagree with the bitmap's length is the
+  one that would be a read past the end, so the glyph is dropped rather than the bitmap
+  clamped. Zero-area glyphs are kept: a space has an advance and nothing to draw, and a range
+  that dropped its spaces would set the words run together.
+  Checked against mbgl's `GlyphPBF.Parsing` and its `fake_glyphs` fixture, which is built for
+  exactly this — glyphs wrong in a different way each, plus one that is right. A parser that
+  accepted them all would pass a test written against a real font, because a real font has no
+  bad glyphs. Two rejections survived deleting the checks anyway, since that fixture happens not
+  to carry a glyph complete but for one field; those cases are hand-encoded in the test.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

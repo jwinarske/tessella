@@ -1038,7 +1038,9 @@ name = "tessella-glyph"
 version = "0.0.0"
 dependencies = [
  "fontdue",
+ "tessella-source",
  "tessella-storage",
+ "thiserror",
 ]
 
 [[package]]
