@@ -537,11 +537,21 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   sequence in front of the first tile request — four sources on a link where a round trip is
   40 ms was 160 ms of a cold start spent finding out what to ask for. They do not depend on each
   other, so they go to the pool as one batch.
-  Remaining: TLS and reading `.pmtiles`
-  archives directly (both held for the cross toolchains, §16), cross-faded (pattern) binders,
-  DR-11's bytecode VM — classification, constant folding and the direct evaluator are done and
-  wired, and §12.1 now carries the measurement that says what the VM has to fix — and §12.5's
-  startup path.
+  Remaining: TLS and reading `.pmtiles` archives directly, both held for the cross toolchains
+  (§16); and a worker-count budget taken on the RK3566 lane rather than on a workstation
+  loopback, which is the last thing R1's exit asks for and the one that genuinely needs the
+  board.
+
+  Three things this list used to carry, and why they are not on it. **Cross-faded (pattern)
+  binders** are blocked rather than deferred: no golden carries a pattern layer until R3 brings
+  the textures, so writing the binder now means writing it against nothing to diff it with — and
+  every binder that is right is right because the oracle said so. **DR-11's bytecode VM** is
+  decided, not pending: it was built, measured slower than the walk it replaced, and reverted,
+  with §12.1 recording that a compact `Copy` runtime value has to come first. **§12.5's startup
+  path** is done as far as it goes before symbols: sources resolve in parallel, and the trace
+  says style parse and paint resolution together are under two per cent of a cold start, so the
+  compiled-style cache would save a fraction of a fiftieth. What remains of §12.5 is the
+  speculative sprite and glyph fetch, which has nothing to fetch until R2.
   A region's area is a box or a shape. The shape path is a port of mbgl's `util::TileCover`
   scanline, checked against mbgl's own expectations — the exact 424-tile multipolygon, the
   punched hole at 8/136/87, the six-tile San Francisco outline — and against
