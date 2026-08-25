@@ -1087,7 +1087,16 @@ is the realistic worst case, not a contrived one).
   ancestor, which is almost always what was on screen a moment ago. The map goes momentarily
   blurry rather than momentarily empty. Necessity is carried separately from retention because
   it decides what may be *fetched*: an ideal tile is required, a substitute optional, since a
-  request for a stopgap competes with the tile that would make it unnecessary. Checked against
+  request for a stopgap competes with the tile that would make it unnecessary. The property it
+  exists for is asserted separately from the port — a faithful transcription of a wrong algorithm
+  passes an oracle diff and fails this: across a crossing in both directions, under every arrival
+  order a coprime stride reaches, no ideal tile is left with a hole. Coverage is decided on the
+  quadtree rather than by sampling, since a hairline of background between two tiles is exactly
+  the artefact at issue and a sampling test passes for a hole thinner than its spacing. And it
+  counts only tiles that *have data*, which mutation testing forced: dropping the renderable
+  check on a substitution left every coverage assertion passing, because filling a hole with an
+  empty tile covers it as far as tile ids are concerned. That in turn needed a pyramid that
+  models a pending tile, mid-crossing being mostly pending. Checked against
   all eighteen of mbgl's own expectations, whole action logs rather than final state — what the
   algorithm declines to ask for (the ancestry a sibling already walked, the request it does not
   spend on a substitute) is as much of the contract as what it draws. The acknowledged part of
