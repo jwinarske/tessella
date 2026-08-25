@@ -300,6 +300,13 @@ pub struct LaidOut {
     pub extent: (f32, f32, f32, f32),
     /// How many glyphs it drew.
     pub glyphs: usize,
+    /// Which segment of its line the anchor falls on.
+    ///
+    /// mbgl's `anchorSegment`, and the projection cannot do without it: walking a line from a
+    /// point needs to know which pair of vertices that point lies between, and recovering it by
+    /// searching the line is both slower and ambiguous where a line crosses itself. Zero for a
+    /// point label, which has no line.
+    pub segment: usize,
     /// Which vertices of the shared buffer are this label's.
     ///
     /// A layer's labels share one buffer, so per-frame state — the opacity a fade produced, the
@@ -398,6 +405,7 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
             anchor: label.anchor,
             extent: (shaping.top, shaping.bottom, shaping.left, shaping.right),
             glyphs: buffers.glyphs() - before,
+            segment: 0,
             vertices: before * 4..buffers.vertices.len(),
         });
     }
@@ -569,6 +577,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                 anchor: anchor.point,
                 extent: (shaping.top, shaping.bottom, shaping.left, shaping.right),
                 glyphs: buffers.glyphs() - before,
+                segment: anchor.segment,
                 vertices: before * 4..buffers.vertices.len(),
             });
         }

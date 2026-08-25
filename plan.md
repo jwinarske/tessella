@@ -997,12 +997,34 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   share one place in the word — and it stays out of the vertex for the same reason the corners
   do not carry it: the shader projects the line first and then walks along the projected result,
   so a value baked into the geometry would be bent twice.
-  What the same picture shows still missing is `text-keep-upright`: about half the road labels
-  read right to left, because a label placed along a line running westward is drawn upside down
-  unless the projection flips it. mbgl does that in `symbol_projection.cpp` at frame time rather
-  than at layout time, which is the right home for it — whether a line runs leftwards is a
-  property of the camera, not of the tile — so it belongs with `ViewSymbols::frame` and is not
-  a defect in the buffers.
+  Two more came out of looking at it again. The rasterizer was *scattering* — walking the glyph's
+  own box and writing to the rotated position each sample mapped to — which is fine at zero
+  degrees and full of holes at any other angle, because rotating a grid does not give a grid. It
+  gathers now, the way the point-label path already did. And about half the road labels read
+  right to left, which is `text-keep-upright`.
+  So `symbol_projection.cpp`'s along-line placement lands: `place_glyph_along_line` and the
+  `place_glyphs_along_line` around it. This is per view per frame and has to be — which way a
+  road runs *on screen* is a property of the camera, so the same label is upright at one bearing
+  and upside down at another — and it is why layout hands over one distance per glyph rather than
+  a position. Three things in it are easy to drop and each is invisible until it is not: the
+  direction of travel is the sign of the offset, so glyphs before the anchor walk *backwards*
+  along the line; a glyph walked backwards takes a half turn so it is not drawn mirrored; and the
+  perpendicular offset is signed by that direction, so a label above its road stays above it when
+  the walk reverses. mbgl accumulates those half turns rather than normalizing, and this does
+  too — the angle is only ever consumed through a sine and a cosine, so a glyph at two pi is a
+  glyph that is upright, and a transcription that "tidied" it would be departing from the oracle
+  for nothing.
+  Keeping text upright is a *retry*, not a branch: place the label, and if the first glyph lands
+  right of the last then it reads backwards, so place it again walking the other way. It is
+  tested on the two end glyphs rather than on the anchor's angle, because a label spanning a bend
+  can sit on a segment running one way while the label as a whole reads the other. A line too
+  short answers "no room" rather than "needs flipping", so the caller is not sent round the loop
+  to discover the same thing twice. And `text-keep-upright` off has to *place* rather than
+  refuse, since the property exists for symbols meant to follow the line whichever way it runs.
+  What still makes a street tile dense is that nothing culls the overlaps: a line label collides
+  as a run of circles following the line, which `collision_box` says outright it does not build.
+  The grid already indexes circles and tests them against boxes and each other; what is missing
+  is mbgl's `bboxifyLabel`, which is the piece between them.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

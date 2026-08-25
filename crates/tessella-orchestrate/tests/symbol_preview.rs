@@ -21,6 +21,7 @@ use tessella_glyph::atlas::{Atlas, Rect};
 use tessella_glyph::pbf::{self, Glyph, Metrics, Range};
 use tessella_layout::symbol;
 use tessella_layout::symbol_bucket::{Glyphs, Label, SymbolBuffers, SymbolOptions, build_symbols};
+use tessella_orchestrate::project::PlacedGlyph;
 use tessella_orchestrate::symbols::{FrameLabel, FrameOptions, ViewSymbols};
 use tessella_place::feature::Padding;
 use tessella_source::mvt::{GeomType, Tile};
@@ -367,6 +368,7 @@ fn blit(
 #[ignore]
 fn draw_line_labels() {
     use tessella_layout::symbol_bucket::{LineLabel, LineOptions, build_line_symbols};
+    use tessella_orchestrate::project::{LineOffsets, Placement, place_upright};
 
     let glyphs = pbf::parse(
         Range {
@@ -448,27 +450,48 @@ fn draw_line_labels() {
     #[allow(clippy::cast_precision_loss)]
     let scale = CANVAS as f32 / WINDOW;
 
+    let project = |point: (f32, f32)| ((point.0 - ORIGIN.0) * scale, (point.1 - ORIGIN.1) * scale);
+
     let mut drawn = 0usize;
+    let mut flipped = 0usize;
+    let mut no_room = 0usize;
     let mut repetition = 0usize;
     for label in &labels {
+        // The line goes into screen space before anything is placed on it. Text draws at its own
+        // size, so the distances layout recorded are screen pixels, and walking a line in tile
+        // units with them would put every glyph in the wrong place by the scale factor.
+        let screen: Vec<(f32, f32)> = label.line.iter().map(|point| project(*point)).collect();
+
         // Repetitions appear in label order, so walk them in step.
         while repetition < laid.len() {
             let entry = &laid[repetition];
             if !on_line(&label.line, entry.anchor) {
                 break;
             }
+            repetition += 1;
+
+            let quads = entry.vertices.start / 4..entry.vertices.end / 4;
+            let (placement, was_flipped) = place_upright(
+                &screen,
+                project(entry.anchor),
+                entry.segment,
+                &buffers.glyph_offsets[quads],
+                &LineOffsets::default(),
+            );
+            let Placement::Placed(glyphs) = placement else {
+                no_room += 1;
+                continue;
+            };
+            flipped += usize::from(was_flipped);
+
             blit_along(
                 &mut canvas,
                 &buffers,
                 &font.atlas,
                 entry.vertices.clone(),
-                &label.line,
-                entry.anchor,
-                scale,
-                ORIGIN,
+                &glyphs,
             );
             drawn += 1;
-            repetition += 1;
         }
     }
 
@@ -476,7 +499,8 @@ fn draw_line_labels() {
         .unwrap_or_else(|_| "/tmp/tessella-roads.png".to_string());
     write_png(&path, CANVAS, CANVAS, &canvas);
     println!(
-        "\n  {} roads, {drawn} label repetitions along them, written to {path}\n",
+        "\n  {} roads, {drawn} label repetitions along them ({flipped} turned upright, \
+         {no_room} with no room), written to {path}\n",
         labels.len()
     );
     assert!(drawn > 0);
@@ -498,31 +522,26 @@ fn on_line(line: &[(f32, f32)], anchor: (f32, f32)) -> bool {
 }
 
 /// Draws one repetition, walking each glyph along the line as the shader does.
-#[allow(clippy::too_many_arguments)]
 fn blit_along(
     canvas: &mut [u8],
     buffers: &SymbolBuffers,
     atlas: &Atlas,
     vertices: core::ops::Range<usize>,
-    line: &[(f32, f32)],
-    anchor: (f32, f32),
-    scale: f32,
-    origin: (f32, f32),
+    placed: &[PlacedGlyph],
 ) {
     let (atlas_width, _) = atlas.size();
 
-    for quad in vertices.step_by(4) {
+    for (index, quad) in vertices.step_by(4).enumerate() {
         if quad + 3 >= buffers.vertices.len() {
             break;
         }
-        // How far along the line this glyph sits. Not in the vertex — the corners carry only
-        // the glyph's own box, because the shader projects the line before stepping along it.
-        let along = buffers.glyph_offsets[quad / 4];
-        let Some((centre, angle)) = walk(line, anchor, along) else {
-            continue;
+        // Where the projection put this glyph. One entry per quad, in the same order, which is
+        // the same order layout wrote the along-line distances in.
+        let Some(&PlacedGlyph { point, angle }) = placed.get(index) else {
+            break;
         };
 
-        // The glyph's own box, relative to the point reached above.
+        // The glyph's own box, relative to the point the projection reached.
         let box_of = |index: usize| {
             let vertex = &buffers.vertices[quad + index];
             (
@@ -543,24 +562,42 @@ fn blit_along(
         }
 
         let (sin, cos) = angle.sin_cos();
-        // One sample per output pixel. The glyph's box is in screen units and is drawn
-        // unscaled — only its *position* along the line is scaled — so stepping by the canvas
-        // scale would take about one sample per glyph and draw the label as a speck. Which it
-        // did: the road network was visible as dotted paths with no letters on it.
-        let steps_x = (right - left).ceil().max(1.0);
-        let steps_y = (bottom - top).ceil().max(1.0);
+        let screen = point;
+
+        // Gather, not scatter. Walking the glyph's own box and writing to the rotated position
+        // it maps to leaves the canvas full of holes as soon as the angle is not a multiple of a
+        // right angle: the samples are on a grid in glyph space, and rotating a grid does not
+        // give a grid. So the loop runs over the output pixels the glyph can touch and asks each
+        // one where it falls in the glyph, which is what a rasterizer does and what `blit` above
+        // already did. Scattering is why the road labels came out ragged while the point labels,
+        // which are never rotated, looked right.
+        let corners = [(left, top), (right, top), (left, bottom), (right, bottom)];
+        let mapped = corners.map(|(cx, cy)| {
+            (
+                screen.0 + cos.mul_add(cx, -(sin * cy)),
+                screen.1 + sin.mul_add(cx, cos * cy),
+            )
+        });
+        let bound = |pick: fn(&(f32, f32)) -> f32, fold: fn(f32, f32) -> f32| {
+            mapped.iter().map(pick).fold(f32::NAN, fold)
+        };
+        let min_x = bound(|point| point.0, f32::min).floor().max(0.0);
+        let max_x = bound(|point| point.0, f32::max).ceil();
+        let min_y = bound(|point| point.1, f32::min).floor().max(0.0);
+        let max_y = bound(|point| point.1, f32::max).ceil();
+
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        for sy in 0..steps_y as u32 {
+        for py in min_y as u32..(max_y.max(0.0) as u32).min(CANVAS) {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            for sx in 0..steps_x as u32 {
-                let u = f32::from(sx as u16) / steps_x;
-                let v = f32::from(sy as u16) / steps_y;
-                let local = (left + u * (right - left), top + v * (bottom - top));
-                let x = (centre.0 - origin.0) * scale + cos.mul_add(local.0, -(sin * local.1));
-                let y = (centre.1 - origin.1) * scale + sin.mul_add(local.0, cos * local.1);
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let (px, py) = (x as u32, y as u32);
-                if x < 0.0 || y < 0.0 || px >= CANVAS || py >= CANVAS {
+            for px in min_x as u32..(max_x.max(0.0) as u32).min(CANVAS) {
+                // The pixel's centre, rotated back into the glyph's own frame.
+                let dx = f32::from(px as u16) + 0.5 - screen.0;
+                let dy = f32::from(py as u16) + 0.5 - screen.1;
+                let local = (cos.mul_add(dx, sin * dy), cos.mul_add(dy, -(sin * dx)));
+
+                let u = (local.0 - left) / (right - left);
+                let v = (local.1 - top) / (bottom - top);
+                if !(0.0..1.0).contains(&u) || !(0.0..1.0).contains(&v) {
                     continue;
                 }
 
@@ -580,46 +617,4 @@ fn blit_along(
             }
         }
     }
-}
-
-/// Walks `distance` along the line from the anchor, returning the point and the tangent there.
-///
-/// This is what the shader does with `glyph_offset`, and it is why a line label's glyphs are all
-/// at one anchor in the buffer: the curve is applied at draw time, against the projected line,
-/// rather than baked into geometry that would then be bent twice.
-fn walk(line: &[(f32, f32)], anchor: (f32, f32), distance: f32) -> Option<((f32, f32), f32)> {
-    // Find the anchor's position along the line.
-    let mut travelled = 0.0f32;
-    let mut anchor_at = None;
-    for pair in line.windows(2) {
-        let (a, b) = (pair[0], pair[1]);
-        let length = (b.0 - a.0).hypot(b.1 - a.1);
-        if length > 0.0 {
-            let along =
-                (b.0 - a.0).mul_add(anchor.0 - a.0, (b.1 - a.1) * (anchor.1 - a.1)) / length;
-            let cross = (b.0 - a.0).mul_add(anchor.1 - a.1, -((b.1 - a.1) * (anchor.0 - a.0)));
-            if (cross / length).abs() <= 1.5 && (-1.0..=length + 1.0).contains(&along) {
-                anchor_at = Some(travelled + along);
-                break;
-            }
-        }
-        travelled += length;
-    }
-    let target = anchor_at? + distance;
-
-    // And walk to the target.
-    let mut travelled = 0.0f32;
-    for pair in line.windows(2) {
-        let (a, b) = (pair[0], pair[1]);
-        let length = (b.0 - a.0).hypot(b.1 - a.1);
-        if length > 0.0 && target <= travelled + length {
-            let t = ((target - travelled) / length).clamp(0.0, 1.0);
-            return Some((
-                (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t),
-                (b.1 - a.1).atan2(b.0 - a.0),
-            ));
-        }
-        travelled += length;
-    }
-    None
 }
