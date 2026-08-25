@@ -393,6 +393,13 @@ pub fn bindings_for(
             Content::Circle(_) => {
                 emit(0, view::fill_pass(), view::circle_flags());
             }
+            // Sublayer 0 and stencilled, which is what `symbol_style.dump` shows: its symbol
+            // drawable carries the same flags as the fill above it. Symbols overhang tile edges,
+            // so leaving the stencil off would be the defensible guess — the oracle says
+            // otherwise, and the oracle is what this is measured against.
+            Content::Symbol(_) => {
+                emit(0, view::fill_pass(), view::tiled_flags());
+            }
         }
     }
     bindings

@@ -265,7 +265,7 @@ pub struct Label {
 }
 
 /// How a symbol layer sets its text.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct SymbolOptions {
     /// `text-size`, in pixels.
     pub size: f32,
@@ -423,7 +423,7 @@ pub struct LineLabel {
 }
 
 /// How a line-placed label repeats.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LineOptions {
     /// How the text itself is set.
     pub symbol: SymbolOptions,

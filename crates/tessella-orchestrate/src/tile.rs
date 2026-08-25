@@ -39,6 +39,7 @@ use tessella_layout::circle::CircleBucket;
 use tessella_layout::fill::{self, FillBucket, Position, Ring};
 use tessella_layout::line::{LineBucket, LineCap, LineJoin, LineOptions};
 use tessella_layout::paint::{BinderError, PaintBinder};
+use tessella_layout::symbol_layout::SymbolLayout;
 use tessella_source::clip::{
     clip_line_to_box, clip_points_to_box, clip_ring_to_box, round_to_tile_units,
 };
@@ -80,6 +81,13 @@ pub enum Content {
     Line(LineBucket),
     /// A quad per point, with the disc drawn inside it by the shader.
     Circle(CircleBucket),
+    /// A symbol layer's labels, resolved but not yet shaped.
+    ///
+    /// The only content that is not geometry. Shaping needs glyph metrics, and the glyphs are a
+    /// network resource whose URL is not known until the text has been resolved — so the tile
+    /// builder produces the text and the dependencies, and `SymbolLayout::lay_out` produces
+    /// vertices once the ranges have arrived. mbgl splits it in the same place.
+    Symbol(SymbolLayout),
 }
 
 /// One layer's contribution to one tile.
@@ -118,6 +126,9 @@ impl LayerBucket {
             Content::Line(_) => 1,
             // As is a circle. Its stroke is a shader term, not a second draw.
             Content::Circle(_) => 1,
+            // And a symbol layer, whose labels share one buffer per tile — the golden's
+            // twelve-glyph drawable is two labels, not two drawables.
+            Content::Symbol(_) => 1,
         }
     }
 }
@@ -188,6 +199,70 @@ pub fn build_tile(
         );
 
         let content = match layer.kind {
+            LayerKind::Symbol => {
+                let filter = match &layer.filter {
+                    Some(value) => Filter::parse(value).map_err(|source| TileError::Filter {
+                        layer: layer.id.clone(),
+                        source,
+                    })?,
+                    None => Filter::always(),
+                };
+
+                let zoom = f64::from(tile.bucket_zoom());
+                let mut layout = SymbolLayout::new(layer, zoom, tile.overscale_factor());
+                let project =
+                    |p: &[f64; 2]| projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
+
+                for feature in features {
+                    if !filter.matches(feature, None) {
+                        continue;
+                    }
+
+                    // A label is clipped by whether its *anchor* is on the tile, not by cutting
+                    // its geometry: half a road name is not a label, and a point label has no
+                    // geometry to cut. So the rings go in whole and placement decides.
+                    #[allow(clippy::cast_possible_truncation)]
+                    let rings: Vec<Vec<(f32, f32)>> = match &feature.geometry {
+                        Geometry::Point(points) => points
+                            .iter()
+                            .map(|point| {
+                                let projected = project(point);
+                                alloc::vec![(projected[0] as f32, projected[1] as f32)]
+                            })
+                            .collect(),
+                        Geometry::LineString(lines) => lines
+                            .iter()
+                            .map(|line| {
+                                line.iter()
+                                    .map(|point| {
+                                        let projected = project(point);
+                                        (projected[0] as f32, projected[1] as f32)
+                                    })
+                                    .collect()
+                            })
+                            .collect(),
+                        // A polygon labels at its rings, which is what mbgl does when a symbol
+                        // layer reads an area source: the outline is what a line-placed label
+                        // follows, and the first vertex is what a point-placed one anchors to.
+                        Geometry::Polygon(polygons) => polygons
+                            .iter()
+                            .flatten()
+                            .map(|ring| {
+                                ring.iter()
+                                    .map(|point| {
+                                        let projected = project(point);
+                                        (projected[0] as f32, projected[1] as f32)
+                                    })
+                                    .collect()
+                            })
+                            .collect(),
+                    };
+
+                    layout.push(layer, zoom, feature, &rings);
+                }
+
+                Content::Symbol(layout)
+            }
             LayerKind::Background => Content::Background,
             LayerKind::Fill => {
                 let filter = match &layer.filter {
@@ -586,6 +661,51 @@ pub fn build_mvt_tile(
                 }
                 Content::Line(bucket)
             }
+            LayerKind::Symbol => {
+                let filter = match &layer.filter {
+                    Some(value) => Filter::parse(value).map_err(|source| TileError::Filter {
+                        layer: layer.id.clone(),
+                        source,
+                    })?,
+                    None => Filter::always(),
+                };
+
+                let named = layer
+                    .source_layer
+                    .as_deref()
+                    .and_then(|name| decoded.layer(name));
+
+                let zoom = f64::from(tile.bucket_zoom());
+                let mut layout = SymbolLayout::new(layer, zoom, tile.overscale_factor());
+                if let Some(named) = named {
+                    for feature in named.features() {
+                        if !filter.matches(&feature, None) {
+                            continue;
+                        }
+
+                        // No geometry-type check: `symbol-placement` decides what to do with
+                        // whatever the feature carries, and a symbol layer over polygons is how
+                        // a style labels park and water areas.
+                        let scaled = feature.rings_scaled(EXTENT);
+                        #[allow(clippy::cast_possible_truncation)]
+                        let rings: Vec<Vec<(f32, f32)>> = scaled
+                            .rings()
+                            .map(|ring| {
+                                ring.iter()
+                                    .map(|point| (point[0] as f32, point[1] as f32))
+                                    .collect()
+                            })
+                            .collect();
+
+                        layout.push(layer, zoom, &feature, &rings);
+                    }
+                }
+                Content::Symbol(layout)
+            }
+            // The circle layer is built from GeoJSON only. Spelled out rather than left to a
+            // wildcard: a wildcard here is what let a layer type be enabled in `is_built` and
+            // silently draw nothing from a vector tile, which is the quietest kind of gap.
+            LayerKind::Circle => continue,
             _ => continue,
         };
 
@@ -666,12 +786,21 @@ pub fn bucket_for<'a>(buckets: &'a [LayerBucket], layer_id: &str) -> Option<&'a 
 }
 
 impl Content {
+    /// The symbol layout, if this is one.
+    #[must_use]
+    pub fn as_symbol(&self) -> Option<&SymbolLayout> {
+        match self {
+            Self::Symbol(layout) => Some(layout),
+            Self::Background | Self::Fill(_) | Self::Line(_) | Self::Circle(_) => None,
+        }
+    }
+
     /// The fill bucket, if this is one.
     #[must_use]
     pub fn as_fill(&self) -> Option<&FillBucket> {
         match self {
             Self::Fill(bucket) => Some(bucket),
-            Self::Background | Self::Line(_) | Self::Circle(_) => None,
+            Self::Background | Self::Line(_) | Self::Circle(_) | Self::Symbol(_) => None,
         }
     }
 
@@ -680,7 +809,7 @@ impl Content {
     pub fn as_line(&self) -> Option<&LineBucket> {
         match self {
             Self::Line(bucket) => Some(bucket),
-            Self::Background | Self::Fill(_) | Self::Circle(_) => None,
+            Self::Background | Self::Fill(_) | Self::Circle(_) | Self::Symbol(_) => None,
         }
     }
 
@@ -689,7 +818,7 @@ impl Content {
     pub fn as_circle(&self) -> Option<&CircleBucket> {
         match self {
             Self::Circle(bucket) => Some(bucket),
-            Self::Background | Self::Fill(_) | Self::Line(_) => None,
+            Self::Background | Self::Fill(_) | Self::Line(_) | Self::Symbol(_) => None,
         }
     }
 
@@ -714,6 +843,9 @@ impl Content {
             Self::Fill(bucket) => !bucket.segments.is_empty(),
             Self::Line(bucket) => !bucket.segments.is_empty(),
             Self::Circle(bucket) => !bucket.segments.is_empty(),
+            // Labels, not vertices: a symbol layer has data when it resolved text, whether or
+            // not the glyphs to shape it with have arrived.
+            Self::Symbol(layout) => !layout.is_empty(),
         }
     }
 }
@@ -753,6 +885,19 @@ impl TileId {
     #[must_use]
     pub const fn bucket_zoom(&self) -> u8 {
         self.overscaled_z
+    }
+
+    /// How many times over its own size this tile is being drawn.
+    ///
+    /// mbgl's `overscaleFactor`: one for a tile at its own zoom, two for a parent standing in
+    /// one level down, and so on. Line placement needs it so a child's anchors stay aligned with
+    /// its parent's — without it every label along a road jumps at a zoom crossing.
+    #[must_use]
+    pub fn overscale_factor(&self) -> f32 {
+        #[allow(clippy::cast_precision_loss)]
+        {
+            (1u32 << (self.overscaled_z - self.z)) as f32
+        }
     }
 }
 

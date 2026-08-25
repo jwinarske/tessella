@@ -1047,6 +1047,29 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   per-circle distance from the anchor — padded down by a fifth, mbgl's "conservative padding" —
   is what a pitched camera will use to test a *prefix* of the run. On the street fixture 425
   repetitions become 173.
+  Symbols then reach the tile builder, which is where the two-phase shape of a symbol layer stops
+  being an implementation detail and becomes a type. Every other layer turns features into
+  vertices in one pass: the geometry is in the tile and nothing else is needed. A symbol layer
+  cannot, because shaping needs glyph metrics and the glyphs are a *network resource whose URL is
+  not known until the text has been resolved*. So `SymbolLayout` holds text, geometry and the
+  codepoints per font stack, and no vertices at all; the only way to get vertices is `lay_out`,
+  which takes the glyphs as an argument. mbgl splits it in the same place, between constructing
+  the layout and `prepareSymbols`. Making the phases *types* rather than a flag is the point: a
+  half-built bucket that is sometimes shaped and sometimes not is exactly the state that draws
+  blank tiles when a font is slow.
+  `symbol-placement` decides which builder runs and what geometry is kept — one anchor per ring
+  for a point label, the whole ring for a line one — and the layout properties are evaluated at
+  the bucket zoom, since `text-size` interpolated over zoom is in most styles. What is *not* done
+  is per-feature layout properties: the spec allows `text-size` to be data-driven, and a layer
+  using that draws every label at the layer's size. That is a real gap rather than a
+  simplification of the model, and it is a small one — the vertex already carries a size per
+  quad, so what is missing is a size per label and not anything about the encoding.
+  Two things fell out of wiring it up. A symbol layer over a *vector* tile went through a
+  different builder than one over GeoJSON, and that builder ended in a wildcard arm — so enabling
+  the layer type in `is_built` would have had it silently draw nothing from every real tile. The
+  wildcard is now spelled out per type, which is what turns the next such gap into a compile
+  error. And the circle layer turns out to have been in exactly that position already: enabled,
+  and built from GeoJSON only.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
