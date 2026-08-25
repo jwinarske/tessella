@@ -982,6 +982,27 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   neighbour's — which draws as a label that will not fade, and errors nowhere. Fades stay keyed
   by cross-tile id rather than by buffer position, so a tile rebuilt at a crossing does not
   re-fade the labels that never moved.
+  A picture then gets drawn, because every other test here checks a number and a map is a thing
+  you look at. A software rasterizer behind `#[ignore]` decodes the packed vertices exactly as a
+  shader would and writes a PNG, so it exercises the wire format rather than the shaper behind
+  it — and it has now found three things no assertion did. Text came out illegible at an SDF
+  edge of 128 when mbgl's is `(256-64)/256`; a smoothstep rewritten for one clippy lint became
+  `t*t*(1-2t)`, negative past the halfway point, so glyph interiors were skipped and the fix was
+  found by measuring the font's SDF histogram rather than by adjusting the threshold again. And
+  every glyph of a line label drew on top of the first, because the along-line distance was
+  recorded nowhere. That last one is the one worth writing down: the test asserting the distance
+  is *not* in the corners passed, and nothing asserted it was anywhere, so it went missing
+  between the shaper and the buffers with the whole suite green. It is mbgl's
+  `PlacedSymbol::glyphOffsets` — per quad rather than per vertex, since a glyph's four corners
+  share one place in the word — and it stays out of the vertex for the same reason the corners
+  do not carry it: the shader projects the line first and then walks along the projected result,
+  so a value baked into the geometry would be bent twice.
+  What the same picture shows still missing is `text-keep-upright`: about half the road labels
+  read right to left, because a label placed along a line running westward is drawn upside down
+  unless the projection flips it. mbgl does that in `symbol_projection.cpp` at frame time rather
+  than at layout time, which is the right home for it — whether a line runs leftwards is a
+  property of the camera, not of the tile — so it belongs with `ViewSymbols::frame` and is not
+  a defect in the buffers.
 - **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.

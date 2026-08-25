@@ -154,6 +154,13 @@ pub struct SymbolBuffers {
     pub opacity: Vec<f32>,
     /// Two triangles per glyph.
     pub indices: Vec<u16>,
+    /// How far along its line each glyph sits, one per quad.
+    ///
+    /// mbgl's `PlacedSymbol::glyphOffsets`, and it is deliberately *not* in the vertex: the
+    /// shader projects the line first and then walks this distance along the projected result,
+    /// so a value baked into the geometry would be bent twice. Zero throughout for a point
+    /// label, which is what makes the two placements share one buffer format.
+    pub glyph_offsets: Vec<f32>,
 }
 
 impl SymbolBuffers {
@@ -185,12 +192,13 @@ impl SymbolBuffers {
         &mut self,
         anchor: (f32, f32),
         corners: [(f32, f32); 4],
-        glyph_offset_y: f32,
+        glyph_offset: (f32, f32),
         tex: (u16, u16, u16, u16),
         size: SizeRange,
         is_sdf: bool,
         opacity: f32,
     ) {
+        let glyph_offset_y = glyph_offset.1;
         let index = self.vertices.len();
         assert!(
             index + 4 <= usize::from(u16::MAX),
@@ -226,6 +234,7 @@ impl SymbolBuffers {
         // Two triangles over the four corners, sharing the diagonal.
         self.indices
             .extend_from_slice(&[base, base + 1, base + 2, base + 1, base + 2, base + 3]);
+        self.glyph_offsets.push(glyph_offset.0);
     }
 }
 
@@ -372,7 +381,7 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
             buffers.add_quad(
                 label.anchor,
                 [quad.tl, quad.tr, quad.bl, quad.br],
-                quad.glyph_offset.1,
+                quad.glyph_offset,
                 (
                     quad.tex.x as u16,
                     quad.tex.y as u16,
@@ -544,7 +553,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                 buffers.add_quad(
                     anchor.point,
                     [quad.tl, quad.tr, quad.bl, quad.br],
-                    quad.glyph_offset.1,
+                    quad.glyph_offset,
                     (
                         quad.tex.x as u16,
                         quad.tex.y as u16,

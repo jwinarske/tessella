@@ -26,6 +26,7 @@ use tessella_place::feature::Padding;
 use tessella_source::mvt::{GeomType, Tile};
 
 const TILE: &[u8] = include_bytes!("../../../tests/live-fixtures/world_z7-5-16-11.mvt");
+const STREETS: &[u8] = include_bytes!("../../../tests/mvt-fixtures/streets-10-163-395.mvt");
 const GLYPHS: &[u8] = include_bytes!("../../../tests/glyph-fixtures/TestFont/0-255.pbf");
 
 const CANVAS: u32 = 700;
@@ -353,4 +354,272 @@ fn blit(
             }
         }
     }
+}
+
+/// Draws the streets tile's roads with their type printed along them.
+///
+/// The point of looking at this one is the along-line projection. A line label's glyphs are all
+/// at the same anchor in the vertex buffer; what separates them is `glyph_offset`, which the
+/// shader walks along the line to turn into a position and a rotation. So this does what the
+/// shader does — and if the offset were baked into the corners instead, every road's name would
+/// draw as a pile of letters at one point.
+#[test]
+#[ignore]
+fn draw_line_labels() {
+    use tessella_layout::symbol_bucket::{LineLabel, LineOptions, build_line_symbols};
+
+    let glyphs = pbf::parse(
+        Range {
+            first: 0,
+            last: 255,
+        },
+        GLYPHS,
+    )
+    .expect("the range parses");
+    let tile = Tile::decode(STREETS).expect("the fixture decodes");
+    let layer = tile
+        .layers
+        .iter()
+        .find(|layer| layer.name == "road")
+        .expect("a road layer");
+
+    // The roads carry no name, but they carry a type, and a type printed along the road is a
+    // real data-driven label rather than an invented one.
+    let mut labels: Vec<LineLabel> = Vec::new();
+    for feature in layer.features() {
+        if feature.geom_type() != GeomType::LineString {
+            continue;
+        }
+        let Some((_, value)) = feature
+            .properties()
+            .iter()
+            .find(|(key, _)| &**key == "type")
+        else {
+            continue;
+        };
+        let tessella_source::mvt::Value::String(text) = value else {
+            continue;
+        };
+        for ring in feature.rings() {
+            if ring.len() < 2 {
+                continue;
+            }
+            #[allow(clippy::cast_precision_loss)]
+            labels.push(LineLabel {
+                text: text.to_string(),
+                line: ring
+                    .iter()
+                    .map(|point| (point[0] as f32, point[1] as f32))
+                    .collect(),
+            });
+        }
+    }
+    assert!(!labels.is_empty(), "the fixture has roads");
+
+    let used: BTreeSet<u32> = labels
+        .iter()
+        .flat_map(|label| label.text.chars().map(|character| character as u32))
+        .collect();
+    let mut atlas = Atlas::new(512, 512);
+    for glyph in &glyphs {
+        if used.contains(&glyph.id) {
+            atlas.add(glyph.id, glyph);
+        }
+    }
+    let font = Font { glyphs, atlas };
+
+    let (buffers, laid) = build_line_symbols(
+        &labels,
+        &font,
+        &LineOptions {
+            spacing: 400.0,
+            max_angle: core::f32::consts::PI / 5.0,
+            ..LineOptions::default()
+        },
+    );
+
+    // A window onto part of the tile rather than the whole of it. Text draws at its own size
+    // whatever the camera, so a z10 tile shown whole puts eight thousand units of road behind
+    // labels that are eighty pixels wide, and they pile into each other. This is what a camera
+    // at that zoom would actually show.
+    const WINDOW: f32 = 1400.0;
+    const ORIGIN: (f32, f32) = (2300.0, 2800.0);
+    let mut canvas = vec![24u8; (CANVAS * CANVAS) as usize];
+    #[allow(clippy::cast_precision_loss)]
+    let scale = CANVAS as f32 / WINDOW;
+
+    let mut drawn = 0usize;
+    let mut repetition = 0usize;
+    for label in &labels {
+        // Repetitions appear in label order, so walk them in step.
+        while repetition < laid.len() {
+            let entry = &laid[repetition];
+            if !on_line(&label.line, entry.anchor) {
+                break;
+            }
+            blit_along(
+                &mut canvas,
+                &buffers,
+                &font.atlas,
+                entry.vertices.clone(),
+                &label.line,
+                entry.anchor,
+                scale,
+                ORIGIN,
+            );
+            drawn += 1;
+            repetition += 1;
+        }
+    }
+
+    let path = std::env::var("TESSELLA_LINE_PREVIEW")
+        .unwrap_or_else(|_| "/tmp/tessella-roads.png".to_string());
+    write_png(&path, CANVAS, CANVAS, &canvas);
+    println!(
+        "\n  {} roads, {drawn} label repetitions along them, written to {path}\n",
+        labels.len()
+    );
+    assert!(drawn > 0);
+}
+
+/// Whether an anchor lies on this line, within rounding.
+fn on_line(line: &[(f32, f32)], anchor: (f32, f32)) -> bool {
+    line.windows(2).any(|pair| {
+        let (a, b) = (pair[0], pair[1]);
+        let length = ((b.0 - a.0).powi(2) + (b.1 - a.1).powi(2)).sqrt();
+        if length == 0.0 {
+            return false;
+        }
+        // Distance from the anchor to the segment, by the cross product over the length.
+        let cross = (b.0 - a.0).mul_add(anchor.1 - a.1, -((b.1 - a.1) * (anchor.0 - a.0)));
+        let along = (b.0 - a.0).mul_add(anchor.0 - a.0, (b.1 - a.1) * (anchor.1 - a.1)) / length;
+        (cross / length).abs() <= 1.5 && (-1.0..=length + 1.0).contains(&along)
+    })
+}
+
+/// Draws one repetition, walking each glyph along the line as the shader does.
+#[allow(clippy::too_many_arguments)]
+fn blit_along(
+    canvas: &mut [u8],
+    buffers: &SymbolBuffers,
+    atlas: &Atlas,
+    vertices: core::ops::Range<usize>,
+    line: &[(f32, f32)],
+    anchor: (f32, f32),
+    scale: f32,
+    origin: (f32, f32),
+) {
+    let (atlas_width, _) = atlas.size();
+
+    for quad in vertices.step_by(4) {
+        if quad + 3 >= buffers.vertices.len() {
+            break;
+        }
+        // How far along the line this glyph sits. Not in the vertex — the corners carry only
+        // the glyph's own box, because the shader projects the line before stepping along it.
+        let along = buffers.glyph_offsets[quad / 4];
+        let Some((centre, angle)) = walk(line, anchor, along) else {
+            continue;
+        };
+
+        // The glyph's own box, relative to the point reached above.
+        let box_of = |index: usize| {
+            let vertex = &buffers.vertices[quad + index];
+            (
+                f32::from(vertex.pos_offset[2]) / 32.0,
+                f32::from(vertex.pos_offset[3]) / 32.0,
+            )
+        };
+        let (left, top) = box_of(0);
+        let (right, bottom) = box_of(3);
+        let texel = |index: usize| {
+            let vertex = &buffers.vertices[quad + index];
+            (vertex.data[0], vertex.data[1])
+        };
+        let (tex_left, tex_top) = texel(0);
+        let (tex_right, tex_bottom) = texel(3);
+        if right <= left || bottom <= top {
+            continue;
+        }
+
+        let (sin, cos) = angle.sin_cos();
+        // One sample per output pixel. The glyph's box is in screen units and is drawn
+        // unscaled — only its *position* along the line is scaled — so stepping by the canvas
+        // scale would take about one sample per glyph and draw the label as a speck. Which it
+        // did: the road network was visible as dotted paths with no letters on it.
+        let steps_x = (right - left).ceil().max(1.0);
+        let steps_y = (bottom - top).ceil().max(1.0);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        for sy in 0..steps_y as u32 {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            for sx in 0..steps_x as u32 {
+                let u = f32::from(sx as u16) / steps_x;
+                let v = f32::from(sy as u16) / steps_y;
+                let local = (left + u * (right - left), top + v * (bottom - top));
+                let x = (centre.0 - origin.0) * scale + cos.mul_add(local.0, -(sin * local.1));
+                let y = (centre.1 - origin.1) * scale + sin.mul_add(local.0, cos * local.1);
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let (px, py) = (x as u32, y as u32);
+                if x < 0.0 || y < 0.0 || px >= CANVAS || py >= CANVAS {
+                    continue;
+                }
+
+                let tx = f32::from(tex_left) + u * f32::from(tex_right - tex_left);
+                let ty = f32::from(tex_top) + v * f32::from(tex_bottom - tex_top);
+                let distance = sample(atlas.pixels(), atlas_width, tx, ty);
+                const INNER_EDGE: f32 = (256.0 - 64.0) / 256.0;
+                const EDGE_GAMMA: f32 = 0.105;
+                let alpha = smoothstep(INNER_EDGE - EDGE_GAMMA, INNER_EDGE + EDGE_GAMMA, distance);
+                if alpha <= 0.0 {
+                    continue;
+                }
+                let slot = &mut canvas[(py * CANVAS + px) as usize];
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let lit = alpha.mul_add(255.0 - f32::from(*slot), f32::from(*slot)) as u8;
+                *slot = (*slot).max(lit);
+            }
+        }
+    }
+}
+
+/// Walks `distance` along the line from the anchor, returning the point and the tangent there.
+///
+/// This is what the shader does with `glyph_offset`, and it is why a line label's glyphs are all
+/// at one anchor in the buffer: the curve is applied at draw time, against the projected line,
+/// rather than baked into geometry that would then be bent twice.
+fn walk(line: &[(f32, f32)], anchor: (f32, f32), distance: f32) -> Option<((f32, f32), f32)> {
+    // Find the anchor's position along the line.
+    let mut travelled = 0.0f32;
+    let mut anchor_at = None;
+    for pair in line.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let length = (b.0 - a.0).hypot(b.1 - a.1);
+        if length > 0.0 {
+            let along =
+                (b.0 - a.0).mul_add(anchor.0 - a.0, (b.1 - a.1) * (anchor.1 - a.1)) / length;
+            let cross = (b.0 - a.0).mul_add(anchor.1 - a.1, -((b.1 - a.1) * (anchor.0 - a.0)));
+            if (cross / length).abs() <= 1.5 && (-1.0..=length + 1.0).contains(&along) {
+                anchor_at = Some(travelled + along);
+                break;
+            }
+        }
+        travelled += length;
+    }
+    let target = anchor_at? + distance;
+
+    // And walk to the target.
+    let mut travelled = 0.0f32;
+    for pair in line.windows(2) {
+        let (a, b) = (pair[0], pair[1]);
+        let length = (b.0 - a.0).hypot(b.1 - a.1);
+        if length > 0.0 && target <= travelled + length {
+            let t = ((target - travelled) / length).clamp(0.0, 1.0);
+            return Some((
+                (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t),
+                (b.1 - a.1).atan2(b.0 - a.0),
+            ));
+        }
+        travelled += length;
+    }
+    None
 }

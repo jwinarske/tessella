@@ -165,7 +165,7 @@ fn a_quad_is_four_vertices_and_two_triangles() {
     buffers.add_quad(
         (1000.0, 2000.0),
         [(-4.0, 4.0), (28.0, 4.0), (-4.0, 36.0), (28.0, 36.0)],
-        0.0,
+        (0.0, 0.0),
         (10, 20, 32, 32),
         SizeRange::constant(16.0),
         true,
@@ -177,6 +177,7 @@ fn a_quad_is_four_vertices_and_two_triangles() {
     assert_eq!(buffers.opacity.len(), 4);
     assert_eq!(buffers.indices, [0, 1, 2, 1, 2, 3]);
     assert_eq!(buffers.glyphs(), 1);
+    assert_eq!(buffers.glyph_offsets, [0.0], "one per quad, not per vertex");
 }
 
 /// Each corner takes the texel of its own corner of the atlas rectangle.
@@ -190,7 +191,7 @@ fn each_corner_samples_its_own_texel() {
     buffers.add_quad(
         (0.0, 0.0),
         [(0.0, 0.0), (10.0, 0.0), (0.0, 10.0), (10.0, 10.0)],
-        0.0,
+        (0.0, 0.0),
         (100, 200, 32, 16),
         SizeRange::constant(16.0),
         true,
@@ -220,7 +221,7 @@ fn a_second_quad_indexes_its_own_vertices() {
         buffers.add_quad(
             (0.0, 0.0),
             [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)],
-            0.0,
+            (0.0, 0.0),
             (0, 0, 8, 8),
             SizeRange::constant(16.0),
             true,

@@ -140,6 +140,50 @@ fn the_along_line_position_is_not_in_the_corners() {
     );
 }
 
+/// And it is recorded, one distance per glyph, advancing across the word.
+///
+/// The other half of the test above, and the half that was missing: proving the distance is not
+/// in the corners says nothing about whether it survived at all. It had not — every glyph of a
+/// repetition carried the same position, so a rasterizer drawing from these buffers stacked the
+/// whole word on one letter. That is mbgl's `PlacedSymbol::glyphOffsets`, and it is per quad
+/// rather than per vertex because the four corners of a glyph share one place in the word.
+#[test]
+fn the_along_line_position_is_recorded_per_glyph() {
+    let font = Font::new("Main Street");
+    let (buffers, laid) = build_line_symbols(
+        &[label("Main Street", road())],
+        &font,
+        &LineOptions::default(),
+    );
+
+    assert_eq!(
+        buffers.glyph_offsets.len(),
+        buffers.vertices.len() / 4,
+        "one per quad"
+    );
+
+    // "Main Street" is eleven characters, of which the space has no quad.
+    let first = laid[0].vertices.clone();
+    let offsets = &buffers.glyph_offsets[first.start / 4..first.end / 4];
+    assert_eq!(offsets.len(), 10);
+
+    // Left to right, and spanning the width of the word rather than a fraction of it.
+    for pair in offsets.windows(2) {
+        assert!(pair[1] > pair[0], "{offsets:?} does not advance");
+    }
+    let span = offsets.last().expect("some") - offsets[0];
+    assert!(
+        span > 40.0,
+        "the word spans {span} units, which is narrower than one glyph"
+    );
+
+    // Centred on the anchor: mbgl shapes about the middle, so the first glyph sits left of it.
+    assert!(
+        offsets[0] < 0.0 && *offsets.last().expect("some") > 0.0,
+        "{offsets:?} is not centred on the anchor"
+    );
+}
+
 /// One shaping serves every repetition.
 ///
 /// Asserted through its consequence: every repetition is byte-identical but for its anchor. If
