@@ -287,3 +287,97 @@ fn a_cover_is_constant_within_an_integer_level() {
         "crossing into the next level is where the cover changes"
     );
 }
+
+/// A pan that does not change the cover costs one camera block a frame and nothing else (§9.3).
+///
+/// # What "pure" means here, and why it is worth a name
+///
+/// §6's contract has three cases: parked emits nothing, pure camera motion emits camera-block
+/// bytes only, churn emits bytes proportional to the churn. The middle one is the one a user
+/// spends most of their time in — a drag is camera motion and nothing else for every frame that
+/// does not pull a new tile into view — and it is the one where a regression hides best, because
+/// re-emitting geometry during a pan looks perfectly correct.
+///
+/// So the budget is stated as an identity rather than a bound: bytes per frame *equals* one
+/// camera block. A bound of "at most a few hundred bytes" is satisfied by a producer that has
+/// started sending something small every frame that it did not send before.
+#[test]
+fn a_pure_pan_costs_one_camera_block_a_frame() {
+    use tessella_capture_abi::envelope::OrderEpoch;
+    use tessella_orchestrate::camera::CameraBlock;
+    use tessella_style::light::Light;
+    use tessella_tile::cover::ViewTransform;
+
+    let view_at = |longitude: f64| ViewTransform {
+        longitude,
+        latitude: 51.505,
+        zoom: 13.0,
+        width: 1024.0,
+        height: 768.0,
+        bearing: 0.0,
+        pitch: 0.0,
+    };
+
+    // A pan small enough to stay inside one integer level's cover: the tiles do not change, so
+    // by §6 nothing but the camera owes anything.
+    let base = view_at(-0.11);
+    let cover_of = |view: &ViewTransform| {
+        let mut tiles: Vec<_> = tessella_tile::cover::cover(view)
+            .expect("covers")
+            .into_iter()
+            .map(|tile| (tile.z, tile.x, tile.y))
+            .collect();
+        tiles.sort_unstable();
+        tiles
+    };
+    let settled_cover = cover_of(&base);
+
+    let mut ring = Ring::new(64 * 1024);
+    let producer = ring.producer();
+    let mut arena = SlabArena::new();
+    let mut tracker = DamageTracker::new();
+
+    let key_at = |view: &ViewTransform| CameraKey {
+        center_zoom0: tessella_tile::projection::center_zoom0(view.longitude, view.latitude),
+        ..camera()
+    };
+
+    // Settle.
+    let first = tracker.begin_frame(VIEW, key_at(&base));
+    assert!(first.camera && first.geometry);
+    emit_tile(producer, &mut arena);
+    CameraBlock::new(&base, &Light::default(), OrderEpoch(1), 0, 0)
+        .expect("an unrotated camera")
+        .write(producer)
+        .expect("writes");
+    let mut head = producer.head();
+
+    let mut sizes = Vec::new();
+    for frame in 1..=40 {
+        let view = view_at(-0.11 + 0.00002 * f64::from(frame));
+        assert_eq!(
+            cover_of(&view),
+            settled_cover,
+            "frame {frame} moved the cover; this is not a pure pan"
+        );
+
+        let work = tracker.begin_frame(VIEW, key_at(&view));
+        assert!(work.camera, "frame {frame} moved and owes a camera");
+        assert!(!work.geometry, "frame {frame} wanted geometry during a pan");
+
+        CameraBlock::new(&view, &Light::default(), OrderEpoch(1), 0, 0)
+            .expect("an unrotated camera")
+            .write(producer)
+            .expect("writes");
+
+        sizes.push(producer.head() - head);
+        head = producer.head();
+    }
+
+    let block = sizes[0];
+    assert!(block > 0, "a camera block is not nothing");
+    assert!(
+        sizes.iter().all(|size| *size == block),
+        "a pan's per-frame cost varied: {sizes:?}"
+    );
+}

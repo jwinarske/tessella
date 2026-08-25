@@ -462,7 +462,10 @@ historic note).
 ### 9.3 Counters (CI assertions)
 
 Extend the LogFrameSink-stats pattern: bytes/frame parked == 0; bytes/frame during pure pan ≤
-camera-block budget; OrderUpdate count == order-change count (asserted in `draw_order.rs`: fifty frames of an
+camera-block budget — asserted in `parked_is_silent.rs` as an *identity* rather than a bound:
+forty frames of a pan that provably does not move the cover each cost exactly one camera block
+and want no geometry. A bound is satisfied by a producer that has started sending something
+small every frame it did not send before; OrderUpdate count == order-change count (asserted in `draw_order.rs`: fifty frames of an
 unchanged order move the ring not at all, three successive changes emit once each and settle
 immediately after, and rebuilding an identical order from scratch is not a change — the
 suppression compares the resolved bytes rather than tracking whether anyone called `bind`); AttributesModified == 0 on a
