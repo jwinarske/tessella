@@ -36,6 +36,13 @@ pub struct FrameLabel<'a> {
     pub cross_tile_id: u32,
     /// Where layout put it, and which vertices are its own.
     pub laid_out: LaidOut,
+    /// Where its icon was laid out, when it has one.
+    ///
+    /// A symbol is a label, an icon, or both, and placement treats the two halves together —
+    /// `text-optional` and `icon-optional` are about exactly this pair. They are separate fields
+    /// rather than one because they are separate *drawables*: the two go through different
+    /// shaders and cannot share a vertex buffer.
+    pub icon: Option<LaidOut>,
     /// The line it follows, in tile units, or empty when it is point-placed.
     ///
     /// A borrow rather than a copy: a street tile has thousands of these and the geometry is
@@ -68,6 +75,12 @@ pub struct FrameOptions {
     pub viewport: (f32, f32),
     /// The tile's overscaling, which widens a line label's padding circles.
     pub overscaling: f32,
+    /// `icon-padding`, in screen pixels.
+    ///
+    /// Separate from the text's, and the spec's defaults differ: two pixels around text and
+    /// *one* around an icon. Sharing one value crowds icons or spaces them, depending which way
+    /// it is shared.
+    pub icon_padding: Padding,
 }
 
 impl Default for FrameOptions {
@@ -78,6 +91,7 @@ impl Default for FrameOptions {
             increment: 1.0,
             viewport: (1024.0, 768.0),
             overscaling: 1.0,
+            icon_padding: Padding::uniform(1.0),
         }
     }
 }
@@ -148,10 +162,29 @@ impl ViewSymbols {
                     .map(Shape::Circles)
                 };
 
+                // The icon's own box, at its own padding. Point-placed only: a line-placed
+                // icon needs the anchors `get_anchors` produces, which layout does not build.
+                let icon = label.icon.as_ref().and_then(|laid| {
+                    let (top, bottom, left, right) = laid.extent;
+                    collision_box(
+                        Extent {
+                            top,
+                            bottom,
+                            left,
+                            right,
+                        },
+                        project(laid.anchor),
+                        1.0,
+                        options.icon_padding,
+                        0.0,
+                    )
+                    .map(Shape::Box)
+                });
+
                 Candidate {
                     cross_tile_id: label.cross_tile_id,
                     text,
-                    icon: None,
+                    icon,
                 }
             })
             .collect();

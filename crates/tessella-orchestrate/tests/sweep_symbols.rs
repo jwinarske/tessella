@@ -210,6 +210,7 @@ fn run(zooms: &[f64]) -> (Vec<Vec<Opacities>>, usize) {
                     frame_labels.push(FrameLabel {
                         cross_tile_id: symbol.cross_tile_id,
                         laid_out: entry.clone(),
+                        icon: None,
                         line: &[],
                     });
                     texts.push(symbol.key.clone());

@@ -195,6 +195,7 @@ fn draw_a_frame() {
         .map(|(index, laid_out)| FrameLabel {
             cross_tile_id: index as u32 + 1,
             laid_out,
+            icon: None,
             line: &[],
         })
         .collect();
@@ -463,6 +464,7 @@ fn draw_line_labels() {
                 #[allow(clippy::cast_possible_truncation)]
                 cross_tile_id: frame_labels.len() as u32 + 1,
                 laid_out: laid[repetition].clone(),
+                icon: None,
                 line: &label.line,
             });
             repetition += 1;

@@ -1338,6 +1338,21 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   its interface — the same reason the evaluated props carry an icon half for a layer with no
   icons. The symbol capture's style has no sprite, so its zero is a value the oracle carries
   rather than a placeholder, which is why it is passed rather than defaulted.
+  Placement then takes both halves. `place` has modelled `text-optional` and `icon-optional`
+  since R2 and nothing exercised them, because until now `Candidate::icon` was always `None` —
+  which is the kind of gap where every rule agrees with every other for the wrong reason, so the
+  first assertion is that the icon half is offered at all. The four combinations are four
+  different maps: a shield that vanishes with its label, a label that vanishes with its shield,
+  either alone, or both or nothing. Neither optional is the spec's default and the strictest —
+  a shield with a number in it is one thing, and drawing the number without the shield is worse
+  than drawing neither.
+  A symbol with no icon must not be held back by one it does not have, which `icon-optional`
+  defaulting to false makes easy to get wrong: most symbols are text-only, and a rule read as
+  "the text needs the icon" rather than "the text needs the icon *if there is one*" blanks every
+  label on the map.
+  `icon-padding` is its own value and not the text's. The spec's defaults differ — two pixels
+  around text and one around an icon — and sharing one crowds icons or spaces them depending
+  which way it is shared, either of which reads as a collision bug rather than a padding one.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

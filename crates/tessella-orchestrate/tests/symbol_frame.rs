@@ -70,6 +70,7 @@ fn lay_out(entries: &[(&str, (f32, f32))]) -> (SymbolBuffers, Vec<FrameLabel<'st
         .map(|(index, laid_out)| FrameLabel {
             cross_tile_id: index as u32 + 1,
             laid_out,
+            icon: None,
             line: &[],
         })
         .collect();
@@ -398,11 +399,13 @@ fn a_line_label_reserves_its_road_and_not_its_box() {
             FrameLabel {
                 cross_tile_id: 1,
                 laid_out: laid[0].clone(),
+                icon: None,
                 line,
             },
             FrameLabel {
                 cross_tile_id: 2,
                 laid_out: beside[0].clone(),
+                icon: None,
                 line: &[],
             },
         ];
@@ -426,4 +429,218 @@ fn a_line_label_reserves_its_road_and_not_its_box() {
         placed(&road),
         "the road's circles blocked a label the road does not pass"
     );
+}
+
+/// A symbol's two halves are placed together, and the optionality rules decide how.
+///
+/// `place` has modelled these since R2 and nothing exercised them with a real icon, because
+/// until R3 there were none. The four combinations are genuinely four different maps: a shield
+/// that vanishes with its label, a label that vanishes with its shield, either alone, or both
+/// or nothing.
+mod two_halves {
+    use super::{lay_out, to_screen};
+
+    use tessella_layout::symbol_bucket::{IconLabel, IconOptions, build_icons};
+    use tessella_orchestrate::symbols::{FrameLabel, FrameOptions, ViewSymbols};
+    use tessella_place::feature::Padding;
+    use tessella_place::placement::Rules;
+
+    /// A sheet with one big icon in it.
+    fn sprites() -> tessella_glyph::sprite::Index {
+        tessella_glyph::sprite::parse(
+            br#"{"marker": {"x": 0, "y": 0, "width": 64, "height": 64}}"#,
+            Some((64, 64)),
+        )
+        .expect("the index parses")
+    }
+
+    /// Two symbols at the same tile anchor, so their icons certainly collide.
+    ///
+    /// The text boxes collide too — the point is that both halves of the second symbol are in
+    /// the way, and what is drawn is decided by the rules rather than by geometry.
+    fn overlapping() -> (
+        Vec<tessella_layout::symbol_bucket::LaidOut>,
+        Vec<tessella_layout::symbol_bucket::LaidOut>,
+    ) {
+        let (_, text) = lay_out(&[("Alpha", (1000.0, 1000.0)), ("Bravo", (1010.0, 1000.0))]);
+        let icons: Vec<IconLabel> = [(1000.0f32, 1000.0f32), (1010.0, 1000.0)]
+            .into_iter()
+            .map(|anchor| IconLabel {
+                image: "marker".to_string(),
+                anchor,
+                options: IconOptions::default(),
+            })
+            .collect();
+        let (_, laid_icons) = build_icons(&icons, &sprites());
+        (
+            text.into_iter().map(|label| label.laid_out).collect(),
+            laid_icons,
+        )
+    }
+
+    /// Runs a frame with both halves offered under `rules`, returning what each symbol drew.
+    fn placed(rules: Rules) -> Vec<(bool, bool)> {
+        let (text, icons) = overlapping();
+        let labels: Vec<FrameLabel> = text
+            .into_iter()
+            .zip(icons)
+            .enumerate()
+            .map(|(index, (laid_out, icon))| FrameLabel {
+                #[allow(clippy::cast_possible_truncation)]
+                cross_tile_id: index as u32 + 1,
+                laid_out,
+                icon: Some(icon),
+                line: &[],
+            })
+            .collect();
+
+        let mut view = ViewSymbols::new();
+        let result = view.frame(
+            &labels,
+            to_screen,
+            &FrameOptions {
+                rules,
+                padding: Padding::uniform(2.0),
+                icon_padding: Padding::uniform(1.0),
+                ..FrameOptions::default()
+            },
+        );
+        result
+            .placed
+            .iter()
+            .map(|symbol| (symbol.text, symbol.icon))
+            .collect()
+    }
+
+    /// The icon half is offered at all.
+    ///
+    /// The control: before this, `Candidate::icon` was always `None`, so every rule below would
+    /// have agreed with every other for the wrong reason.
+    #[test]
+    fn the_icon_half_is_placed() {
+        let drawn = placed(Rules::default());
+        assert_eq!(drawn[0], (true, true), "the first symbol drew both halves");
+    }
+
+    /// With neither half optional, a symbol is both or nothing.
+    ///
+    /// The spec's default. A shield with a number in it is one thing, and drawing the number
+    /// without the shield — or the shield without its number — is worse than drawing neither.
+    #[test]
+    fn neither_optional_is_both_or_nothing() {
+        let drawn = placed(Rules::default());
+        assert_eq!(drawn[0], (true, true));
+        assert_eq!(drawn[1], (false, false), "a half survived alone");
+    }
+
+    /// `text-optional` lets the icon stand without its label.
+    #[test]
+    fn text_optional_keeps_the_icon() {
+        let drawn = placed(Rules {
+            text_optional: true,
+            // The second symbol's icon has to fit for there to be anything to keep, so the
+            // icons are allowed to overlap and only the text competes.
+            icon_allow_overlap: true,
+            ..Rules::default()
+        });
+        assert_eq!(drawn[1], (false, true), "the icon went with the text");
+    }
+
+    /// `icon-optional` lets the label stand without its icon.
+    #[test]
+    fn icon_optional_keeps_the_text() {
+        let drawn = placed(Rules {
+            icon_optional: true,
+            text_allow_overlap: true,
+            ..Rules::default()
+        });
+        assert_eq!(drawn[1], (true, false), "the text went with the icon");
+    }
+
+    /// A symbol with no icon is unaffected by the icon rules.
+    ///
+    /// Most symbols are text-only, and `icon-optional` defaulting to false must not make every
+    /// one of them depend on an icon it does not have.
+    #[test]
+    fn a_symbol_with_no_icon_still_draws_its_text() {
+        let (_, labels) = lay_out(&[("Alpha", (1000.0, 1000.0))]);
+        let mut view = ViewSymbols::new();
+        let result = view.frame(&labels, to_screen, &FrameOptions::default());
+        assert_eq!(
+            (result.placed[0].text, result.placed[0].icon),
+            (true, false),
+            "a text-only symbol was held back by an icon it does not have"
+        );
+    }
+
+    /// The icon's padding is its own, and the spec's defaults differ.
+    ///
+    /// Two pixels around text and one around an icon. Sharing one value crowds icons or spaces
+    /// them, depending which way it is shared — and either reads as a collision bug rather than
+    /// as a padding one.
+    #[test]
+    fn the_icon_carries_its_own_padding() {
+        let options = FrameOptions::default();
+        assert_eq!(options.padding, Padding::uniform(2.0));
+        assert_eq!(options.icon_padding, Padding::uniform(1.0));
+
+        // And the value is used: a padding wide enough to make two separated icons collide does.
+        let (text, icons) = overlapping();
+        let apart: Vec<tessella_layout::symbol_bucket::LaidOut> = icons
+            .into_iter()
+            .enumerate()
+            .map(|(index, mut laid)| {
+                #[allow(clippy::cast_precision_loss)]
+                {
+                    laid.anchor = (1000.0 + index as f32 * 2000.0, 1000.0);
+                }
+                laid
+            })
+            .collect();
+
+        let run = |icon_padding| {
+            let labels: Vec<FrameLabel> = text
+                .clone()
+                .into_iter()
+                .zip(apart.clone())
+                .enumerate()
+                .map(|(index, (laid_out, icon))| FrameLabel {
+                    #[allow(clippy::cast_possible_truncation)]
+                    cross_tile_id: index as u32 + 1,
+                    laid_out,
+                    icon: Some(icon),
+                    line: &[],
+                })
+                .collect();
+            let mut view = ViewSymbols::new();
+            view.frame(
+                &labels,
+                to_screen,
+                &FrameOptions {
+                    rules: Rules {
+                        text_allow_overlap: true,
+                        icon_optional: true,
+                        ..Rules::default()
+                    },
+                    icon_padding,
+                    ..FrameOptions::default()
+                },
+            )
+            .placed
+            .iter()
+            .filter(|symbol| symbol.icon)
+            .count()
+        };
+
+        assert_eq!(
+            run(Padding::uniform(1.0)),
+            2,
+            "two separated icons collided"
+        );
+        assert_eq!(
+            run(Padding::uniform(200.0)),
+            1,
+            "a padding wide enough to reach the neighbour did not"
+        );
+    }
 }
