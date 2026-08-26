@@ -53,7 +53,17 @@ pub fn expand(template: &str, z: u8, x: u32, y: u32, scheme: Scheme, pixel_ratio
         Scheme::Xyz => y,
         Scheme::Tms => (1u32 << z).saturating_sub(y).saturating_sub(1),
     };
+    replace_tokens(template, |token| token_value(token, z, x, y, pixel_ratio))
+}
 
+/// Substitutes `{token}` where `lookup` answers, and leaves it verbatim where it declines.
+///
+/// mbgl's `util::replaceTokens`, and shared between the tile-template expansion above and the
+/// canonical-URL rewriting in [`crate::canonical`] because mbgl shares it between the same two.
+/// The declining case is the load-bearing one: a template may legitimately contain braces that
+/// are not tokens, and a URL that silently lost them 404s with no clue why.
+#[must_use]
+pub fn replace_tokens(template: &str, lookup: impl Fn(&str) -> Option<String>) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
     while let Some(open) = rest.find('{') {
@@ -72,7 +82,7 @@ pub fn expand(template: &str, z: u8, x: u32, y: u32, scheme: Scheme, pixel_ratio
         }
 
         let token = &rest[1..close];
-        match token_value(token, z, x, y, pixel_ratio) {
+        match lookup(token) {
             Some(value) => out.push_str(&value),
             // Put it back exactly as written, braces included.
             None => {

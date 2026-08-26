@@ -1892,6 +1892,63 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   slowest test in the workspace in a debug build — a thousand VP8 decodes is a great deal more
   work than a thousand PNG ones — which is the price of the coverage rather than an accident, and
   `--release` brings the file back under four seconds.
+  Hosted styles then load at all, which they did not. A style written the way a vendor writes one
+  contains **no HTTP anywhere**: `mapbox://styles/mapbox/streets-v11` is the whole address of the
+  document, and every source, sprite and glyph range inside it is written the same way. With no
+  rewriting the boot fetches nothing, and the failure is not a 404 — it is a scheme no transport
+  claims, several layers from the style that wrote it.
+  `util::mapbox` is the port, with `util::URL` and `util::Path` under it, and all of it is data
+  rather than code: mbgl expresses three vendors as a [`TileServer`] of templates, domain names
+  and version prefixes so a self-hosted server is *configured* instead of special-cased. This
+  does the same, and even Mapbox's one oddity — `&secure` appended to a source URL — is a field
+  rather than an `if`, which is the one place mbgl's own configuration leaks into its code.
+  The API key is the other half and it belongs here rather than in a template a caller fills in.
+  Its *name* differs by vendor — `access_token` for Mapbox, `key` for MapTiler — and it is
+  appended to every request derived from the style. MapLibre's demo server needs none at all,
+  which is why `requires_api_key` is a field and not an assumption: a normalize that demanded one
+  would make the demo style unloadable.
+  Only a *source* refuses outright for a missing key. mbgl throws there and merely logs for the
+  other four kinds, and the asymmetry is right: a source with no key produces a TileJSON fetch
+  that fails and takes every tile of that source with it, while a sprite with no key is one
+  missing picture on a map that otherwise works. One error naming the parameter, before a socket
+  is opened, beats a hundred 401s.
+  Three details of the URL parse are transcribed rather than reasoned, and each is a defect if
+  guessed. A `@2x` immediately before the dot is part of the **extension**, not the filename, so
+  `streets-v8@2x.png` splits as `streets-v8` and `@2x.png` and the sprite template puts the scale
+  back on the far side of the rewrite; reading it as part of the filename produces
+  `streets-v8@2x/sprite.png`, a directory that does not exist. A `#` before the `?` means the
+  fragment swallowed the query and there is none. And a query of span *one* is a bare `?` that
+  carries nothing and is dropped — the check is `> 1` rather than non-empty, or every such URL
+  ends in a stray ampersand.
+  The query carried across from the original has its `?` turned into an `&` when the template
+  already contributed one. Two question marks make every server read the second as a literal
+  inside the first parameter's value, which for a signed URL means the signature silently stops
+  matching — the failure mode that looks like an expired credential and is not.
+  One deliberate divergence, and it is about the *answer* rather than the parse. mbgl logs a
+  domain mismatch and returns the input unchanged, which hands the transport a `mapbox://` URL
+  nothing claims. This reports instead: the information exists exactly there — which kind was
+  asked for, which domain the URL carried, that they disagree — and passing the URL through
+  throws all three away and replaces them with a fetch failure. It is safe because no well-formed
+  style reaches it; `mapbox://////` is the input that does, and mbgl's own test pins it.
+  **Where the rewriting sits in the stack is the load-bearing decision.** It goes *below* the
+  in-flight coalescing table of §5.1 and the byte cache of §12.6, both of which key on the URL —
+  so those layers see the canonical `mapbox://tiles/a.b/0/0/0.pbf` and only the transport ever
+  sees the address with the credential in it. Two consequences follow and both are the point. A
+  cached tile survives a key rotation, because an API key has a lifetime of its own — rotated,
+  refreshed, scoped per user — and a cache keyed on the address it appears in would treat every
+  rotation as a cold start for a whole downloaded region. And two views sharing a tile share it
+  whatever key each was configured with, because they agree on the canonical form before either
+  reaches a socket. mbgl solves the same problem from the other end, canonicalizing a normalized
+  URL back before storing it; putting the rewrite at the bottom makes the storing side never need
+  to know.
+  That claim is asserted where it is observable rather than argued: one cache file, two stacks
+  with different tokens, and the second request is a *hit* — with the negative beside it, that a
+  different tile under the same token is still a miss, so the hit is not the cache answering
+  everything.
+  The resource kind is read off the URL's own domain segment, which is what lets a transport
+  rewrite one at all: a file source is handed a URL and no context, and `mapbox://sprites/…` says
+  what it is. What that gives up is the cross-check a caller who knows the kind can make, so
+  `normalize` still takes one for callers that do.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 
