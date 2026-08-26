@@ -65,7 +65,7 @@ pub use cache::{
     CacheError, CacheStats, CachingFileSource, Entry, RegionId, RegionProgress, SqliteCache,
     StoredRegion,
 };
-pub use canonical::{Canonical, CanonicalError, Kind, TileServer};
+pub use canonical::{Canonical, CanonicalError, Kind, TileServer, canonicalize, canonicalize_any};
 #[cfg(feature = "cache")]
 pub use download::{Download, DownloadError, Got, Progress, Summary};
 pub use geojson::{GeoJsonSourceError, Origin};

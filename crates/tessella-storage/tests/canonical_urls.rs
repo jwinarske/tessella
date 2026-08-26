@@ -675,3 +675,220 @@ mod across_a_rotation {
         assert_eq!(source.stats().hits(), 0);
     }
 }
+
+/// Canonicalizing is the inverse of normalizing, checked as a round trip.
+///
+/// The property is what makes the two directions safe to have at all: a change to one that the
+/// other does not mirror stops round-tripping, and the inversion cannot quietly drift into
+/// producing plausible keys for resources nobody stored.
+mod the_reverse_direction {
+    use tessella_storage::canonical::{
+        Kind, TileServer, canonicalize, canonicalize_any, normalize,
+    };
+
+    /// Every canonical URL in this file survives a trip out and back.
+    #[test]
+    fn every_canonical_url_round_trips() {
+        let mapbox = TileServer::mapbox();
+        let cases = [
+            (Kind::Source, "mapbox://user.map"),
+            (Kind::Style, "mapbox://styles/user/style"),
+            (Kind::Style, "mapbox://styles/user/style/draft"),
+            (Kind::Sprite, "mapbox://sprites/user/style.json"),
+            (Kind::Sprite, "mapbox://sprites/user/style@2x.png"),
+            (Kind::Sprite, "mapbox://sprites/user/style/draft@2x.png"),
+            (Kind::Glyphs, "mapbox://fonts/user/Comic%20Sans/0-255.pbf"),
+            (Kind::Glyphs, "mapbox://fonts/user/{fontstack}/{range}.pbf"),
+            (Kind::Tile, "mapbox://tiles/a.b/0/0/0.pbf"),
+            (Kind::Tile, "mapbox://tiles/a.b/0/0/0@2x.png"),
+            (Kind::Tile, "mapbox://tiles/a.b,c.d/0/0/0.pbf"),
+        ];
+
+        for (kind, canonical) in cases {
+            let fetched = normalize(&mapbox, kind, canonical, "key").expect("normalizes");
+            let back = canonicalize(&mapbox, kind, &fetched)
+                .unwrap_or_else(|| panic!("{fetched} did not canonicalize back"));
+            assert_eq!(back, canonical, "via {fetched}");
+        }
+    }
+
+    /// MapTiler round-trips in every kind, which is what says the machinery is not Mapbox-shaped.
+    #[test]
+    fn maptiler_round_trips_too() {
+        let server = TileServer::maptiler();
+        for (kind, canonical) in [
+            (Kind::Style, "maptiler://maps/basic"),
+            (Kind::Source, "maptiler://sources/v3"),
+            (Kind::Glyphs, "maptiler://fonts/{fontstack}/{range}.pbf"),
+            (
+                Kind::Tile,
+                "maptiler://tiles/tiles/contours/{z}/{x}/{y}.pbf",
+            ),
+        ] {
+            let fetched = normalize(&server, kind, canonical, "k").expect("normalizes");
+            let back = canonicalize(&server, kind, &fetched)
+                .unwrap_or_else(|| panic!("{fetched} did not canonicalize back"));
+            assert_eq!(back, canonical, "via {fetched}");
+        }
+    }
+
+    /// Two of MapLibre's templates are not invertible, and that is a property of the templates.
+    ///
+    /// Its **source** rule is `/tiles/{domain}.json`, which discards the path: both
+    /// `maplibre://tiles` and `maplibre://tiles/tiles` normalize to the same address, so no
+    /// inverse can tell them apart and mbgl's own `canonicalizeSourceURL` returns the shorter one
+    /// for the same reason. Its **glyphs** rule spells out `{fontstack}` and `{start}-{end}`,
+    /// which are the glyph manager's tokens rather than URL structure, so there is nothing
+    /// structural to recover and the answer is `None` rather than a guess.
+    ///
+    /// Recorded rather than papered over. The consequence is real: a style that writes
+    /// `maplibre://tiles/tiles` keys the cache on that, while an import of the fetched URL keys
+    /// on `maplibre://tiles`, and the two do not meet. It does not arise for Mapbox or MapTiler,
+    /// whose templates carry the path.
+    #[test]
+    fn two_maplibre_templates_are_not_invertible() {
+        let server = TileServer::maplibre();
+
+        // The style rule does invert.
+        let style =
+            normalize(&server, Kind::Style, "maplibre://maps/style", "").expect("normalizes");
+        assert_eq!(
+            canonicalize(&server, Kind::Style, &style).as_deref(),
+            Some("maplibre://maps/style")
+        );
+
+        // The source rule loses the path, and the short form normalizes to the same address —
+        // which is why the round-trip check accepts it.
+        let source =
+            normalize(&server, Kind::Source, "maplibre://tiles/tiles", "").expect("normalizes");
+        assert_eq!(source, "https://demotiles.maplibre.org/tiles/tiles.json");
+        assert_eq!(
+            canonicalize(&server, Kind::Source, &source).as_deref(),
+            Some("maplibre://tiles")
+        );
+        assert_eq!(
+            normalize(&server, Kind::Source, "maplibre://tiles", "").expect("normalizes"),
+            source,
+            "the two canonical forms are one address"
+        );
+
+        // The glyph rule has no structure to recover.
+        let glyphs = normalize(
+            &server,
+            Kind::Glyphs,
+            "maplibre://fonts/{fontstack}/{start}-{end}.pbf",
+            "",
+        )
+        .expect("normalizes");
+        assert_eq!(canonicalize(&server, Kind::Glyphs, &glyphs), None);
+    }
+
+    /// mbgl `MapTiler.SourceURL` and `MapTiler.GlyphsURL`, which state the canonical answers.
+    ///
+    /// The query goes: an API key, an `sdk=` marker and whatever else a client appended are
+    /// properties of the *request* rather than of the resource, which is the whole reason a
+    /// cache keys on the canonical form.
+    #[test]
+    fn the_query_does_not_come_back() {
+        let maptiler = TileServer::maptiler();
+        assert_eq!(
+            canonicalize(
+                &maptiler,
+                Kind::Source,
+                "https://api.maptiler.com/tiles/v3/tiles.json?key=abcdef"
+            )
+            .as_deref(),
+            Some("maptiler://sources/v3")
+        );
+        assert_eq!(
+            canonicalize(
+                &maptiler,
+                Kind::Glyphs,
+                "https://api.maptiler.com/fonts/{fontstack}/{range}.pbf?key=abcdef"
+            )
+            .as_deref(),
+            Some("maptiler://fonts/{fontstack}/{range}.pbf")
+        );
+    }
+
+    /// The sprite template is the one with two adjacent tokens, and it inverts correctly.
+    ///
+    /// `/styles/v1{directory}{filename}/sprite{extension}` has nothing between `{directory}` and
+    /// `{filename}`, so matching literals alone cannot divide them. mbgl inverts this with greedy
+    /// regex groups, which resolves the ambiguity by accident and is never exercised by its own
+    /// tests. Splitting at the last `/` — what the two names actually mean — is the only division
+    /// that inverts the forward direction, and the round trip is what proves it.
+    #[test]
+    fn the_sprite_templates_adjacent_tokens_divide_correctly() {
+        let mapbox = TileServer::mapbox();
+        assert_eq!(
+            canonicalize(
+                &mapbox,
+                Kind::Sprite,
+                "https://api.mapbox.com/styles/v1/user/style/draft/sprite@2x.png?access_token=k"
+            )
+            .as_deref(),
+            Some("mapbox://sprites/user/style/draft@2x.png")
+        );
+    }
+
+    /// The kind is discovered by which inversion round-trips, not guessed from the path.
+    ///
+    /// A style URL and a sprite URL share the `/styles/v1` prefix and are told apart only by the
+    /// sprite template's `/sprite{extension}` tail. A source and a tile both sit under `/v4` and
+    /// are told apart by the source template's `.json`.
+    #[test]
+    fn the_kind_falls_out_of_the_round_trip() {
+        let mapbox = TileServer::mapbox();
+        let cases = [
+            (
+                "https://api.mapbox.com/styles/v1/user/style?access_token=k",
+                Kind::Style,
+                "mapbox://styles/user/style",
+            ),
+            (
+                "https://api.mapbox.com/styles/v1/user/style/sprite.json?access_token=k",
+                Kind::Sprite,
+                "mapbox://sprites/user/style.json",
+            ),
+            (
+                "https://api.mapbox.com/fonts/v1/user/Font/0-255.pbf?access_token=k",
+                Kind::Glyphs,
+                "mapbox://fonts/user/Font/0-255.pbf",
+            ),
+            (
+                "https://api.mapbox.com/v4/user.map.json?access_token=k&secure",
+                Kind::Source,
+                "mapbox://user.map",
+            ),
+            (
+                "https://api.mapbox.com/v4/a.b/3/2/1.vector.pbf?access_token=k",
+                Kind::Tile,
+                "mapbox://tiles/a.b/3/2/1.vector.pbf",
+            ),
+        ];
+
+        for (fetched, kind, canonical) in cases {
+            let found = canonicalize_any(&mapbox, fetched)
+                .unwrap_or_else(|| panic!("{fetched} matched nothing"));
+            assert_eq!(found, (kind, canonical.to_string()), "for {fetched}");
+        }
+    }
+
+    /// A URL this server did not serve matches nothing, rather than the catch-all tile template.
+    ///
+    /// `{path}` under the base URL would otherwise claim anything — which is why the tile rule is
+    /// tried last and why the verification exists at all.
+    #[test]
+    fn a_foreign_url_canonicalizes_to_nothing() {
+        let mapbox = TileServer::mapbox();
+        for url in [
+            "https://tiles.example.com/0/0/0.pbf",
+            "https://api.maptiler.com/tiles/v3/tiles.json?key=k",
+            "mapbox://tiles/a.b/0/0/0.pbf",
+            "",
+        ] {
+            assert_eq!(canonicalize_any(&mapbox, url), None, "{url}");
+        }
+    }
+}

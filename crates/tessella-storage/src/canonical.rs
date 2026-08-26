@@ -512,6 +512,169 @@ pub fn normalize<'a>(
     Ok(Cow::Owned(transform(&template, url, &parsed)))
 }
 
+/// The literal and token parts of a template, in order.
+///
+/// A template is a string like `/styles/v1{directory}{filename}/sprite{extension}`, and
+/// inverting it means matching the literals and taking what falls between. Splitting it once
+/// here keeps that inversion from re-parsing the string for every URL.
+fn split_template(template: &str) -> Vec<(&str, Option<&str>)> {
+    let mut parts = Vec::new();
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        let literal = &rest[..open];
+        let Some(close) = rest[open..].find('}').map(|index| open + index) else {
+            break;
+        };
+        parts.push((literal, Some(&rest[open + 1..close])));
+        rest = &rest[close + 1..];
+    }
+    if !rest.is_empty() || parts.is_empty() {
+        parts.push((rest, None));
+    }
+    parts
+}
+
+/// Recovers a template's token values from a path that was built with it.
+///
+/// # The ambiguity, and where it is resolved
+///
+/// Two *adjacent* tokens with no literal between them cannot be split by matching literals
+/// alone: `{directory}{filename}` against `/a/b/c` could divide anywhere. mbgl inverts these
+/// with a regex of greedy `(.+)` groups, which resolves the ambiguity by accident rather than by
+/// intent — and its own tests never exercise the one template where it arises.
+///
+/// This splits at the last `/` instead, which is what `directory` and `filename` mean in
+/// [`PathParts`] and is the only division that inverts the forward direction. Any other adjacent
+/// pair is refused rather than guessed: a wrong split produces a plausible URL for a resource
+/// nobody stored.
+fn invert(template: &str, path: &str) -> Option<Vec<(&'static str, String)>> {
+    const NAMES: [&str; 5] = ["domain", "path", "directory", "filename", "extension"];
+    let name_of = |token: &str| NAMES.iter().copied().find(|known| *known == token);
+
+    let parts = split_template(template);
+    let mut values: Vec<(&'static str, String)> = Vec::new();
+    let mut rest = path;
+
+    for (index, (literal, token)) in parts.iter().enumerate() {
+        rest = rest.strip_prefix(literal)?;
+        let Some(token) = token else { break };
+        let name = name_of(token)?;
+
+        // Where this token's value ends: at the next literal, or at the end for the last token.
+        let next_literal = parts.get(index + 1).map(|(literal, _)| *literal);
+        let value_end = match next_literal {
+            // The final token runs to the end of the path.
+            None => rest.len(),
+            // An adjacent token: no literal separates them, so the division has to come from
+            // what the names mean rather than from the string.
+            Some("") => {
+                let follows = parts.get(index + 1).and_then(|(_, token)| *token)?;
+                if name != "directory" || follows != "filename" {
+                    return None;
+                }
+                // `directory` includes its trailing slash, and `filename` is what follows it up
+                // to the next literal — so the split is the last `/` before that literal.
+                let tail_literal = parts.get(index + 2).map(|(literal, _)| *literal)?;
+                let tail = rest.find(tail_literal)?;
+                rest[..tail].rfind('/')? + 1
+            }
+            Some(literal) => rest.find(literal)?,
+        };
+
+        values.push((name, rest[..value_end].to_string()));
+        rest = &rest[value_end..];
+    }
+
+    // A leftover tail means the template did not describe the whole path.
+    if !rest.is_empty() && parts.last().is_some_and(|(_, token)| token.is_some()) {
+        return None;
+    }
+    Some(values)
+}
+
+/// Rewrites a fetched URL back into the canonical one that names it.
+///
+/// The inverse of [`normalize`], and what a cache keyed on canonical URLs needs in order to
+/// accept resources that were stored by something keyed the other way — an imported offline
+/// pack, most of all. mbgl faces the same problem from the opposite side: its own cache keys on
+/// the *normalized* URL with the API key stripped, so it canonicalizes only tiles, sources,
+/// sprites and glyphs and has no style case at all. Keying on the canonical form instead makes
+/// every kind need one, and gains a cache that survives a change of base URL as well as of key.
+///
+/// # It verifies rather than trusts
+///
+/// The result is accepted only if feeding it back through [`normalize`] reproduces the input.
+/// That is what makes inverting a template safe: an inversion that divided a path wrongly, or a
+/// URL that merely resembles this server's, fails the check and comes back `None` instead of
+/// becoming a plausible key for a resource nobody has. It also means the two directions cannot
+/// drift apart — a change to one that the other does not mirror stops round-tripping.
+///
+/// The query is not carried back. An API key, an `sdk=` marker and whatever else a client
+/// appended are properties of the *request*, not of the resource, which is the whole reason the
+/// canonical form is what the cache keys on.
+#[must_use]
+pub fn canonicalize(server: &TileServer, kind: Kind, url: &str) -> Option<String> {
+    let without_query = url.split(['?', '#']).next()?;
+    let rule = kind.rule(server);
+
+    let mut prefix = String::from(server.base_url);
+    prefix.push_str(rule.version_prefix.unwrap_or(""));
+    let path = without_query.strip_prefix(&prefix)?;
+
+    let values = invert(rule.template, path)?;
+    let value = |name: &str| values.iter().find(|(key, _)| *key == name).map(|(_, v)| v);
+
+    let mut canonical = String::from(server.scheme_alias);
+    canonical.push_str("://");
+    canonical.push_str(value("domain").map_or(rule.domain, String::as_str));
+    if let Some(path) = value("path") {
+        canonical.push_str(path);
+    } else {
+        for name in ["directory", "filename", "extension"] {
+            if let Some(part) = value(name) {
+                canonical.push_str(part);
+            }
+        }
+    }
+
+    // The check that makes the inversion trustworthy, over the *address* rather than the
+    // credential: the query is not part of the comparison, and a placeholder key is passed
+    // because a source URL is refused outright without one — verifying with an empty key would
+    // make every source fail its own check and fall through to the tile rule's catch-all
+    // template, which happily produces `mapbox://tiles/user.map.json` for a tileset.
+    const PROBE_KEY: &str = "probe";
+    let round_tripped = normalize(server, kind, &canonical, PROBE_KEY).ok()?;
+    let stripped = round_tripped.split(['?', '#']).next()?;
+    (stripped == without_query).then_some(canonical)
+}
+
+/// Rewrites a fetched URL back into its canonical form, discovering the resource kind.
+///
+/// An importer reads a URL out of somebody else's database and is told nothing about what it is
+/// for. Every kind is tried and the one whose inversion round-trips wins, which is a stronger
+/// test than a guess from the path: a style URL and a sprite URL share the `/styles/v1` prefix
+/// and are told apart by whether the sprite template's `/sprite{extension}` tail is there.
+///
+/// `None` when no kind round-trips, which is the honest answer for a URL this server did not
+/// serve — and for one it did serve under a template this build does not know.
+#[must_use]
+pub fn canonicalize_any(server: &TileServer, url: &str) -> Option<(Kind, String)> {
+    // Tile last: its template is a bare `{path}`, which matches anything under the base URL, so
+    // a more specific kind must be given the chance to claim the URL first.
+    for kind in [
+        Kind::Sprite,
+        Kind::Glyphs,
+        Kind::Style,
+        Kind::Source,
+        Kind::Tile,
+    ] {
+        if let Some(canonical) = canonicalize(server, kind, url) {
+            return Some((kind, canonical));
+        }
+    }
+    None
+}
+
 impl Kind {
     /// Which resource kind a canonical URL names, from its domain segment.
     ///
