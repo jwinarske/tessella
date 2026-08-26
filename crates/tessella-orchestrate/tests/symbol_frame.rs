@@ -458,6 +458,9 @@ mod two_halves {
                 },
                 pixel_ratio: 1.0,
                 sdf: false,
+                content: None,
+                text_fit_width: None,
+                text_fit_height: None,
             },
         )]
         .into_iter()
@@ -479,6 +482,7 @@ mod two_halves {
                 image: "marker".to_string(),
                 anchor,
                 options: IconOptions::default(),
+                text: None,
             })
             .collect();
         let (_, laid_icons) = build_icons(&icons, &sprites());

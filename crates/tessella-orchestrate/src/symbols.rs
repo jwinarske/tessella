@@ -25,7 +25,9 @@ use alloc::vec::Vec;
 
 use tessella_layout::symbol_bucket::{LaidOut, SymbolBuffers, opacity_vertex};
 use tessella_place::fade::{Fades, Joint};
-use tessella_place::feature::{Extent, Padding, collision_box, collision_circles};
+use tessella_place::feature::{
+    Extent, Padding, collision_box, collision_box_with, collision_circles,
+};
 use tessella_place::grid::GridIndex;
 use tessella_place::placement::{Candidate, Placed, Rules, Shape, place};
 
@@ -166,7 +168,7 @@ impl ViewSymbols {
                 // icon needs the anchors `get_anchors` produces, which layout does not build.
                 let icon = label.icon.as_ref().and_then(|laid| {
                     let (top, bottom, left, right) = laid.extent;
-                    collision_box(
+                    collision_box_with(
                         Extent {
                             top,
                             bottom,
@@ -176,6 +178,9 @@ impl ViewSymbols {
                         project(laid.anchor),
                         1.0,
                         options.icon_padding,
+                        // After `icon-text-fit` the extent is the shield's *content* area and
+                        // the picture reaches further out; collision reserves the picture.
+                        laid.content_margins,
                         0.0,
                     )
                     .map(Shape::Box)

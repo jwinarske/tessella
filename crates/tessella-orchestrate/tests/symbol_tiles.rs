@@ -104,6 +104,9 @@ fn positions(icons: &[(&str, bool)]) -> tessella_glyph::sprite::Positions {
                 },
                 pixel_ratio: 1.0,
                 sdf: *sdf,
+                content: None,
+                text_fit_width: None,
+                text_fit_height: None,
             };
             ((*name).to_string(), position)
         })
@@ -605,7 +608,7 @@ fn icons_lay_out_against_the_sprite_index() {
     let asked = layout.icons();
     assert!(asked.len() > 2, "{asked:?} is too few to prove a miss");
 
-    let (buffers, laid) = layout.lay_out_icons(&sprites);
+    let (buffers, laid) = layout.lay_out_icons(&sprites, &[]);
     assert!(!laid.is_empty(), "nothing was laid out");
     assert_eq!(buffers.vertices.len(), laid.len() * 4, "one quad an icon");
 
@@ -692,8 +695,8 @@ fn the_sprite_decides_whether_it_is_a_field() {
         buffers.vertices[0].data[2] & 1 == 1
     };
 
-    let (as_field, _) = layout.lay_out_icons(&field);
-    let (as_plain, _) = layout.lay_out_icons(&plain);
+    let (as_field, _) = layout.lay_out_icons(&field, &[]);
+    let (as_plain, _) = layout.lay_out_icons(&plain, &[]);
     assert!(is_sdf(&as_field), "an sdf sprite was drawn as an image");
     assert!(!is_sdf(&as_plain), "an image was drawn as a field");
 }
@@ -755,5 +758,147 @@ fn a_roads_segments_are_joined_before_it_is_labelled() {
         for pair in line.windows(2) {
             assert_ne!(pair[0], pair[1], "a zero-length segment at a joint");
         }
+    }
+}
+
+/// `icon-text-fit` stretches a shield around its number, end to end.
+///
+/// The whole chain in one: resolve both halves per feature, shape the text, fit the icon to it,
+/// correct the aspect against the sprite's own limits, and hand placement a box that reserves
+/// the drawn picture rather than the text inside it.
+#[test]
+fn a_shield_stretches_around_its_number() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "l", "type": "symbol", "source": "v", "source-layer": "road",
+                        "layout": {"text-field": "{type}", "text-font": ["TestFont"],
+                                   "icon-image": "shield", "icon-text-fit": "both",
+                                   "icon-text-fit-padding": [2, 4, 2, 4]}}]}"#,
+    )
+    .expect("a style");
+
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+
+    // A shield with a content box: 40x20 drawn, text sits in 4,4..36,16.
+    let sprites: tessella_glyph::sprite::Positions = [(
+        "shield".to_string(),
+        tessella_glyph::sprite::IconPosition {
+            padded_rect: tessella_glyph::atlas::Rect {
+                x: 1,
+                y: 1,
+                width: 42,
+                height: 22,
+            },
+            pixel_ratio: 1.0,
+            sdf: true,
+            content: Some(tessella_glyph::sprite::Content {
+                left: 4.0,
+                top: 4.0,
+                right: 36.0,
+                bottom: 16.0,
+            }),
+            text_fit_width: Some(tessella_glyph::sprite::TextFit::StretchOnly),
+            text_fit_height: Some(tessella_glyph::sprite::TextFit::StretchOnly),
+        },
+    )]
+    .into_iter()
+    .collect();
+
+    let (fonts, _) = fonts_for(layout);
+    let (_, text) = layout.lay_out(&fonts);
+    assert_eq!(
+        text.len(),
+        layout.pending.len(),
+        "the text list must be one-to-one for icons to find their labels"
+    );
+
+    let (icons, laid) = layout.lay_out_icons(&sprites, &text);
+    assert!(!laid.is_empty(), "no shields were drawn");
+    assert_eq!(icons.vertices.len(), laid.len() * 4);
+
+    // Every shield is as wide as its own label plus the fit padding, rather than the sprite's
+    // 40 — which is what "stretched around the text" means and what an unfitted icon would not
+    // do. Widths differ between labels because the labels differ.
+    let widths: BTreeSet<u32> = laid
+        .iter()
+        .map(|entry| {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            {
+                (entry.extent.3 - entry.extent.2) as u32
+            }
+        })
+        .collect();
+    assert!(
+        widths.len() > 1,
+        "every shield came out the same width: {widths:?}"
+    );
+
+    // And each carries the margins its sprite's border needs, so collision reserves the picture.
+    for entry in &laid {
+        let margins = entry
+            .content_margins
+            .expect("a fitted shield with a content box carries margins");
+        assert_eq!(
+            margins,
+            (4.0, 4.0, 4.0, 4.0),
+            "the border is four all round"
+        );
+    }
+}
+
+/// An icon with no label is not stretched, and reserves no border twice.
+///
+/// `icon-text-fit` on a feature with no text has nothing to stretch to. The icon keeps its own
+/// size, and — the part that is easy to miss — it must *not* carry content margins either: its
+/// extent is already the whole picture, so adding them would reserve the border a second time.
+#[test]
+fn an_icon_with_no_label_is_not_stretched() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "l", "type": "symbol", "source": "v", "source-layer": "road",
+                        "layout": {"icon-image": "shield", "icon-text-fit": "both"}}]}"#,
+    )
+    .expect("a style");
+
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+
+    let sprites: tessella_glyph::sprite::Positions = [(
+        "shield".to_string(),
+        tessella_glyph::sprite::IconPosition {
+            padded_rect: tessella_glyph::atlas::Rect {
+                x: 1,
+                y: 1,
+                width: 42,
+                height: 22,
+            },
+            pixel_ratio: 1.0,
+            sdf: true,
+            content: Some(tessella_glyph::sprite::Content {
+                left: 4.0,
+                top: 4.0,
+                right: 36.0,
+                bottom: 16.0,
+            }),
+            text_fit_width: None,
+            text_fit_height: None,
+        },
+    )]
+    .into_iter()
+    .collect();
+
+    let (_, laid) = layout.lay_out_icons(&sprites, &[]);
+    assert!(!laid.is_empty());
+    for entry in &laid {
+        assert_eq!(
+            (entry.extent.3 - entry.extent.2),
+            40.0,
+            "an icon with no label was stretched"
+        );
+        assert!(
+            entry.content_margins.is_none(),
+            "an unfitted icon reserved its border twice"
+        );
     }
 }

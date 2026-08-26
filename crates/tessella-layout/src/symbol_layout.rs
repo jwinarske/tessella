@@ -80,8 +80,35 @@ fn icon_options(layer: &Layer, zoom: f64, feature: Option<&dyn Feature>) -> Icon
         Some([array[0].as_number()? as f32, array[1].as_number()? as f32])
     };
 
+    #[allow(clippy::cast_possible_truncation)]
+    let quad = |key: &str| -> Option<[f32; 4]> {
+        let value = layout_value(layer, key, zoom, feature)?;
+        let array = value.as_array()?;
+        if array.len() != 4 {
+            return None;
+        }
+        Some([
+            array[0].as_number()? as f32,
+            array[1].as_number()? as f32,
+            array[2].as_number()? as f32,
+            array[3].as_number()? as f32,
+        ])
+    };
+
     IconOptions {
         size: number("icon-size").unwrap_or(1.0),
+        text_fit: match layout_value(layer, "icon-text-fit", zoom, feature)
+            .as_ref()
+            .and_then(Value::as_str)
+        {
+            Some("width") => tessella_glyph::quads::IconTextFit::Width,
+            Some("height") => tessella_glyph::quads::IconTextFit::Height,
+            Some("both") => tessella_glyph::quads::IconTextFit::Both,
+            _ => tessella_glyph::quads::IconTextFit::None,
+        },
+        // Top, right, bottom, left, as the spec writes it — the CSS order, not the extent order
+        // everything else here uses. Reading it as the other rotates the padding a quarter turn.
+        text_fit_padding: quad("icon-text-fit-padding").unwrap_or([0.0; 4]),
         offset: pair("icon-offset").unwrap_or([0.0, 0.0]),
         // On the wire in degrees, like `text-rotate`.
         rotate: number("icon-rotate").unwrap_or(0.0).to_radians(),
@@ -489,11 +516,13 @@ impl SymbolLayout {
     pub fn lay_out_icons(
         &self,
         positions: &tessella_glyph::sprite::Positions,
+        text: &[LaidOut],
     ) -> (SymbolBuffers, Vec<LaidOut>) {
         let labels: Vec<IconLabel> = self
             .pending
             .iter()
-            .filter_map(|pending| {
+            .enumerate()
+            .filter_map(|(index, pending)| {
                 let image = pending.icon.clone()?;
                 let anchor = match pending.anchoring {
                     Anchoring::Point(anchor) => anchor,
@@ -503,10 +532,18 @@ impl SymbolLayout {
                     // is wrong.
                     Anchoring::Line(_) => return None,
                 };
+                // The label this icon is drawn around, if it has one. `lay_out` answers one
+                // entry per pending, so the index is the same on both sides — which is the
+                // whole reason it does.
+                let shaped = text
+                    .get(index)
+                    .and_then(|laid| (laid.glyphs > 0).then_some(laid.extent));
+
                 Some(IconLabel {
                     image,
                     anchor,
                     options: pending.icon_options,
+                    text: shaped,
                 })
             })
             .collect();
@@ -551,6 +588,13 @@ impl SymbolLayout {
     /// reorder the buffer against the oracle the moment a second stack appeared. With one stack
     /// and one size, which is the common case, there is one run and no join.
     ///
+    /// **One entry per pending symbol**, including the icon-only ones that shape no text: those
+    /// get an empty extent and an empty vertex range. Emitting only the text-bearing ones would
+    /// be tidier and wrong — `lay_out_icons` needs to find each icon's label by index, and a
+    /// list that skips entries silently pairs every icon after the first text-less symbol with
+    /// the wrong one. An empty extent also places as *nothing*, which is what a symbol with no
+    /// text should reserve.
+    ///
     /// # Panics
     ///
     /// When the joined buffers would exceed what a `u16` index reaches. See
@@ -570,6 +614,8 @@ impl SymbolLayout {
             let run = &self.pending[start..end];
             start = end;
 
+            // Where this run starts in the output, so the empties can be interleaved back into
+            // their own positions afterwards.
             let glyphs = fonts.stack(&head.fonts);
             let (built, entries) = if self.placement.along_line() {
                 let labels: Vec<LineLabel> = run
@@ -607,10 +653,41 @@ impl SymbolLayout {
             // Getting this wrong writes one label's per-frame state over another's, which draws
             // as a label that will not fade and errors nowhere.
             let base = buffers.append(&built);
-            laid.extend(entries.into_iter().map(|mut entry| {
+            let mut shifted = entries.into_iter().map(|mut entry| {
                 entry.vertices = entry.vertices.start + base..entry.vertices.end + base;
                 entry
-            }));
+            });
+
+            if self.placement.along_line() {
+                // A line label is laid out once per *repetition* along its road, so there is no
+                // one-to-one to keep. Icons are point-placed only, so nothing needs one here.
+                laid.extend(shifted);
+            } else {
+                // A point label is laid out exactly once, so the output can be kept one-to-one
+                // with `pending` by putting a placeholder where each text-less symbol belongs.
+                // `lay_out_icons` finds an icon's label by index, and a list that skipped
+                // entries would silently pair every icon after the first text-less symbol with
+                // the wrong one.
+                for pending in run {
+                    if pending.text.is_empty() {
+                        laid.push(LaidOut {
+                            anchor: match pending.anchoring {
+                                Anchoring::Point(anchor) => anchor,
+                                Anchoring::Line(_) => (0.0, 0.0),
+                            },
+                            // An empty extent places as nothing, which is what a symbol with no
+                            // text should reserve.
+                            extent: (0.0, 0.0, 0.0, 0.0),
+                            glyphs: 0,
+                            content_margins: None,
+                            segment: 0,
+                            vertices: buffers.vertices.len()..buffers.vertices.len(),
+                        });
+                    } else if let Some(entry) = shifted.next() {
+                        laid.push(entry);
+                    }
+                }
+            }
         }
 
         (buffers, laid)

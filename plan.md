@@ -1468,6 +1468,20 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   divided by the pixel ratio, so a 2x shield's border is the same size on screen as a 1x one's;
   and they scale with the box where `text-padding` does not, which is why the two are separate
   arguments rather than summed.
+  Wiring it through the layout took a correspondence that had quietly stopped holding. An icon
+  has to find *its own* label to be fitted to it, and the obvious index — position in the
+  laid-out list — stopped matching position in `pending` the moment icon-only symbols became
+  possible, because `lay_out` skipped the ones that shape no text. Nothing failed: the styles in
+  the tests all had text for every feature. So `lay_out` now answers one entry per pending for
+  point placement, with an empty extent where a symbol has no text, and an empty extent places as
+  nothing — which is what a symbol with no text should reserve anyway.
+  Point placement only. A *line* label is laid out once per repetition along its road, so there
+  is no one-to-one to keep and nothing needs one: icons are point-placed. Making the line path
+  one-to-one as well silently dropped every repetition after the first, which showed up as the
+  spacing test's label count halving rather than as anything about icons.
+  `icon-text-fit-padding` is in the spec's CSS order — top, right, bottom, left — and not the
+  top-bottom-left-right the extents here use. Reading one as the other rotates the padding a
+  quarter turn, which is a shield fatter above than beside its number.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

@@ -325,6 +325,12 @@ pub struct LaidOut {
     pub extent: (f32, f32, f32, f32),
     /// How many glyphs it drew.
     pub glyphs: usize,
+    /// An icon's margins between its content box and its own edges, in logical pixels.
+    ///
+    /// `None` for text and for an icon whose sprite names no content box. Collision adds them,
+    /// because after `icon-text-fit` the extent above is the *content* area and the drawn picture
+    /// reaches further out by its border.
+    pub content_margins: Option<(f32, f32, f32, f32)>,
     /// Which segment of its line the anchor falls on.
     ///
     /// mbgl's `anchorSegment`, and the projection cannot do without it: walking a line from a
@@ -430,6 +436,7 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
             anchor: label.anchor,
             extent: (shaping.top, shaping.bottom, shaping.left, shaping.right),
             glyphs: buffers.glyphs() - before,
+            content_margins: None,
             segment: 0,
             vertices: before * 4..buffers.vertices.len(),
         });
@@ -602,6 +609,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                 anchor: anchor.point,
                 extent: (shaping.top, shaping.bottom, shaping.left, shaping.right),
                 glyphs: buffers.glyphs() - before,
+                content_margins: None,
                 segment: anchor.segment,
                 vertices: before * 4..buffers.vertices.len(),
             });
@@ -620,6 +628,12 @@ pub struct IconLabel {
     pub anchor: (f32, f32),
     /// How this feature's icon is set.
     pub options: IconOptions,
+    /// The shaped label this icon is drawn around, as `(top, bottom, left, right)`.
+    ///
+    /// `None` for an icon with no text, which is most markers. `icon-text-fit` needs it and does
+    /// nothing without it: an icon told to stretch to a label that is not there has no size to
+    /// stretch to, so it keeps its own.
+    pub text: Option<(f32, f32, f32, f32)>,
 }
 
 /// How a symbol layer draws its icons.
@@ -633,6 +647,11 @@ pub struct IconOptions {
     pub rotate: f32,
     /// Which part of the icon touches the anchor.
     pub anchor: tessella_glyph::shaping::Anchor,
+    /// `icon-text-fit`: which of the icon's axes stretch around the label.
+    pub text_fit: tessella_glyph::quads::IconTextFit,
+    /// `icon-text-fit-padding`, in logical pixels, ordered top, right, bottom, left as the spec
+    /// writes it.
+    pub text_fit_padding: [f32; 4],
 }
 
 impl Default for IconOptions {
@@ -645,6 +664,8 @@ impl Default for IconOptions {
             offset: [0.0, 0.0],
             rotate: 0.0,
             anchor: tessella_glyph::shaping::Anchor::Center,
+            text_fit: tessella_glyph::quads::IconTextFit::None,
+            text_fit_padding: [0.0; 4],
         }
     }
 }
@@ -685,7 +706,39 @@ pub fn build_icons(
             continue;
         }
 
-        let placed = shape_icon(size, label.options.offset, label.options.anchor);
+        let mut placed = shape_icon(size, label.options.offset, label.options.anchor);
+
+        // Stretch it around the label, if the layer says to and there is a label to stretch to.
+        // The sprite then constrains how far that stretch may distort it.
+        if label.options.text_fit != tessella_glyph::quads::IconTextFit::None
+            && let Some(text) = label.text
+        {
+            let [top, right, bottom, left] = label.options.text_fit_padding;
+            placed = tessella_glyph::quads::fit_icon_to_text(
+                placed,
+                size,
+                text,
+                label.options.text_fit,
+                (top, bottom, left, right),
+                label.options.offset,
+                1.0,
+            );
+            if let Some(content) = position.content {
+                #[allow(clippy::cast_possible_truncation)]
+                let content = (
+                    content.left as f32,
+                    content.top as f32,
+                    content.right as f32,
+                    content.bottom as f32,
+                );
+                placed = tessella_glyph::quads::apply_text_fit(
+                    placed,
+                    content,
+                    position.text_fit_width,
+                    position.text_fit_height,
+                );
+            }
+        }
         // The *padded* rectangle, which is a pixel larger than the icon on every side and is
         // exactly what the quad's border covers.
         let quad = icon_quad(placed, position.padded_rect, label.options.rotate);
@@ -712,10 +765,18 @@ pub fn build_icons(
 
         // The *box*, not the quad: collision measures what the icon occupies and the quad is a
         // pixel larger on every side for sampling.
+        // The margins only mean something once fitting has made the extent a content area. An
+        // unfitted icon's extent already *is* its picture, and adding them would reserve a
+        // border twice.
+        let margins = (label.options.text_fit != tessella_glyph::quads::IconTextFit::None
+            && label.text.is_some())
+        .then(|| position.content_margins());
+
         out.push(LaidOut {
             anchor: label.anchor,
             extent: (placed.top, placed.bottom, placed.left, placed.right),
             glyphs: buffers.glyphs() - before,
+            content_margins: margins,
             segment: 0,
             vertices: before * 4..buffers.vertices.len(),
         });

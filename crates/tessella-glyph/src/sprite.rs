@@ -128,9 +128,37 @@ pub struct IconPosition {
     pub pixel_ratio: f64,
     /// Whether it is a distance field.
     pub sdf: bool,
+    /// The box text is laid into, in the sprite's own pixels.
+    pub content: Option<Content>,
+    /// How the icon may stretch horizontally around that text.
+    pub text_fit_width: Option<TextFit>,
+    /// And vertically.
+    pub text_fit_height: Option<TextFit>,
 }
 
 impl IconPosition {
+    /// The margins between the content box and the icon's own edges, in logical pixels.
+    ///
+    /// Zero when the sprite names no content box. Ordered top, bottom, left, right.
+    #[must_use]
+    pub fn content_margins(&self) -> (f32, f32, f32, f32) {
+        let Some(content) = self.content else {
+            return (0.0, 0.0, 0.0, 0.0);
+        };
+        let (width, height) = self.display_size();
+        #[allow(clippy::cast_possible_truncation)]
+        crate::quads::content_padding(
+            (width as f32, height as f32),
+            (
+                content.left as f32,
+                content.top as f32,
+                content.right as f32,
+                content.bottom as f32,
+            ),
+            self.pixel_ratio as f32,
+        )
+    }
+
     /// The icon's size in logical pixels: the padding removed and the ratio divided out.
     ///
     /// mbgl's `ImagePosition::displaySize`. Both steps matter — leaving the padding in draws
@@ -752,6 +780,9 @@ impl IconAtlas {
             },
             pixel_ratio: sprite.pixel_ratio,
             sdf: sprite.sdf,
+            content: sprite.content,
+            text_fit_width: sprite.text_fit_width,
+            text_fit_height: sprite.text_fit_height,
         })
     }
 }
