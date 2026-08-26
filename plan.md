@@ -1653,6 +1653,29 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   Both the test and the reservation use the thinned set. Reserving every circle while testing a
   thinned one would make a label block more than it checked against, which reads as a map that
   thins out as it fills rather than as an asymmetry.
+  Bidirectional text then stops being wrong. `unicode-bidi` had been a declared dependency of
+  `tessella-layout` that nothing called, so Hebrew and Arabic were laid out in the order they are
+  *stored* rather than the order they are read — every such label drawn backwards. That is not a
+  missing feature but a wrong answer, and the kind a reader who does not know the script cannot
+  see: every letter is correct and the word is not.
+  Runs, not characters. A line is cut into stretches of one direction and the stretches laid out
+  in visual order, each right-to-left one reversed within itself. Reversing the whole line instead
+  puts an embedded Latin word or a number backwards — which looks *nearly* right, and is what a
+  simpler implementation does; mbgl's own `ReverseArabic` is that case, since digits are their own
+  bidi class and lead the display line while the letters around them do not.
+  Reordering happens after line breaking and not before, which is mbgl's order and its note:
+  breaking is decided on the logical order. And it carries each character's *advance* with it —
+  the trap in reordering a shaped line rather than a string, since a reorder that moved codepoints
+  and left the widths behind would set every right-to-left label with its letters spaced by their
+  neighbours' widths.
+  A line the algorithm leaves alone is borrowed rather than rebuilt. Most labels on most maps are
+  left-to-right and shaping runs per label per tile, so that is the difference between the pass
+  being free for them and costing an allocation each.
+  Arabic *shaping* — the contextual letter forms, mbgl's `applyArabicShaping` over ICU's
+  `u_shapeArabic` — is the remaining half and is not ported. Arabic now reorders correctly and
+  each letter is drawn in its isolated form rather than joined to its neighbours. mbgl's
+  `BiDi.ArabicShaping`, `Tashkeel` and `MixedShaping` state the exact strings, so the oracle for
+  it exists whenever it is picked up.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

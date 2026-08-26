@@ -441,6 +441,66 @@ fn justify_line(glyphs: &mut [PositionedGlyph], last_advance: f32, justify: f32)
     }
 }
 
+/// Reorders one line's characters from logical order into display order.
+///
+/// The Unicode bidirectional algorithm, UAX #9, through `unicode-bidi`. Text arrives in the
+/// order it is *stored* — which for Hebrew and Arabic is the order it is read, right to left —
+/// and a shaper that positioned it as stored draws every such label backwards. That is not a
+/// missing feature but a wrong answer: the letters are all correct and the word is not.
+///
+/// Runs, not characters. A line is cut into stretches of one direction and the stretches are
+/// laid out in visual order, each right-to-left one reversed within itself; reversing the whole
+/// line instead would put an embedded Latin word or a number backwards, which is the failure
+/// that looks *nearly* right. mbgl reaches the same place through ICU's `ubidi_setLine` and
+/// `ubidi_getVisualRun`.
+///
+/// Left alone when the line is entirely left-to-right, which is most of them: the algorithm's
+/// answer is the identity there, and building a string to be told so is work for nothing.
+///
+/// Arabic *shaping* — the contextual letter forms — is a separate step mbgl runs before this one
+/// and is not ported. Without it Arabic reorders correctly and each letter is drawn in its
+/// isolated form rather than joined to its neighbours.
+#[must_use]
+pub fn reorder(line: &[Char]) -> std::borrow::Cow<'_, [Char]> {
+    use std::borrow::Cow;
+
+    let text: String = line
+        .iter()
+        .filter_map(|character| char::from_u32(character.codepoint))
+        .collect();
+    // A codepoint that is not a character cannot be reordered against, and the mapping below
+    // depends on the two sequences having the same length.
+    if text.chars().count() != line.len() {
+        return Cow::Borrowed(line);
+    }
+
+    let info = unicode_bidi::ParagraphBidiInfo::new(&text, None);
+    if !info.has_rtl() {
+        return Cow::Borrowed(line);
+    }
+
+    // Byte offsets to positions in `line`, since the runs are byte ranges and the characters are
+    // not one byte each — the scripts this exists for are two and three bytes in UTF-8.
+    let mut at_byte = vec![0usize; text.len() + 1];
+    for (index, (offset, _)) in text.char_indices().enumerate() {
+        at_byte[offset] = index;
+    }
+    at_byte[text.len()] = line.len();
+
+    let (levels, runs) = info.visual_runs(0..text.len());
+    let mut out = Vec::with_capacity(line.len());
+    for run in runs {
+        let (from, to) = (at_byte[run.start], at_byte[run.end]);
+        if levels[run.start].is_rtl() {
+            out.extend(line[from..to].iter().rev().copied());
+        } else {
+            out.extend_from_slice(&line[from..to]);
+        }
+    }
+
+    Cow::Owned(out)
+}
+
 /// Lays a label out: breaks it into lines, places its glyphs, and aligns the result.
 ///
 /// A transcription of mbgl's `shapeLines` for horizontal text in one font stack. Vertical
@@ -461,7 +521,10 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
     let line_count = broken.len();
 
     for line in &broken {
-        let line = trim(line);
+        // Logical order until here; display order from here on. Breaking is decided on the
+        // logical order — mbgl's note, and the reason this is not done before `split_lines`.
+        let line = reorder(trim(line));
+        let line = &*line;
         let mut glyphs: Vec<PositionedGlyph> = Vec::with_capacity(line.len());
         let mut x = 0.0f32;
         let mut last_advance = 0.0f32;

@@ -14,7 +14,6 @@ publish = false
 earcutr.workspace = true
 libm.workspace = true
 rustybuzz.workspace = true
-unicode-bidi.workspace = true
 unicode-linebreak.workspace = true
 tessella-glyph.workspace = true
 tessella-style.workspace = true

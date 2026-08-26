@@ -1036,6 +1036,7 @@ dependencies = [
  "tessella-source",
  "tessella-storage",
  "thiserror",
+ "unicode-bidi",
  "zune-png",
 ]
 
@@ -1052,7 +1053,6 @@ dependencies = [
  "tessella-style",
  "tessella-tile",
  "thiserror",
- "unicode-bidi",
  "unicode-linebreak",
 ]
 

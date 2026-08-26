@@ -14,6 +14,7 @@ publish = false
 fontdue.workspace = true
 zune-png = { workspace = true, optional = true }
 serde_json.workspace = true
+unicode-bidi.workspace = true
 tessella-source.workspace = true
 tessella-storage.workspace = true
 thiserror.workspace = true
