@@ -1564,6 +1564,25 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   viewport that is *not a number*: a resize arriving mid-flight is where one comes from, and the
   guard is a negated `>` because `<= 0` accepts a NaN and would put one in every matrix of the
   frame.
+  The label planes follow it, and the map-aligned branch that was left out for want of a camera
+  now has one. The two branches are different *kinds* of matrix, which is the thing to hold on
+  to: a viewport-aligned label is laid out in screen pixels, so its plane is a projection and
+  carries the tile matrix, while a map-aligned one lies flat on the ground and is laid out in
+  tile units, so its plane is a *scale* and carries no camera at all — the tile matrix already
+  places it. Folding the projection into the second would place the label twice.
+  `text-pitch-alignment` and `text-rotation-alignment` are separate properties because a label
+  can lie flat *and* stay upright, which a road name on a tilted map is; so the bearing is undone
+  in the plane when the label does not turn with the map, and left alone when it does.
+  What holds the two halves together is that they are inverses *through the tile*: a point taken
+  into the label plane and back must land where it started. That is the assertion worth having,
+  because getting one of the two rotations' signs wrong satisfies every structural check —
+  right scale, right zeros, right translation — and fails only this. Verified by flipping the
+  sign, which failed it alone.
+  One hazard is written down rather than fixed: `pixels_to_tile_units` here and `ubo::line_ratio`
+  compute reciprocals of the same quantity, one through the system libm this crate links against
+  and one through the `libm` *crate* the `no_std` one uses, and the two are free to round
+  differently in the last bit. Nothing compares them today. If a line width and a pitched label's
+  plane ever have to agree exactly, that is the seam to fold together first.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

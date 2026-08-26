@@ -563,6 +563,40 @@ pub fn settled(view: &ViewTransform) -> ViewTransform {
         ..*view
     }
 }
+/// mbgl's in-place `matrix::rotate_z`.
+///
+/// Only the first two columns turn; the last two are the z axis and the translation, which a
+/// rotation about z leaves alone. Written out rather than composed from a rotation matrix and a
+/// multiply for the reason the rest of this module is — that would touch sixteen elements where
+/// this touches eight, and the two agree to within rounding rather than to the bit.
+#[must_use]
+pub fn rotate_z(a: &Mat4, radians: f64) -> Mat4 {
+    let (sin, cos) = radians.sin_cos();
+    let mut out = *a;
+    for row in 0..4 {
+        let (first, second) = (a[row], a[4 + row]);
+        out[row] = first * cos + second * sin;
+        out[4 + row] = second * cos - first * sin;
+    }
+    out
+}
+
+/// mbgl's `UnwrappedTileID::pixelsToTileUnits`, for one pixel.
+///
+/// How many tile units a screen pixel spans, at a zoom, for a tile of a given level. In `f32`
+/// throughout because mbgl computes it that way and the value reaches a matrix a shader reads —
+/// promoting it to `f64` here would be more accurate and less faithful.
+#[must_use]
+pub fn pixels_to_tile_units(z: u8, zoom: f64) -> f64 {
+    #[allow(clippy::cast_possible_truncation)]
+    let (zoom, level) = (zoom as f32, f32::from(z));
+    let units = EXTENT_F32 / (512.0f32 * (zoom - level).exp2());
+    f64::from(units)
+}
+
+/// The tile extent, as an `f32`, which is the type mbgl's ratio is computed in.
+const EXTENT_F32: f32 = 8192.0;
+
 /// mbgl's `getLabelPlaneMatrix`, for a label aligned to the viewport.
 ///
 /// The space a line label's glyphs are walked along. Symbols are laid out in *screen* units and
@@ -570,15 +604,34 @@ pub fn settled(view: &ViewTransform) -> ViewTransform {
 /// layout measured in: half the viewport on each axis, y flipped, shifted so the origin is the
 /// top left, then through the tile's own projection.
 ///
-/// Only the viewport-aligned branch. `text-pitch-alignment` defaults to `viewport` for point
-/// placement, and the map-aligned branch scales by tile units per pixel and rotates by the
-/// bearing — which needs a bearing this build refuses (DR-19's second qualification), so
-/// producing it would put a matrix on the wire nothing has checked.
+/// The viewport-aligned branch, which is `text-pitch-alignment`'s default for point placement.
+/// See [`label_plane_matrix_on_map`] for the other.
 #[must_use]
 pub fn label_plane_matrix(pos_matrix: &Mat4, width: f64, height: f64) -> Mat4 {
     let mut m = scale(&identity(), width / 2.0, -(height / 2.0), 1.0);
     translate_in_place(&mut m, 1.0, -1.0, 0.0);
     multiply(&m, pos_matrix)
+}
+
+/// The same, for a label pitched *with the map*.
+///
+/// A label lying flat on the ground is laid out in tile units rather than in screen pixels, so
+/// the plane is a scale and not a projection — the tile matrix already places it. That is why
+/// this takes no `pos_matrix`: pitched with the map, the label plane *is* the tile's plane.
+///
+/// `rotate_with_map` is `text-rotation-alignment`. When the label pitches with the map but does
+/// not rotate with it, the bearing has to be undone here so the text stays upright while lying
+/// flat — the case a road name on a tilted map is, and the reason the two alignments are
+/// separate properties rather than one.
+#[must_use]
+pub fn label_plane_matrix_on_map(z: u8, zoom: f64, bearing: f64, rotate_with_map: bool) -> Mat4 {
+    let units = pixels_to_tile_units(z, zoom);
+    let m = scale(&identity(), 1.0 / units, 1.0 / units, 1.0);
+    if rotate_with_map {
+        m
+    } else {
+        rotate_z(&m, bearing)
+    }
 }
 
 /// mbgl's `getGlCoordMatrix`, for a label aligned to the viewport.
@@ -591,6 +644,28 @@ pub fn gl_coord_matrix(width: f64, height: f64) -> Mat4 {
     let mut m = scale(&identity(), 1.0, -1.0, 1.0);
     translate_in_place(&mut m, -1.0, -1.0, 0.0);
     scale(&m, 2.0 / width, 2.0 / height, 1.0)
+}
+
+/// The same, for a label pitched with the map.
+///
+/// The inverse of [`label_plane_matrix_on_map`] composed with the tile's own projection, which
+/// is what makes it carry `pos_matrix` where the viewport version does not: a flat label's plane
+/// is the tile's, so getting back to clip means going through the tile.
+#[must_use]
+pub fn gl_coord_matrix_on_map(
+    pos_matrix: &Mat4,
+    z: u8,
+    zoom: f64,
+    bearing: f64,
+    rotate_with_map: bool,
+) -> Mat4 {
+    let units = pixels_to_tile_units(z, zoom);
+    let m = scale(pos_matrix, units, units, 1.0);
+    if rotate_with_map {
+        m
+    } else {
+        rotate_z(&m, -bearing)
+    }
 }
 
 /// The 4x4 identity.
