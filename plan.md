@@ -1511,6 +1511,30 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   thousand square. The second is deliberately sized to sit *inside* `zune-png`'s own cap and
   outside this one — a larger header is refused by the decoder instead, which would let the test
   pass without exercising the bound it is about.
+  Every parser that reads bytes off a network then gets run against bytes it was not written for.
+  Not `cargo-fuzz`: libFuzzer needs nightly and DR-17 pins this workspace to the stable toolchain
+  the target's Yocto release carries, so a fuzz target CI cannot run is a fuzz target nobody
+  runs. The mutation happens in a test instead — deterministic, seeded by a constant, and going
+  with every commit. A weaker search that runs a thousand times more often, which for the
+  failures this is about is the better trade. A `fuzz/` directory for depth is still worth
+  adding; neither substitutes for the other.
+  The contract is *return, either way*. `forbid(unsafe_code)` holds across all ten crates, so a
+  malformed input cannot corrupt memory; what it can do is panic — which on a worker takes down a
+  tile build, and which a hostile origin can then trigger at will — or allocate from a number it
+  was told rather than one it checked. On a device with one map and no supervisor to restart it,
+  both are denial of service.
+  Seven parsers: the vector tile decoder and a walk of what it returns, the glyph range, the
+  sprite index, the sprite sheet, GeoJSON, the style document with its filters and paint
+  resolution, and the PMTiles header. Nothing panicked, which is a result worth being careful
+  about — a harness that has never caught anything may be one that cannot. So the harness is
+  tested too: it is handed a parser that panics on a byte the mutations reach, and asserted to
+  report it. `catch_unwind` is doing the swallowing, and one that caught a panic and forgot to
+  re-raise it would be silent about every real one.
+  The seeds are the *conformance* fixtures rather than real tiles, and not only because it cut
+  the run from thirty seconds to eight. A bit flip in half a megabyte lands on a coordinate
+  almost every time; in fifty bytes it lands on a tag, a length or a geometry command, which is
+  where a decoder breaks. One real tile is kept beside them for the shapes a hand-made fixture
+  does not have.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 
