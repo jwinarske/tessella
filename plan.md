@@ -1989,6 +1989,8 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   A cold start passes the whole-tile mask explicitly rather than defaulting to it, because a
   cover *is* one zoom level and saying so is the point — the substitution case belongs to the
   sweep, and that is where the mask is computed over a renderable set.
+  Importing an offline pack downloaded by another client is out of this tree, in a separate
+  crate that is not part of this repository.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

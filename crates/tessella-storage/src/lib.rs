@@ -57,6 +57,7 @@ pub mod offline;
 pub mod pmtiles;
 pub mod shared;
 pub mod source;
+pub mod store_path;
 pub mod tileset;
 pub mod url;
 
@@ -76,5 +77,6 @@ pub use offline::{Area, AreaError, Estimate, Region, SourceContribution, SourceK
 pub use pmtiles::source::PmtilesFileSource;
 pub use shared::{Abandoned, ShareStats, Shared};
 pub use source::{Coalescing, FetchError, Fetched, FileSource, Response, Router};
+pub use store_path::{StorePathError, from_env, prepare};
 pub use tileset::{ResolveError, TileSet, resolve};
 pub use url::{Scheme, ZoomRange, expand, fetch_zoom, percent_encode};
