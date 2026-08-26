@@ -141,6 +141,40 @@ pub fn font_stack(layer: &Layer, zoom: f64, feature: &dyn Feature) -> Vec<String
     })
 }
 
+/// The sprite a feature's `icon-image` names, if any.
+///
+/// The icon half of [`label`], and it has to be separate rather than a field on it: a symbol may
+/// be an icon with no text at all — every POI marker on a map is one — so a builder that resolved
+/// the icon only when there was text would draw none of them.
+///
+/// Tokens are resolved the same way, which is what makes `{maki}-15` work: the sprite name is
+/// built from the feature's own properties, and a feature missing that property names no sprite
+/// rather than one called `-15`.
+#[must_use]
+pub fn icon_image(layer: &Layer, zoom: f64, feature: &dyn Feature) -> Option<String> {
+    let field = layer.layout.get("icon-image")?;
+
+    let name = match field {
+        PropertyValue::Literal(Value::String(template)) => replace_tokens(template, feature),
+        PropertyValue::Literal(other) => stringify(other),
+        PropertyValue::Expression(expression) => {
+            let value = evaluate(expression.value(), zoom, feature)?;
+            match value {
+                Value::String(name) => replace_tokens(&name, feature),
+                other => stringify(&other),
+            }
+        }
+    };
+
+    // An empty name is no icon. Unlike a label it is not trimmed: a sprite name is a key into the
+    // index and leading space in one is a name that simply is not there, which is a missing icon
+    // rather than a malformed one.
+    if name.is_empty() {
+        return None;
+    }
+    Some(name)
+}
+
 /// The label a feature produces in this layer, if any.
 ///
 /// `None` when the layer has no `text-field`, when the field resolves to nothing, or when the

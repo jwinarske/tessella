@@ -26,6 +26,8 @@ use tessella_style::document::PropertyValue;
 use tessella_style::expression::{Expression, Feature};
 use tessella_style::{Layer, Value};
 
+use alloc::collections::BTreeSet;
+
 use tessella_glyph::fonts::Fonts;
 
 use crate::anchors::EXTENT;
@@ -122,11 +124,17 @@ pub enum Anchoring {
     Line(Vec<(f32, f32)>),
 }
 
-/// One feature's label, resolved but not shaped.
+/// One feature's symbol, resolved but not shaped.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pending {
-    /// What it says, after tokens and expressions.
+    /// What it says, after tokens and expressions. Empty for an icon with no label.
     pub text: String,
+    /// The sprite its `icon-image` names, if it has one.
+    ///
+    /// A symbol is a label, an icon, or both. Most markers on a map are the middle case, which is
+    /// why this is not a field of the text: a builder that resolved the icon only where there was
+    /// text would draw none of them.
+    pub icon: Option<String>,
     /// The font stack it is set in.
     pub fonts: Vec<String>,
     /// Where it goes.
@@ -203,12 +211,20 @@ impl SymbolLayout {
         feature: &dyn Feature,
         rings: &[Vec<(f32, f32)>],
     ) {
-        let Some(label) = symbol::label(layer, zoom, feature) else {
-            return;
-        };
-        if label.text.is_empty() {
+        let label = symbol::label(layer, zoom, feature);
+        let icon = symbol::icon_image(layer, zoom, feature);
+
+        // A symbol needs one half or the other. Neither is the common case — most features of a
+        // symbol source have no name and no icon — and it is why this is a filter rather than an
+        // error.
+        if label.as_ref().is_none_or(|label| label.text.is_empty()) && icon.is_none() {
             return;
         }
+        let fonts = label
+            .as_ref()
+            .map(|label| label.fonts.clone())
+            .unwrap_or_default();
+        let text = label.map(|label| label.text).unwrap_or_default();
 
         for ring in rings {
             let anchoring = if self.placement.along_line() {
@@ -235,8 +251,9 @@ impl SymbolLayout {
             };
 
             self.pending.push(Pending {
-                text: label.text.clone(),
-                fonts: label.fonts.clone(),
+                text: text.clone(),
+                icon: icon.clone(),
+                fonts: fonts.clone(),
                 anchoring,
                 symbol: text_options(layer, zoom, Some(feature)),
             });
@@ -251,7 +268,7 @@ impl SymbolLayout {
     pub fn dependencies(&self) -> GlyphDependencies {
         let mut out = GlyphDependencies::new();
         for pending in &self.pending {
-            if pending.fonts.is_empty() {
+            if pending.fonts.is_empty() || pending.text.is_empty() {
                 continue;
             }
             out.entry(pending.fonts.clone())
@@ -259,6 +276,20 @@ impl SymbolLayout {
                 .extend(pending.text.chars().map(|character| character as u32));
         }
         out
+    }
+
+    /// The sprites this layout needs, which is what the sprite sheet is looked up by.
+    ///
+    /// The icon counterpart of [`Self::dependencies`]. A name is not checked against the index
+    /// here — the index may not have arrived — so this is what the layer *asked for* rather than
+    /// what exists, and an icon the sheet does not have is a layout-time miss rather than a
+    /// resolution failure.
+    #[must_use]
+    pub fn icons(&self) -> BTreeSet<String> {
+        self.pending
+            .iter()
+            .filter_map(|pending| pending.icon.clone())
+            .collect()
     }
 
     /// Whether this layer draws anything on this tile.
@@ -321,6 +352,7 @@ impl SymbolLayout {
             let (built, entries) = if self.placement.along_line() {
                 let labels: Vec<LineLabel> = run
                     .iter()
+                    .filter(|pending| !pending.text.is_empty())
                     .filter_map(|pending| match &pending.anchoring {
                         Anchoring::Line(line) => Some(LineLabel {
                             text: pending.text.to_string(),
@@ -337,6 +369,7 @@ impl SymbolLayout {
             } else {
                 let labels: Vec<Label> = run
                     .iter()
+                    .filter(|pending| !pending.text.is_empty())
                     .filter_map(|pending| match pending.anchoring {
                         Anchoring::Point(anchor) => Some(Label {
                             text: pending.text.to_string(),

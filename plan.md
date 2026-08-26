@@ -1251,6 +1251,19 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   two granularities belong to different layers and nothing here can widen the second without
   hand-rolling a number parser. For an index no tool would emit, failing loudly beats half
   loading.
+  `icon-image` resolution follows, and it turned up a structural assumption rather than a bug in
+  the small: the tile builder resolved `text-field` first and returned early when a feature had
+  no name, so a layer with an `icon-image` and no `text-field` produced *nothing at all*. Most
+  markers on a map are exactly that. A symbol needs one half or the other, not the text half
+  specifically, and the resolvers are separate for the same reason.
+  Tokens resolve the same way in both halves and the consequence is not the same. `{name}` as a
+  `text-field` on a feature with no name is an empty label and nothing to draw; `{name}-marker`
+  as an `icon-image` is the sprite `-marker`, because the token is a `get`, an absent property is
+  an empty string, and the surrounding literal survives. mbgl does that too and then misses at
+  lookup — so `icons()` is what a layer *asked for* rather than what the sheet has, and a missing
+  icon is a layout-time miss rather than a resolution failure. The obvious reading is the other
+  one, which is why it is pinned: the two rules look identical until a style writes
+  `{name}-marker` and gets an icon it did not mean instead of no icon at all.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

@@ -435,3 +435,123 @@ fn a_varying_size_does_not_reorder_the_buffer() {
     }
     assert_eq!(next, buffers.vertices.len());
 }
+
+/// A symbol can be an icon with no label.
+///
+/// Most markers on a map are exactly that, and the builder dropped every one of them: it
+/// resolved `text-field` first and returned early when a feature had no name, so a layer with
+/// `icon-image` and no `text-field` produced nothing at all. A symbol needs one half or the
+/// other, not the text half specifically.
+#[test]
+fn an_icon_without_a_label_is_still_a_symbol() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "l", "type": "symbol", "source": "v", "source-layer": "road",
+                        "layout": {"icon-image": "{type}-marker"}}]}"#,
+    )
+    .expect("a style");
+
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+
+    assert!(!layout.is_empty(), "an icon-only layer produced no symbols");
+    assert!(
+        layout.pending.iter().all(|pending| pending.text.is_empty()),
+        "a layer with no text-field produced text"
+    );
+    assert_eq!(
+        layout.dependencies().len(),
+        0,
+        "an icon asked for glyph ranges"
+    );
+
+    let icons = layout.icons();
+    assert!(icons.contains("primary-marker"), "{icons:?}");
+    assert!(
+        icons.iter().all(|name| name.ends_with("-marker")),
+        "a token was left unresolved: {icons:?}"
+    );
+}
+
+/// A feature with neither a name nor an icon produces nothing.
+///
+/// The other side of the same rule. Most features of a symbol source have neither, so this is
+/// the common path rather than an edge: a layer that emitted a symbol per feature regardless
+/// would put an empty collision box on every road in the tile.
+#[test]
+fn a_feature_with_neither_half_produces_nothing() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "l", "type": "symbol", "source": "v", "source-layer": "road",
+                        "layout": {"text-field": "{name}", "icon-image": "{name}",
+                                   "text-font": ["TestFont"]}}]}"#,
+    )
+    .expect("a style");
+
+    // The fixture's roads carry `type` and not `name`, so both halves resolve to nothing.
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+    assert!(layout.is_empty(), "{} symbols", layout.pending.len());
+    assert!(layout.icons().is_empty());
+}
+
+/// A token in an icon name resolves to *something* even when its property is absent.
+///
+/// `{name}-marker` on a feature with no name is the sprite `-marker`, not nothing — the token is
+/// a `get` and an absent property is an empty string, so the surrounding literal survives. mbgl
+/// does the same and then misses at lookup, which is why `icons()` is what the layer *asked for*
+/// rather than what the sheet has.
+///
+/// Worth pinning because the obvious reading is the other one: that a token failing should void
+/// the whole name. It does for `text-field`, where an empty label is nothing to draw — and the
+/// two rules look the same until a style writes `{name}-marker` and gets an icon it did not mean
+/// rather than no icon at all.
+#[test]
+fn a_token_that_resolves_to_nothing_still_leaves_its_literal() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "l", "type": "symbol", "source": "v", "source-layer": "road",
+                        "layout": {"icon-image": "{name}-marker"}}]}"#,
+    )
+    .expect("a style");
+
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+    assert_eq!(
+        layout.icons().into_iter().collect::<Vec<_>>(),
+        vec!["-marker".to_string()],
+        "the literal did not survive the empty token"
+    );
+}
+
+/// A symbol with both halves carries both.
+#[test]
+fn a_symbol_can_have_both_halves() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "l", "type": "symbol", "source": "v", "source-layer": "road",
+                        "layout": {"text-field": "{type}", "icon-image": "{type}-shield",
+                                   "text-font": ["TestFont"]}}]}"#,
+    )
+    .expect("a style");
+
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+
+    let with_both = layout
+        .pending
+        .iter()
+        .filter(|pending| !pending.text.is_empty() && pending.icon.is_some())
+        .count();
+    assert_eq!(with_both, layout.pending.len(), "a half went missing");
+
+    // The text half still asks for its glyphs, and the icon half for its sprites.
+    assert_eq!(layout.dependencies().len(), 1, "one font stack");
+    assert!(layout.icons().contains("primary-shield"));
+
+    // And the text still lays out, unaffected by the icon beside it.
+    let (fonts, _) = fonts_for(layout);
+    let (buffers, laid) = layout.lay_out(&fonts);
+    assert!(!laid.is_empty());
+    assert!(!buffers.is_empty());
+}
