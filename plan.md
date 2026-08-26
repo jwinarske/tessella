@@ -1264,6 +1264,19 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   icon is a layout-time miss rather than a resolution failure. The obvious reading is the other
   one, which is why it is pinned: the two rules look identical until a style writes
   `{name}-marker` and gets an icon it did not mean instead of no icon at all.
+  The icon quad follows: mbgl's `shapeIcon` and `getIconQuad`, which are two steps and not one.
+  The box is what collision measures and the quad is what draws, and the quad is a pixel larger
+  on every side — mbgl's comment says why, and it is not a fudge: a ten-pixel icon that is not
+  aligned to the pixel grid covers eleven actual pixels, so a quad sized to the icon clips a
+  sliver off one edge. The pad is on the *quad* and not on the texture rectangle, since the extra
+  pixel samples the atlas padding the atlas already reserves; padding the rectangle instead would
+  sample the neighbouring icon.
+  `shape_icon` takes *logical* pixels, which is the unit the pixel ratio exists to produce.
+  Handing it the sheet size draws every `@2x` icon at twice its size, and that reads as a broken
+  sprite sheet rather than as a unit mix-up — so the conversion is asserted where the two meet.
+  The anchor rule is the text one and catches people out the same way: it names the part of the
+  icon that *touches* the point, so `top` puts the icon below it. Inverted, every marker sits on
+  the wrong side of what it marks, consistently, which looks like a style problem.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

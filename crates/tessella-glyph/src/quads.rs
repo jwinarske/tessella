@@ -22,7 +22,7 @@
 
 use crate::atlas::Rect;
 use crate::pbf::{BORDER, Metrics};
-use crate::shaping::Shaping;
+use crate::shaping::{Anchor, Shaping};
 
 /// How far outside the ink a quad reaches, in pixels.
 ///
@@ -153,4 +153,77 @@ where
     }
 
     quads
+}
+
+/// The one-pixel pad an icon quad carries on every side.
+///
+/// mbgl's comment says it plainly: a ten-pixel icon that is not perfectly aligned to the pixel
+/// grid covers eleven actual pixels, so a quad sized to the icon clips a sliver off one edge.
+/// The pad is on the *quad* and not on the texture rectangle — the extra pixel samples the
+/// atlas padding, which is why the atlas reserves it.
+pub const ICON_QUAD_BORDER: f32 = 1.0;
+
+/// Where an icon sits relative to its anchor, before it becomes a quad.
+///
+/// mbgl's `PositionedIcon::shapeIcon`. Separate from the quad for the same reason shaping is
+/// separate from `glyph_quads`: the box is what collision measures and the quad is what draws,
+/// and the quad is a pixel larger on every side.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PositionedIcon {
+    /// Left edge, relative to the anchor.
+    pub left: f32,
+    /// Top edge.
+    pub top: f32,
+    /// Right edge.
+    pub right: f32,
+    /// Bottom edge.
+    pub bottom: f32,
+}
+
+/// Places an icon of `size` logical pixels against its anchor and offset.
+///
+/// `size` is the sprite's size *after* its pixel ratio — a 48-pixel `@2x` sprite is 24 logical
+/// pixels, and using the sheet size here would draw every retina icon at twice its size.
+#[must_use]
+pub fn shape_icon(size: (f32, f32), offset: [f32; 2], anchor: Anchor) -> PositionedIcon {
+    let (horizontal, vertical) = anchor.alignment();
+    let left = offset[0] - size.0 * horizontal;
+    let top = offset[1] - size.1 * vertical;
+    PositionedIcon {
+        left,
+        top,
+        right: left + size.0,
+        bottom: top + size.1,
+    }
+}
+
+/// The quad an icon draws as.
+///
+/// mbgl's `getIconQuad`. `rotate` is `icon-rotate` in radians, applied about the anchor the way
+/// a glyph's is — which is why it rotates the corners rather than the box: the atlas rectangle
+/// does not turn with the icon.
+#[must_use]
+pub fn icon_quad(icon: PositionedIcon, tex: Rect, radians: f32) -> Quad {
+    let left = icon.left - ICON_QUAD_BORDER;
+    let top = icon.top - ICON_QUAD_BORDER;
+    let right = icon.right + ICON_QUAD_BORDER;
+    let bottom = icon.bottom + ICON_QUAD_BORDER;
+
+    let mut quad = Quad {
+        tl: (left, top),
+        tr: (right, top),
+        bl: (left, bottom),
+        br: (right, bottom),
+        tex,
+        glyph_offset: (0.0, 0.0),
+    };
+
+    if radians != 0.0 {
+        let (sin, cos) = radians.sin_cos();
+        quad.tl = rotate(quad.tl, sin, cos);
+        quad.tr = rotate(quad.tr, sin, cos);
+        quad.bl = rotate(quad.bl, sin, cos);
+        quad.br = rotate(quad.br, sin, cos);
+    }
+    quad
 }
