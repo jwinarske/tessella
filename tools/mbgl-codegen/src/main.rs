@@ -1190,7 +1190,13 @@ fn parse_shader_attributes(text: &str) -> Vec<ShaderTable> {
             if let Some(rest) = line.strip_prefix("AttributeInfo{") {
                 let body = rest.trim_end_matches("},").trim_end_matches('}');
                 let parts: Vec<&str> = body.split(',').map(str::trim).collect();
-                if parts.len() == 3
+                // Three fields, or four: fill-extrusion's static attributes carry a fourth
+                // naming the instance-rate id they share with the instanced shader. Requiring
+                // exactly three silently dropped those two, which left the generated table with
+                // a fill-extrusion shader that declared its data-driven attributes and not its
+                // position — a producer reading it would have emitted a drawable with no
+                // geometry binding at all.
+                if (parts.len() == 3 || parts.len() == 4)
                     && let Ok(binding) = parts[0].parse::<i32>()
                 {
                     let data_type = parts[1].rsplit("::").next().unwrap_or(parts[1]).to_string();

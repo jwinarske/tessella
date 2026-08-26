@@ -219,7 +219,19 @@ pub const DEBUG_SHADER: [ShaderAttribute; 1] = [ShaderAttribute {
 }];
 
 /// Attributes declared by `FillExtrusionPatternShader`.
-pub const FILL_EXTRUSION_PATTERN_SHADER: [ShaderAttribute; 4] = [
+pub const FILL_EXTRUSION_PATTERN_SHADER: [ShaderAttribute; 6] = [
+    ShaderAttribute {
+        binding: 0,
+        declared: AttributeDataType::Short2,
+        attr_id: 0,
+        name: "idFillExtrusionPosVertexAttribute",
+    },
+    ShaderAttribute {
+        binding: 1,
+        declared: AttributeDataType::UShort2,
+        attr_id: 1,
+        name: "idFillExtrusionDecimalsEdAttribute",
+    },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Float,
@@ -247,7 +259,19 @@ pub const FILL_EXTRUSION_PATTERN_SHADER: [ShaderAttribute; 4] = [
 ];
 
 /// Attributes declared by `FillExtrusionShader`.
-pub const FILL_EXTRUSION_SHADER: [ShaderAttribute; 3] = [
+pub const FILL_EXTRUSION_SHADER: [ShaderAttribute; 5] = [
+    ShaderAttribute {
+        binding: 0,
+        declared: AttributeDataType::Short2,
+        attr_id: 0,
+        name: "idFillExtrusionPosVertexAttribute",
+    },
+    ShaderAttribute {
+        binding: 1,
+        declared: AttributeDataType::UShort2,
+        attr_id: 1,
+        name: "idFillExtrusionDecimalsEdAttribute",
+    },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Float4,

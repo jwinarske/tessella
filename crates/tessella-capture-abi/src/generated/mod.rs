@@ -200,6 +200,63 @@ mod tests {
         }
     }
 
+    /// Fill extrusion declares its position, which for a while it did not.
+    ///
+    /// mbgl writes two of its `AttributeInfo`s with a *fourth* field — the instance-rate id the
+    /// static and instanced shaders share — and the generator required exactly three, so those
+    /// two were dropped. The table then described a shader that bound its data-driven colour and
+    /// height and had nowhere to put its vertices: a producer reading it would have emitted a
+    /// drawable with no geometry binding at all, which draws nothing and reports nothing.
+    ///
+    /// Checked here rather than only in the generator because the shape of the failure was a
+    /// *short table*, and a short table is indistinguishable from a shader that genuinely
+    /// declares less. Naming the attributes that must be there is what makes it visible.
+    #[test]
+    fn fill_extrusion_declares_its_position() {
+        for shader in [
+            BuiltIn::FillExtrusionShader,
+            BuiltIn::FillExtrusionPatternShader,
+        ] {
+            let table = attributes(shader);
+            let position = table
+                .iter()
+                .find(|attribute| attribute.name == "idFillExtrusionPosVertexAttribute")
+                .unwrap_or_else(|| panic!("{shader:?} declares no position"));
+            assert_eq!(position.binding, 0, "{shader:?}");
+            assert_eq!(position.attr_id, 0, "{shader:?}");
+            assert_eq!(position.declared, AttributeDataType::Short2, "{shader:?}");
+
+            let decimals = table
+                .iter()
+                .find(|attribute| attribute.name == "idFillExtrusionDecimalsEdAttribute")
+                .unwrap_or_else(|| panic!("{shader:?} declares no decimals/edge-distance"));
+            assert_eq!(decimals.binding, 1, "{shader:?}");
+            assert_eq!(decimals.declared, AttributeDataType::UShort2, "{shader:?}");
+        }
+    }
+
+    /// The fill-extrusion attribute ids are the ones the *instanced* branch of the header gives.
+    ///
+    /// `MLN_USE_FILL_EXTRUSION_INSTANCING` is `(MLN_RENDER_BACKEND_METAL || MLN_RENDER_BACKEND_VULKAN)`,
+    /// and DR-16 settled this build on Vulkan — so the id after `decimals` is
+    /// `idFillExtrusionOutlinePos` and the data-driven three start at 3, not the
+    /// `Normal2D` numbering the other branch would give. Getting the branch wrong shifts every
+    /// data-driven id by one, which binds height where colour belongs.
+    #[test]
+    fn the_fill_extrusion_ids_are_the_instanced_branchs() {
+        let table = attributes(BuiltIn::FillExtrusionShader);
+        let id_of = |name: &str| {
+            table
+                .iter()
+                .find(|attribute| attribute.name == name)
+                .unwrap_or_else(|| panic!("{name} is missing"))
+                .attr_id
+        };
+        assert_eq!(id_of("idFillExtrusionBaseVertexAttribute"), 3);
+        assert_eq!(id_of("idFillExtrusionColorVertexAttribute"), 4);
+        assert_eq!(id_of("idFillExtrusionHeightVertexAttribute"), 5);
+    }
+
     /// A shader with no table is a shader this build has no data for, not one that binds
     /// nothing. The background shader genuinely has attributes; a truly absent one is the
     /// signal that generation missed something.
