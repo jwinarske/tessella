@@ -28,7 +28,7 @@ use std::collections::BTreeMap;
 use serde_json::Value;
 
 /// The largest dimension an icon may have, as mbgl bounds it.
-pub const MAX_DIMENSION: i64 = 1024;
+pub const MAX_DIMENSION: u64 = 1024;
 
 /// The largest pixel ratio, as mbgl bounds it.
 pub const MAX_PIXEL_RATIO: f64 = 10.0;
@@ -80,6 +80,10 @@ pub struct Sprite {
     pub stretch_y: Vec<Stretch>,
     /// Where text goes inside it.
     pub content: Option<Content>,
+    /// How the icon stretches horizontally to fit its text.
+    pub text_fit_width: Option<TextFit>,
+    /// And vertically.
+    pub text_fit_height: Option<TextFit>,
 }
 
 impl Sprite {
@@ -110,8 +114,38 @@ pub enum SpriteError {
     NotAnObject,
 }
 
-fn number(entry: &serde_json::Map<String, Value>, key: &str) -> Option<f64> {
-    entry.get(key)?.as_f64()
+/// The largest value the rectangle fields accept, as mbgl's `getUInt16` bounds it.
+pub const MAX_COORDINATE: u64 = 65_535;
+
+/// One rectangle field, with mbgl's `getUInt16` semantics.
+///
+/// Not a refusal. mbgl reads `x`, `y`, `width` and `height` as unsigned sixteen-bit integers
+/// with a **default of zero**, so a field that is absent, fractional, negative, or above 65535
+/// is logged and becomes zero — and the entry carries on to the bounds check with that zero in
+/// it. That matters in two opposite directions: a missing `width` becomes zero and is refused by
+/// `width <= 0`, while a missing `x` becomes zero and is perfectly valid. `{"width": 32,
+/// "height": 32}` with no origin is an icon at the sheet's top left, and mbgl's own
+/// `SpriteParsingSimpleWidthHeight` says so.
+fn coordinate(entry: &serde_json::Map<String, Value>, key: &str) -> u32 {
+    let Some(value) = entry.get(key) else {
+        return 0;
+    };
+    // `IsUint()` in rapidjson: a non-negative integer. A fractional or negative number is not
+    // one, and falls to the default rather than being rounded towards anything.
+    match value.as_u64() {
+        Some(number) if number <= MAX_COORDINATE => {
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                number as u32
+            }
+        }
+        _ => 0,
+    }
+}
+
+/// One number-typed field, with mbgl's `getDouble` semantics: any number, or the default.
+fn number(entry: &serde_json::Map<String, Value>, key: &str, default: f64) -> f64 {
+    entry.get(key).and_then(Value::as_f64).unwrap_or(default)
 }
 
 fn stretches(entry: &serde_json::Map<String, Value>, key: &str) -> Vec<Stretch> {
@@ -148,6 +182,30 @@ fn content(entry: &serde_json::Map<String, Value>) -> Option<Content> {
     })
 }
 
+/// How an icon's own pixels are stretched to fit the text laid into it.
+///
+/// mbgl's `style::TextFit`. An unrecognized string is `None` — the same as absent — rather than
+/// a default, because the three named behaviours are genuinely different and guessing between
+/// them resizes a shield the wrong way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextFit {
+    /// Scale in both directions as needed.
+    StretchOrShrink,
+    /// Grow only.
+    StretchOnly,
+    /// Keep the aspect ratio.
+    Proportional,
+}
+
+fn text_fit(entry: &serde_json::Map<String, Value>, key: &str) -> Option<TextFit> {
+    match entry.get(key)?.as_str()? {
+        "stretchOrShrink" => Some(TextFit::StretchOrShrink),
+        "stretchOnly" => Some(TextFit::StretchOnly),
+        "proportional" => Some(TextFit::Proportional),
+        _ => None,
+    }
+}
+
 /// Reads one entry, or `None` when it is unusable.
 ///
 /// `sheet` is the image's size, and is what the rectangle is checked against — an entry naming a
@@ -157,46 +215,33 @@ fn content(entry: &serde_json::Map<String, Value>) -> Option<Content> {
 fn read(value: &Value, sheet: Option<(u32, u32)>) -> Option<Sprite> {
     let entry = value.as_object()?;
 
-    let width = number(entry, "width")?;
-    let height = number(entry, "height")?;
-    let x = number(entry, "x")?;
-    let y = number(entry, "y")?;
-    // The spec's default, and the one a sheet without `@2x` uses.
-    let pixel_ratio = number(entry, "pixelRatio").unwrap_or(1.0);
+    let width = coordinate(entry, "width");
+    let height = coordinate(entry, "height");
+    let x = coordinate(entry, "x");
+    let y = coordinate(entry, "y");
+    let pixel_ratio = number(entry, "pixelRatio", 1.0);
 
-    // mbgl's `createStyleImage` bounds, transcribed. Each of these reads as valid JSON and then
-    // goes wrong somewhere else: a zero ratio divides by zero in `logical_size`, a negative
-    // dimension wraps when it reaches an unsigned rectangle, and an oversized one is a sheet
-    // nothing can upload.
-    //
+    // mbgl's `createStyleImage` bounds, transcribed. The rectangle fields cannot be negative or
+    // fractional by the time they arrive — `coordinate` has already turned those into zero — so
+    // what is left to refuse is a zero or oversized dimension, a ratio outside its range, and a
+    // rectangle that does not fit the sheet.
+    if width == 0 || height == 0 {
+        return None;
+    }
+    if u64::from(width) > MAX_DIMENSION || u64::from(height) > MAX_DIMENSION {
+        return None;
+    }
     // Written as a negated `>` rather than as `<=` on purpose, and not for style: `<= 0`
     // *accepts* a NaN, since every comparison against one is false, and would then hand an
     // unsigned cast a value with no defined result. Defensive rather than load-bearing today —
     // JSON has no NaN literal and a number out of range fails the whole document before it
     // reaches here — and the defensive form costs nothing while tidying it does not.
     #[allow(clippy::neg_cmp_op_on_partial_ord)]
-    if !(width > 0.0)
-        || !(height > 0.0)
-        || width > MAX_DIMENSION as f64
-        || height > MAX_DIMENSION as f64
-    {
-        return None;
-    }
-    #[allow(clippy::neg_cmp_op_on_partial_ord)]
     if !(pixel_ratio > 0.0) || pixel_ratio > MAX_PIXEL_RATIO {
-        return None;
-    }
-    if x < 0.0 || y < 0.0 {
-        return None;
-    }
-    // Whole pixels. A fractional rectangle has no meaning against a texture and would round
-    // differently in the two places that read it.
-    if x.fract() != 0.0 || y.fract() != 0.0 || width.fract() != 0.0 || height.fract() != 0.0 {
         return None;
     }
 
     if let Some((sheet_width, sheet_height)) = sheet {
-        let (sheet_width, sheet_height) = (f64::from(sheet_width), f64::from(sheet_height));
         if x >= sheet_width || y >= sheet_height {
             return None;
         }
@@ -205,17 +250,18 @@ fn read(value: &Value, sheet: Option<(u32, u32)>) -> Option<Sprite> {
         }
     }
 
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     Some(Sprite {
-        x: x as u32,
-        y: y as u32,
-        width: width as u32,
-        height: height as u32,
+        x,
+        y,
+        width,
+        height,
         pixel_ratio,
         sdf: entry.get("sdf").and_then(Value::as_bool).unwrap_or(false),
         stretch_x: stretches(entry, "stretchX"),
         stretch_y: stretches(entry, "stretchY"),
         content: content(entry),
+        text_fit_width: text_fit(entry, "textFitWidth"),
+        text_fit_height: text_fit(entry, "textFitHeight"),
     })
 }
 

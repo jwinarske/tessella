@@ -75,6 +75,10 @@ fn the_bounds_are_mbgls() {
         ("zero height", r#"{"x":0,"y":0,"width":24,"height":0}"#),
         ("negative width", r#"{"x":0,"y":0,"width":-1,"height":24}"#),
         (
+            "a width past the field's range",
+            r#"{"x":0,"y":0,"width":65536,"height":24}"#,
+        ),
+        (
             "over the dimension cap",
             r#"{"x":0,"y":0,"width":1025,"height":24}"#,
         ),
@@ -90,16 +94,15 @@ fn the_bounds_are_mbgls() {
             "over the ratio cap",
             r#"{"x":0,"y":0,"width":24,"height":24,"pixelRatio":11}"#,
         ),
-        (
-            "negative origin",
-            r#"{"x":-1,"y":0,"width":24,"height":24}"#,
-        ),
     ];
 
     for (what, entry) in cases {
         let index = parse(&format!(r#"{{"icon": {entry}}}"#));
         assert!(index.is_empty(), "{what} was accepted: {index:?}");
     }
+
+    // A negative origin is *not* here: it becomes zero and the entry survives, which is
+    // `a_fractional_dimension_is_refused_and_a_fractional_origin_is_not`.
 
     // And the caps themselves are inclusive, so an icon exactly at one is kept.
     let at_the_cap = sprite::parse(
@@ -132,16 +135,18 @@ fn a_rectangle_off_the_sheet_is_refused() {
     assert_eq!(unchecked.len(), 1);
 }
 
-/// A fractional rectangle is refused.
+/// A fractional *dimension* is refused and a fractional *origin* is not.
 ///
-/// It has no meaning against a texture, and rounding it would round differently in the two
-/// places that read it — the vertex's texture coordinate and the atlas upload's rectangle.
+/// One rule with two outcomes, which is why it reads as two. Every rectangle field is an
+/// unsigned integer with a default of zero, so a fractional value in any of them becomes zero —
+/// and zero is a fatal width and a perfectly good origin. `against_mbgl` has the upstream
+/// expectations that say so; this is the same fact stated where a reader meets it first.
 #[test]
-fn a_fractional_rectangle_is_refused() {
-    let index = parse(r#"{"icon": {"x": 0.5, "y": 0, "width": 24, "height": 24}}"#);
-    assert!(index.is_empty());
-    let index = parse(r#"{"icon": {"x": 0, "y": 0, "width": 24.5, "height": 24}}"#);
-    assert!(index.is_empty());
+fn a_fractional_dimension_is_refused_and_a_fractional_origin_is_not() {
+    assert!(parse(r#"{"icon": {"x": 0, "y": 0, "width": 24.5, "height": 24}}"#).is_empty());
+
+    let shifted = parse(r#"{"icon": {"x": 0.5, "y": 0, "width": 24, "height": 24}}"#);
+    assert_eq!(shifted["icon"].x, 0, "a fractional origin is not a refusal");
 }
 
 /// Stretches and the content box read back, and a malformed range is dropped.
@@ -296,5 +301,170 @@ fn the_bounds_refuse_an_incomparable_value() {
     {
         assert!(!(nan > 0.0), "a NaN must fail the guard the module uses");
         assert!(!(nan <= 0.0), "and would pass the one it does not");
+    }
+}
+
+/// mbgl's own sprite fixture and the expectations its `Sprite.*` tests state.
+///
+/// Everything above checks behaviour this build reasons about. This checks it against the
+/// upstream it is a transcription of: same bytes, same answers. Reading `sprite_parser.cpp`
+/// found three places where the reasoning had gone wrong, and all three are here.
+mod against_mbgl {
+    use tessella_glyph::sprite::{self, TextFit};
+
+    const EMERALD_JSON: &[u8] = include_bytes!("../../../tests/sprite-fixtures/emerald.json");
+
+    /// The sheet is 200x299, which is what mbgl's error messages in these tests quote.
+    const SHEET: (u32, u32) = (200, 299);
+
+    /// mbgl's `Sprite.SpriteParsing`: the fixture yields its icons, names intact.
+    #[test]
+    fn the_fixture_parses_the_way_mbgl_parses_it() {
+        let index = sprite::parse(EMERALD_JSON, Some(SHEET)).expect("the index parses");
+        assert_eq!(index.len(), 73, "mbgl reads seventy-three from this file");
+
+        // Names with dots in them, which is the shape a hand-made fixture does not have: a
+        // parser that split a name on a separator would pass every test written against one.
+        assert!(index.contains_key("dlr.london-overground.london-underground.national-rail"));
+        assert!(index.contains_key("dlr.london-underground"));
+        assert!(index.contains_key("default_marker"));
+
+        // And every rectangle is inside the sheet, which is what the bounds check is for.
+        for (name, sprite) in &index {
+            assert!(
+                sprite.x + sprite.width <= SHEET.0 && sprite.y + sprite.height <= SHEET.1,
+                "{name} runs off the sheet: {sprite:?}"
+            );
+        }
+    }
+
+    /// mbgl's `Sprite.SpriteParsingSimpleWidthHeight`: an entry with no origin is valid.
+    ///
+    /// The first thing reading the source corrected. `x` and `y` are read with a *default of
+    /// zero*, not required — so `{"width": 32, "height": 32}` is an icon at the sheet's top left
+    /// and mbgl accepts it. This build refused it, which is a style whose minimal entries all
+    /// vanish.
+    #[test]
+    fn an_entry_with_no_origin_is_an_icon_at_the_corner() {
+        let index = sprite::parse(br#"{"image": {"width": 32, "height": 32}}"#, Some(SHEET))
+            .expect("parses");
+        assert_eq!(index.len(), 1, "mbgl accepts this one");
+        assert_eq!((index["image"].x, index["image"].y), (0, 0));
+    }
+
+    /// mbgl's `Sprite.SpriteParsingWidthTooBig` and `SpriteParsingNegativeWidth`.
+    ///
+    /// Both refuse, and both refuse for the *same* reason rather than for two: the field is read
+    /// as an unsigned sixteen-bit integer with a default of zero, so 65536 and -1 alike become
+    /// zero, and it is `width <= 0` that turns them away. mbgl's error message quotes `0x32`,
+    /// which is the zero showing through.
+    #[test]
+    fn an_impossible_width_becomes_zero_and_is_refused() {
+        for width in ["65536", "-1", "0.5"] {
+            let body = format!(r#"{{"image": {{"width": {width}, "height": 32}}}}"#);
+            let index = sprite::parse(body.as_bytes(), Some(SHEET)).expect("parses");
+            assert!(index.is_empty(), "a width of {width} was accepted");
+        }
+    }
+
+    /// A fractional *origin* becomes zero and the entry survives.
+    ///
+    /// The second correction, and the one that goes the other way from every instinct: the same
+    /// rule that refuses a fractional width *accepts* a fractional x, because zero is a valid
+    /// origin and zero is not a valid width. This build refused it, which is closer to what a
+    /// person would want and further from what mbgl does — and the oracle is the point.
+    #[test]
+    fn a_fractional_origin_becomes_zero_and_survives() {
+        let index = sprite::parse(
+            br#"{"image": {"x": 0.5, "y": -3, "width": 32, "height": 32}}"#,
+            Some(SHEET),
+        )
+        .expect("parses");
+        assert_eq!(index.len(), 1, "mbgl keeps this one at the corner");
+        assert_eq!((index["image"].x, index["image"].y), (0, 0));
+    }
+
+    /// mbgl's `Sprite.SpriteParsingNullRatio`: a zero pixel ratio is refused.
+    ///
+    /// Unlike the rectangle fields, `pixelRatio` is read as any number and *keeps* what it
+    /// reads — mbgl's message quotes `@0x`, so the zero reached the bounds check rather than
+    /// being defaulted away. The two readers are genuinely different and that is why.
+    #[test]
+    fn a_zero_ratio_is_refused_by_the_bounds_and_not_the_reader() {
+        let index = sprite::parse(
+            br#"{"image": {"width": 32, "height": 32, "pixelRatio": 0}}"#,
+            Some(SHEET),
+        )
+        .expect("parses");
+        assert!(index.is_empty());
+
+        // And a fractional ratio is kept, which a uint16 reader would have destroyed.
+        let fine = sprite::parse(
+            br#"{"image": {"width": 32, "height": 32, "pixelRatio": 1.5}}"#,
+            Some(SHEET),
+        )
+        .expect("parses");
+        assert!((fine["image"].pixel_ratio - 1.5).abs() < f64::EPSILON);
+    }
+
+    /// mbgl's `Sprite.SpriteParsingTextFit` and `SpriteParsingInvalidTextFit`.
+    ///
+    /// The third correction: this build did not read the fields at all. An unrecognized value is
+    /// absent rather than a default, because the three behaviours resize a shield differently
+    /// and guessing between them is worse than not stretching.
+    #[test]
+    fn text_fit_reads_its_three_values_and_no_others() {
+        let index = sprite::parse(
+            br#"{"a": {"width": 16, "height": 16,
+                      "textFitWidth": "stretchOrShrink", "textFitHeight": "proportional"},
+                 "b": {"width": 16, "height": 16, "textFitWidth": "stretchOnly"},
+                 "c": {"width": 16, "height": 16, "textFitWidth": "nonsense"},
+                 "d": {"width": 16, "height": 16, "textFitWidth": 3}}"#,
+            Some(SHEET),
+        )
+        .expect("parses");
+
+        assert_eq!(index["a"].text_fit_width, Some(TextFit::StretchOrShrink));
+        assert_eq!(index["a"].text_fit_height, Some(TextFit::Proportional));
+        assert_eq!(index["b"].text_fit_width, Some(TextFit::StretchOnly));
+        assert_eq!(index["b"].text_fit_height, None, "unset is not a default");
+        assert_eq!(
+            index["c"].text_fit_width, None,
+            "a bad value is not a guess"
+        );
+        assert_eq!(index["d"].text_fit_width, None, "nor is a non-string");
+    }
+
+    /// mbgl's `Sprite.SpriteParsingInvalidStretches` and `SpriteParsingInvalidContent`.
+    ///
+    /// A malformed stretch is skipped and its neighbours kept; a malformed content box is
+    /// dropped whole. The asymmetry is mbgl's: a stretch list is a list of ranges and one bad
+    /// range is one bad range, while a content box is four numbers and three of them is nothing.
+    #[test]
+    fn malformed_stretches_and_content_follow_mbgls_asymmetry() {
+        let index = sprite::parse(
+            br#"{"image": {"width": 16, "height": 16,
+                          "stretchX": [[0, 4], "no", [8, 12], [1, 2, 3]],
+                          "content": [1, 2, 3]}}"#,
+            Some(SHEET),
+        )
+        .expect("parses");
+
+        assert_eq!(
+            index["image"].stretch_x.len(),
+            2,
+            "a good range was dropped"
+        );
+        assert!(
+            index["image"].content.is_none(),
+            "a three-sided box was kept"
+        );
+    }
+
+    /// mbgl's `Sprite.SpriteParsingEmptyImage`: an entry with no dimensions at all is refused.
+    #[test]
+    fn an_entry_with_no_dimensions_is_refused() {
+        let index = sprite::parse(br#"{"image": {}}"#, Some(SHEET)).expect("parses");
+        assert!(index.is_empty(), "an entry with nothing in it drew");
     }
 }

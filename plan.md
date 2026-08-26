@@ -1353,6 +1353,30 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   `icon-padding` is its own value and not the text's. The spec's defaults differ — two pixels
   around text and one around an icon — and sharing one crowds icons or spaces them depending
   which way it is shared, either of which reads as a collision bug rather than a padding one.
+  The sprite work is then checked against maplibre-native's own, which turned out to be on the
+  same machine all along — `sprite_parser.cpp` beside its seventeen-test suite and the
+  `emerald.png`/`emerald.json` pair those tests read. Reading the source found three places where
+  the transcription had been reasoned rather than read, and the direction of two of them is the
+  interesting part.
+  Every rectangle field is an unsigned sixteen-bit integer with a **default of zero**, not a
+  required value: `getUInt16` logs and returns zero for anything absent, fractional, negative or
+  above 65535, and the entry carries on to the bounds check with that zero in it. So the *same*
+  rule refuses a fractional width and accepts a fractional origin — zero is a fatal width and a
+  perfectly good origin — and `{"width": 32, "height": 32}` with no origin at all is a valid icon
+  at the sheet's corner, which mbgl's `SpriteParsingSimpleWidthHeight` says outright. This build
+  required an origin and refused a fractional one: a style whose minimal entries all vanish, and
+  a rule that is closer to what a person would want and further from what the oracle does.
+  `pixelRatio` is the odd one and deliberately so — read as any number and *kept*, which is why
+  mbgl's own error message for a zero ratio quotes `@0x` rather than `@1x`. Two readers, not one,
+  and a fractional ratio survives where a fractional width does not.
+  `textFitWidth` and `textFitHeight` were not read at all. An unrecognized value is *absent*
+  rather than defaulted, because the three behaviours resize a shield differently and guessing
+  between them is worse than not stretching.
+  `emerald.json` is now vendored beside the glyph fixtures: a two-hundred-by-two-hundred-ninety-
+  nine sheet with seventy-three icons, among them the
+  `dlr.london-overground.london-underground.national-rail` family whose names carry dots. A
+  hand-made fixture does not have that shape, and a parser splitting names on a separator would
+  pass every test written against one.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

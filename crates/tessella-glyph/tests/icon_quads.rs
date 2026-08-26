@@ -78,6 +78,8 @@ fn a_retina_icon_is_placed_at_its_logical_size() {
         stretch_x: Vec::new(),
         stretch_y: Vec::new(),
         content: None,
+        text_fit_width: None,
+        text_fit_height: None,
     };
     let (width, height) = sheet.logical_size();
     #[allow(clippy::cast_possible_truncation)]
