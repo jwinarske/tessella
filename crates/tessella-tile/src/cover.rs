@@ -132,11 +132,33 @@ pub enum CoverError {
 ///
 /// [`CoverError::Pitched`] when the view has pitch.
 pub fn cover(view: &ViewTransform) -> Result<Vec<TileCoord>, CoverError> {
+    cover_at(view, view.tile_zoom())
+}
+
+/// The tiles a view needs at a stated integer zoom.
+///
+/// [`cover`] is this at the view's own [`ViewTransform::tile_zoom`], which is what a vector
+/// source uses. A raster source does not: mbgl's `coveringZoomLevel` shifts the zoom by
+/// `log2(512 / tileSize)` and *rounds* instead of flooring, so a 256-pixel raster source covers
+/// the same screen with one level more than a vector one. Asking for a cover at a stated zoom is
+/// how that is expressed without the caller re-deriving the walk — and the walk needs it,
+/// because `scale` below is the difference between the view's fractional zoom and this level,
+/// and that is what makes twice as many tiles fit across when the level goes up by one.
+///
+/// `z` is clamped to [`MAX_ZOOM`] for the same reason [`ViewTransform::tile_zoom`] clamps: the
+/// world size below is `1u32 << z`, and a shift past the width of the type is undefined rather
+/// than large.
+///
+/// # Errors
+///
+/// [`CoverError::Pitched`] when the view has pitch, and [`CoverError::TooLarge`] when the level
+/// asked for needs more than [`MAX_TILES`].
+pub fn cover_at(view: &ViewTransform, z: u8) -> Result<Vec<TileCoord>, CoverError> {
     if view.pitch.abs() > f64::EPSILON {
         return Err(CoverError::Pitched);
     }
 
-    let z = view.tile_zoom();
+    let z = z.min(MAX_ZOOM);
     let world = f64::from(1u32 << z);
 
     // The centre in tile units at the *fractional* zoom, then rescaled to the integer one. Using

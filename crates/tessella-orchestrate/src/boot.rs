@@ -49,6 +49,7 @@ use tessella_source::GeoJsonFeature;
 use tessella_source::mvt;
 use tessella_source::tiling::TilingOptions;
 use tessella_storage::fetch_zoom;
+use tessella_storage::offline::SourceKind;
 use tessella_storage::source::{Coalescing, FileSource};
 use tessella_storage::tileset::{self, TileSet};
 use tessella_style::{LayerKind, Source, Style};
@@ -56,7 +57,24 @@ use tessella_tile::cover::{self, ViewTransform};
 
 use crate::cache::TileCache;
 use crate::pool::{Pool, Priority};
-use crate::tile::{LayerBucket, TileId, build_mvt_tile, build_tile};
+use crate::tile::{LayerBucket, TileId, build_mvt_tile, build_raster_tile, build_tile};
+
+/// The tile zoom a source is covered at.
+///
+/// mbgl's `coveringZoomLevel`: a vector source floors the view's zoom, and a raster source
+/// shifts it by `log2(512 / tileSize)` and *rounds*. The rounding is not a detail — flooring a
+/// 256-pixel source would leave it consistently one level too coarse, which is a satellite
+/// basemap at half the resolution of the labels drawn over it.
+///
+/// Clamped to what a cover can address. The zoom arrives from the consumer's camera over the
+/// reverse channel (DR-9) and is not a trusted number, and the shift makes it larger.
+fn covering_zoom(kind: SourceKind, zoom: f64) -> u8 {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    {
+        kind.covering_zoom(zoom)
+            .clamp(0.0, f64::from(cover::MAX_ZOOM)) as u8
+    }
+}
 
 /// When each stage of a cold start finished, measured from the moment it began.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -250,8 +268,8 @@ impl Default for Workers {
 
 /// What resolving one source produced.
 enum Resolved {
-    /// A tiled source's manifest.
-    Tiles(TileSet),
+    /// A tiled source's manifest, and whether its tiles are features or a picture.
+    Tiles(TileSet, SourceKind),
     /// A GeoJSON document, already read into features.
     Document(alloc::sync::Arc<Vec<GeoJsonFeature>>),
 }
@@ -267,6 +285,8 @@ enum Resolved {
 enum Work {
     /// Fetch, decode, then build.
     Vector { url: String },
+    /// Fetch, decode the picture, then build the quad it goes on.
+    Raster { url: String },
     /// Build from the document the source already resolved to.
     Geojson {
         features: alloc::sync::Arc<Vec<GeoJsonFeature>>,
@@ -285,7 +305,7 @@ impl Job {
     /// spent during resolution — so it names the tile instead.
     fn what(&self) -> String {
         match &self.work {
-            Work::Vector { url } => url.clone(),
+            Work::Vector { url } | Work::Raster { url } => url.clone(),
             Work::Geojson { .. } => alloc::format!("{}/{}", self.source, self.tile),
         }
     }
@@ -401,7 +421,18 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
         batch.submit(move || {
             let outcome = match &source {
                 Source::Vector(source) => tileset::resolve(source, files.inner())
-                    .map(Resolved::Tiles)
+                    .map(|set| Resolved::Tiles(set, SourceKind::Vector))
+                    .map_err(|error| error.to_string()),
+                // The same manifest, the same templates: TileJSON does not distinguish, and a
+                // raster source is addressed exactly as a vector one is. What differs is the
+                // zoom its tiles are asked for at and what arrives in them.
+                Source::Raster(source) => tileset::resolve(source, files.inner())
+                    .map(|set| {
+                        let kind = SourceKind::Raster {
+                            tile_size: set.tile_size,
+                        };
+                        Resolved::Tiles(set, kind)
+                    })
                     .map_err(|error| error.to_string()),
                 // One fetch for the whole document, or none at all if it is inline. The tiling
                 // is this side's, so there is nothing per-tile to ask for afterwards.
@@ -438,7 +469,7 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
         return Err(error);
     }
 
-    let mut sets: Vec<(String, TileSet)> = Vec::new();
+    let mut sets: Vec<(String, TileSet, SourceKind)> = Vec::new();
     let mut documents: Vec<(String, alloc::sync::Arc<Vec<GeoJsonFeature>>)> = Vec::new();
     {
         let mut held = resolved
@@ -450,7 +481,7 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
         held.sort_by(|a, b| a.0.cmp(&b.0));
         for (name, outcome) in held.drain(..) {
             match outcome {
-                Resolved::Tiles(set) => sets.push((name, set)),
+                Resolved::Tiles(set, kind) => sets.push((name, set, kind)),
                 Resolved::Document(features) => documents.push((name, features)),
             }
         }
@@ -458,13 +489,36 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
 
     let sources_resolved = started.elapsed();
 
+    // One cover per *source kind*, not one for the map. mbgl computes `tileCover` per source
+    // with that source's own `coveringZoomLevel`, and the levels genuinely differ: a 256-pixel
+    // raster source needs one zoom more than a vector one to fill the same screen, so a single
+    // cover would fetch imagery at half the resolution of the labels drawn over it.
     let cover = cover::cover(view).map_err(|_| BootError::Uncovered)?;
+    let mut raster_covers: alloc::collections::BTreeMap<u8, Vec<cover::TileCoord>> =
+        alloc::collections::BTreeMap::new();
+    for (_, _, kind) in &sets {
+        if let SourceKind::Raster { .. } = kind {
+            let z = covering_zoom(*kind, view.zoom);
+            if let alloc::collections::btree_map::Entry::Vacant(slot) = raster_covers.entry(z) {
+                slot.insert(cover::cover_at(view, z).map_err(|_| BootError::Uncovered)?);
+            }
+        }
+    }
+
     let mut jobs: Vec<Job> = Vec::new();
     // One job per (tile, source). A tile is not one thing: it is one thing *per source*, the
     // way mbgl has a render tile per source-tile, and a style that overlays a local extract on
     // a world basemap wants both at the same address.
-    for tile in &cover {
-        for (name, set) in &sets {
+    for (name, set, kind) in &sets {
+        let (tiles, work): (&[cover::TileCoord], fn(String) -> Work) = match kind {
+            SourceKind::Vector => (&cover, |url| Work::Vector { url }),
+            SourceKind::Raster { .. } => (
+                raster_covers[&covering_zoom(*kind, view.zoom)].as_slice(),
+                |url| Work::Raster { url },
+            ),
+        };
+
+        for tile in tiles {
             let Some(z) = fetch_zoom(tile.z, set.zooms) else {
                 continue;
             };
@@ -473,25 +527,27 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
             let Some(url) = set.url_for(z, x, y, 1.0) else {
                 continue;
             };
-            let tile = TileId::overscaled(z, x, y, tile.z);
+            let id = TileId::overscaled(z, x, y, tile.z);
             jobs.push(Job {
                 source: name.clone(),
                 key: tessella_tile::store::TileKey::overscaled(
                     name.as_str(),
-                    tile.z,
-                    tile.x,
-                    tile.y,
-                    tile.overscaled_z,
+                    id.z,
+                    id.x,
+                    id.y,
+                    id.overscaled_z,
                     style_rev,
                 ),
-                tile,
-                work: Work::Vector { url },
+                tile: id,
+                work: work(url),
             });
         }
+    }
 
-        // A GeoJSON source has no zoom range to clamp against and nothing to fetch: every tile
-        // of the cover is cut from the one document, at the cover's own zoom.
-        for (name, features) in &documents {
+    // A GeoJSON source has no zoom range to clamp against and nothing to fetch: every tile
+    // of the cover is cut from the one document, at the cover's own zoom.
+    for (name, features) in &documents {
+        for tile in &cover {
             let id = TileId::new(tile.z, tile.x, tile.y);
             jobs.push(Job {
                 source: name.clone(),
@@ -503,6 +559,7 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
             });
         }
     }
+
     let cover_computed = started.elapsed();
 
     if jobs.is_empty() {
@@ -612,6 +669,33 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
                                 message: error.to_string(),
                             }
                         })
+                    }
+                    Work::Raster { url } => {
+                        let response = files.fetch(url).map_err(|error| BootError::Fetch {
+                            url: url.clone(),
+                            message: error.to_string(),
+                        })?;
+                        record(&first_fetch);
+                        bytes.fetch_add(response.body.len(), Ordering::Relaxed);
+
+                        // As for a vector tile: a source's coverage is not a rectangle, and the
+                        // hole an absent imagery tile leaves is a hole rather than a failure.
+                        if response.is_absent() {
+                            return Ok(Vec::new());
+                        }
+
+                        let image =
+                            tessella_source::image::decode(&response.body).map_err(|error| {
+                                BootError::Decode {
+                                    url: url.clone(),
+                                    message: error.to_string(),
+                                }
+                            })?;
+                        build_raster_tile(&style, &job.source, alloc::sync::Arc::new(image))
+                            .map_err(|error| BootError::Build {
+                                url: url.clone(),
+                                message: error.to_string(),
+                            })
                     }
                     // Nothing to fetch and nothing to decode: the document arrived
                     // during source resolution, and this cuts a tile out of it.

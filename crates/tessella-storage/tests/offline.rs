@@ -263,6 +263,7 @@ fn manifest(template: &str, min: u8, max: u8) -> TileSet {
         templates: vec![template.to_string()],
         zooms: ZoomRange { min, max },
         scheme: Scheme::Xyz,
+        tile_size: 512,
     }
 }
 
@@ -398,6 +399,7 @@ fn a_sharded_source_downloads_each_tile_once() {
                 "https://c.host/{z}/{x}/{y}.mvt".into(),
             ],
             zooms: ZoomRange { min: 0, max: 14 },
+            tile_size: 512,
             scheme: Scheme::Xyz,
         },
     )]);

@@ -118,7 +118,13 @@ pub struct TileSource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maxzoom: Option<f64>,
     /// Tile side in pixels.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// Spelled `tileSize` in the document. The spec's source fields are camelCase where they are
+    /// more than one word, unlike a layer's kebab-case properties, and the rename has to be
+    /// stated per field because most of them are single words that need none. Without it the key
+    /// falls into `extra` and this reads `None` for every style ever written — which is not a
+    /// parse error but a raster basemap covered at the wrong zoom.
+    #[serde(default, rename = "tileSize", skip_serializing_if = "Option::is_none")]
     pub tile_size: Option<u32>,
     /// Bounding box, as `[west, south, east, north]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -143,11 +149,19 @@ pub struct GeojsonSource {
     /// Whether to cluster points.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cluster: Option<bool>,
-    /// Cluster radius in pixels.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Cluster radius in pixels. Spelled `clusterRadius` in the document.
+    #[serde(
+        default,
+        rename = "clusterRadius",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cluster_radius: Option<f64>,
-    /// Zoom past which clustering stops.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Zoom past which clustering stops. Spelled `clusterMaxZoom` in the document.
+    #[serde(
+        default,
+        rename = "clusterMaxZoom",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cluster_max_zoom: Option<f64>,
     /// Buffer around tile edges, in pixels.
     #[serde(default, skip_serializing_if = "Option::is_none")]

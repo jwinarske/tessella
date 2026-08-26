@@ -423,7 +423,7 @@ trivial). No async runtime: mirror mbgl's actor model with threads + channels, p
 | BiDi | unicode-bidi | ubidi/ICU |
 | shaping | rustybuzz + unicode-linebreak | harfbuzz |
 | local glyph SDF | sdf_glyph_renderer-style + fontdue/ab_glyph | TinySDF/freetype path |
-| PNG decode | zune-png, behind an off-by-default feature (DR-20, §12.2) | mbgl's png decoder |
+| PNG/JPEG decode | zune-png + zune-jpeg, behind one off-by-default `image` feature (DR-20, §12.2) | mbgl's png/jpeg decoders |
 | cache DB | rusqlite (bundled) | sqlite vendored |
 | HTTP | ureq (blocking, on workers) | cpp-httplib/curl |
 | f64 math | hand-written `[f64; 16]`; see below | mbgl matrix |
@@ -1741,6 +1741,72 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   gap: a raster tile is an image rather than a set of features, so there is no feature for a
   property to vary over, which is why the layer has no paint binder while every other tiled layer
   does.
+  The layer alone draws nothing, though, because nothing fetched a raster tile: `Source::Raster`
+  fell through source resolution, so a satellite basemap resolved to no templates and asked for
+  no tiles. Closing that is a decoder, a cover, and a builder.
+  **The decoder reads JPEG as well as PNG, and that is not an extra.** Satellite imagery is
+  photographic, and a photograph stored losslessly is several times the bytes for a difference
+  nobody looking at a map can see — so every commercial imagery source serves JPEG, and a build
+  that reads only PNG draws no satellite at all. The failure is silent, too: the tile fetches
+  successfully and then does not decode. Terrain shading and label-free overlays go back to PNG
+  for the alpha, so the two are not alternatives to pick between; a real style uses both.
+  The format is sniffed from the bytes rather than taken from the URL or a `Content-Type`. A tile
+  template ends in `.png` for plenty of sources that serve JPEG behind it, and a header can be
+  absent, wrong, or `application/octet-stream`. The first eight bytes cannot be any of those.
+  WebP is the third mbgl reads and this does not; it is refused as an *unrecognized format*
+  rather than as a broken body, which is a configuration answer instead of a retry, and
+  `tile.webp` is vendored so the refusal is asserted against a real file.
+  Sprite sheets go through the same decoder now rather than a second copy of it. The bound
+  against the header, the widening to RGBA and the sniff are the same questions for a sheet and
+  for a tile, and answering them twice is how two answers drift apart.
+  **The decode premultiplies, and it did not before.** mbgl's `decodeImage` returns a
+  `PremultipliedImage`; this build's style colours are stored premultiplied and its shaders are
+  mbgl's, so an image that is not premultiplied was the odd one out in a pipeline that assumed
+  otherwise. Left straight, an icon's anti-aliased edge blends its own colour at full strength
+  against the background and draws a bright fringe around every marker that fades out — invisible
+  on the opaque sprites that are most of a sheet, and wrong everywhere else. mbgl's rounding is
+  transcribed with it: `(c * a + 127) / 255` is a round-to-nearest where `c * a / 255` truncates,
+  and the two differ by one over most of the range, which is a diff on nearly every translucent
+  pixel of a sheet compared byte for byte.
+  The oracle's own `test/fixtures/image` is vendored and its `image.test.cpp` numbers
+  transcribed. The profile/no-profile pair is the assertion worth having: mbgl expects the *same*
+  pixel from both, so a decoder honouring an ICC profile would colour-manage one tile of a
+  basemap and not its neighbours, and the seam between them reads as a bug in the tile server.
+  **A raster source is covered at its own zoom, not the map's.** mbgl computes `tileCover` per
+  source with that source's `coveringZoomLevel`, which shifts by `log2(512 / tileSize)` and
+  *rounds* where a vector source floors. A 256-pixel source — which is what most imagery services
+  serve — therefore needs one level more to fill the same screen, and covering it at the map's own
+  zoom fetches imagery at half the resolution of the labels drawn over it: a blurry basemap
+  rather than anything that reads as a cover bug. So `cover_at` takes a stated level and the job
+  planner became source-major, since the tiles are no longer one list.
+  Which turned up a defect underneath it. `tileSize` had **never been read**: the spec's source
+  keys are camelCase where a layer's properties are kebab-case, and serde needs told per field
+  because most source keys are single words needing no rename — so the key fell into `extra` and
+  the field was `None` for every style ever written. Not a parse error, and indistinguishable
+  from a style that stated nothing. `clusterRadius` and `clusterMaxZoom` were the same and are
+  fixed with it, inert only because clustering is not built. The round trip is asserted as well
+  as the read: an offline region records the style it pinned, so a rename that reads correctly
+  and writes `tile_size` produces a document nothing else can read back.
+  The builder is a third one rather than an arm of the other two. The existing pair take features
+  and differ only in what a coordinate means; this takes none, and every stage they share —
+  filter, classify, tessellate, bind — has nothing to act on. It is the same fact that makes a
+  raster layer draw with an *empty* source tile where a fill does not: a fill with no features has
+  nothing to draw and correctly draws nothing, while a raster tile with no features is every
+  raster tile there is. A raster layer pointed at a *vector* source therefore draws nothing at
+  all, which is the only correct answer — its picture is its source's tile, and emitting a quad
+  anyway would put geometry on the wire sampling a texture nothing uploaded.
+  The picture rides with the geometry and is shared between the layers built from it. A style
+  drawing one imagery source twice — a base pass and a tinted overlay — is two buckets over one
+  image, and a raster tile is a quarter of a megabyte (§11.5).
+  A 404 imagery tile is a hole and not a failure, as a vector one is: coverage is not a rectangle,
+  and a style should not fail to start because a corner of the screen is outside a survey. An
+  undecodable body *is* reported, though, and the distinction is the point — an origin serving an
+  error page with a 200 is a real failure mode, and treating those bytes as an empty tile would
+  draw a hole and report success.
+  What is still missing is the wire: the texture upload and the `texture_refs` that bind it. That
+  gap is not the raster layer's — the glyph atlas has it too, and `TextureRef` has never been
+  populated by anything but `whole_stream`'s hand-built records — so it is one piece of work for
+  both rather than a raster one.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 
@@ -2314,7 +2380,7 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
   compared as sequences, and it is what says the rotation is wagyu's alone and not something
   upstream of it that the fill path's cycle comparison was hiding.
 
-- **DR-20 Sprites and raster decode PNG; compressed textures are a separate question.**
+- **DR-20 Sprites and raster decode PNG and JPEG; compressed textures are a separate question.**
   KTX2 with a Basis or block-compressed payload is genuinely cheaper than RGBA8 where it counts
   — a 1024-square sprite sheet is 4 MB decoded and roughly 1 MB as ETC2 or ASTC, and on an
   RK3566 that is shared memory and shared bandwidth. It is the same argument §12.4 already makes
@@ -2322,7 +2388,13 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
   It still cannot replace PNG here, for three reasons that are not about the codec.
   **The format is not ours to choose.** A style-spec sprite is `sprite.json` plus `sprite.png`,
   and every style in the wild — Protomaps, MapTiler, OpenMapTiles — serves exactly that. Raster
-  tiles are the same: the origin decides. A build that reads only KTX2 loads no existing style.
+  tiles are the same: the origin decides, and it decides *JPEG* for satellite imagery, because a
+  photograph stored losslessly is several times the bytes for a difference nobody looking at a
+  map can see. So both are read and the format is sniffed from the bytes. A build that reads
+  only KTX2 loads no existing style; one that reads only PNG draws no satellite basemap.
+  WebP is the one mbgl reads and this does not yet, and it is a real gap rather than a
+  hypothetical: MapTiler and Mapbox both serve `.webp` variants. It is refused by name so the
+  answer is legible, and `image-webp` is the pure-Rust decoder to add behind the same feature.
   **It would cost the oracle.** mbgl decodes PNG, and the capture's texture hash is over decoded
   pixels. Reading different bytes than the probe reads leaves nothing to diff, which is the one
   thing that makes any of this checkable.

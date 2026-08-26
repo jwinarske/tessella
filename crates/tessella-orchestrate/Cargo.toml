@@ -32,9 +32,10 @@ std = []
 # reason `tessella-storage`'s `cache` feature is: `rusqlite` bundles C, and the cross lane has
 # no toolchain for it.
 offline = ["std", "tessella-storage/cache"]
-# Sprite sheets, which need a PNG decoder. Off by default for binary size (DR-12) rather than
-# for the toolchain — `zune-png` is pure Rust and costs the cross lane nothing.
-png = ["tessella-glyph/png"]
+# Sprite sheets and raster tiles, which need image decoders. Off by default for binary size
+# (DR-12) rather than for the toolchain — `zune-png` and `zune-jpeg` are pure Rust and cost the
+# cross lane nothing.
+image = ["tessella-glyph/image"]
 
 [dev-dependencies]
 tessella-storage = { workspace = true, features = ["cache", "http", "pmtiles"] }

@@ -4,8 +4,11 @@
 //! image, so the geometry is a rectangle and the interesting work is the texture beside it — but
 //! the rectangle has to be right, and the colour factors are not the property values.
 
+use std::sync::Arc;
+
 use tessella_layout::raster::{RasterBucket, contrast_factor, saturation_factor, spin_weights};
-use tessella_orchestrate::tile::{TileId, build_mvt_tile};
+use tessella_orchestrate::tile::{TileId, build_mvt_tile, build_raster_tile};
+use tessella_source::image::Image;
 use tessella_source::mvt::Tile;
 use tessella_style::Style;
 
@@ -19,24 +22,96 @@ fn satellite() -> Style {
     .expect("a style")
 }
 
-/// A raster layer draws whether or not the source decoded any features.
+/// A 2x2 opaque image, standing in for a decoded tile.
+fn picture() -> Arc<Image> {
+    Arc::new(Image {
+        width: 2,
+        height: 2,
+        pixels: vec![255; 2 * 2 * 4],
+    })
+}
+
+/// A raster layer draws from an image and no features at all.
 ///
 /// The difference from every other layer here, all of which build from features and produce
-/// nothing when there are none. A raster tile carries no features at all — a layer that waited
-/// for some would draw no imagery ever, which is a blank map with a working style.
+/// nothing when there are none. A raster tile carries no features — a layer that waited for some
+/// would draw no imagery ever, which is a blank map with a working style.
 #[test]
 fn a_raster_layer_draws_without_features() {
-    let tile = Tile::decode(REAL_TILE).expect("the fixture decodes");
-    let buckets =
-        build_mvt_tile(&satellite(), "sat", TileId::new(0, 0, 0), &tile).expect("the tile builds");
+    let buckets = build_raster_tile(&satellite(), "sat", picture()).expect("the tile builds");
 
     assert_eq!(buckets.len(), 1, "one raster layer");
-    let bucket = buckets[0]
+    let content = buckets[0]
         .content
         .as_raster()
         .expect("a raster layer builds a raster bucket");
-    assert_eq!(bucket.quads(), 1, "one quad for a whole tile");
+    assert_eq!(content.bucket.quads(), 1, "one quad for a whole tile");
+    assert_eq!(content.image.size(), (2, 2), "the picture rides with it");
     assert_eq!(buckets[0].drawable_count(), 1);
+}
+
+/// Two raster layers over one source share one decoded picture.
+///
+/// A style drawing imagery twice — a base pass and a tinted overlay — is two buckets and one
+/// image, and a raster tile is a quarter of a megabyte. Copying it per layer is the kind of
+/// allocation §11.5 counts.
+#[test]
+fn two_layers_over_one_source_share_the_picture() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"sat": {"type": "raster", "tiles": []}},
+            "layers": [{"id": "base", "type": "raster", "source": "sat"},
+                       {"id": "tint", "type": "raster", "source": "sat",
+                        "paint": {"raster-opacity": 0.3}}]}"#,
+    )
+    .expect("a style");
+
+    let buckets = build_raster_tile(&style, "sat", picture()).expect("the tile builds");
+    assert_eq!(buckets.len(), 2);
+
+    let first = buckets[0].content.as_raster().expect("raster");
+    let second = buckets[1].content.as_raster().expect("raster");
+    assert!(
+        Arc::ptr_eq(&first.image, &second.image),
+        "the picture was copied per layer"
+    );
+}
+
+/// A raster layer over a feature source draws nothing.
+///
+/// Not a silent skip but the only correct answer: a raster layer's picture *is* its source's
+/// tile, so a raster layer pointed at a vector source names a source with no picture to give.
+/// Emitting a quad anyway would put geometry on the wire sampling a texture nothing uploaded,
+/// which draws whatever the consumer last bound there.
+#[test]
+fn a_raster_layer_over_a_vector_source_draws_nothing() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"vec": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "confused", "type": "raster", "source": "vec"}]}"#,
+    )
+    .expect("a style");
+
+    let tile = Tile::decode(REAL_TILE).expect("the fixture decodes");
+    let buckets =
+        build_mvt_tile(&style, "vec", TileId::new(0, 0, 0), &tile).expect("the tile builds");
+    assert!(buckets.is_empty(), "a raster layer built from features");
+}
+
+/// Only the layers drawing from this source are built.
+#[test]
+fn another_sources_raster_layer_is_not_built() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8,
+            "sources": {"sat": {"type": "raster", "tiles": []},
+                        "dem": {"type": "raster", "tiles": []}},
+            "layers": [{"id": "imagery", "type": "raster", "source": "sat"},
+                       {"id": "relief", "type": "raster", "source": "dem"}]}"#,
+    )
+    .expect("a style");
+
+    let buckets = build_raster_tile(&style, "sat", picture()).expect("the tile builds");
+    assert_eq!(buckets.len(), 1);
+    assert_eq!(buckets[0].layer_id, "imagery");
+    assert_eq!(buckets[0].layer_index, 0, "painter order is kept");
 }
 
 /// The whole-tile quad covers the extent, and samples the image over the same range.

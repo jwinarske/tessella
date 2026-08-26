@@ -31,6 +31,14 @@ pub struct TileSet {
     pub zooms: ZoomRange,
     /// Which way rows are numbered.
     pub scheme: Scheme,
+    /// Tile side in pixels, which decides the zoom a raster source is covered at.
+    ///
+    /// 512 unless the source says otherwise, which is the spec's default and the size a vector
+    /// tile always is. A raster source serving 256-pixel tiles needs one zoom level *more* than
+    /// a 512-pixel one to fill the same screen — mbgl's `coveringZoomLevel` shifts by
+    /// `log2(512 / tileSize)` — so this is not a display detail: it decides which tiles are
+    /// asked for.
+    pub tile_size: u16,
 }
 
 /// Why a source could not be resolved.
@@ -61,7 +69,7 @@ pub enum ResolveError {
 }
 
 /// Reads the zoom range and scheme a source states, falling back to the spec's defaults.
-fn describe(source: &tessella_style::TileSource) -> (ZoomRange, Scheme) {
+fn describe(source: &tessella_style::TileSource) -> (ZoomRange, Scheme, u16) {
     let default = ZoomRange::default();
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let zoom = |value: Option<f64>, fallback: u8| {
@@ -73,12 +81,21 @@ fn describe(source: &tessella_style::TileSource) -> (ZoomRange, Scheme) {
             .get("scheme")
             .and_then(tessella_style::Value::as_str),
     );
+    // Clamped rather than trusted. A manifest is a fetched document from a party that is not
+    // this build's, and a `tileSize` of zero divides in `coveringZoomLevel` while one of four
+    // billion shifts the covering zoom past anything addressable. The range is what a tile
+    // actually is: no smaller than a single pixel, no larger than the largest texture anything
+    // uploads.
+    let tile_size = source.tile_size.unwrap_or(512).clamp(1, 8192);
+    #[allow(clippy::cast_possible_truncation)]
+    let tile_size = tile_size as u16;
     (
         ZoomRange {
             min: zoom(source.minzoom, default.min),
             max: zoom(source.maxzoom, default.max),
         },
         scheme,
+        tile_size,
     )
 }
 
@@ -95,7 +112,7 @@ pub fn resolve(
     source: &tessella_style::TileSource,
     files: &dyn FileSource,
 ) -> Result<TileSet, ResolveError> {
-    let (zooms, scheme) = describe(source);
+    let (zooms, scheme, tile_size) = describe(source);
 
     if let Some(templates) = &source.tiles
         && !templates.is_empty()
@@ -104,6 +121,7 @@ pub fn resolve(
             templates: templates.clone(),
             zooms,
             scheme,
+            tile_size,
         });
     }
 
@@ -125,7 +143,7 @@ pub fn resolve(
             message: error.to_string(),
         })?;
 
-    let (manifest_zooms, manifest_scheme) = describe(&manifest);
+    let (manifest_zooms, manifest_scheme, manifest_tile_size) = describe(&manifest);
     let templates = manifest
         .tiles
         .filter(|tiles| !tiles.is_empty())
@@ -148,6 +166,7 @@ pub fn resolve(
         } else {
             manifest_scheme
         },
+        tile_size: source.tile_size.map_or(manifest_tile_size, |_| tile_size),
     })
 }
 

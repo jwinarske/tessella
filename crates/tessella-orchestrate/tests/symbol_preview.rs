@@ -680,9 +680,9 @@ fn blit_along(
 /// mbgl's own `emerald` sheet: seventy-three icons, markers and shields and patterns.
 ///
 /// ```sh
-/// cargo test -p tessella-orchestrate --features png --test symbol_preview -- --ignored --nocapture
+/// cargo test -p tessella-orchestrate --features image --test symbol_preview -- --ignored --nocapture
 /// ```
-#[cfg(feature = "png")]
+#[cfg(feature = "image")]
 #[test]
 #[ignore]
 fn draw_the_icon_atlas() {

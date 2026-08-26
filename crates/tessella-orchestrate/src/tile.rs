@@ -82,12 +82,16 @@ pub enum Content {
     Line(LineBucket),
     /// A quad per point, with the disc drawn inside it by the shader.
     Circle(CircleBucket),
-    /// A raster layer's quad.
+    /// A raster layer's quad and the picture it is stretched over.
     ///
-    /// Geometry only. A raster tile *is* an image, so what a layer contributes per tile is the
-    /// rectangle it is stretched over — the picture arrives as a texture and the colour
-    /// adjustment is the layer's rather than the tile's.
-    Raster(RasterBucket),
+    /// The image rides with the geometry because it *is* the tile: a raster source carries no
+    /// features, so there is nothing else the tile could be, and separating them would leave a
+    /// quad on the wire sampling a texture nothing had uploaded.
+    ///
+    /// Shared rather than owned. Two raster layers over one source — a satellite basemap and a
+    /// hillshade drawn from the same imagery, or the same source at two opacities — are two
+    /// buckets and one picture, and a raster tile is a quarter of a megabyte (§11.5).
+    Raster(RasterContent),
     /// A symbol layer's labels, resolved but not yet shaped.
     ///
     /// The only content that is not geometry. Shaping needs glyph metrics, and the glyphs are a
@@ -95,6 +99,15 @@ pub enum Content {
     /// builder produces the text and the dependencies, and `SymbolLayout::lay_out` produces
     /// vertices once the ranges have arrived. mbgl splits it in the same place.
     Symbol(SymbolLayout),
+}
+
+/// A raster layer's contribution to one tile: where the picture goes, and the picture.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RasterContent {
+    /// The quad, or one per entry of the tile's mask.
+    pub bucket: RasterBucket,
+    /// The decoded tile, RGBA and premultiplied.
+    pub image: alloc::sync::Arc<tessella_source::image::Image>,
 }
 
 /// One layer's contribution to one tile.
@@ -208,15 +221,11 @@ pub fn build_tile(
         );
 
         let content = match layer.kind {
-            // A raster layer draws its tile whether or not anything was decoded for it: the
-            // geometry is the rectangle the image goes on, and the image arrives separately as a
-            // texture. That is the difference from every other layer here, all of which build
-            // from features and produce nothing when there are none.
-            //
-            // One quad, because the tile mask is not built — see the plan. A mask only differs
-            // from the whole tile where a parent is partly covered by its children, which is a
-            // state a settled frame at a fixed camera never reaches.
-            LayerKind::Raster => Content::Raster(RasterBucket::whole_tile()),
+            // A raster layer over a *feature* source draws nothing, and that is not a silent
+            // skip: a raster layer's picture is its source's tile, so pointing one at a vector
+            // or GeoJSON source names a source that has no picture to give. `build_raster_tile`
+            // is where a raster layer is built, from a decoded image rather than from features.
+            LayerKind::Raster => continue,
             LayerKind::Symbol => {
                 let filter = match &layer.filter {
                     Some(value) => Filter::parse(value).map_err(|source| TileError::Filter {
@@ -527,6 +536,69 @@ pub fn build_sourceless(style: &Style, tile: TileId) -> Result<Vec<LayerBucket>,
     Ok(buckets)
 }
 
+/// Builds a tile's buckets from a decoded raster image.
+///
+/// # Why this is a third builder rather than an arm of the other two
+///
+/// The other two take features and differ only in what a coordinate means. This takes no
+/// features at all: a raster tile carries none, and every step the feature builders share —
+/// filter, classify, tessellate, bind — has nothing to act on. What is left is a rectangle and a
+/// picture, and expressing that as a feature builder with every stage skipped would be a
+/// pipeline shaped around data that is not there.
+///
+/// It is also why a raster layer draws with an *empty* source tile and a fill layer does not. A
+/// fill with no features has nothing to draw and correctly draws nothing; a raster tile with no
+/// features is every raster tile there is.
+///
+/// The image is shared across the layers built here rather than copied into each. A style
+/// drawing one imagery source twice — a base pass and a tinted overlay — is two buckets over one
+/// picture, and the picture is a quarter of a megabyte.
+///
+/// # Errors
+///
+/// [`TileError`] when a layer's paint properties do not compile. There is no filter to compile:
+/// a filter selects features and a raster tile has none, so `filter` on a raster layer is
+/// ignored exactly as the spec says it is.
+///
+/// There is no tile id either, which the other two take. A whole-tile quad does not depend on
+/// which tile it is, and a *masked* one would not either: a mask is the set of quadrants whose
+/// children have not loaded, which is a question about the moment rather than about the address.
+pub fn build_raster_tile(
+    style: &Style,
+    source: &str,
+    image: alloc::sync::Arc<tessella_source::image::Image>,
+) -> Result<Vec<LayerBucket>, TileError> {
+    let mut buckets = Vec::new();
+
+    for (layer_index, layer) in style.layers.iter().enumerate() {
+        if layer.kind != LayerKind::Raster || !draws_from(layer, source) {
+            continue;
+        }
+
+        let paint = resolve_paint(layer).map_err(|source| TileError::Property {
+            layer: layer.id.clone(),
+            source,
+        })?;
+
+        buckets.push(LayerBucket {
+            layer_index,
+            layer_id: layer.id.clone(),
+            // One quad, because the tile mask is not built — see the plan. A mask only differs
+            // from the whole tile where a parent is partly covered by its children, which is a
+            // state a settled frame at a fixed camera never reaches.
+            content: Content::Raster(RasterContent {
+                bucket: RasterBucket::whole_tile(),
+                image: alloc::sync::Arc::clone(&image),
+            }),
+            paint,
+            // None of a raster layer's paint properties is data-driven, and that is structural
+            // rather than a gap: there is no feature for one to vary over.
+            binder: PaintBinder::default(),
+        });
+    }
+    Ok(buckets)
+}
+
 /// Builds a tile's buckets from a decoded vector tile.
 ///
 /// # Why this is not `build_tile` with a different feature type
@@ -682,15 +754,11 @@ pub fn build_mvt_tile(
                 }
                 Content::Line(bucket)
             }
-            // A raster layer draws its tile whether or not anything was decoded for it: the
-            // geometry is the rectangle the image goes on, and the image arrives separately as a
-            // texture. That is the difference from every other layer here, all of which build
-            // from features and produce nothing when there are none.
-            //
-            // One quad, because the tile mask is not built — see the plan. A mask only differs
-            // from the whole tile where a parent is partly covered by its children, which is a
-            // state a settled frame at a fixed camera never reaches.
-            LayerKind::Raster => Content::Raster(RasterBucket::whole_tile()),
+            // A raster layer over a *feature* source draws nothing, and that is not a silent
+            // skip: a raster layer's picture is its source's tile, so pointing one at a vector
+            // or GeoJSON source names a source that has no picture to give. `build_raster_tile`
+            // is where a raster layer is built, from a decoded image rather than from features.
+            LayerKind::Raster => continue,
             LayerKind::Symbol => {
                 let filter = match &layer.filter {
                     Some(value) => Filter::parse(value).map_err(|source| TileError::Filter {
@@ -864,9 +932,9 @@ pub fn bucket_for<'a>(buckets: &'a [LayerBucket], layer_id: &str) -> Option<&'a 
 impl Content {
     /// The raster quad, if this is one.
     #[must_use]
-    pub fn as_raster(&self) -> Option<&RasterBucket> {
+    pub fn as_raster(&self) -> Option<&RasterContent> {
         match self {
-            Self::Raster(bucket) => Some(bucket),
+            Self::Raster(content) => Some(content),
             Self::Background
             | Self::Fill(_)
             | Self::Line(_)
@@ -951,7 +1019,7 @@ impl Content {
             // Labels, not vertices: a symbol layer has data when it resolved text, whether or
             // not the glyphs to shape it with have arrived.
             Self::Symbol(layout) => !layout.is_empty(),
-            Self::Raster(bucket) => !bucket.is_empty(),
+            Self::Raster(content) => !content.bucket.is_empty(),
         }
     }
 }

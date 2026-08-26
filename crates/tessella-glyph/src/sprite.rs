@@ -33,7 +33,7 @@ use serde_json::Value;
 /// reason the glyph atlas does not: a rectangle handed out for a texture the consumer has
 /// already uploaded cannot move. A thousand and twenty-four square holds a street style's whole
 /// icon set with room over, since each icon is tens of pixels rather than hundreds.
-#[cfg(feature = "png")]
+#[cfg(feature = "image")]
 pub const ATLAS_SIZE: u32 = 1024;
 
 /// The largest dimension an icon may have, as mbgl bounds it.
@@ -394,7 +394,7 @@ pub fn urls(base: &str, pixel_ratio: f64) -> (String, String) {
 /// `RGBA` pixel type means. Not premultiplied — mbgl premultiplies on upload and the capture's
 /// texture hash is over the decoded image, so premultiplying here would put different bytes on
 /// the wire than the oracle has.
-#[cfg(feature = "png")]
+#[cfg(feature = "image")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sheet {
     /// Width in sheet pixels.
@@ -405,7 +405,7 @@ pub struct Sheet {
     pub pixels: Vec<u8>,
 }
 
-#[cfg(feature = "png")]
+#[cfg(feature = "image")]
 impl Sheet {
     /// Its size, in the shape the index's bounds check takes.
     #[must_use]
@@ -416,20 +416,14 @@ impl Sheet {
 
 /// The largest a decoded sheet may be, in bytes of RGBA.
 ///
-/// A PNG header states dimensions and the decoder allocates from them, so a few hundred bytes
-/// can ask for gigabytes — the classic decompression bomb, and on a device-class target an
-/// out-of-memory rather than a slow frame. `zune-png` defaults to refusing beyond 16384 square,
-/// which is still a gibibyte of RGBA and far past anything a sprite sheet is.
-///
-/// Sixty-four mebibytes is four thousand pixels square: generous against real sheets, which run
-/// to hundreds of pixels or a couple of thousand at most, and small enough that refusing is
-/// cheaper than the allocation. Checked against the *header* before any pixel is decoded, so a
-/// bomb costs a parse of twenty-five bytes.
-#[cfg(feature = "png")]
-pub const MAX_SHEET_BYTES: usize = 64 * 1024 * 1024;
+/// Re-exported from the shared image decoder rather than restated: the bound is one number and
+/// two copies of it drift. See [`tessella_source::image::MAX_IMAGE_BYTES`] for why it is checked
+/// against the header rather than after the allocation.
+#[cfg(feature = "image")]
+pub use tessella_source::image::MAX_IMAGE_BYTES as MAX_SHEET_BYTES;
 
 /// Why a sheet could not be decoded.
-#[cfg(feature = "png")]
+#[cfg(feature = "image")]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SheetError {
     /// The bytes are not a PNG this decoder reads.
@@ -455,111 +449,39 @@ pub enum SheetError {
 
 /// Decodes a sprite sheet.
 ///
-/// Every colour type is widened to RGBA: a sheet may be greyscale, palletted or RGB, and the
-/// rectangle the index hands out is in pixels rather than bytes — so a decoder that returned the
-/// source's own channel count would make every offset downstream depend on the file's encoding.
+/// A thin adapter over [`tessella_source::image::decode`], which a raster tile goes through as
+/// well: the bound against the header, the widening to RGBA and the format sniff are the same
+/// questions for a sheet and for a tile, and answering them twice is how the two drift apart.
+/// What stays here is the error type, because a caller loading a style wants to be told its
+/// *sprite* did not decode.
+///
+/// A sheet that is a JPEG is accepted, and is a style bug rather than a decode one: JPEG has no
+/// alpha, so every icon in it draws its background as an opaque rectangle. Refusing it here
+/// would be this layer inventing a rule the spec does not state, and the picture says plainly
+/// what happened.
 ///
 /// # Errors
 ///
-/// [`SheetError`] when the bytes are not a PNG, or when the image has no area.
-#[cfg(feature = "png")]
+/// [`SheetError`] when the bytes are not an image this build reads, or when the image has no
+/// area.
+#[cfg(feature = "image")]
 pub fn decode_sheet(body: &[u8]) -> Result<Sheet, SheetError> {
-    use zune_png::PngDecoder;
-    use zune_png::zune_core::bytestream::ZCursor;
-    use zune_png::zune_core::options::DecoderOptions;
+    use tessella_source::image::{Image, ImageError};
 
-    // Ask for eight-bit RGBA outright rather than converting afterwards. A sixteen-bit sheet
-    // decoded at its own depth would be twice the bytes with the same rectangles, and the
-    // mismatch would show as every icon sampling half of its neighbour.
-    let options = DecoderOptions::default()
-        .png_set_strip_to_8bit(true)
-        .png_set_add_alpha_channel(true);
-    let mut decoder = PngDecoder::new_with_options(ZCursor::new(body), options);
-
-    // The header first, and *only* the header. A PNG states its dimensions in twenty-five bytes
-    // and the decoder allocates from them, so a bomb is refused for the cost of a parse rather
-    // than for the cost of the allocation it asked for.
-    decoder
-        .decode_headers()
-        .map_err(|error| SheetError::Decode(alloc_string(&error)))?;
-    let (width, height) = decoder
-        .dimensions()
-        .ok_or_else(|| SheetError::Decode("the header carries no dimensions".to_string()))?;
-    let wanted = width.saturating_mul(height).saturating_mul(4);
-    if wanted > MAX_SHEET_BYTES {
-        return Err(SheetError::TooLarge { wanted });
+    match tessella_source::image::decode(body) {
+        Ok(Image {
+            width,
+            height,
+            pixels,
+        }) => Ok(Sheet {
+            width,
+            height,
+            pixels,
+        }),
+        Err(ImageError::TooLarge { wanted }) => Err(SheetError::TooLarge { wanted }),
+        Err(ImageError::Unusable { width, height }) => Err(SheetError::Unusable { width, height }),
+        Err(other) => Err(SheetError::Decode(other.to_string())),
     }
-
-    let pixels = decoder
-        .decode_raw()
-        .map_err(|error| SheetError::Decode(alloc_string(&error)))?;
-
-    #[allow(clippy::cast_possible_truncation)]
-    let (width, height) = (width as u32, height as u32);
-    if width == 0 || height == 0 {
-        return Err(SheetError::Unusable { width, height });
-    }
-
-    let colorspace = decoder
-        .colorspace()
-        .ok_or_else(|| SheetError::Decode("the header carries no colorspace".to_string()))?;
-    let pixels = widen(&pixels, colorspace, width, height)?;
-
-    Ok(Sheet {
-        width,
-        height,
-        pixels,
-    })
-}
-
-#[cfg(feature = "png")]
-fn alloc_string(error: &impl core::fmt::Debug) -> String {
-    format!("{error:?}")
-}
-
-/// Widens whatever the decoder produced into RGBA.
-#[cfg(feature = "png")]
-fn widen(
-    pixels: &[u8],
-    colorspace: zune_png::zune_core::colorspace::ColorSpace,
-    width: u32,
-    height: u32,
-) -> Result<Vec<u8>, SheetError> {
-    use zune_png::zune_core::colorspace::ColorSpace;
-
-    let count = (width as usize) * (height as usize);
-    let expand = |channels: usize, place: fn(&[u8], &mut [u8; 4])| {
-        if pixels.len() < count * channels {
-            return None;
-        }
-        let mut out = Vec::with_capacity(count * 4);
-        for source in pixels.chunks_exact(channels).take(count) {
-            let mut rgba = [0u8; 4];
-            place(source, &mut rgba);
-            out.extend_from_slice(&rgba);
-        }
-        Some(out)
-    };
-
-    let widened = match colorspace {
-        ColorSpace::RGBA => (pixels.len() >= count * 4).then(|| pixels[..count * 4].to_vec()),
-        ColorSpace::RGB => expand(3, |source, rgba| {
-            *rgba = [source[0], source[1], source[2], 255];
-        }),
-        ColorSpace::LumaA => expand(2, |source, rgba| {
-            *rgba = [source[0], source[0], source[0], source[1]];
-        }),
-        ColorSpace::Luma => expand(1, |source, rgba| {
-            *rgba = [source[0], source[0], source[0], 255];
-        }),
-        other => {
-            return Err(SheetError::Decode(format!(
-                "a sprite sheet in {other:?} is not a colour type a sheet uses"
-            )));
-        }
-    };
-
-    widened.ok_or(SheetError::Unusable { width, height })
 }
 
 /// A style's sprite resource: the index and the sheet it points into.
@@ -570,7 +492,7 @@ fn widen(
 /// once and holds them.
 ///
 /// [`Fonts`]: crate::fonts::Fonts
-#[cfg(feature = "png")]
+#[cfg(feature = "image")]
 #[derive(Debug)]
 pub struct Sprites {
     base: String,
@@ -584,7 +506,7 @@ pub struct Sprites {
     dirty: bool,
 }
 
-#[cfg(feature = "png")]
+#[cfg(feature = "image")]
 impl Sprites {
     /// An empty store for a style's `sprite` base at a device pixel ratio.
     #[must_use]
@@ -708,7 +630,7 @@ impl Sprites {
 }
 
 /// Why a sprite resource could not be loaded.
-#[cfg(feature = "png")]
+#[cfg(feature = "image")]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LoadError {
     /// The transport failed. The resource stays unheld, so a later call tries again.
@@ -732,7 +654,7 @@ pub enum LoadError {
 /// sheet. `parseSprite` copies each icon out of it, and the atlas packs those copies with
 /// padding between them. A sheet has no padding — icons in it are usually flush — so drawing
 /// straight from it makes every icon quad's one-pixel border sample its neighbour.
-#[cfg(feature = "png")]
+#[cfg(feature = "image")]
 #[derive(Debug)]
 pub struct IconAtlas {
     pack: crate::atlas::ShelfPack,
@@ -743,7 +665,7 @@ pub struct IconAtlas {
     dirty: Vec<crate::atlas::Rect>,
 }
 
-#[cfg(feature = "png")]
+#[cfg(feature = "image")]
 impl IconAtlas {
     /// An empty atlas.
     #[must_use]

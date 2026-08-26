@@ -256,7 +256,7 @@ fn a_sprite_index_parser_survives_malformed_input() {
 }
 
 /// A sprite sheet, which is a PNG from a style's origin.
-#[cfg(feature = "png")]
+#[cfg(feature = "image")]
 #[test]
 fn a_sprite_sheet_decoder_survives_malformed_input() {
     const SHEET: &[u8] = include_bytes!("../../../tests/sprite-fixtures/emerald.png");
@@ -270,6 +270,33 @@ fn a_sprite_sheet_decoder_survives_malformed_input() {
                 (sheet.width as usize) * (sheet.height as usize) * 4,
                 "a decoded sheet's dimensions do not describe its pixels"
             );
+        }
+    });
+}
+
+/// A raster tile, which is a PNG or a JPEG from an imagery origin.
+///
+/// Fuzzed separately from the sprite sheet even though the two go through one decoder, because
+/// the mutations that matter are not the same: a sheet fixture is a PNG, so a mutation of it
+/// stays in the PNG decoder, and the JPEG half would never be reached. Both fixtures are here,
+/// so a mutation that flips the signature crosses between them as well.
+#[cfg(feature = "image")]
+#[test]
+fn a_raster_tile_decoder_survives_malformed_input() {
+    const PNG: &[u8] = include_bytes!("../../../tests/image-fixtures/tile.png");
+    const JPEG: &[u8] = include_bytes!("../../../tests/image-fixtures/tile.jpeg");
+
+    hammer("image::decode", &[PNG, JPEG], |bytes| {
+        if let Ok(image) = tessella_source::image::decode(bytes) {
+            // Everything downstream indexes by these dimensions — an atlas rectangle, a texture
+            // upload, a quad's coordinates — so a buffer that does not match them is a read past
+            // the end several stages from here.
+            assert_eq!(
+                image.pixels.len(),
+                (image.width as usize) * (image.height as usize) * 4,
+                "a decoded image's dimensions do not describe its pixels"
+            );
+            assert!(image.width > 0 && image.height > 0, "a zero-area image");
         }
     });
 }

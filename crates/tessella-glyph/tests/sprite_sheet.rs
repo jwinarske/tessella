@@ -5,7 +5,7 @@
 //! encoded — a greyscale sheet and an RGBA one with identical rectangles would sample different
 //! things. Everything is widened to RGBA for that reason, and each colour type is checked.
 
-#![cfg(feature = "png")]
+#![cfg(feature = "image")]
 
 use tessella_glyph::sprite::{self, SheetError};
 
@@ -86,15 +86,35 @@ fn encode(width: u32, height: u32, color_type: u8, samples: &[u8]) -> Vec<u8> {
     png
 }
 
-/// An RGBA sheet decodes to its own bytes.
+/// An opaque RGBA sheet decodes to its own bytes.
+///
+/// Opaque deliberately: a sheet comes back *premultiplied*, which is what mbgl's `decodeImage`
+/// produces and what every blend downstream assumes, so the only pixels that survive a decode
+/// unchanged are the ones whose alpha is 255. See `a_translucent_sheet_is_premultiplied` for
+/// the other half.
 #[test]
-fn an_rgba_sheet_decodes_unchanged() {
-    let samples: Vec<u8> = (0..2 * 2 * 4).map(|index| index as u8).collect();
+fn an_opaque_rgba_sheet_decodes_unchanged() {
+    let samples: Vec<u8> = (0..2 * 2 * 4)
+        .map(|index| if index % 4 == 3 { 255 } else { index as u8 })
+        .collect();
     let sheet = sprite::decode_sheet(&encode(2, 2, 6, &samples)).expect("decodes");
 
     assert_eq!(sheet.size(), (2, 2));
     assert_eq!(sheet.pixels.len(), 2 * 2 * 4);
     assert_eq!(sheet.pixels, samples);
+}
+
+/// A sheet with alpha in it comes back premultiplied.
+///
+/// mbgl decodes every image to a `PremultipliedImage`, and the shaders and the style colours are
+/// both in that space. Left straight, an icon's anti-aliased edge blends at full strength and
+/// draws a bright fringe around the marker — invisible on the opaque sprites that are most of a
+/// sheet, and obvious on the ones that fade out.
+#[test]
+fn a_translucent_sheet_is_premultiplied() {
+    let sheet = sprite::decode_sheet(&encode(2, 1, 6, &[200, 100, 50, 128, 200, 100, 50, 0]))
+        .expect("decodes");
+    assert_eq!(sheet.pixels, vec![100, 50, 25, 128, 0, 0, 0, 0]);
 }
 
 /// An RGB sheet gains an opaque alpha rather than a transparent one.
@@ -118,11 +138,15 @@ fn a_greyscale_sheet_broadcasts_across_the_channels() {
     assert_eq!(sheet.pixels, vec![64, 64, 64, 255, 200, 200, 200, 255]);
 }
 
-/// Greyscale with alpha keeps the alpha and broadcasts the rest.
+/// Greyscale with alpha keeps the alpha, broadcasts the rest, and premultiplies.
+///
+/// The half-alpha 64 becomes 32 and the transparent 200 becomes nothing, which is the same rule
+/// the RGBA case follows — the widening and the premultiply are two steps and the order between
+/// them is the one that reads: broadcast first, then multiply what was broadcast.
 #[test]
 fn greyscale_with_alpha_keeps_its_alpha() {
     let sheet = sprite::decode_sheet(&encode(2, 1, 4, &[64, 128, 200, 0])).expect("decodes");
-    assert_eq!(sheet.pixels, vec![64, 64, 64, 128, 200, 200, 200, 0]);
+    assert_eq!(sheet.pixels, vec![32, 32, 32, 128, 0, 0, 0, 0]);
 }
 
 /// The decoded size is what the index's bounds check runs against.
@@ -171,7 +195,9 @@ fn a_body_that_is_not_a_png_is_an_error() {
 /// which is most of what a real sheet is.
 #[test]
 fn a_full_size_sheet_decodes() {
-    let samples: Vec<u8> = (0..512usize * 512 * 4).map(|index| index as u8).collect();
+    let samples: Vec<u8> = (0..512usize * 512 * 4)
+        .map(|index| if index % 4 == 3 { 255 } else { index as u8 })
+        .collect();
     let sheet = sprite::decode_sheet(&encode(512, 512, 6, &samples)).expect("decodes");
     assert_eq!(sheet.size(), (512, 512));
     assert_eq!(sheet.pixels.len(), 512 * 512 * 4);

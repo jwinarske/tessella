@@ -12,7 +12,6 @@ publish = false
 
 [dependencies]
 fontdue.workspace = true
-zune-png = { workspace = true, optional = true }
 serde_json.workspace = true
 unicode-bidi.workspace = true
 tessella-source.workspace = true
@@ -21,11 +20,12 @@ thiserror.workspace = true
 
 [features]
 default = []
-# Decoding a sprite sheet. Off by default and for the same reason `cache` and `tls` are: a build
-# that draws no icons should not carry a PNG decoder, and §16's cross lane checks the workspace
-# with default features. `zune-png` is pure Rust, so unlike `tls` this costs that lane nothing
-# even when enabled — it is a feature for binary size (DR-12), not for the toolchain.
-png = ["dep:zune-png"]
+# Decoding a sprite sheet, which goes through the shared image decoder a raster tile uses. Off by
+# default for the same reason `cache` and `tls` are: a build that draws no icons should not carry
+# a PNG and a JPEG decoder, and §16's cross lane checks the workspace with default features. Both
+# are pure Rust, so unlike `tls` this costs that lane nothing even when enabled — it is a feature
+# for binary size (DR-12), not for the toolchain.
+image = ["tessella-source/image"]
 
 [lints]
 workspace = true

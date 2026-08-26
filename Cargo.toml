@@ -62,6 +62,7 @@ ureq = { version = "3.4", default-features = false, features = ["gzip"] }  # cpp
 # whole `zune-image`: a sprite sheet and a raster tile are PNG, and the family's other decoders
 # are binary §12.4 would carry for nothing. Pure Rust, so the cross lane is unaffected — it is a
 # feature only because not every build draws icons. WebP joins it when raster tiles land.
+zune-jpeg = "0.5"
 zune-png = "0.5"
 geozero = "0.15"         # interim MVT decode; §8 prefers a hand-rolled zero-copy varint reader
 

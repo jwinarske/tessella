@@ -178,3 +178,67 @@ fn rejects_malformed_json() {
         Err(tessella_style::Error::Json(_))
     ));
 }
+
+/// The spec's camelCase source fields reach their fields rather than falling into `extra`.
+///
+/// A source's multi-word keys are camelCase where a layer's paint properties are kebab-case, and
+/// serde needs told per field because most source keys are single words that need no rename. A
+/// missing one is not a parse error — the key lands in `extra` and the field reads `None` — so
+/// it looks exactly like a style that did not state the value. `tileSize` was that for a while,
+/// which covered every raster basemap at the wrong zoom.
+#[test]
+fn a_sources_camel_case_keys_are_read() {
+    use tessella_style::Source;
+
+    let style = tessella_style::Style::parse(
+        r#"{"version": 8,
+            "sources": {
+              "sat": {"type": "raster", "tiles": ["https://o/{z}/{x}/{y}.png"],
+                      "tileSize": 256, "minzoom": 2, "maxzoom": 19},
+              "points": {"type": "geojson", "data": "https://o/points.json",
+                         "cluster": true, "clusterRadius": 60, "clusterMaxZoom": 11}
+            },
+            "layers": []}"#,
+    )
+    .expect("the style parses");
+
+    let Some(Source::Raster(raster)) = style.source("sat") else {
+        panic!("the raster source is missing");
+    };
+    assert_eq!(raster.tile_size, Some(256), "tileSize fell into `extra`");
+    assert_eq!(raster.minzoom, Some(2.0));
+    assert_eq!(raster.maxzoom, Some(19.0));
+    assert!(
+        !raster.extra.contains_key("tileSize"),
+        "tileSize was read twice"
+    );
+
+    let Some(Source::Geojson(points)) = style.source("points") else {
+        panic!("the geojson source is missing");
+    };
+    assert_eq!(points.cluster, Some(true));
+    assert_eq!(points.cluster_radius, Some(60.0));
+    assert_eq!(points.cluster_max_zoom, Some(11.0));
+}
+
+/// And they go back out under the same names.
+///
+/// A style is round-tripped rather than only read — an offline region records the style it
+/// pinned — so a rename that reads correctly and writes `tile_size` produces a document nothing
+/// else can read back.
+#[test]
+fn a_sources_camel_case_keys_are_written_back() {
+    let style = tessella_style::Style::parse(
+        r#"{"version": 8,
+            "sources": {"sat": {"type": "raster", "tiles": [], "tileSize": 256}},
+            "layers": []}"#,
+    )
+    .expect("the style parses");
+
+    let Some(source) = style.source("sat") else {
+        panic!("the source is missing");
+    };
+    let written = serde_json::to_string(source).expect("serializes");
+    assert!(written.contains(r#""tileSize":256"#), "{written}");
+    assert!(!written.contains("tile_size"), "{written}");
+}

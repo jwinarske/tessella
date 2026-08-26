@@ -240,7 +240,7 @@ pub const SPRITE_SHEET_FORMAT: TexturePixelType = TexturePixelType::RGBA;
 /// "all of it", which is exactly what this is.
 ///
 /// `None` when the sheet has not arrived or has not changed — a style's icons are uploaded once.
-#[cfg(feature = "png")]
+#[cfg(feature = "image")]
 #[must_use]
 pub fn sprite_sheet(texture: TextureId, sheet: &tessella_glyph::sprite::Sheet) -> Option<Upload> {
     let size = Extent {

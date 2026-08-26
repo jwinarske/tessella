@@ -17,6 +17,15 @@ thiserror.workspace = true
 tessella-storage.workspace = true
 tessella-style.workspace = true
 tessella-tile.workspace = true
+zune-jpeg = { workspace = true, optional = true }
+zune-png = { workspace = true, optional = true }
+
+[features]
+default = []
+# Raster tiles and sprite sheets, which are PNG and JPEG. Off by default for binary size
+# (DR-12): a style with no raster source and no sprite never reaches either decoder, and both
+# are pure Rust so the cross lane pays nothing to have them available.
+image = ["dep:zune-jpeg", "dep:zune-png"]
 
 [dev-dependencies]
 serde_json.workspace = true
