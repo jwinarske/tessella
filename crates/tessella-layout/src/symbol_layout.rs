@@ -26,7 +26,7 @@ use tessella_style::document::PropertyValue;
 use tessella_style::expression::{Expression, Feature};
 use tessella_style::{Layer, Value};
 
-use alloc::collections::BTreeSet;
+use alloc::collections::{BTreeMap, BTreeSet};
 
 use tessella_glyph::fonts::Fonts;
 
@@ -327,6 +327,140 @@ impl SymbolLayout {
                 .extend(pending.text.chars().map(|character| character as u32));
         }
         out
+    }
+
+    /// Joins line features that share an endpoint and say the same thing.
+    ///
+    /// A port of mbgl's `util::mergeLines`, which it runs on a symbol layer's features whenever
+    /// `symbol-placement` is `line` and before any anchor is chosen.
+    ///
+    /// A road is rarely one feature. A tile cuts it at its edges and a source cuts it wherever an
+    /// attribute changes — a speed limit, a surface, a bridge — so "Main Street" arrives as a
+    /// dozen stubs laid end to end. Labelling them separately puts a dozen copies of the name
+    /// along one street, and *drops* most of them instead: a stub shorter than its own label
+    /// cannot hold one at all, which is why the street fixture produced far fewer labels than it
+    /// has roads. Joining first is what turns a run of stubs into a road long enough to name.
+    ///
+    /// Two features join when one's last point is the other's first *and* their text matches.
+    /// Text, not feature id — the point is to label the street rather than to reassemble the
+    /// source — and a stub whose name differs stays its own line even where it touches.
+    ///
+    /// Merged-away features are dropped rather than left empty. mbgl clears their geometry and
+    /// skips them later; here the layout would otherwise carry a pending symbol with no line in
+    /// it, which every stage downstream would have to know to ignore.
+    ///
+    /// One greedy pass, and **not** run to a fixed point. The index holds one entry per text and
+    /// endpoint, so where two roads of the same name start at the same place only one of them is
+    /// reachable — a Y junction, of which a street tile has dozens. Running again joins more.
+    /// mbgl's index is an `unordered_map` assigned into and overwrites identically, so a second
+    /// pass would be a divergence: a silent one, because the extra joins look like better
+    /// labelling rather than like a difference from the oracle.
+    pub fn merge_lines(&mut self) {
+        if !self.placement.along_line() {
+            return;
+        }
+
+        /// Where a line ends, keyed exactly rather than by hash.
+        ///
+        /// mbgl hashes the text with the coordinate and indexes on that, which can collide and
+        /// join two different streets that happen to touch. The tuple cannot, and is otherwise
+        /// the same lookup — tile coordinates are integral, so the comparison is exact.
+        type End = (String, i32, i32);
+
+        let key = |text: &str, point: (f32, f32)| -> End {
+            #[allow(clippy::cast_possible_truncation)]
+            (text.to_string(), point.0 as i32, point.1 as i32)
+        };
+
+        // Which feature ends at a point, and which begins at one.
+        let mut ends_at: BTreeMap<End, usize> = BTreeMap::new();
+        let mut starts_at: BTreeMap<End, usize> = BTreeMap::new();
+
+        for index in 0..self.pending.len() {
+            let Anchoring::Line(line) = &self.pending[index].anchoring else {
+                continue;
+            };
+            if line.is_empty() || self.pending[index].text.is_empty() {
+                continue;
+            }
+            let text = self.pending[index].text.clone();
+            let left = key(&text, line[0]);
+            let right = key(&text, line[line.len() - 1]);
+
+            let before = ends_at.get(&left).copied();
+            let after = starts_at.get(&right).copied();
+
+            match (before, after) {
+                // A line on each side: join all three. Never a line with itself, which is what
+                // keeps a closed ring from being merged into nothing.
+                (Some(before), Some(after)) if before != after => {
+                    starts_at.remove(&right);
+                    self.join(after, index, true);
+                    ends_at.remove(&left);
+                    // The *merged* line, not the original. This line's points moved into
+                    // `after` a moment ago, so joining `index` again appends nothing and leaves
+                    // the road in two pieces — which looks like a correct merge on any fixture
+                    // where only one end touches.
+                    self.join(before, after, false);
+
+                    starts_at.remove(&left);
+                    ends_at.remove(&right);
+                    if let Anchoring::Line(line) = &self.pending[before].anchoring {
+                        let far = key(&text, line[line.len() - 1]);
+                        ends_at.insert(far, before);
+                    }
+                }
+                // A line ending where this one starts: append this to it.
+                (Some(before), _) => {
+                    ends_at.remove(&left);
+                    ends_at.insert(right, before);
+                    self.join(before, index, false);
+                }
+                // A line starting where this one ends: prepend this to it.
+                (None, Some(after)) => {
+                    starts_at.remove(&right);
+                    starts_at.insert(left, after);
+                    self.join(after, index, true);
+                }
+                (None, None) => {
+                    starts_at.insert(left, index);
+                    ends_at.insert(right, index);
+                }
+            }
+        }
+
+        // What was merged away has no line left; a pending symbol with no geometry is not one.
+        self.pending.retain(|pending| match &pending.anchoring {
+            Anchoring::Line(line) => !line.is_empty(),
+            Anchoring::Point(_) => true,
+        });
+    }
+
+    /// Moves `from`'s line onto `into`, leaving `from` empty.
+    ///
+    /// `prepend` puts it in front. Either way the shared point appears once: the joint is the
+    /// last point of one and the first of the other, and keeping both would put a zero-length
+    /// segment in the middle of the road for the anchor walk to divide by.
+    fn join(&mut self, into: usize, from: usize, prepend: bool) {
+        let Anchoring::Line(moving) = &mut self.pending[from].anchoring else {
+            return;
+        };
+        let mut moving = core::mem::take(moving);
+        if moving.is_empty() {
+            return;
+        }
+
+        let Anchoring::Line(target) = &mut self.pending[into].anchoring else {
+            return;
+        };
+        if prepend {
+            moving.pop();
+            moving.append(target);
+            *target = moving;
+        } else {
+            target.pop();
+            target.append(&mut moving);
+        }
     }
 
     /// The sprites this layout needs, which is what the sprite sheet is looked up by.

@@ -261,6 +261,9 @@ pub fn build_tile(
                     layout.push(layer, zoom, feature, &rings);
                 }
 
+                // A road is rarely one feature; joining its segments before anything is placed
+                // is what makes it long enough to name.
+                layout.merge_lines();
                 Content::Symbol(layout)
             }
             LayerKind::Background => Content::Background,
@@ -700,6 +703,7 @@ pub fn build_mvt_tile(
                         layout.push(layer, zoom, &feature, &rings);
                     }
                 }
+                layout.merge_lines();
                 Content::Symbol(layout)
             }
             LayerKind::Circle => {

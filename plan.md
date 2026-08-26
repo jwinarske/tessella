@@ -1399,6 +1399,28 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   R0 exit and a mask is a field addition, so it wants a capture of a partially covered parent
   before anything is added. Recorded rather than fixed, and named here because the next reader
   will otherwise conclude from a green golden that masks are handled.
+  The audit then found a third: **`mergeLines` was missing entirely.** mbgl runs it on a symbol
+  layer's features whenever `symbol-placement` is `line`, before any anchor is chosen, and it
+  joins features that share an endpoint *and* say the same thing. A road is rarely one feature —
+  a tile cuts it at its edges and a source cuts it wherever an attribute changes, a speed limit
+  or a surface or a bridge — so "Main Street" arrives as a dozen stubs laid end to end. Without
+  the join each stub is labelled separately, and most are *dropped*: a stub shorter than its own
+  label cannot hold one. That is why the street fixture produced so many fewer labels than it has
+  roads, a number that had been read as the fixture being short of long roads.
+  Ported with mbgl's own `MergeLines.*` expectations, coordinate for coordinate, because the
+  merge is order-dependent: joining the same set in a different order gives different *lines* —
+  the same points distributed between features differently — and every anchor moves. The
+  three-way case is the one to get exactly, and getting it half right is the easy failure: this
+  build joined one end and left the other, which is indistinguishable from correct on any fixture
+  where only one side touches. mbgl passes the *already merged* line to the second join, and
+  passing the original appends nothing because its points have already moved.
+  One property is worth stating because it looks like a bug: the merge is **not idempotent**, and
+  running it twice joins more. The index holds one entry per text and endpoint, so where two
+  roads of the same name start at the same place only one is reachable — the street fixture has
+  fifty such junctions. mbgl's index is an `unordered_map` assigned into and overwrites the same
+  way, so one greedy pass is the oracle's behaviour. Running to a fixed point would be a
+  divergence, and a *silent* one, since the extra joins look like better labelling rather than
+  like a difference.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

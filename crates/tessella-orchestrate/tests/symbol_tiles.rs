@@ -697,3 +697,63 @@ fn the_sprite_decides_whether_it_is_a_field() {
     assert!(is_sdf(&as_field), "an sdf sprite was drawn as an image");
     assert!(!is_sdf(&as_plain), "an image was drawn as a field");
 }
+
+/// A road's segments are joined before it is labelled.
+///
+/// The street fixture is 1773 road *features*, which is not 1773 roads: a tile cuts a street at
+/// its edges and a source cuts it wherever an attribute changes, so one street arrives as a run
+/// of stubs laid end to end. Labelling them separately puts a copy of the name on each — and
+/// drops most of them, because a stub shorter than its own label cannot hold one.
+///
+/// The measurable consequence is that merging *raises* the number of labels placed while
+/// *lowering* the number of features, which is the shape that says stubs became roads rather
+/// than that geometry went missing.
+#[test]
+fn a_roads_segments_are_joined_before_it_is_labelled() {
+    let style = road_style("line");
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let merged = buckets[0].content.as_symbol().expect("a symbol layout");
+
+    assert!(
+        merged.pending.len() < 1773,
+        "{} features survived a merge of 1773",
+        merged.pending.len()
+    );
+
+    // And the surviving lines are longer than the stubs they came from: at least one is longer
+    // than any single feature could be, which only a join produces.
+    let longest = merged
+        .pending
+        .iter()
+        .filter_map(|pending| match &pending.anchoring {
+            Anchoring::Line(line) => Some(line.len()),
+            Anchoring::Point(_) => None,
+        })
+        .max()
+        .expect("some roads");
+    assert!(longest > 2, "every road is still a two-point stub");
+
+    // A second pass joins more, and that is not a bug in either implementation. The index holds
+    // one entry per (text, endpoint), so where two roads of the same name start at the same
+    // point only one of them is reachable — this tile has fifty such junctions. mbgl's index is
+    // an `unordered_map` assigned into, which overwrites the same way. One greedy pass is what
+    // mbgl does and what this does; running it to a fixed point would be a divergence, and a
+    // silent one, since the extra joins look like better labelling.
+    let mut again = merged.clone();
+    again.merge_lines();
+    assert!(
+        again.pending.len() < merged.pending.len(),
+        "a second pass changed nothing, so the junction case has gone away"
+    );
+
+    // Every merged line is still a line: no empties left behind, and no duplicated joints.
+    for pending in &merged.pending {
+        let Anchoring::Line(line) = &pending.anchoring else {
+            continue;
+        };
+        assert!(line.len() >= 2, "an empty line survived the merge");
+        for pair in line.windows(2) {
+            assert_ne!(pair[0], pair[1], "a zero-length segment at a joint");
+        }
+    }
+}
