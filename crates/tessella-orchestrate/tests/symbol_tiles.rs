@@ -902,3 +902,176 @@ fn an_icon_with_no_label_is_not_stretched() {
         );
     }
 }
+
+/// `auto` resolves in two steps, and the order is what makes a road name lie flat.
+///
+/// Rotation alignment goes first: `map` for a line-placed symbol, `viewport` for a point-placed
+/// one — a road name follows its road, a town name stays upright. Pitch alignment then *inherits
+/// what rotation became*. Resolving pitch first would give every line label a viewport pitch and
+/// lay none of them flat on a tilted map, which is a plausible-looking map that is wrong.
+#[test]
+fn auto_alignment_resolves_from_placement_then_inherits() {
+    use tessella_layout::symbol_layout::Alignment;
+
+    let point = build_mvt_tile(&road_style("point"), "v", ID, &tile()).expect("builds");
+    let point = point[0].content.as_symbol().expect("a symbol layout");
+    assert_eq!(point.text_alignments.rotation, Alignment::Viewport);
+    assert_eq!(
+        point.text_alignments.pitch,
+        Alignment::Viewport,
+        "pitch did not inherit rotation"
+    );
+
+    let line = build_mvt_tile(&road_style("line"), "v", ID, &tile()).expect("builds");
+    let line = line[0].content.as_symbol().expect("a symbol layout");
+    assert_eq!(line.text_alignments.rotation, Alignment::Map);
+    assert_eq!(
+        line.text_alignments.pitch,
+        Alignment::Map,
+        "a road name would stand up on a tilted map"
+    );
+}
+
+/// A style may state either alignment, and the other still inherits.
+#[test]
+fn a_stated_alignment_overrides_the_default() {
+    use tessella_layout::symbol_layout::Alignment;
+
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "l", "type": "symbol", "source": "v", "source-layer": "road",
+                        "layout": {"text-field": "{type}", "text-font": ["TestFont"],
+                                   "symbol-placement": "line",
+                                   "text-pitch-alignment": "viewport"}}]}"#,
+    )
+    .expect("a style");
+
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+
+    // A road name that follows the road but stays upright when the map tilts: the case the two
+    // properties are separate for.
+    assert_eq!(layout.text_alignments.rotation, Alignment::Map);
+    assert_eq!(layout.text_alignments.pitch, Alignment::Viewport);
+
+    // The icons' pair is its own, and untouched by the text's.
+    assert_eq!(layout.icon_alignments.pitch, Alignment::Map);
+}
+
+/// The alignments decide which matrices a drawable carries and who turns the symbol.
+#[test]
+fn the_alignments_decide_the_drawables_matrices() {
+    use tessella_layout::symbol_layout::{Alignment, Alignments, Placement};
+    use tessella_orchestrate::ubo::SymbolDrawableEntry;
+    use tessella_tile::cover::ViewTransform;
+
+    let view = ViewTransform {
+        longitude: -0.11,
+        latitude: 51.505,
+        zoom: 13.0,
+        width: 1024.0,
+        height: 768.0,
+        bearing: core::f64::consts::FRAC_PI_4,
+        pitch: core::f64::consts::FRAC_PI_6,
+    };
+
+    let entry = |alignments, placement| {
+        SymbolDrawableEntry::for_tile(
+            &view,
+            13,
+            4093,
+            2723,
+            0,
+            1,
+            0,
+            [512.0, 512.0],
+            [0.0, 0.0],
+            16.0,
+            alignments,
+            placement,
+        )
+        .expect("a viewport")
+    };
+
+    let upright = Alignments {
+        rotation: Alignment::Viewport,
+        pitch: Alignment::Viewport,
+    };
+    let flat = Alignments {
+        rotation: Alignment::Map,
+        pitch: Alignment::Map,
+    };
+    let turning_but_standing = Alignments {
+        rotation: Alignment::Map,
+        pitch: Alignment::Viewport,
+    };
+
+    // A label walked along a line gets the *identity* plane: the projection does the walk along
+    // the projected road, and a plane here would bend the label before the walk bent it again.
+    let walked = entry(flat, Placement::Line);
+    assert_eq!(
+        walked.label_plane_matrix,
+        [
+            1.0, 0.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, 0.0, //
+            0.0, 0.0, 1.0, 0.0, //
+            0.0, 0.0, 0.0, 1.0,
+        ],
+        "a walked label got a plane to bend it twice"
+    );
+
+    // A flat point label gets the map-aligned plane, which is not the viewport one.
+    let lying = entry(flat, Placement::Point);
+    let standing = entry(upright, Placement::Point);
+    assert_ne!(lying.label_plane_matrix, standing.label_plane_matrix);
+    assert!(lying.pitch_with_map);
+    assert!(!standing.pitch_with_map);
+
+    // Only the symbol that turns with the map while standing up is turned by the shader. The
+    // other two are turned by the projection or by the walk, and turning them again would
+    // double the rotation.
+    assert!(entry(turning_but_standing, Placement::Point).rotate_symbol);
+    assert!(!lying.rotate_symbol, "a flat label was turned twice");
+    assert!(!walked.rotate_symbol, "a walked label was turned twice");
+    assert!(!standing.rotate_symbol);
+}
+
+/// The gamma scale corrects a flat label's distance field and leaves an upright one alone.
+///
+/// A label lying flat and pitched away covers fewer screen pixels than it was laid out for, so a
+/// fixed ramp is sampled across too few of them and the text thins to nothing at the horizon.
+/// One for a label standing up: its glyphs are the size they were laid out at.
+#[test]
+fn the_gamma_scale_corrects_only_a_flat_label() {
+    use tessella_layout::symbol_layout::Alignment;
+    use tessella_orchestrate::ubo::symbol_gamma_scale;
+    use tessella_tile::cover::ViewTransform;
+
+    let view = ViewTransform {
+        longitude: -0.11,
+        latitude: 51.505,
+        zoom: 13.0,
+        width: 1024.0,
+        height: 768.0,
+        bearing: 0.0,
+        pitch: core::f64::consts::FRAC_PI_6,
+    };
+
+    assert_eq!(symbol_gamma_scale(&view, Alignment::Viewport), 1.0);
+
+    let flat = symbol_gamma_scale(&view, Alignment::Map);
+    assert!(
+        flat > 1.0,
+        "{flat} would thin the text rather than widen it"
+    );
+
+    // Steeper pitch tips the glyphs further away, so the correction *falls* with the cosine.
+    let steeper = ViewTransform {
+        pitch: core::f64::consts::FRAC_PI_3,
+        ..view
+    };
+    assert!(
+        symbol_gamma_scale(&steeper, Alignment::Map) < flat,
+        "the correction did not follow the pitch"
+    );
+}

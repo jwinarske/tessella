@@ -190,6 +190,89 @@ impl Placement {
     }
 }
 
+/// `*-rotation-alignment` and `*-pitch-alignment`: what a symbol is oriented against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Alignment {
+    /// Fixed to the screen. A label stays upright and the same size however the map is turned.
+    #[default]
+    Viewport,
+    /// Fixed to the ground. A label turns and tilts with the map.
+    Map,
+}
+
+/// The two alignments a symbol's halves resolve to.
+///
+/// `auto` is the spec's default for both and resolves in two steps, in this order. Rotation
+/// alignment takes `map` for a line-placed symbol and `viewport` for a point-placed one — a road
+/// name follows its road, a town name stays upright. Pitch alignment then *inherits whatever
+/// rotation alignment became*, which is why the order matters: resolving pitch first would give
+/// every line label a viewport pitch and lay none of them flat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Alignments {
+    /// What the symbol turns with.
+    pub rotation: Alignment,
+    /// What it tilts with.
+    pub pitch: Alignment,
+}
+
+impl Alignments {
+    /// Resolves both from a layer, for a placement.
+    ///
+    /// `prefix` is `text` or `icon`: the two halves carry their own pair, and a style setting one
+    /// and leaving the other `auto` is ordinary rather than exotic.
+    #[must_use]
+    pub fn of(layer: &Layer, zoom: f64, placement: Placement, prefix: &str) -> Self {
+        let read = |key: &str| -> Option<Alignment> {
+            match layout_value(layer, key, zoom, None)
+                .as_ref()
+                .and_then(Value::as_str)?
+            {
+                "map" => Some(Alignment::Map),
+                "viewport" => Some(Alignment::Viewport),
+                // `auto`, and anything a newer spec adds.
+                _ => None,
+            }
+        };
+
+        let rotation = read(&alloc::format!("{prefix}-rotation-alignment")).unwrap_or({
+            if placement.along_line() {
+                Alignment::Map
+            } else {
+                Alignment::Viewport
+            }
+        });
+        // Inherited, not defaulted. A line label that rotates with the map also pitches with it
+        // unless the style says otherwise.
+        let pitch = read(&alloc::format!("{prefix}-pitch-alignment")).unwrap_or(rotation);
+
+        Self { rotation, pitch }
+    }
+
+    /// Whether the symbol's glyphs are walked along a line rather than placed at a point.
+    ///
+    /// mbgl's `alongLine`, and it is *both* conditions: a line-placed symbol that does not rotate
+    /// with the map is drawn upright at each anchor rather than following the road, so it is not
+    /// walked. The label plane is the identity in that case, because the projection does the walk
+    /// itself and a plane would bend it twice.
+    #[must_use]
+    pub const fn along_line(self, placement: Placement) -> bool {
+        placement.along_line() && matches!(self.rotation, Alignment::Map)
+    }
+
+    /// Whether the shader turns the symbol, rather than the projection doing it.
+    ///
+    /// mbgl's `rotateInShader`. A symbol that turns with the map *and* lies flat is turned by the
+    /// label-plane projection; one that is walked along a line is turned by the walk. What is
+    /// left — turning with the map while standing up on screen — is the only case the shader has
+    /// to do itself.
+    #[must_use]
+    pub const fn rotate_in_shader(self, placement: Placement) -> bool {
+        matches!(self.rotation, Alignment::Map)
+            && matches!(self.pitch, Alignment::Viewport)
+            && !self.along_line(placement)
+    }
+}
+
 /// Where one label goes, in tile units.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Anchoring {
@@ -236,6 +319,10 @@ pub struct SymbolLayout {
     pub line: LineOptions,
     /// Where the labels sit.
     pub placement: Placement,
+    /// What the text is oriented against.
+    pub text_alignments: Alignments,
+    /// What the icons are.
+    pub icon_alignments: Alignments,
 }
 
 impl SymbolLayout {
@@ -270,6 +357,8 @@ impl SymbolLayout {
                 overscaling,
                 centred: placement == Placement::LineCenter,
             },
+            text_alignments: Alignments::of(layer, zoom, placement, "text"),
+            icon_alignments: Alignments::of(layer, zoom, placement, "icon"),
             placement,
         }
     }

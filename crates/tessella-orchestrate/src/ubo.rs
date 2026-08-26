@@ -30,6 +30,7 @@ use tessella_capture_abi::envelope::{Span, UboUpdate, ViewId, WireRecord};
 use tessella_capture_abi::generated::ubo_layouts;
 use tessella_capture_abi::generated::ubo_slots;
 use tessella_capture_abi::ring::{Full, Producer};
+use tessella_layout::symbol_layout::{Alignment, Alignments, Placement};
 use tessella_style::Value;
 use tessella_style::property::{Binding, Color, DefaultValue, ResolvedProperty};
 use tessella_tile::camera;
@@ -828,6 +829,8 @@ impl SymbolDrawableEntry {
         texsize: [f32; 2],
         texsize_icon: [f32; 2],
         size: f32,
+        alignments: Alignments,
+        placement: Placement,
     ) -> Result<Self, camera::CameraError> {
         let mut projection = camera::proj_matrix(view)?;
         projection[14] -= f64::from(depth_offset(layer_index, sub_layer_index));
@@ -836,11 +839,26 @@ impl SymbolDrawableEntry {
             &camera::matrix_for_tile(z, x, y, wrap, view.zoom),
         );
 
-        // The label plane is built from the tile matrix *without* the depth offset — mbgl passes
-        // the drawable's own matrix, and the offset is already in it. Passing an unoffset one
-        // would put the label plane a hair in front of the geometry it belongs to.
-        let plane = camera::label_plane_matrix(&tile, view.width, view.height);
-        let coord = camera::gl_coord_matrix(view.width, view.height);
+        let pitch_with_map = alignments.pitch == Alignment::Map;
+        let rotate_with_map = alignments.rotation == Alignment::Map;
+        let along_line = alignments.along_line(placement);
+
+        // The identity for a label walked along a line. The projection does the walk itself,
+        // point by point along the *projected* road, so a plane here would bend the label once
+        // before the walk bent it again.
+        let plane = if along_line {
+            camera::identity()
+        } else if pitch_with_map {
+            camera::label_plane_matrix_on_map(z, view.zoom, view.bearing, rotate_with_map)
+        } else {
+            camera::label_plane_matrix(&tile, view.width, view.height)
+        };
+
+        let coord = if pitch_with_map {
+            camera::gl_coord_matrix_on_map(&tile, z, view.zoom, view.bearing, rotate_with_map)
+        } else {
+            camera::gl_coord_matrix(view.width, view.height)
+        };
 
         #[allow(clippy::cast_possible_truncation)]
         Ok(Self {
@@ -850,8 +868,8 @@ impl SymbolDrawableEntry {
             texsize,
             texsize_icon,
             is_text: true,
-            rotate_symbol: false,
-            pitch_with_map: false,
+            rotate_symbol: alignments.rotate_in_shader(placement),
+            pitch_with_map,
             // A constant `text-size` is constant in both senses, which is the common case and
             // the only one this build produces.
             is_size_zoom_constant: true,
@@ -861,6 +879,27 @@ impl SymbolDrawableEntry {
             size,
             interpolations: [0.0; 5],
         })
+    }
+}
+
+/// The gamma a symbol's distance field is sampled with, for this camera.
+///
+/// mbgl's `gammaScale`. One for a label standing up on screen: its glyphs are the size they were
+/// laid out at, so the field's ramp needs no correction.
+///
+/// A label lying flat on the ground is a different picture. Pitched away from the camera it
+/// covers fewer screen pixels than it was laid out for, so a fixed ramp is sampled across too few
+/// of them and the text thins to nothing at the horizon; scaling by the cosine of the pitch times
+/// the camera distance widens the ramp to match. It is the same correction a mipmap makes, done
+/// in the shader because a distance field has no mip levels to choose between.
+#[must_use]
+pub fn symbol_gamma_scale(view: &ViewTransform, pitch: Alignment) -> f32 {
+    #[allow(clippy::cast_possible_truncation)]
+    match pitch {
+        Alignment::Map => {
+            (view.pitch.cos() * camera::camera_to_center_distance(view.height)) as f32
+        }
+        Alignment::Viewport => 1.0,
     }
 }
 
@@ -913,9 +952,8 @@ pub fn pack_symbol_drawable_buffer(entries: &[SymbolDrawableEntry], stride: u32)
 /// halo first and the fill over it, so a layer with `text-halo-width` emits twice. This build
 /// draws no halo, which is why the oracle's two entries are both `is_halo = 0`.
 ///
-/// `gamma_scale` is one at pitch zero. Pitched, mbgl scales it by the drawable's perspective
-/// ratio so distant text does not thin out; there is no pitch here, and inventing the pitched
-/// value would put a number on the wire nothing produced.
+/// `gamma_scale` comes from [`symbol_gamma_scale`], which is one for a label standing up on
+/// screen and the pitch correction for one lying flat.
 #[must_use]
 pub fn pack_symbol_tile_props(
     drawables: usize,

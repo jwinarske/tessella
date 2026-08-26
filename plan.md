@@ -1609,6 +1609,31 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   a faster transcendental library, and the profile says it would not be worth having anyway:
   thirty of the thirty-eight transcendental call sites are in the camera, the projection and the
   cover, which run per view per frame rather than per vertex.
+  Symbols then respond to the camera that can now rotate. `text-rotation-alignment` and
+  `text-pitch-alignment` both default to `auto` and resolve in two steps whose *order* is the
+  whole of it: rotation goes first and takes `map` for a line-placed symbol and `viewport` for a
+  point-placed one — a road name follows its road, a town name stays upright — and pitch then
+  *inherits what rotation became*. Resolving pitch first gives every line label a viewport pitch
+  and lays none of them flat on a tilted map, which is a plausible-looking map that is wrong.
+  Three things follow from the pair and each is a different mechanism turning the same symbol,
+  which is why doing two of them is a double rotation rather than a stronger one. A label walked
+  along a line gets the *identity* label plane, because the projection does the walk along the
+  projected road and a plane would bend it before the walk bent it again. A label lying flat is
+  turned by the map-aligned plane. What is left — turning with the map while standing up on
+  screen — is the only case the *shader* turns, which is mbgl's `rotateInShader` and what
+  `rotate_symbol` had been hardcoded false for.
+  `along_line` is both conditions and not just the placement: a line-placed symbol that does not
+  rotate with the map is drawn upright at each anchor rather than following the road, so it is
+  not walked.
+  `gamma_scale` stops being one. A label lying flat and pitched away covers fewer screen pixels
+  than it was laid out for, so a fixed distance-field ramp is sampled across too few of them and
+  the text thins to nothing at the horizon; the cosine of the pitch times the camera distance
+  widens the ramp to match. It is the correction a mipmap would make, done in the shader because
+  a distance field has no mip levels to choose between. One for a label standing up, whose glyphs
+  are the size they were laid out at.
+  The capture's style names neither alignment and is point-placed, so both resolve to viewport —
+  which is the branch every golden pins, and the reason they all still hold now that the other
+  branch exists.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

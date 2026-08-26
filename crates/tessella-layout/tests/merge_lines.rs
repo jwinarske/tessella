@@ -9,7 +9,9 @@
 //! so the expectation is stated as "these lines survive" rather than "these slots are empty".
 
 use tessella_layout::symbol_bucket::{IconOptions, LineOptions, SymbolOptions};
-use tessella_layout::symbol_layout::{Anchoring, Pending, Placement, SymbolLayout};
+use tessella_layout::symbol_layout::{
+    Alignment, Alignments, Anchoring, Pending, Placement, SymbolLayout,
+};
 
 /// A layout holding the given `(text, line)` features, line-placed.
 fn layout(features: &[(&str, &[(i32, i32)])]) -> SymbolLayout {
@@ -38,6 +40,14 @@ fn layout(features: &[(&str, &[(i32, i32)])]) -> SymbolLayout {
         symbol: SymbolOptions::default(),
         line: LineOptions::default(),
         placement: Placement::Line,
+        text_alignments: Alignments {
+            rotation: Alignment::Map,
+            pitch: Alignment::Map,
+        },
+        icon_alignments: Alignments {
+            rotation: Alignment::Map,
+            pitch: Alignment::Map,
+        },
     }
 }
 

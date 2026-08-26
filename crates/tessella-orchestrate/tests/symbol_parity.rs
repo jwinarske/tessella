@@ -1103,6 +1103,7 @@ mod symbol_ubos {
 /// *line* label needs.
 mod symbol_drawable_ubo {
     use tessella_capture_abi::generated::ubo_layouts::SYMBOL_DRAWABLE_UBO;
+    use tessella_layout::symbol_layout::{Alignment, Alignments, Placement};
     use tessella_orchestrate::ubo::{self, SymbolDrawableEntry};
     use tessella_tile::cover::ViewTransform;
 
@@ -1122,6 +1123,12 @@ mod symbol_drawable_ubo {
 
     /// The two tiles the golden's symbol drawables sit on, in the order it lists them.
     const TILES: [(u32, u32); 2] = [(4093, 2723), (4093, 2724)];
+
+    /// Both alignments as the capture's style resolves them.
+    const VIEWPORT: Alignments = Alignments {
+        rotation: Alignment::Viewport,
+        pitch: Alignment::Viewport,
+    };
 
     #[test]
     fn the_drawable_buffer_matches_the_oracle() {
@@ -1144,6 +1151,11 @@ mod symbol_drawable_ubo {
                     // placeholder, and is why it is passed rather than defaulted.
                     [0.0, 0.0],
                     16.0,
+                    // The capture's style names neither alignment, and its placement is point,
+                    // so `auto` resolves to viewport for both — which is the branch the golden
+                    // pins and the reason it still holds now the other exists.
+                    VIEWPORT,
+                    Placement::Point,
                 )
                 .expect("the probe has a viewport")
             })
@@ -1175,6 +1187,8 @@ mod symbol_drawable_ubo {
             [512.0, 512.0],
             [0.0, 0.0],
             16.0,
+            VIEWPORT,
+            Placement::Point,
         )
         .expect("a viewport");
         let second = SymbolDrawableEntry::for_tile(
@@ -1188,6 +1202,8 @@ mod symbol_drawable_ubo {
             [512.0, 512.0],
             [0.0, 0.0],
             16.0,
+            VIEWPORT,
+            Placement::Point,
         )
         .expect("a viewport");
 
