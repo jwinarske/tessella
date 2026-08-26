@@ -18,6 +18,8 @@ use tessella_tile::cover::ViewTransform;
 /// maplibre-native's own 256-pixel raster tile.
 const TILE_PNG: &[u8] = include_bytes!("../../../tests/image-fixtures/tile.png");
 const TILE_JPEG: &[u8] = include_bytes!("../../../tests/image-fixtures/tile.jpeg");
+#[cfg(feature = "webp")]
+const TILE_WEBP: &[u8] = include_bytes!("../../../tests/image-fixtures/tile.webp");
 const MVT: &[u8] = include_bytes!("../../../tests/mvt-fixtures/real-world-0-0-0.mvt");
 
 /// An origin serving one body for tiles and refusing anything it does not recognise.
@@ -192,6 +194,46 @@ fn a_jpeg_imagery_tile_decodes() {
         .as_raster()
         .expect("a raster bucket");
     assert_eq!(content.image.size(), (256, 256));
+}
+
+/// A WebP imagery tile decodes, which is what MapTiler and Mapbox serve.
+///
+/// The template in this style ends in `.png` and the origin answers with WebP, which is not a
+/// misconfiguration but how a content-negotiating CDN behaves. The format is sniffed from the
+/// bytes, so the mismatch is invisible to everything downstream — which is the whole point of
+/// sniffing rather than trusting the URL.
+#[cfg(feature = "webp")]
+#[test]
+fn a_webp_imagery_tile_decodes_from_a_png_template() {
+    let booted = boot(&overlay(256), &view(13.0), TILE_WEBP.to_vec()).expect("boots");
+    let built = booted
+        .tiles
+        .iter()
+        .find(|built| built.source == "sat")
+        .expect("a raster tile");
+    let content = built.buckets[0]
+        .content
+        .as_raster()
+        .expect("a raster bucket");
+    assert_eq!(content.image.size(), (256, 256));
+}
+
+/// Without the WebP decoder the same tile is reported as a format this build cannot read.
+///
+/// Not as a corrupt body. A style pointed at a WebP source on a binary built without the feature
+/// is a build question, and saying so is the difference between changing a Cargo feature and
+/// going to look at the tile server.
+#[cfg(not(feature = "webp"))]
+#[test]
+fn a_webp_imagery_tile_names_the_missing_decoder() {
+    const TILE_WEBP: &[u8] = include_bytes!("../../../tests/image-fixtures/tile.webp");
+
+    let failure = boot(&overlay(256), &view(13.0), TILE_WEBP.to_vec())
+        .expect_err("this build has no webp decoder");
+    let BootError::Decode { message, .. } = &failure else {
+        panic!("expected a decode error, got {failure:?}");
+    };
+    assert!(message.contains("without a Webp decoder"), "{message}");
 }
 
 /// A body that is not an image fails the tile rather than drawing something.

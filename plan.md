@@ -423,7 +423,8 @@ trivial). No async runtime: mirror mbgl's actor model with threads + channels, p
 | BiDi | unicode-bidi | ubidi/ICU |
 | shaping | rustybuzz + unicode-linebreak | harfbuzz |
 | local glyph SDF | sdf_glyph_renderer-style + fontdue/ab_glyph | TinySDF/freetype path |
-| PNG/JPEG decode | zune-png + zune-jpeg, behind one off-by-default `image` feature (DR-20, §12.2) | mbgl's png/jpeg decoders |
+| PNG/JPEG decode | zune-png + zune-jpeg, behind an off-by-default `image` feature (DR-20, §12.2) | mbgl's png/jpeg decoders |
+| WebP decode | image-webp, behind an off-by-default `webp` feature above `image` (DR-20) | libwebp |
 | cache DB | rusqlite (bundled) | sqlite vendored |
 | HTTP | ureq (blocking, on workers) | cpp-httplib/curl |
 | f64 math | hand-written `[f64; 16]`; see below | mbgl matrix |
@@ -1753,9 +1754,9 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   The format is sniffed from the bytes rather than taken from the URL or a `Content-Type`. A tile
   template ends in `.png` for plenty of sources that serve JPEG behind it, and a header can be
   absent, wrong, or `application/octet-stream`. The first eight bytes cannot be any of those.
-  WebP is the third mbgl reads and this does not; it is refused as an *unrecognized format*
-  rather than as a broken body, which is a configuration answer instead of a retry, and
-  `tile.webp` is vendored so the refusal is asserted against a real file.
+  WebP is the third mbgl reads and, at this point, the one this build did not; `tile.webp` was
+  vendored so the refusal could be asserted against a real file, and it lands a few paragraphs
+  below.
   Sprite sheets go through the same decoder now rather than a second copy of it. The bound
   against the header, the widening to RGBA and the sniff are the same questions for a sheet and
   for a tile, and answering them twice is how two answers drift apart.
@@ -1851,6 +1852,46 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   value: the upload reaches the ring *before* the geometry that names it. The ring is ordered and
   the consumer acts on records as they arrive, so a `GeometryAdd` carrying a `TextureRef` the
   consumer has seen no upload for binds nothing at all.
+  WebP closes the last of the three formats a basemap is served as. It is what a source reaches
+  for when it wants photographic compression *and* an alpha channel — MapTiler and Mapbox serve
+  their satellite and hybrid layers as it — and it is the format a URL is least likely to admit
+  to: a `.png` template answered with WebP behind a content-negotiating CDN is an ordinary
+  arrangement rather than a misconfiguration, which is the case the byte sniff was written for
+  and is now asserted end to end.
+  `image-webp` is the decoder: pure Rust and `forbid(unsafe_code)`, like the zune pair. It sits
+  behind a feature of its own rather than inside `image` for two reasons that are not the same
+  reason. A VP8 decoder is a great deal more code than a PNG one, so DR-12 bites hardest there;
+  and it reads through `std::io` where the zune decoders take cursors of their own, making it the
+  one decoder that pulls `std` into a crate that is otherwise `no_std`. That is declared at an
+  `extern crate std` inside the function rather than left to happen, so the feature reads as a
+  decision about the crate's discipline and not only about its size.
+  The RIFF signature is checked in both halves — `RIFF` at the start *and* `WEBP` at offset
+  eight. `RIFF` alone is a container tag shared with WAV, AVI and a dozen other formats, so
+  matching on it would hand a sound file to the image decoder and report a decode failure where
+  "not an image" is the truthful answer.
+  Two behaviours are chosen rather than inherited. An *animated* WebP decodes to its first frame
+  rather than being refused: a raster tile is a picture of the ground, the texture behind it
+  holds one image, and there is no frame clock in this pipeline to advance a second one with —
+  so refusing would drop a tile whose first frame is perfectly usable. And chroma is upsampled
+  bilinearly, which is `image-webp`'s default and libwebp's, and therefore what mbgl gets; the
+  alternative is faster and leaves jagged edges along every colour boundary.
+  The fixture turned out to be a better oracle than its own test claims. mbgl's `image.test.cpp`
+  asserts the size of `tile.webp` and nothing more, but the file is a *lossy* `VP8 ` frame inside
+  an extended `VP8X` container with an EXIF chunk beside it — the harder of the two container
+  paths — and it still agrees with `tile.png` to within a tenth of a level on every channel mean.
+  That is an assertion the size check cannot make: a decoder that swapped the chroma planes,
+  upsampled them wrongly, or read the container's dimensions instead of the frame's produces
+  something of exactly the right size and visibly the wrong colour.
+  Reading the fixtures as one picture in three encodings would have been wrong, though, and the
+  tests say so out loud. `tile.jpeg` is a *different photograph* — its red channel means 117.6
+  against the other two's 63.9 — so it is excluded from that comparison with the numbers written
+  down, rather than left for someone to "fix" the tolerance around later.
+  The mutation harness takes the WebP seed too, and it is the one that earns its place: an
+  extended container is a chunk walk over a length field the file states, which is the shape where
+  a malformed body reads past the end if the walk trusts it. Nothing panicked. It is also now the
+  slowest test in the workspace in a debug build — a thousand VP8 decodes is a great deal more
+  work than a thousand PNG ones — which is the price of the coverage rather than an accident, and
+  `--release` brings the file back under four seconds.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 
@@ -2424,7 +2465,7 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
   compared as sequences, and it is what says the rotation is wagyu's alone and not something
   upstream of it that the fill path's cycle comparison was hiding.
 
-- **DR-20 Sprites and raster decode PNG and JPEG; compressed textures are a separate question.**
+- **DR-20 Sprites and raster decode PNG, JPEG and WebP; compressed textures are a separate question.**
   KTX2 with a Basis or block-compressed payload is genuinely cheaper than RGBA8 where it counts
   — a 1024-square sprite sheet is 4 MB decoded and roughly 1 MB as ETC2 or ASTC, and on an
   RK3566 that is shared memory and shared bandwidth. It is the same argument §12.4 already makes

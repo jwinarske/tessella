@@ -26,6 +26,9 @@ default = []
 # are pure Rust, so unlike `tls` this costs that lane nothing even when enabled — it is a feature
 # for binary size (DR-12), not for the toolchain.
 image = ["tessella-source/image"]
+# WebP, for a sheet served as one. Rare — a sprite sheet is nearly always PNG — but the decoder
+# is shared with raster tiles, so a build that reads WebP tiles reads WebP sheets for free.
+webp = ["image", "tessella-source/webp"]
 
 [lints]
 workspace = true

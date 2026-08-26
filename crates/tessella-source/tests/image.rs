@@ -133,7 +133,7 @@ fn a_jpeg_is_opaque_everywhere() {
 fn the_format_is_sniffed_from_the_signature() {
     assert_eq!(sniff(TILE_PNG), Some(Format::Png));
     assert_eq!(sniff(TILE_JPEG), Some(Format::Jpeg));
-    assert_eq!(sniff(TILE_WEBP), None, "webp is not read by this build");
+    assert_eq!(sniff(TILE_WEBP), Some(Format::Webp));
     assert_eq!(sniff(b""), None);
     assert_eq!(
         sniff(b"<!DOCTYPE html>"),
@@ -147,16 +147,101 @@ fn the_format_is_sniffed_from_the_signature() {
     let mut mangled = TILE_PNG.to_vec();
     mangled[4] = b'\n';
     assert_eq!(sniff(&mangled), None);
+
+    // `RIFF` alone is a container tag shared with WAV, AVI and a dozen other formats. Matching
+    // on it would hand a sound file to the image decoder and report a decode failure where "not
+    // an image" is the truthful answer.
+    let mut wav = b"RIFF\x24\x08\x00\x00WAVEfmt ".to_vec();
+    wav.extend_from_slice(&[0; 16]);
+    assert_eq!(sniff(&wav), None, "a wav is not a webp");
+
+    // And a RIFF header that stops before the form type is not enough to claim either.
+    assert_eq!(sniff(b"RIFF\x24\x08\x00\x00WEB"), None);
 }
 
-/// WebP is refused as an unrecognized format rather than as a broken one.
+/// mbgl `Image.WebPTile`: the third encoding of the same tile, at the same size.
 ///
-/// mbgl reads it on most of its platforms and this build does not yet. The distinction is the
-/// point: `Unrecognized` says the source is serving a format nothing here reads, which is a
-/// configuration answer, while a decode failure says the body is corrupt, which is a retry.
+/// The one a URL is least likely to admit to. A `.png` template served as WebP behind a
+/// content-negotiating CDN is an ordinary arrangement, which is why the format is sniffed rather
+/// than trusted — and why this fixture matters more than its rarity suggests.
+#[cfg(feature = "webp")]
+#[test]
+fn a_webp_tile_decodes() {
+    let image = decode(TILE_WEBP).expect("the fixture decodes");
+    assert_eq!(image.size(), (256, 256));
+    assert_eq!(image.pixels.len(), 256 * 256 * 4);
+
+    // The fixture has no alpha chunk, so the decoder answers three channels and the widening
+    // supplies the fourth. Zero-filling it would make every WebP tile fully transparent — a
+    // blank map with a working fetch.
+    assert!(
+        image.pixels.as_chunks::<4>().0.iter().all(|p| p[3] == 255),
+        "a webp decoded with a transparent pixel in it"
+    );
+
+    // And it decoded a picture rather than a zeroed buffer of the right size.
+    let pixels = image.pixels.as_chunks::<4>().0;
+    let first = pixels[0];
+    assert!(
+        pixels.iter().any(|pixel| *pixel != first),
+        "the whole tile decoded to one colour"
+    );
+}
+
+/// The PNG and the WebP are the same picture, which is what checks the VP8 path.
+///
+/// mbgl's `tile.webp` is a `VP8 ` chunk — *lossy*, in an extended container with an EXIF chunk
+/// beside it — and it still agrees with `tile.png` to within a tenth of a level on every channel
+/// mean. That is a much stronger statement than the size check `Image.WebPTile` makes: a decoder
+/// that swapped the chroma planes, or upsampled them wrongly, or read the extended header's
+/// dimensions instead of the frame's, produces something of exactly the right size and visibly
+/// the wrong colour. The mean is what notices.
+///
+/// `tile.jpeg` is deliberately not in this comparison. It is a different photograph — its red
+/// channel means 117.6 against the PNG's 63.9 — and mbgl's own tests never claim otherwise; they
+/// assert the size of each file and nothing more. Reading the three as one picture in three
+/// encodings is the mistake this paragraph exists to stop.
+#[cfg(feature = "webp")]
+#[test]
+fn the_png_and_the_webp_are_the_same_picture() {
+    let reference = decode(TILE_PNG).expect("png");
+    let webp = decode(TILE_WEBP).expect("webp");
+    assert_eq!(webp.size(), reference.size());
+
+    let mean = |image: &tessella_source::image::Image, channel: usize| -> f64 {
+        let pixels = image.pixels.as_chunks::<4>().0;
+        pixels
+            .iter()
+            .map(|pixel| f64::from(pixel[channel]))
+            .sum::<f64>()
+            / pixels.len() as f64
+    };
+
+    for channel in 0..3 {
+        let (want, got) = (mean(&reference, channel), mean(&webp, channel));
+        assert!(
+            (want - got).abs() < 0.5,
+            "channel {channel}: the webp means {got} against the png's {want}"
+        );
+    }
+}
+
+/// A build without the WebP decoder says so, rather than calling the bytes corrupt.
+///
+/// The distinction is the point, and it is why `Unsupported` exists beside `Decode`: one says
+/// this binary was not built to read the format, which is a build answer, and the other says the
+/// body is broken, which is a retry. Reporting the second for the first sends the next person to
+/// look at the tile server.
+#[cfg(not(feature = "webp"))]
 #[test]
 fn a_webp_tile_is_refused_by_name() {
-    assert_eq!(decode(TILE_WEBP), Err(ImageError::Unrecognized));
+    use tessella_source::image::Format;
+
+    assert_eq!(sniff(TILE_WEBP), Some(Format::Webp), "it is still a webp");
+    assert_eq!(
+        decode(TILE_WEBP),
+        Err(ImageError::Unsupported(Format::Webp))
+    );
 }
 
 /// A truncated body fails rather than producing an image with a garbage tail.

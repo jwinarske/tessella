@@ -1,23 +1,29 @@
 //! Decoding a raster tile or a sprite sheet into RGBA.
 //!
-//! # Two formats, because a basemap is both
+//! # Three formats, because a basemap is all of them
 //!
 //! Sprite sheets are PNG — they have alpha, and an icon without alpha is a rectangle of
 //! background around a picture. Satellite imagery is JPEG, and overwhelmingly so: a photographic
 //! tile stored losslessly is several times the bytes for a difference nobody looking at a map
 //! can see, so every commercial imagery source serves JPEG and a build that reads only PNG can
 //! draw no satellite basemap at all. Terrain shading and label-free overlays go back to PNG for
-//! the alpha. So the two are not alternatives to choose between; a real style uses both, often
-//! from the same source, and which one a tile is cannot be known before it arrives.
+//! the alpha.
 //!
-//! The format is therefore sniffed from the bytes rather than taken from the URL or a
-//! `Content-Type`. A tile URL template ends in `.png` for many sources that serve JPEG behind
-//! it, and a header can be absent, wrong, or `application/octet-stream`; the first eight bytes
-//! cannot be any of those things.
+//! WebP is what a source reaches for when it wants both at once — photographic compression *and*
+//! an alpha channel — and it is what MapTiler and Mapbox serve for their satellite and hybrid
+//! layers today. It is also the one a URL is least likely to admit to: a `.png` template served
+//! as WebP behind a content-negotiating CDN is an ordinary arrangement, not a misconfiguration.
+//!
+//! So the three are not alternatives to choose between; a real style uses all of them, often
+//! from the same source, and which one a tile is cannot be known before it arrives. The format
+//! is therefore sniffed from the bytes rather than taken from the URL or a `Content-Type`. A
+//! header can be absent, wrong, or `application/octet-stream`; the first twelve bytes cannot be
+//! any of those things.
 //!
 //! # Everything widens to RGBA
 //!
-//! A PNG may be greyscale, palletted, RGB or RGBA and a JPEG greyscale or YCbCr, and what is
+//! A PNG may be greyscale, palletted, RGB or RGBA, a JPEG greyscale or YCbCr, and a WebP either
+//! three channels or four depending on whether it carries an alpha chunk. What is
 //! downstream — an atlas rectangle, a texture upload, a shader sampling a quad — counts in
 //! pixels. A decoder returning the file's own channel count would make every offset past this
 //! point depend on how the file happened to be encoded, which is a defect that appears only for
@@ -26,7 +32,8 @@
 //! # The bound is checked against the header
 //!
 //! Every byte here came off a network from a party that is not trusted. The module is
-//! `forbid(unsafe_code)` and so are both decoders, so the risk is not memory corruption; it is
+//! `forbid(unsafe_code)` and so is every decoder behind it, so the risk is not memory
+//! corruption; it is
 //! *allocation*. An image states its dimensions in its header and the decoder allocates from
 //! them, so a few hundred bytes can ask for gigabytes — the classic decompression bomb, and on a
 //! device-class target an out-of-memory rather than a slow frame. The dimensions are read and
@@ -73,6 +80,8 @@ pub enum Format {
     Png,
     /// JPEG.
     Jpeg,
+    /// WebP, lossy or lossless.
+    Webp,
 }
 
 /// Why an image could not be decoded.
@@ -120,6 +129,11 @@ pub enum ImageError {
 /// PNG's is eight bytes and includes a `\r\n` pair and a lone `\n` precisely so that a transfer
 /// that mangles line endings corrupts the signature rather than silently corrupting the image.
 /// JPEG's is the two-byte start-of-image marker.
+///
+/// WebP's is split: `RIFF` at the start, then a four-byte length, then `WEBP` at offset eight.
+/// Both halves are checked, because `RIFF` alone is a container tag shared with WAV, AVI and a
+/// dozen other formats — matching on it would hand a sound file to the image decoder and get a
+/// decode failure where "not an image" is the truthful answer.
 #[must_use]
 pub fn sniff(body: &[u8]) -> Option<Format> {
     const PNG: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
@@ -128,6 +142,9 @@ pub fn sniff(body: &[u8]) -> Option<Format> {
     }
     if body.starts_with(&[0xff, 0xd8]) {
         return Some(Format::Jpeg);
+    }
+    if body.len() >= 12 && body.starts_with(b"RIFF") && &body[8..12] == b"WEBP" {
+        return Some(Format::Webp);
     }
     None
 }
@@ -142,6 +159,7 @@ pub fn decode(body: &[u8]) -> Result<Image, ImageError> {
     match sniff(body) {
         Some(Format::Png) => decode_png(body),
         Some(Format::Jpeg) => decode_jpeg(body),
+        Some(Format::Webp) => decode_webp(body),
         None => Err(ImageError::Unrecognized),
     }
 }
@@ -154,6 +172,11 @@ fn decode_png(_body: &[u8]) -> Result<Image, ImageError> {
 #[cfg(not(feature = "image"))]
 fn decode_jpeg(_body: &[u8]) -> Result<Image, ImageError> {
     Err(ImageError::Unsupported(Format::Jpeg))
+}
+
+#[cfg(not(feature = "webp"))]
+fn decode_webp(_body: &[u8]) -> Result<Image, ImageError> {
+    Err(ImageError::Unsupported(Format::Webp))
 }
 
 /// Refuses dimensions that would allocate past the ceiling.
@@ -240,6 +263,63 @@ fn decode_jpeg(body: &[u8]) -> Result<Image, ImageError> {
     #[allow(clippy::cast_possible_truncation)]
     let (width, height) = (width as u32, height as u32);
     finish(pixels, channels(out)?, width, height)
+}
+
+/// Decodes a WebP, lossy or lossless, to RGBA.
+///
+/// # The one decoder here that needs `std`
+///
+/// `image-webp` reads through `std::io::BufRead + Seek` where the zune decoders take a cursor of
+/// their own, so this path — and only this path — pulls `std` into an otherwise `no_std` crate.
+/// It is declared at the `extern crate` below rather than left implicit, so that turning the
+/// feature on is visibly a decision about the crate's discipline and not just about its size.
+///
+/// # A tile is a still, even when the file is not
+///
+/// WebP carries animation, and `read_image` answers with the first frame for a file that has
+/// several. That is the right answer for a map: a raster tile is a picture of the ground, the
+/// texture behind it holds one image, and there is no frame clock anywhere in this pipeline to
+/// advance a second one with. Refusing an animated file instead would drop a tile whose first
+/// frame is perfectly usable.
+///
+/// # Bilinear upsampling, because that is what the oracle does
+///
+/// A lossy WebP stores chroma at half resolution and something has to interpolate it back.
+/// `image-webp` defaults to the same fancy bilinear filter libwebp does, which is what mbgl gets
+/// through its own libwebp; the alternative — nearest — is faster and leaves jagged edges along
+/// every colour boundary. The default is taken deliberately rather than by omission.
+#[cfg(feature = "webp")]
+fn decode_webp(body: &[u8]) -> Result<Image, ImageError> {
+    extern crate std;
+    use std::io::Cursor;
+
+    use image_webp::WebPDecoder;
+
+    let mut decoder = WebPDecoder::new(Cursor::new(body))
+        .map_err(|error| ImageError::Decode(alloc::format!("{error:?}")))?;
+
+    // Dimensions are known from the header, before a pixel is decoded, which is where the bound
+    // belongs. `output_buffer_size` answers `None` when the product overflows a `usize`, which
+    // `afford` would have refused anyway — but it is a different question and is answered first.
+    let (width, height) = decoder.dimensions();
+    afford(width as usize, height as usize)?;
+    let wanted = decoder
+        .output_buffer_size()
+        .ok_or(ImageError::TooLarge { wanted: usize::MAX })?;
+    if wanted > MAX_IMAGE_BYTES {
+        return Err(ImageError::TooLarge { wanted });
+    }
+
+    // Three channels or four, depending on whether the file carries an alpha chunk. The buffer
+    // has to be exactly the size the decoder asks for — it refuses any other length rather than
+    // writing a prefix — so this is not a place to allocate the RGBA width and hope.
+    let mut pixels = alloc::vec![0u8; wanted];
+    decoder
+        .read_image(&mut pixels)
+        .map_err(|error| ImageError::Decode(alloc::format!("{error:?}")))?;
+
+    let channels = if decoder.has_alpha() { 4 } else { 3 };
+    finish(pixels, channels, width, height)
 }
 
 /// How many bytes a pixel occupies in a colour space, or a refusal.

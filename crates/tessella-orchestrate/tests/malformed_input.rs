@@ -278,15 +278,31 @@ fn a_sprite_sheet_decoder_survives_malformed_input() {
 ///
 /// Fuzzed separately from the sprite sheet even though the two go through one decoder, because
 /// the mutations that matter are not the same: a sheet fixture is a PNG, so a mutation of it
-/// stays in the PNG decoder, and the JPEG half would never be reached. Both fixtures are here,
-/// so a mutation that flips the signature crosses between them as well.
+/// stays in the PNG decoder, and the other formats would never be reached. All three fixtures
+/// are here, so a mutation that flips a signature crosses between them as well.
+///
+/// The WebP seed is the one that earns its place. It is a lossy `VP8 ` frame inside an extended
+/// container, which is a chunk walk over a length field the file states — the shape where a
+/// malformed body reads past the end if the walk trusts it.
+///
+/// It is also, in a debug build, the slowest test in the workspace: a VP8 decode is a great deal
+/// more work than a PNG one and this attempts a thousand of them. That is the price of the
+/// coverage rather than an accident, and it is paid once per CI run; `--release` brings the whole
+/// file back under four seconds.
 #[cfg(feature = "image")]
 #[test]
 fn a_raster_tile_decoder_survives_malformed_input() {
     const PNG: &[u8] = include_bytes!("../../../tests/image-fixtures/tile.png");
     const JPEG: &[u8] = include_bytes!("../../../tests/image-fixtures/tile.jpeg");
+    #[cfg(feature = "webp")]
+    const WEBP: &[u8] = include_bytes!("../../../tests/image-fixtures/tile.webp");
 
-    hammer("image::decode", &[PNG, JPEG], |bytes| {
+    #[cfg(feature = "webp")]
+    let seeds: &[&[u8]] = &[PNG, JPEG, WEBP];
+    #[cfg(not(feature = "webp"))]
+    let seeds: &[&[u8]] = &[PNG, JPEG];
+
+    hammer("image::decode", seeds, |bytes| {
         if let Ok(image) = tessella_source::image::decode(bytes) {
             // Everything downstream indexes by these dimensions — an atlas rectangle, a texture
             // upload, a quad's coordinates — so a buffer that does not match them is a read past
