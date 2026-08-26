@@ -1872,6 +1872,34 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
   compared as sequences, and it is what says the rotation is wagyu's alone and not something
   upstream of it that the fill path's cycle comparison was hiding.
 
+- **DR-20 Sprites and raster decode PNG; compressed textures are a separate question.**
+  KTX2 with a Basis or block-compressed payload is genuinely cheaper than RGBA8 where it counts
+  — a 1024-square sprite sheet is 4 MB decoded and roughly 1 MB as ETC2 or ASTC, and on an
+  RK3566 that is shared memory and shared bandwidth. It is the same argument §12.4 already makes
+  for R8 glyph atlases, and §12.4's "the C++ formats are the floor, not the target" invites it.
+  It still cannot replace PNG here, for three reasons that are not about the codec.
+  **The format is not ours to choose.** A style-spec sprite is `sprite.json` plus `sprite.png`,
+  and every style in the wild — Protomaps, MapTiler, OpenMapTiles — serves exactly that. Raster
+  tiles are the same: the origin decides. A build that reads only KTX2 loads no existing style.
+  **It would cost the oracle.** mbgl decodes PNG, and the capture's texture hash is over decoded
+  pixels. Reading different bytes than the probe reads leaves nothing to diff, which is the one
+  thing that makes any of this checkable.
+  **The wire has no word for it.** `TexturePixelType` is generated from `mln::TexturePixelType`
+  under DR-6 — RGBA, Alpha, Stencil, Depth, Luminance — so a compressed upload means either
+  diverging from a generated table or adding a value mbgl does not have, against an ABI frozen
+  at R0 exit.
+  Decode *cost* is not the reason either way. A sprite sheet is decoded once per style, against
+  a cold start measured at about 3 ms in total; it is not on a hot path. Raster tiles are the
+  case where continuous decode would matter, and there the format is the origin's anyway.
+  Where compression does pay is later and elsewhere, in two places. **The offline cache**: a
+  region's resources are already downloaded and pinned, so transcoding a sheet once at download
+  time costs nothing per session and saves the residency every session after — the origin still
+  serves PNG and only our cache changes. **The consumer**: Filament is what uploads to the GPU,
+  and compressing at the upload needs no producer change at all. Both still need a compressed
+  pixel type on the wire to be visible across the seam, so either way the decision is an ABI one
+  rather than a decoder one, and it wants a measurement first: raster tile decode on RK3566,
+  against the frame budget §13.3 already has a harness for.
+
 ## 15. Risk register
 
 - **R-1 Symbol pipeline underestimation.** No ecosystem substitute; placement parity is
