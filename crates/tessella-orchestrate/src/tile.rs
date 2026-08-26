@@ -211,6 +211,13 @@ pub fn build_tile(
     let (lo, hi) = (f64::from(lo), f64::from(hi));
     let mut buckets = Vec::new();
 
+    // Filters are evaluated at the tile's own zoom, as mbgl's layouts do — `zoom` there is
+    // `tileID.overscaledZ`, and it reaches the filter through the same `EvaluationContext` the
+    // paint properties use. A filter written `["step", ["zoom"], …]` is ordinary; evaluated
+    // without a zoom it errors, and an erroring filter admits nothing, so the layer would draw
+    // nothing at every zoom rather than at the wrong ones.
+    let bucket_zoom = f64::from(tile.bucket_zoom());
+
     for (layer_index, layer) in style.layers.iter().enumerate() {
         if !layer.kind.is_built() || !draws_from(layer, source) {
             continue;
@@ -221,11 +228,8 @@ pub fn build_tile(
             source,
         })?;
 
-        let mut binder = PaintBinder::new(
-            paint_specs(&layer.kind).unwrap_or(&[]),
-            &paint,
-            f64::from(tile.bucket_zoom()),
-        );
+        let mut binder =
+            PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint, bucket_zoom);
 
         let content = match layer.kind {
             // A raster layer over a *feature* source draws nothing, and that is not a silent
@@ -242,13 +246,12 @@ pub fn build_tile(
                     None => Filter::always(),
                 };
 
-                let zoom = f64::from(tile.bucket_zoom());
-                let mut layout = SymbolLayout::new(layer, zoom, tile.overscale_factor());
+                let mut layout = SymbolLayout::new(layer, bucket_zoom, tile.overscale_factor());
                 let project =
                     |p: &[f64; 2]| projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
 
                 for feature in features {
-                    if !filter.matches(feature, None) {
+                    if !filter.matches(feature, Some(bucket_zoom)) {
                         continue;
                     }
 
@@ -292,7 +295,7 @@ pub fn build_tile(
                             .collect(),
                     };
 
-                    layout.push(layer, zoom, feature, &rings);
+                    layout.push(layer, bucket_zoom, feature, &rings);
                 }
 
                 // A road is rarely one feature; joining its segments before anything is placed
@@ -319,7 +322,7 @@ pub fn build_tile(
                 let mut per_feature: Vec<Vec<Ring>> = Vec::new();
                 let mut kept: Vec<&GeoJsonFeature> = Vec::new();
                 for feature in features {
-                    if !filter.matches(feature, None) {
+                    if !filter.matches(feature, Some(bucket_zoom)) {
                         continue;
                     }
                     // Every geometry type, not just polygons. mbgl's `FillBucket::addFeature`
@@ -384,7 +387,7 @@ pub fn build_tile(
                 let project =
                     |p: &[f64; 2]| projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
                 for feature in features {
-                    if !filter.matches(feature, None) {
+                    if !filter.matches(feature, Some(bucket_zoom)) {
                         continue;
                     }
                     match &feature.geometry {
@@ -446,7 +449,7 @@ pub fn build_tile(
 
                 let mut bucket = CircleBucket::default();
                 for feature in features {
-                    if !filter.matches(feature, None) {
+                    if !filter.matches(feature, Some(bucket_zoom)) {
                         continue;
                     }
                     let Geometry::Point(points) = &feature.geometry else {
@@ -661,6 +664,13 @@ pub fn build_mvt_tile(
 ) -> Result<Vec<LayerBucket>, TileError> {
     let mut buckets = Vec::new();
 
+    // Filters are evaluated at the tile's own zoom, as mbgl's layouts do — `zoom` there is
+    // `tileID.overscaledZ`, and it reaches the filter through the same `EvaluationContext` the
+    // paint properties use. A filter written `["step", ["zoom"], …]` is ordinary; evaluated
+    // without a zoom it errors, and an erroring filter admits nothing, so the layer would draw
+    // nothing at every zoom rather than at the wrong ones.
+    let bucket_zoom = f64::from(tile.bucket_zoom());
+
     for (layer_index, layer) in style.layers.iter().enumerate() {
         if !layer.kind.is_built() || !draws_from(layer, source) {
             continue;
@@ -671,11 +681,8 @@ pub fn build_mvt_tile(
             source,
         })?;
 
-        let mut binder = PaintBinder::new(
-            paint_specs(&layer.kind).unwrap_or(&[]),
-            &paint,
-            f64::from(tile.bucket_zoom()),
-        );
+        let mut binder =
+            PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint, bucket_zoom);
 
         let content = match layer.kind {
             LayerKind::Background => Content::Background,
@@ -703,7 +710,7 @@ pub fn build_mvt_tile(
                 let mut kept: Vec<tessella_source::mvt::FeatureRef<'_>> = Vec::new();
                 if let Some(named) = named {
                     for feature in named.features() {
-                        if !filter.matches(&feature, None) {
+                        if !filter.matches(&feature, Some(bucket_zoom)) {
                             continue;
                         }
                         // No geometry-type check, deliberately. `FillBucket::addFeature` has
@@ -761,7 +768,7 @@ pub fn build_mvt_tile(
                 let mut bucket = LineBucket::default();
                 if let Some(named) = named {
                     for feature in named.features() {
-                        if !filter.matches(&feature, None) {
+                        if !filter.matches(&feature, Some(bucket_zoom)) {
                             continue;
                         }
                         // Polygons are drawn by a line layer as their own outlines, which is
@@ -814,11 +821,10 @@ pub fn build_mvt_tile(
                     .as_deref()
                     .and_then(|name| decoded.layer(name));
 
-                let zoom = f64::from(tile.bucket_zoom());
-                let mut layout = SymbolLayout::new(layer, zoom, tile.overscale_factor());
+                let mut layout = SymbolLayout::new(layer, bucket_zoom, tile.overscale_factor());
                 if let Some(named) = named {
                     for feature in named.features() {
-                        if !filter.matches(&feature, None) {
+                        if !filter.matches(&feature, Some(bucket_zoom)) {
                             continue;
                         }
 
@@ -836,7 +842,7 @@ pub fn build_mvt_tile(
                             })
                             .collect();
 
-                        layout.push(layer, zoom, &feature, &rings);
+                        layout.push(layer, bucket_zoom, &feature, &rings);
                     }
                 }
                 layout.merge_lines();
@@ -859,7 +865,7 @@ pub fn build_mvt_tile(
                 let mut bucket = CircleBucket::default();
                 if let Some(named) = named {
                     for feature in named.features() {
-                        if !filter.matches(&feature, None) {
+                        if !filter.matches(&feature, Some(bucket_zoom)) {
                             continue;
                         }
                         // A circle layer draws points, and mbgl's `CircleBucket::addFeature`

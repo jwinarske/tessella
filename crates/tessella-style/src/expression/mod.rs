@@ -670,12 +670,51 @@ impl Expression {
     ///
     /// As [`Expression::parse`].
     pub fn parse_for(value: &Value, spec: &PropertySpec) -> Result<Self, ParseError> {
+        Self::parse_rooted(value, spec, true)
+    }
+
+    /// Parses a filter, where a zoom curve may appear anywhere.
+    ///
+    /// # The rule is a property rule, not an expression rule
+    ///
+    /// mbgl has two entry points and only one of them checks: `parseLayerPropertyExpression`
+    /// runs `findZoomCurve` and rejects a buried curve, while `parseExpression` — which
+    /// `Converter<Filter>` calls — does not. The reason is what the check is *for*: a property
+    /// is evaluated once per zoom interval and interpolated between the endpoints, which needs
+    /// a single identifiable curve to take endpoints from. A filter is evaluated per feature at
+    /// the tile's own zoom and never interpolated, so there is nothing to find.
+    ///
+    /// Applying the property rule here refuses ordinary styles. `["all", ["==", ["get",
+    /// "class"], "path"], ["step", ["zoom"], …]]` is how a road layer drops footways above a
+    /// zoom, and twenty-three layers of one real style are written that way.
+    ///
+    /// # Errors
+    ///
+    /// As [`Expression::parse`].
+    pub fn parse_filter(value: &Value) -> Result<Self, ParseError> {
+        Self::parse_rooted(
+            value,
+            &PropertySpec {
+                default: None,
+                expected: None,
+            },
+            false,
+        )
+    }
+
+    fn parse_rooted(
+        value: &Value,
+        spec: &PropertySpec,
+        zoom_placement: bool,
+    ) -> Result<Self, ParseError> {
         let mut root = parse::parse_with_default(value, spec)?;
 
         // Checked on the tree the style actually wrote, before either wrapper below moves the
         // root. A coerced tree has the curve one level down and would be rejected as though the
         // style had buried it.
-        check_zoom_placement(&root)?;
+        if zoom_placement {
+            check_zoom_placement(&root)?;
+        }
 
         // A property the spec types as a colour gets its result coerced. The style writes
         // `"red"` or a function returning `"red"`, and what the renderer needs is RGBA — so the
@@ -966,6 +1005,12 @@ fn coerce_to_color(expr: Expr) -> Expr {
             body: Box::new(coerce_to_color(*body)),
         },
         other if other.result_type() == Type::Color => other,
+        // A null is the *absence* of a value, not a value to convert. It reaches here from a
+        // colour-typed property with no default — `line-gradient`, whose mbgl default is an
+        // empty `PropertyValue` — when the style does not write one, and casting it raises
+        // "cannot cast null to number" at constant-fold time, refusing the whole style over a
+        // property nobody set.
+        Expr::Literal(Value::Null) => Expr::Literal(Value::Null),
         other => Expr::Cast {
             to: CastKind::Color,
             args: alloc::vec![other],

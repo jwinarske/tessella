@@ -168,3 +168,32 @@ fn colour_height_and_base_are_data_driven() {
         ]
     );
 }
+
+/// A filter is evaluated at the tile's own zoom, as mbgl's layouts evaluate it.
+///
+/// mbgl's `zoom` there is `parameters.tileID.overscaledZ`, and it reaches the filter through the
+/// same `EvaluationContext` the paint properties use. The builders passed no zoom at all, so
+/// `["zoom"]` in a filter raised an evaluation error, and a filter that errors admits nothing —
+/// the layer drew at *no* zoom rather than at the wrong ones. That is the shape of the bug that
+/// hides: a blank layer looks like a style choice, where a misplaced one looks like a bug.
+#[test]
+fn a_filter_sees_the_tiles_zoom() {
+    let tile = Tile::decode(REAL_TILE).expect("the fixture decodes");
+    let style = serde_json::from_str::<Style>(
+        r#"{"version": 8, "sources": {"src": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "buildings", "type": "fill-extrusion", "source": "src",
+                        "source-layer": "water",
+                        "filter": ["step", ["zoom"], false, 3, true]}]}"#,
+    )
+    .expect("a style");
+
+    let below = build_mvt_tile(&style, "src", TileId::new(2, 0, 0), &tile).expect("builds");
+    let above = build_mvt_tile(&style, "src", TileId::new(4, 0, 0), &tile).expect("builds");
+
+    let geometry = |buckets: &[tessella_orchestrate::tile::LayerBucket]| match &buckets[0].content {
+        tessella_orchestrate::tile::Content::Fill3d(bucket) => !bucket.vertices.is_empty(),
+        other => panic!("expected an extrusion, got {other:?}"),
+    };
+    assert!(!geometry(&below), "the filter excludes everything below z3");
+    assert!(geometry(&above), "and admits it above");
+}

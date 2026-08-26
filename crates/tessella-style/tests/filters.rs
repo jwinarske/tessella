@@ -432,3 +432,56 @@ mod mbgl_id {
         }
     }
 }
+
+/// A filter may put a zoom curve anywhere. A property may not.
+///
+/// The rule is mbgl's `parseLayerPropertyExpression`, and mbgl's `Converter<Filter>` calls
+/// `parseExpression`, which does not apply it. What the rule is *for* says why: a property is
+/// evaluated once per zoom interval and interpolated between the endpoints, which needs one
+/// identifiable curve to take endpoints from; a filter is evaluated per feature at the tile's
+/// own zoom and never interpolated.
+///
+/// `["all", …, ["step", ["zoom"], …]]` is the ordinary way a road layer drops footways above a
+/// zoom, and twenty-three layers of one real vendor style are written that way — so applying
+/// the property rule here refused the style over its own house style.
+#[test]
+fn a_filter_may_bury_a_zoom_curve() {
+    let json = r#"["all",
+        ["==", ["get", "class"], "path"],
+        ["step", ["zoom"], false, 16, true]]"#;
+    let compiled = filter(json);
+    assert_eq!(
+        compiled.expression().dependency(),
+        Dependency::ZoomAndFeature
+    );
+
+    let path = TestFeature::new("LineString", vec![("class", Value::String("path".into()))]);
+    assert!(!compiled.matches(&path, Some(14.0)), "below the step");
+    assert!(compiled.matches(&path, Some(17.0)), "above the step");
+}
+
+/// And the same expression as a *property* is still refused.
+///
+/// Relaxing the filter path must not relax the property path with it: the endpoint machinery
+/// has no way to find a curve buried under an `all`, so accepting one there would silently
+/// evaluate the property at a single zoom and never interpolate it.
+#[test]
+fn a_property_may_not() {
+    let json = r#"["all", ["step", ["zoom"], false, 16, true]]"#;
+    let value: Value = serde_json::from_str(json).expect("valid json");
+    assert!(tessella_style::Expression::parse(&value).is_err());
+}
+
+/// A zoom filter given no zoom admits nothing, which is why the builders pass the tile's.
+///
+/// Not a rule so much as the consequence of one: `["zoom"]` outside a zoom context is an
+/// evaluation error, and a filter that errors matches no feature. A builder that forgot the
+/// zoom would therefore draw the layer at no zoom at all rather than at the wrong ones — a
+/// silent blank rather than a visible mistake, which is why it is asserted.
+#[test]
+fn a_zoom_filter_without_a_zoom_admits_nothing() {
+    let compiled = filter(r#"["step", ["zoom"], false, 16, true]"#);
+    let feature = TestFeature::new("LineString", vec![]);
+    assert!(!compiled.matches(&feature, None));
+    assert!(compiled.matches(&feature, Some(17.0)));
+}

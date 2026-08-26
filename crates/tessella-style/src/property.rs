@@ -123,8 +123,13 @@ pub enum PropertyKind {
     Enum,
     /// A sprite image name.
     Image,
-    /// A fixed-length array of numbers.
-    NumberArray(usize),
+    /// An array of numbers, of a fixed length where the spec gives one.
+    ///
+    /// `None` is not "unknown" — it is the spec's own answer. `line-dasharray` is declared
+    /// `"type": "array", "value": "number"` with no `length`, because a dash pattern is however
+    /// many alternating on/off runs the author wrote; mbgl carries it as a `std::vector<float>`
+    /// for the same reason. Every other array property in the spec does give a length.
+    NumberArray(Option<usize>),
 }
 
 /// A property's default, in a form that can live in a static table.
@@ -298,7 +303,7 @@ const FILL_PAINT: &[PropertySpec] = &[
     },
     PropertySpec {
         name: "fill-translate",
-        kind: PropertyKind::NumberArray(2),
+        kind: PropertyKind::NumberArray(Some(2)),
         default: DefaultValue::NumberPair(0.0, 0.0),
         data_driven: false,
     },
@@ -337,7 +342,7 @@ const LINE_PAINT: &[PropertySpec] = &[
     },
     PropertySpec {
         name: "line-dasharray",
-        kind: PropertyKind::NumberArray(0),
+        kind: PropertyKind::NumberArray(None),
         default: DefaultValue::None,
         data_driven: false,
     },
@@ -379,7 +384,7 @@ const LINE_PAINT: &[PropertySpec] = &[
     },
     PropertySpec {
         name: "line-translate",
-        kind: PropertyKind::NumberArray(2),
+        kind: PropertyKind::NumberArray(Some(2)),
         default: DefaultValue::NumberPair(0.0, 0.0),
         data_driven: false,
     },
@@ -493,7 +498,7 @@ const CIRCLE_PAINT: &[PropertySpec] = &[
     },
     PropertySpec {
         name: "circle-translate",
-        kind: PropertyKind::NumberArray(2),
+        kind: PropertyKind::NumberArray(Some(2)),
         default: DefaultValue::NumberPair(0.0, 0.0),
         data_driven: false,
     },
@@ -631,7 +636,7 @@ const FILL_EXTRUSION_PAINT: &[PropertySpec] = &[
     },
     PropertySpec {
         name: "fill-extrusion-translate",
-        kind: PropertyKind::NumberArray(2),
+        kind: PropertyKind::NumberArray(Some(2)),
         default: DefaultValue::NumberPair(0.0, 0.0),
         data_driven: false,
     },
@@ -880,7 +885,8 @@ fn check_literal(spec: &PropertySpec, value: &Value) -> Result<(), PropertyError
         PropertyKind::Boolean => value.as_bool().is_some(),
         PropertyKind::Enum | PropertyKind::Image => value.as_str().is_some(),
         PropertyKind::NumberArray(len) => value.as_array().is_some_and(|items| {
-            items.len() == len && items.iter().all(|i| i.as_number().is_some())
+            len.is_none_or(|len| items.len() == len)
+                && items.iter().all(|i| i.as_number().is_some())
         }),
     };
 
@@ -907,20 +913,30 @@ fn check_literal(spec: &PropertySpec, value: &Value) -> Result<(), PropertyError
 /// The two halves come from different places and both matter. The default is what a
 /// pre-expression function falls back to; the type is what `identity` checks against and what
 /// decides whether a bare array is a constant or a malformed call.
+///
+/// # The type comes from the kind, not from the default
+///
+/// It was read off `DefaultValue` here, which happens to agree for every property that has a
+/// default and gives the wrong answer for every property that does not. `line-dasharray` is the
+/// case that shows it: mbgl's `getDefaultLineDasharray()` returns an empty
+/// `PropertyValue<std::vector<float>>`, so there is no default to read a type from — and the
+/// parser was told `Value`, its "unknown". A bare `[0.15, 2]` at the root of an array-typed
+/// property is a constant, but at the root of an unknown-typed one it is a call to an operator
+/// named `0.15`, so every style with a dashed line was refused at load.
+///
+/// `PropertyKind` *is* the declared type. Reading it there needs no fallback and cannot drift
+/// from the default's spelling.
 fn expression_spec(spec: &PropertySpec) -> expression::PropertySpec {
     expression::PropertySpec {
         default: Some(default_value(spec)),
-        expected: Some(match spec.default {
-            DefaultValue::Color(_) => expression::Type::Color,
-            DefaultValue::Number(_) => expression::Type::Number,
-            DefaultValue::Boolean(_) => expression::Type::Boolean,
-            // An enum is a string with a value list. The list is checked elsewhere; the type is
-            // what the expression parser needs.
-            DefaultValue::Enum(_) => expression::Type::String,
-            DefaultValue::NumberPair(..) => expression::Type::Array,
-            // A property with no default has no type to enforce either. `Value` is the
-            // parser's "unknown", which is the honest answer rather than a guess.
-            DefaultValue::None => expression::Type::Value,
+        expected: Some(match spec.kind {
+            PropertyKind::Color => expression::Type::Color,
+            PropertyKind::Number => expression::Type::Number,
+            PropertyKind::Boolean => expression::Type::Boolean,
+            // An enum is a string with a value list, and a sprite name is a string. Both lists
+            // are checked elsewhere; the type is what the expression parser needs.
+            PropertyKind::Enum | PropertyKind::Image => expression::Type::String,
+            PropertyKind::NumberArray(_) => expression::Type::Array,
         }),
     }
 }

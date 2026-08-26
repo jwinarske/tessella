@@ -8,12 +8,10 @@
 //! through `sudo` or a setuid wrapper. Only the application knows which, so only the application
 //! should ask.
 //!
-//! So nothing here is called automatically. [`SqliteCache::open`] still takes a path and nothing
+//! So nothing here is called automatically. `SqliteCache::open` still takes a path and nothing
 //! else, and an application that wants the environment consulted calls [`from_env`] and passes
 //! the answer. The decision stays at the boundary that can evaluate it, and a library user who
 //! never calls this is not silently exposed to a variable they did not know existed.
-//!
-//! [`SqliteCache::open`]: crate::cache::SqliteCache::open
 //!
 //! # Data, not cache
 //!
@@ -123,14 +121,12 @@ pub fn from_env() -> Result<PathBuf, StorePathError> {
 
 /// Creates the store directory if it is missing and checks that it is private.
 ///
-/// Returns the path of the store *file* inside it, ready for [`SqliteCache::open`].
+/// Returns the path of the store *file* inside it, ready for `SqliteCache::open`.
 ///
 /// The checks are the ones that matter for a file another user must not be able to substitute:
 /// every existing ancestor must not be group- or world-writable unless it is sticky (`/tmp` is,
 /// which is what the sticky bit is for), the final component must not be a symlink, and anything
 /// created here is created `0700`.
-///
-/// [`SqliteCache::open`]: crate::cache::SqliteCache::open
 ///
 /// # Errors
 ///

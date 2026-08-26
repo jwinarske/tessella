@@ -52,7 +52,7 @@ use tessella_storage::fetch_zoom;
 use tessella_storage::offline::SourceKind;
 use tessella_storage::source::{Coalescing, FileSource};
 use tessella_storage::tileset::{self, TileSet};
-use tessella_style::{LayerKind, Source, Style};
+use tessella_style::{LayerKind, RejectedLayer, Source, Style};
 use tessella_tile::cover::{self, ViewTransform};
 
 use crate::cache::TileCache;
@@ -119,6 +119,12 @@ pub struct Boot {
     /// per source. Building it inside a source's pass would emit one copy per source of a
     /// thing the oracle emits once.
     pub sourceless: Vec<(TileId, Vec<LayerBucket>)>,
+    /// Layers the style asked for that this build cannot compile, and why.
+    ///
+    /// Reported rather than logged, and not empty on real styles: see
+    /// [`Style::reject_uncompilable`]. Every layer left in the style compiled, so a tile that
+    /// fails after this point failed on its *data* rather than on the document.
+    pub rejected_layers: Vec<RejectedLayer>,
     /// Stage timings.
     pub trace: BootTrace,
     /// Tile bodies handled, in bytes.
@@ -388,7 +394,11 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
     } = config;
     let started = Instant::now();
 
-    let style = Style::parse(style_text).map_err(|error| BootError::Style(error.to_string()))?;
+    let mut style =
+        Style::parse(style_text).map_err(|error| BootError::Style(error.to_string()))?;
+    // As mbgl's parser does, and before anything reads a layer: a document that names one thing
+    // this build does not have still draws every layer that does.
+    let rejected_layers = style.reject_uncompilable();
     let style_parsed = started.elapsed();
 
     // Every source a layer actually draws from. A style may declare sources no layer uses, and
@@ -566,6 +576,7 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
         return Ok(Boot {
             tiles: Vec::new(),
             sourceless: Vec::new(),
+            rejected_layers,
             trace: BootTrace {
                 style_parsed,
                 sources_resolved,
@@ -788,6 +799,7 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
     Ok(Boot {
         tiles,
         sourceless,
+        rejected_layers,
         trace: BootTrace {
             style_parsed,
             sources_resolved,

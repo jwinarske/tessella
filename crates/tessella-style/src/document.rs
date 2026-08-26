@@ -390,6 +390,46 @@ impl Style {
         Ok(style)
     }
 
+    /// Drops the layers that will not compile, and says which and why.
+    ///
+    /// # Why a whole style is not refused over one layer
+    ///
+    /// mbgl's parser converts each layer on its own: `Parser::parseLayer` calls
+    /// `convert<std::unique_ptr<Layer>>`, and on failure logs a warning and *returns* — the
+    /// layer never enters `layers`, and every other layer in the document still does. So a
+    /// style that names one thing mbgl does not have renders without that layer rather than not
+    /// at all.
+    ///
+    /// This is not a nicety on real styles, it is the difference between a map and a blank
+    /// screen. A vendor style routinely uses expressions outside the MapLibre spec —
+    /// `["distance-from-center"]` and `["pitch"]` are Mapbox GL JS v3 additions that mbgl has no
+    /// compound expression for — and each one appears in a filter on a label layer. Refusing the
+    /// document over them drops the other hundred layers with it.
+    ///
+    /// # Why the reasons are returned rather than logged
+    ///
+    /// mbgl's `Log::Warning` goes wherever the embedder pointed the log, which in practice is
+    /// nowhere. A dropped layer is a real difference between what the style asked for and what
+    /// is drawn, and the caller is the only one that can decide whether it matters — so it is a
+    /// value, and this returns it.
+    ///
+    /// Compiling here also means the tile builders cannot meet these failures: everything left
+    /// in `layers` has had its filter, paint and layout compiled once, on the way in.
+    pub fn reject_uncompilable(&mut self) -> Vec<RejectedLayer> {
+        let mut rejected = Vec::new();
+        self.layers.retain(|layer| match compile_check(layer) {
+            Ok(()) => true,
+            Err(reason) => {
+                rejected.push(RejectedLayer {
+                    id: layer.id.clone(),
+                    reason,
+                });
+                false
+            }
+        });
+        rejected
+    }
+
     /// Looks up a layer by id.
     #[must_use]
     pub fn layer(&self, id: &str) -> Option<&Layer> {
@@ -401,4 +441,25 @@ impl Style {
     pub fn source(&self, id: &str) -> Option<&Source> {
         self.sources.get(id)
     }
+}
+
+/// A layer that could not be compiled, and the reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RejectedLayer {
+    /// The layer's id, as the style wrote it.
+    pub id: String,
+    /// Why it will not compile, in the words of whichever step refused it.
+    pub reason: String,
+}
+
+/// Everything the tile builders will ask of a layer, asked once here instead.
+fn compile_check(layer: &Layer) -> Result<(), alloc::string::String> {
+    use alloc::string::ToString;
+
+    if let Some(filter) = &layer.filter {
+        crate::filter::Filter::parse(filter).map_err(|error| error.to_string())?;
+    }
+    crate::property::resolve_paint(layer).map_err(|error| error.to_string())?;
+    crate::property::resolve_layout(layer).map_err(|error| error.to_string())?;
+    Ok(())
 }

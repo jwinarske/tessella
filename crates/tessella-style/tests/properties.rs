@@ -20,6 +20,12 @@ fn layer_from(json: &str) -> tessella_style::Layer {
     serde_json::from_str(json).expect("valid layer")
 }
 
+fn layer_with(kind: &str, paint: &str) -> tessella_style::Layer {
+    layer_from(&format!(
+        r#"{{"id": "l", "type": "{kind}", "source": "s", "paint": {{{paint}}}}}"#
+    ))
+}
+
 // --- colors ---
 
 /// Straight sRGB over 255, not premultiplied and not linearized. Taken from the golden dump
@@ -427,5 +433,72 @@ fn the_channel_conversion_is_mbgls_expression() {
         (79.0_f32 / 255.0).to_bits(),
         (79.0_f32 * (1.0_f32 / 255.0)).to_bits(),
         "and agree on this one, which is how the difference stays hidden"
+    );
+}
+
+/// `line-dasharray` has no length in the spec, and a dash pattern is any length the author wrote.
+///
+/// The property table spelled a variable length as `NumberArray(0)` and the checker read the
+/// zero as an exact length, so the only array-typed property in the spec that *has* no length
+/// was the one array no style could write. `[3, 3]` — the ordinary spelling of a dashed
+/// boundary — was refused, and refusing one property refused the whole style.
+#[test]
+fn a_dash_pattern_is_any_length() {
+    for pattern in ["[3, 3]", "[0.15, 2]", "[1, 0.5, 3, 0.5]", "[]"] {
+        let layer = layer_with("line", &format!(r#""line-dasharray": {pattern}"#));
+        resolve_paint(&layer).unwrap_or_else(|error| panic!("{pattern}: {error}"));
+    }
+}
+
+/// And it is still an array of *numbers*.
+///
+/// Dropping the length check must not drop the element check with it: `["3", "3"]` is a pair of
+/// strings and no dash pattern, and the whole point of the check is to say so at load rather
+/// than to hand the shader two strings.
+#[test]
+fn a_dash_pattern_is_still_numbers() {
+    let layer = layer_with("line", r#""line-dasharray": ["3", "3"]"#);
+    assert!(resolve_paint(&layer).is_err());
+}
+
+/// A property's expression type comes from its kind, not from its default.
+///
+/// The two agree for every property that has a default, which is what let the wrong source
+/// stand. `line-dasharray` has no default — mbgl's `getDefaultLineDasharray()` returns an empty
+/// `PropertyValue<std::vector<float>>` — so it was typed `Value`, the parser's "unknown", and a
+/// bare array at the root of an unknown-typed property is a call to an operator named by its
+/// first element rather than a constant.
+#[test]
+fn a_defaultless_property_still_has_a_type() {
+    let layer = layer_with("line", r#""line-dasharray": [3, 3]"#);
+    let resolved = resolve_paint(&layer).expect("compiles");
+    let dashes = resolved
+        .get("line-dasharray")
+        .expect("the property resolved");
+    assert_eq!(
+        dashes.expression.evaluate(None, None).expect("evaluates"),
+        Value::Array(vec![Value::Number(3.0), Value::Number(3.0)]),
+        "a bare array at the root of an array-typed property is a constant, not a call"
+    );
+}
+
+/// A colour-typed property nobody wrote stays absent rather than becoming a cast of null.
+///
+/// `line-gradient` is the case: colour-typed with no default, so the property boundary's
+/// coercion wrapped its `null` in a `to-color`, and a constant expression is folded at parse —
+/// where casting null raises "cannot cast null to number" and refuses the style over a property
+/// the author never set.
+#[test]
+fn an_unset_colour_property_is_not_coerced() {
+    let layer = layer_with("line", r#""line-width": 2"#);
+    let resolved = resolve_paint(&layer).expect("compiles");
+    assert_eq!(
+        resolved
+            .get("line-gradient")
+            .expect("the property resolved")
+            .expression
+            .evaluate(None, None)
+            .expect("evaluates"),
+        Value::Null
     );
 }

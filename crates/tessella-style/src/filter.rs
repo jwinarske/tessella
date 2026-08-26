@@ -69,7 +69,7 @@ impl Filter {
     pub fn parse(value: &Value) -> Result<Self, FilterError> {
         let expr = if is_expression_filter(value) {
             return Ok(Self {
-                expression: Expression::parse(value)?,
+                expression: Expression::parse_filter(value)?,
             });
         } else {
             convert_legacy(value)?
