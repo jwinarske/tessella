@@ -155,3 +155,148 @@ fn no_rotation_leaves_the_corners_untouched() {
     assert_eq!(turned.tl, (icon.left - 1.0, icon.top - 1.0));
     assert_eq!(turned.br, (icon.right + 1.0, icon.bottom + 1.0));
 }
+
+/// Stretching an icon around its label — mbgl's `icon-text-fit` and `applyTextFit`.
+///
+/// This is what draws a route shield: a sprite whose middle stretches to hold a number, and
+/// whose border must not stretch with it. Two mechanisms, and they are not the same one. The
+/// *layer* says `icon-text-fit` — which axes to stretch — and the *sprite* says `textFitWidth`
+/// and `textFitHeight`, which constrain how far that stretch may distort it.
+mod text_fit {
+    use tessella_glyph::quads::{IconTextFit, apply_text_fit, content_padding, fit_icon_to_text};
+    use tessella_glyph::sprite::TextFit;
+
+    /// mbgl's `Shaping.applyTextFit` setup: 4-unit text at font scale 4, so a 16x16 icon.
+    const FONT_SCALE: f32 = 4.0;
+    const TEXT: (f32, f32, f32, f32) = (-2.0, 2.0, -2.0, 2.0);
+    const FITTED: f32 = 16.0;
+
+    /// An icon fitted to that text in both directions.
+    fn fitted() -> tessella_glyph::quads::PositionedIcon {
+        fit_icon_to_text(
+            tessella_glyph::quads::PositionedIcon::default(),
+            (FITTED, FITTED),
+            TEXT,
+            IconTextFit::Both,
+            (0.0, 0.0, 0.0, 0.0),
+            [0.0, 0.0],
+            FONT_SCALE,
+        )
+    }
+
+    /// Fitting both axes gives the text's box.
+    #[test]
+    fn fitting_both_axes_takes_the_texts_box() {
+        let icon = fitted();
+        assert_eq!(icon.right - icon.left, FITTED);
+        assert_eq!(icon.bottom - icon.top, FITTED);
+    }
+
+    /// Fitting one axis centres the other rather than stretching it.
+    ///
+    /// mbgl's `else` branches, and the reason they are not "leave it alone": the icon has to move
+    /// to sit on the text even where it does not resize, or a width-fitted shield stretches
+    /// across the label while sitting above it.
+    #[test]
+    fn fitting_one_axis_centres_the_other() {
+        let wide = fit_icon_to_text(
+            tessella_glyph::quads::PositionedIcon::default(),
+            (40.0, 10.0),
+            TEXT,
+            IconTextFit::Width,
+            (0.0, 0.0, 0.0, 0.0),
+            [0.0, 0.0],
+            FONT_SCALE,
+        );
+        assert_eq!(wide.right - wide.left, FITTED, "the width did not fit");
+        assert_eq!(wide.bottom - wide.top, 10.0, "the height was stretched");
+        // Centred on the text's vertical middle, which is zero here.
+        assert_eq!(wide.top + wide.bottom, 0.0, "{wide:?} is not centred");
+    }
+
+    /// `icon-text-fit-padding` grows the fitted box, per side.
+    #[test]
+    fn the_fit_padding_grows_each_side_on_its_own() {
+        let padded = fit_icon_to_text(
+            tessella_glyph::quads::PositionedIcon::default(),
+            (FITTED, FITTED),
+            TEXT,
+            IconTextFit::Both,
+            (1.0, 2.0, 3.0, 4.0),
+            [0.0, 0.0],
+            FONT_SCALE,
+        );
+        assert_eq!(padded.top, -8.0 - 1.0);
+        assert_eq!(padded.bottom, 8.0 + 2.0);
+        assert_eq!(padded.left, -8.0 - 3.0);
+        assert_eq!(padded.right, 8.0 + 4.0);
+    }
+
+    /// mbgl `Shaping.applyTextFit`, horizontal: a 100x20 sprite with a 5,5,95,15 content box.
+    ///
+    /// The content is 90x10, so its aspect is nine to one. Fitted to a square, an axis marked
+    /// `proportional` pulls the icon back to that aspect: 144 by 16.
+    #[test]
+    fn a_proportional_axis_restores_the_content_aspect() {
+        let content = (5.0, 5.0, 95.0, 15.0);
+
+        // Neither field set: nothing happens.
+        let untouched = apply_text_fit(fitted(), content, None, None);
+        assert_eq!(untouched.right - untouched.left, FITTED);
+        assert_eq!(untouched.bottom - untouched.top, FITTED);
+
+        // Both stretchOrShrink: still nothing, because the content already matches.
+        let free = apply_text_fit(
+            fitted(),
+            content,
+            Some(TextFit::StretchOrShrink),
+            Some(TextFit::StretchOrShrink),
+        );
+        assert_eq!(free.right - free.left, FITTED);
+        assert_eq!(free.bottom - free.top, FITTED);
+
+        // stretchOnly width against a proportional height: widened to nine times the height.
+        let corrected = apply_text_fit(
+            fitted(),
+            content,
+            Some(TextFit::StretchOnly),
+            Some(TextFit::Proportional),
+        );
+        assert_eq!(corrected.right - corrected.left, FITTED * 9.0);
+        assert_eq!(corrected.bottom - corrected.top, FITTED);
+    }
+
+    /// mbgl `Shaping.applyTextFit`, vertical: a 20x100 sprite with a 5,5,15,95 content box.
+    ///
+    /// The mirror image, and worth having separately: the two branches are written out rather
+    /// than shared, so one can be right while the other is not.
+    #[test]
+    fn the_vertical_branch_mirrors_the_horizontal_one() {
+        let content = (5.0, 5.0, 15.0, 95.0);
+        let corrected = apply_text_fit(
+            fitted(),
+            content,
+            Some(TextFit::Proportional),
+            Some(TextFit::StretchOnly),
+        );
+        assert_eq!(corrected.right - corrected.left, FITTED);
+        assert_eq!(corrected.bottom - corrected.top, FITTED * 9.0);
+    }
+
+    /// The content margins are in logical pixels, so a retina shield's border matches a plain
+    /// one's.
+    ///
+    /// `content` is in the sprite's own pixels. Leaving the ratio out gives a 2x shield twice
+    /// the border, which reads as two differently drawn shields rather than as a units mistake.
+    #[test]
+    fn the_content_margins_divide_out_the_pixel_ratio() {
+        // A 100x20 sprite at ratio 1 displays at 100x20; its content inset is 5 all round.
+        let plain = content_padding((100.0, 20.0), (5.0, 5.0, 95.0, 15.0), 1.0);
+        assert_eq!(plain, (5.0, 5.0, 5.0, 5.0));
+
+        // The same drawing at 2x is a 200x40 sprite displaying at 100x20, and its border is
+        // still five logical pixels.
+        let retina = content_padding((100.0, 20.0), (10.0, 10.0, 190.0, 30.0), 2.0);
+        assert_eq!(retina, (5.0, 5.0, 5.0, 5.0));
+    }
+}

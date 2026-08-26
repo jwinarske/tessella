@@ -134,16 +134,50 @@ pub fn collision_box(
     padding: Padding,
     rotate_degrees: f32,
 ) -> Option<CollisionBox> {
+    collision_box_with(extent, anchor, box_scale, padding, None, rotate_degrees)
+}
+
+/// The collision box for a label, with an icon's content margins added.
+///
+/// `content` is what [`crate::feature::Padding`] cannot express on its own: `text-padding` is a
+/// number of *screen* pixels and does not scale, while an icon's margins are part of the picture
+/// and do. mbgl keeps them apart for that reason and so does this — they are added after the
+/// scale, each at its own.
+///
+/// The margins *grow* the box, which reads backwards until the fitting is in view: once
+/// `icon-text-fit` has stretched a shield around its label, the extent is the shield's *content*
+/// area and the drawn picture reaches further out by its border. Collision reserves the picture.
+///
+/// # Errors
+///
+/// `None` under the same condition as [`collision_box`].
+#[must_use]
+pub fn collision_box_with(
+    extent: Extent,
+    anchor: (f32, f32),
+    box_scale: f32,
+    padding: Padding,
+    content: Option<(f32, f32, f32, f32)>,
+    rotate_degrees: f32,
+) -> Option<CollisionBox> {
     if extent.is_empty() {
         return None;
     }
 
     // Scale first, then pad: the padding is a number of screen pixels and must not grow with
     // the label.
-    let y1 = extent.top * box_scale - padding.top;
-    let y2 = extent.bottom * box_scale + padding.bottom;
-    let x1 = extent.left * box_scale - padding.left;
-    let x2 = extent.right * box_scale + padding.right;
+    let mut y1 = extent.top * box_scale - padding.top;
+    let mut y2 = extent.bottom * box_scale + padding.bottom;
+    let mut x1 = extent.left * box_scale - padding.left;
+    let mut x2 = extent.right * box_scale + padding.right;
+
+    if let Some((top, bottom, left, right)) = content {
+        y1 -= top * box_scale;
+        y2 += bottom * box_scale;
+        x1 -= left * box_scale;
+        x2 += right * box_scale;
+    }
+    let (y1, y2, x1, x2) = (y1, y2, x1, x2);
 
     if rotate_degrees == 0.0 {
         return Some(CollisionBox {

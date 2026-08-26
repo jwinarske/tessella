@@ -23,6 +23,7 @@
 use crate::atlas::Rect;
 use crate::pbf::{BORDER, Metrics};
 use crate::shaping::{Anchor, Shaping};
+use crate::sprite::TextFit;
 
 /// How far outside the ink a quad reaches, in pixels.
 ///
@@ -168,7 +169,7 @@ pub const ICON_QUAD_BORDER: f32 = 1.0;
 /// mbgl's `PositionedIcon::shapeIcon`. Separate from the quad for the same reason shaping is
 /// separate from `glyph_quads`: the box is what collision measures and the quad is what draws,
 /// and the quad is a pixel larger on every side.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct PositionedIcon {
     /// Left edge, relative to the anchor.
     pub left: f32,
@@ -178,6 +179,13 @@ pub struct PositionedIcon {
     pub right: f32,
     /// Bottom edge.
     pub bottom: f32,
+    /// How far the drawn icon reaches beyond its *content* box, on each side.
+    ///
+    /// Zero for an icon with no content box. For one that has it — a shield — the box above is
+    /// the content area once `icon-text-fit` has stretched it around the label, and the picture
+    /// still extends past it by the sprite's border. Collision reserves the picture rather than
+    /// the text area, so these are added back at that point rather than here.
+    pub collision_padding: (f32, f32, f32, f32),
 }
 
 /// Places an icon of `size` logical pixels against its anchor and offset.
@@ -194,7 +202,136 @@ pub fn shape_icon(size: (f32, f32), offset: [f32; 2], anchor: Anchor) -> Positio
         top,
         right: left + size.0,
         bottom: top + size.1,
+        collision_padding: (0.0, 0.0, 0.0, 0.0),
     }
+}
+
+/// The margins between an icon's content box and its own edges, in logical pixels.
+///
+/// mbgl computes these in `shapeIcon` from `content` and the pixel ratio. `content` is in the
+/// sprite's own pixels, so a retina shield's margins are half what the numbers say — dividing by
+/// the ratio is what keeps a 2x shield's border the same size on screen as a 1x one's.
+///
+/// Ordered top, bottom, left, right, matching the extent everything else here carries.
+#[must_use]
+pub fn content_padding(
+    size: (f32, f32),
+    content: (f32, f32, f32, f32),
+    pixel_ratio: f32,
+) -> (f32, f32, f32, f32) {
+    let (left, top, right, bottom) = content;
+    (
+        top / pixel_ratio,
+        size.1 - bottom / pixel_ratio,
+        left / pixel_ratio,
+        size.0 - right / pixel_ratio,
+    )
+}
+
+/// How `icon-text-fit` stretches an icon around its label.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum IconTextFit {
+    /// Leave the icon alone.
+    #[default]
+    None,
+    /// Stretch it to the text's width, and centre it vertically.
+    Width,
+    /// Stretch it to the text's height, and centre it horizontally.
+    Height,
+    /// Stretch it in both directions.
+    Both,
+}
+
+/// Resizes an icon around the text it holds — mbgl's `PositionedIcon::fitIconToText`.
+///
+/// `text` is the shaped label's extent as `(top, bottom, left, right)` and `padding` is
+/// `icon-text-fit-padding`, in the same order.
+///
+/// The icon's *anchor* is deliberately ignored, which mbgl says outright: `icon-text-fit` is a
+/// statement about where the icon goes relative to the text, and honouring the anchor as well
+/// would move it away from the label it is drawn around.
+#[must_use]
+pub fn fit_icon_to_text(
+    icon: PositionedIcon,
+    size: (f32, f32),
+    text: (f32, f32, f32, f32),
+    fit: IconTextFit,
+    padding: (f32, f32, f32, f32),
+    offset: [f32; 2],
+    font_scale: f32,
+) -> PositionedIcon {
+    let (text_top, text_bottom, text_left, text_right) = text;
+    let (pad_top, pad_bottom, pad_left, pad_right) = padding;
+    let (left, right) = (text_left * font_scale, text_right * font_scale);
+    let (top, bottom) = (text_top * font_scale, text_bottom * font_scale);
+
+    let mut out = icon;
+    if matches!(fit, IconTextFit::Width | IconTextFit::Both) {
+        out.left = offset[0] + left - pad_left;
+        out.right = offset[0] + right + pad_right;
+    } else {
+        out.left = offset[0] + (left + right - size.0) / 2.0;
+        out.right = out.left + size.0;
+    }
+
+    if matches!(fit, IconTextFit::Height | IconTextFit::Both) {
+        out.top = offset[1] + top - pad_top;
+        out.bottom = offset[1] + bottom + pad_bottom;
+    } else {
+        out.top = offset[1] + (top + bottom - size.1) / 2.0;
+        out.bottom = out.top + size.1;
+    }
+    out
+}
+
+/// Corrects a fitted icon's aspect against the sprite's `textFitWidth`/`textFitHeight`.
+///
+/// mbgl's `PositionedIcon::applyTextFit`. Fitting an icon to its text stretches it in whichever
+/// directions `icon-text-fit` names, and a shield stretched freely in both looks wrong — the
+/// sprite says which of its axes may stretch and which must keep the content box's proportions.
+///
+/// Only a `proportional` axis does anything. With both `stretchOrShrink`, or with neither field
+/// set, the content rectangle already matches the content and there is nothing to correct.
+#[must_use]
+pub fn apply_text_fit(
+    icon: PositionedIcon,
+    content: (f32, f32, f32, f32),
+    fit_width: Option<TextFit>,
+    fit_height: Option<TextFit>,
+) -> PositionedIcon {
+    let (Some(fit_width), Some(fit_height)) = (fit_width, fit_height) else {
+        return icon;
+    };
+
+    let width = icon.right - icon.left;
+    let height = icon.bottom - icon.top;
+    let (content_left, content_top, content_right, content_bottom) = content;
+    let content_width = content_right - content_left;
+    let content_height = content_bottom - content_top;
+    if content_height == 0.0 || height == 0.0 || width == 0.0 {
+        return icon;
+    }
+    let aspect = content_width / content_height;
+
+    let mut out = icon;
+    if fit_height == TextFit::Proportional {
+        if (fit_width == TextFit::StretchOnly && (width / height) < aspect)
+            || fit_width == TextFit::Proportional
+        {
+            let new_width = (height * aspect).ceil();
+            out.left *= new_width / width;
+            out.right = out.left + new_width;
+        }
+    } else if fit_width == TextFit::Proportional
+        && fit_height == TextFit::StretchOnly
+        && aspect != 0.0
+        && (width / height) > aspect
+    {
+        let new_height = (width / aspect).ceil();
+        out.top *= new_height / height;
+        out.bottom = out.top + new_height;
+    }
+    out
 }
 
 /// The quad an icon draws as.

@@ -1445,6 +1445,29 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   that is the whole of it, while this one sizes an offline region, and a user dropping a pin
   means the tile under the pin. It is named in the test now rather than reasoned, so a future
   diff reads it as a decision.
+  `icon-text-fit` then lands, which is what draws a route shield: a sprite whose middle stretches
+  to hold a number and whose border must not stretch with it. Two mechanisms and not one, which
+  is the thing to keep straight — the *layer* says `icon-text-fit`, which axes may stretch, and
+  the *sprite* says `textFitWidth` and `textFitHeight`, how far that stretch may distort it. mbgl
+  keeps them in two functions and so does this.
+  Fitting deliberately ignores the icon's anchor, which mbgl says outright: `icon-text-fit` is a
+  statement about where the icon sits relative to the *text*, and honouring the anchor as well
+  would move it off the label it is drawn around. An axis that is not fitted is *centred* rather
+  than left alone, which is the branch it is easy to read as a no-op — without it a width-fitted
+  shield stretches across its label while sitting above it.
+  `applyTextFit` corrects the aspect afterwards, and only a `proportional` axis does anything:
+  with both `stretchOrShrink`, or with neither field set, the content rectangle already matches
+  the content. Checked against mbgl's own numbers — a 100x20 sprite with a 5,5,95,15 content box
+  fitted to a square comes back 144 by 16, its content's nine-to-one aspect restored — and the
+  vertical branch against its mirror, since the two are written out separately and one can be
+  right while the other is not.
+  Placement sees the other half. A sprite with a `content` box carries *margins* between that box
+  and its own edges, and they grow the collision box: once fitting has stretched a shield around
+  its label the extent is the shield's content area, and the drawn picture reaches further out by
+  its border, which is what has to be reserved. The margins are in the sprite's own pixels and are
+  divided by the pixel ratio, so a 2x shield's border is the same size on screen as a 1x one's;
+  and they scale with the box where `text-padding` does not, which is why the two are separate
+  arguments rather than summed.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

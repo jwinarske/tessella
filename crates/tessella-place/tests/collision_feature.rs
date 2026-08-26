@@ -191,3 +191,60 @@ fn padding_is_what_keeps_labels_apart() {
         "without padding they clear each other"
     );
 }
+
+/// An icon's content margins grow its collision box, and scale with it.
+///
+/// The half of `icon-text-fit` that placement sees. Once a shield has been stretched around its
+/// label, the extent is the shield's *content* area — the box the number sits in — and the drawn
+/// picture reaches further out by its border. Collision has to reserve the picture, or two
+/// shields overlap by their borders and look crowded while the numbers do not touch.
+///
+/// Two paddings with different behaviours, which is why they are separate arguments: `text-padding`
+/// is a number of screen pixels and stays put under zoom, while the margins are part of the
+/// drawing and scale with it.
+#[test]
+fn an_icons_content_margins_grow_its_box() {
+    use tessella_place::feature::collision_box_with;
+
+    let extent = Extent {
+        top: -8.0,
+        bottom: 8.0,
+        left: -8.0,
+        right: 8.0,
+    };
+
+    let bare =
+        collision_box_with(extent, (0.0, 0.0), 1.0, Padding::default(), None, 0.0).expect("a box");
+    assert_eq!(bare.size(), (16.0, 16.0));
+
+    // A border of two on every side: the picture is twenty across where its content is sixteen.
+    let margins = Some((2.0, 2.0, 2.0, 2.0));
+    let bordered = collision_box_with(extent, (0.0, 0.0), 1.0, Padding::default(), margins, 0.0)
+        .expect("a box");
+    assert_eq!(bordered.size(), (20.0, 20.0));
+
+    // The margins scale with the box; `text-padding` does not.
+    let scaled = collision_box_with(extent, (0.0, 0.0), 2.0, Padding::uniform(3.0), margins, 0.0)
+        .expect("a box");
+    assert_eq!(
+        scaled.size(),
+        (
+            // extent 16 doubled, plus 3 of screen padding each side, plus 2 of margin doubled
+            32.0 + 6.0 + 8.0,
+            32.0 + 6.0 + 8.0
+        ),
+        "the two paddings did not scale differently"
+    );
+
+    // No margins is the same as zero margins, so an icon without a content box is unaffected.
+    let zeroed = collision_box_with(
+        extent,
+        (0.0, 0.0),
+        1.0,
+        Padding::default(),
+        Some((0.0, 0.0, 0.0, 0.0)),
+        0.0,
+    )
+    .expect("a box");
+    assert_eq!(zeroed.size(), bare.size());
+}
