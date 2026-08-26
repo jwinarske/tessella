@@ -18,6 +18,8 @@ extern crate alloc;
 
 pub mod clip;
 pub mod geojson;
+#[cfg(feature = "gltf")]
+pub mod gltf;
 pub mod image;
 pub mod mvt;
 pub mod protobuf;

@@ -18,6 +18,7 @@ tessella-storage.workspace = true
 tessella-style.workspace = true
 tessella-tile.workspace = true
 image-webp = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
 zune-jpeg = { workspace = true, optional = true }
 zune-png = { workspace = true, optional = true }
 
@@ -27,6 +28,11 @@ default = []
 # (DR-12): a style with no raster source and no sprite never reaches either decoder, and both
 # are pure Rust so the cross lane pays nothing to have them available.
 image = ["dep:zune-jpeg", "dep:zune-png"]
+# Binary glTF, which is how a Mapbox 3D-buildings tile arrives. The container and both of the
+# extensions a buildings tile requires are Khronos specifications, so every rule the reader
+# follows is published. Off by default because a style with no model layer never
+# reaches it.
+gltf = ["dep:serde_json"]
 # WebP on top of those, which a satellite or hybrid layer from MapTiler or Mapbox is served as.
 # Its own feature rather than part of `image` for two reasons. A VP8 decoder is a great deal more
 # code than a PNG one, and DR-12's binary-size argument bites hardest there. And `image-webp`
