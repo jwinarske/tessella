@@ -733,11 +733,12 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   hash cannot be compared. Making them comparable is a change to mbgl's atlas behaviour rather
   than to the probe's dump code, and an oracle representing a *modified* mbgl is worth less than
   one with seven elided lines. Investigated and declined, not deferred.
-  **Not in this phase and not in any other**: icons and sprites. §5 names one sprite atlas per
-  style and the crate map gives `tessella-glyph` the sprite half of mbgl's `text/`, but no phase
-  claims the work — R2 is spelled "symbols" and means glyphs, and R3 is raster, patterns and
-  fill-extrusion. That is a gap in this plan rather than in the build, and it is written here so
-  the next reader does not have to rediscover it.
+  **Not in this phase**: icons and sprites. R2 is spelled "symbols" and means glyphs. R3's line
+  did not name them either while the R2 narrative above already said "until R3 brings the sprite
+  atlas" — the plan disagreed with itself, and R3's scope now says so explicitly. What waits on
+  it is named where it is missed: vertical writing, images in text and per-section scaling all
+  change a line's *height* as well as its width, and none of them has an oracle without the
+  sprite atlas.
   **Held behind a capture**: the pitched paths, in three different states, and the difference
   between them matters. A line label's collision circles *do* carry the signed distance from the
   anchor that selects a prefix of the run under pitch — computed, stored, and read by nothing.
@@ -1224,7 +1225,32 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   identities, the index buffers, the five attribute descriptors, the atlas texture's size and
   format, the painter order and all three uniform buffers. What remains elided is the atlas
   packing order, which is mbgl's to make deterministic.
-- **R3** — raster, patterns/dynamic textures (rect-list damage), fill-extrusion.
+- **R3** — *in progress.* Sprites and icons, raster, patterns/dynamic textures (rect-list
+  damage), fill-extrusion.
+  The sprite index lands first, as `tessella-glyph/sprite`: mbgl's `SpriteParser`. A style names
+  one sprite *base* and the origin serves two resources for it, the suffix going before the
+  extension rather than after the URL — `sprite@2x.json`, not `sprite.json@2x` — and a query
+  string surviving in front of the suffix, which is what makes a signed sprite URL work.
+  Almost all of it is refusal, and that is the part worth having. The index is hand-written or
+  tool-generated JSON with no schema behind it, so every field can be wrong in a way that is not
+  a parse error: a negative width wraps when it reaches an unsigned rectangle, a zero pixel ratio
+  divides by zero, a rectangle running off the sheet samples whatever the neighbouring icon left
+  there and looks like the wrong icon rather than like an error. mbgl's bounds are transcribed
+  rather than chosen — a dimension over 1024, a ratio outside `0 < r <= 10` — and a bad entry is
+  dropped while the sheet is kept, because a style with one broken icon still has three hundred
+  that draw.
+  The pixel ratio is carried rather than folded into the rectangle: everything downstream
+  measures in logical pixels, and folding it in would lose the sheet coordinates the upload
+  needs. Stretches and the content box come with it — a route shield is drawn around a label
+  whose width was not known when the sprite was made, so the icon says which of its columns and
+  rows may stretch — and a range that is not exactly two numbers is refused rather than truncated,
+  since taking the first two of `[0, 4, 9]` would read it as `[0, 4]`.
+  One inconsistency is pinned rather than papered over: `-1` is a value that parses and is then
+  refused, so its entry is dropped, while `1e400` is not a value at all and the parser refuses the
+  whole document — so one number JSON cannot represent takes every icon in the sheet with it. The
+  two granularities belong to different layers and nothing here can widen the second without
+  hand-rolling a number parser. For an index no tool would emit, failing loudly beats half
+  loading.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

@@ -23,6 +23,7 @@ pub mod manager;
 pub mod pbf;
 pub mod quads;
 pub mod shaping;
+pub mod sprite;
 pub mod text;
 
 /// What a symbol layer needs to know about a glyph.
