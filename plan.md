@@ -1407,14 +1407,16 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   the same pass confirmed was right, since our reported rectangle for a 24-pixel glyph is 32 and
   so is mbgl's.
   **Clip masks are absent, and the golden could not have caught it.** mbgl's `updateTileMasks`
-  gives each rendered tile the set of *quadrants* to draw, so a parent under one child draws the
-  other three; `StencilTiles` carries a tile and a matrix and has no word for a quadrant. Every
-  tile in every capture is `o13` at its own zoom — substitution never happens in a settled frame
-  at a fixed camera — so the case has never been captured, while `sweep_never_blank` exercises it
-  on this side several times a run. It is a wire question rather than a code one: the ABI froze at
-  R0 exit and a mask is a field addition, so it wants a capture of a partially covered parent
-  before anything is added. Recorded rather than fixed, and named here because the next reader
-  will otherwise conclude from a green golden that masks are handled.
+  gives each rendered tile the set of sub-tiles to draw, so a parent under one child draws the
+  other three. Every tile in every capture is `o13` at its own zoom — substitution never happens
+  in a settled frame at a fixed camera — so the case has never been captured, while
+  `sweep_never_blank` exercises it on this side several times a run. Recorded rather than fixed,
+  and named here because the next reader will otherwise conclude from a green golden that masks
+  are handled.
+  *This paragraph originally went on to call it a wire question — `StencilTiles` carries a tile
+  and a matrix and has no word for a quadrant, so a mask looked like a field addition against a
+  frozen ABI. That was wrong, and reading the two consumers is what settled it; the correction is
+  below, where the masks land.*
   The audit then found a third: **`mergeLines` was missing entirely.** mbgl runs it on a symbol
   layer's features whenever `symbol-placement` is `line`, before any anchor is chosen, and it
   joins features that share an endpoint *and* say the same thing. A road is rarely one feature —
@@ -1949,6 +1951,44 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   rewrite one at all: a file source is handed a URL and no context, and `mapbox://sprites/…` says
   what it is. What that gives up is the cross-check a caller who knows the kind can make, so
   `normalize` still takes one for callers that do.
+  Clip masks land, and the first thing to say about them is that the earlier entry above had the
+  layer wrong. It called a mask a *wire* question — `StencilTiles` carries a tile and a matrix
+  and has no word for a quadrant, so a mask looked like a field addition against an ABI frozen at
+  R0 exit, wanting a capture nobody could produce. Reading the two ends settled it the other way.
+  **`renderTileClippingMasks` never sees a mask.** It builds one `ClipUBO` per render tile
+  carrying a matrix and a stencil reference, draws a full-tile quad for each, and that is the
+  whole of the stencil path — on every backend, and in the capture backend's `TileLayerGroup`
+  too, which records exactly `{id, matrix}` per tile. `StencilTiles` is complete as it stands.
+  **`TileMask` is consumed by two things, and both turn it into geometry.**
+  `RasterBucket::setMask` and `HillshadeBucket::setMask`, each building a quad per entry at
+  `EXTENT >> z`. So a mask is not a field the stream is missing. It is vertices, and vertices
+  already travel — which means no ABI decision, no capture of a partially covered parent, and
+  nothing frozen in the way. What was blocking the work was a misreading rather than a protocol.
+  `algorithm::updateTileMasks` ports directly, and mbgl's own
+  `test/algorithm/update_tile_masks.test.cpp` is the oracle: every case transcribed, including
+  the two that a plausible implementation fails. A mask **descends** rather than stopping at
+  quadrants — a single z4 tile under a z0 one masks it into twelve rectangles, three at each of
+  four levels — and it is stated **relative** to the tile, `x - (root.x << depth)`, which at
+  street-zoom indices is where an implementation that shifted the wrong operand produces a
+  plausible mask nowhere near the tile.
+  The empty mask and the whole-tile mask are opposites and are the pair a caller confuses. A tile
+  covered by four children draws *nothing*; reading empty as "no restriction" renders that region
+  twice, which on a translucent raster layer is visibly darker. Both are named in the API rather
+  than left to a length check.
+  Two structural consequences follow from the mask being geometry. It is **per view**, not per
+  tile: §5.1 shares tiles across views, and two views loading at different rates hold different
+  masks for the same tile, so the mask arrives as an argument to the builder rather than being
+  baked into a cached bucket. And a masked bucket is therefore *different geometry* with a
+  different id — which is not a loss of sharing but the same rule §5.3 already states, since two
+  views that agree on the mask produce the same bytes and share as before.
+  The whole-tile mask builds byte-identically to the unmasked bucket, which is what lets the two
+  paths converge: a settled cover produces `{(0, 0, 0)}` for every tile, and anything else would
+  re-upload geometry that had not changed on every settled frame. mbgl special-cases it to keep
+  using shared full-extent buffers; here it is one quad either way, and the sharing is by
+  geometry identity instead.
+  A cold start passes the whole-tile mask explicitly rather than defaulting to it, because a
+  cover *is* one zoom level and saying so is the point — the substitution case belongs to the
+  sweep, and that is where the mask is computed over a renderable set.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

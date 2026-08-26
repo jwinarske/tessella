@@ -11,6 +11,7 @@ use tessella_orchestrate::tile::{TileId, build_mvt_tile, build_raster_tile};
 use tessella_source::image::Image;
 use tessella_source::mvt::Tile;
 use tessella_style::Style;
+use tessella_tile::mask::{MaskEntry, WHOLE_TILE};
 
 const REAL_TILE: &[u8] = include_bytes!("../../../tests/mvt-fixtures/real-world-0-0-0.mvt");
 
@@ -21,6 +22,9 @@ fn satellite() -> Style {
     )
     .expect("a style")
 }
+
+/// The mask a settled cover always produces.
+const WHOLE: &[MaskEntry] = &[WHOLE_TILE];
 
 /// A 2x2 opaque image, standing in for a decoded tile.
 fn picture() -> Arc<Image> {
@@ -38,7 +42,8 @@ fn picture() -> Arc<Image> {
 /// would draw no imagery ever, which is a blank map with a working style.
 #[test]
 fn a_raster_layer_draws_without_features() {
-    let buckets = build_raster_tile(&satellite(), "sat", picture()).expect("the tile builds");
+    let buckets =
+        build_raster_tile(&satellite(), "sat", picture(), WHOLE).expect("the tile builds");
 
     assert_eq!(buckets.len(), 1, "one raster layer");
     let content = buckets[0]
@@ -65,7 +70,7 @@ fn two_layers_over_one_source_share_the_picture() {
     )
     .expect("a style");
 
-    let buckets = build_raster_tile(&style, "sat", picture()).expect("the tile builds");
+    let buckets = build_raster_tile(&style, "sat", picture(), WHOLE).expect("the tile builds");
     assert_eq!(buckets.len(), 2);
 
     let first = buckets[0].content.as_raster().expect("raster");
@@ -108,7 +113,7 @@ fn another_sources_raster_layer_is_not_built() {
     )
     .expect("a style");
 
-    let buckets = build_raster_tile(&style, "sat", picture()).expect("the tile builds");
+    let buckets = build_raster_tile(&style, "sat", picture(), WHOLE).expect("the tile builds");
     assert_eq!(buckets.len(), 1);
     assert_eq!(buckets[0].layer_id, "imagery");
     assert_eq!(buckets[0].layer_index, 0, "painter order is kept");
@@ -491,4 +496,84 @@ fn the_picture_reaches_the_ring_before_the_geometry_that_binds_it() {
         kinds,
         vec![EnvelopeKind::TextureUpdate, EnvelopeKind::GeometryAdd]
     );
+}
+
+/// A mask becomes geometry: one quad per entry, at that entry's own size.
+///
+/// mbgl's `RasterBucket::setMask` builds a quad at `EXTENT >> z` for each entry, and the
+/// correspondence is the whole reason a mask needs no place on the wire. What travels is
+/// vertices, and vertices already travel.
+#[test]
+fn a_mask_becomes_one_quad_per_entry() {
+    // Three quarters of a tile whose top-left child has loaded — mbgl's `OneChild` case.
+    let mask = [
+        MaskEntry { z: 1, x: 0, y: 1 },
+        MaskEntry { z: 1, x: 1, y: 0 },
+        MaskEntry { z: 1, x: 1, y: 1 },
+    ];
+    let bucket = RasterBucket::masked(&mask);
+    assert_eq!(bucket.quads(), 3);
+
+    let corners: Vec<[i16; 2]> = bucket
+        .vertices
+        .iter()
+        .map(|vertex| vertex.position)
+        .collect();
+    // The quarter that loaded is the one *not* drawn: nothing starts at the origin.
+    assert!(!corners.contains(&[0, 0]), "the covered quarter was drawn");
+    assert!(corners.contains(&[0, 4096]), "the bottom-left quarter");
+    assert!(corners.contains(&[4096, 0]), "the top-right quarter");
+    assert!(corners.contains(&[4096, 4096]), "the bottom-right quarter");
+    assert!(
+        corners
+            .iter()
+            .all(|point| point[0] <= 8192 && point[1] <= 8192)
+    );
+}
+
+/// A mask of different depths produces quads of different sizes.
+///
+/// The property a quadrant-only implementation cannot have. mbgl's `Complex` case masks one tile
+/// into six rectangles across three levels, and each level's extent is half the one above.
+#[test]
+fn a_deeper_mask_entry_is_a_smaller_quad() {
+    let bucket = RasterBucket::masked(&[
+        MaskEntry { z: 1, x: 1, y: 0 },
+        MaskEntry { z: 3, x: 7, y: 6 },
+    ]);
+    assert_eq!(bucket.quads(), 2);
+
+    let side = |quad: usize| -> i16 {
+        let base = quad * 4;
+        bucket.vertices[base + 1].position[0] - bucket.vertices[base].position[0]
+    };
+    assert_eq!(side(0), 4096, "one level down is half the extent");
+    assert_eq!(side(1), 1024, "three levels down is an eighth");
+}
+
+/// An empty mask is an empty bucket, which draws nothing.
+///
+/// The opposite of the whole-tile mask, and the pair a caller most easily confuses. A parent
+/// covered by four children must draw *nothing*; reading empty as "no restriction" renders every
+/// pixel of that region twice, which for a translucent raster layer is visibly darker.
+#[test]
+fn a_fully_covered_tile_draws_nothing() {
+    let bucket = RasterBucket::masked(&[]);
+    assert_eq!(bucket.quads(), 0);
+    assert!(bucket.is_empty());
+
+    // And the layer reports no drawable for it, rather than an empty one.
+    let buckets = build_raster_tile(&satellite(), "sat", picture(), &[]).expect("the tile builds");
+    assert_eq!(buckets.len(), 1, "the layer is still present");
+    assert_eq!(buckets[0].drawable_count(), 0, "but draws nothing");
+}
+
+/// The whole-tile mask is the same bucket `whole_tile()` builds.
+///
+/// Which is what lets the two paths converge: a settled cover produces `{(0, 0, 0)}` for every
+/// tile, and that has to be byte-identical to the unmasked bucket or every settled frame would
+/// re-upload geometry that had not changed.
+#[test]
+fn the_whole_tile_mask_is_the_unmasked_bucket() {
+    assert_eq!(RasterBucket::masked(WHOLE), RasterBucket::whole_tile());
 }

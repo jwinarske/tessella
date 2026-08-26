@@ -36,10 +36,12 @@
 
 pub mod camera;
 pub mod cover;
+pub mod mask;
 pub mod polygon;
 pub mod projection;
 pub mod renderables;
 pub mod store;
 
 pub use cover::{CoverError, TileCoord, ViewTransform, cover};
+pub use mask::{MaskEntry, update_tile_masks};
 pub use store::{Lookup, TileKey, TileStore};

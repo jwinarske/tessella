@@ -560,13 +560,16 @@ pub fn build_sourceless(style: &Style, tile: TileId) -> Result<Vec<LayerBucket>,
 /// a filter selects features and a raster tile has none, so `filter` on a raster layer is
 /// ignored exactly as the spec says it is.
 ///
-/// There is no tile id either, which the other two take. A whole-tile quad does not depend on
-/// which tile it is, and a *masked* one would not either: a mask is the set of quadrants whose
-/// children have not loaded, which is a question about the moment rather than about the address.
+/// There is no tile id either, which the other two take. The geometry depends on the tile's
+/// *mask* rather than on its address — which sub-tiles no better tile has covered — and that is a
+/// question about the moment rather than about where the tile is. The mask therefore arrives as
+/// an argument: it belongs to the view's renderable set, and two views loading at different rates
+/// hold different masks for the same tile.
 pub fn build_raster_tile(
     style: &Style,
     source: &str,
     image: alloc::sync::Arc<tessella_source::image::Image>,
+    mask: &[tessella_tile::mask::MaskEntry],
 ) -> Result<Vec<LayerBucket>, TileError> {
     let mut buckets = Vec::new();
 
@@ -583,11 +586,8 @@ pub fn build_raster_tile(
         buckets.push(LayerBucket {
             layer_index,
             layer_id: layer.id.clone(),
-            // One quad, because the tile mask is not built — see the plan. A mask only differs
-            // from the whole tile where a parent is partly covered by its children, which is a
-            // state a settled frame at a fixed camera never reaches.
             content: Content::Raster(RasterContent {
-                bucket: RasterBucket::whole_tile(),
+                bucket: RasterBucket::masked(mask),
                 image: alloc::sync::Arc::clone(&image),
             }),
             paint,

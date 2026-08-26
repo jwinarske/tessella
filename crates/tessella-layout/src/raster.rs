@@ -12,9 +12,12 @@
 //! tile is one quad, which is every case a settled frame at a fixed camera produces and every
 //! case any capture contains.
 //!
-//! The mask itself is not built here: `StencilTiles` has no word for a quadrant, which is
-//! recorded in the plan as a wire question rather than a code one. The shape is kept so that
-//! adding it later is a caller passing a mask rather than this being rewritten.
+//! The mask comes from [`tessella_tile::mask::update_tile_masks`], which is mbgl's
+//! `algorithm::updateTileMasks`. It is a *raster* mechanism and not a stencil one: `TileMask` is
+//! consumed only by `RasterBucket::setMask` and `HillshadeBucket::setMask`, both of which turn it
+//! into geometry, while `renderTileClippingMasks` draws a full-tile quad per render tile and
+//! never sees a quadrant. So a mask needs nothing added to the capture stream — it is geometry,
+//! and geometry already travels.
 
 use alloc::vec::Vec;
 
@@ -104,6 +107,30 @@ impl RasterBucket {
     pub fn whole_tile() -> Self {
         let mut bucket = Self::default();
         bucket.add_quad(0, 0, 0);
+        bucket
+    }
+
+    /// The bucket for a tile's clip mask.
+    ///
+    /// `mask` is what [`tessella_tile::mask::update_tile_masks`] produced for this tile: the
+    /// sub-tiles it should still draw, relative to itself. mbgl's `RasterBucket::setMask` builds
+    /// exactly this — a quad per entry at `EXTENT >> z` — and the correspondence is why the mask
+    /// needs no place on the wire: it is geometry, and geometry already travels.
+    ///
+    /// An **empty** mask is an empty bucket, which draws nothing. That is the answer for a tile
+    /// entirely covered by better ones, and it is the opposite of the whole-tile mask rather than
+    /// a degenerate form of it.
+    ///
+    /// mbgl special-cases the whole-tile mask to keep using shared full-extent buffers; here it
+    /// is one quad either way, so the case is not branched on. The saving mbgl makes is in buffer
+    /// *sharing* rather than in vertex count, and this side shares by geometry identity instead —
+    /// two tiles with the same mask produce the same bytes and therefore the same id (§5.3).
+    #[must_use]
+    pub fn masked(mask: &[tessella_tile::mask::MaskEntry]) -> Self {
+        let mut bucket = Self::default();
+        for entry in mask {
+            bucket.add_quad(entry.z, entry.x, entry.y);
+        }
         bucket
     }
 }

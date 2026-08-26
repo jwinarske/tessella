@@ -691,11 +691,22 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
                                     message: error.to_string(),
                                 }
                             })?;
-                        build_raster_tile(&style, &job.source, alloc::sync::Arc::new(image))
-                            .map_err(|error| BootError::Build {
-                                url: url.clone(),
-                                message: error.to_string(),
-                            })
+                        // The whole tile. A cold start's cover is one zoom level, so no tile in
+                        // it is an ancestor of another and every mask is the whole tile — which
+                        // is why no capture ever shows one. A view that substitutes a parent
+                        // while its children load computes the mask over its own renderable set
+                        // and rebuilds the geometry, because the mask belongs to that view's
+                        // moment rather than to the tile.
+                        build_raster_tile(
+                            &style,
+                            &job.source,
+                            alloc::sync::Arc::new(image),
+                            &[tessella_tile::mask::WHOLE_TILE],
+                        )
+                        .map_err(|error| BootError::Build {
+                            url: url.clone(),
+                            message: error.to_string(),
+                        })
                     }
                     // Nothing to fetch and nothing to decode: the document arrived
                     // during source resolution, and this cuts a tile out of it.
