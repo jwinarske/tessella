@@ -14,11 +14,11 @@ use tessella_source::gltf::{self, ComponentType, ElementType, Filter, GltfError,
 /// Wraps a JSON document and a binary chunk into a GLB.
 fn glb(json: &str, binary: &[u8]) -> Vec<u8> {
     let mut json_chunk = json.as_bytes().to_vec();
-    while json_chunk.len() % 4 != 0 {
+    while !json_chunk.len().is_multiple_of(4) {
         json_chunk.push(b' ');
     }
     let mut bin_chunk = binary.to_vec();
-    while bin_chunk.len() % 4 != 0 {
+    while !bin_chunk.len().is_multiple_of(4) {
         bin_chunk.push(0);
     }
 
