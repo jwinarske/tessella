@@ -655,18 +655,19 @@ impl Default for IconOptions {
 /// separate *drawables*: text draws through `SymbolSDFShader` and an icon through
 /// `SymbolIconShader`, so they cannot share a buffer even when they belong to the same symbol.
 ///
-/// `sprites` is the style's index. An icon naming a sprite the sheet does not have is skipped —
-/// mbgl does the same, and it is why the layout records the name it asked for rather than a
-/// resolved rectangle: the sheet may not have arrived yet, and a style naming one missing icon
-/// still draws the rest.
+/// `positions` is where each icon sits in the *icon atlas* — not in the sprite sheet. mbgl cuts
+/// every icon out of the sheet and repacks it with a pixel of padding around it, and that pixel
+/// is what the quad's one-pixel border samples. Drawing straight from the sheet, where icons are
+/// usually flush against each other, puts a hairline of the neighbouring picture around every
+/// marker on the map.
 ///
-/// The atlas here is the sprite sheet itself. Unlike glyphs there is nothing to pack: the index
-/// gives rectangles into an image the origin already laid out, so the "atlas" is the sheet and
-/// the rectangles are its.
+/// An icon naming a sprite the sheet does not have is skipped — mbgl does the same, and it is
+/// why the layout records the name it asked for rather than a resolved rectangle: the sheet may
+/// not have arrived yet, and a style naming one missing icon still draws the rest.
 #[must_use]
 pub fn build_icons(
     labels: &[IconLabel],
-    sprites: &tessella_glyph::sprite::Index,
+    positions: &tessella_glyph::sprite::Positions,
 ) -> (SymbolBuffers, Vec<LaidOut>) {
     use tessella_glyph::quads::{icon_quad, shape_icon};
 
@@ -674,10 +675,10 @@ pub fn build_icons(
     let mut out = Vec::with_capacity(labels.len());
 
     for label in labels {
-        let Some(sprite) = sprites.get(&label.image) else {
+        let Some(position) = positions.get(&label.image) else {
             continue;
         };
-        let (width, height) = sprite.logical_size();
+        let (width, height) = position.display_size();
         #[allow(clippy::cast_possible_truncation)]
         let size = (width as f32, height as f32);
         if size.0 <= 0.0 || size.1 <= 0.0 {
@@ -685,16 +686,9 @@ pub fn build_icons(
         }
 
         let placed = shape_icon(size, label.options.offset, label.options.anchor);
-        let quad = icon_quad(
-            placed,
-            tessella_glyph::atlas::Rect {
-                x: sprite.x,
-                y: sprite.y,
-                width: sprite.width,
-                height: sprite.height,
-            },
-            label.options.rotate,
-        );
+        // The *padded* rectangle, which is a pixel larger than the icon on every side and is
+        // exactly what the quad's border covers.
+        let quad = icon_quad(placed, position.padded_rect, label.options.rotate);
 
         let before = buffers.glyphs();
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -712,7 +706,7 @@ pub fn build_icons(
             // The sprite decides, not the layer. A shield drawn as a distance field is
             // recolourable by `icon-color`; a photographic icon is not, and putting a plain
             // image through the SDF shader draws its alpha as a coverage ramp.
-            sprite.sdf,
+            position.sdf,
             1.0,
         );
 

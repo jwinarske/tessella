@@ -225,7 +225,7 @@ pub fn glyph_atlas(
     )
 }
 
-/// The pixel format a sprite sheet is uploaded in.
+/// The pixel format the icon atlas is uploaded in.
 ///
 /// RGBA, unlike the glyph atlas. §12.4's single-channel argument does not reach here: a sprite
 /// is a picture and three of its four channels carry something. An SDF sprite is the exception

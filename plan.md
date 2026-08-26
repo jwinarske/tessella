@@ -1377,6 +1377,28 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   `dlr.london-overground.london-underground.national-rail` family whose names carry dots. A
   hand-made fixture does not have that shape, and a parser splitting names on a separator would
   pass every test written against one.
+  The same pass over the rest of the ports found two more things, one wrong and one absent.
+  **The sprite sheet is not the texture.** `parseSprite` copies each icon *out* of the sheet into
+  an image of its own, and `DynamicTextureAtlas::uploadIcons` packs those into a texture with
+  `ImagePosition::padding` plus an extra pixel around each; `ImagePosition::displaySize` then
+  takes that padding back out, and the icon quad's one-pixel border samples it. mbgl's own
+  `getIconQuads.normal` is the arithmetic that proves it — a 15x11 *padded* rect displays at 13x9
+  and quads to a 15x11 box. This build had drawn straight from the sheet on the reasoning that a
+  sheet is already laid out, which is true and beside the point: a sheet has no padding between
+  icons, so the border sampled the neighbouring picture and every marker on the map carried a
+  hairline of the wrong icon. Icons are cut and repacked now, into an RGBA atlas using the same
+  `ShelfPack` and the same two-reserved-one-reported padding the glyph atlas already used — which
+  the same pass confirmed was right, since our reported rectangle for a 24-pixel glyph is 32 and
+  so is mbgl's.
+  **Clip masks are absent, and the golden could not have caught it.** mbgl's `updateTileMasks`
+  gives each rendered tile the set of *quadrants* to draw, so a parent under one child draws the
+  other three; `StencilTiles` carries a tile and a matrix and has no word for a quadrant. Every
+  tile in every capture is `o13` at its own zoom — substitution never happens in a settled frame
+  at a fixed camera — so the case has never been captured, while `sweep_never_blank` exercises it
+  on this side several times a run. It is a wire question rather than a code one: the ABI froze at
+  R0 exit and a mask is a field addition, so it wants a capture of a partially covered parent
+  before anything is added. Recorded rather than fixed, and named here because the next reader
+  will otherwise conclude from a green golden that masks are handled.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

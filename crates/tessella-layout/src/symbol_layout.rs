@@ -354,7 +354,7 @@ impl SymbolLayout {
     #[must_use]
     pub fn lay_out_icons(
         &self,
-        sprites: &tessella_glyph::sprite::Index,
+        positions: &tessella_glyph::sprite::Positions,
     ) -> (SymbolBuffers, Vec<LaidOut>) {
         let labels: Vec<IconLabel> = self
             .pending
@@ -377,7 +377,7 @@ impl SymbolLayout {
             })
             .collect();
 
-        build_icons(&labels, sprites)
+        build_icons(&labels, positions)
     }
 
     /// Whether this layer draws anything on this tile.

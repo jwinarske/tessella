@@ -445,13 +445,23 @@ mod two_halves {
     use tessella_place::feature::Padding;
     use tessella_place::placement::Rules;
 
-    /// A sheet with one big icon in it.
-    fn sprites() -> tessella_glyph::sprite::Index {
-        tessella_glyph::sprite::parse(
-            br#"{"marker": {"x": 0, "y": 0, "width": 64, "height": 64}}"#,
-            Some((64, 64)),
-        )
-        .expect("the index parses")
+    /// An atlas with one big icon in it, padded the way the packer pads.
+    fn sprites() -> tessella_glyph::sprite::Positions {
+        [(
+            "marker".to_string(),
+            tessella_glyph::sprite::IconPosition {
+                padded_rect: tessella_glyph::atlas::Rect {
+                    x: 1,
+                    y: 1,
+                    width: 66,
+                    height: 66,
+                },
+                pixel_ratio: 1.0,
+                sdf: false,
+            },
+        )]
+        .into_iter()
+        .collect()
     }
 
     /// Two symbols at the same tile anchor, so their icons certainly collide.

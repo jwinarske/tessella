@@ -84,6 +84,32 @@ fn road_style_spaced(placement: &str, spacing: f32) -> Style {
     .expect("a style")
 }
 
+/// Icon positions in an atlas, as the packer would produce them.
+///
+/// The rectangle is *padded*: a sixteen-pixel icon occupies eighteen, one pixel of which is the
+/// border the quad samples. Building it here rather than parsing an index is the point — an
+/// index gives sheet rectangles, and the sheet is not the texture.
+fn positions(icons: &[(&str, bool)]) -> tessella_glyph::sprite::Positions {
+    icons
+        .iter()
+        .enumerate()
+        .map(|(index, (name, sdf))| {
+            #[allow(clippy::cast_possible_truncation)]
+            let position = tessella_glyph::sprite::IconPosition {
+                padded_rect: tessella_glyph::atlas::Rect {
+                    x: index as u32 * 20 + 1,
+                    y: 1,
+                    width: 18,
+                    height: 18,
+                },
+                pixel_ratio: 1.0,
+                sdf: *sdf,
+            };
+            ((*name).to_string(), position)
+        })
+        .collect()
+}
+
 fn tile() -> Tile {
     Tile::decode(STREETS).expect("the fixture decodes")
 }
@@ -573,13 +599,8 @@ fn icons_lay_out_against_the_sprite_index() {
     let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
     let layout = buckets[0].content.as_symbol().expect("a symbol layout");
 
-    // A sheet with two of the names the layer asked for, and not the third.
-    let sprites = tessella_glyph::sprite::parse(
-        br#"{"primary":   {"x": 0,  "y": 0, "width": 16, "height": 16},
-             "motorway":  {"x": 16, "y": 0, "width": 16, "height": 16}}"#,
-        Some((64, 64)),
-    )
-    .expect("the index parses");
+    // An atlas holding two of the names the layer asked for, and not the third.
+    let sprites = positions(&[("primary", false), ("motorway", false)]);
 
     let asked = layout.icons();
     assert!(asked.len() > 2, "{asked:?} is too few to prove a miss");
@@ -663,16 +684,8 @@ fn the_sprite_decides_whether_it_is_a_field() {
     let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
     let layout = buckets[0].content.as_symbol().expect("a symbol layout");
 
-    let field = tessella_glyph::sprite::parse(
-        br#"{"primary": {"x": 0, "y": 0, "width": 16, "height": 16, "sdf": true}}"#,
-        Some((64, 64)),
-    )
-    .expect("parses");
-    let plain = tessella_glyph::sprite::parse(
-        br#"{"primary": {"x": 0, "y": 0, "width": 16, "height": 16}}"#,
-        Some((64, 64)),
-    )
-    .expect("parses");
+    let field = positions(&[("primary", true)]);
+    let plain = positions(&[("primary", false)]);
 
     // The flag rides in the low bit of the packed minimum size.
     let is_sdf = |buffers: &tessella_layout::symbol_bucket::SymbolBuffers| {

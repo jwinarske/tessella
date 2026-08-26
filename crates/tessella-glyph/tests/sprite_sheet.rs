@@ -325,3 +325,136 @@ mod store {
         assert!(sprites.sheet().is_none(), "the sheet outlived its index");
     }
 }
+
+/// Icons are cut out of the sheet and repacked, which is what mbgl does and this did not.
+///
+/// The sheet is a *transport*, not a texture. `parseSprite` copies each icon into an image of
+/// its own and `DynamicTextureAtlas` packs those with a pixel of padding around each; the icon
+/// quad's one-pixel border then samples that padding. Drawing straight from the sheet — where
+/// icons sit flush against each other — makes the border sample the neighbouring picture, which
+/// is a hairline of the wrong icon around every marker on the map.
+mod atlas {
+    use super::encode;
+
+    use tessella_glyph::sprite::{IconAtlas, Sprites, decode_sheet};
+
+    /// Two 4x4 icons side by side, flush: red then blue.
+    ///
+    /// Flush on purpose. A sheet with a gutter would hide the bug this checks for.
+    fn flush_sheet() -> Vec<u8> {
+        let mut samples = vec![0u8; 8 * 4 * 4];
+        for row in 0..4usize {
+            for column in 0..8usize {
+                let at = (row * 8 + column) * 4;
+                let colour: [u8; 4] = if column < 4 {
+                    [255, 0, 0, 255]
+                } else {
+                    [0, 0, 255, 255]
+                };
+                samples[at..at + 4].copy_from_slice(&colour);
+            }
+        }
+        encode(8, 4, 6, &samples)
+    }
+
+    const INDEX: &str = r#"{"red":  {"x": 0, "y": 0, "width": 4, "height": 4},
+                            "blue": {"x": 4, "y": 0, "width": 4, "height": 4}}"#;
+
+    /// The packed rectangle is a pixel larger than the icon on every side.
+    #[test]
+    fn the_packed_rectangle_carries_a_pixel_of_padding() {
+        let sheet = decode_sheet(&flush_sheet()).expect("decodes");
+        let index = tessella_glyph::sprite::parse(INDEX.as_bytes(), Some(sheet.size()))
+            .expect("the index parses");
+
+        let mut atlas = IconAtlas::new(64, 64);
+        let placed = atlas.add(&sheet, &index["red"]).expect("it fits");
+
+        assert_eq!(
+            (placed.padded_rect.width, placed.padded_rect.height),
+            (6, 6),
+            "a four-pixel icon occupies six with its padding"
+        );
+        assert_eq!(
+            placed.display_size(),
+            (4.0, 4.0),
+            "the padding was not taken back out for layout"
+        );
+    }
+
+    /// The pixel around a packed icon is transparent, not its neighbour.
+    ///
+    /// The assertion the whole rework exists for. In the sheet the two icons are flush, so the
+    /// pixel to the right of the red one is blue; in the atlas it must be nothing.
+    #[test]
+    fn the_border_pixel_is_padding_and_not_the_neighbour() {
+        let sheet = decode_sheet(&flush_sheet()).expect("decodes");
+        let index =
+            tessella_glyph::sprite::parse(INDEX.as_bytes(), Some(sheet.size())).expect("parses");
+
+        // In the sheet, the pixel after the red icon is the blue one's first.
+        // Row zero, column four: the first pixel of the blue icon.
+        let after_red_in_sheet = 4 * 4;
+        assert_eq!(
+            &sheet.pixels[after_red_in_sheet..after_red_in_sheet + 4],
+            &[0, 0, 255, 255],
+            "the fixture is not flush, so this proves nothing"
+        );
+
+        let mut atlas = IconAtlas::new(64, 64);
+        let red = atlas.add(&sheet, &index["red"]).expect("it fits");
+        atlas.add(&sheet, &index["blue"]).expect("it fits");
+
+        // In the atlas, the border pixel inside the padded rectangle is transparent.
+        let (width, _) = atlas.size();
+        let border_x = red.padded_rect.x + red.padded_rect.width - 1;
+        let border_y = red.padded_rect.y;
+        let at = ((border_y * width + border_x) as usize) * 4;
+        assert_eq!(
+            &atlas.pixels()[at..at + 4],
+            &[0, 0, 0, 0],
+            "the quad's border samples the neighbouring icon"
+        );
+
+        // And the icon's own pixels are there, unshifted.
+        let inside = (((red.padded_rect.y + 1) * width + red.padded_rect.x + 1) as usize) * 4;
+        assert_eq!(&atlas.pixels()[inside..inside + 4], &[255, 0, 0, 255]);
+    }
+
+    /// A retina icon keeps its ratio through the packing.
+    #[test]
+    fn the_pixel_ratio_survives_packing() {
+        let sheet = decode_sheet(&encode(8, 8, 6, &[255u8; 8 * 8 * 4])).expect("decodes");
+        let index = tessella_glyph::sprite::parse(
+            br#"{"icon": {"x": 0, "y": 0, "width": 8, "height": 8, "pixelRatio": 2}}"#,
+            Some(sheet.size()),
+        )
+        .expect("parses");
+
+        let mut atlas = IconAtlas::new(64, 64);
+        let placed = atlas.add(&sheet, &index["icon"]).expect("it fits");
+        assert_eq!(placed.padded_rect.width, 10, "eight plus its padding");
+        assert_eq!(
+            placed.display_size(),
+            (4.0, 4.0),
+            "a 2x icon of eight sheet pixels is four logical ones"
+        );
+    }
+
+    /// The store packs on load, so every icon in the index has a position.
+    #[test]
+    fn loading_packs_every_icon() {
+        let mut sprites = Sprites::new("https://example.com/sprite", 1.0);
+        sprites
+            .load(INDEX.as_bytes(), &flush_sheet())
+            .expect("both halves load");
+
+        assert_eq!(sprites.positions().len(), 2);
+        assert!(sprites.positions().contains_key("red"));
+        assert_eq!(sprites.atlas().size(), (1024, 1024));
+        assert!(
+            !sprites.take_dirty_rects().is_empty(),
+            "packing two icons dirtied nothing"
+        );
+    }
+}

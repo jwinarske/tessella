@@ -27,6 +27,15 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
+/// The width and height of the icon atlas.
+///
+/// mbgl starts its dynamic texture at 512 square and grows it. This does not grow, for the
+/// reason the glyph atlas does not: a rectangle handed out for a texture the consumer has
+/// already uploaded cannot move. A thousand and twenty-four square holds a street style's whole
+/// icon set with room over, since each icon is tens of pixels rather than hundreds.
+#[cfg(feature = "png")]
+pub const ATLAS_SIZE: u32 = 1024;
+
 /// The largest dimension an icon may have, as mbgl bounds it.
 pub const MAX_DIMENSION: u64 = 1024;
 
@@ -99,6 +108,45 @@ impl Sprite {
 
 /// A style's sprite index.
 pub type Index = BTreeMap<String, Sprite>;
+
+/// Where one icon sits in the *icon atlas*, once it has been cut from the sheet and packed.
+///
+/// mbgl's `ImagePosition`. Not the sprite's rectangle in the sheet, and the difference is the
+/// whole point: `parseSprite` copies each icon out of the sheet into an image of its own, and
+/// `DynamicTextureAtlas` packs those into a texture with a pixel of padding around each. The
+/// sheet is a *transport* for the icons, not the texture they are drawn from.
+///
+/// The rectangle here includes that one pixel on every side — mbgl's `paddedRect` — which is
+/// what the icon quad's one-pixel border samples. Handing out the sheet rectangle instead makes
+/// that border sample the neighbouring icon, which draws a hairline of the wrong picture around
+/// every marker on the map.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IconPosition {
+    /// Its rectangle in the atlas, including a pixel of padding on every side.
+    pub padded_rect: crate::atlas::Rect,
+    /// How many atlas pixels make one logical pixel.
+    pub pixel_ratio: f64,
+    /// Whether it is a distance field.
+    pub sdf: bool,
+}
+
+impl IconPosition {
+    /// The icon's size in logical pixels: the padding removed and the ratio divided out.
+    ///
+    /// mbgl's `ImagePosition::displaySize`. Both steps matter — leaving the padding in draws
+    /// every icon two pixels too large, and leaving the ratio in draws every retina icon at
+    /// twice its size.
+    #[must_use]
+    pub fn display_size(&self) -> (f64, f64) {
+        (
+            f64::from(self.padded_rect.width - 2) / self.pixel_ratio,
+            f64::from(self.padded_rect.height - 2) / self.pixel_ratio,
+        )
+    }
+}
+
+/// Where every icon of a style sits, after packing.
+pub type Positions = BTreeMap<String, IconPosition>;
 
 /// Why an index could not be read at all.
 ///
@@ -468,6 +516,8 @@ pub struct Sprites {
     pixel_ratio: f64,
     index: Index,
     sheet: Option<Sheet>,
+    atlas: IconAtlas,
+    positions: Positions,
     /// Whether the sheet has been uploaded since it last changed — §6.4's damage, for a
     /// resource that changes exactly once.
     dirty: bool,
@@ -483,6 +533,8 @@ impl Sprites {
             pixel_ratio,
             index: Index::new(),
             sheet: None,
+            atlas: IconAtlas::new(ATLAS_SIZE, ATLAS_SIZE),
+            positions: Positions::new(),
             dirty: false,
         }
     }
@@ -530,8 +582,21 @@ impl Sprites {
         let sheet = decode_sheet(image).map_err(LoadError::Sheet)?;
         let parsed = parse(index, Some(sheet.size())).map_err(LoadError::Index)?;
 
+        // Cut every icon out of the sheet and pack it. mbgl does this in two places — the
+        // parser copies each icon to an image of its own, and the atlas packs those with padding
+        // — and the padding is what the icon quad's one-pixel border samples.
+        let mut atlas = IconAtlas::new(ATLAS_SIZE, ATLAS_SIZE);
+        let mut positions = Positions::new();
+        for (name, sprite) in &parsed {
+            if let Some(position) = atlas.add(&sheet, sprite) {
+                positions.insert(name.clone(), position);
+            }
+        }
+
         self.index = parsed;
         self.sheet = Some(sheet);
+        self.atlas = atlas;
+        self.positions = positions;
         self.dirty = true;
         Ok(())
     }
@@ -546,6 +611,23 @@ impl Sprites {
     #[must_use]
     pub fn get(&self, name: &str) -> Option<&Sprite> {
         self.index.get(name)
+    }
+
+    /// Where every icon sits in the atlas, which is what layout draws from.
+    #[must_use]
+    pub const fn positions(&self) -> &Positions {
+        &self.positions
+    }
+
+    /// The atlas itself, for the texture upload.
+    #[must_use]
+    pub const fn atlas(&self) -> &IconAtlas {
+        &self.atlas
+    }
+
+    /// The rectangles the atlas has changed since the last call.
+    pub fn take_dirty_rects(&mut self) -> Vec<crate::atlas::Rect> {
+        self.atlas.take_dirty()
     }
 
     /// The sheet, once it has arrived.
@@ -577,4 +659,99 @@ pub enum LoadError {
     /// The index was not readable.
     #[error(transparent)]
     Index(#[from] SpriteError),
+}
+
+/// The texture a style's icons are drawn from.
+///
+/// Four channels, unlike the glyph atlas: an icon is a picture and three of its channels carry
+/// something. The packing is the same — `ShelfPack` with two pixels reserved on every side and
+/// one of them reported, which is mbgl's `extraPadding` plus `ImagePosition::padding`.
+///
+/// Why this exists at all, given the sheet is already a laid-out image: mbgl does not upload the
+/// sheet. `parseSprite` copies each icon out of it, and the atlas packs those copies with
+/// padding between them. A sheet has no padding — icons in it are usually flush — so drawing
+/// straight from it makes every icon quad's one-pixel border sample its neighbour.
+#[cfg(feature = "png")]
+#[derive(Debug)]
+pub struct IconAtlas {
+    pack: crate::atlas::ShelfPack,
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+    next_key: u32,
+    dirty: Vec<crate::atlas::Rect>,
+}
+
+#[cfg(feature = "png")]
+impl IconAtlas {
+    /// An empty atlas.
+    #[must_use]
+    pub fn new(width: u32, height: u32) -> Self {
+        Self {
+            pack: crate::atlas::ShelfPack::new(width, height),
+            pixels: vec![0; (width as usize) * (height as usize) * 4],
+            width,
+            height,
+            next_key: 0,
+            dirty: Vec::new(),
+        }
+    }
+
+    /// Its dimensions, which is what `texsize_icon` carries.
+    #[must_use]
+    pub const fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+
+    /// The RGBA pixels.
+    #[must_use]
+    pub fn pixels(&self) -> &[u8] {
+        &self.pixels
+    }
+
+    /// The rectangles changed since the last call — §6.4's damage.
+    pub fn take_dirty(&mut self) -> Vec<crate::atlas::Rect> {
+        core::mem::take(&mut self.dirty)
+    }
+
+    /// Cuts one icon out of `sheet` and packs it, returning where it landed.
+    ///
+    /// `None` when the atlas is full. The icon is skipped rather than the sheet refused, the way
+    /// a glyph that does not fit is.
+    pub fn add(&mut self, sheet: &Sheet, sprite: &Sprite) -> Option<IconPosition> {
+        use crate::atlas::PADDING;
+
+        let key = self.next_key;
+        let slot = self
+            .pack
+            .pack(key, sprite.width + 2 * PADDING, sprite.height + 2 * PADDING)?;
+        self.next_key += 1;
+
+        // Copy the icon's pixels out of the sheet into the middle of its slot. Row by row,
+        // because the two images have different widths and a single copy would shear it.
+        for row in 0..sprite.height {
+            let from = (((sprite.y + row) * sheet.width + sprite.x) as usize) * 4;
+            let to = (((slot.y + PADDING + row) * self.width + slot.x + PADDING) as usize) * 4;
+            let run = (sprite.width as usize) * 4;
+            if from + run > sheet.pixels.len() || to + run > self.pixels.len() {
+                // The index's bounds check should have refused this already; not trusting it
+                // here is what keeps a bad sheet from being a read past the end.
+                return None;
+            }
+            self.pixels[to..to + run].copy_from_slice(&sheet.pixels[from..from + run]);
+        }
+
+        self.dirty.push(slot);
+        Some(IconPosition {
+            // One pixel of the two is reported, which is the pixel the quad's border samples.
+            padded_rect: crate::atlas::Rect {
+                x: slot.x + 1,
+                y: slot.y + 1,
+                width: slot.width - 2,
+                height: slot.height - 2,
+            },
+            pixel_ratio: sprite.pixel_ratio,
+            sdf: sprite.sdf,
+        })
+    }
 }
