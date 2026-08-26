@@ -33,8 +33,8 @@ use tessella_glyph::fonts::Fonts;
 use crate::anchors::EXTENT;
 use crate::symbol::{self, GlyphDependencies};
 use crate::symbol_bucket::{
-    Label, LaidOut, LineLabel, LineOptions, SymbolBuffers, SymbolOptions, build_line_symbols,
-    build_symbols,
+    IconLabel, IconOptions, Label, LaidOut, LineLabel, LineOptions, SymbolBuffers, SymbolOptions,
+    build_icons, build_line_symbols, build_symbols,
 };
 
 /// One layout property, evaluated at a zoom with no feature.
@@ -54,6 +54,54 @@ fn layout_value(
             .ok()?
             .evaluate(Some(zoom), feature)
             .ok(),
+    }
+}
+
+/// How a layer draws its icons, at a zoom and optionally for one feature.
+///
+/// `icon-size` is a *multiplier* and defaults to one, unlike `text-size` which names a size in
+/// pixels and defaults to sixteen. Reading one as the other draws every marker sixteen times too
+/// large, which is why they do not share this function.
+fn icon_options(layer: &Layer, zoom: f64, feature: Option<&dyn Feature>) -> IconOptions {
+    #[allow(clippy::cast_possible_truncation)]
+    let number = |key: &str| {
+        layout_value(layer, key, zoom, feature)
+            .as_ref()
+            .and_then(Value::as_number)
+            .map(|value| value as f32)
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    let pair = |key: &str| -> Option<[f32; 2]> {
+        let value = layout_value(layer, key, zoom, feature)?;
+        let array = value.as_array()?;
+        if array.len() != 2 {
+            return None;
+        }
+        Some([array[0].as_number()? as f32, array[1].as_number()? as f32])
+    };
+
+    IconOptions {
+        size: number("icon-size").unwrap_or(1.0),
+        offset: pair("icon-offset").unwrap_or([0.0, 0.0]),
+        // On the wire in degrees, like `text-rotate`.
+        rotate: number("icon-rotate").unwrap_or(0.0).to_radians(),
+        anchor: anchor_of(layout_value(layer, "icon-anchor", zoom, feature).as_ref()),
+    }
+}
+
+/// Reads a `*-anchor` value, defaulting the way the spec does.
+fn anchor_of(value: Option<&Value>) -> tessella_glyph::shaping::Anchor {
+    use tessella_glyph::shaping::Anchor;
+    match value.and_then(Value::as_str) {
+        Some("left") => Anchor::Left,
+        Some("right") => Anchor::Right,
+        Some("top") => Anchor::Top,
+        Some("bottom") => Anchor::Bottom,
+        Some("top-left") => Anchor::TopLeft,
+        Some("top-right") => Anchor::TopRight,
+        Some("bottom-left") => Anchor::BottomLeft,
+        Some("bottom-right") => Anchor::BottomRight,
+        _ => Anchor::Center,
     }
 }
 
@@ -139,6 +187,8 @@ pub struct Pending {
     pub fonts: Vec<String>,
     /// Where it goes.
     pub anchoring: Anchoring,
+    /// How *this feature's* icon is drawn.
+    pub icon_options: IconOptions,
     /// How *this feature's* text is set.
     ///
     /// The layer's, unless a layout property is data-driven — `text-size` is the one styles
@@ -256,6 +306,7 @@ impl SymbolLayout {
                 fonts: fonts.clone(),
                 anchoring,
                 symbol: text_options(layer, zoom, Some(feature)),
+                icon_options: icon_options(layer, zoom, Some(feature)),
             });
         }
     }
@@ -290,6 +341,43 @@ impl SymbolLayout {
             .iter()
             .filter_map(|pending| pending.icon.clone())
             .collect()
+    }
+
+    /// Lays out this layer's icons against a sprite index.
+    ///
+    /// The icon counterpart of [`Self::lay_out`], and a separate buffer for a real reason: text
+    /// draws through `SymbolSDFShader` and an icon through `SymbolIconShader`, so the two halves
+    /// of one symbol are two *drawables* and cannot share a vertex buffer.
+    ///
+    /// An icon naming a sprite the sheet does not have is skipped, so a style with one missing
+    /// icon still draws the rest. Order is the layer's, as it is for text.
+    #[must_use]
+    pub fn lay_out_icons(
+        &self,
+        sprites: &tessella_glyph::sprite::Index,
+    ) -> (SymbolBuffers, Vec<LaidOut>) {
+        let labels: Vec<IconLabel> = self
+            .pending
+            .iter()
+            .filter_map(|pending| {
+                let image = pending.icon.clone()?;
+                let anchor = match pending.anchoring {
+                    Anchoring::Point(anchor) => anchor,
+                    // A line-placed icon repeats along the line the way a label does, which
+                    // needs the anchors `get_anchors` produces rather than a point. Not built:
+                    // it would place every icon of a road at its first vertex, which draws and
+                    // is wrong.
+                    Anchoring::Line(_) => return None,
+                };
+                Some(IconLabel {
+                    image,
+                    anchor,
+                    options: pending.icon_options,
+                })
+            })
+            .collect();
+
+        build_icons(&labels, sprites)
     }
 
     /// Whether this layer draws anything on this tile.

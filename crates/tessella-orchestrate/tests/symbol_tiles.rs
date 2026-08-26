@@ -555,3 +555,132 @@ fn a_symbol_can_have_both_halves() {
     assert!(!laid.is_empty());
     assert!(!buffers.is_empty());
 }
+
+/// A tile's icons lay out against the style's sprite index.
+///
+/// The icon half end to end: resolve `icon-image` per feature, ask the index for each name, and
+/// emit a quad per icon that the sheet has. Nothing packs — unlike glyphs, the sprite sheet is
+/// already an atlas and the index gives rectangles into it.
+#[test]
+fn icons_lay_out_against_the_sprite_index() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "l", "type": "symbol", "source": "v", "source-layer": "road",
+                        "layout": {"icon-image": "{type}", "icon-size": 2}}]}"#,
+    )
+    .expect("a style");
+
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+
+    // A sheet with two of the names the layer asked for, and not the third.
+    let sprites = tessella_glyph::sprite::parse(
+        br#"{"primary":   {"x": 0,  "y": 0, "width": 16, "height": 16},
+             "motorway":  {"x": 16, "y": 0, "width": 16, "height": 16}}"#,
+        Some((64, 64)),
+    )
+    .expect("the index parses");
+
+    let asked = layout.icons();
+    assert!(asked.len() > 2, "{asked:?} is too few to prove a miss");
+
+    let (buffers, laid) = layout.lay_out_icons(&sprites);
+    assert!(!laid.is_empty(), "nothing was laid out");
+    assert_eq!(buffers.vertices.len(), laid.len() * 4, "one quad an icon");
+
+    // Only the names the sheet has drew. A missing icon is skipped, not an error: a style with
+    // one absent sprite still draws the rest.
+    let drawn = laid.len();
+    let present = layout
+        .pending
+        .iter()
+        .filter(|pending| {
+            pending
+                .icon
+                .as_deref()
+                .is_some_and(|name| sprites.contains_key(name))
+        })
+        .count();
+    assert_eq!(
+        drawn, present,
+        "a missing sprite was drawn or a present one was not"
+    );
+    assert!(drawn < layout.pending.len(), "nothing was skipped");
+
+    // The ranges tile the buffer in order, the way the text ones do.
+    let mut next = 0usize;
+    for entry in &laid {
+        assert_eq!(entry.vertices.start, next, "a gap or an overlap");
+        next = entry.vertices.end;
+    }
+    assert_eq!(next, buffers.vertices.len());
+}
+
+/// `icon-size` is a multiplier, and `text-size` is a size.
+///
+/// The two look alike and default differently — one to 1 and the other to 16 — because
+/// `icon-size` scales a sprite that is already the size its author drew it. Reading one as the
+/// other draws every marker sixteen times too large, which is the kind of wrong that looks like
+/// a broken sprite sheet.
+#[test]
+fn icon_size_is_a_multiplier_not_a_size() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "l", "type": "symbol", "source": "v", "source-layer": "road",
+                        "layout": {"icon-image": "{type}"}}]}"#,
+    )
+    .expect("a style");
+
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+
+    assert!(
+        layout
+            .pending
+            .iter()
+            .all(|pending| (pending.icon_options.size - 1.0).abs() < f32::EPSILON),
+        "icon-size defaulted to something other than one"
+    );
+    assert!(
+        (layout.symbol.size - 16.0).abs() < f32::EPSILON,
+        "text-size defaulted to something other than sixteen"
+    );
+}
+
+/// An SDF sprite is marked as one in the vertex, and a plain image is not.
+///
+/// The sprite decides, not the layer. A shield drawn as a distance field is recolourable by
+/// `icon-color`; a photographic icon is not, and putting a plain image through the SDF shader
+/// draws its alpha as a coverage ramp.
+#[test]
+fn the_sprite_decides_whether_it_is_a_field() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "l", "type": "symbol", "source": "v", "source-layer": "road",
+                        "layout": {"icon-image": "{type}"}}]}"#,
+    )
+    .expect("a style");
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+
+    let field = tessella_glyph::sprite::parse(
+        br#"{"primary": {"x": 0, "y": 0, "width": 16, "height": 16, "sdf": true}}"#,
+        Some((64, 64)),
+    )
+    .expect("parses");
+    let plain = tessella_glyph::sprite::parse(
+        br#"{"primary": {"x": 0, "y": 0, "width": 16, "height": 16}}"#,
+        Some((64, 64)),
+    )
+    .expect("parses");
+
+    // The flag rides in the low bit of the packed minimum size.
+    let is_sdf = |buffers: &tessella_layout::symbol_bucket::SymbolBuffers| {
+        buffers.vertices[0].data[2] & 1 == 1
+    };
+
+    let (as_field, _) = layout.lay_out_icons(&field);
+    let (as_plain, _) = layout.lay_out_icons(&plain);
+    assert!(is_sdf(&as_field), "an sdf sprite was drawn as an image");
+    assert!(!is_sdf(&as_plain), "an image was drawn as a field");
+}

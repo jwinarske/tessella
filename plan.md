@@ -1277,6 +1277,28 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   The anchor rule is the text one and catches people out the same way: it names the part of the
   icon that *touches* the point, so `top` puts the icon below it. Inverted, every marker sits on
   the wrong side of what it marks, consistently, which looks like a style problem.
+  Icons then reach the bucket. The two halves of a symbol are two *drawables* and not one — text
+  goes through `SymbolSDFShader` and an icon through `SymbolIconShader` — so they cannot share a
+  vertex buffer even when they belong to the same feature, which is why `lay_out_icons` sits
+  beside `lay_out` rather than inside it. It is also what `is_text` in the tile props and
+  `is_text_prop` in the drawable buffer are for, both of them already checked against the oracle
+  before there was an icon to set them for.
+  There is nothing to pack. Unlike a glyph atlas, a sprite sheet arrives already laid out and the
+  index gives rectangles into it, so the "atlas" *is* the sheet — which is why the layout records
+  the name a layer asked for rather than a rectangle: the sheet may not have arrived, and an icon
+  it does not have is skipped so a style with one missing sprite still draws the rest.
+  Two defaults look alike and are not. `icon-size` is a *multiplier* and defaults to one, because
+  a sprite is already the size its author drew it; `text-size` names a size in pixels and defaults
+  to sixteen. Reading one as the other draws every marker sixteen times too large, which looks
+  like a broken sprite sheet rather than a units mistake, so the two are read by separate
+  functions and the defaults are asserted against each other.
+  Whether an icon is a distance field is the *sprite's* property and not the layer's. A shield
+  drawn as a field is recolourable by `icon-color`; a photographic icon is not, and putting a
+  plain image through the SDF shader draws its alpha as a coverage ramp. The flag rides in the
+  low bit of the packed size, where the text path already put it.
+  Line-placed icons are not built. They repeat along a line the way a label does and need the
+  anchors `get_anchors` produces; taking the line's first vertex instead would place every icon
+  of a road at one end, which draws and is wrong — so they are skipped rather than approximated.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

@@ -610,3 +610,122 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
 
     (buffers, out)
 }
+
+/// One icon to place: which sprite, and where.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IconLabel {
+    /// The sprite name the layer's `icon-image` resolved to.
+    pub image: alloc::string::String,
+    /// Where it is anchored, in tile units.
+    pub anchor: (f32, f32),
+    /// How this feature's icon is set.
+    pub options: IconOptions,
+}
+
+/// How a symbol layer draws its icons.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IconOptions {
+    /// `icon-size`, a *multiplier* rather than a pixel size — the sprite already has one.
+    pub size: f32,
+    /// `icon-offset`, in logical pixels.
+    pub offset: [f32; 2],
+    /// `icon-rotate`, in radians.
+    pub rotate: f32,
+    /// Which part of the icon touches the anchor.
+    pub anchor: tessella_glyph::shaping::Anchor,
+}
+
+impl Default for IconOptions {
+    fn default() -> Self {
+        Self {
+            // One, not sixteen. `icon-size` scales a sprite that is already the size its author
+            // drew it; `text-size` names a size outright. Treating icon-size like text-size draws
+            // every marker sixteen times too large.
+            size: 1.0,
+            offset: [0.0, 0.0],
+            rotate: 0.0,
+            anchor: tessella_glyph::shaping::Anchor::Center,
+        }
+    }
+}
+
+/// Lays out a layer's icons into one tile's buffers.
+///
+/// The icon counterpart of [`build_symbols`], and separate from it because the two halves are
+/// separate *drawables*: text draws through `SymbolSDFShader` and an icon through
+/// `SymbolIconShader`, so they cannot share a buffer even when they belong to the same symbol.
+///
+/// `sprites` is the style's index. An icon naming a sprite the sheet does not have is skipped —
+/// mbgl does the same, and it is why the layout records the name it asked for rather than a
+/// resolved rectangle: the sheet may not have arrived yet, and a style naming one missing icon
+/// still draws the rest.
+///
+/// The atlas here is the sprite sheet itself. Unlike glyphs there is nothing to pack: the index
+/// gives rectangles into an image the origin already laid out, so the "atlas" is the sheet and
+/// the rectangles are its.
+#[must_use]
+pub fn build_icons(
+    labels: &[IconLabel],
+    sprites: &tessella_glyph::sprite::Index,
+) -> (SymbolBuffers, Vec<LaidOut>) {
+    use tessella_glyph::quads::{icon_quad, shape_icon};
+
+    let mut buffers = SymbolBuffers::default();
+    let mut out = Vec::with_capacity(labels.len());
+
+    for label in labels {
+        let Some(sprite) = sprites.get(&label.image) else {
+            continue;
+        };
+        let (width, height) = sprite.logical_size();
+        #[allow(clippy::cast_possible_truncation)]
+        let size = (width as f32, height as f32);
+        if size.0 <= 0.0 || size.1 <= 0.0 {
+            continue;
+        }
+
+        let placed = shape_icon(size, label.options.offset, label.options.anchor);
+        let quad = icon_quad(
+            placed,
+            tessella_glyph::atlas::Rect {
+                x: sprite.x,
+                y: sprite.y,
+                width: sprite.width,
+                height: sprite.height,
+            },
+            label.options.rotate,
+        );
+
+        let before = buffers.glyphs();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        buffers.add_quad(
+            label.anchor,
+            [quad.tl, quad.tr, quad.bl, quad.br],
+            quad.glyph_offset,
+            (
+                quad.tex.x as u16,
+                quad.tex.y as u16,
+                quad.tex.width as u16,
+                quad.tex.height as u16,
+            ),
+            SizeRange::constant(label.options.size),
+            // The sprite decides, not the layer. A shield drawn as a distance field is
+            // recolourable by `icon-color`; a photographic icon is not, and putting a plain
+            // image through the SDF shader draws its alpha as a coverage ramp.
+            sprite.sdf,
+            1.0,
+        );
+
+        // The *box*, not the quad: collision measures what the icon occupies and the quad is a
+        // pixel larger on every side for sampling.
+        out.push(LaidOut {
+            anchor: label.anchor,
+            extent: (placed.top, placed.bottom, placed.left, placed.right),
+            glyphs: buffers.glyphs() - before,
+            segment: 0,
+            vertices: before * 4..buffers.vertices.len(),
+        });
+    }
+
+    (buffers, out)
+}
