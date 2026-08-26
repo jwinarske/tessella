@@ -376,11 +376,15 @@ impl LineDrawableEntry {
 /// float and the extent and tile size are cast to float before the division.
 #[must_use]
 pub fn line_ratio(z: u8, zoom: f64) -> f32 {
+    // One implementation of this quantity, not two. It was computed here through the `libm`
+    // *crate* and in `camera::pixels_to_tile_units` through the system one `tessella-tile` links
+    // against — reciprocals of the same number by two routines free to round differently in the
+    // last bit, with nothing comparing them. A line's width and a pitched label's plane both
+    // read it, so a disagreement would be a hairline mismatch nothing would attribute.
     #[allow(clippy::cast_possible_truncation)]
-    let (zoom, z) = (zoom as f32, f32::from(z));
-    // mbgl's EXTENT and tileSize_D, cast to float exactly as it casts them.
-    let tile_units_per_pixel = 8192.0f32 / (512.0f32 * libm::powf(2.0, zoom - z));
-    1.0 / tile_units_per_pixel
+    {
+        1.0 / camera::pixels_to_tile_units(z, zoom) as f32
+    }
 }
 
 /// The six zoom-mix factors a line drawable's UBO carries.

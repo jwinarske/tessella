@@ -35,7 +35,6 @@ libm = "0.2"            # core has no sqrt or round; the line generator needs bo
 fontdue = "0.9"          # local glyph SDF path
 geo-types = "0.7"
 geojson = "1.0"
-glam = "0.33"            # DMat4/DVec — mbgl matrix (§2.2: projMatrix is f64 column-major)
 rustybuzz = "0.20"       # harfbuzz
 unicode-bidi = "0.3"     # ubidi/ICU
 unicode-linebreak = "0.1"

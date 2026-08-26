@@ -372,12 +372,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "glam"
-version = "0.33.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c426daf70099baff33fac0ba85151c42424861c56828cef9ba02dacb78eb6b26"
-
-[[package]]
 name = "hash32"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1067,8 +1061,6 @@ name = "tessella-orchestrate"
 version = "0.0.0"
 dependencies = [
  "crossbeam",
- "glam",
- "libm",
  "log",
  "serde_json",
  "tempfile",
@@ -1088,7 +1080,6 @@ dependencies = [
 name = "tessella-place"
 version = "0.0.0"
 dependencies = [
- "glam",
  "tessella-layout",
  "tessella-style",
  "tessella-tile",
@@ -1138,7 +1129,6 @@ dependencies = [
 name = "tessella-tile"
 version = "0.0.0"
 dependencies = [
- "glam",
  "thiserror",
 ]
 

@@ -13,7 +13,6 @@ publish = false
 [dependencies]
 thiserror.workspace = true
 crossbeam.workspace = true
-glam.workspace = true
 log.workspace = true
 tessella-capture-abi.workspace = true
 tessella-glyph.workspace = true
@@ -22,7 +21,6 @@ tessella-place.workspace = true
 tessella-source.workspace = true
 tessella-storage.workspace = true
 tessella-style.workspace = true
-libm.workspace = true
 tessella-tile.workspace = true
 
 [features]

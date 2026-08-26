@@ -504,3 +504,33 @@ fn the_circle_flags_are_integers_and_differ() {
         "an integer one, not a float one"
     );
 }
+
+/// The line ratio and the label plane's scale are reciprocals of one number.
+///
+/// They were two implementations of it — one through the `libm` crate in a `no_std` crate, one
+/// through the system libm `tessella-tile` links against — free to round differently in the last
+/// bit, with nothing comparing them. A line's width and a pitched label's plane both read it, so
+/// a disagreement would draw a hairline mismatch nothing would attribute to a rounding seam.
+///
+/// Asserted at fractional zooms as well as whole ones. At a whole zoom the exponent is exact and
+/// any two implementations agree; the fractional case is the one that separates them, and it is
+/// the case `composite_style_z13_5` captures.
+#[test]
+fn the_line_ratio_is_the_label_planes_reciprocal() {
+    for (z, zoom) in [
+        (13u8, 13.0f64),
+        (13, 13.5),
+        (13, 14.25),
+        (11, 13.0),
+        (0, 0.0),
+        (16, 12.75),
+    ] {
+        #[allow(clippy::cast_possible_truncation)]
+        let expected = 1.0 / tessella_tile::camera::pixels_to_tile_units(z, zoom) as f32;
+        assert_eq!(
+            ubo::line_ratio(z, zoom),
+            expected,
+            "at tile zoom {z} viewed from {zoom}"
+        );
+    }
+}

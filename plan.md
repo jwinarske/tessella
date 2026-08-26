@@ -115,8 +115,8 @@ Consumer compatibility constraints; each is a protocol invariant with a test:
   generated against the C++ headers, so drift is a compile failure.
 - **`declaredDataType` vs supplied type**: bind the declared type with the supplied
   offset/stride (packed min/max interpolation pairs; frame_diff.hpp AttributeDesc docs).
-- **`projMatrix` is f64 column-major** (glam `DMat4`); **`centerZoom0` is scale-free** — the
-  zoom-flicker regression documented in frame_diff.hpp is a named test case.
+- **`projMatrix` is f64 column-major** (a bare `[f64; 16]`, see §8); **`centerZoom0` is
+  scale-free** — the zoom-flicker regression documented in frame_diff.hpp is a named test case.
 - **Stencil contract**: consumer synthesizes masks from `StencilTiles`; per-tile matrix is
   `matrixForTile`, not any content drawable's matrix; reference values are never carried.
 - **`pixelsPerMeter` and the style light** travel in the camera block (§6.3).
@@ -426,10 +426,25 @@ trivial). No async runtime: mirror mbgl's actor model with threads + channels, p
 | PNG decode | zune-png, behind an off-by-default feature (DR-20, §12.2) | mbgl's png decoder |
 | cache DB | rusqlite (bundled) | sqlite vendored |
 | HTTP | ureq (blocking, on workers) | cpp-httplib/curl |
-| f64 math | glam DMat4/DVec | mbgl matrix |
+| f64 math | hand-written `[f64; 16]`; see below | mbgl matrix |
 | ring/sync | crossbeam (or hand SPSC matching ihs ring ABI) | — |
 
 Expressions have no crate; hand port. Symbol placement has no crate; hand port.
+
+`glam` was listed here for `DMat4`/`DVec` and is not used. The matrices are hand-written
+`[f64; 16]` instead, because the order the terms accumulate *is* the quantity being reproduced:
+every golden diff is byte-exact over matrices these produce, and a library's multiply — however
+mathematically identical — is free to associate differently and move the last bit. The same
+reasoning rules out a faster transcendental library for `tessella-tile`, which links the *system*
+libm precisely because that is what the C++ oracle links against.
+
+It is not a performance trade being lost. The transcendentals are per view per frame rather than
+per vertex — thirty of the thirty-eight call sites are in the camera, the projection and the
+cover — against a measured per-frame producer cost of 1.5 to 5.1 ms that §13.3 attributes to
+cover, clip masks, drawable matrices and uniform writes. Rust does not fuse multiply-add without
+being asked, so the scalar path is already IEEE-exact; a NEON version that *did* fuse would round
+differently and break the diff, and one that did not would be register-bound on a 4x4 of `f64`.
+Revisit against a profile on the §13.3 rig rather than against intuition.
 
 ---
 
@@ -1581,8 +1596,19 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   One hazard is written down rather than fixed: `pixels_to_tile_units` here and `ubo::line_ratio`
   compute reciprocals of the same quantity, one through the system libm this crate links against
   and one through the `libm` *crate* the `no_std` one uses, and the two are free to round
-  differently in the last bit. Nothing compares them today. If a line width and a pitched label's
-  plane ever have to agree exactly, that is the seam to fold together first.
+  differently in the last bit — so they are folded into one: `line_ratio` is now the reciprocal of
+  `pixels_to_tile_units`, and a test pins them as one quantity at fractional zooms as well as
+  whole ones. At a whole zoom the exponent is exact and any two implementations agree; the
+  fractional case is the one that separates them, and it is the case `composite_style_z13_5`
+  captures. Every golden held across the change, which is what says the two routines happened to
+  agree today rather than that it did not matter.
+  `glam` went with it. §8 listed it for `DMat4`/`DVec` and nothing ever used it — the matrices are
+  hand-written `[f64; 16]`, because the order the terms accumulate *is* the quantity being
+  reproduced and a library's multiply is free to associate differently. Three crates carried the
+  dependency for nothing, which is a §12.4 cost against no benefit. The same reasoning rules out
+  a faster transcendental library, and the profile says it would not be worth having anyway:
+  thirty of the thirty-eight transcendental call sites are in the camera, the projection and the
+  cover, which run per view per frame rather than per vertex.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 
