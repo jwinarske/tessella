@@ -109,3 +109,161 @@ fn an_unknown_mesh_format_is_refused() {
     assert_eq!(MeshFormat::from_repr(2), None);
     assert_eq!(MeshFormat::from_repr(255), None);
 }
+
+/// Placement: where a model tile goes, and how its metres become vertical units.
+mod placement {
+    use tessella_orchestrate::ubo::{
+        MESH_DRAWABLE_UBO, MESH_DRAWABLE_UBO_SIZE, MeshPlacement, height_factor,
+        pack_mesh_drawable_buffer,
+    };
+
+    /// A Mapbox buildings mesh is tile units in x and y and **metres** in z.
+    ///
+    /// Measured rather than assumed, across 972 nodes of a real store: node translations span
+    /// 60 to 8189, which is the tile extent, while node z-scale is exactly 1.0 and mesh heights
+    /// run to 330 with a 95th percentile of 136. Those are building heights in metres, not tile
+    /// units — half the nodes are flat because a buildings tile carries a footprint mesh beside
+    /// each extruded one.
+    ///
+    /// That is the same mixed convention `fill-extrusion` uses, which is why mbgl's own
+    /// `heightFactor` is the conversion rather than something derived here.
+    #[test]
+    fn the_height_factor_is_mbgls() {
+        // `-numTiles / tileSize_D / 8.0`, with tileSize_D 512.
+        assert_eq!(height_factor(0), -(1.0 / 4096.0));
+        assert_eq!(height_factor(14), -4.0);
+        assert_eq!(height_factor(16), -16.0);
+
+        // Negative throughout: the sign is the shader's vertical convention, not a scale.
+        for zoom in 0..=22u8 {
+            assert!(height_factor(zoom) < 0.0, "z{zoom}");
+        }
+
+        // It doubles per zoom level, because a tile covers half the ground each time while its
+        // unit count stays the same.
+        for zoom in 0..22u8 {
+            let ratio = height_factor(zoom + 1) / height_factor(zoom);
+            assert!((ratio - 2.0).abs() < 1e-6, "z{zoom} -> {ratio}");
+        }
+    }
+
+    /// A hundred-metre building comes out a plausible fraction of its tile.
+    ///
+    /// The check that the factor is the right *magnitude* and not merely the right formula. At
+    /// z14 a tile is roughly 2.4 km at the equator and 8192 units across, so a hundred metres
+    /// should land in the low hundreds of units. A factor off by the 512 or the 8 would put it
+    /// out by an order of magnitude, which is a city of towers or a city of kerbs.
+    #[test]
+    fn a_building_is_a_plausible_fraction_of_its_tile() {
+        let units = (100.0 * height_factor(14)).abs();
+        assert!(
+            (100.0..1000.0).contains(&units),
+            "100 m at z14 came to {units} tile units"
+        );
+    }
+
+    /// The placement buffer is one entry per mesh, at the layer's stride.
+    ///
+    /// A consolidated buffer, like every other layer's: the consumer reads entry `i` for the
+    /// `i`-th mesh named by that layer's `ViewUse` records.
+    #[test]
+    fn each_mesh_gets_its_own_entry() {
+        let mut first = [0.0f32; 16];
+        first[0] = 3.0;
+        let mut second = [0.0f32; 16];
+        second[15] = 9.0;
+
+        let placements = [
+            MeshPlacement {
+                matrix: first,
+                height_factor: height_factor(14),
+            },
+            MeshPlacement {
+                matrix: second,
+                height_factor: height_factor(15),
+            },
+        ];
+        // A stride wider than the block is what an alignment requirement produces.
+        let packed = pack_mesh_drawable_buffer(&placements, 96);
+        assert_eq!(packed.len(), 192);
+
+        let at = |offset: usize| {
+            f32::from_le_bytes(packed[offset..offset + 4].try_into().expect("four bytes"))
+        };
+        assert_eq!(at(0), 3.0, "the first matrix");
+        assert_eq!(at(64), -4.0, "its height factor, at z14");
+        assert_eq!(at(96 + 60), 9.0, "the second matrix, one stride on");
+        assert_eq!(at(96 + 64), -8.0, "its height factor, at z15");
+
+        // The words after the factor are padding to the block's alignment and stay zero.
+        assert_eq!([at(68), at(72), at(76)], [0.0; 3]);
+        assert!(
+            packed[MESH_DRAWABLE_UBO_SIZE..96]
+                .iter()
+                .all(|byte| *byte == 0),
+            "the gap between blocks is not zeroed"
+        );
+    }
+
+    /// The mesh slot sits clear of every slot mbgl generates.
+    ///
+    /// The first slot this build chooses rather than transcribes, because mbgl has no mesh layer
+    /// to read one from. It is separated by a gap rather than placed adjacent, and the gap is
+    /// asserted at compile time in the module — this is the readable statement of the same
+    /// thing. Taking nine, one past mbgl's `MAX_UBO_COUNT_PER_SHADER`, would collide the moment
+    /// mbgl added a shader's worth of buffer.
+    #[test]
+    fn the_mesh_slot_is_clear_of_mbgls() {
+        use tessella_capture_abi::generated::ubo_slots::{MAX_UBO_COUNT_PER_SHADER, SLOTS};
+
+        // The gap itself is asserted at compile time in the module; both of these are
+        // constants, so the readable statement of it lives in a `const` block here too.
+        const _: () = assert!(MESH_DRAWABLE_UBO > MAX_UBO_COUNT_PER_SHADER);
+        const _: () = assert!(
+            MESH_DRAWABLE_UBO - MAX_UBO_COUNT_PER_SHADER >= 4,
+            "the gap is too small to be a gap"
+        );
+
+        // This one is a real search rather than a constant comparison: nothing anywhere in the
+        // generated chain may already carry the number, whatever its name.
+        assert!(
+            SLOTS.iter().all(|(_, slot)| *slot != MESH_DRAWABLE_UBO),
+            "a generated slot already uses this number"
+        );
+    }
+}
+
+/// A mesh's matrix is the drawable matrix, not a second one computed beside it.
+///
+/// A model tile sits in the same tile space as every other layer and takes the same layer and
+/// sublayer depth bias. Computing it separately would leave two implementations of mbgl's bias
+/// arithmetic to keep in step, and they would agree right up until the day they did not.
+#[test]
+fn a_mesh_uses_the_same_matrix_as_every_other_drawable() {
+    use tessella_orchestrate::ubo::{DrawableEntry, MeshPlacement, height_factor};
+    use tessella_tile::camera;
+    use tessella_tile::cover::ViewTransform;
+
+    let view = camera::settled(&ViewTransform {
+        longitude: -0.11,
+        latitude: 51.505,
+        zoom: 14.0,
+        width: 1024.0,
+        height: 768.0,
+        bearing: 0.0,
+        pitch: 0.0,
+    });
+
+    let entry = DrawableEntry::for_tile(&view, 14, 8189, 5447, 0, 3, 1).expect("an entry");
+    let placement = MeshPlacement::for_tile(&view, 14, 8189, 5447, 0, 3, 1).expect("a placement");
+
+    assert_eq!(placement.matrix, entry.matrix);
+    assert_eq!(placement.height_factor, height_factor(14));
+
+    // And the bias is genuinely in there: a different sublayer is a different matrix.
+    let deeper = MeshPlacement::for_tile(&view, 14, 8189, 5447, 0, 3, 2).expect("a placement");
+    assert_ne!(
+        deeper.matrix, placement.matrix,
+        "the sublayer bias is not applied"
+    );
+}

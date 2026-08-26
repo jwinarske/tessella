@@ -1991,6 +1991,32 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   sweep, and that is where the mask is computed over a renderable set.
   Importing an offline pack downloaded by another client is out of this tree, in a separate
   crate that is not part of this repository.
+  Placing a model tile then needed one fact settled from the data rather than assumed, and it is
+  the fact everything else follows from: **a buildings mesh is tile units in x and y and metres in
+  z**. Measured across 972 nodes of a real store — node translations span 60 to 8189, which is the
+  tile extent, while node z-scale is exactly 1.0 and heights run to 330 with a 95th percentile of
+  136. Those are buildings in metres, not a normalised range. Half the nodes are flat, because a
+  buildings tile carries a footprint mesh beside each extruded one.
+  That is the same mixed convention `fill-extrusion` uses, which is why mbgl's own `heightFactor`
+  — `-numTiles / tileSize_D / 8.0` — is the conversion rather than something derived here. It
+  carries no latitude term and that is not an omission: heights are drawn in Mercator-scaled units
+  so a building keeps its proportion against the locally-scaled ground, and putting latitude in
+  would make one at sixty degrees correct against the metre and wrong against its own street.
+  The matrix is the *drawable* matrix, not a second one computed beside it. A model tile sits in
+  the same tile space as every other layer and takes the same layer and sublayer depth bias, so a
+  parallel implementation would leave two copies of mbgl's bias arithmetic to keep in step — and
+  they would agree right up until the day they did not.
+  **The slot is the first number this build chooses rather than transcribes.** Every other slot
+  comes out of the generated table, evaluated from mbgl's chain of anonymous enums under DR-6, and
+  mbgl has no mesh layer to read one from. It is placed with a gap rather than adjacent to mbgl's
+  range: mbgl's run zero to eight with `MAX_UBO_COUNT_PER_SHADER` at nine, and taking nine would
+  collide the moment mbgl added a shader's worth of buffer. Sixteen leaves room to fifteen, and a
+  compile-time assertion turns a future collision into a build failure rather than two things
+  writing one slot. A search over the whole generated chain checks the number is unused by name as
+  well as by bound.
+  The placement travels as a `UboUpdate` — a consolidated buffer, one entry per mesh in the
+  layer's draw order, exactly as a fill's does. Nothing new on the wire for it, which is the point
+  of having put the mesh in the geometry id space.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

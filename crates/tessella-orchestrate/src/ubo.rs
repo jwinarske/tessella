@@ -1102,6 +1102,116 @@ pub fn pack_fill_extrusion_props(
     out
 }
 
+/// The uniform slot a mesh drawable's placement is written to.
+///
+/// # The first slot this build chooses rather than transcribes
+///
+/// Every other slot in this crate comes out of the generated table, evaluated from mbgl's own
+/// chain of anonymous enums under DR-6. mbgl has no mesh layer, so there is no slot to read — and
+/// this is the one place a number is picked here instead.
+///
+/// It is picked with a gap rather than adjacent to mbgl's range, and the gap is asserted. mbgl's
+/// slots run zero to eight with `MAX_UBO_COUNT_PER_SHADER` at nine; taking nine would collide
+/// the moment mbgl added one shader's worth of buffer. Sixteen leaves room for mbgl to grow to
+/// fifteen, and the compile-time assertion below is what turns a future collision into a build
+/// failure rather than two things writing the same slot.
+pub const MESH_DRAWABLE_UBO: u32 = 16;
+
+const _: () = assert!(
+    MESH_DRAWABLE_UBO > tessella_capture_abi::generated::ubo_slots::MAX_UBO_COUNT_PER_SHADER,
+    "mbgl's slots have grown into the one this build chose for meshes"
+);
+
+/// Bytes one mesh placement occupies in the layer's consolidated buffer.
+///
+/// A matrix and one scalar, padded to the sixteen-byte alignment every block on this protocol
+/// has. Sized here rather than read from a generated layout for the reason the slot is.
+pub const MESH_DRAWABLE_UBO_SIZE: usize = 80;
+
+/// Converts a height in metres into the vertical unit the tile matrix works in.
+///
+/// mbgl's `heightFactor`, `-numTiles / tileSize_D / 8.0`, and it applies to a model tile for a
+/// measured reason rather than an assumed one: a Mapbox buildings mesh puts x and y in tile units
+/// — its node translations span the extent, 60 to 8189 across a real store — while its z is in
+/// **metres**, with node z-scale exactly 1.0 and heights running to 330. That is the same mixed
+/// convention `fill-extrusion` uses, which is why the same factor converts it.
+///
+/// There is no latitude term, and that is not an omission. Heights are drawn in Mercator-scaled
+/// units so that a building keeps its proportion against the locally-scaled ground around it;
+/// putting the latitude in here would make a building at sixty degrees correct against the metre
+/// and wrong against its own street.
+#[must_use]
+pub fn height_factor(z: u8) -> f32 {
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        -(f64::from(1u32 << z.min(30)) / 512.0 / 8.0) as f32
+    }
+}
+
+/// Where one mesh tile goes, and how a metre becomes a vertical unit there.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct MeshPlacement {
+    /// Tile-local to clip, as every other drawable matrix on this protocol is.
+    pub matrix: [f32; 16],
+    /// What a height in metres multiplies by, from [`height_factor`].
+    pub height_factor: f32,
+}
+
+impl MeshPlacement {
+    /// The placement of one model tile under a view.
+    ///
+    /// The matrix is [`DrawableEntry`]'s, not a second one computed alongside it. A mesh sits in
+    /// the same tile space as every other layer and takes the same layer and sublayer depth
+    /// bias, so a parallel implementation here would be a second thing to keep in step with
+    /// mbgl's bias arithmetic — and the two would agree until the day they did not.
+    ///
+    /// # Errors
+    ///
+    /// [`camera::CameraError`] when the view has no area.
+    pub fn for_tile(
+        view: &ViewTransform,
+        z: u8,
+        x: u32,
+        y: u32,
+        wrap: i32,
+        layer_index: i32,
+        sub_layer_index: i32,
+    ) -> Result<Self, camera::CameraError> {
+        let entry = DrawableEntry::for_tile(view, z, x, y, wrap, layer_index, sub_layer_index)?;
+        Ok(Self {
+            matrix: entry.matrix,
+            height_factor: height_factor(z),
+        })
+    }
+}
+
+/// Packs the placement of each mesh drawable in a layer.
+///
+/// One entry per mesh in the layer's draw order, at `stride`, which is what a consolidated
+/// uniform buffer is: the consumer reads entry `i` for the `i`-th mesh named by that layer's
+/// `ViewUse` records.
+///
+/// # Why a mesh needs a matrix at all when its glTF carries node transforms
+///
+/// The node matrices place a building *within its tile*. Nothing in the file says where the tile
+/// is, what the camera is doing, or how a metre relates to a tile unit at this zoom — and none of
+/// that is the asset's to know. It is the producer's, which is the whole division this stream
+/// draws: the consumer's loader owns what the mesh is made of, and the producer owns whether and
+/// where it is drawn.
+#[must_use]
+pub fn pack_mesh_drawable_buffer(placements: &[MeshPlacement], stride: u32) -> Vec<u8> {
+    let stride = stride as usize;
+    let mut out = alloc::vec![0u8; placements.len() * stride];
+    for (placement, slot) in placements.iter().zip(out.chunks_mut(stride)) {
+        for (index, value) in placement.matrix.iter().enumerate() {
+            slot[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        slot[64..68].copy_from_slice(&placement.height_factor.to_le_bytes());
+        // The three words after it are padding to the block's alignment, and stay zero.
+    }
+    out
+}
+
 /// Packs `RasterDrawableUBO`: one matrix, and nothing else.
 ///
 /// The smallest drawable buffer of any layer, because a raster tile carries no per-feature
