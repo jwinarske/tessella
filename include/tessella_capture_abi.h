@@ -56,6 +56,7 @@ typedef enum tsl_envelope_kind {
     TSL_ENVELOPE_KIND_STENCIL_TILES = 9,
     TSL_ENVELOPE_KIND_VIEW_DECLARE = 10,
     TSL_ENVELOPE_KIND_VIEW_UNDECLARE = 11,
+    TSL_ENVELOPE_KIND_MESH_ADD = 12,
 } tsl_envelope_kind;
 
 /* Why geometry was announced. A steady stream of ATTRIBUTES_MODIFIED on a static scene is a */
@@ -66,6 +67,12 @@ typedef enum tsl_add_reason {
     TSL_ADD_REASON_ATTRIBUTES_REPLACED = 2,
     TSL_ADD_REASON_ATTRIBUTES_MODIFIED = 3,
 } tsl_add_reason;
+
+/* What a mesh's bytes are. A consumer meeting a value it does not know must skip the mesh rather */
+/* than guess at the bytes. */
+typedef enum tsl_mesh_format {
+    TSL_MESH_FORMAT_GLB = 1,
+} tsl_mesh_format;
 
 /* Which side owns a view's camera. Declared per view at tsl_view_declare. */
 typedef enum tsl_camera_mode {
@@ -410,6 +417,48 @@ TSL_ASSERT(offsetof(tsl_geometry_add, builtin_shader) == 64, "tsl_geometry_add.b
 TSL_ASSERT(offsetof(tsl_geometry_add, vertex_type) == 68, "tsl_geometry_add.vertex_type moved");
 TSL_ASSERT(offsetof(tsl_geometry_add, reason) == 69, "tsl_geometry_add.reason moved");
 TSL_ASSERT(offsetof(tsl_geometry_add, _pad) == 70, "tsl_geometry_add._pad moved");
+
+/*
+ * Announces a process-scoped, refcounted mesh: an authored model the consumer's own loader
+ * reads.
+ *
+ * Not a tsl_geometry_add, because that describes geometry the producer computed and names an
+ * mbgl shader family for it. A model tile arrives authored and there is no such family for a PBR
+ * mesh. The bytes travel whole and a glTF loader reads them.
+ *
+ * The id is in the same space as tsl_geometry_add's, so tsl_view_use, tsl_view_release and
+ * tsl_geometry_remove bind, release and drop a mesh exactly as they do geometry. A consumer that
+ * skips this envelope and later meets a tsl_view_use naming the id has a protocol fault: a style
+ * with a model layer cannot be drawn without a mesh loader.
+ *
+ * Placement is not here. The tile-to-clip matrix is per view and per frame; this record is
+ * neither, and the matrix travels as a tsl_ubo_update like every other layer's.
+ *
+ * Mirrors `MeshAdd`.
+ */
+typedef struct tsl_mesh_add {
+    /* Process-wide id, shared with tsl_geometry_add. */
+    uint64_t mesh;
+    /* The asset's bytes. A slab reference rather than an inline payload: a model tile is */
+    /* hundreds of kilobytes and the ring is sized by envelope count. It is also what makes the */
+    /* hand-off zero-copy -- a glTF loader parses straight from this memory, and the consumer */
+    /* holds the slab alive until it is done. */
+    tsl_slab_ref bytes;
+    /* tsl_mesh_format of the bytes. */
+    uint8_t format;
+    /* tsl_add_reason. A mesh is announced once and not modified in place. */
+    uint8_t reason;
+    /* Must be zero. */
+    uint8_t _pad[2];
+} tsl_mesh_add;
+
+TSL_ASSERT(sizeof(tsl_mesh_add) == 24, "tsl_mesh_add size differs from the Rust definition");
+TSL_ASSERT(TSL_ALIGNOF(tsl_mesh_add) == 8, "tsl_mesh_add alignment differs from the Rust definition");
+TSL_ASSERT(offsetof(tsl_mesh_add, mesh) == 0, "tsl_mesh_add.mesh moved");
+TSL_ASSERT(offsetof(tsl_mesh_add, bytes) == 8, "tsl_mesh_add.bytes moved");
+TSL_ASSERT(offsetof(tsl_mesh_add, format) == 20, "tsl_mesh_add.format moved");
+TSL_ASSERT(offsetof(tsl_mesh_add, reason) == 21, "tsl_mesh_add.reason moved");
+TSL_ASSERT(offsetof(tsl_mesh_add, _pad) == 22, "tsl_mesh_add._pad moved");
 
 /*
  * Drops shared geometry once no view holds it.

@@ -378,6 +378,86 @@ pub struct GeometryAdd {
     pub _pad: [u8; 2],
 }
 
+/// What a mesh's bytes are.
+///
+/// One value today, and an enum rather than a bare flag because the alternatives are real and
+/// near: a glTF whose buffers sit beside it, or a format a later consumer prefers. A consumer
+/// reading a value it does not know must skip the mesh rather than guess at the bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
+pub enum MeshFormat {
+    /// Binary glTF: one self-contained file, JSON and binary chunks together.
+    Glb = 1,
+}
+
+impl MeshFormat {
+    /// Every declared format, so the C mirror and the round-trip test cover all of them.
+    pub const ALL: [Self; 1] = [Self::Glb];
+
+    /// Converts a wire value, rejecting unknown ones.
+    #[must_use]
+    pub const fn from_repr(value: u8) -> Option<Self> {
+        match value {
+            1 => Some(Self::Glb),
+            _ => None,
+        }
+    }
+}
+
+/// Announces a process-scoped, refcounted **mesh** (§5.3).
+///
+/// # Why a mesh is not `GeometryAdd`
+///
+/// [`GeometryAdd`] describes geometry this build *computed*: vertices it tessellated, attributes
+/// it bound, and a `builtin_shader` naming one of mbgl's shader families. A model tile is none of
+/// those. It arrives authored — positions, normals, materials, textures, a node hierarchy — and
+/// the frontend's job is to decide *whether and where* it draws, not what it is made of. There is
+/// no mbgl shader family for a PBR mesh, and inventing one would be exactly the drift DR-6 exists
+/// to prevent.
+///
+/// So the bytes travel whole and the consumer's own loader reads them. Both consumers this
+/// targets already have one that does: Filament's `gltfio` links meshoptimizer and takes a byte
+/// pointer, and flutter_scene's importer recognises the same two extensions and takes a
+/// `Uint8List`. Decoding here and re-emitting would discard work the consumer already links and
+/// roughly triple what crosses the seam.
+///
+/// # It shares the geometry id space, deliberately
+///
+/// The `mesh` field is a [`GeometryId`], so [`ViewUse`], [`ViewRelease`], [`GeometryRemove`] and
+/// [`OrderEntry`] all apply unchanged: a mesh takes its place in painter order, is bound into
+/// views, and is dropped when the last one releases it, by the same records as everything else.
+/// One new envelope kind instead of four, and the consumer needs no second table — it looks an id
+/// up and finds whichever kind of thing it added.
+///
+/// The consequence is worth stating plainly: a consumer that skips this kind and then meets a
+/// [`ViewUse`] naming the id has a protocol fault on its hands. That is not a gap so much as the
+/// truth about a style with a model layer — a consumer with no mesh loader cannot draw it, in the
+/// same way one with no texture upload cannot draw a symbol.
+///
+/// # Placement is not here
+///
+/// The tile-to-clip matrix is per view and per frame; this record is neither. It travels as a
+/// [`UboUpdate`] keyed `(view, layer, slot)`, which is how every other layer's matrix travels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(C)]
+pub struct MeshAdd {
+    /// Process-wide id, in the same space as [`GeometryAdd::geometry`].
+    pub mesh: GeometryId,
+    /// The asset's bytes, in a slab the consumer holds alive while it loads (§11.3).
+    ///
+    /// A slab reference rather than an inline payload because a model tile is hundreds of
+    /// kilobytes and the ring is sized by envelope count. It is also what makes the hand-off
+    /// zero-copy: `gltfio` parses from the pointer, and a `Uint8List` view can be taken over the
+    /// same memory, so nothing is copied until the loader builds its GPU buffers.
+    pub bytes: SlabRef,
+    /// What the bytes are, as a [`MeshFormat`] discriminant.
+    pub format: u8,
+    /// Why this was announced, as an [`AddReason`] discriminant.
+    pub reason: u8,
+    /// Padding. Must be zero.
+    pub _pad: [u8; 2],
+}
+
 /// Drops a piece of shared geometry, once no view holds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(C)]
@@ -784,6 +864,7 @@ wire_records!(
     TextureUpdate,
     StencilTiles,
     StencilTile,
+    MeshAdd,
     OrderEntry,
     OrderUpdate,
     CameraUpdate,
@@ -820,6 +901,7 @@ const _: () = {
     layout!(TextureRef, 16, 8);
     layout!(GeometryAdd, 72, 8);
     layout!(GeometryRemove, 8, 8);
+    layout!(MeshAdd, 24, 8);
     layout!(ViewDeclare, 8, 4);
     layout!(ViewUndeclare, 4, 4);
     layout!(ViewUse, 40, 8);

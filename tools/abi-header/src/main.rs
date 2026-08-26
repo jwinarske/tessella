@@ -308,6 +308,45 @@ fn structs() -> Vec<Struct> {
             ]
         ),
         c_struct!(
+            MeshAdd,
+            "mesh_add",
+            "Announces a process-scoped, refcounted mesh: an authored model the consumer's own \
+             loader reads.\n\n\
+             Not a tsl_geometry_add, because that describes geometry the producer computed and \
+             names an mbgl shader family for it. A model tile arrives authored and there is no \
+             such family for a PBR mesh. The bytes travel whole and a glTF loader reads them.\n\n\
+             The id is in the same space as tsl_geometry_add's, so tsl_view_use, \
+             tsl_view_release and tsl_geometry_remove bind, release and drop a mesh exactly as \
+             they do geometry. A consumer that skips this envelope and later meets a \
+             tsl_view_use naming the id has a protocol fault: a style with a model layer cannot \
+             be drawn without a mesh loader.\n\n\
+             Placement is not here. The tile-to-clip matrix is per view and per frame; this \
+             record is neither, and the matrix travels as a tsl_ubo_update like every other \
+             layer's.",
+            [
+                (
+                    mesh,
+                    "uint64_t mesh",
+                    "Process-wide id, shared with tsl_geometry_add."
+                ),
+                (
+                    bytes,
+                    "tsl_slab_ref bytes",
+                    "The asset's bytes. A slab reference rather than an inline payload: a model \
+                     tile is hundreds of kilobytes and the ring is sized by envelope count. It \
+                     is also what makes the hand-off zero-copy -- a glTF loader parses straight \
+                     from this memory, and the consumer holds the slab alive until it is done."
+                ),
+                (format, "uint8_t format", "tsl_mesh_format of the bytes."),
+                (
+                    reason,
+                    "uint8_t reason",
+                    "tsl_add_reason. A mesh is announced once and not modified in place."
+                ),
+                (_pad, "uint8_t _pad[2]", "Must be zero."),
+            ]
+        ),
+        c_struct!(
             GeometryRemove,
             "geometry_remove",
             "Drops shared geometry once no view holds it.",
@@ -827,6 +866,13 @@ fn generate() -> String {
         "Why geometry was announced. A steady stream of ATTRIBUTES_MODIFIED on a static scene \
          is a visible bug, not a hint.",
         &AddReason::ALL.map(|r| (screaming(&format!("{r:?}")), r as i64)),
+    );
+    emit_enum(
+        w,
+        "mesh_format",
+        "What a mesh's bytes are. A consumer meeting a value it does not know must skip the \
+         mesh rather than guess at the bytes.",
+        &MeshFormat::ALL.map(|f| (screaming(&format!("{f:?}")), f as i64)),
     );
     emit_enum(
         w,

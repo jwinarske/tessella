@@ -118,6 +118,13 @@ pub enum EnvelopeKind {
     ViewDeclare = 10,
     /// Drops a view and everything scoped to it (DR-18).
     ViewUndeclare = 11,
+    /// Process-scoped, refcounted mesh: a shared geometry id and the bytes of an authored
+    /// model, which the consumer's own loader reads.
+    ///
+    /// Additive, and last in the numbering because it is: a stream with no model layer never
+    /// carries one. It shares the geometry id space, so [`Self::ViewUse`], [`Self::ViewRelease`]
+    /// and [`Self::GeometryRemove`] bind, release and drop a mesh exactly as they do geometry.
+    MeshAdd = 12,
 }
 
 /// How the ring treats an envelope under consumer stall (§4).
@@ -140,7 +147,7 @@ pub enum CoalescePolicy {
 impl EnvelopeKind {
     /// Every declared envelope kind. Adding a variant without adding it here fails the
     /// round-trip test rather than silently escaping coverage.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::GeometryAdd,
         Self::GeometryRemove,
         Self::ViewUse,
@@ -152,6 +159,7 @@ impl EnvelopeKind {
         Self::StencilTiles,
         Self::ViewDeclare,
         Self::ViewUndeclare,
+        Self::MeshAdd,
     ];
 
     /// Converts a wire discriminant into an [`EnvelopeKind`], rejecting unknown values.
@@ -172,6 +180,7 @@ impl EnvelopeKind {
             9 => Some(Self::StencilTiles),
             10 => Some(Self::ViewDeclare),
             11 => Some(Self::ViewUndeclare),
+            12 => Some(Self::MeshAdd),
             _ => None,
         }
     }
@@ -180,8 +189,12 @@ impl EnvelopeKind {
     #[must_use]
     pub const fn coalesce_policy(self) -> CoalescePolicy {
         match self {
+            // A mesh is lossless for the reason geometry is: it announces something that
+            // exists rather than a state that can be superseded, and a dropped announcement is
+            // a `ViewUse` naming an id the consumer never saw.
             Self::GeometryAdd
             | Self::GeometryRemove
+            | Self::MeshAdd
             | Self::ViewDeclare
             | Self::ViewUndeclare
             | Self::ViewUse
@@ -267,7 +280,9 @@ mod tests {
             assert_eq!(EnvelopeKind::from_repr(kind as u16), Some(kind));
         }
         assert_eq!(EnvelopeKind::from_repr(0), None);
-        assert_eq!(EnvelopeKind::from_repr(12), None);
+        // One past the last declared kind. This number moves every time one is added, which is
+        // the point: it fails on the addition rather than quietly widening what the ring accepts.
+        assert_eq!(EnvelopeKind::from_repr(13), None);
         assert_eq!(EnvelopeKind::from_repr(u16::MAX), None);
     }
 
@@ -299,6 +314,10 @@ mod tests {
             (EnvelopeKind::StencilTiles, LatestWins),
             (EnvelopeKind::ViewDeclare, Lossless),
             (EnvelopeKind::ViewUndeclare, Lossless),
+            // A mesh announces something that exists rather than a state that can be
+            // superseded, so a dropped one leaves a `ViewUse` naming an id the consumer never
+            // saw — the same reason `GeometryAdd` is lossless.
+            (EnvelopeKind::MeshAdd, Lossless),
         ];
         assert_eq!(expected.len(), EnvelopeKind::ALL.len());
         for (kind, policy) in expected {

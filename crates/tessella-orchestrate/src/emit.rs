@@ -30,8 +30,8 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use tessella_capture_abi::envelope::{
-    AddReason, AttributeDesc, GeometryAdd, GeometryId, GeometryRemove, Segment as AbiSegment,
-    SlabRef, Span, TextureId, TextureRef, WireRecord,
+    AddReason, AttributeDesc, GeometryAdd, GeometryId, GeometryRemove, MeshAdd, MeshFormat,
+    Segment as AbiSegment, SlabRef, Span, TextureId, TextureRef, WireRecord,
 };
 use tessella_capture_abi::generated::texture_slots;
 use tessella_capture_abi::ring::{Full, Producer};
@@ -576,6 +576,65 @@ pub fn encode_raster(
     };
 
     Encoded { record, payload }
+}
+
+/// Puts an authored model into a slab and announces it.
+///
+/// # What this deliberately does not do
+///
+/// It does not decode the glTF. Both consumers this targets already have a loader that does —
+/// Filament's `gltfio` links meshoptimizer and takes a byte pointer, flutter_scene's importer
+/// recognises the same extensions and takes a `Uint8List` — so decoding here would discard work
+/// the consumer already links and roughly triple what crosses the seam, since a meshopt-packed
+/// tile is several times smaller than its vertices.
+///
+/// What the producer decides is what it always decides: whether the tile is in the cover, and
+/// where it goes. The bytes are an asset, not a computation.
+///
+/// # The slab is the zero-copy hand-off
+///
+/// The GLB is copied into a slab **once**, and everything after that is a reference: `gltfio`
+/// parses from the slab's memory, and a `Uint8List` view can be taken over the same bytes. The
+/// consumer holds the slab alive until its loader is done, which is the same §11.3 contract
+/// geometry already uses — and exactly the lifetime an asynchronous load needs.
+///
+/// That one copy is the arena's, and it is not free; a caller that already has the bytes in a
+/// slab should build the record itself rather than hand them here to be copied again.
+pub fn encode_mesh(arena: &mut SlabArena, mesh: GeometryId, glb: &[u8]) -> MeshEncoded {
+    let bytes = arena.alloc(glb);
+    MeshEncoded {
+        record: MeshAdd {
+            mesh,
+            bytes,
+            format: MeshFormat::Glb as u8,
+            // A mesh is announced once. It is never modified in place: a changed tile is a
+            // different tile with an id of its own, which is what makes the refcount enough.
+            reason: AddReason::Created as u8,
+            _pad: [0; 2],
+        }
+        .as_bytes()
+        .to_vec(),
+        payload: Vec::new(),
+    }
+}
+
+/// Writes a mesh announcement to the ring.
+///
+/// # Errors
+///
+/// [`Full`] when the ring cannot take it. Lossless like geometry: a dropped announcement leaves
+/// a later `ViewUse` naming an id the consumer never saw.
+pub fn write_mesh(producer: &mut Producer, mesh: &MeshEncoded) -> Result<(), Full> {
+    producer.write(EnvelopeKind::MeshAdd, &mesh.record, &[])
+}
+
+/// A mesh announcement, ready for the ring.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MeshEncoded {
+    /// The record as it will be written.
+    pub record: Vec<u8>,
+    /// Nothing: a mesh's bytes live in a slab, not in the payload region.
+    pub payload: Vec<u8>,
 }
 
 /// Writes an encoded envelope to the ring.
