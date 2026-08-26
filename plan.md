@@ -720,8 +720,34 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   is what the implementation claims and text is what the ground says.
   Verified by deleting the index: three of the five fail, including that one. Continuity alone
   does not, which is why it is not the criterion.
-- **R2** — *in progress.* Symbols: glyph manager, shaping, quads, per-view placement,
-  collision, cross-tile index, fades. Largest phase; budget ≈ R0+R1.
+- **R2** — *exit met, with one qualification named below.* Symbols: glyph manager, shaping,
+  quads, per-view placement, collision, cross-tile index, fades. Largest phase; budget ≈ R0+R1.
+  Exit: probe parity on a style with a symbol layer, the way R0's is on the hermetic style and
+  R1's on a real one — **met**. `symbol_style.dump` reproduces through the production path:
+  parse the style, cover the camera, build each tile, fetch the ranges the tile declared over the
+  style's own `glyphs` URL, shape, place, encode. Drawable identities, index buffers, the five
+  attribute descriptors, the atlas texture's size and format, painter order and all three uniform
+  buffers, byte for byte. R1.5's remaining criterion — zero symbol pops — closed with it.
+  **The qualification** is the seven elided lines: mbgl packs the glyph atlas in the order glyphs
+  arrive and that order is not deterministic, so the symbol vertex hashes and the atlas texture
+  hash cannot be compared. Making them comparable is a change to mbgl's atlas behaviour rather
+  than to the probe's dump code, and an oracle representing a *modified* mbgl is worth less than
+  one with seven elided lines. Investigated and declined, not deferred.
+  **Not in this phase and not in any other**: icons and sprites. §5 names one sprite atlas per
+  style and the crate map gives `tessella-glyph` the sprite half of mbgl's `text/`, but no phase
+  claims the work — R2 is spelled "symbols" and means glyphs, and R3 is raster, patterns and
+  fill-extrusion. That is a gap in this plan rather than in the build, and it is written here so
+  the next reader does not have to rediscover it.
+  **Held behind a capture**: the pitched paths, in three different states, and the difference
+  between them matters. A line label's collision circles *do* carry the signed distance from the
+  anchor that selects a prefix of the run under pitch — computed, stored, and read by nothing.
+  `gamma_scale` is written as its pitch-zero value of one, and the perspective ratio mbgl scales
+  it by is not written at all. The label-plane and coordinate matrices have a map-aligned branch
+  that scales by tile units per pixel and rotates by the bearing, and that branch is deliberately
+  absent rather than written and untested: producing it would put a matrix on the wire against no
+  measurement. All three wait on the same thing — the probe is unrotated, so there is no capture
+  to check any of it against, which is R0's second qualification reappearing rather than a new
+  one.
   The SDF glyph range format reads, as `tessella-glyph/pbf`: `{fontstack}/{first}-{last}.pbf`,
   256 codepoints a file, metrics and a distance field with the ecosystem's three-pixel border.
   Almost all of it is rejection, and that is the part that matters — proto2 makes every field
