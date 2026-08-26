@@ -5,6 +5,7 @@
 
 pub mod mbgl_enums;
 pub mod shader_attributes;
+pub mod texture_slots;
 pub mod ubo_layouts;
 pub mod ubo_slots;
 
@@ -92,6 +93,109 @@ mod tests {
                         a.name, b.name
                     );
                 }
+            }
+        }
+    }
+
+    /// The texture tables agree with the golden dump on both sides of the question.
+    ///
+    /// `symbol_style.dump` gives each symbol drawable exactly one `tex ... slot=0` line and its
+    /// fill drawables none at all. Both are reproduced here from the header and the shader
+    /// sources rather than from the dump, which is what makes the agreement mean something: one
+    /// says the SDF shader has a sampler at slot 0, the other says a plain fill has none, and a
+    /// table that had drifted would disagree with the capture before it ever bound anything.
+    #[test]
+    fn the_texture_tables_match_the_oracles_bindings() {
+        use super::texture_slots::{texture_count, textures};
+
+        let symbol = textures(BuiltIn::SymbolSDFShader);
+        assert_eq!(symbol.len(), 1, "the dump shows one tex line per symbol");
+        assert_eq!(symbol[0].binding, 0, "slot=0");
+        assert_eq!(symbol[0].name, "idSymbolImageTexture");
+
+        assert_eq!(
+            texture_count(BuiltIn::FillShader),
+            Some(0),
+            "the dump's fill drawables carry no tex line"
+        );
+        assert_eq!(texture_count(BuiltIn::BackgroundShader), Some(0));
+    }
+
+    /// A raster drawable binds *two* textures, both of them the tile's own image.
+    ///
+    /// Which looks like a mistake in `render_raster_layer.cpp` and is not: slot 1 is the parent
+    /// tile a fading tile blends against, and with no fade in progress it is the same image. A
+    /// producer binding only slot 0 leaves the second sampler unbound, and what a shader reads
+    /// from an unbound sampler is the backend's business rather than a defined black.
+    #[test]
+    fn a_raster_shader_has_two_samplers_for_one_picture() {
+        use super::texture_slots::textures;
+
+        let raster = textures(BuiltIn::RasterShader);
+        assert_eq!(raster.len(), 2);
+        assert_eq!(raster[0].binding, 0);
+        assert_eq!(raster[1].binding, 1);
+        assert_eq!(raster[0].name, "idRasterImage0Texture");
+        assert_eq!(raster[1].name, "idRasterImage1Texture");
+    }
+
+    /// The icon atlas has a slot only on the shader that declares one.
+    ///
+    /// `SymbolSDFShader` samples text alone; `SymbolTextAndIconShader` samples both. Binding the
+    /// sprite atlas at slot 1 of the first would bind a texture that shader has no sampler for —
+    /// which is the whole reason the slot comes from a table rather than from a remembered
+    /// number.
+    #[test]
+    fn the_icon_atlas_has_no_slot_on_the_text_only_shader() {
+        use super::texture_slots::textures;
+
+        assert!(
+            !textures(BuiltIn::SymbolSDFShader)
+                .iter()
+                .any(|texture| texture.name == "idSymbolImageIconTexture")
+        );
+        let both = textures(BuiltIn::SymbolTextAndIconShader);
+        assert_eq!(both.len(), 2);
+        assert_eq!(both[1].binding, 1);
+        assert_eq!(both[1].name, "idSymbolImageIconTexture");
+    }
+
+    /// A shader that samples nothing is distinguishable from one with no table.
+    ///
+    /// Both answer `textures()` with an empty slice, and they mean opposite things: the first is
+    /// a fill shader, correctly binding nothing, and the second is a gap in generation that
+    /// would emit a drawable which cannot draw.
+    #[test]
+    fn an_empty_table_and_a_missing_one_are_different() {
+        use super::texture_slots::{TABLED, texture_count, textures};
+
+        assert_eq!(texture_count(BuiltIn::FillShader), Some(0));
+        assert!(textures(BuiltIn::FillShader).is_empty());
+
+        // Every shader in the match arm reports a count; anything outside it reports `None`.
+        for shader in TABLED {
+            assert!(texture_count(shader).is_some(), "{shader:?}");
+        }
+        assert_eq!(TABLED.len(), 29, "the vulkan shader sources declare 29");
+    }
+
+    /// Binding slots within a shader are distinct and dense from zero.
+    ///
+    /// A gap would mean the parse dropped an entry, and a duplicate would bind one sampler over
+    /// another. Neither is visible in a table read one row at a time.
+    #[test]
+    fn texture_slots_are_dense_and_unique() {
+        use super::texture_slots::{TABLED, textures};
+
+        for shader in TABLED {
+            let table = textures(shader);
+            for (index, texture) in table.iter().enumerate() {
+                assert_eq!(
+                    usize::try_from(texture.binding).expect("a small slot"),
+                    index,
+                    "{shader:?}: {} is not at its position",
+                    texture.name
+                );
             }
         }
     }

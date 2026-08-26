@@ -1806,7 +1806,51 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   What is still missing is the wire: the texture upload and the `texture_refs` that bind it. That
   gap is not the raster layer's — the glyph atlas has it too, and `TextureRef` has never been
   populated by anything but `whole_stream`'s hand-built records — so it is one piece of work for
-  both rather than a raster one.
+  both rather than a raster one, and it is what lands next.
+  Textures then reach the wire, which closes a gap that was never raster's alone. `TextureRef`
+  had been in the ABI since R0 and populated by nothing: `texture_refs` was `Span::default()` on
+  every drawable this build emitted, so the glyph atlas had the same hole. A drawable naming no
+  texture binds nothing, and the tile draws as whatever the consumer last had in that slot.
+  A texture's *slot* belongs to the shader, not to the texture, and that is what makes this a
+  DR-6 table rather than three constants. The glyph atlas is slot 0 of `SymbolSDFShader` and slot
+  0 of `SymbolTextAndIconShader`; the sprite atlas is slot 1 of the second and has **no slot at
+  all** in the first. A producer that remembered "the icon atlas is slot 1" would bind, on an SDF
+  drawable, a texture that shader has no sampler for — a label with no glyphs rather than an
+  error. So `texture_slots.rs` is generated from `shader_defines.hpp`'s anonymous enums and the
+  `TextureInfo` arrays in `src/mbgl/shaders/vulkan/*.cpp`, exactly as the attribute tables are.
+  Two independent agreements with the oracle come out of it, and neither was fitted to: the
+  table says `SymbolSDFShader` has one sampler at slot 0, and `symbol_style.dump` gives every
+  symbol drawable exactly one `tex ... slot=0` line; the table says a plain fill has none, and
+  the dump's fill drawables carry no `tex` line at all. A build that bound nothing would satisfy
+  the second and fail the first; one that bound something everywhere would do the reverse.
+  The distinction between *no samplers* and *no table* is kept, because an empty slice cannot
+  make it. A fill shader genuinely samples nothing — mbgl writes `std::array<TextureInfo, 0>` —
+  while a shader missing from the generated match would also answer with an empty slice and mean
+  that generation had missed it. `texture_count` returns `Option` for that reason, and the
+  parser recognises the one-line empty form as a table rather than skipping it.
+  Supplying too few textures is refused rather than truncated. A shader's samplers are all of
+  them or none: what a shader reads from an unbound sampler is the backend's business rather
+  than a defined black, so a drawable missing one cannot draw and a prefix is not a lesser
+  version of the right answer.
+  Which is exactly the raster case, and the one that looks like a bug in mbgl and is not.
+  `RasterShaderSource` declares *two* textures and `render_raster_layer.cpp` sets the same image
+  to both: slot 1 is the parent tile a fading tile blends against, and with no fade in progress
+  it is the tile's own picture. Binding only slot 0 would leave the second sampler reading
+  whatever the backend left there.
+  A raster tile uploads whole, like a sprite sheet and unlike a glyph atlas — it arrives
+  complete and is never touched again, and a *new* tile is a new texture rather than a region of
+  an old one. One texture per tile rather than one atlas per source, which is mbgl's arrangement
+  and is forced rather than chosen: tiles arrive and are dropped on their own schedules, and
+  packing them into a shared atlas would make evicting one a repack of the rest. It is also why
+  the binding belongs on the drawable — every raster drawable samples a different texture, where
+  every symbol drawable of a style samples the same atlas.
+  RGBA, not the atlas's single channel. §12.4's argument does not reach a picture, and a raster
+  tile may carry alpha — a label-free overlay, a hillshade, a corner outside the survey — which a
+  format that dropped it would draw as opaque black rather than as nothing.
+  The last assertion is a protocol one and invisible to any test of a single function's return
+  value: the upload reaches the ring *before* the geometry that names it. The ring is ordered and
+  the consumer acts on records as they arrive, so a `GeometryAdd` carrying a `TextureRef` the
+  consumer has seen no upload for binds nothing at all.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

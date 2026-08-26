@@ -8,7 +8,7 @@
 //! The expected layout is not invented here: it is what `tests/golden/symbol_style.dump` shows
 //! mbgl emitting, and `symbol_parity` checks the golden still says so.
 
-use tessella_capture_abi::envelope::GeometryId;
+use tessella_capture_abi::envelope::{GeometryId, TextureId};
 use tessella_capture_abi::ring::Ring;
 use tessella_capture_abi::{AttributeDataType, BuiltIn, EnvelopeKind};
 use tessella_glyph::atlas::{Atlas, Rect};
@@ -17,6 +17,10 @@ use tessella_layout::symbol_bucket::{Glyphs, Label, SymbolOptions, build_symbols
 use tessella_orchestrate::emit::{self, SlabArena};
 
 const GLYPHS: &[u8] = include_bytes!("../../../tests/glyph-fixtures/TestFont/0-255.pbf");
+
+/// The glyph atlas a symbol drawable samples. Any id will do here — what is under test is the
+/// slot it lands in, which comes from the shader's generated table rather than from this.
+const ATLAS: TextureId = TextureId(3);
 
 struct Font {
     glyphs: Vec<Glyph>,
@@ -66,7 +70,7 @@ fn labelled(text: &str) -> (SlabArena, emit::Encoded, usize) {
     let glyphs = buffers.glyphs();
 
     let mut arena = SlabArena::new();
-    let encoded = emit::encode_symbol(&mut arena, GeometryId(7), &buffers, 0, true);
+    let encoded = emit::encode_symbol(&mut arena, GeometryId(7), &buffers, 0, true, ATLAS);
     arena.seal();
     (arena, encoded, glyphs)
 }
@@ -98,7 +102,7 @@ fn a_non_sdf_symbol_names_the_icon_shader() {
         &SymbolOptions::default(),
     );
     let mut arena = SlabArena::new();
-    let encoded = emit::encode_symbol(&mut arena, GeometryId(1), &buffers, 0, false);
+    let encoded = emit::encode_symbol(&mut arena, GeometryId(1), &buffers, 0, false, ATLAS);
     assert_eq!(
         encoded.record.builtin_shader,
         BuiltIn::SymbolIconShader as i32
@@ -232,7 +236,7 @@ fn an_empty_layer_encodes_to_nothing() {
     assert!(buffers.is_empty());
 
     let mut arena = SlabArena::new();
-    let encoded = emit::encode_symbol(&mut arena, GeometryId(1), &buffers, 0, true);
+    let encoded = emit::encode_symbol(&mut arena, GeometryId(1), &buffers, 0, true, ATLAS);
     assert_eq!(encoded.record.vertex_count, 0);
     assert_eq!(encoded.segments()[0].vertex_length, 0);
 }

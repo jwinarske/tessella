@@ -31,11 +31,13 @@ use alloc::vec::Vec;
 
 use tessella_capture_abi::envelope::{
     AddReason, AttributeDesc, GeometryAdd, GeometryId, GeometryRemove, Segment as AbiSegment,
-    SlabRef, Span, WireRecord,
+    SlabRef, Span, TextureId, TextureRef, WireRecord,
 };
+use tessella_capture_abi::generated::texture_slots;
 use tessella_capture_abi::ring::{Full, Producer};
 use tessella_capture_abi::{AttributeDataType, BuiltIn, EnvelopeKind};
 use tessella_layout::fill::FillBucket;
+use tessella_layout::raster::{RasterBucket, RasterVertex};
 use tessella_layout::symbol_bucket::{SymbolBuffers, SymbolVertex};
 
 use crate::binder::VertexLayout;
@@ -52,6 +54,9 @@ const POSITION_STRIDE: u32 = 4;
 
 /// A symbol's interleaved layout vertex: three attributes of four shorts.
 const SYMBOL_STRIDE: u32 = 24;
+
+/// A raster vertex: a tile position and a texture position, two shorts each.
+const RASTER_STRIDE: u32 = 8;
 
 /// Default slab size. Large enough that a tile's geometry rarely spans two, small enough that a
 /// mostly-empty one is not worth worrying about.
@@ -203,6 +208,52 @@ impl Encoded {
     }
 }
 
+/// The texture bindings for a drawable, paired with the slots its shader declares.
+///
+/// # Why the slot comes from a table rather than from the caller
+///
+/// A slot belongs to the *shader*, not to the texture. The glyph atlas is slot 0 of
+/// `SymbolSDFShader` and slot 0 of `SymbolTextAndIconShader`; the sprite atlas is slot 1 of the
+/// second and has no slot at all in the first. A producer that remembered "the icon atlas is
+/// slot 1" would bind, on an SDF drawable, a texture that shader has no sampler for — which
+/// draws a label with no glyphs rather than reporting anything. DR-6's generated table is where
+/// the slots come from, for the same reason attribute bindings come from one.
+///
+/// # Supplying the wrong number is a fault, not a shorter list
+///
+/// A shader's samplers are all of them or none: a raster shader declares two and reads both, and
+/// what a shader reads from an *unbound* sampler is the backend's business rather than a defined
+/// black. So a caller supplying fewer textures than the shader declares is emitting a drawable
+/// that cannot draw, and this says so rather than binding a prefix.
+///
+/// # Panics
+///
+/// When `bound` is not exactly as long as the shader's table, or when the shader has no
+/// generated table at all. Both are producer bugs rather than data faults — the shader is chosen
+/// a few lines above every call site — and a drawable with the wrong samplers is worse on the
+/// wire than a panic in a test.
+#[must_use]
+pub fn texture_refs(shader: BuiltIn, bound: &[TextureId]) -> Vec<TextureRef> {
+    let declared = texture_slots::texture_count(shader)
+        .unwrap_or_else(|| panic!("{shader:?} has no generated texture table"));
+    assert_eq!(
+        bound.len(),
+        declared,
+        "{shader:?} declares {declared} samplers and {} were supplied",
+        bound.len()
+    );
+
+    texture_slots::textures(shader)
+        .iter()
+        .zip(bound)
+        .map(|(slot, texture)| TextureRef {
+            texture: *texture,
+            slot: slot.binding,
+            _pad: 0,
+        })
+        .collect()
+}
+
 /// Encodes a fill bucket into a geometry envelope, allocating its bytes into `arena`.
 ///
 /// The envelope carries no view: it is process-scoped and refcounted, and a `ViewUse` binds it
@@ -308,12 +359,21 @@ pub fn encode_fill(
 ///
 /// `is_sdf` picks the shader. Text is always SDF; an icon may be either, and the flag is already
 /// packed into each vertex's size field, so this only decides which shader is named.
+///
+/// `atlas` is the texture this drawable samples, and it is *one* texture whichever kind of
+/// symbol this is. mbgl's `DrawableAtlasesTweaker` is explicit about it: a shader declaring a
+/// separate icon sampler gets both atlases, and a shader that does not gets the glyph atlas for
+/// a text drawable and the *icon* atlas for an icon drawable — at the same slot 0 either way.
+/// Neither shader named here declares the second sampler, so the caller passes whichever atlas
+/// this drawable's symbols came out of. The golden's single `tex ... slot=0` line per symbol
+/// drawable is that rule seen from outside.
 pub fn encode_symbol(
     arena: &mut SlabArena,
     geometry: GeometryId,
     buffers: &SymbolBuffers,
     permutation_key: u64,
     is_sdf: bool,
+    atlas: TextureId,
 ) -> Encoded {
     let vertex_bytes = as_symbol_bytes(&buffers.vertices);
     let index_bytes = as_bytes_u16(&buffers.indices);
@@ -402,6 +462,13 @@ pub fn encode_symbol(
         }],
     );
 
+    let shader = if is_sdf {
+        BuiltIn::SymbolSDFShader
+    } else {
+        BuiltIn::SymbolIconShader
+    };
+    let texture_refs = push_span(&mut payload, &texture_refs(shader, &[atlas]));
+
     #[allow(clippy::cast_possible_truncation)]
     let record = GeometryAdd {
         geometry,
@@ -411,13 +478,99 @@ pub fn encode_symbol(
         attrs,
         instance_attrs: Span::default(),
         segments,
-        texture_refs: Span::default(),
-        builtin_shader: if is_sdf {
-            BuiltIn::SymbolSDFShader as i32
-        } else {
-            BuiltIn::SymbolIconShader as i32
-        },
+        texture_refs,
+        builtin_shader: shader as i32,
         vertex_type: AttributeDataType::Short4 as u8,
+        reason: AddReason::Created as u8,
+        _pad: [0; 2],
+    };
+
+    Encoded { record, payload }
+}
+
+/// Encodes a raster layer's geometry.
+///
+/// Two attributes, both `Short2` and both out of the same interleaved buffer: where the vertex
+/// sits in the tile and where it samples the image. mbgl declares the second as `UShort2` in the
+/// bucket and binds `idRasterTexturePosVertexAttribute` as `Short2`, which is not a
+/// contradiction — the values are all non-negative and under the extent, so the two readings
+/// agree over the range a tile occupies. The shader's declaration is what the wire carries.
+///
+/// `image` is bound to *both* of the shader's samplers. `render_raster_layer.cpp` does the same
+/// thing, and it is not a mistake: slot 1 is the parent tile a fading tile blends against, and
+/// with no fade in progress it is this tile's own picture. Binding only slot 0 would leave the
+/// second sampler unbound, and what a shader reads from an unbound sampler is the backend's
+/// business rather than a defined black.
+pub fn encode_raster(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    bucket: &RasterBucket,
+    image: TextureId,
+) -> Encoded {
+    let vertex_bytes = as_raster_bytes(&bucket.vertices);
+    let index_bytes = as_bytes_u16(&bucket.indices);
+
+    let interleaved = arena.alloc(&vertex_bytes);
+    let indexes = arena.alloc(&index_bytes);
+
+    let descriptors = alloc::vec![
+        AttributeDesc {
+            attr_id: 0,
+            binding: 0,
+            source: interleaved,
+            offset: 0,
+            vertex_offset: 0,
+            stride: RASTER_STRIDE,
+            data_type: AttributeDataType::Short2 as u8,
+            declared_data_type: AttributeDataType::Short2 as u8,
+            _pad: [0; 2],
+        },
+        AttributeDesc {
+            attr_id: 1,
+            binding: 1,
+            source: interleaved,
+            offset: 4,
+            vertex_offset: 0,
+            stride: RASTER_STRIDE,
+            data_type: AttributeDataType::Short2 as u8,
+            declared_data_type: AttributeDataType::Short2 as u8,
+            _pad: [0; 2],
+        },
+    ];
+
+    let mut payload = Vec::new();
+    let attrs = push_span(&mut payload, &descriptors);
+    // One segment however many quads the mask produced. They share a buffer, and a raster
+    // tile's four indices per quad cannot approach what a u16 reaches.
+    #[allow(clippy::cast_possible_truncation)]
+    let segments = push_span(
+        &mut payload,
+        &[AbiSegment {
+            vertex_offset: 0,
+            index_offset: 0,
+            vertex_length: bucket.vertices.len() as u32,
+            index_length: bucket.indices.len() as u32,
+        }],
+    );
+    let texture_refs = push_span(
+        &mut payload,
+        &texture_refs(BuiltIn::RasterShader, &[image, image]),
+    );
+
+    #[allow(clippy::cast_possible_truncation)]
+    let record = GeometryAdd {
+        geometry,
+        // No data-driven attributes: a raster tile has no features for a property to vary over,
+        // so there is one permutation and its key is zero.
+        permutation_key: 0,
+        indexes,
+        vertex_count: bucket.vertices.len() as u32,
+        attrs,
+        instance_attrs: Span::default(),
+        segments,
+        texture_refs,
+        builtin_shader: BuiltIn::RasterShader as i32,
+        vertex_type: AttributeDataType::Short2 as u8,
         reason: AddReason::Created as u8,
         _pad: [0; 2],
     };
@@ -508,6 +661,25 @@ fn as_symbol_bytes(values: &[SymbolVertex]) -> Vec<u8> {
             out.extend_from_slice(&value.to_le_bytes());
         }
         for value in vertex.pixel_offset {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    out
+}
+
+/// A raster vertex's bytes: position then texture coordinate, interleaved.
+///
+/// The texture coordinate is written as its own two little-endian `u16`, which is the same four
+/// bytes an `i16` pair would produce for any value a tile holds. It is spelled as the type the
+/// bucket stores rather than converted, so a value that ever did exceed `i16::MAX` would be
+/// wrong here in an obvious way instead of silently negative.
+fn as_raster_bytes(values: &[RasterVertex]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(values.len() * RASTER_STRIDE as usize);
+    for vertex in values {
+        for value in vertex.position {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in vertex.texture {
             out.extend_from_slice(&value.to_le_bytes());
         }
     }

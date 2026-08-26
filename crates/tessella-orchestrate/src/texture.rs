@@ -250,6 +250,39 @@ pub fn sprite_sheet(texture: TextureId, sheet: &tessella_glyph::sprite::Sheet) -
     Some(whole(texture, size, SPRITE_SHEET_FORMAT, &sheet.pixels))
 }
 
+/// The pixel format a raster tile is uploaded in.
+///
+/// RGBA, for the sprite sheet's reason and one more: a raster tile may carry alpha — a
+/// label-free overlay, a hillshade, a tile whose corner is outside the survey — and a format
+/// that dropped it would draw those as opaque black rather than as nothing.
+pub const RASTER_TILE_FORMAT: TexturePixelType = TexturePixelType::RGBA;
+
+/// The upload for a decoded raster tile.
+///
+/// A whole-texture upload, like the sprite sheet and unlike the glyph atlas: a tile arrives once,
+/// complete, and is never touched again — a *new* tile is a new texture rather than a region of
+/// an old one. Zero rects is what the envelope spells "all of it".
+///
+/// One texture per tile, not one atlas for the source. That is mbgl's arrangement
+/// (`RasterBucket::texture2d`) and it is forced rather than chosen: tiles arrive and are dropped
+/// on their own schedules, and packing them into a shared atlas would make evicting one a repack
+/// of the rest. It is also why the *drawable* carries the binding — every raster drawable
+/// samples a different texture, where every symbol drawable of a style samples the same atlas.
+///
+/// `None` for a tile with no pixels. A zero-dimension image is refused at decode, so this only
+/// fires for a bucket built without one.
+#[must_use]
+pub fn raster_tile(texture: TextureId, image: &tessella_source::image::Image) -> Option<Upload> {
+    if image.width == 0 || image.height == 0 || image.pixels.is_empty() {
+        return None;
+    }
+    let size = Extent {
+        width: image.width,
+        height: image.height,
+    };
+    Some(whole(texture, size, RASTER_TILE_FORMAT, &image.pixels))
+}
+
 /// The smallest rectangle containing all of these.
 fn union_of(rects: &[Rect16]) -> Rect16 {
     let min_x = rects.iter().map(|rect| rect.x).min().unwrap_or(0);

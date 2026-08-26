@@ -491,7 +491,11 @@ fn only_the_atlas_dependent_hashes_are_elided() {
 mod through_the_builder {
     use super::{Golden, fnv1a, golden_symbols};
 
-    use tessella_capture_abi::envelope::GeometryId;
+    use tessella_capture_abi::envelope::{GeometryId, TextureId};
+
+    /// The glyph atlas a symbol drawable samples. Any id will do: what is under test is the
+    /// slot, which comes from the shader's generated table rather than from this.
+    const ATLAS: TextureId = TextureId(3);
     use tessella_glyph::fonts::{Dependencies, Fonts};
     use tessella_orchestrate::emit::{SlabArena, encode_symbol};
     use tessella_orchestrate::tile::{Content, TileId, build_tile};
@@ -652,7 +656,7 @@ mod through_the_builder {
         for (symbol, layout) in &layouts {
             let (buffers, _) = layout.lay_out(&fonts);
             let mut arena = SlabArena::default();
-            let encoded = encode_symbol(&mut arena, GeometryId(1), &buffers, 0, true);
+            let encoded = encode_symbol(&mut arena, GeometryId(1), &buffers, 0, true, ATLAS);
 
             let mut attributes: Vec<(u32, u32, u32, u32)> = encoded
                 .attributes()
@@ -680,6 +684,86 @@ mod through_the_builder {
             );
         }
     }
+}
+
+/// The oracle binds one texture per symbol drawable, at slot zero, and none to a fill.
+///
+/// Both halves matter and only together. `sh0033` is the symbol shader and every one of its
+/// drawables carries exactly one `tex ... slot=0` line; the fill and background drawables in the
+/// same dump carry none. A producer that bound nothing would agree with the second and fail the
+/// first, and one that bound a texture to everything would do the reverse.
+///
+/// This is read out of the dump rather than out of the generated table, so it is an independent
+/// statement of the same fact — `tessella-capture-abi`'s own tests check the table against these
+/// numbers from the other side.
+#[test]
+fn the_oracle_binds_one_texture_to_a_symbol_and_none_to_a_fill() {
+    let mut symbol_bindings = 0;
+    let mut other_bindings = 0;
+    for line in DUMP.lines() {
+        let Some(rest) = line.trim().strip_prefix("tex ") else {
+            continue;
+        };
+        let id = rest.split_whitespace().next().expect("a drawable id");
+        let slot = rest
+            .split_whitespace()
+            .find_map(|token| token.strip_prefix("slot="))
+            .expect("a slot");
+        assert_eq!(slot, "0", "{line}");
+        if id.contains("sh0033") {
+            symbol_bindings += 1;
+        } else {
+            other_bindings += 1;
+        }
+    }
+
+    assert_eq!(
+        symbol_bindings,
+        golden_symbols().len(),
+        "one texture per symbol drawable"
+    );
+    assert_eq!(other_bindings, 0, "a non-symbol drawable bound a texture");
+}
+
+/// An encoded symbol drawable carries that binding, with the slot from the shader's table.
+///
+/// The slot is not passed in — the caller supplies an atlas and the generated table says where
+/// it lands. Which is the point: a producer that remembered a number would agree with the oracle
+/// today and bind the wrong sampler the moment a style used a shader with two.
+#[test]
+fn an_encoded_symbol_binds_its_atlas_at_the_oracle_s_slot() {
+    use tessella_capture_abi::envelope::{GeometryId, TextureId, TextureRef, WireRecord};
+    use tessella_orchestrate::emit::{SlabArena, encode_symbol};
+
+    let atlas = TextureId(41);
+    let buffers = tessella_layout::symbol_bucket::SymbolBuffers::default();
+    let mut arena = SlabArena::default();
+
+    for is_sdf in [true, false] {
+        let encoded = encode_symbol(&mut arena, GeometryId(1), &buffers, 0, is_sdf, atlas);
+        assert_eq!(encoded.record.texture_refs.count, 1, "sdf={is_sdf}");
+
+        let size = core::mem::size_of::<TextureRef>();
+        let start = encoded.record.texture_refs.offset as usize;
+        let bound = TextureRef::from_bytes(&encoded.payload[start..start + size]).expect("a ref");
+        assert_eq!(bound.slot, 0, "sdf={is_sdf}");
+        assert_eq!(bound.texture, atlas, "sdf={is_sdf}");
+    }
+}
+
+/// A shader's samplers are supplied in full or the producer is at fault.
+///
+/// Not a shorter list: what a shader reads from an unbound sampler is the backend's business
+/// rather than a defined black, so a drawable missing one is a drawable that cannot draw. The
+/// raster shader is the case that makes it concrete — it declares two and mbgl fills both with
+/// the same picture.
+#[test]
+#[should_panic(expected = "declares 2 samplers and 1")]
+fn supplying_too_few_textures_is_refused() {
+    use tessella_capture_abi::BuiltIn;
+    use tessella_capture_abi::envelope::TextureId;
+
+    let _ = tessella_orchestrate::emit::texture_refs(BuiltIn::RasterShader, &[TextureId(1)]);
 }
 
 /// The glyph atlas reaches the stream as the texture the oracle describes.

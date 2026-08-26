@@ -311,3 +311,184 @@ fn the_raster_drawable_buffer_is_one_matrix_per_tile() {
         "the padding between slots is not zeroed"
     );
 }
+
+/// A raster drawable reaches the wire with both samplers bound to its own picture.
+///
+/// `RasterShaderSource` declares two textures and `render_raster_layer.cpp` sets the same image
+/// to each. Slot 1 is the parent tile a fading tile blends against, and with no fade in progress
+/// it is this tile. Binding only slot 0 leaves the second sampler unbound, and what a shader
+/// reads from an unbound sampler is the backend's business rather than a defined black.
+#[test]
+fn the_encoded_raster_binds_its_picture_to_both_samplers() {
+    use tessella_capture_abi::BuiltIn;
+    use tessella_capture_abi::envelope::{GeometryId, TextureId, TextureRef, WireRecord};
+    use tessella_orchestrate::emit::{SlabArena, encode_raster};
+
+    let picture = TextureId(17);
+    let bucket = RasterBucket::whole_tile();
+    let mut arena = SlabArena::default();
+    let encoded = encode_raster(&mut arena, GeometryId(2), &bucket, picture);
+
+    assert_eq!(encoded.record.builtin_shader, BuiltIn::RasterShader as i32);
+    assert_eq!(encoded.record.vertex_count, 4);
+    assert_eq!(encoded.record.texture_refs.count, 2);
+
+    let size = core::mem::size_of::<TextureRef>();
+    let start = encoded.record.texture_refs.offset as usize;
+    let bound: Vec<TextureRef> = (0..2)
+        .map(|index| {
+            TextureRef::from_bytes(&encoded.payload[start + index * size..]).expect("a ref")
+        })
+        .collect();
+
+    assert_eq!(bound[0].slot, 0);
+    assert_eq!(bound[1].slot, 1);
+    assert!(
+        bound.iter().all(|reference| reference.texture == picture),
+        "the two samplers do not carry the same picture"
+    );
+}
+
+/// Both vertex attributes read the one interleaved buffer, four bytes apart.
+///
+/// Position and texture coordinate travel together — mbgl declares them as one vertex — so a
+/// descriptor pointing the second at its own slab would be describing a layout the bytes do not
+/// have, and the consumer believes descriptors.
+#[test]
+fn the_raster_attributes_share_one_interleaved_buffer() {
+    use tessella_capture_abi::AttributeDataType;
+    use tessella_capture_abi::envelope::{GeometryId, TextureId};
+    use tessella_orchestrate::emit::{SlabArena, encode_raster};
+
+    let mut arena = SlabArena::default();
+    let encoded = encode_raster(
+        &mut arena,
+        GeometryId(2),
+        &RasterBucket::whole_tile(),
+        TextureId(1),
+    );
+
+    let attributes = encoded.attributes();
+    assert_eq!(attributes.len(), 2);
+    assert_eq!(attributes[0].source, attributes[1].source, "two slabs");
+    assert_eq!(attributes[0].offset, 0);
+    assert_eq!(attributes[1].offset, 4);
+    for attribute in &attributes {
+        assert_eq!(attribute.stride, 8);
+        assert_eq!(attribute.data_type, AttributeDataType::Short2 as u8);
+        assert_eq!(
+            attribute.declared_data_type,
+            AttributeDataType::Short2 as u8
+        );
+    }
+
+    // One segment however many quads a mask produced: they share the buffer.
+    let segments = encoded.segments();
+    assert_eq!(segments.len(), 1);
+    assert_eq!(segments[0].vertex_length, 4);
+    assert_eq!(segments[0].index_length, 6);
+}
+
+/// A decoded tile uploads whole, as RGBA, with no rect list.
+///
+/// Zero rects is what the envelope spells "all of it". A raster tile arrives complete and is
+/// never touched again — a new tile is a new texture, not a region of an old one — so the
+/// glyph atlas's dirty-rect machinery has nothing to describe here.
+#[test]
+fn a_raster_tile_uploads_whole() {
+    use tessella_capture_abi::envelope::TextureId;
+    use tessella_orchestrate::texture::{self, RASTER_TILE_FORMAT};
+    use tessella_source::image::Image;
+
+    let image = Image {
+        width: 256,
+        height: 256,
+        pixels: vec![7; 256 * 256 * 4],
+    };
+    let upload = texture::raster_tile(TextureId(9), &image).expect("an upload");
+
+    assert_eq!(upload.record.texture, TextureId(9));
+    assert_eq!(upload.record.size.width, 256);
+    assert_eq!(upload.record.size.height, 256);
+    assert_eq!(upload.record.rect_count, 0, "a whole-texture upload");
+    assert_eq!(upload.record.format, RASTER_TILE_FORMAT as u8);
+    assert_eq!(upload.record.pixels.count as usize, image.pixels.len());
+    assert_eq!(upload.pixels, image.pixels);
+
+    // RGBA rather than the glyph atlas's single channel: a raster tile may carry alpha, and a
+    // format that dropped it would draw a tile's transparent corner as opaque black.
+    assert_ne!(RASTER_TILE_FORMAT, texture::GLYPH_ATLAS_FORMAT);
+}
+
+/// An image with no pixels produces no upload rather than a zero-sized texture.
+#[test]
+fn an_empty_picture_uploads_nothing() {
+    use tessella_capture_abi::envelope::TextureId;
+    use tessella_orchestrate::texture;
+    use tessella_source::image::Image;
+
+    for image in [
+        Image {
+            width: 0,
+            height: 4,
+            pixels: Vec::new(),
+        },
+        Image {
+            width: 4,
+            height: 0,
+            pixels: Vec::new(),
+        },
+    ] {
+        assert!(texture::raster_tile(TextureId(9), &image).is_none());
+    }
+}
+
+/// The picture is uploaded before the geometry that names it.
+///
+/// A protocol fault rather than an arithmetic one, and invisible to any test that checks one
+/// function's return value: a `GeometryAdd` carrying a `TextureRef` the consumer has never seen
+/// an upload for binds nothing, and the tile draws as whatever was last in that slot. The
+/// ordering is the producer's to guarantee because the ring is ordered and the consumer acts on
+/// records as they arrive.
+#[test]
+fn the_picture_reaches_the_ring_before_the_geometry_that_binds_it() {
+    use tessella_capture_abi::EnvelopeKind;
+    use tessella_capture_abi::envelope::{GeometryId, TextureId};
+    use tessella_capture_abi::ring::Ring;
+    use tessella_orchestrate::emit::{self, SlabArena};
+    use tessella_orchestrate::texture;
+    use tessella_source::image::Image;
+
+    let picture = TextureId(9);
+    let image = Image {
+        width: 4,
+        height: 4,
+        pixels: vec![255; 4 * 4 * 4],
+    };
+
+    let mut ring = Ring::new(1 << 16);
+    let (producer, consumer) = ring.split();
+
+    let upload = texture::raster_tile(picture, &image).expect("an upload");
+    texture::write(producer, &upload).expect("writes");
+
+    let mut arena = SlabArena::default();
+    let encoded = emit::encode_raster(
+        &mut arena,
+        GeometryId(2),
+        &RasterBucket::whole_tile(),
+        picture,
+    );
+    emit::write(producer, &encoded).expect("writes");
+
+    let mut kinds = Vec::new();
+    while let Some(record) = consumer.peek() {
+        kinds.push(record.kind);
+        let consumed = record.consumed();
+        consumer.advance(consumed);
+    }
+    assert_eq!(
+        kinds,
+        vec![EnvelopeKind::TextureUpdate, EnvelopeKind::GeometryAdd]
+    );
+}
