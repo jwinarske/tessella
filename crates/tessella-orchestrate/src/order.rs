@@ -393,6 +393,13 @@ pub fn bindings_for(
             Content::Circle(_) => {
                 emit(0, view::fill_pass(), view::circle_flags());
             }
+            // Translucent, whatever `raster-opacity` is: mbgl draws a raster layer in the
+            // translucent pass and drops it from the frame entirely at an opacity of zero,
+            // rather than promoting an opaque one to the opaque pass. An image with an alpha
+            // channel is not opaque because its layer is.
+            Content::Raster(_) => {
+                emit(0, view::fill_pass(), view::tiled_flags());
+            }
             // Sublayer 0 and stencilled, which is what `symbol_style.dump` shows: its symbol
             // drawable carries the same flags as the fill above it. Symbols overhang tile edges,
             // so leaving the stencil off would be the defensible guess — the oracle says

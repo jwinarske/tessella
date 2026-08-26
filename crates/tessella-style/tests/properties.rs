@@ -313,18 +313,18 @@ fn a_literal_of_the_wrong_type_is_rejected() {
 /// line and circle layers, and they must not stop the fill layers from drawing (§1).
 #[test]
 fn an_unimplemented_layer_type_resolves_empty() {
-    // The hermetic style no longer contains one: background, fill, line, circle and symbol are
-    // all implemented, which is why this reaches for a type outside it. A layer type with no
-    // spec table resolves to nothing rather than to guessed defaults — the difference between
-    // "this build does not know what a raster layer's properties are" and "it thinks they are
-    // empty".
+    // The hermetic style no longer contains one: background, fill, line, circle, symbol and
+    // raster are all implemented, which is why this reaches for a type outside it. A layer type
+    // with no spec table resolves to nothing rather than to guessed defaults — the difference
+    // between "this build does not know what a heatmap layer's properties are" and "it thinks
+    // they are empty".
     let style = Style::parse(
         r#"{"version": 8, "sources": {}, "layers": [
-             {"id": "r", "type": "raster", "source": "s", "paint": {"raster-opacity": 0.5}},
-             {"id": "h", "type": "heatmap", "source": "s"}]}"#,
+             {"id": "h", "type": "heatmap", "source": "s", "paint": {"heatmap-opacity": 0.5}},
+             {"id": "e", "type": "fill-extrusion", "source": "s"}]}"#,
     )
     .expect("style parses");
-    for id in ["r", "h"] {
+    for id in ["h", "e"] {
         let paint = resolve_paint(style.layer(id).expect(id)).expect("resolves");
         assert!(paint.is_empty(), "{id}");
         assert!(is_all_uniform(&paint), "vacuously, {id}");

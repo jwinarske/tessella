@@ -30,6 +30,7 @@ pub mod circle;
 pub mod fill;
 pub mod line;
 pub mod paint;
+pub mod raster;
 pub mod symbol;
 pub mod symbol_bucket;
 pub mod symbol_layout;

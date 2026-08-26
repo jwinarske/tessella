@@ -30,6 +30,7 @@ use tessella_capture_abi::envelope::{Span, UboUpdate, ViewId, WireRecord};
 use tessella_capture_abi::generated::ubo_layouts;
 use tessella_capture_abi::generated::ubo_slots;
 use tessella_capture_abi::ring::{Full, Producer};
+use tessella_layout::raster::{self, RasterColour};
 use tessella_layout::symbol_layout::{Alignment, Alignments, Placement};
 use tessella_style::Value;
 use tessella_style::property::{Binding, Color, DefaultValue, ResolvedProperty};
@@ -1032,6 +1033,86 @@ pub fn symbol_props_from_paint(
         uniform_number(paint, "icon-opacity", zoom),
         uniform_number(paint, "icon-halo-width", zoom),
         uniform_number(paint, "icon-halo-blur", zoom),
+    )
+}
+
+/// Packs `RasterDrawableUBO`: one matrix, and nothing else.
+///
+/// The smallest drawable buffer of any layer, because a raster tile carries no per-feature
+/// anything — the image is a texture and the colour adjustment is the layer's, so what is left
+/// per drawable is where the tile goes.
+#[must_use]
+pub fn pack_raster_drawable_buffer(matrices: &[[f32; 16]], stride: u32) -> Vec<u8> {
+    let stride = stride as usize;
+    let mut out = alloc::vec![0u8; matrices.len() * stride];
+    for (matrix, slot) in matrices.iter().zip(out.chunks_mut(stride)) {
+        for (index, value) in matrix.iter().enumerate() {
+            slot[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+        }
+    }
+    out
+}
+
+/// Packs `RasterEvaluatedPropsUBO`.
+///
+/// `tl_parent`, `scale_parent` and `fade_t` describe a tile fading in over the parent standing in
+/// for it, which is what `raster-fade-duration` times. They are written as *not fading* — the
+/// parent at the origin, unscaled, the fade complete — because a still frame is what every
+/// capture is and a value invented for the transition would be a number on the wire nothing
+/// produced.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn pack_raster_props(
+    colour: RasterColour,
+    opacity: f32,
+    brightness_low: f32,
+    brightness_high: f32,
+    buffer_scale: f32,
+) -> Vec<u8> {
+    const SIZE: usize = 64;
+    let mut out = Vec::with_capacity(SIZE);
+    push_f32s(&mut out, &colour.spin_weights);
+    // The parent's top-left and scale: no parent, so the identity.
+    push_f32s(&mut out, &[0.0, 0.0, 1.0, buffer_scale]);
+    push_f32s(
+        &mut out,
+        &[
+            // Fade complete.
+            1.0,
+            opacity,
+            brightness_low,
+            brightness_high,
+            colour.saturation_factor,
+            colour.contrast_factor,
+            0.0,
+            0.0,
+        ],
+    );
+    debug_assert_eq!(out.len(), SIZE);
+    out
+}
+
+/// A raster layer's evaluated properties, from its resolved paint.
+#[must_use]
+pub fn raster_props_from_paint(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    zoom: f64,
+) -> Vec<u8> {
+    let colour = RasterColour {
+        spin_weights: raster::spin_weights(uniform_number(paint, "raster-hue-rotate", zoom)),
+        saturation_factor: raster::saturation_factor(uniform_number(
+            paint,
+            "raster-saturation",
+            zoom,
+        )),
+        contrast_factor: raster::contrast_factor(uniform_number(paint, "raster-contrast", zoom)),
+    };
+    pack_raster_props(
+        colour,
+        uniform_number(paint, "raster-opacity", zoom),
+        uniform_number(paint, "raster-brightness-min", zoom),
+        uniform_number(paint, "raster-brightness-max", zoom),
+        1.0,
     )
 }
 

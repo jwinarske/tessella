@@ -1704,6 +1704,43 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   Two of this build's own expectations were wrong and were corrected rather than the code: a
   medial form needs a join on *both* sides, and the letter after a lam-alef stands alone because
   an alef is right-joining and does not join forward.
+  The raster layer lands next, and it is the largest functional hole rather than the largest
+  piece of work: without it a satellite or hillshade basemap cannot be shown at all, and those
+  are most of what a style names a raster source for.
+  The geometry is a rectangle. mbgl's `RasterBucket` builds one quad per entry of the tile's clip
+  mask, which with no mask is the whole tile, and each vertex carries *two* coordinates — where
+  it sits in the tile and where it samples the image. They are the same numbers for a whole-tile
+  quad and are still two attributes, because a masked quad covers a quadrant of the tile while
+  sampling a quadrant of the image and the two rectangles stop agreeing the moment a parent
+  stands in for a missing child. Keeping them apart now is what makes the mask a caller passing
+  one later rather than a rewrite; the mask itself is still the ABI question recorded above.
+  A raster layer draws with **no features**, which is the way it differs from every other layer
+  here. Fills, lines and symbols all build from a tile's features and produce nothing when there
+  are none — a rule that, applied to a raster tile, draws no imagery ever, since a raster tile
+  carries no features to build from. The layer arm is in both tile builders for that reason.
+  The colour adjustments are the part worth transcribing rather than deriving. Each is a *factor*
+  and not the property, and two of the three are asymmetric: reducing saturation or contrast is
+  linear while raising either is a reciprocal that runs away as it approaches its limit. Read as
+  symmetric — one multiply either way — the picture is nearly right at small values and visibly
+  wrong at large ones, which is a defect nobody reports until a style leans on it. The `1.001` in
+  the saturation branch is a bound in the arithmetic rather than in the property, and it is what
+  keeps the property's own maximum finite. Hue rotation is a rotation about the grey axis of the
+  colour cube, so its weights sum to one at every angle: a version that normalised wrongly
+  brightens or darkens as the hue turns, which reads as a broken image rather than a broken
+  rotation, and is asserted as the sum rather than as three numbers.
+  `RasterEvaluatedPropsUBO` is transcribed offset by offset against the header's own comments,
+  because the buffer is the shader's interface and a value in the wrong slot is read as a
+  different property — a saturation read as a brightness — and produces a picture instead of an
+  error. `tl_parent`, `scale_parent` and `fade_t` describe a tile fading in over the parent
+  standing in for it, and are written as *not fading*: a still frame is what every capture is,
+  and a value invented for the transition would be a number on the wire nothing produced.
+  Painter order takes it as translucent whatever the opacity says, which is `render_raster_layer`
+  and not an approximation of it — a raster tile has no interior to depth-test against, and an
+  opaque pass would let a tile drawn later fail the test against one drawn earlier at the same
+  depth. None of its eight paint properties is data-driven, and that is structural rather than a
+  gap: a raster tile is an image rather than a set of features, so there is no feature for a
+  property to vary over, which is why the layer has no paint binder while every other tiled layer
+  does.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

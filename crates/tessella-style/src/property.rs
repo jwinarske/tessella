@@ -519,6 +519,67 @@ const FILL_LAYOUT: &[PropertySpec] = &[PropertySpec {
     data_driven: true,
 }];
 
+/// A raster layer's paint properties.
+///
+/// All eight are uniforms — none is data-driven, and none *can* be: a raster tile is an image
+/// rather than a set of features, so there is no feature for a property to vary over. That is why
+/// the layer has no paint binder while every other tiled layer does.
+const RASTER_PAINT: &[PropertySpec] = &[
+    PropertySpec {
+        name: "raster-brightness-max",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(1.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "raster-brightness-min",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "raster-contrast",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        // Milliseconds, and the one property here the shader never sees: it feeds the fade
+        // between a tile and the parent standing in for it, which is a frame-loop quantity.
+        name: "raster-fade-duration",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(300.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "raster-hue-rotate",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "raster-opacity",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(1.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        // How the image is sampled between pixels. `linear` by default, and `nearest` for data
+        // a style does not want interpolated — a categorical raster where a blend of two
+        // categories is a third that means nothing.
+        name: "raster-resampling",
+        kind: PropertyKind::Enum,
+        default: DefaultValue::Enum("linear"),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "raster-saturation",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: false,
+    },
+];
+
 /// A symbol layer's paint properties.
 ///
 /// Ten of them reach the evaluated-props buffer, five for text and five for icons, and the icon
@@ -601,6 +662,7 @@ pub fn paint_specs(kind: &LayerKind) -> Option<&'static [PropertySpec]> {
         LayerKind::Line => Some(LINE_PAINT),
         LayerKind::Circle => Some(CIRCLE_PAINT),
         LayerKind::Symbol => Some(SYMBOL_PAINT),
+        LayerKind::Raster => Some(RASTER_PAINT),
         _ => None,
     }
 }

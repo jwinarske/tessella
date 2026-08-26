@@ -39,6 +39,7 @@ use tessella_layout::circle::CircleBucket;
 use tessella_layout::fill::{self, FillBucket, Position, Ring};
 use tessella_layout::line::{LineBucket, LineCap, LineJoin, LineOptions};
 use tessella_layout::paint::{BinderError, PaintBinder};
+use tessella_layout::raster::RasterBucket;
 use tessella_layout::symbol_layout::SymbolLayout;
 use tessella_source::clip::{
     clip_line_to_box, clip_points_to_box, clip_ring_to_box, round_to_tile_units,
@@ -81,6 +82,12 @@ pub enum Content {
     Line(LineBucket),
     /// A quad per point, with the disc drawn inside it by the shader.
     Circle(CircleBucket),
+    /// A raster layer's quad.
+    ///
+    /// Geometry only. A raster tile *is* an image, so what a layer contributes per tile is the
+    /// rectangle it is stretched over — the picture arrives as a texture and the colour
+    /// adjustment is the layer's rather than the tile's.
+    Raster(RasterBucket),
     /// A symbol layer's labels, resolved but not yet shaped.
     ///
     /// The only content that is not geometry. Shaping needs glyph metrics, and the glyphs are a
@@ -126,6 +133,8 @@ impl LayerBucket {
             Content::Line(_) => 1,
             // As is a circle. Its stroke is a shader term, not a second draw.
             Content::Circle(_) => 1,
+            // And a raster tile, whose quads share one drawable however many the mask made.
+            Content::Raster(_) => 1,
             // And a symbol layer, whose labels share one buffer per tile — the golden's
             // twelve-glyph drawable is two labels, not two drawables.
             Content::Symbol(_) => 1,
@@ -199,6 +208,15 @@ pub fn build_tile(
         );
 
         let content = match layer.kind {
+            // A raster layer draws its tile whether or not anything was decoded for it: the
+            // geometry is the rectangle the image goes on, and the image arrives separately as a
+            // texture. That is the difference from every other layer here, all of which build
+            // from features and produce nothing when there are none.
+            //
+            // One quad, because the tile mask is not built — see the plan. A mask only differs
+            // from the whole tile where a parent is partly covered by its children, which is a
+            // state a settled frame at a fixed camera never reaches.
+            LayerKind::Raster => Content::Raster(RasterBucket::whole_tile()),
             LayerKind::Symbol => {
                 let filter = match &layer.filter {
                     Some(value) => Filter::parse(value).map_err(|source| TileError::Filter {
@@ -664,6 +682,15 @@ pub fn build_mvt_tile(
                 }
                 Content::Line(bucket)
             }
+            // A raster layer draws its tile whether or not anything was decoded for it: the
+            // geometry is the rectangle the image goes on, and the image arrives separately as a
+            // texture. That is the difference from every other layer here, all of which build
+            // from features and produce nothing when there are none.
+            //
+            // One quad, because the tile mask is not built — see the plan. A mask only differs
+            // from the whole tile where a parent is partly covered by its children, which is a
+            // state a settled frame at a fixed camera never reaches.
+            LayerKind::Raster => Content::Raster(RasterBucket::whole_tile()),
             LayerKind::Symbol => {
                 let filter = match &layer.filter {
                     Some(value) => Filter::parse(value).map_err(|source| TileError::Filter {
@@ -751,8 +778,7 @@ pub fn build_mvt_tile(
             // Every built type has an arm above. Spelled out rather than left to a wildcard:
             // a wildcard here is what let a layer type be enabled in `is_built` and silently
             // draw nothing from a vector tile, which is the quietest kind of gap.
-            LayerKind::Raster
-            | LayerKind::FillExtrusion
+            LayerKind::FillExtrusion
             | LayerKind::Heatmap
             | LayerKind::Hillshade
             | LayerKind::Custom
@@ -836,12 +862,29 @@ pub fn bucket_for<'a>(buckets: &'a [LayerBucket], layer_id: &str) -> Option<&'a 
 }
 
 impl Content {
+    /// The raster quad, if this is one.
+    #[must_use]
+    pub fn as_raster(&self) -> Option<&RasterBucket> {
+        match self {
+            Self::Raster(bucket) => Some(bucket),
+            Self::Background
+            | Self::Fill(_)
+            | Self::Line(_)
+            | Self::Circle(_)
+            | Self::Symbol(_) => None,
+        }
+    }
+
     /// The symbol layout, if this is one.
     #[must_use]
     pub fn as_symbol(&self) -> Option<&SymbolLayout> {
         match self {
             Self::Symbol(layout) => Some(layout),
-            Self::Background | Self::Fill(_) | Self::Line(_) | Self::Circle(_) => None,
+            Self::Background
+            | Self::Fill(_)
+            | Self::Line(_)
+            | Self::Circle(_)
+            | Self::Raster(_) => None,
         }
     }
 
@@ -850,7 +893,11 @@ impl Content {
     pub fn as_fill(&self) -> Option<&FillBucket> {
         match self {
             Self::Fill(bucket) => Some(bucket),
-            Self::Background | Self::Line(_) | Self::Circle(_) | Self::Symbol(_) => None,
+            Self::Background
+            | Self::Line(_)
+            | Self::Circle(_)
+            | Self::Symbol(_)
+            | Self::Raster(_) => None,
         }
     }
 
@@ -859,7 +906,11 @@ impl Content {
     pub fn as_line(&self) -> Option<&LineBucket> {
         match self {
             Self::Line(bucket) => Some(bucket),
-            Self::Background | Self::Fill(_) | Self::Circle(_) | Self::Symbol(_) => None,
+            Self::Background
+            | Self::Fill(_)
+            | Self::Circle(_)
+            | Self::Symbol(_)
+            | Self::Raster(_) => None,
         }
     }
 
@@ -868,7 +919,11 @@ impl Content {
     pub fn as_circle(&self) -> Option<&CircleBucket> {
         match self {
             Self::Circle(bucket) => Some(bucket),
-            Self::Background | Self::Fill(_) | Self::Line(_) | Self::Symbol(_) => None,
+            Self::Background
+            | Self::Fill(_)
+            | Self::Line(_)
+            | Self::Symbol(_)
+            | Self::Raster(_) => None,
         }
     }
 
@@ -896,6 +951,7 @@ impl Content {
             // Labels, not vertices: a symbol layer has data when it resolved text, whether or
             // not the glyphs to shape it with have arrived.
             Self::Symbol(layout) => !layout.is_empty(),
+            Self::Raster(bucket) => !bucket.is_empty(),
         }
     }
 }
