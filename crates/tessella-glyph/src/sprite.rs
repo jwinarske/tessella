@@ -265,3 +265,144 @@ pub fn urls(base: &str, pixel_ratio: f64) -> (String, String) {
         format!("{path}{suffix}.png{query}"),
     )
 }
+
+/// A decoded sprite sheet: the pixels the index's rectangles point into.
+///
+/// RGBA, eight bits a channel, which is what the style spec's sprites are and what the wire's
+/// `RGBA` pixel type means. Not premultiplied — mbgl premultiplies on upload and the capture's
+/// texture hash is over the decoded image, so premultiplying here would put different bytes on
+/// the wire than the oracle has.
+#[cfg(feature = "png")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Sheet {
+    /// Width in sheet pixels.
+    pub width: u32,
+    /// Height in sheet pixels.
+    pub height: u32,
+    /// `width * height * 4` bytes.
+    pub pixels: Vec<u8>,
+}
+
+#[cfg(feature = "png")]
+impl Sheet {
+    /// Its size, in the shape the index's bounds check takes.
+    #[must_use]
+    pub const fn size(&self) -> (u32, u32) {
+        (self.width, self.height)
+    }
+}
+
+/// Why a sheet could not be decoded.
+#[cfg(feature = "png")]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SheetError {
+    /// The bytes are not a PNG this decoder reads.
+    #[error("the sprite sheet did not decode: {0}")]
+    Decode(String),
+    /// The image decoded to a size or depth nothing can index.
+    #[error("the sprite sheet is {width}x{height}, which is not a usable sheet")]
+    Unusable {
+        /// Decoded width.
+        width: u32,
+        /// Decoded height.
+        height: u32,
+    },
+}
+
+/// Decodes a sprite sheet.
+///
+/// Every colour type is widened to RGBA: a sheet may be greyscale, palletted or RGB, and the
+/// rectangle the index hands out is in pixels rather than bytes — so a decoder that returned the
+/// source's own channel count would make every offset downstream depend on the file's encoding.
+///
+/// # Errors
+///
+/// [`SheetError`] when the bytes are not a PNG, or when the image has no area.
+#[cfg(feature = "png")]
+pub fn decode_sheet(body: &[u8]) -> Result<Sheet, SheetError> {
+    use zune_png::PngDecoder;
+    use zune_png::zune_core::bytestream::ZCursor;
+    use zune_png::zune_core::options::DecoderOptions;
+
+    // Ask for eight-bit RGBA outright rather than converting afterwards. A sixteen-bit sheet
+    // decoded at its own depth would be twice the bytes with the same rectangles, and the
+    // mismatch would show as every icon sampling half of its neighbour.
+    let options = DecoderOptions::default()
+        .png_set_strip_to_8bit(true)
+        .png_set_add_alpha_channel(true);
+    let mut decoder = PngDecoder::new_with_options(ZCursor::new(body), options);
+
+    let pixels = decoder
+        .decode_raw()
+        .map_err(|error| SheetError::Decode(alloc_string(&error)))?;
+    let (width, height) = decoder
+        .dimensions()
+        .ok_or_else(|| SheetError::Decode("the header carries no dimensions".to_string()))?;
+
+    #[allow(clippy::cast_possible_truncation)]
+    let (width, height) = (width as u32, height as u32);
+    if width == 0 || height == 0 {
+        return Err(SheetError::Unusable { width, height });
+    }
+
+    let colorspace = decoder
+        .colorspace()
+        .ok_or_else(|| SheetError::Decode("the header carries no colorspace".to_string()))?;
+    let pixels = widen(&pixels, colorspace, width, height)?;
+
+    Ok(Sheet {
+        width,
+        height,
+        pixels,
+    })
+}
+
+#[cfg(feature = "png")]
+fn alloc_string(error: &impl core::fmt::Debug) -> String {
+    format!("{error:?}")
+}
+
+/// Widens whatever the decoder produced into RGBA.
+#[cfg(feature = "png")]
+fn widen(
+    pixels: &[u8],
+    colorspace: zune_png::zune_core::colorspace::ColorSpace,
+    width: u32,
+    height: u32,
+) -> Result<Vec<u8>, SheetError> {
+    use zune_png::zune_core::colorspace::ColorSpace;
+
+    let count = (width as usize) * (height as usize);
+    let expand = |channels: usize, place: fn(&[u8], &mut [u8; 4])| {
+        if pixels.len() < count * channels {
+            return None;
+        }
+        let mut out = Vec::with_capacity(count * 4);
+        for source in pixels.chunks_exact(channels).take(count) {
+            let mut rgba = [0u8; 4];
+            place(source, &mut rgba);
+            out.extend_from_slice(&rgba);
+        }
+        Some(out)
+    };
+
+    let widened = match colorspace {
+        ColorSpace::RGBA => (pixels.len() >= count * 4).then(|| pixels[..count * 4].to_vec()),
+        ColorSpace::RGB => expand(3, |source, rgba| {
+            *rgba = [source[0], source[1], source[2], 255];
+        }),
+        ColorSpace::LumaA => expand(2, |source, rgba| {
+            *rgba = [source[0], source[0], source[0], source[1]];
+        }),
+        ColorSpace::Luma => expand(1, |source, rgba| {
+            *rgba = [source[0], source[0], source[0], 255];
+        }),
+        other => {
+            return Err(SheetError::Decode(format!(
+                "a sprite sheet in {other:?} is not a colour type a sheet uses"
+            )));
+        }
+    };
+
+    widened.ok_or(SheetError::Unusable { width, height })
+}

@@ -55,7 +55,11 @@ tempfile = "3"           # for tests that need a real file on disk
 # lane checks the workspace with default features precisely so it needs no cross C toolchain
 # (§16). Enabling it per-crate through `tessella-storage`'s `tls` feature keeps that true.
 ureq = { version = "3.4", default-features = false, features = ["gzip"] }  # cpp-httplib/curl (§12.6 wants HTTP/2 multiplexing — revisit at R1)
-zune-image = "0.5"       # SIMD raster decode straight into the texture slab (§12.2, R3)
+# §12.2 wants a SIMD decoder writing straight into the texture slab. `zune-png` rather than the
+# whole `zune-image`: a sprite sheet and a raster tile are PNG, and the family's other decoders
+# are binary §12.4 would carry for nothing. Pure Rust, so the cross lane is unaffected — it is a
+# feature only because not every build draws icons. WebP joins it when raster tiles land.
+zune-png = "0.5"
 geozero = "0.15"         # interim MVT decode; §8 prefers a hand-rolled zero-copy varint reader
 
 [workspace.lints.rust]

@@ -12,10 +12,19 @@ publish = false
 
 [dependencies]
 fontdue.workspace = true
+zune-png = { workspace = true, optional = true }
 serde_json.workspace = true
 tessella-source.workspace = true
 tessella-storage.workspace = true
 thiserror.workspace = true
+
+[features]
+default = []
+# Decoding a sprite sheet. Off by default and for the same reason `cache` and `tls` are: a build
+# that draws no icons should not carry a PNG decoder, and §16's cross lane checks the workspace
+# with default features. `zune-png` is pure Rust, so unlike `tls` this costs that lane nothing
+# even when enabled — it is a feature for binary size (DR-12), not for the toolchain.
+png = ["dep:zune-png"]
 
 [lints]
 workspace = true

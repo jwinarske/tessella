@@ -423,6 +423,7 @@ trivial). No async runtime: mirror mbgl's actor model with threads + channels, p
 | BiDi | unicode-bidi | ubidi/ICU |
 | shaping | rustybuzz + unicode-linebreak | harfbuzz |
 | local glyph SDF | sdf_glyph_renderer-style + fontdue/ab_glyph | TinySDF/freetype path |
+| PNG decode | zune-png, behind an off-by-default feature (DR-20, §12.2) | mbgl's png decoder |
 | cache DB | rusqlite (bundled) | sqlite vendored |
 | HTTP | ureq (blocking, on workers) | cpp-httplib/curl |
 | f64 math | glam DMat4/DVec | mbgl matrix |
@@ -1299,6 +1300,24 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   Line-placed icons are not built. They repeat along a line the way a label does and need the
   anchors `get_anchors` produces; taking the line's first vertex instead would place every icon
   of a road at one end, which draws and is wrong — so they are skipped rather than approximated.
+  The sheet itself then decodes, with `zune-png` behind an off-by-default `png` feature — the
+  pattern `cache` and `tls` already use, and for a different reason than `tls` has: `zune-png` is
+  pure Rust, so unlike `rustls` it costs the cross lane nothing even enabled. It is a feature for
+  binary size (DR-12), not for the toolchain. `zune-png` rather than the whole `zune-image` that
+  §8 named: a sprite sheet and a raster tile are PNG, and the family's other decoders are bytes
+  §12.4 would carry for nothing.
+  Everything is widened to RGBA whatever the file's colour type. The rectangles the index hands
+  out are in *pixels*, so a decoder returning the source's own channel count would make every
+  offset downstream depend on how the sheet happened to be encoded — a greyscale sheet and an
+  RGBA one with identical rectangles would sample different things. Greyscale broadcasts across
+  the colour channels rather than staying in red, which is the failure that decodes to the right
+  place at the right size and draws the wrong colour; RGB gains an *opaque* alpha rather than a
+  transparent one, which is the failure that draws nothing at all.
+  Not premultiplied. mbgl premultiplies on upload and the capture's texture hash is over the
+  decoded image, so doing it here would put different bytes on the wire than the oracle has.
+  The test encodes its own PNGs with stored zlib blocks rather than using a second image crate:
+  the decoder is the dependency under evaluation, and encoding with another one would make the
+  test pass or fail on either.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 
