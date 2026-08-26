@@ -1489,6 +1489,28 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   seventy-three icons: shields, pins and roundels, colours intact and unsheared. It is drawn over
   a chequerboard rather than a ground, so the transparent padding reads as padding — a solid
   ground would make a dropped alpha channel look correct, which is the failure most worth seeing.
+  A security pass over the untrusted decoders then puts a stated ceiling on every one of them.
+  Every byte this build parses came off a network and a source is not a trusted party — an origin
+  can be hostile, compromised or merely wrong, and a plain-HTTP one can be anybody on the path.
+  `forbid(unsafe_code)` holds in all ten crates, so the risk is not memory corruption; it is
+  *allocation*, and on a device-class target an out-of-memory rather than a slow frame.
+  Three decoders, in three different states, and the difference is worth recording. The HTTP body
+  was already bounded — at ten mebibytes, by `ureq`'s own default rather than by anything here,
+  which is a bound a dependency bump could remove with nothing saying so; it is stated explicitly
+  now. The PMTiles gzip path was genuinely unbounded: `read_to_end` on an attacker-supplied
+  member, where a few hundred bytes expand without limit. And the PNG path was bounded by
+  `zune-png` at 16384 square, which is a *gibibyte* of RGBA from a file of sixty bytes — inside
+  the letter of a limit and far outside anything a sprite sheet is.
+  All three refuse rather than truncate. A short tile decodes as a protobuf wire error several
+  steps from the cause, which is the failure this crate's own notes already argue against, and a
+  caller seeing one could not tell a bomb from a corrupt archive. The sheet is checked from its
+  *header*, before a pixel is decoded, so refusing costs a parse of twenty-five bytes rather than
+  the allocation being asked for.
+  The tests build real bombs rather than asserting the constants: a gzip member of under sixty-four
+  kilobytes that expands past ten mebibytes, and a PNG under a hundred bytes claiming eight
+  thousand square. The second is deliberately sized to sit *inside* `zune-png`'s own cap and
+  outside this one — a larger header is refused by the decoder instead, which would let the test
+  pass without exercising the bound it is about.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

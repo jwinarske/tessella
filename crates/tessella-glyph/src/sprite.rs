@@ -414,6 +414,20 @@ impl Sheet {
     }
 }
 
+/// The largest a decoded sheet may be, in bytes of RGBA.
+///
+/// A PNG header states dimensions and the decoder allocates from them, so a few hundred bytes
+/// can ask for gigabytes — the classic decompression bomb, and on a device-class target an
+/// out-of-memory rather than a slow frame. `zune-png` defaults to refusing beyond 16384 square,
+/// which is still a gibibyte of RGBA and far past anything a sprite sheet is.
+///
+/// Sixty-four mebibytes is four thousand pixels square: generous against real sheets, which run
+/// to hundreds of pixels or a couple of thousand at most, and small enough that refusing is
+/// cheaper than the allocation. Checked against the *header* before any pixel is decoded, so a
+/// bomb costs a parse of twenty-five bytes.
+#[cfg(feature = "png")]
+pub const MAX_SHEET_BYTES: usize = 64 * 1024 * 1024;
+
 /// Why a sheet could not be decoded.
 #[cfg(feature = "png")]
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -428,6 +442,14 @@ pub enum SheetError {
         width: u32,
         /// Decoded height.
         height: u32,
+    },
+    /// The header asks for more memory than [`MAX_SHEET_BYTES`] allows.
+    ///
+    /// Refused before decoding rather than after: the point is not to hold the allocation.
+    #[error("the sprite sheet header asks for {wanted} bytes, past the {MAX_SHEET_BYTES} ceiling")]
+    TooLarge {
+        /// What the header's dimensions would have cost, in bytes of RGBA.
+        wanted: usize,
     },
 }
 
@@ -454,12 +476,23 @@ pub fn decode_sheet(body: &[u8]) -> Result<Sheet, SheetError> {
         .png_set_add_alpha_channel(true);
     let mut decoder = PngDecoder::new_with_options(ZCursor::new(body), options);
 
-    let pixels = decoder
-        .decode_raw()
+    // The header first, and *only* the header. A PNG states its dimensions in twenty-five bytes
+    // and the decoder allocates from them, so a bomb is refused for the cost of a parse rather
+    // than for the cost of the allocation it asked for.
+    decoder
+        .decode_headers()
         .map_err(|error| SheetError::Decode(alloc_string(&error)))?;
     let (width, height) = decoder
         .dimensions()
         .ok_or_else(|| SheetError::Decode("the header carries no dimensions".to_string()))?;
+    let wanted = width.saturating_mul(height).saturating_mul(4);
+    if wanted > MAX_SHEET_BYTES {
+        return Err(SheetError::TooLarge { wanted });
+    }
+
+    let pixels = decoder
+        .decode_raw()
+        .map_err(|error| SheetError::Decode(alloc_string(&error)))?;
 
     #[allow(clippy::cast_possible_truncation)]
     let (width, height) = (width as u32, height as u32);

@@ -147,3 +147,53 @@ fn an_unrouted_url_is_an_error_and_not_a_404() {
         "{error}"
     );
 }
+
+/// A gzip member that expands past the ceiling is refused, not truncated.
+///
+/// A few hundred bytes of gzip expand without limit — the classic decompression bomb. An archive
+/// is a file from somewhere else however it arrived, so `read_to_end` on one is the allocation
+/// this crate must not make: on a device-class target it is an out-of-memory rather than a slow
+/// frame.
+///
+/// Refused rather than truncated, and the difference matters. A short tile decodes as a protobuf
+/// wire error several steps from the cause, and a caller seeing one could not tell a bomb from a
+/// corrupt archive.
+#[test]
+fn a_decompression_bomb_is_refused() {
+    use std::io::Write;
+    use tessella_storage::pmtiles::PmtilesError;
+    use tessella_storage::source::MAX_RESOURCE_BYTES;
+
+    // Zeroes compress to almost nothing, which is what makes the bomb small.
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+    let chunk = vec![0u8; 1024 * 1024];
+    #[allow(clippy::cast_possible_truncation)]
+    let rounds = (MAX_RESOURCE_BYTES / (1024 * 1024)) as usize + 2;
+    for _ in 0..rounds {
+        encoder.write_all(&chunk).expect("compresses");
+    }
+    let bomb = encoder.finish().expect("finishes");
+
+    assert!(
+        (bomb.len() as u64) < 64 * 1024,
+        "the bomb is {} bytes, which is not much of a bomb",
+        bomb.len()
+    );
+
+    match tessella_storage::pmtiles::inflate_for_test(bomb) {
+        Err(PmtilesError::TooLarge { limit }) => assert_eq!(limit, MAX_RESOURCE_BYTES),
+        other => panic!(
+            "a {rounds}-mebibyte bomb was not refused: {:?}",
+            other.map(|out| out.len())
+        ),
+    }
+
+    // And an ordinary tile still inflates, so the bound is not simply refusing everything.
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(b"an ordinary tile").expect("compresses");
+    let ordinary = encoder.finish().expect("finishes");
+    assert_eq!(
+        tessella_storage::pmtiles::inflate_for_test(ordinary).expect("inflates"),
+        b"an ordinary tile"
+    );
+}

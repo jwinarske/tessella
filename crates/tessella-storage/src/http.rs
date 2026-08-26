@@ -180,8 +180,12 @@ impl FileSource for HttpFileSource {
         let (max_age, must_revalidate) = freshness(header("cache-control").as_deref());
         let expires_at = header("expires").and_then(|value| http_date(&value));
 
+        // Bounded explicitly rather than by `read_to_vec`'s own default: the cap is a property
+        // of what this crate is willing to hold, not of the transport it happens to use.
         let body = response
             .body_mut()
+            .with_config()
+            .limit(crate::source::MAX_RESOURCE_BYTES)
             .read_to_vec()
             .map_err(|error| transport(error.to_string()))?;
 

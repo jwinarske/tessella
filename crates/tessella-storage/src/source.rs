@@ -120,6 +120,20 @@ pub enum FetchError {
 /// A fetch's outcome, shared between a leader and its waiters.
 pub type Fetched = Result<Arc<Response>, FetchError>;
 
+/// The largest a single fetched resource may be, decompressed.
+///
+/// Every byte this crate parses came off a network, and a source is not a trusted party — an
+/// origin can be hostile, compromised, or merely wrong, and a plain-HTTP one can be anybody on
+/// the path. The parsers below are all `forbid(unsafe_code)`, so the risk is not memory
+/// corruption; it is *allocation*. A few hundred bytes of gzip expand to gigabytes, and on a
+/// device-class target that is an out-of-memory rather than a slow frame.
+///
+/// Ten mebibytes is generous against what a real resource is: a vector tile is tens to hundreds
+/// of kilobytes, a glyph range under a hundred, a sprite sheet a few. It is stated here rather
+/// than inherited from a dependency's default — `ureq` happens to cap `read_to_vec` at the same
+/// figure today, and a version that raised it would remove this bound without anything saying so.
+pub const MAX_RESOURCE_BYTES: u64 = 10 * 1024 * 1024;
+
 /// Somewhere bytes come from.
 ///
 /// Blocking, and called on a worker: §12.6's connection reuse and the §5.1 coalescing above it

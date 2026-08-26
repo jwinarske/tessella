@@ -46,6 +46,18 @@ pub enum PmtilesError {
     /// The underlying reader failed.
     #[error("reading the archive: {0}")]
     Io(String),
+    /// Decompressing a range would have produced more than [`MAX_RESOURCE_BYTES`] bytes.
+    ///
+    /// Refused rather than truncated. A truncated tile decodes as a protobuf wire error several
+    /// steps away from the cause, which is the failure this module's own notes argue against —
+    /// and a caller that saw a short tile could not tell a bomb from a corrupt archive.
+    ///
+    /// [`MAX_RESOURCE_BYTES`]: crate::source::MAX_RESOURCE_BYTES
+    #[error("a range decompressed past the {limit}-byte ceiling")]
+    TooLarge {
+        /// The ceiling that was exceeded.
+        limit: u64,
+    },
 }
 
 /// How a byte range is stored.
@@ -378,6 +390,17 @@ impl RangeReader for std::fs::File {
     }
 }
 
+/// Inflates a gzip range, for the bomb test.
+///
+/// The bound is on the private `decompress`, which is reached only through an archive — building
+/// one whose *tile* expands past the ceiling means writing a valid header, a directory and an
+/// offset, none of which is what the test is about. This is the same call with the compression
+/// fixed, exposed so the ceiling can be exercised directly.
+#[doc(hidden)]
+pub fn inflate_for_test(bytes: Vec<u8>) -> Result<Vec<u8>, PmtilesError> {
+    decompress(bytes, Compression::Gzip)
+}
+
 /// Inflates a range according to the archive's stated compression.
 fn decompress(bytes: Vec<u8>, compression: Compression) -> Result<Vec<u8>, PmtilesError> {
     match compression {
@@ -387,9 +410,19 @@ fn decompress(bytes: Vec<u8>, compression: Compression) -> Result<Vec<u8>, Pmtil
         Compression::Gzip => {
             use std::io::Read;
             let mut out = Vec::new();
+            // Bounded. A gzip member a few hundred bytes long can expand without limit, and an
+            // archive is a file from somewhere else however it arrived — `read_to_end` on an
+            // untrusted stream is the allocation this crate must not make.
+            let limit = crate::source::MAX_RESOURCE_BYTES;
+            // One byte past the ceiling, so passing it is observable: `take` truncates
+            // silently, and a short tile is indistinguishable from a corrupt one.
             flate2::read::GzDecoder::new(bytes.as_slice())
+                .take(limit + 1)
                 .read_to_end(&mut out)
                 .map_err(|error| PmtilesError::Io(format!("gunzip: {error}")))?;
+            if out.len() as u64 > limit {
+                return Err(PmtilesError::TooLarge { limit });
+            }
             Ok(out)
         }
         Compression::Brotli => Err(PmtilesError::UnsupportedCompression(3)),

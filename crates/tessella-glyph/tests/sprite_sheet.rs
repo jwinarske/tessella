@@ -458,3 +458,93 @@ mod atlas {
         );
     }
 }
+
+/// A sheet whose header asks for gigabytes is refused before it is decoded.
+///
+/// The classic decompression bomb: a PNG states its dimensions in twenty-five bytes and the
+/// decoder allocates from them, so a few hundred bytes can ask for more memory than the device
+/// has. `zune-png`'s own default stops at 16384 square, which is still a gibibyte of RGBA — far
+/// past anything a sprite sheet is, and past what an RK3566 has to spare.
+///
+/// The header is parsed and the *rest is not*, which is the whole point: refusing costs a parse
+/// rather than the allocation being asked for.
+#[test]
+fn a_sheet_that_asks_for_too_much_is_refused() {
+    use tessella_glyph::sprite::MAX_SHEET_BYTES;
+
+    // Eight thousand square: 256 mebibytes of RGBA, from a file of sixty-odd bytes. Chosen to
+    // sit *inside* `zune-png`'s own 16384 limit and outside this one — a larger header is
+    // refused by the decoder instead, which would make this test pass without exercising the
+    // bound it is about.
+    let bomb = header_only(8192, 8192);
+    assert!(bomb.len() < 100, "the bomb is {} bytes", bomb.len());
+
+    match sprite::decode_sheet(&bomb) {
+        Err(SheetError::TooLarge { wanted }) => {
+            assert!(wanted > MAX_SHEET_BYTES, "{wanted} is not over the ceiling");
+        }
+        other => panic!("a 256 MiB header was not refused: {other:?}"),
+    }
+
+    // The decoder's own cap is still there behind it, which is why a yet larger header fails
+    // differently rather than reaching the check above.
+    assert!(matches!(
+        sprite::decode_sheet(&header_only(20_000, 20_000)),
+        Err(SheetError::Decode(_))
+    ));
+
+    // And a sheet inside the ceiling still decodes, so the bound is not simply refusing
+    // everything.
+    let real = encode(64, 64, 6, &[0u8; 64 * 64 * 4]);
+    assert!(sprite::decode_sheet(&real).is_ok());
+}
+
+/// A PNG that states enormous dimensions and carries almost no data.
+///
+/// Enough structure for the header to parse — a real bomb has that much — and a token IDAT that
+/// could not fill a pixel of what the header claims. The whole file is under a hundred bytes.
+fn header_only(width: u32, height: u32) -> Vec<u8> {
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut table = [0u32; 256];
+        for (index, entry) in table.iter_mut().enumerate() {
+            let mut value = index as u32;
+            for _ in 0..8 {
+                value = if value & 1 == 1 {
+                    0xedb8_8320 ^ (value >> 1)
+                } else {
+                    value >> 1
+                };
+            }
+            *entry = value;
+        }
+        let mut crc = 0xffff_ffffu32;
+        for byte in bytes {
+            crc = table[((crc ^ u32::from(*byte)) & 0xff) as usize] ^ (crc >> 8);
+        }
+        crc ^ 0xffff_ffff
+    }
+
+    let mut header = Vec::new();
+    header.extend_from_slice(&width.to_be_bytes());
+    header.extend_from_slice(&height.to_be_bytes());
+    header.extend_from_slice(&[8, 6, 0, 0, 0]);
+
+    let mut png = vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+    let chunk = |kind: &[u8; 4], body: &[u8], png: &mut Vec<u8>| {
+        png.extend_from_slice(&(body.len() as u32).to_be_bytes());
+        let mut framed = kind.to_vec();
+        framed.extend_from_slice(body);
+        png.extend_from_slice(&framed);
+        png.extend_from_slice(&crc32(&framed).to_be_bytes());
+    };
+    chunk(b"IHDR", &header, &mut png);
+    // A zlib stream holding one empty stored block: valid, and nowhere near enough to fill what
+    // the header asks for.
+    chunk(
+        b"IDAT",
+        &[0x78, 0x01, 0x01, 0x00, 0x00, 0xff, 0xff],
+        &mut png,
+    );
+    chunk(b"IEND", &[], &mut png);
+    png
+}
