@@ -1482,6 +1482,13 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   `icon-text-fit-padding` is in the spec's CSS order — top, right, bottom, left — and not the
   top-bottom-left-right the extents here use. Reading one as the other rotates the padding a
   quarter turn, which is a shield fatter above than beside its number.
+  The atlas then gets looked at, which is the point of having a rasterizer behind `#[ignore]`.
+  Nothing about the icon *pixel* path had been seen — the audit found its one bug by reading
+  mbgl, and a packer that shears a row, drops a channel or mislays the padding produces
+  arithmetic that checks out and a picture that does not. mbgl's own `emerald` sheet packs to
+  seventy-three icons: shields, pins and roundels, colours intact and unsheared. It is drawn over
+  a chequerboard rather than a ground, so the transparent padding reads as padding — a solid
+  ground would make a dropped alpha channel look correct, which is the failure most worth seeing.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

@@ -88,6 +88,22 @@ fn place_names() -> Vec<(String, (f32, f32))> {
 /// CRC and an Adler checksum. A dependency to make a debug picture would be a dependency in the
 /// shipping graph.
 fn write_png(path: &str, width: u32, height: u32, grey: &[u8]) {
+    write_png_typed(path, width, height, grey, 0, 1);
+}
+
+/// The same, for an image with more than one channel.
+///
+/// `color_type` and `channels` are the PNG header's: 0 and 1 for greyscale, 6 and 4 for RGBA.
+/// Kept as one writer rather than two because the zlib and CRC halves are the whole of it and
+/// the only difference is the stride.
+fn write_png_typed(
+    path: &str,
+    width: u32,
+    height: u32,
+    samples: &[u8],
+    color_type: u8,
+    channels: usize,
+) {
     fn crc32(bytes: &[u8]) -> u32 {
         let mut table = [0u32; 256];
         for (index, entry) in table.iter_mut().enumerate() {
@@ -118,10 +134,11 @@ fn write_png(path: &str, width: u32, height: u32, grey: &[u8]) {
     }
 
     // Each scanline is prefixed with its filter type, which is zero: none.
-    let mut raw = Vec::with_capacity((width as usize + 1) * height as usize);
+    let stride = width as usize * channels;
+    let mut raw = Vec::with_capacity((stride + 1) * height as usize);
     for row in 0..height as usize {
         raw.push(0);
-        raw.extend_from_slice(&grey[row * width as usize..(row + 1) * width as usize]);
+        raw.extend_from_slice(&samples[row * stride..(row + 1) * stride]);
     }
 
     let mut zlib = vec![0x78, 0x01];
@@ -145,7 +162,7 @@ fn write_png(path: &str, width: u32, height: u32, grey: &[u8]) {
     let mut header = Vec::new();
     header.extend_from_slice(&width.to_be_bytes());
     header.extend_from_slice(&height.to_be_bytes());
-    header.extend_from_slice(&[8, 0, 0, 0, 0]); // 8-bit greyscale
+    header.extend_from_slice(&[8, color_type, 0, 0, 0]);
     chunk(&mut png, b"IHDR", &header);
     chunk(&mut png, b"IDAT", &zlib);
     chunk(&mut png, b"IEND", &[]);
@@ -651,4 +668,61 @@ fn blit_along(
             }
         }
     }
+}
+
+/// The packed icon atlas, as a picture.
+///
+/// Nothing about the icon *pixel* path has ever been looked at. The audit already found one bug
+/// in it by reading mbgl rather than by eye — icons drawn straight from the sheet, so every
+/// quad's border sampled its neighbour — and a packer that shears a row, drops a channel, or
+/// mislays the padding produces arithmetic that checks out and a picture that does not.
+///
+/// mbgl's own `emerald` sheet: seventy-three icons, markers and shields and patterns.
+///
+/// ```sh
+/// cargo test -p tessella-orchestrate --features png --test symbol_preview -- --ignored --nocapture
+/// ```
+#[cfg(feature = "png")]
+#[test]
+#[ignore]
+fn draw_the_icon_atlas() {
+    const SHEET: &[u8] = include_bytes!("../../../tests/sprite-fixtures/emerald.png");
+    const INDEX: &[u8] = include_bytes!("../../../tests/sprite-fixtures/emerald.json");
+
+    let mut sprites = tessella_glyph::sprite::Sprites::new("file://emerald", 1.0);
+    sprites.load(INDEX, SHEET).expect("the sprite loads");
+
+    let atlas = sprites.atlas();
+    let (width, height) = atlas.size();
+
+    // A chequerboard behind it, so transparent padding reads as padding rather than as black.
+    // A solid ground would make a missing alpha channel look correct.
+    let mut canvas = vec![0u8; (width as usize) * (height as usize) * 4];
+    for y in 0..height as usize {
+        for x in 0..width as usize {
+            let at = (y * width as usize + x) * 4;
+            let dark = ((x / 8) + (y / 8)) % 2 == 0;
+            let ground = if dark { 40u8 } else { 60 };
+            let source = &atlas.pixels()[at..at + 4];
+            let alpha = f32::from(source[3]) / 255.0;
+            for channel in 0..3 {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                {
+                    canvas[at + channel] = alpha.mul_add(
+                        f32::from(source[channel]),
+                        (1.0 - alpha) * f32::from(ground),
+                    ) as u8;
+                }
+            }
+            canvas[at + 3] = 255;
+        }
+    }
+
+    let path = std::env::var("TESSELLA_ATLAS_PREVIEW")
+        .unwrap_or_else(|_| "/tmp/tessella-icon-atlas.png".to_string());
+    write_png_typed(&path, width, height, &canvas, 6, 4);
+
+    let packed = sprites.positions().len();
+    println!("\n  {packed} icons packed into {width}x{height}, written to {path}\n");
+    assert!(packed > 60, "only {packed} icons packed");
 }
