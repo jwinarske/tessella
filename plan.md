@@ -1421,6 +1421,30 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   way, so one greedy pass is the oracle's behaviour. Running to a fixed point would be a
   divergence, and a *silent* one, since the extra joins look like better labelling rather than
   like a difference.
+  The sweep then reached the rest of R0–R2, and most of it came back clean. Expressions were
+  already checked against the 350-case spec suite rather than against mbgl, which is a stronger
+  oracle for that piece. `GridIndex`, the cross-tile index, `getAnchors`, `TileCover`'s geometry
+  cases and `GlyphPBF` were already ported from mbgl's own tests. The glyph atlas's padding turns
+  out to match exactly — a 24-pixel glyph reports a 32-pixel rectangle here and in mbgl — which
+  is what made the icon path's missing padding legible as a divergence rather than a choice.
+  `replaceTokens` is used by mbgl **only** for URL templates, never for `text-field`, which
+  confirms the earlier token decision from the other side: the URL rule leaves an unknown token
+  literal, this build's URL path already did, and `text-field` correctly uses the `get` rule
+  instead. `Filter.ID`'s thirty-odd assertions all hold — `$id` is type-strict in both directions
+  and a property named `id` does not answer to it.
+  One more divergence turned up, in bounds cover. mbgl's `TileCover.Arctic` expects *nothing* for
+  a box between 86 and 90: Mercator stops at 85.051129, so a box beyond it names no ground the
+  pyramid has. This build clamped it into the world, which is right for a box that *reaches* the
+  pole from below and wrong for one that never enters — clamping collapses it to a zero-height
+  strip on the top row, and the degenerate-box rule then inflated that into a row of tiles nobody
+  asked for. The two are separated now: a box crossing into the world is clamped, one lying
+  wholly outside it covers nothing.
+  The degenerate box itself stays a deliberate divergence. mbgl's `SingletonZ0` expects nothing
+  for a zero-area bounds; this answers with the tile under it, because the two functions are used
+  for different things — mbgl's is a viewport cover, where a zero-area viewport draws nothing and
+  that is the whole of it, while this one sizes an offline region, and a user dropping a pin
+  means the tile under the pin. It is named in the test now rather than reasoned, so a future
+  diff reads it as a decision.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

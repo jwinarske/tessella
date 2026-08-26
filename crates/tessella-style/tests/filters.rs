@@ -288,3 +288,147 @@ fn a_layer_without_a_filter_admits_everything() {
     assert!(Filter::always().matches(&polygon(vec![]), None));
     assert!(Filter::always().matches(&TestFeature::new("Point", vec![]), None));
 }
+
+/// mbgl's `Filter.ID`, assertion for assertion.
+///
+/// `$id` is not a property and the comparisons on it are type-strict, and both halves are easy
+/// to get subtly wrong. A style filtering `["==", "$id", 1234]` against a source whose ids are
+/// strings must match nothing rather than everything, and a feature carrying a *property* named
+/// `id` must not answer to `$id` — the two live in different namespaces, so conflating them
+/// makes a filter that works on one source silently select the wrong features on another.
+mod mbgl_id {
+    use super::{TestFeature, filter, num};
+    use tessella_style::Value;
+
+    fn with_number_id() -> TestFeature {
+        TestFeature::new("Point", vec![]).with_id(num(1234.0))
+    }
+
+    fn with_string_id() -> TestFeature {
+        TestFeature::new("Point", vec![]).with_id(Value::String("1".to_string()))
+    }
+
+    /// Equality on `$id` compares the type as well as the value.
+    #[test]
+    fn equality_on_an_id_is_type_strict() {
+        assert!(filter(r#"["==", "$id", 1234]"#).matches(&with_number_id(), None));
+        assert!(
+            !filter(r#"["==", "$id", "1234"]"#).matches(&with_number_id(), None),
+            "a numeric id matched a string"
+        );
+    }
+
+    /// A property called `id` is not `$id`.
+    #[test]
+    fn a_property_named_id_is_not_the_feature_id() {
+        let by_property = TestFeature::new("Point", vec![("id", num(1234.0))]);
+        assert!(
+            !filter(r#"["==", "$id", 1234]"#).matches(&by_property, None),
+            "a property named id answered to $id"
+        );
+        assert!(!filter(r#"["==", "$id", "1234"]"#).matches(&by_property, None));
+    }
+
+    /// Ordering a numeric id, at and around the boundary.
+    #[test]
+    fn ordering_a_numeric_id() {
+        let feature = with_number_id();
+        let cases: [(&str, bool); 10] = [
+            (r#"["<", "$id", 0]"#, false),
+            (r#"["<", "$id", 1234]"#, false),
+            (r#"["<=", "$id", 1234]"#, true),
+            (r#"["<", "$id", 123]"#, false),
+            (r#"["<=", "$id", 123]"#, false),
+            (r#"[">", "$id", 0]"#, true),
+            (r#"[">", "$id", 123]"#, true),
+            (r#"[">=", "$id", 123]"#, true),
+            (r#"[">", "$id", 1234]"#, false),
+            (r#"[">=", "$id", 1234]"#, true),
+        ];
+        for (json, expected) in cases {
+            assert_eq!(
+                filter(json).matches(&feature, None),
+                expected,
+                "{json} against id 1234"
+            );
+        }
+    }
+
+    /// Ordering across types is false in every direction, rather than coercing.
+    ///
+    /// The case that separates a type-strict comparison from a permissive one: a coercing
+    /// implementation answers *true* to one of the four and false to the others, so any single
+    /// assertion here can pass by luck.
+    #[test]
+    fn ordering_across_types_is_always_false() {
+        for json in [
+            r#"[">", "$id", "1"]"#,
+            r#"["<", "$id", "1"]"#,
+            r#"[">=", "$id", "1"]"#,
+            r#"["<=", "$id", "1"]"#,
+        ] {
+            assert!(
+                !filter(json).matches(&with_number_id(), None),
+                "{json} coerced a number against a string"
+            );
+        }
+
+        for json in [
+            r#"[">", "$id", 1]"#,
+            r#"["<", "$id", 1]"#,
+            r#"[">=", "$id", 1]"#,
+            r#"["<=", "$id", 1]"#,
+        ] {
+            assert!(
+                !filter(json).matches(&with_string_id(), None),
+                "{json} coerced a string against a number"
+            );
+        }
+    }
+
+    /// A string id orders lexicographically, not numerically.
+    ///
+    /// `"1" < "012"` is false and `"1" < "1234"` is true, which is only so under string
+    /// ordering — a numeric reading gives the opposite for the first.
+    #[test]
+    fn a_string_id_orders_as_a_string() {
+        let feature = with_string_id();
+        let cases: [(&str, bool); 10] = [
+            (r#"["<", "$id", "0"]"#, false),
+            (r#"["<", "$id", "1234"]"#, true),
+            (r#"["<=", "$id", "1234"]"#, true),
+            (r#"["<", "$id", "012"]"#, false),
+            (r#"["<=", "$id", "012"]"#, false),
+            (r#"[">", "$id", "0"]"#, true),
+            (r#"[">", "$id", "234"]"#, false),
+            (r#"[">=", "$id", "012"]"#, true),
+            (r#"[">", "$id", "1234"]"#, false),
+            (r#"[">=", "$id", "1234"]"#, false),
+        ];
+        for (json, expected) in cases {
+            assert_eq!(
+                filter(json).matches(&feature, None),
+                expected,
+                "{json} against id \"1\""
+            );
+        }
+    }
+
+    /// A feature with no id matches nothing that asks about one.
+    #[test]
+    fn a_feature_with_no_id_matches_nothing() {
+        let anonymous = TestFeature::new("Point", vec![]);
+        for json in [
+            r#"["==", "$id", 1234]"#,
+            r#"["!=", "$id", 1234]"#,
+            r#"[">", "$id", 0]"#,
+            r#"["has", "$id"]"#,
+        ] {
+            let matched = filter(json).matches(&anonymous, None);
+            assert!(
+                !matched || json.starts_with(r#"["!="#),
+                "{json} matched a feature with no id"
+            );
+        }
+    }
+}

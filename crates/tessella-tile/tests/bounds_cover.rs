@@ -128,10 +128,19 @@ fn the_count_does_not_allocate() {
     }
 }
 
-/// A degenerate box is one tile, not none.
+/// A degenerate box is one tile, not none — and this is a deliberate divergence.
 ///
-/// A user dropping a pin and asking for "here" states a box of zero area, and the tile under it
-/// is what they meant.
+/// mbgl's `TileCover.SingletonZ0` and `SingletonZ1` expect **nothing** for a bounds whose two
+/// corners are the same point. This build answers with the tile under it, because the two are
+/// used for different things: mbgl's is a viewport cover, where a zero-area viewport draws
+/// nothing and that is the whole of it, while this one sizes an *offline region* — a user
+/// dropping a pin and asking for "here" means the tile under the pin, and downloading nothing is
+/// not a reading of that.
+///
+/// Recorded rather than assumed. The rule was reasoned before it was checked against mbgl, and
+/// the check found that it also made a box wholly beyond the projection non-empty — which nobody
+/// chose. That case is refused now; this one is kept, and named here so a future diff against
+/// mbgl reads it as a decision rather than a bug.
 #[test]
 fn a_point_sized_box_is_one_tile() {
     let pin = Bounds::new(13.405, 52.52, 13.405, 52.52);
@@ -139,4 +148,29 @@ fn a_point_sized_box_is_one_tile() {
         assert_eq!(pin.tile_count(z), 1, "at zoom {z}");
         assert_eq!(pin.tiles(z, 10).expect("covers").len(), 1);
     }
+}
+
+/// A box entirely beyond the projection covers nothing — mbgl's `Arctic` and `Antarctic`.
+///
+/// Mercator stops at 85.051129, so a box from 86 to 90 names no ground the pyramid has. Clamping
+/// it into the world instead — which is right for a box that *reaches* the pole from below —
+/// collapses it to a zero-height strip on the top row, and the degenerate-box rule then inflates
+/// that into a row of tiles nobody asked for. This build did exactly that: two tiles at z1 where
+/// mbgl has none.
+#[test]
+fn a_box_beyond_the_projection_covers_nothing() {
+    let arctic = Bounds::new(-180.0, 86.0, 180.0, 90.0);
+    let antarctic = Bounds::new(-180.0, -90.0, 180.0, -86.0);
+
+    for z in 0..=8 {
+        assert_eq!(arctic.tile_count(z), 0, "arctic at zoom {z}");
+        assert_eq!(antarctic.tile_count(z), 0, "antarctic at zoom {z}");
+        assert!(arctic.tiles(z, 100).expect("covers").is_empty());
+        assert!(antarctic.tiles(z, 100).expect("covers").is_empty());
+    }
+
+    // A box that *reaches* the pole from inside the world is still clamped rather than refused:
+    // the ground below the limit is real and the user asked for it.
+    let reaching = Bounds::new(-180.0, 60.0, 180.0, 90.0);
+    assert!(reaching.tile_count(2) > 0, "a polar box lost its ground");
 }

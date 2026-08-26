@@ -256,6 +256,20 @@ impl Bounds {
     /// east edge *ceils and subtracts one*, and the rows clamp to the world. The asymmetry is
     /// deliberate — a box ending exactly on a tile boundary does not pull in the tile beyond it,
     /// which at zoom 14 over a city is a whole column of tiles nobody asked to download.
+    /// Whether the box names only latitudes the projection does not reach.
+    ///
+    /// mbgl's `TileCover.Arctic` and `Antarctic` expect *nothing* for a box between 86 and 90:
+    /// Mercator stops at [`projection::LATITUDE_MAX`], so a box beyond it names no ground the
+    /// pyramid has. Clamping it instead — which is right for a box that merely *reaches* the
+    /// pole — collapses it to a zero-height strip at the top row, and the degenerate-box rule
+    /// below then turns that into a row of tiles nobody asked for.
+    ///
+    /// So the two are separated: a box that crosses into the world is clamped, and one that
+    /// lies wholly outside it covers nothing.
+    fn is_off_the_world(&self) -> bool {
+        self.south > projection::LATITUDE_MAX || self.north < -projection::LATITUDE_MAX
+    }
+
     fn ranges(&self, z: u8) -> (u32, u32, u32, u32) {
         let world = f64::from(1u32 << z);
         let sw = projection::tile_units(self.west, self.south, z);
@@ -280,6 +294,9 @@ impl Bounds {
     /// "how big is this" must not be answered by allocating it.
     #[must_use]
     pub fn tile_count(&self, z: u8) -> u64 {
+        if self.is_off_the_world() {
+            return 0;
+        }
         if z == 0 {
             return 1;
         }
@@ -303,6 +320,9 @@ impl Bounds {
     /// the limit because the answer differs by purpose: a viewport has [`MAX_TILES`], and a
     /// download a user asked for legitimately runs to millions.
     pub fn tiles(&self, z: u8, limit: u64) -> Result<Vec<TileCoord>, CoverError> {
+        if self.is_off_the_world() {
+            return Ok(Vec::new());
+        }
         let demanded = self.tile_count(z);
         if demanded > limit {
             return Err(CoverError::TooLarge { tiles: demanded });
