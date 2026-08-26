@@ -1318,6 +1318,26 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   The test encodes its own PNGs with stored zlib blocks rather than using a second image crate:
   the decoder is the dependency under evaluation, and encoding with another one would make the
   test pass or fail on either.
+  The store above it is the icon counterpart of `Fonts`, and simpler in the way that matters:
+  there is nothing to pack. A glyph atlas is built by this process out of ranges that arrive
+  separately; a sprite sheet arrives already laid out and the index is its map, so the store
+  fetches two resources once and holds them. A style has one sprite and every tile asks the same
+  question, which is what a second call fetching nothing is for.
+  The order inside it is load-bearing and reads backwards: the *image* is decoded before the
+  index is parsed, because the index's bounds check is against the sheet's size — a rectangle
+  running off the image is refused, and a store that parsed the index first would admit
+  rectangles that sample past the end of a texture. A sheet that does not decode leaves no index
+  behind either: icons pointing at an image that is not there is worse than no icons.
+  The sheet reaches the wire as a *whole-texture* upload rather than a rect list, which is the
+  difference from the glyph atlas stated as a format: an atlas fills in as labels arrive and
+  changes in small places, while a sheet arrives once, complete, and never changes again — and
+  zero rects is what the envelope spells "all of it". RGBA rather than the atlas's R8, since
+  §12.4's single-channel argument does not reach a picture.
+  `texsize_icon` stops being a hardcoded zero with it. Both texture sizes ride in every drawable
+  entry whether or not that drawable uses them, because one shader samples both and the buffer is
+  its interface — the same reason the evaluated props carry an icon half for a layer with no
+  icons. The symbol capture's style has no sprite, so its zero is a value the oracle carries
+  rather than a placeholder, which is why it is passed rather than defaulted.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

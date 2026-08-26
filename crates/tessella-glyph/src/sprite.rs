@@ -406,3 +406,129 @@ fn widen(
 
     widened.ok_or(SheetError::Unusable { width, height })
 }
+
+/// A style's sprite resource: the index and the sheet it points into.
+///
+/// The icon counterpart of [`Fonts`], and simpler in the way that matters — there is nothing to
+/// pack. A glyph atlas is built by this process out of ranges that arrive separately; a sprite
+/// sheet arrives already laid out, and the index is its map. So the store fetches two resources
+/// once and holds them.
+///
+/// [`Fonts`]: crate::fonts::Fonts
+#[cfg(feature = "png")]
+#[derive(Debug)]
+pub struct Sprites {
+    base: String,
+    pixel_ratio: f64,
+    index: Index,
+    sheet: Option<Sheet>,
+    /// Whether the sheet has been uploaded since it last changed — §6.4's damage, for a
+    /// resource that changes exactly once.
+    dirty: bool,
+}
+
+#[cfg(feature = "png")]
+impl Sprites {
+    /// An empty store for a style's `sprite` base at a device pixel ratio.
+    #[must_use]
+    pub fn new(base: impl Into<String>, pixel_ratio: f64) -> Self {
+        Self {
+            base: base.into(),
+            pixel_ratio,
+            index: Index::new(),
+            sheet: None,
+            dirty: false,
+        }
+    }
+
+    /// Fetches the index and the sheet, in that order.
+    ///
+    /// The sheet is fetched first in wall-clock terms by any real transport, but the *index* is
+    /// parsed against the sheet's size — a rectangle running off the image is refused, and that
+    /// check needs the image. So the image is decoded before the index is read, and a style whose
+    /// sheet fails to decode gets no icons rather than icons pointing at nothing.
+    ///
+    /// Idempotent: a second call with the resource already held fetches nothing. A style has one
+    /// sprite and every tile of it asks the same question.
+    ///
+    /// # Errors
+    ///
+    /// [`SpriteError`] when the index is not readable. A sheet that fails to decode is reported
+    /// as [`SpriteError::Json`]'s sibling — see [`SheetError`] — through [`Self::load`], which is
+    /// what a caller with its own transport uses.
+    pub fn fetch(&mut self, files: &dyn tessella_storage::FileSource) -> Result<bool, LoadError> {
+        if self.sheet.is_some() {
+            return Ok(false);
+        }
+        let (index_url, image_url) = urls(&self.base, self.pixel_ratio);
+
+        let image = files
+            .fetch(&image_url)
+            .map_err(|source| LoadError::Fetch(source.to_string()))?;
+        let json = files
+            .fetch(&index_url)
+            .map_err(|source| LoadError::Fetch(source.to_string()))?;
+
+        self.load(&json.body, &image.body)?;
+        Ok(true)
+    }
+
+    /// Reads an index and a sheet that a caller already has.
+    ///
+    /// # Errors
+    ///
+    /// [`LoadError`] when either half is unreadable. Both are required: an index without a sheet
+    /// names rectangles in an image that does not exist, and a sheet without an index has no
+    /// names to look them up by.
+    pub fn load(&mut self, index: &[u8], image: &[u8]) -> Result<(), LoadError> {
+        let sheet = decode_sheet(image).map_err(LoadError::Sheet)?;
+        let parsed = parse(index, Some(sheet.size())).map_err(LoadError::Index)?;
+
+        self.index = parsed;
+        self.sheet = Some(sheet);
+        self.dirty = true;
+        Ok(())
+    }
+
+    /// The index, for laying icons out.
+    #[must_use]
+    pub const fn index(&self) -> &Index {
+        &self.index
+    }
+
+    /// One icon, by the name a layer asked for.
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&Sprite> {
+        self.index.get(name)
+    }
+
+    /// The sheet, once it has arrived.
+    #[must_use]
+    pub const fn sheet(&self) -> Option<&Sheet> {
+        self.sheet.as_ref()
+    }
+
+    /// Whether the sheet needs uploading, clearing the flag.
+    ///
+    /// A sprite sheet changes once in a style's life, so this answers true once. §6.5's still
+    /// frame is a frame with no envelopes in it, and re-uploading a megabyte of unchanged icons
+    /// every frame would make a settled map the most expensive one.
+    pub fn take_dirty(&mut self) -> bool {
+        core::mem::replace(&mut self.dirty, false)
+    }
+}
+
+/// Why a sprite resource could not be loaded.
+#[cfg(feature = "png")]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum LoadError {
+    /// The transport failed. The resource stays unheld, so a later call tries again.
+    #[error("the sprite could not be fetched: {0}")]
+    Fetch(String),
+    /// The sheet did not decode.
+    #[error(transparent)]
+    Sheet(#[from] SheetError),
+    /// The index was not readable.
+    #[error(transparent)]
+    Index(#[from] SpriteError),
+}

@@ -1139,6 +1139,10 @@ mod symbol_drawable_ubo {
                     1,
                     0,
                     [512.0, 512.0],
+                    // The capture's style has no sprite, so the icon texture is unbound and its
+                    // size is zero — which is a value the oracle carries rather than a
+                    // placeholder, and is why it is passed rather than defaulted.
+                    [0.0, 0.0],
                     16.0,
                 )
                 .expect("the probe has no bearing or pitch")
@@ -1160,12 +1164,32 @@ mod symbol_drawable_ubo {
     #[test]
     fn the_coordinate_matrix_is_the_viewport_s_alone() {
         let view = probe();
-        let first =
-            SymbolDrawableEntry::for_tile(&view, 13, 4093, 2723, 0, 1, 0, [512.0, 512.0], 16.0)
-                .expect("no bearing");
-        let second =
-            SymbolDrawableEntry::for_tile(&view, 13, 4093, 2724, 0, 1, 0, [512.0, 512.0], 16.0)
-                .expect("no bearing");
+        let first = SymbolDrawableEntry::for_tile(
+            &view,
+            13,
+            4093,
+            2723,
+            0,
+            1,
+            0,
+            [512.0, 512.0],
+            [0.0, 0.0],
+            16.0,
+        )
+        .expect("no bearing");
+        let second = SymbolDrawableEntry::for_tile(
+            &view,
+            13,
+            4093,
+            2724,
+            0,
+            1,
+            0,
+            [512.0, 512.0],
+            [0.0, 0.0],
+            16.0,
+        )
+        .expect("no bearing");
 
         assert_eq!(first.coord_matrix, second.coord_matrix);
         assert_ne!(

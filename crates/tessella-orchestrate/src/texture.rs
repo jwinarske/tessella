@@ -225,6 +225,31 @@ pub fn glyph_atlas(
     )
 }
 
+/// The pixel format a sprite sheet is uploaded in.
+///
+/// RGBA, unlike the glyph atlas. §12.4's single-channel argument does not reach here: a sprite
+/// is a picture and three of its four channels carry something. An SDF sprite is the exception
+/// and is still RGBA, because a sheet holds both kinds and the format is the sheet's.
+pub const SPRITE_SHEET_FORMAT: TexturePixelType = TexturePixelType::RGBA;
+
+/// The upload for a sprite sheet.
+///
+/// A whole-texture upload rather than a rect list, and the difference from the glyph atlas is
+/// real: a glyph atlas fills in as labels arrive and changes in small places, while a sheet
+/// arrives once, complete, and never changes again. Zero rects is what the envelope spells
+/// "all of it", which is exactly what this is.
+///
+/// `None` when the sheet has not arrived or has not changed — a style's icons are uploaded once.
+#[cfg(feature = "png")]
+#[must_use]
+pub fn sprite_sheet(texture: TextureId, sheet: &tessella_glyph::sprite::Sheet) -> Option<Upload> {
+    let size = Extent {
+        width: sheet.width,
+        height: sheet.height,
+    };
+    Some(whole(texture, size, SPRITE_SHEET_FORMAT, &sheet.pixels))
+}
+
 /// The smallest rectangle containing all of these.
 fn union_of(rects: &[Rect16]) -> Rect16 {
     let min_x = rects.iter().map(|rect| rect.x).min().unwrap_or(0);

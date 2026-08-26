@@ -775,7 +775,11 @@ pub struct SymbolDrawableEntry {
     pub coord_matrix: [f32; 16],
     /// The glyph atlas, in pixels.
     pub texsize: [f32; 2],
-    /// The icon atlas, in pixels. Zero while there are no icons.
+    /// The sprite sheet, in pixels. Zero when the style has no sprite.
+    ///
+    /// Both sizes ride in every entry whether or not the drawable uses them, because one shader
+    /// samples both textures and the buffer is its interface — the same reason the evaluated
+    /// props carry an icon half for a layer with no icons.
     pub texsize_icon: [f32; 2],
     /// Whether this drawable is the text half rather than the icon half.
     pub is_text: bool,
@@ -818,6 +822,7 @@ impl SymbolDrawableEntry {
         layer_index: i32,
         sub_layer_index: i32,
         texsize: [f32; 2],
+        texsize_icon: [f32; 2],
         size: f32,
     ) -> Result<Self, camera::CameraError> {
         let mut projection = camera::proj_matrix(view)?;
@@ -839,7 +844,7 @@ impl SymbolDrawableEntry {
             label_plane_matrix: core::array::from_fn(|index| plane[index] as f32),
             coord_matrix: core::array::from_fn(|index| coord[index] as f32),
             texsize,
-            texsize_icon: [0.0, 0.0],
+            texsize_icon,
             is_text: true,
             rotate_symbol: false,
             pitch_with_map: false,

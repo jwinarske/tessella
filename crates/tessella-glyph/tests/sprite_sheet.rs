@@ -177,3 +177,151 @@ fn a_full_size_sheet_decodes() {
     assert_eq!(sheet.pixels.len(), 512 * 512 * 4);
     assert_eq!(sheet.pixels, samples);
 }
+
+/// The store fetches both halves and holds them.
+mod store {
+    use super::encode;
+
+    use std::cell::RefCell;
+
+    use tessella_glyph::sprite::{LoadError, Sprites};
+    use tessella_storage::source::{FetchError, FileSource, Response};
+
+    /// An origin serving one sprite resource, counting what was asked of it.
+    struct Origin {
+        asked: RefCell<Vec<String>>,
+        sheet: Vec<u8>,
+        index: Vec<u8>,
+    }
+
+    impl Origin {
+        fn new(index: &str) -> Self {
+            Self {
+                asked: RefCell::new(Vec::new()),
+                sheet: encode(32, 32, 6, &[0u8; 32 * 32 * 4]),
+                index: index.as_bytes().to_vec(),
+            }
+        }
+
+        fn asked(&self) -> Vec<String> {
+            self.asked.borrow().clone()
+        }
+    }
+
+    impl FileSource for Origin {
+        fn fetch(&self, url: &str) -> Result<Response, FetchError> {
+            self.asked.borrow_mut().push(url.to_string());
+            let body = if url.ends_with(".png") {
+                self.sheet.clone()
+            } else {
+                self.index.clone()
+            };
+            Ok(Response {
+                status: 200,
+                body,
+                ..Response::default()
+            })
+        }
+    }
+
+    // `FileSource` is `Send + Sync`; the `RefCell` here is single-threaded test bookkeeping.
+    unsafe impl Sync for Origin {}
+    unsafe impl Send for Origin {}
+
+    const INDEX: &str = r#"{"airport": {"x": 0, "y": 0, "width": 16, "height": 16},
+                            "past":    {"x": 24, "y": 24, "width": 16, "height": 16}}"#;
+
+    /// Both URLs are asked for, and the index is read against the sheet's size.
+    ///
+    /// The ordering that matters: an entry running off the image is refused, and that check needs
+    /// the image — so a store that parsed the index first would admit rectangles that sample past
+    /// the end of the texture.
+    #[test]
+    fn the_index_is_read_against_the_sheet() {
+        let origin = Origin::new(INDEX);
+        let mut sprites = Sprites::new("https://example.com/sprite", 1.0);
+        assert!(sprites.fetch(&origin).expect("the origin answers"));
+
+        let asked = origin.asked();
+        assert_eq!(asked.len(), 2, "{asked:?}");
+        assert!(asked.iter().any(|url| url.ends_with("sprite.json")));
+        assert!(asked.iter().any(|url| url.ends_with("sprite.png")));
+
+        assert!(sprites.get("airport").is_some());
+        assert!(
+            sprites.get("past").is_none(),
+            "24 + 16 runs past a 32-pixel sheet"
+        );
+        assert_eq!(sprites.sheet().expect("a sheet").size(), (32, 32));
+    }
+
+    /// A second call fetches nothing.
+    ///
+    /// A style has one sprite and every tile of it asks the same question, so the store is what
+    /// stops a map spending two round trips per tile on an answer it already has.
+    #[test]
+    fn a_second_call_asks_for_nothing() {
+        let origin = Origin::new(INDEX);
+        let mut sprites = Sprites::new("https://example.com/sprite", 1.0);
+        assert!(sprites.fetch(&origin).expect("answers"));
+        assert!(
+            !sprites.fetch(&origin).expect("answers"),
+            "it fetched again"
+        );
+        assert_eq!(origin.asked().len(), 2);
+    }
+
+    /// The retina base is asked for at a ratio above one.
+    #[test]
+    fn a_retina_ratio_asks_for_the_retina_sheet() {
+        let origin = Origin::new(INDEX);
+        let mut sprites = Sprites::new("https://example.com/sprite", 2.0);
+        sprites.fetch(&origin).expect("answers");
+        assert!(
+            origin.asked().iter().all(|url| url.contains("@2x")),
+            "{:?}",
+            origin.asked()
+        );
+    }
+
+    /// The sheet is owed once and then never again.
+    ///
+    /// A sprite sheet changes once in a style's life. A settled frame is a frame with no
+    /// envelopes in it, and re-uploading a megabyte of unchanged icons every frame would make a
+    /// still map the most expensive one.
+    #[test]
+    fn the_sheet_is_uploaded_once() {
+        let origin = Origin::new(INDEX);
+        let mut sprites = Sprites::new("https://example.com/sprite", 1.0);
+        sprites.fetch(&origin).expect("answers");
+
+        assert!(sprites.take_dirty(), "an arrived sheet owes an upload");
+        assert!(!sprites.take_dirty(), "it owed a second one");
+    }
+
+    /// A sheet that does not decode gives no icons rather than icons pointing at nothing.
+    #[test]
+    fn an_undecodable_sheet_gives_no_icons() {
+        let mut sprites = Sprites::new("https://example.com/sprite", 1.0);
+        let error = sprites
+            .load(INDEX.as_bytes(), b"<html>404</html>")
+            .expect_err("a 404 page is not a sheet");
+        assert!(matches!(error, LoadError::Sheet(_)));
+
+        assert!(sprites.index().is_empty(), "an index survived a dead sheet");
+        assert!(sprites.sheet().is_none());
+        assert!(!sprites.take_dirty(), "nothing arrived, so nothing is owed");
+    }
+
+    /// An index that is not an index is an error too, and leaves the store empty.
+    #[test]
+    fn an_unreadable_index_leaves_the_store_empty() {
+        let mut sprites = Sprites::new("https://example.com/sprite", 1.0);
+        let sheet = encode(8, 8, 6, &[0u8; 8 * 8 * 4]);
+        let error = sprites
+            .load(b"[1,2,3]", &sheet)
+            .expect_err("an array is not an index");
+        assert!(matches!(error, LoadError::Index(_)));
+        assert!(sprites.sheet().is_none(), "the sheet outlived its index");
+    }
+}
