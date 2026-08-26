@@ -1674,8 +1674,36 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   Arabic *shaping* — the contextual letter forms, mbgl's `applyArabicShaping` over ICU's
   `u_shapeArabic` — is the remaining half and is not ported. Arabic now reorders correctly and
   each letter is drawn in its isolated form rather than joined to its neighbours. mbgl's
-  `BiDi.ArabicShaping`, `Tashkeel` and `MixedShaping` state the exact strings, so the oracle for
-  it exists whenever it is picked up.
+  `BiDi.ArabicShaping`, `Tashkeel` and `MixedShaping` state the exact strings, and it lands next.
+  Arabic is written joined: which of a letter's four shapes is drawn depends on whether the
+  letters either side join to it, so the same letter is four different pictures and text is
+  *stored* as none of them. A renderer drawing the stored forms produces something a reader can
+  decipher and no reader would call written Arabic.
+  The table is generated, not written — `tools/unicode-codegen/arabic_shaping.py`, in DR-6's
+  discipline. Seventy-six letters times four forms plus the joining types that select between
+  them is a table recalled rather than read, and one that would pass mbgl's three strings while
+  being wrong about the rest of the alphabet. Both halves are in the Unicode Character Database:
+  `ArabicShaping.txt` gives the joining types and `UnicodeData.txt` gives the forms, as the
+  `<isolated>`/`<initial>`/`<medial>`/`<final>` decompositions of Presentation Forms-B.
+  Two things reading the data taught that guessing would not have. The ligature substitution is
+  the four *lam-alefs* and nothing else: `<isolated> 0644 ...` also matches lam-jeem, lam-hah and
+  the rest of Presentation Forms-A, which `U_SHAPE_LETTERS_SHAPE` leaves as two letters — taking
+  them draws ligatures ICU does not. And joining type is a **different question from having
+  forms**. Every diacritic is Transparent and has no presentation forms of its own — `FE76 ARABIC
+  FATHA ISOLATED FORM` decomposes to a *space* and a fatha, two code points, so it is rightly
+  absent from a forms table — while Unicode lists only five transparent characters explicitly and
+  *derives* the other two thousand from General_Category. Reading the joining type off the letters
+  leaves every mark non-joining, and a mark then breaks the join around it: every voweled word
+  comes apart while unvoweled text stays perfect, which is most of a Qur'anic inscription and none
+  of a road sign.
+  Shaping runs before breaking and breaking before reordering, which is mbgl's order and each step
+  depends on the one before: the forms come from *logical* neighbours, so reordering first joins
+  every letter to whatever ended up beside it on screen. A lam-alef consumes two characters for
+  one, so the rewrite walks input and output in step rather than matching codepoints — a
+  presentation form does not equal the base it came from.
+  Two of this build's own expectations were wrong and were corrected rather than the code: a
+  medial form needs a join on *both* sides, and the letter after a lam-alef stands alone because
+  an alef is right-joining and does not join forward.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

@@ -156,3 +156,124 @@ fn a_left_to_right_line_is_borrowed_rather_than_rebuilt() {
     let hebrew = line("\u{5e9}\u{5dc}");
     assert!(matches!(reorder(&hebrew), std::borrow::Cow::Owned(_)));
 }
+
+/// Arabic contextual shaping — mbgl's `applyArabicShaping`, against its own expected strings.
+///
+/// Arabic is written joined, and which of a letter's four shapes is drawn depends on whether the
+/// letters either side join to it. Text is *stored* as unjoined base letters, so a renderer that
+/// drew them as stored produces something a reader can decipher and no reader would call written
+/// Arabic.
+///
+/// mbgl's test file says the expected strings "may appear to be backwards ... because whatever
+/// you're viewing the text with is applying the bidirectional algorithm a second time", and that
+/// they are presentation forms. They are written here as escapes for that reason: the bytes are
+/// the assertion, and a copied glyph is not.
+mod arabic {
+    use tessella_glyph::arabic::shape;
+
+    fn shaped(text: &str) -> Vec<u32> {
+        let codepoints: Vec<u32> = text.chars().map(|character| character as u32).collect();
+        shape(&codepoints)
+    }
+
+    fn expect(text: &str, forms: &[u32]) {
+        assert_eq!(
+            shaped(text),
+            forms.to_vec(),
+            "shaping {:?}",
+            text.escape_unicode().to_string()
+        );
+    }
+
+    /// mbgl `BiDi.ArabicShaping`: "اليمن" — alef, lam, yeh, meem, noon.
+    ///
+    /// Every joined form in one word. The alef is right-joining so it stays isolated and the lam
+    /// after it takes an *initial* rather than medial form — the case that separates a shaper
+    /// which reads joining types from one that joins everything to everything.
+    #[test]
+    fn a_word_takes_its_joined_forms() {
+        expect(
+            "\u{627}\u{644}\u{64a}\u{645}\u{646}",
+            &[0xFE8D, 0xFEDF, 0xFEF4, 0xFEE4, 0xFEE6],
+        );
+    }
+
+    /// mbgl `BiDi.Tashkeel`: "سلام۳۹" ends in a lam-alef ligature and two digits.
+    ///
+    /// Two letters become one code point, so the output is shorter than the input. The digits
+    /// are not Arabic letters and pass through untouched.
+    #[test]
+    fn lam_alef_becomes_one_ligature() {
+        let out = shaped("\u{633}\u{644}\u{627}\u{645}\u{6f3}\u{6f9}");
+        assert_eq!(out.len(), 5, "the ligature did not consume the alef");
+        // Seen initial, the lam-alef ligature in its *final* form because the seen joins forward
+        // into it, then meem *isolated* — the alef is right-joining, so the ligature does not
+        // join forward and the meem after it starts alone.
+        assert_eq!(out, vec![0xFEB3, 0xFEFC, 0xFEE1, 0x06F3, 0x06F9]);
+    }
+
+    /// mbgl `BiDi.MixedShaping`: Latin beside Arabic is left alone.
+    #[test]
+    fn latin_passes_through_untouched() {
+        let out = shaped("\u{645}\u{643} Maktabat");
+        assert_eq!(
+            &out[2..],
+            &[0x20, 0x4D, 0x61, 0x6B, 0x74, 0x61, 0x62, 0x61, 0x74]
+        );
+        // And the Arabic before it still joined: meem initial, kaf final.
+        assert_eq!(&out[..2], &[0xFEE3, 0xFEDA]);
+    }
+
+    /// A diacritic does not break the join around it.
+    ///
+    /// Transparent joining. A letter's context has to look *past* any number of marks, and a
+    /// shaper that stopped at the first one unjoins every voweled word — which is most of a
+    /// Qur'anic text and none of a road sign, so it survives casual testing.
+    #[test]
+    fn a_diacritic_does_not_break_a_join() {
+        // Beh, fatha, beh: the marks sits between two letters that must still join.
+        let bare = shaped("\u{628}\u{628}");
+        let voweled = shaped("\u{628}\u{64e}\u{628}");
+
+        // Initial then final: a medial form needs a join on *both* sides, and the second beh has
+        // nothing after it.
+        assert_eq!(bare, vec![0xFE91, 0xFE90]);
+        assert_eq!(
+            voweled,
+            vec![0xFE91, 0x064E, 0xFE90],
+            "the mark unjoined the word"
+        );
+    }
+
+    /// A right-joining letter never takes an initial or medial form.
+    ///
+    /// Alef, dal, reh and their kin join only backwards. The table repeats their isolated and
+    /// final forms so the lookup stays an index, and this is what says the repeat is not reached
+    /// by accident.
+    #[test]
+    fn a_right_joining_letter_stays_open() {
+        // Beh, dal, beh. The dal takes a final form and the beh after it starts a new run, so it
+        // is *initial* rather than medial.
+        assert_eq!(
+            shaped("\u{628}\u{62f}\u{628}"),
+            vec![0xFE91, 0xFEAA, 0xFE8F],
+            "a right-joining letter joined forwards"
+        );
+    }
+
+    /// A lone letter is isolated, and non-Arabic is never touched.
+    #[test]
+    fn the_degenerate_cases_hold() {
+        assert_eq!(shaped("\u{628}"), vec![0xFE8F], "a lone beh is isolated");
+        assert_eq!(shaped(""), Vec::<u32>::new());
+        assert_eq!(
+            shaped("Main Street"),
+            "Main Street".chars().map(|c| c as u32).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            shaped("\u{5e9}\u{5dc}"),
+            vec![0x5E9, 0x5DC],
+            "Hebrew is not Arabic"
+        );
+    }
+}

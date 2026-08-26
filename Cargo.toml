@@ -3,6 +3,10 @@
 [workspace]
 resolver = "3"
 members = ["crates/*", "tools/*"]
+# Codegen scripts rather than crates. `tools/*` globs members, and a directory of Python under it
+# is not one — the mbgl oracles live inside `tools/mbgl-codegen` and so are covered by its
+# manifest, while this reads the Unicode Character Database and belongs to no crate.
+exclude = ["tools/unicode-codegen"]
 
 [workspace.package]
 version = "0.0.0"

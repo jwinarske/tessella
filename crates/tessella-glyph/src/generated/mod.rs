@@ -5,4 +5,5 @@
 //! the drift is silent: the symptom is a map that renders slightly differently, not a build
 //! that fails.
 
+pub mod arabic;
 pub mod blocks;

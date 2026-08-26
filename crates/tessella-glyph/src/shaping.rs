@@ -441,6 +441,45 @@ fn justify_line(glyphs: &mut [PositionedGlyph], last_advance: f32, justify: f32)
     }
 }
 
+/// Rewrites a label's Arabic letters into their contextual forms.
+///
+/// [`crate::arabic::shape`] over the whole label, carrying the advances. A lam-alef ligature
+/// replaces two letters with one, so the result can be shorter than the input — the advance kept
+/// is the *lam's*, since the ligature is drawn where the lam was and the alef is folded into it.
+///
+/// Borrowed when the label has no Arabic in it, which is most of them.
+#[must_use]
+pub fn apply_arabic(text: &[Char]) -> std::borrow::Cow<'_, [Char]> {
+    use std::borrow::Cow;
+
+    let codepoints: Vec<u32> = text.iter().map(|character| character.codepoint).collect();
+    let shaped = crate::arabic::shape(&codepoints);
+    if shaped == codepoints {
+        return Cow::Borrowed(text);
+    }
+
+    // Walk the two in step. A ligature consumed two inputs for one output, so the input index
+    // advances by more than the output's — matching on the codepoint would be wrong, since a
+    // presentation form does not equal the base it came from.
+    let mut out = Vec::with_capacity(shaped.len());
+    let mut input = 0usize;
+    for codepoint in shaped {
+        // The alef the ligature swallowed, if this output stands for two inputs.
+        let consumed = usize::from(
+            input + 1 < text.len()
+                && codepoint != text[input].codepoint
+                && crate::arabic::is_lam_alef(codepoint),
+        );
+        out.push(Char {
+            codepoint,
+            ..text[input]
+        });
+        input += 1 + consumed;
+    }
+
+    Cow::Owned(out)
+}
+
 /// Reorders one line's characters from logical order into display order.
 ///
 /// The Unicode bidirectional algorithm, UAX #9, through `unicode-bidi`. Text arrives in the
@@ -516,6 +555,13 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
     let mut y = Y_OFFSET;
     let mut max_line_length = 0.0f32;
     let mut max_line_height = 0.0f32;
+
+    // Contextual forms first, then breaking, then reordering — mbgl's order, and each step
+    // depends on the one before. The forms come from *logical* neighbours, so reordering first
+    // would join every letter to whatever ended up beside it on screen; breaking is decided on
+    // the logical order too.
+    let shaped_text = apply_arabic(text);
+    let text: &[Char] = &shaped_text;
 
     let broken = split_lines(text, options.max_width);
     let line_count = broken.len();

@@ -16,6 +16,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod arabic;
 pub mod atlas;
 pub mod fonts;
 pub mod generated;
