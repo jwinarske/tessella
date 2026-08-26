@@ -1634,6 +1634,25 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   The capture's style names neither alignment and is point-placed, so both resolve to viewport —
   which is the branch every golden pins, and the reason they all still hold now that the other
   branch exists.
+  The last of the pitch path is the collision prefix, and it turns out to be two mechanisms that
+  had been described as one. `calculateTileDistances` says how far along its line each vertex sits
+  from the anchor — a *reach* in each direction rather than a signed position, so the run is a
+  valley with its floor at the anchor's segment, which is what lets placement take the prefix a
+  label actually covers instead of its whole run. Ported with mbgl's three expectations and the
+  property none of them alone pins; an anchor naming a segment the line does not have answers zero
+  throughout rather than panicking, because the anchors and the line reach it from different
+  places and a line can be merged or clipped after an anchor was chosen.
+  The thinning is the half that pays now. A run's circles overlap by construction — they step by
+  half a box so the run is a covering rather than a dotted line — so adjacent circles are often
+  nearly coincident on screen, most of all where a pitched map squeezes the far end of a road into
+  a few pixels. mbgl drops one when its centre is within √2 radii of the last kept, with two rules
+  that are not optional: never two in a row, and never the last. A run that thinned itself away
+  would reserve a single point of the road it covers, and the *end* of a label is where it meets
+  the next one, so dropping the final circle is how two labels come to overlap at their ends while
+  every circle between them was tested.
+  Both the test and the reservation use the thinned set. Reserving every circle while testing a
+  thinned one would make a label block more than it checked against, which reads as a map that
+  thins out as it fills rather than as an asymmetry.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

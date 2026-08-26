@@ -335,3 +335,61 @@ pub fn get_center_anchor(
 
     None
 }
+
+/// How far each of a line's vertices is from an anchor, along the line.
+///
+/// A port of mbgl's `SymbolLayout::calculateTileDistances`. Every entry is a *positive* distance
+/// — the vertex before the anchor and the vertex after it at the same remove both read the same —
+/// because what reads them wants a reach in each direction rather than a signed position.
+///
+/// This is what makes a pitched line label's collision affordable. A road name lays out a run of
+/// collision circles along its road, and on a tilted map the far end of that run is squeezed into
+/// a few pixels while the near end is spread across many; testing every circle would reserve
+/// screen the label does not occupy. Knowing how far along the line each vertex sits lets
+/// placement take the *prefix* the label actually reaches and ignore the rest.
+///
+/// Empty when the line is empty. Zero throughout when the anchor names no segment, which is what
+/// a point-placed label is: it occupies one place rather than a run.
+#[must_use]
+pub fn calculate_tile_distances(line: &[(f32, f32)], anchor: &Anchor) -> Vec<f32> {
+    let mut out = alloc::vec![0.0f32; line.len()];
+    if line.is_empty() {
+        return out;
+    }
+
+    let segment = anchor.segment;
+    if segment >= line.len() {
+        return out;
+    }
+
+    // Forward from the anchor to the end, and backward from it to the start. The anchor sits
+    // between `segment` and `segment + 1`, so each direction starts with the part-segment
+    // between it and the vertex it is walking towards.
+    let mut forward = if segment + 1 < line.len() {
+        distance(anchor.point, line[segment + 1])
+    } else {
+        0.0
+    };
+    let mut backward = distance(anchor.point, line[segment]);
+
+    for index in segment + 1..line.len() {
+        out[index] = forward;
+        if index < line.len() - 1 {
+            forward += distance(line[index + 1], line[index]);
+        }
+    }
+
+    // Downward to zero inclusive, which is why this is not a range: mbgl breaks at zero rather
+    // than decrementing an unsigned index past it, and the same trap is here.
+    let mut index = segment;
+    loop {
+        out[index] = backward;
+        if index == 0 {
+            break;
+        }
+        backward += distance(line[index - 1], line[index]);
+        index -= 1;
+    }
+
+    out
+}

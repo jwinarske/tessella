@@ -73,6 +73,49 @@ pub enum Shape {
     Circles(Vec<LineCircle>),
 }
 
+/// Which circles of a line label's run are worth testing.
+///
+/// mbgl's thinning pass in `CollisionIndex::placeLineFeature`, and it is a *performance* decision
+/// with a stated shape rather than an approximation. The circles overlap by construction — they
+/// step by half a box so the run is a covering rather than a dotted line — and on screen that
+/// means adjacent circles are often nearly on top of each other, most of all where a pitched map
+/// squeezes the far end of a road into a few pixels.
+///
+/// mbgl's rule: circles touch when their centres are two radii apart and are doubled up at one,
+/// and it starts dropping at √2 — "thinning the number of circles as much as possible is a major
+/// performance win, and the small gaps introduced don't make a very noticeable difference".
+///
+/// Two circles are never dropped in a row, and the last one is always kept: a run that thinned
+/// itself away would reserve nothing, and the end of a label is where it collides with the next.
+#[must_use]
+pub fn thin(circles: &[LineCircle]) -> Vec<usize> {
+    let mut kept: Vec<usize> = Vec::with_capacity(circles.len());
+    let mut previous_placed = false;
+
+    for (index, entry) in circles.iter().enumerate() {
+        if previous_placed {
+            let previous = circles[*kept.last().expect("a placed circle")].circle;
+            let dx = entry.circle.center.0 - previous.center.0;
+            let dy = entry.circle.center.1 - previous.center.1;
+            let radius = entry.circle.radius;
+            // Squared throughout: the comparison is against √2 radii and squaring both sides
+            // removes the root from the inner loop of placement.
+            let too_dense = radius * radius * 2.0 > dx * dx + dy * dy;
+
+            // Unless it is the last one there is, in which case it is kept however tightly it
+            // sits against its neighbour.
+            if too_dense && index + 1 < circles.len() {
+                previous_placed = false;
+                continue;
+            }
+        }
+        kept.push(index);
+        previous_placed = true;
+    }
+
+    kept
+}
+
 impl Shape {
     /// Whether anything already placed is in the way.
     #[must_use]
@@ -80,11 +123,11 @@ impl Shape {
         match self {
             Self::Box(box_) => grid.hit_test_box(box_.bounds()),
             // Any circle hitting is the whole label refused. A partial run would draw part of a
-            // road name, and mbgl uses the per-circle distance to pick a *prefix* under pitch
-            // rather than to accept a label whose middle is covered.
-            Self::Circles(circles) => circles
-                .iter()
-                .any(|entry| grid.hit_test_circle(entry.circle)),
+            // road name, and the thinning below drops circles that add nothing rather than
+            // circles that are in the way.
+            Self::Circles(circles) => thin(circles)
+                .into_iter()
+                .any(|index| grid.hit_test_circle(circles[index].circle)),
         }
     }
 
@@ -93,8 +136,11 @@ impl Shape {
         match self {
             Self::Box(box_) => grid.insert_box(id, box_.bounds()),
             Self::Circles(circles) => {
-                for entry in circles {
-                    grid.insert_circle(id, entry.circle);
+                // The same run that was tested. Reserving every circle while testing a thinned
+                // set would make a label block more than it checked against, which reads as a
+                // map that thins out as it fills.
+                for index in thin(circles) {
+                    grid.insert_circle(id, circles[index].circle);
                 }
             }
         }

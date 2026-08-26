@@ -238,3 +238,113 @@ fn a_degenerate_line_is_refused() {
     assert!(line_circles(&[], (0.0, 0.0), 0, LENGTH, HEIGHT, 1.0).is_empty());
     assert!(line_circles(&[(1.0, 1.0)], (1.0, 1.0), 0, LENGTH, HEIGHT, 1.0).is_empty());
 }
+
+/// Thinning a run of circles — mbgl's pass in `placeLineFeature`.
+///
+/// The circles overlap by construction: they step by half a box so the run is a covering rather
+/// than a dotted line. On screen that makes adjacent circles nearly coincident, most of all where
+/// a pitched map squeezes the far end of a road into a few pixels, and testing every one of them
+/// is work that changes no answer.
+mod thinning {
+    use tessella_place::feature::LineCircle;
+    use tessella_place::grid::Circle;
+    use tessella_place::placement::thin;
+
+    /// A run of circles at a given spacing, all the same radius.
+    fn run(count: usize, spacing: f32, radius: f32) -> Vec<LineCircle> {
+        (0..count)
+            .map(|index| LineCircle {
+                #[allow(clippy::cast_precision_loss)]
+                circle: Circle::new((index as f32 * spacing, 0.0), radius),
+                #[allow(clippy::cast_precision_loss)]
+                distance_from_anchor: index as f32 * spacing,
+            })
+            .collect()
+    }
+
+    /// Circles further apart than √2 radii are all kept.
+    #[test]
+    fn a_spread_run_is_kept_whole() {
+        // Radius 10, so the threshold is about 14.1 apart. At 20 nothing is dropped.
+        let circles = run(6, 20.0, 10.0);
+        assert_eq!(thin(&circles), vec![0, 1, 2, 3, 4, 5]);
+    }
+
+    /// A tightly packed run keeps every other circle.
+    ///
+    /// The saving mbgl is after: half the queries, and the gaps introduced are smaller than the
+    /// circles that remain.
+    #[test]
+    fn a_packed_run_is_halved() {
+        // Radius 10, spacing 5: well inside √2 radii, so every second one goes.
+        let circles = run(7, 5.0, 10.0);
+        assert_eq!(thin(&circles), vec![0, 2, 4, 6]);
+    }
+
+    /// Two circles are never dropped in a row.
+    ///
+    /// The rule that stops a run thinning itself away. Without it a dense enough run keeps only
+    /// its first circle, and a label would reserve a single point of the road it covers.
+    #[test]
+    fn no_two_circles_are_dropped_in_a_row() {
+        // Radius 50, spacing 1: every circle is on top of its neighbour.
+        let circles = run(20, 1.0, 50.0);
+        let kept = thin(&circles);
+
+        for pair in kept.windows(2) {
+            assert!(
+                pair[1] - pair[0] <= 2,
+                "{kept:?} dropped two circles together"
+            );
+        }
+        assert!(kept.len() >= circles.len() / 2, "{kept:?} thinned too far");
+    }
+
+    /// The last circle is kept however tightly it sits.
+    ///
+    /// The end of a label is where it meets the next one, so dropping the final circle is how
+    /// two labels come to overlap at their ends while every circle between them was tested.
+    #[test]
+    fn the_last_circle_is_always_kept() {
+        for count in 2..8 {
+            let circles = run(count, 1.0, 50.0);
+            let kept = thin(&circles);
+            assert_eq!(
+                *kept.last().expect("something is kept"),
+                count - 1,
+                "a run of {count} dropped its end: {kept:?}"
+            );
+        }
+    }
+
+    /// An empty run thins to nothing, and a single circle survives.
+    #[test]
+    fn the_degenerate_runs_hold() {
+        assert!(thin(&[]).is_empty());
+        assert_eq!(thin(&run(1, 1.0, 50.0)), vec![0]);
+    }
+
+    /// Thinning never changes what a label collides with in a way that matters.
+    ///
+    /// Stated as coverage: every dropped circle is within a radius of one that was kept, so the
+    /// ground the run reserves is the same ground to within the gaps mbgl accepts. A thinning
+    /// that dropped a circle with no kept neighbour would open a hole in the middle of a road.
+    #[test]
+    fn every_dropped_circle_is_covered_by_a_kept_one() {
+        let circles = run(20, 6.0, 10.0);
+        let kept = thin(&circles);
+
+        for (index, entry) in circles.iter().enumerate() {
+            if kept.contains(&index) {
+                continue;
+            }
+            let covered = kept.iter().any(|other| {
+                let near = circles[*other].circle;
+                let dx = entry.circle.center.0 - near.center.0;
+                let dy = entry.circle.center.1 - near.center.1;
+                dx.hypot(dy) <= near.radius + entry.circle.radius
+            });
+            assert!(covered, "circle {index} was dropped into a hole");
+        }
+    }
+}

@@ -296,3 +296,101 @@ fn centre(line: &[(f32, f32)], max_angle: f32) -> Option<tessella_layout::anchor
         line, max_angle, TEXT_LEFT, TEXT_RIGHT, ICON_LEFT, ICON_RIGHT, GLYPH_SIZE, 1.0,
     )
 }
+
+/// How far each vertex is from the anchor along the line — mbgl's `calculateTileDistances`.
+///
+/// Its three expectations, verbatim, plus the property they imply. What reads these wants a
+/// *reach* in each direction rather than a signed position, which is why a vertex two steps
+/// before the anchor and one two steps after both read two.
+mod tile_distances {
+    use tessella_layout::anchors::{Anchor, calculate_tile_distances};
+
+    fn line(points: &[(i32, i32)]) -> Vec<(f32, f32)> {
+        points
+            .iter()
+            .map(|(x, y)| {
+                #[allow(clippy::cast_precision_loss)]
+                (*x as f32, *y as f32)
+            })
+            .collect()
+    }
+
+    /// mbgl `calculateTileDistances.Line`.
+    #[test]
+    fn the_distances_run_out_from_the_anchor_in_both_directions() {
+        let line = line(&[(1, 1), (1, 2), (1, 3), (1, 4)]);
+        let anchor = Anchor {
+            point: (1.0, 3.0),
+            angle: 0.0,
+            segment: 2,
+        };
+        assert_eq!(
+            calculate_tile_distances(&line, &anchor),
+            vec![2.0, 1.0, 0.0, 1.0]
+        );
+    }
+
+    /// mbgl `calculateTileDistances.Point`: one vertex is zero from itself.
+    #[test]
+    fn a_single_point_is_no_distance_from_itself() {
+        let line = line(&[(1, 1)]);
+        let anchor = Anchor {
+            point: (1.0, 1.0),
+            angle: 0.0,
+            segment: 0,
+        };
+        assert_eq!(calculate_tile_distances(&line, &anchor), vec![0.0]);
+    }
+
+    /// mbgl `calculateTileDistances.EmptySegment`: an empty line has no distances.
+    #[test]
+    fn an_empty_line_has_no_distances() {
+        assert!(
+            calculate_tile_distances(
+                &[],
+                &Anchor {
+                    point: (1.0, 1.0),
+                    angle: 0.0,
+                    segment: 0,
+                }
+            )
+            .is_empty()
+        );
+    }
+
+    /// Every distance is positive, and rises with the remove from the anchor.
+    ///
+    /// The property the three cases above imply and none of them alone pins: they are reaches
+    /// rather than positions, so the run is a valley with its floor at the anchor's segment. A
+    /// signed version would read as monotonic and place the prefix on one side only.
+    #[test]
+    fn the_distances_are_a_valley_around_the_anchor() {
+        let line = line(&[(0, 0), (10, 0), (20, 0), (30, 0), (40, 0), (50, 0)]);
+        let anchor = Anchor {
+            point: (25.0, 0.0),
+            angle: 0.0,
+            segment: 2,
+        };
+        let distances = calculate_tile_distances(&line, &anchor);
+
+        assert!(distances.iter().all(|value| *value >= 0.0), "{distances:?}");
+        // Falling to the anchor's segment, then rising away from it.
+        assert_eq!(distances, vec![25.0, 15.0, 5.0, 5.0, 15.0, 25.0]);
+    }
+
+    /// An anchor naming a segment the line does not have is zero throughout.
+    ///
+    /// Not a panic. The anchors and the line reach this from different places — a line can be
+    /// merged or clipped after an anchor was chosen — and indexing on trust is how that becomes
+    /// a crash on a worker rather than a label in the wrong place.
+    #[test]
+    fn a_segment_past_the_line_is_no_distance_at_all() {
+        let line = line(&[(0, 0), (10, 0)]);
+        let anchor = Anchor {
+            point: (5.0, 0.0),
+            angle: 0.0,
+            segment: 99,
+        };
+        assert_eq!(calculate_tile_distances(&line, &anchor), vec![0.0, 0.0]);
+    }
+}
