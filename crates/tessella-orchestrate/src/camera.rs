@@ -50,7 +50,7 @@ impl CameraBlock {
     ///
     /// # Errors
     ///
-    /// [`CameraError::Rotated`] when the view has bearing or pitch.
+    /// [`CameraError::EmptyViewport`] when the view has no area.
     pub fn new(
         view: &ViewTransform,
         light: &Light,

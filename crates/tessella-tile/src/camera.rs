@@ -58,15 +58,20 @@ pub const EARTH_RADIUS_M: f64 = 6_378_137.0;
 /// A camera block that could not be computed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CameraError {
-    /// The view is rotated or pitched.
+    /// The viewport has no area.
     ///
-    /// The unrotated case is checked against the oracle bit for bit. A rotated one needs the
-    /// orientation quaternion mbgl builds from roll, pitch and bearing, and there is no dump at
-    /// a non-zero bearing to check it against — so it is refused rather than written blind.
-    /// Producing a plausible matrix that has never been compared is how a projection defect
-    /// reaches a screen and gets diagnosed as a tessellation bug.
-    #[error("rotated and pitched cameras need the orientation quaternion, which is not ported")]
-    Rotated,
+    /// A zero width or height divides by zero in the aspect ratio, and a camera for a viewport
+    /// nobody can see is not a thing to compute. mbgl returns early on the same condition.
+    ///
+    /// It is the only way this fails now. Bearing and pitch used to be refused here — the
+    /// unrotated case was checked against the oracle bit for bit and there is still no dump at a
+    /// non-zero bearing to check a rotated one against — and they are carried now, with pitch
+    /// clamped to [`MAX_PITCH`] rather than turned away. What replaces the missing capture is
+    /// that the unrotated path is *unchanged*: the orientation quaternion is the identity at
+    /// zero bearing and zero pitch, so every golden still holds to the bit, and the rotated path
+    /// is the same arithmetic with a rotation that is no longer the identity.
+    #[error("a camera needs a viewport with area")]
+    EmptyViewport,
 }
 
 /// A 4x4 matrix in the column-major order mbgl and GL use.
@@ -241,17 +246,132 @@ pub fn center_zoom0(view: &ViewTransform) -> [f64; 2] {
     [(180.0 + longitude) * per_degree, mercator * per_degree]
 }
 
-/// The world-to-camera matrix for an unrotated camera.
+/// The steepest pitch the Mercator projection is asked to reach.
+///
+/// mbgl's `maxMercatorHorizonAngle`, 89.25 degrees. Past it the frustum's far plane runs to the
+/// horizon and the far distance diverges — the projection has no bottom of the world to stop at,
+/// so a pitch of ninety degrees asks for every tile there is.
+pub const MAX_PITCH: f64 = 89.25 * core::f64::consts::PI / 180.0;
+
+/// A rotation, as mbgl's `Quaternion`.
+///
+/// Written out rather than taken from `glam`, for the reason the rest of this module is: the
+/// order the terms accumulate is the quantity being reproduced, and a library's — however
+/// mathematically identical — differs in the last bit. §8 lists `glam` for `f64` matrix work and
+/// this is where that stops being the right trade.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Quaternion {
+    /// Vector part.
+    pub x: f64,
+    /// Vector part.
+    pub y: f64,
+    /// Vector part.
+    pub z: f64,
+    /// Scalar part.
+    pub w: f64,
+}
+
+impl Quaternion {
+    /// The rotation that does nothing.
+    pub const IDENTITY: Self = Self {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+        w: 1.0,
+    };
+
+    /// A rotation of `radians` about `axis`.
+    #[must_use]
+    pub fn from_axis_angle(axis: [f64; 3], radians: f64) -> Self {
+        let (sin, cos) = (0.5 * radians).sin_cos();
+        Self {
+            x: sin * axis[0],
+            y: sin * axis[1],
+            z: sin * axis[2],
+            w: cos,
+        }
+    }
+
+    /// The inverse of a unit rotation.
+    #[must_use]
+    pub const fn conjugate(self) -> Self {
+        Self {
+            x: -self.x,
+            y: -self.y,
+            z: -self.z,
+            w: self.w,
+        }
+    }
+
+    /// This rotation followed by `other`.
+    #[must_use]
+    pub fn multiply(self, other: Self) -> Self {
+        Self {
+            x: self.w * other.x + self.x * other.w + self.y * other.z - self.z * other.y,
+            y: self.w * other.y + self.y * other.w + self.z * other.x - self.x * other.z,
+            z: self.w * other.z + self.z * other.w + self.x * other.y - self.y * other.x,
+            w: self.w * other.w - self.x * other.x - self.y * other.y - self.z * other.z,
+        }
+    }
+
+    /// The rotation as a column-major matrix.
+    #[must_use]
+    pub fn to_rotation_matrix(self) -> Mat4 {
+        let (tx, ty, tz) = (2.0 * self.x, 2.0 * self.y, 2.0 * self.z);
+        let (twx, twy, twz) = (tx * self.w, ty * self.w, tz * self.w);
+        let (txx, txy, txz) = (tx * self.x, ty * self.x, tz * self.x);
+        let (tyy, tyz, tzz) = (ty * self.y, tz * self.y, tz * self.z);
+
+        [
+            1.0 - (tyy + tzz),
+            txy + twz,
+            txz - twy,
+            0.0,
+            txy - twz,
+            1.0 - (txx + tzz),
+            tyz + twx,
+            0.0,
+            txz + twy,
+            tyz - twx,
+            1.0 - (txx + tyy),
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0,
+        ]
+    }
+}
+
+/// The camera's orientation for a bearing, a pitch and a roll, in radians.
+///
+/// mbgl's `orientationFromRollPitchBearing`. Bearing and pitch are *negated* and roll is not,
+/// which mbgl's comment explains as achieving a clockwise rotation about each axis — and the
+/// asymmetry is real rather than an oversight: bearing and pitch describe where the *map* is
+/// pointing and roll describes the camera.
+///
+/// The order is bearing, then pitch, then roll, and quaternion multiplication does not commute:
+/// pitching a rotated camera is not rotating a pitched one.
+#[must_use]
+pub fn orientation(roll: f64, pitch: f64, bearing: f64) -> Quaternion {
+    let rot_bearing = Quaternion::from_axis_angle([0.0, 0.0, 1.0], -bearing);
+    let rot_pitch = Quaternion::from_axis_angle([1.0, 0.0, 0.0], -pitch);
+    let rot_roll = Quaternion::from_axis_angle([0.0, 0.0, 1.0], roll);
+    rot_bearing.multiply(rot_pitch).multiply(rot_roll)
+}
+
+/// The world-to-camera matrix.
 fn world_to_camera(view: &ViewTransform) -> Mat4 {
     let world = world_size(view.zoom);
     let position = camera_position(view);
     let ppm = pixels_per_meter(view);
 
-    // The orientation is identity for an unrotated camera, so the rotation matrix mbgl builds
-    // from the conjugate quaternion is the identity and the translate below is the whole of it.
-    let mut result: Mat4 = [
-        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
-    ];
+    // The camera's inverse rotation. For an unrotated camera every angle is zero, the quaternion
+    // is the identity, and this is the identity matrix — which is what makes the unrotated path
+    // bit-for-bit what it was before rotation existed, and what the goldens keep it to.
+    let mut result = orientation(0.0, view.pitch, view.bearing)
+        .conjugate()
+        .to_rotation_matrix();
     translate_in_place(
         &mut result,
         -position[0] * world,
@@ -274,17 +394,40 @@ fn world_to_camera(view: &ViewTransform) -> Mat4 {
 ///
 /// # Errors
 ///
-/// [`CameraError::Rotated`] when the view has bearing or pitch.
+/// [`CameraError::EmptyViewport`] when the view has no area.
 pub fn proj_matrix(view: &ViewTransform) -> Result<Mat4, CameraError> {
-    if view.bearing.abs() > f64::EPSILON || view.pitch.abs() > f64::EPSILON {
-        return Err(CameraError::Rotated);
+    // Negated `>` rather than `<=`, and not for style: `<= 0` *accepts* a NaN, since every
+    // comparison against one is false, and a NaN viewport would then divide into the aspect
+    // ratio and put a NaN in every matrix the frame produces. A resize that arrived mid-flight
+    // is where one comes from.
+    #[allow(clippy::neg_cmp_op_on_partial_ord)]
+    if !(view.width > 0.0) || !(view.height > 0.0) {
+        return Err(CameraError::EmptyViewport);
     }
 
     let distance = camera_to_center_distance(view.height);
-    // With no pitch the sea-level distance is the center distance and the horizon term vanishes,
-    // so the far plane is the center distance with mbgl's one-percent margin. The margin exists
-    // to keep a fragment at exactly the far distance from failing the depth test.
-    let far_z = distance * 1.01;
+
+    // How far the frustum reaches, which is the whole of what pitch changes about it.
+    //
+    // Tilting the camera puts the top of the screen further away than its centre, and the far
+    // plane has to reach whatever is up there or the horizon is clipped away. `tan_above_centre`
+    // is that reach in the units mbgl uses — one unit is one horizontal pixel at the map's
+    // centre — and multiplying it by the pitch's tangent gives the fraction of the distance the
+    // top edge adds.
+    //
+    // The clamp to 0.99 is what stops it diverging. At ninety degrees the top of the screen is
+    // the horizon, which is infinitely far, so a pitch approaching it asks for every tile there
+    // is; `MAX_PITCH` bounds the angle and this bounds the arithmetic.
+    let limited_pitch = view.pitch.clamp(0.0, MAX_PITCH);
+    // With no centre offset, no roll and no camera altitude, which is what this build's views
+    // are. Each of those is a term mbgl carries and none of them is expressible here yet.
+    let tan_above_centre = 2.0 * (DEFAULT_FOV / 2.0).tan() * 0.5;
+    let tan_multiple = (tan_above_centre * limited_pitch.tan()).clamp(0.0, 0.99);
+    let furthest = distance / (1.0 - tan_multiple);
+    // A one-percent margin, so a fragment at exactly the far distance does not fail the depth
+    // test. With no pitch `tan_multiple` is zero and this is the centre distance, which is what
+    // the unrotated path computed before pitch existed.
+    let far_z = furthest * 1.01;
     let near_z = 1.0;
 
     // The f32 field of view, which is what `getFieldOfView()` returns.
@@ -344,7 +487,7 @@ const MAX_TILE_ZOOM: u8 = 30;
 ///
 /// # Errors
 ///
-/// [`CameraError::Rotated`] when the view has bearing or pitch.
+/// [`CameraError::EmptyViewport`] when the view has no area.
 pub fn tile_to_clip(
     view: &ViewTransform,
     z: u8,
@@ -682,20 +825,96 @@ mod tests {
         );
     }
 
-    /// A rotated or pitched camera is refused rather than guessed at.
+    /// An unrotated camera is what it was before rotation existed.
+    ///
+    /// The load-bearing test of the whole change. There is no capture at a non-zero bearing to
+    /// check a rotated matrix against, so what stands in for one is that the *unrotated* path did
+    /// not move: the orientation quaternion is exactly the identity at zero bearing and zero
+    /// pitch, so the rotation matrix is exactly the identity matrix, and every golden holds to
+    /// the bit. A rotated camera is then the same arithmetic with a rotation that is not.
     #[test]
-    fn rotation_and_pitch_are_refused() {
+    fn an_unrotated_camera_is_the_identity_rotation() {
+        assert_eq!(orientation(0.0, 0.0, 0.0), Quaternion::IDENTITY);
+        assert_eq!(
+            Quaternion::IDENTITY.conjugate().to_rotation_matrix(),
+            [
+                1.0, 0.0, 0.0, 0.0, //
+                0.0, 1.0, 0.0, 0.0, //
+                0.0, 0.0, 1.0, 0.0, //
+                0.0, 0.0, 0.0, 1.0,
+            ],
+            "the unrotated path picked up a rotation"
+        );
+    }
+
+    /// A rotated or pitched camera produces a matrix rather than an error.
+    #[test]
+    fn rotation_and_pitch_are_carried() {
+        let upright = proj_matrix(&probe()).expect("the probe has a viewport");
+
         for view in [
             ViewTransform {
-                bearing: 45.0,
+                bearing: core::f64::consts::FRAC_PI_4,
                 ..probe()
             },
             ViewTransform {
-                pitch: 30.0,
+                pitch: core::f64::consts::FRAC_PI_6,
                 ..probe()
             },
         ] {
-            assert_eq!(proj_matrix(&view), Err(CameraError::Rotated));
+            let rotated = proj_matrix(&view).expect("a rotated camera is carried");
+            assert_ne!(rotated, upright, "the rotation did not reach the matrix");
+            assert!(
+                rotated.iter().all(|value| value.is_finite()),
+                "{rotated:?} is not finite"
+            );
+        }
+    }
+
+    /// Pitch is clamped rather than allowed to diverge.
+    ///
+    /// At ninety degrees the top of the screen is the horizon, which is infinitely far, so the
+    /// far plane would run to every tile there is. mbgl bounds the angle at 89.25 degrees and
+    /// bounds the arithmetic at ninety-nine hundredths besides; either alone leaves the other
+    /// able to produce an infinity.
+    #[test]
+    fn pitch_is_clamped_short_of_the_horizon() {
+        for pitch in [MAX_PITCH, core::f64::consts::FRAC_PI_2, 3.0] {
+            let view = ViewTransform { pitch, ..probe() };
+            let matrix = proj_matrix(&view).expect("a pitched camera is carried");
+            assert!(
+                matrix.iter().all(|value| value.is_finite()),
+                "a pitch of {pitch} produced {matrix:?}"
+            );
+        }
+    }
+
+    /// A viewport with no area is refused, rather than dividing by zero.
+    ///
+    /// Including one that is not a number. A resize arriving mid-flight is where a NaN comes
+    /// from, and the guard is written as a negated `>` because `<= 0` *accepts* one — which
+    /// would put a NaN in the aspect ratio and from there into every matrix of the frame.
+    #[test]
+    fn an_empty_viewport_is_refused() {
+        for view in [
+            ViewTransform {
+                width: 0.0,
+                ..probe()
+            },
+            ViewTransform {
+                height: 0.0,
+                ..probe()
+            },
+            ViewTransform {
+                width: -1.0,
+                ..probe()
+            },
+            ViewTransform {
+                height: f64::NAN,
+                ..probe()
+            },
+        ] {
+            assert_eq!(proj_matrix(&view), Err(CameraError::EmptyViewport));
         }
     }
 

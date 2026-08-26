@@ -1535,6 +1535,35 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   almost every time; in fifty bytes it lands on a tag, a length or a geometry command, which is
   where a decoder breaks. One real tile is kept beside them for the shapes a hand-made fixture
   does not have.
+  The camera then stops refusing rotation. `proj_matrix` answered `CameraError::Rotated` for any
+  bearing or pitch, which made the whole build an unrotatable map — and cascaded: every pitched
+  path written since was dead code, the map-aligned label matrices were left out for want of
+  anything to check them against, and six of mbgl's own tile-cover cases could not be run.
+  The missing piece was mbgl's orientation quaternion, and it is written out rather than taken
+  from `glam` for the reason the rest of this module is: the order the terms accumulate is the
+  quantity being reproduced. Bearing and pitch are *negated* and roll is not — mbgl's comment
+  explains it as a clockwise rotation about each axis, and the asymmetry is real, since the first
+  two describe where the map points and the third describes the camera. The order is bearing,
+  then pitch, then roll, and the product does not commute: pitching a rotated camera is not
+  rotating a pitched one.
+  The far plane is the rest of it, and the whole of what pitch changes about the frustum. Tilting
+  puts the top of the screen further away than its centre, so the far plane must reach it or the
+  horizon is clipped; the reach is `tan(fov/2)` in the units mbgl uses, and the pitch's tangent
+  turns it into a fraction of the distance the top edge adds. Two clamps, and neither is
+  redundant: `MAX_PITCH` at 89.25 degrees bounds the *angle*, and 0.99 bounds the *arithmetic*,
+  because at ninety degrees the top of the screen is the horizon and the far distance diverges.
+  What stands in for the capture that does not exist is that the unrotated path is *unchanged*.
+  The quaternion is exactly the identity at zero bearing and zero pitch, so the rotation matrix
+  is exactly the identity matrix and the far plane collapses to the centre distance — every
+  golden still holds to the bit, and the rotated path is the same arithmetic with a rotation that
+  is no longer the identity. That is weaker than a diff against a rotated dump and it is not
+  nothing: it says the change added a term rather than moved one.
+  `CameraError` keeps a variant, and a better one. Nothing produced `Rotated` any more, and a
+  `Result` that can never be `Err` is a lie in the signature — so it is now `EmptyViewport`, which
+  guards a division by zero that was never guarded and which mbgl returns early on. Including a
+  viewport that is *not a number*: a resize arriving mid-flight is where one comes from, and the
+  guard is a negated `>` because `<= 0` accepts a NaN and would put one in every matrix of the
+  frame.
 - **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
   isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
 

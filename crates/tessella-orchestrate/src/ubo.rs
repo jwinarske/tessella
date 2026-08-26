@@ -164,7 +164,7 @@ impl DrawableEntry {
     ///
     /// # Errors
     ///
-    /// [`camera::CameraError`] when the view has bearing or pitch.
+    /// [`camera::CameraError`] when the view has no area.
     pub fn for_tile(
         view: &ViewTransform,
         z: u8,
@@ -195,7 +195,7 @@ impl DrawableEntry {
     ///
     /// # Errors
     ///
-    /// [`camera::CameraError`] when the view has bearing or pitch.
+    /// [`camera::CameraError`] when the view has no area.
     #[allow(clippy::too_many_arguments)]
     pub fn for_tile_with(
         view: &ViewTransform,
@@ -338,7 +338,7 @@ impl LineDrawableEntry {
     ///
     /// # Errors
     ///
-    /// [`camera::CameraError`] when the view has bearing or pitch.
+    /// [`camera::CameraError`] when the view has no area.
     #[allow(clippy::too_many_arguments)]
     pub fn for_tile(
         view: &ViewTransform,
@@ -587,7 +587,7 @@ impl CircleDrawableEntry {
     ///
     /// # Errors
     ///
-    /// [`camera::CameraError`] when the view has bearing or pitch.
+    /// [`camera::CameraError`] when the view has no area.
     #[allow(clippy::too_many_arguments)]
     pub fn for_tile(
         view: &ViewTransform,
@@ -811,7 +811,7 @@ impl SymbolDrawableEntry {
     ///
     /// # Errors
     ///
-    /// [`camera::CameraError`] when the view has bearing or pitch.
+    /// [`camera::CameraError`] when the view has no area.
     #[allow(clippy::too_many_arguments)]
     pub fn for_tile(
         view: &ViewTransform,

@@ -1145,7 +1145,7 @@ mod symbol_drawable_ubo {
                     [0.0, 0.0],
                     16.0,
                 )
-                .expect("the probe has no bearing or pitch")
+                .expect("the probe has a viewport")
             })
             .collect();
 
@@ -1176,7 +1176,7 @@ mod symbol_drawable_ubo {
             [0.0, 0.0],
             16.0,
         )
-        .expect("no bearing");
+        .expect("a viewport");
         let second = SymbolDrawableEntry::for_tile(
             &view,
             13,
@@ -1189,7 +1189,7 @@ mod symbol_drawable_ubo {
             [0.0, 0.0],
             16.0,
         )
-        .expect("no bearing");
+        .expect("a viewport");
 
         assert_eq!(first.coord_matrix, second.coord_matrix);
         assert_ne!(
