@@ -513,6 +513,20 @@ fn uniform_color(
 }
 
 /// A number-typed property's uniform value, falling back to its spec default.
+/// A uniform property's value at zoom zero, for a decision that is not per frame.
+///
+/// `fill-extrusion-opacity` decides how many drawables a layer becomes rather than what colour
+/// it is, and that has to be settled where the bucket is built. A zoom-varying opacity would
+/// change the count between frames whatever this read, so the bucket's own zoom is as good an
+/// answer as exists on this side.
+#[must_use]
+pub fn uniform_opacity(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    name: &str,
+) -> f32 {
+    uniform_number(paint, name, 0.0)
+}
+
 fn uniform_number(
     paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
     name: &str,
@@ -1034,6 +1048,58 @@ pub fn symbol_props_from_paint(
         uniform_number(paint, "icon-halo-width", zoom),
         uniform_number(paint, "icon-halo-blur", zoom),
     )
+}
+
+/// Packs `FillExtrusionPropsUBO`.
+///
+/// Five sixteen-byte blocks, and three of them are the *light*. An extrusion is the first thing
+/// in this build whose colour depends on more than its paint: `light-color`, `light-position`
+/// and `light-intensity` come from the style's top-level `light` block, and a wall's shade is
+/// the dot product of its normal with that direction. A build that packed the paint and left the
+/// light at zero draws every building flat black.
+///
+/// `light_position` is the *cartesian* form of the style's spherical `[radial, azimuth, polar]`,
+/// and it is rotated by the negated bearing when the light's anchor is `viewport` rather than
+/// `map` — mbgl's `FillExtrusionBucket::lightPosition`. Anchored to the map it does not move with
+/// the camera, which is what makes a city look lit rather than painted.
+#[allow(clippy::too_many_arguments)]
+#[must_use]
+pub fn pack_fill_extrusion_props(
+    color: [f32; 4],
+    light_color: [f32; 3],
+    light_position: [f32; 3],
+    base: f32,
+    height: f32,
+    light_intensity: f32,
+    vertical_gradient: f32,
+    opacity: f32,
+) -> Vec<u8> {
+    const SIZE: usize = 80;
+    let mut out = Vec::with_capacity(SIZE);
+    push_f32s(&mut out, &color);
+    push_f32s(
+        &mut out,
+        &[light_color[0], light_color[1], light_color[2], 0.0],
+    );
+    push_f32s(
+        &mut out,
+        &[
+            light_position[0],
+            light_position[1],
+            light_position[2],
+            base,
+        ],
+    );
+    push_f32s(
+        &mut out,
+        &[height, light_intensity, vertical_gradient, opacity],
+    );
+    // `fade`, `from_scale` and `to_scale` belong to the pattern path, which no golden carries.
+    // Written as the identity rather than left out: the block is a fixed size and the shader
+    // reads every word of it.
+    push_f32s(&mut out, &[0.0, 1.0, 1.0, 0.0]);
+    debug_assert_eq!(out.len(), SIZE);
+    out
 }
 
 /// Packs `RasterDrawableUBO`: one matrix, and nothing else.

@@ -81,6 +81,27 @@ pub fn circle_flags() -> DrawFlags {
     DrawFlags::ENABLE_DEPTH | DrawFlags::ENABLE_COLOR
 }
 
+/// The depth-only pass of a fill extrusion.
+///
+/// A translucent extrusion is drawn twice: once writing depth and no colour, then once writing
+/// colour. Without the first pass the walls of one building blend against the walls of the
+/// building behind it — every surface alpha-blended against every other surface in front of it —
+/// which reads as a city made of glass. The depth pass settles what is visible first so the
+/// colour pass blends only against the ground.
+///
+/// `IS_3D`, which the ABI has carried since R0 and nothing has set until now: an extrusion is
+/// the first geometry in this build that leaves the map plane.
+#[must_use]
+pub fn extrusion_depth_flags() -> DrawFlags {
+    DrawFlags::IS_3D | DrawFlags::ENABLE_DEPTH
+}
+
+/// The colour pass of a fill extrusion.
+#[must_use]
+pub fn extrusion_color_flags() -> DrawFlags {
+    DrawFlags::IS_3D | DrawFlags::ENABLE_DEPTH | DrawFlags::ENABLE_COLOR
+}
+
 /// The pass a fill draws in.
 #[must_use]
 pub fn fill_pass() -> RenderPass {

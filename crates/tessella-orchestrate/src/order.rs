@@ -400,6 +400,21 @@ pub fn bindings_for(
             Content::Raster(_) => {
                 emit(0, view::fill_pass(), view::tiled_flags());
             }
+            // Two drawables, and the order between them is load-bearing. mbgl builds a
+            // depth-only pass at sub-layer 0 and a colour pass at 1 whenever the layer is not
+            // opaque — `doDepthPass = (!opaque || hasPattern)`, with `opaque` meaning an opacity
+            // of one. Without the depth pass every wall alpha-blends against every wall behind
+            // it, which reads as a city made of glass rather than as buildings.
+            //
+            // An opaque extrusion needs only the colour pass, and still takes sub-layer 1 —
+            // dropping it to zero would reorder it against a translucent extrusion in the same
+            // layer group.
+            Content::Fill3d(ref extrusion) => {
+                if !extrusion.opaque {
+                    emit(0, view::fill_pass(), view::extrusion_depth_flags());
+                }
+                emit(1, view::fill_pass(), view::extrusion_color_flags());
+            }
             // Sublayer 0 and stencilled, which is what `symbol_style.dump` shows: its symbol
             // drawable carries the same flags as the fill above it. Symbols overhang tile edges,
             // so leaving the stencil off would be the defensible guess — the oracle says

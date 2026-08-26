@@ -590,6 +590,68 @@ const RASTER_PAINT: &[PropertySpec] = &[
 ///
 /// `text-translate` and its anchor are here for completeness of the spec surface; nothing reads
 /// them yet.
+/// A fill-extrusion layer's paint properties.
+///
+/// Three of the eight are data-driven, and they are the three an extrusion *is*: colour, height
+/// and base. A building layer varies all three per feature — that is the whole point of it — so
+/// unlike a raster layer these have to reach the shader as attributes rather than as uniforms.
+///
+/// `fill-extrusion-pattern` is here and unbuilt for the reason the other pattern properties are:
+/// no golden carries a pattern layer, so the binder has nothing to check against.
+const FILL_EXTRUSION_PAINT: &[PropertySpec] = &[
+    PropertySpec {
+        name: "fill-extrusion-base",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "fill-extrusion-color",
+        kind: PropertyKind::Color,
+        default: DefaultValue::Color(Color::black()),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "fill-extrusion-height",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "fill-extrusion-opacity",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(1.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "fill-extrusion-pattern",
+        kind: PropertyKind::Image,
+        default: DefaultValue::None,
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "fill-extrusion-translate",
+        kind: PropertyKind::NumberArray(2),
+        default: DefaultValue::NumberPair(0.0, 0.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "fill-extrusion-translate-anchor",
+        kind: PropertyKind::Enum,
+        default: DefaultValue::Enum("map"),
+        data_driven: false,
+    },
+    PropertySpec {
+        // Whether the walls darken toward the ground. A boolean in the spec and a float in the
+        // shader, which is why it is carried as a number here — the props buffer has no room for
+        // a bool and mbgl writes 1.0 or 0.0.
+        name: "fill-extrusion-vertical-gradient",
+        kind: PropertyKind::Boolean,
+        default: DefaultValue::Boolean(true),
+        data_driven: false,
+    },
+];
+
 const SYMBOL_PAINT: &[PropertySpec] = &[
     PropertySpec {
         name: "icon-color",
@@ -663,6 +725,7 @@ pub fn paint_specs(kind: &LayerKind) -> Option<&'static [PropertySpec]> {
         LayerKind::Circle => Some(CIRCLE_PAINT),
         LayerKind::Symbol => Some(SYMBOL_PAINT),
         LayerKind::Raster => Some(RASTER_PAINT),
+        LayerKind::FillExtrusion => Some(FILL_EXTRUSION_PAINT),
         _ => None,
     }
 }

@@ -218,6 +218,7 @@ fn build(style: &Style, decoded: &mvt::Tile, tile: tessella_orchestrate::tile::T
             tessella_orchestrate::tile::Content::Line(line) => line.vertices.len(),
             tessella_orchestrate::tile::Content::Circle(circle) => circle.vertices.len(),
             tessella_orchestrate::tile::Content::Raster(raster) => raster.bucket.vertices.len(),
+            tessella_orchestrate::tile::Content::Fill3d(extrusion) => extrusion.vertices.len(),
             // A symbol layer has no vertices until glyphs arrive, so it contributes none to a
             // measurement of how long turning features into geometry takes.
             tessella_orchestrate::tile::Content::Symbol(_)

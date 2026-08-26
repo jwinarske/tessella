@@ -37,6 +37,7 @@ use alloc::vec::Vec;
 
 use tessella_layout::circle::CircleBucket;
 use tessella_layout::fill::{self, FillBucket, Position, Ring};
+use tessella_layout::fill_extrusion::{self, FillExtrusionBucket};
 use tessella_layout::line::{LineBucket, LineCap, LineJoin, LineOptions};
 use tessella_layout::paint::{BinderError, PaintBinder};
 use tessella_layout::raster::RasterBucket;
@@ -92,6 +93,8 @@ pub enum Content {
     /// hillshade drawn from the same imagery, or the same source at two opacities — are two
     /// buckets and one picture, and a raster tile is a quarter of a megabyte (§11.5).
     Raster(RasterContent),
+    /// Extruded polygons: an outline and a roof, with the walls raised by the shader.
+    Fill3d(FillExtrusionBucket),
     /// A symbol layer's labels, resolved but not yet shaped.
     ///
     /// The only content that is not geometry. Shaping needs glyph metrics, and the glyphs are a
@@ -148,6 +151,10 @@ impl LayerBucket {
             Content::Circle(_) => 1,
             // And a raster tile, whose quads share one drawable however many the mask made.
             Content::Raster(_) => 1,
+            // An extrusion is two when it is translucent: a depth-only pass and a colour pass.
+            // Without the first, every wall alpha-blends against the walls behind it. An opaque
+            // one needs only the second, which is mbgl's `doDepthPass = (!opaque || hasPattern)`.
+            Content::Fill3d(ref bucket) => usize::from(!bucket.opaque) + 1,
             // And a symbol layer, whose labels share one buffer per tile — the golden's
             // twelve-glyph drawable is two labels, not two drawables.
             Content::Symbol(_) => 1,
@@ -294,7 +301,10 @@ pub fn build_tile(
                 Content::Symbol(layout)
             }
             LayerKind::Background => Content::Background,
-            LayerKind::Fill => {
+            // Extrusions share the arm: they take the same features, the same clipping and the
+            // same ring classification, and differ only in what the vertices are packed into.
+            // mbgl's two buckets diverge at exactly the same point.
+            LayerKind::Fill | LayerKind::FillExtrusion => {
                 let filter = match &layer.filter {
                     Some(value) => Filter::parse(value).map_err(|source| TileError::Filter {
                         layer: layer.id.clone(),
@@ -349,7 +359,7 @@ pub fn build_tile(
                     }
                 }
                 let borrowed: Vec<&[Ring]> = per_feature.iter().map(Vec::as_slice).collect();
-                let (bucket, ends) = fill::build_features_tracked(&borrowed);
+                let (content, ends) = build_fill_content(layer, &paint, &borrowed);
                 for (feature, end) in kept.iter().zip(&ends) {
                     binder
                         .push(*end, &paint, *feature)
@@ -358,7 +368,7 @@ pub fn build_tile(
                             source,
                         })?;
                 }
-                Content::Fill(bucket)
+                content
             }
             LayerKind::Line => {
                 let filter = match &layer.filter {
@@ -536,6 +546,34 @@ pub fn build_sourceless(style: &Style, tile: TileId) -> Result<Vec<LayerBucket>,
     Ok(buckets)
 }
 
+/// Builds a flat fill or an extrusion from the same classified rings.
+///
+/// The two diverge only at the packing. An extrusion additionally needs to know whether the
+/// layer is opaque, which decides how many drawables it becomes rather than what its geometry
+/// is — mbgl's `opaque = evaluated.get<FillExtrusionOpacity>() >= 1`, read from the resolved
+/// paint here for the same reason.
+fn build_fill_content(
+    layer: &tessella_style::Layer,
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    rings: &[&[Ring]],
+) -> (Content, Vec<usize>) {
+    if layer.kind == LayerKind::FillExtrusion {
+        // A data-driven opacity cannot be resolved to one number here, and mbgl does not try:
+        // `FillExtrusionOpacity` is data-constant in the spec, so the value is always a
+        // uniform. A style that made it otherwise is refused before this by the property table.
+        // Zoom zero: `fill-extrusion-opacity` is data-constant in the spec but may still be a
+        // zoom function, and mbgl reads it from the evaluated properties at the frame's zoom.
+        // Reading it at the bucket's own zoom is the closest this side has — and the only thing
+        // it decides is the drawable count, which a zoom-varying opacity would change between
+        // frames either way.
+        let opaque = crate::ubo::uniform_opacity(paint, "fill-extrusion-opacity") >= 1.0;
+        let (bucket, ends) = fill_extrusion::build_features_tracked(rings, opaque);
+        return (Content::Fill3d(bucket), ends);
+    }
+    let (bucket, ends) = fill::build_features_tracked(rings);
+    (Content::Fill(bucket), ends)
+}
+
 /// Builds a tile's buckets from a decoded raster image.
 ///
 /// # Why this is a third builder rather than an arm of the other two
@@ -641,7 +679,10 @@ pub fn build_mvt_tile(
 
         let content = match layer.kind {
             LayerKind::Background => Content::Background,
-            LayerKind::Fill => {
+            // Extrusions share the arm: they take the same features, the same clipping and the
+            // same ring classification, and differ only in what the vertices are packed into.
+            // mbgl's two buckets diverge at exactly the same point.
+            LayerKind::Fill | LayerKind::FillExtrusion => {
                 let filter = match &layer.filter {
                     Some(value) => Filter::parse(value).map_err(|source| TileError::Filter {
                         layer: layer.id.clone(),
@@ -691,7 +732,7 @@ pub fn build_mvt_tile(
                     }
                 }
                 let borrowed: Vec<&[Ring]> = per_feature.iter().map(Vec::as_slice).collect();
-                let (bucket, ends) = fill::build_features_tracked(&borrowed);
+                let (content, ends) = build_fill_content(layer, &paint, &borrowed);
                 for (feature, end) in kept.iter().zip(&ends) {
                     binder
                         .push(*end, &paint, feature)
@@ -700,7 +741,7 @@ pub fn build_mvt_tile(
                             source,
                         })?;
                 }
-                Content::Fill(bucket)
+                content
             }
             LayerKind::Line => {
                 let filter = match &layer.filter {
@@ -846,11 +887,9 @@ pub fn build_mvt_tile(
             // Every built type has an arm above. Spelled out rather than left to a wildcard:
             // a wildcard here is what let a layer type be enabled in `is_built` and silently
             // draw nothing from a vector tile, which is the quietest kind of gap.
-            LayerKind::FillExtrusion
-            | LayerKind::Heatmap
-            | LayerKind::Hillshade
-            | LayerKind::Custom
-            | LayerKind::Other(_) => continue,
+            LayerKind::Heatmap | LayerKind::Hillshade | LayerKind::Custom | LayerKind::Other(_) => {
+                continue;
+            }
         };
 
         buckets.push(LayerBucket {
@@ -937,6 +976,7 @@ impl Content {
             Self::Raster(content) => Some(content),
             Self::Background
             | Self::Fill(_)
+            | Self::Fill3d(_)
             | Self::Line(_)
             | Self::Circle(_)
             | Self::Symbol(_) => None,
@@ -952,7 +992,8 @@ impl Content {
             | Self::Fill(_)
             | Self::Line(_)
             | Self::Circle(_)
-            | Self::Raster(_) => None,
+            | Self::Fill3d(_) => None,
+            Self::Raster(_) => None,
         }
     }
 
@@ -965,7 +1006,8 @@ impl Content {
             | Self::Line(_)
             | Self::Circle(_)
             | Self::Symbol(_)
-            | Self::Raster(_) => None,
+            | Self::Fill3d(_) => None,
+            Self::Raster(_) => None,
         }
     }
 
@@ -978,7 +1020,8 @@ impl Content {
             | Self::Fill(_)
             | Self::Circle(_)
             | Self::Symbol(_)
-            | Self::Raster(_) => None,
+            | Self::Fill3d(_) => None,
+            Self::Raster(_) => None,
         }
     }
 
@@ -991,7 +1034,8 @@ impl Content {
             | Self::Fill(_)
             | Self::Line(_)
             | Self::Symbol(_)
-            | Self::Raster(_) => None,
+            | Self::Fill3d(_) => None,
+            Self::Raster(_) => None,
         }
     }
 
@@ -1020,6 +1064,7 @@ impl Content {
             // not the glyphs to shape it with have arrived.
             Self::Symbol(layout) => !layout.is_empty(),
             Self::Raster(content) => !content.bucket.is_empty(),
+            Self::Fill3d(bucket) => !bucket.segments.is_empty(),
         }
     }
 }
