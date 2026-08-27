@@ -102,7 +102,7 @@ fn parse_rooted(
     // constant: `fill-translate`'s default is `[0, 0]`, which is data and not a call to an
     // operator named `0`. So the check is skipped exactly where a bare array is a legal value,
     // which is at the root of an array-typed property and nowhere else.
-    let array_valued_root = at_root && spec.expected == Some(Type::Array);
+    let array_valued_root = at_root && matches!(spec.expected, Some(Type::Array(_)));
     if let Some(items) = value.as_array()
         && !array_valued_root
     {

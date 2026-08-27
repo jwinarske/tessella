@@ -207,6 +207,68 @@ pub enum CastKind {
     Color,
 }
 
+/// What is known about an array's shape.
+///
+/// The spec types arrays by element and by length, and both are optional: `array` alone admits
+/// anything, `array<number>` any length of numbers, `array<number, 2>` exactly two. A property
+/// declares one and an expression produces one, and the whole point of writing them down is that
+/// the two can then be compared — `Expected array<string, 2> but found array<number, 2>` is a
+/// sentence the spec's checker says and this could not.
+///
+/// `Copy`, deliberately: `Type` is `Copy` and const-usable throughout, and a boxed element type
+/// would cost that everywhere to express a nesting the spec does not have. An array's elements
+/// are scalars or unconstrained, and never another parameterised array.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ArrayType {
+    /// The element type, or `None` for the spec's `value` — unconstrained.
+    pub element: Option<Scalar>,
+    /// The length, or `None` for any.
+    pub length: Option<u32>,
+}
+
+impl ArrayType {
+    /// An array nothing is known about.
+    #[must_use]
+    pub const fn any() -> Self {
+        Self {
+            element: None,
+            length: None,
+        }
+    }
+
+    /// An array of this element type, of any length.
+    #[must_use]
+    pub const fn of(element: Scalar) -> Self {
+        Self {
+            element: Some(element),
+            length: None,
+        }
+    }
+}
+
+/// The element types the spec lets an array declare.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Scalar {
+    /// `number`
+    Number,
+    /// `string`
+    String,
+    /// `boolean`
+    Boolean,
+}
+
+impl Scalar {
+    /// The full type this element type stands for.
+    #[must_use]
+    pub const fn widen(self) -> Type {
+        match self {
+            Self::Number => Type::Number,
+            Self::String => Type::String,
+            Self::Boolean => Type::Boolean,
+        }
+    }
+}
+
 /// What an expression is known to produce.
 ///
 /// # `Value` is "unknown", not "anything"
@@ -234,8 +296,8 @@ pub enum Type {
     Boolean,
     /// An object.
     Object,
-    /// An array.
-    Array,
+    /// An array, with whatever the spec pinned down about it.
+    Array(ArrayType),
     /// A color.
     Color,
     /// Formatted text: sections with per-section font, scale and colour.
@@ -243,6 +305,44 @@ pub enum Type {
 }
 
 impl Type {
+    /// Whether a value of this type may stand where `self` is expected.
+    ///
+    /// mbgl's `checkSubtype`, and the direction matters: `self` is what the property declared and
+    /// `actual` is what the expression produces.
+    ///
+    /// # The three rules
+    ///
+    /// `Value` — the spec's "unknown" — accepts anything that is a value at all, which is
+    /// everything the language has. That is what keeps `["get", …]` usable everywhere.
+    ///
+    /// An array accepts an array whose element type is acceptable and whose length matches when
+    /// one was declared. The empty-array exemption is mbgl's and is load-bearing: `[]` has no
+    /// element type to check, so `array<value, 0>` is admitted wherever any array is, and a style
+    /// writing an empty list is not refused for not saying what it would have held.
+    ///
+    /// Everything else is equality.
+    #[must_use]
+    pub fn accepts(self, actual: Self) -> bool {
+        match self {
+            Self::Value => true,
+            Self::Array(expected) => {
+                let Self::Array(found) = actual else {
+                    return false;
+                };
+                // An empty array satisfies any element type: there is nothing in it to disagree.
+                let elements_ok = found.length == Some(0)
+                    || match (expected.element, found.element) {
+                        (None, _) => true,
+                        (Some(_), None) => false,
+                        (Some(want), Some(got)) => want == got,
+                    };
+                let length_ok = expected.length.is_none() || expected.length == found.length;
+                elements_ok && length_ok
+            }
+            other => other == actual,
+        }
+    }
+
     /// Whether a value of this type can be compared at all, by this kind of comparison.
     ///
     /// mbgl's `isComparableType`, and it is a property of *one* operand rather than of the pair:
@@ -308,37 +408,74 @@ impl Type {
                 | (Self::Boolean, Self::Boolean)
                 | (Self::Color, Self::Color)
                 | (Self::Object, Self::Object)
-                | (Self::Array, Self::Array)
+                | (Self::Array(_), Self::Array(_))
         )
     }
 
     /// The type a value has.
     #[must_use]
-    pub const fn of(value: &Value) -> Self {
+    pub fn of(value: &Value) -> Self {
         match value {
             Value::Null => Self::Null,
             Value::Bool(_) => Self::Boolean,
             Value::Number(_) => Self::Number,
             Value::String(_) => Self::String,
-            Value::Array(_) => Self::Array,
+            // An array literal's shape is inferred from what is in it: its length, and its
+            // element type when every element agrees. That is what lets the checker say
+            // `array<number, 3>` about `[1, 2, 3]` -- and refuse it where a property asked for
+            // strings.
+            Value::Array(items) => {
+                let mut element = None;
+                for (index, item) in items.iter().enumerate() {
+                    let scalar = match item {
+                        Value::Number(_) => Some(Scalar::Number),
+                        Value::String(_) => Some(Scalar::String),
+                        Value::Bool(_) => Some(Scalar::Boolean),
+                        _ => None,
+                    };
+                    if index == 0 {
+                        element = scalar;
+                    } else if element != scalar {
+                        element = None;
+                        break;
+                    }
+                }
+                #[allow(clippy::cast_possible_truncation)]
+                Self::Array(ArrayType {
+                    element,
+                    length: Some(items.len() as u32),
+                })
+            }
             Value::Object(_) => Self::Object,
             Value::Color(_) => Self::Color,
         }
     }
 
-    /// A name for error messages.
+    /// A name for error messages, in the spec's own spelling.
+    ///
+    /// An array names what is known about it — `array`, `array<number>`, `array<number, 2>` —
+    /// because that is the half of "Expected array<string, 2> but found array<number, 2>" that
+    /// tells a style author which of the two is wrong.
     #[must_use]
-    pub const fn name(self) -> &'static str {
+    pub fn name(self) -> alloc::string::String {
+        use alloc::string::ToString as _;
         match self {
-            Self::Value => "value",
-            Self::Null => "null",
-            Self::Number => "number",
-            Self::String => "string",
-            Self::Boolean => "boolean",
-            Self::Object => "object",
-            Self::Array => "array",
-            Self::Color => "color",
-            Self::Formatted => "formatted",
+            Self::Value => "value".to_string(),
+            Self::Null => "null".to_string(),
+            Self::Number => "number".to_string(),
+            Self::String => "string".to_string(),
+            Self::Boolean => "boolean".to_string(),
+            Self::Object => "object".to_string(),
+            Self::Color => "color".to_string(),
+            Self::Formatted => "formatted".to_string(),
+            Self::Array(array) => match (array.element, array.length) {
+                (None, None) => "array".to_string(),
+                (Some(element), None) => alloc::format!("array<{}>", element.widen().name()),
+                (None, Some(length)) => alloc::format!("array<value, {length}>"),
+                (Some(element), Some(length)) => {
+                    alloc::format!("array<{}, {length}>", element.widen().name())
+                }
+            },
         }
     }
 }
@@ -362,6 +499,17 @@ pub enum AssertKind {
 }
 
 impl AssertKind {
+    /// The array element type this names, or `None` for one an array cannot hold.
+    #[must_use]
+    pub const fn as_scalar(self) -> Option<Scalar> {
+        match self {
+            Self::Number => Some(Scalar::Number),
+            Self::String => Some(Scalar::String),
+            Self::Boolean => Some(Scalar::Boolean),
+            Self::Object => None,
+        }
+    }
+
     /// The type name the spec uses in the error message.
     #[must_use]
     pub const fn type_name(self) -> &'static str {
@@ -962,6 +1110,31 @@ impl Expression {
             };
         }
 
+        // The declared type against the produced one, which is the spec's own check and the one
+        // that turns "this style is wrong" from a rendering surprise into a load error. Only
+        // where a property *declares* a type: `parse` with no spec has nothing to check against,
+        // and an expression whose result is not known statically is `Value`, which accepts.
+        // A null is exempt for the reason `coerce_to_color` exempts it: it is the *absence* of a
+        // value, not a value of the wrong type. A property the style never wrote is parsed from
+        // its spec default, and a defaultless property's default is null — so checking it turns
+        // every unset `fill-pattern` and `line-gradient` into a style that will not load.
+        let absent = matches!(root, Expr::Literal(Value::Null));
+        if let Some(expected) = spec.expected
+            && !absent
+        {
+            let actual = root.result_type();
+            if !expected.accepts(actual) && actual != Type::Value {
+                return Err(ParseError::Malformed {
+                    operator: "expression".into(),
+                    detail: alloc::format!(
+                        "expected {} but found {} instead",
+                        expected.name(),
+                        actual.name()
+                    ),
+                });
+            }
+        }
+
         let dependency = classify(&root);
         let parsed = Self { root, dependency };
 
@@ -1068,7 +1241,11 @@ impl Expr {
                 AssertKind::Boolean => Type::Boolean,
                 AssertKind::Object => Type::Object,
             },
-            Self::AssertArray { .. } => Type::Array,
+            Self::AssertArray { item, length, .. } => Type::Array(ArrayType {
+                element: item.and_then(AssertKind::as_scalar),
+                #[allow(clippy::cast_possible_truncation)]
+                length: length.map(|n| n as u32),
+            }),
             Self::Cast { to, .. } => match to {
                 CastKind::Number => Type::Number,
                 CastKind::String => Type::String,
@@ -1082,7 +1259,12 @@ impl Expr {
             // An element of an array whose type is not known statically, which is what makes
             // `["at", …]` usable in a comparison the checker cannot otherwise admit.
             Self::At { .. } => Type::Value,
-            Self::Split { .. } | Self::ToRgba(_) => Type::Array,
+            // A split is any number of strings; `to-rgba` is exactly four numbers.
+            Self::Split { .. } => Type::Array(ArrayType::of(Scalar::String)),
+            Self::ToRgba(_) => Type::Array(ArrayType {
+                element: Some(Scalar::Number),
+                length: Some(4),
+            }),
             // It never produces one, so nothing constrains what it could have been.
             Self::Error(_) => Type::Value,
             Self::Concat(_) | Self::Join { .. } => Type::String,

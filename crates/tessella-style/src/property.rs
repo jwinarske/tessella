@@ -936,7 +936,14 @@ fn expression_spec(spec: &PropertySpec) -> expression::PropertySpec {
             // An enum is a string with a value list, and a sprite name is a string. Both lists
             // are checked elsewhere; the type is what the expression parser needs.
             PropertyKind::Enum | PropertyKind::Image => expression::Type::String,
-            PropertyKind::NumberArray(_) => expression::Type::Array,
+            // The declared shape, not just "an array": `fill-translate` is two numbers and
+            // `line-dasharray` is any number of them, and a checker given only "array" cannot
+            // tell a style that wrote a colour there.
+            PropertyKind::NumberArray(length) => expression::Type::Array(expression::ArrayType {
+                element: Some(expression::Scalar::Number),
+                #[allow(clippy::cast_possible_truncation)]
+                length: length.map(|n| n as u32),
+            }),
         }),
     }
 }

@@ -681,7 +681,12 @@ fn a_colour_is_not_an_array_of_numbers() {
     let array: Value = serde_json::from_str(r#"["literal", [0, 255, 0, 1]]"#).expect("json");
     assert_eq!(
         Expression::parse(&array).expect("parses").result_type(),
-        Type::Array
+        // Four numbers, which is what the literal holds — the shape is inferred now rather
+        // than flattened to "an array".
+        Type::Array(tessella_style::expression::ArrayType {
+            element: Some(tessella_style::expression::Scalar::Number),
+            length: Some(4),
+        })
     );
 
     // Converting a colour twice must not change it.

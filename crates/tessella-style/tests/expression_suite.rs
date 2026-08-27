@@ -134,7 +134,25 @@ fn run_case(case: &Value) -> Result<(), String> {
                 "string" => Some(Type::String),
                 "boolean" => Some(Type::Boolean),
                 "color" => Some(Type::Color),
-                "array" => Some(Type::Array),
+                // The whole declared shape, not just "an array". `array<string, 2>` is what
+                // lets the checker refuse an expression producing `array<number, 2>`, and
+                // flattening it here made three suite cases unfailable.
+                "array" => Some(Type::Array(tessella_style::expression::ArrayType {
+                    element: spec
+                        .and_then(|spec| spec.get("value"))
+                        .and_then(Value::as_str)
+                        .and_then(|name| match name {
+                            "number" => Some(tessella_style::expression::Scalar::Number),
+                            "string" => Some(tessella_style::expression::Scalar::String),
+                            "boolean" => Some(tessella_style::expression::Scalar::Boolean),
+                            _ => None,
+                        }),
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    length: spec
+                        .and_then(|spec| spec.get("length"))
+                        .and_then(Value::as_number)
+                        .map(|n| n as u32),
+                })),
                 // `enum` is a string with a value list, which this does not check yet;
                 // treating it as a string is right about the type and silent about the list.
                 "enum" => Some(Type::String),

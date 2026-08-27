@@ -265,8 +265,11 @@ to-number/basic
 to-rgba/zero
 to-string/2-ary
 to-string/basic
+typecheck/array-invalid-item
 typecheck/array-item-subtyping
 typecheck/array-length-subtyping
+typecheck/array-length-subtyping--no-length
+typecheck/array-wrong-length
 typeof/basic
 upcase/basic
 zoom/basic

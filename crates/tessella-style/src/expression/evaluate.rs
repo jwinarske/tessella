@@ -737,7 +737,7 @@ fn matches_spec_type(expected: Type, value: &Value) -> bool {
         Type::String => matches!(value, Value::String(_)),
         Type::Boolean => matches!(value, Value::Bool(_)),
         Type::Object => matches!(value, Value::Object(_)),
-        Type::Array => matches!(value, Value::Array(_)),
+        Type::Array(_) => matches!(value, Value::Array(_)),
         Type::Color => matches!(value, Value::String(_) | Value::Array(_)),
         Type::Null => matches!(value, Value::Null),
         // A formatted property accepts anything, because anything can be wrapped in a section.
@@ -848,11 +848,13 @@ fn evaluate_legacy(
     // function with nothing to fall back to has no value for this feature, and null would render
     // as absent rather than report that the style and the data disagree.
     let fallback = || -> Result<Value, EvaluationError> {
-        function.fallback().cloned().ok_or(EvaluationError::Type {
-            expected: function
-                .property_type
-                .map_or("a value", |expected| expected.name()),
-            got: "null",
+        function.fallback().cloned().ok_or_else(|| {
+            EvaluationError::Custom(alloc::format!(
+                "expected {}, got null",
+                function
+                    .property_type
+                    .map_or_else(|| alloc::string::String::from("a value"), Type::name)
+            ))
         })
     };
 
