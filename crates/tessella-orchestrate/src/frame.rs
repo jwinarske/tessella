@@ -193,6 +193,9 @@ pub fn emit(
     let mut source: BTreeMap<u64, (usize, usize, tessella_capture_abi::envelope::TextureId)> =
         BTreeMap::new();
     let mut bound: Vec<GeometryBinding> = Vec::new();
+    // One entry per bucket that reached the arena, so a bucket's second drawable reuses the
+    // bytes rather than copying them.
+    let mut packed_bytes: BTreeMap<(usize, usize), emit::Encoded> = BTreeMap::new();
 
     for (index, (tile, tile_buckets)) in buckets.iter().enumerate() {
         // A raster tile's picture goes up before any drawable names it, for the reason the glyph
@@ -254,22 +257,20 @@ pub fn emit(
     // for batching, and it is worth doing here rather than leaving the consumer to copy the
     // buckets into a buffer of its own — a copy per frame of every byte of geometry.
     let mut packed: BTreeSet<u64> = BTreeSet::new();
-    let mut open: Option<(u32, i32)> = None;
+    let mut open: Option<u32> = None;
     for entry in draw_order.resolve() {
         // A drawable whose pass is a mask appears once per pass; its geometry is packed once.
         if !packed.insert(entry.geometry.0) {
             continue;
         }
-        // One slab per (view, layer), which is DR-16's consolidated buffer. Sub-layer counts as
-        // part of the layer here because it separates drawables that never batch anyway — a
-        // fill's triangles from its own outline, an extrusion's depth pass from its colour pass.
-        // Each of those binds a different shader, so keeping them apart costs nothing and keeps
-        // a slab equal to exactly one batch.
-        let layer = (entry.layer_index, entry.sub_layer_index);
-        if open.is_some_and(|previous| previous != layer) {
+        // One slab per (view, layer), which is DR-16's consolidated buffer — and per layer
+        // rather than per sub-layer, because a bucket's drawables share their geometry and so
+        // land on both sides of a sub-layer boundary. They still batch separately: the run is
+        // keyed on sub-layer too, since what differs between them is render state.
+        if open.is_some_and(|previous| previous != entry.layer_index) {
             arena.seal();
         }
-        open = Some(layer);
+        open = Some(entry.layer_index);
         let Some(&(tile_index, bucket_index, raster_texture)) = source.get(&entry.geometry.0)
         else {
             continue;
@@ -280,10 +281,41 @@ pub fn emit(
         else {
             continue;
         };
-        if let Some(encoded) = encode(arena, bucket, entry.geometry, fonts, raster_texture) {
-            emit::write(producer, &encoded)?;
-            emitted.geometries += 1;
-        }
+
+        // A bucket's bytes go into the arena once, however many drawables it produces.
+        //
+        // Two of the seven kinds produce two: a fill's triangles and its outline, and a
+        // translucent extrusion's depth pass and its colour pass. Neither pair differs in
+        // anything a `GeometryAdd` carries — the record is the buffer description, and view,
+        // layer, tile, pass and flags are all on `ViewUse`. What separates the drawables is
+        // render state and `ubo_index`, which are per drawable already.
+        //
+        // Encoding per drawable meant a translucent extrusion's vertices, indices and
+        // interleaved attributes were all copied twice: on a forty-two tile cover of a city
+        // that is 15.8 MB of a 36.6 MB frame, and it is the largest single cost in `emit`.
+        //
+        // The second drawable gets its own id rather than sharing the first's, and the two
+        // records name the same slab ranges. Sharing the id would save a record and cost
+        // clarity: `ViewRelease` is keyed by (geometry, view), so one release would drop both
+        // drawables with nothing in the stream saying so. Nothing requires two geometries'
+        // ranges to be disjoint — a slab reference is an offset.
+        let encoded = match packed_bytes.get(&(tile_index, bucket_index)) {
+            Some(first) => {
+                let mut copy: emit::Encoded = first.clone();
+                copy.record.geometry = entry.geometry;
+                copy
+            }
+            None => {
+                let Some(fresh) = encode(arena, bucket, entry.geometry, fonts, raster_texture)
+                else {
+                    continue;
+                };
+                packed_bytes.insert((tile_index, bucket_index), fresh.clone());
+                fresh
+            }
+        };
+        emit::write(producer, &encoded)?;
+        emitted.geometries += 1;
     }
 
     // Every geometry is announced before any drawable names one.

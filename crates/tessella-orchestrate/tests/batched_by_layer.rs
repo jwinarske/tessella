@@ -73,6 +73,8 @@ struct Binding {
     shader: i32,
     permutation: u64,
     slab: u32,
+    /// Where the position buffer begins, so two geometries naming one buffer are visible.
+    at: u32,
     stride: u32,
     offsets: Vec<(u32, u32)>,
 }
@@ -146,6 +148,7 @@ fn frame_stream() -> (BTreeMap<u64, Binding>, Vec<OrderEntry>) {
                                 shader: add.builtin_shader,
                                 permutation: add.permutation_key,
                                 slab: position.source.slab,
+                                at: position.source.offset,
                                 stride: position.stride,
                                 offsets: attrs.iter().map(|a| (a.attr_id, a.offset)).collect(),
                             },
@@ -272,20 +275,24 @@ fn a_batch_spans_the_cover() {
 /// neighbour's is replaced; one slab for the frame would make every frame rebuild every byte.
 /// It is also the unit a consumer allocates, and a driver's maximum buffer size is a real
 /// number.
+///
+/// The layer, and not the sub-layer within it: a bucket's drawables share one geometry, so a
+/// fill's triangles and its outline name the same bytes from either side of a sub-layer
+/// boundary. Sealing between them would have to copy the bytes to keep them apart.
 #[test]
 fn a_slab_holds_one_layer() {
     let (bindings, order) = frame_stream();
 
-    let mut owner: BTreeMap<u32, (u32, i32)> = BTreeMap::new();
+    let mut owner: BTreeMap<u32, u32> = BTreeMap::new();
     for entry in &order {
         let Some(binding) = bindings.get(&entry.geometry.0) else {
             continue;
         };
-        let layer = (entry.layer_index, entry.sub_layer_index);
+        let layer = entry.layer_index;
         match owner.get(&binding.slab) {
             Some(previous) => assert_eq!(
                 *previous, layer,
-                "slab {} holds both {previous:?} and {layer:?}",
+                "slab {} holds both layer {previous} and layer {layer}",
                 binding.slab
             ),
             None => {
@@ -294,4 +301,46 @@ fn a_slab_holds_one_layer() {
         }
     }
     assert!(owner.len() > 1, "the frame used more than one slab");
+}
+
+/// A bucket's bytes reach the arena once, however many drawables it produces.
+///
+/// A translucent extrusion draws twice — a depth-only pass and then a colour pass — and the two
+/// differ in render state and `ubo_index`, neither of which a `GeometryAdd` carries. Encoding
+/// per drawable copied every vertex, index and interleaved attribute a second time, which on a
+/// city-sized cover was the largest single cost in `emit`.
+///
+/// The two records keep separate ids and name the same bytes. Separate ids because
+/// `ViewRelease` is keyed by (geometry, view): sharing one would mean a single release dropped
+/// both drawables, with nothing in the stream to say it had.
+#[test]
+fn a_bucket_is_encoded_once() {
+    let (bindings, order) = frame_stream();
+
+    // Distinct geometry ids whose position buffer begins at the same place in the same slab.
+    // Every bucket in this fixture is built from the same tile, so equal *bytes* prove nothing —
+    // equal offsets prove the bytes were written once.
+    let mut at_offset: BTreeMap<(u32, u32), Vec<u64>> = BTreeMap::new();
+    for (geometry, binding) in &bindings {
+        at_offset
+            .entry((binding.slab, binding.at))
+            .or_default()
+            .push(*geometry);
+    }
+
+    let shared: usize = at_offset.values().filter(|ids| ids.len() > 1).count();
+    let drawables = order
+        .iter()
+        .filter(|entry| bindings.contains_key(&entry.geometry.0))
+        .count();
+
+    assert!(
+        shared > 0,
+        "no bucket's drawables shared their bytes: {drawables} drawables over {} buffers",
+        at_offset.len()
+    );
+    assert!(
+        at_offset.len() < bindings.len(),
+        "every geometry got its own buffer, so nothing was shared"
+    );
 }
