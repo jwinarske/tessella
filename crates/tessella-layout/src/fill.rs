@@ -56,6 +56,18 @@ pub struct FillBucket {
     pub indices: Vec<u16>,
     /// Draw segments.
     pub segments: Vec<Segment>,
+    /// Line indices for the outline, over the same vertices.
+    ///
+    /// A fill draws twice — its triangles and then its outline — and the oracle gives the two
+    /// different shaders, `FillShader` and `FillOutlineShader`, over one vertex buffer. What
+    /// differs is the indices: triangles from earcut, and a line loop per ring.
+    pub line_indices: Vec<u16>,
+    /// Draw segments for [`Self::line_indices`].
+    ///
+    /// Its own vector because a line segment's index range is not a triangle segment's, and a
+    /// segment carries both offsets. The vertex ranges do coincide, which is what lets the
+    /// outline share the fill's vertices.
+    pub line_segments: Vec<Segment>,
 }
 
 /// Largest vertex index a segment can address.
@@ -262,11 +274,13 @@ fn build_polygons(bucket: &mut FillBucket, polygons: Vec<Vec<Ring>>) {
             if index > 0 {
                 holes.push(flat.len() / 2);
             }
+            let ring_base = bucket.vertices.len() - start_vertices + base as usize;
             for point in ring {
                 bucket.vertices.push(*point);
                 flat.push(f64::from(point[0]));
                 flat.push(f64::from(point[1]));
             }
+            outline_indices(bucket, ring_base, ring.len());
         }
         debug_assert_eq!(flat.len(), total_vertices * 2);
 
@@ -284,6 +298,58 @@ fn build_polygons(bucket: &mut FillBucket, polygons: Vec<Vec<Ring>>) {
                 segment.index_length += triangles.len() as u32;
             }
         }
+    }
+}
+
+/// Adds one ring's outline, as mbgl's `addOutlineIndices` adds it.
+///
+/// # A line per vertex, and the closing one first
+///
+/// `count` vertices give `count` segments and `count * 2` indices — one more segment than the
+/// gaps between the points, because the ring closes. mbgl emits that closing segment *first*,
+/// from the last vertex back to the first, and only then walks the consecutive pairs. A natural
+/// implementation appends it last instead, which draws the same outline and does not match the
+/// oracle's index buffer.
+///
+/// The count includes a ring's repeated closing point, which this build keeps. So a square
+/// arrives as five vertices and produces five segments, the first of them from that repeat back
+/// to the point it repeats — zero length, and drawn. That is mbgl's arithmetic and the golden
+/// carries it: five vertices, ten indices.
+fn outline_indices(bucket: &mut FillBucket, base: usize, count: usize) {
+    if count == 0 {
+        return;
+    }
+
+    let needs_segment = bucket
+        .line_segments
+        .last()
+        .is_none_or(|segment| segment.vertex_length as usize + count > MAX_SEGMENT_VERTICES);
+    if needs_segment {
+        #[allow(clippy::cast_possible_truncation)]
+        bucket.line_segments.push(Segment {
+            vertex_offset: base as u32,
+            index_offset: bucket.line_indices.len() as u32,
+            vertex_length: 0,
+            index_length: 0,
+        });
+    }
+
+    let Some(segment) = bucket.line_segments.last_mut() else {
+        return;
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    let first = segment.vertex_length as u16;
+
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        bucket.line_indices.push(first + count as u16 - 1);
+        bucket.line_indices.push(first);
+        for offset in 1..count as u16 {
+            bucket.line_indices.push(first + offset - 1);
+            bucket.line_indices.push(first + offset);
+        }
+        segment.vertex_length += count as u32;
+        segment.index_length += count as u32 * 2;
     }
 }
 
