@@ -26,6 +26,7 @@
 extern crate alloc;
 
 pub mod config;
+pub mod crossfade;
 pub mod document;
 pub mod expression;
 pub mod filter;
