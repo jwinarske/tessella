@@ -835,12 +835,40 @@ fn parse_interpolate(operator: &str, args: &[Value], scope: &[String]) -> Result
                 })?;
                 Interpolation::Exponential { base }
             }
-            // cubic-bezier is in the spec and not implemented. Rejecting it names the gap;
-            // approximating it with linear would be a silently wrong curve.
+            // Four numbers, each in `0..=1`, and mbgl checks every one of them: the two
+            // control points of a unit Bézier, the first and last being implicitly `(0, 0)`
+            // and `(1, 1)`. A control point outside the unit square makes a curve that is not
+            // a function of `x`, so solving it has no single answer -- which is why the range
+            // check is a parse error rather than a clamp.
+            Some("cubic-bezier") => {
+                // Exactly five elements: the name and four numbers. mbgl tests
+                // `arrayLength(interp) == 5` and does not read the arguments at all otherwise,
+                // so a fifth number is an error rather than something to ignore — and the spec
+                // suite has a case that says so.
+                let control = |index: usize| -> Option<f64> {
+                    if spec.len() != 5 {
+                        return None;
+                    }
+                    spec.get(index)
+                        .and_then(Value::as_number)
+                        .filter(|value| (0.0..=1.0).contains(value))
+                };
+                let (Some(x1), Some(y1), Some(x2), Some(y2)) =
+                    (control(1), control(2), control(3), control(4))
+                else {
+                    return Err(ParseError::Malformed {
+                        operator: operator.to_string(),
+                        detail: "cubic-bezier interpolation requires four numeric arguments \
+                                 with values between 0 and 1"
+                            .to_string(),
+                    });
+                };
+                Interpolation::CubicBezier { x1, y1, x2, y2 }
+            }
             Some(other) => {
                 return Err(ParseError::Malformed {
                     operator: operator.to_string(),
-                    detail: format!("interpolation `{other}` is not implemented"),
+                    detail: format!("interpolation `{other}` is not one the spec names"),
                 });
             }
             None => {

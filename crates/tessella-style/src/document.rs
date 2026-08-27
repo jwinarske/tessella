@@ -461,5 +461,23 @@ fn compile_check(layer: &Layer) -> Result<(), alloc::string::String> {
     }
     crate::property::resolve_paint(layer).map_err(|error| error.to_string())?;
     crate::property::resolve_layout(layer).map_err(|error| error.to_string())?;
+
+    // Then every remaining expression, whether or not a spec table names the property.
+    //
+    // The tables cover the kinds this build draws, and `layout_specs` answers `None` for a
+    // symbol layer — so a symbol's `text-field` was compiled by nobody. A layer whose text
+    // cannot be shaped then stayed in the style and drew *nothing*, which is the worst of the
+    // three outcomes: refusing the document is loud, dropping the layer is honest, and silently
+    // rendering an empty layer reads as a style that chose not to label anything.
+    //
+    // It is not hypothetical. A vendor style's `text-field` is
+    // `["coalesce", ["get", ["concat", "name_", ["config", …]]], ["get", "name"]]`, and `config`
+    // is a Mapbox Standard style-config expression with no MapLibre counterpart — so twelve
+    // label layers compiled clean and shaped no labels.
+    for value in layer.layout.values().chain(layer.paint.values()) {
+        if let PropertyValue::Expression(expression) = value {
+            crate::Expression::parse(expression.value()).map_err(|error| error.to_string())?;
+        }
+    }
     Ok(())
 }

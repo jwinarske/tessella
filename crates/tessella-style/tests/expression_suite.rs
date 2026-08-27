@@ -235,20 +235,38 @@ fn run_case(case: &Value) -> Result<(), String> {
 /// Numbers compare with a tolerance, because the suite's expectations are decimal literals and
 /// several operators are transcendental. Everything else compares exactly.
 ///
-/// # Why the tolerance is two units and not one
+/// # Why the tolerance is two units of the sixth *significant* digit
 ///
 /// The fixtures carry six significant digits and are *truncated* to them, not rounded:
 /// `interpolate/exponential` expects `3.33333` for a value that is `3.3333333…`. So a correct
-/// result can be a full unit of the sixth digit away — a relative `1e-6` — and a tolerance of
-/// exactly `1e-6` puts that case on the boundary, where one ULP in the last bit of the
-/// computation decides whether it passes. It did exactly that: `a + (b - a) * t` landed just
-/// inside and mbgl's own `a * (1 - t) + b * t` just outside, which would have read as the
-/// correct formula regressing.
-const TOLERANCE: f64 = 2e-6;
+/// result can be a full unit of the sixth digit away, and a tolerance of exactly one unit puts
+/// that case on the boundary, where one ULP in the last bit of the computation decides whether
+/// it passes. It did exactly that: `a + (b - a) * t` landed just inside and mbgl's own
+/// `a * (1 - t) + b * t` just outside, which would have read as the correct formula regressing.
+///
+/// # Why significant and not relative
+///
+/// It was a flat relative `2e-6`, which is the right number only where the leading digit is a
+/// nine. A unit of the sixth significant digit is a *relative* `1e-6` at 9.99999 and `1e-5` at
+/// 1.00000 — an order of magnitude apart — so a flat relative bound is either too tight at the
+/// bottom of a decade or too loose at the top. `interpolate/cubic-bezier` is the case that
+/// showed it: `18.73959…` truncates to `18.7395`, an absolute `9e-5` and a relative `4.8e-6`,
+/// which a `2e-6` bound rejects for a value that agrees with mbgl's to every digit the fixture
+/// carries.
+const SIGNIFICANT_DIGITS: i32 = 6;
+
+/// Two units of the last significant digit the fixtures carry, at this value's magnitude.
+fn tolerance(want: f64) -> f64 {
+    if want == 0.0 || !want.is_finite() {
+        return 2e-6;
+    }
+    let decade = want.abs().log10().floor() as i32;
+    2.0 * 10f64.powi(decade - (SIGNIFICANT_DIGITS - 1))
+}
 
 fn values_match(got: &Value, want: &Value) -> bool {
     match (got, want) {
-        (Value::Number(a), Value::Number(b)) => (a - b).abs() <= TOLERANCE * a.abs().max(1.0),
+        (Value::Number(a), Value::Number(b)) => (a - b).abs() <= tolerance(*b).max(2e-6),
         (Value::Array(a), Value::Array(b)) => {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| values_match(x, y))
         }

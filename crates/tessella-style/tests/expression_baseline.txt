@@ -71,6 +71,7 @@ index-of/assert-string
 index-of/basic-array
 index-of/invalid-haystack
 index-of/invalid-needle
+interpolate/cubic-bezier
 interpolate/cubic-bezier-3-args
 interpolate/cubic-bezier-5-args
 interpolate/cubic-bezier-invalid-control-point
@@ -80,6 +81,7 @@ interpolate/exponential-number-array
 interpolate/exponential-single-stop
 interpolate/infer-array-type
 interpolate/linear
+interpolate/linear-many-stops
 join/empty-array
 join/empty-item
 join/empty-separator

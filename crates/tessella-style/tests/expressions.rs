@@ -403,16 +403,19 @@ fn out_of_order_stops_are_rejected() {
     }
 }
 
-/// cubic-bezier is in the spec and not implemented. Approximating it with linear would be a
-/// silently wrong curve, so it is refused by name.
+/// An interpolation the spec does not name is refused, rather than approximated with linear.
+///
+/// The spec names three — `linear`, `exponential` and `cubic-bezier` — and all three are
+/// implemented. What is refused is a fourth, which a style can only get by inventing one or by
+/// being written against something that is not this spec. Falling back to linear there would
+/// draw a curve nobody asked for and say nothing about it.
 #[test]
-fn unimplemented_interpolation_is_refused() {
-    let value: Value = serde_json::from_str(
-        r#"["interpolate", ["cubic-bezier", 0, 0, 1, 1], ["zoom"], 0, 0, 1, 1]"#,
-    )
-    .unwrap();
-    let error = Expression::parse(&value).expect_err("cubic-bezier is not implemented");
-    assert!(format!("{error}").contains("cubic-bezier"), "{error}");
+fn an_unknown_interpolation_is_refused() {
+    let value: Value =
+        serde_json::from_str(r#"["interpolate", ["ease-in-quint"], ["zoom"], 0, 0, 1, 1]"#)
+            .unwrap();
+    let error = Expression::parse(&value).expect_err("no such interpolation");
+    assert!(format!("{error}").contains("ease-in-quint"), "{error}");
 }
 
 /// `literal` is how a style writes data that would otherwise read as a call.
@@ -1065,4 +1068,101 @@ fn colours_still_blend_channel_wise() {
     assert_eq!(colour.g, 0.0);
     assert_eq!(colour.b, 0.0);
     assert_eq!(colour.a, 1.0);
+}
+
+/// `cubic-bezier` interpolation, which is CSS easing and mbgl's `util::UnitBezier`.
+///
+/// The curve is parametric — `x` and `y` are both functions of `t` — and what an interpolation
+/// needs is `y` given `x`. A cubic has no closed-form inverse, so mbgl solves numerically:
+/// Newton first, then bisection. The bisection is not decoration. Newton stalls where the
+/// derivative approaches zero, which is exactly what a curve with a flat start is, and the case
+/// below with a control point at the origin exercises it.
+mod cubic_bezier {
+    use super::*;
+
+    fn eased(spec: &str, at: f64) -> f64 {
+        let json = format!(r#"["interpolate", {spec}, ["zoom"], 0, 0, 100, 100]"#);
+        let value: Value = serde_json::from_str(&json).expect("valid json");
+        let expression = Expression::parse(&value).expect("parses");
+        expression
+            .evaluate(Some(at), None)
+            .expect("evaluates")
+            .as_number()
+            .expect("a number")
+    }
+
+    /// The identity curve is the diagonal, so it must agree with linear everywhere.
+    ///
+    /// A useful check because it is the one case where the numerical solve has an exact answer
+    /// to be measured against: if Newton or the bisection bracket were wrong, this is where the
+    /// error would be plainest.
+    #[test]
+    fn the_identity_curve_is_linear() {
+        for at in [0.0, 12.5, 25.0, 50.0, 75.0, 99.0, 100.0] {
+            let bezier = eased(r#"["cubic-bezier", 0.0, 0.0, 1.0, 1.0]"#, at);
+            assert!(
+                (bezier - at).abs() < 1e-4,
+                "at {at}: identity bezier gave {bezier}"
+            );
+        }
+    }
+
+    /// CSS `ease-in-out`, against values the curve is defined by rather than values it produced.
+    ///
+    /// Symmetric about the midpoint, which is the property the control points state, and slower
+    /// than linear in the first half.
+    #[test]
+    fn ease_in_out_is_symmetric_and_slow_at_the_ends() {
+        let spec = r#"["cubic-bezier", 0.42, 0.0, 0.58, 1.0]"#;
+        assert!(
+            (eased(spec, 50.0) - 50.0).abs() < 1e-4,
+            "the midpoint is fixed"
+        );
+
+        let quarter = eased(spec, 25.0);
+        let three_quarters = eased(spec, 75.0);
+        assert!(quarter < 25.0, "eased in: {quarter} at a quarter");
+        assert!(three_quarters > 75.0, "eased out: {three_quarters}");
+        assert!(
+            ((100.0 - three_quarters) - quarter).abs() < 1e-4,
+            "symmetric: {quarter} vs {}",
+            100.0 - three_quarters
+        );
+    }
+
+    /// The curve is monotonic in x, so the output never goes backwards.
+    #[test]
+    fn the_output_never_goes_backwards() {
+        let spec = r#"["cubic-bezier", 0.0, 0.7, 1.0, 0.3]"#;
+        let mut previous = f64::NEG_INFINITY;
+        for step in 0..=100 {
+            let value = eased(spec, f64::from(step));
+            assert!(
+                value >= previous - 1e-9,
+                "at {step}: {value} after {previous}"
+            );
+            previous = value;
+        }
+    }
+
+    /// Four numbers in the unit square, and mbgl checks every one.
+    ///
+    /// A control point outside it makes a curve that is not a function of x, so solving has no
+    /// single answer — which is why this is a parse error rather than a clamp.
+    #[test]
+    fn a_control_point_outside_the_unit_square_is_refused() {
+        for spec in [
+            r#"["cubic-bezier", 0.5, 0.0, 1.5, 1.0]"#,
+            r#"["cubic-bezier", -0.1, 0.0, 1.0, 1.0]"#,
+            r#"["cubic-bezier", 0.5, 0.0, 1.0]"#,
+            r#"["cubic-bezier", 0.5, 0.0, 1.0, "x"]"#,
+        ] {
+            let json = format!(r#"["interpolate", {spec}, ["zoom"], 0, 0, 1, 1]"#);
+            let value: Value = serde_json::from_str(&json).expect("valid json");
+            assert!(
+                Expression::parse(&value).is_err(),
+                "{spec} should not parse"
+            );
+        }
+    }
 }

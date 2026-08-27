@@ -317,6 +317,124 @@ pub enum Interpolation {
         /// Rate of change.
         base: f64,
     },
+    /// A cubic Bézier easing curve, as CSS spells it.
+    ///
+    /// The two control points are given; the first and last are implicitly `(0, 0)` and
+    /// `(1, 1)`, which is what makes it a *unit* Bézier and why only four numbers travel.
+    CubicBezier {
+        /// First control point's x, in `0..=1`.
+        x1: f64,
+        /// First control point's y, in `0..=1`.
+        y1: f64,
+        /// Second control point's x, in `0..=1`.
+        x2: f64,
+        /// Second control point's y, in `0..=1`.
+        y2: f64,
+    },
+}
+
+/// mbgl's `util::UnitBezier`, which is WebKit's, which is what CSS easing is defined by.
+///
+/// # Why solving is iterative
+///
+/// The curve is parametric: `x` and `y` are both functions of `t`, and what an interpolation
+/// needs is `y` as a function of `x`. There is no closed form for the inverse of a cubic, so `t`
+/// is found numerically — Newton first because it converges in a handful of steps for a
+/// well-behaved curve, then bisection, which is slower and cannot fail to bracket. mbgl does
+/// exactly this, and the fallback is not decoration: Newton stalls where the derivative is near
+/// zero, which is precisely what a curve with a flat start is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct UnitBezier {
+    ax: f64,
+    bx: f64,
+    cx: f64,
+    ay: f64,
+    by: f64,
+    cy: f64,
+}
+
+impl UnitBezier {
+    /// The polynomial coefficients, in mbgl's spelling.
+    ///
+    /// Written the long way rather than simplified, because the simplification is only exact in
+    /// real arithmetic: `1 - 3p1x - (3(p2x - p1x) - 3p1x)` and `1 - 3p2x + 3p1x` are the same
+    /// number until they are `f64`, and the whole point of transcribing is that they agree.
+    const fn new(p1x: f64, p1y: f64, p2x: f64, p2y: f64) -> Self {
+        let cx = 3.0 * p1x;
+        let bx = 3.0 * (p2x - p1x) - (3.0 * p1x);
+        let cy = 3.0 * p1y;
+        let by = 3.0 * (p2y - p1y) - (3.0 * p1y);
+        Self {
+            ax: 1.0 - (3.0 * p1x) - bx,
+            bx,
+            cx,
+            ay: 1.0 - (3.0 * p1y) - by,
+            by,
+            cy,
+        }
+    }
+
+    /// `ax t³ + bx t² + cx t`, by Horner's rule as mbgl writes it.
+    fn sample_curve_x(self, t: f64) -> f64 {
+        ((self.ax * t + self.bx) * t + self.cx) * t
+    }
+
+    fn sample_curve_y(self, t: f64) -> f64 {
+        ((self.ay * t + self.by) * t + self.cy) * t
+    }
+
+    fn sample_curve_derivative_x(self, t: f64) -> f64 {
+        (3.0 * self.ax * t + 2.0 * self.bx) * t + self.cx
+    }
+
+    /// Given an `x`, the parameter it came from.
+    fn solve_curve_x(self, x: f64, epsilon: f64) -> f64 {
+        // Newton first: normally very fast.
+        let mut t2 = x;
+        for _ in 0..8 {
+            let x2 = self.sample_curve_x(t2) - x;
+            if x2.abs() < epsilon {
+                return t2;
+            }
+            let d2 = self.sample_curve_derivative_x(t2);
+            if d2.abs() < 1e-6 {
+                break;
+            }
+            t2 -= x2 / d2;
+        }
+
+        // Then bisection, for reliability.
+        let (mut t0, mut t1) = (0.0f64, 1.0f64);
+        t2 = x;
+        if t2 < t0 {
+            return t0;
+        }
+        if t2 > t1 {
+            return t1;
+        }
+        while t0 < t1 {
+            let x2 = self.sample_curve_x(t2);
+            if (x2 - x).abs() < epsilon {
+                return t2;
+            }
+            if x > x2 {
+                t0 = t2;
+            } else {
+                t1 = t2;
+            }
+            t2 = (t1 - t0) * 0.5 + t0;
+        }
+        t2
+    }
+
+    fn solve(self, x: f64, epsilon: f64) -> f64 {
+        self.sample_curve_y(self.solve_curve_x(x, epsilon))
+    }
+}
+
+/// The eased position of `x` along a unit Bézier, at mbgl's epsilon.
+pub(crate) fn solve_unit_bezier(x1: f64, y1: f64, x2: f64, y2: f64, x: f64) -> f64 {
+    UnitBezier::new(x1, y1, x2, y2).solve(x, 1e-6)
 }
 
 /// What a legacy filter comparison reads from the feature.
@@ -936,6 +1054,15 @@ impl Expression {
                 let value =
                     (base.powf(f64::from(progress)) - 1.0) / (base.powf(f64::from(diff)) - 1.0);
                 value as f32
+            }
+            // The curve eases the *linear* factor rather than the input: mbgl's
+            // `CubicBezierInterpolator` computes `interpolationFactor(1.0, …)` — a plain
+            // fraction — and solves the Bézier for it. The epsilon is mbgl's 1e-6.
+            Interpolation::CubicBezier { x1, y1, x2, y2 } => {
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    solve_unit_bezier(*x1, *y1, *x2, *y2, f64::from(progress / diff)) as f32
+                }
             }
         };
         factor.clamp(0.0, 1.0)

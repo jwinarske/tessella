@@ -905,6 +905,12 @@ fn factor(interpolation: Interpolation, position: f64, lower: f64, upper: f64) -
                 numerator / denominator
             }
         }
+        // The curve eases the plain fraction rather than the input. mbgl's
+        // `CubicBezierInterpolator` computes `interpolationFactor(1.0, …)` -- which for a base
+        // of one is exactly `(position - lower) / span` -- and solves the Bézier for it.
+        Interpolation::CubicBezier { x1, y1, x2, y2 } => {
+            crate::expression::solve_unit_bezier(x1, y1, x2, y2, (position - lower) / span)
+        }
     }
 }
 

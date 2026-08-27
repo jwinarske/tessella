@@ -233,6 +233,33 @@ fn run() -> Result<String, String> {
             build_sourceless(&style, id).map_err(|error| format!("background {id}: {error}"))?,
         );
         built.sort_by_key(|bucket| bucket.layer_index);
+        if std::env::var_os("CAPTURE_RENDER_TRACE").is_some() {
+            for bucket in &built {
+                let kind = match &bucket.content {
+                    tessella_orchestrate::tile::Content::Symbol(layout) => {
+                        format!(
+                            "Symbol(empty={}, stacks={:?})",
+                            layout.is_empty(),
+                            layout.stacks()
+                        )
+                    }
+                    tessella_orchestrate::tile::Content::Fill(b) => {
+                        format!("Fill({})", b.vertices.len())
+                    }
+                    tessella_orchestrate::tile::Content::Line(b) => {
+                        format!("Line({})", b.vertices.len())
+                    }
+                    tessella_orchestrate::tile::Content::Circle(b) => {
+                        format!("Circle({})", b.vertices.len())
+                    }
+                    tessella_orchestrate::tile::Content::Fill3d(b) => {
+                        format!("Fill3d({})", b.vertices.len())
+                    }
+                    _ => "other".to_string(),
+                };
+                eprintln!("    built {} -> {kind}", bucket.layer_id);
+            }
+        }
         buckets.push((id, built));
     }
 
