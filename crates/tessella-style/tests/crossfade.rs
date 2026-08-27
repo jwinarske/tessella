@@ -167,3 +167,60 @@ fn every_image_the_fade_could_reach_is_named() {
     let missing = |_: f64| None;
     assert!(names_at(missing, 14.0).is_empty());
 }
+
+/// A layer's pattern dependencies, across the three zooms a fade can reach.
+mod dependencies {
+    use tessella_style::crossfade::pattern_names;
+    use tessella_style::{Layer, Style};
+
+    fn layer(paint: &str) -> Layer {
+        let style = Style::parse(&format!(
+            r#"{{"version": 8, "sources": {{"s": {{"type": "vector", "tiles": []}}}},
+                "layers": [{{"id": "l", "type": "fill", "source": "s", "source-layer": "x",
+                            "paint": {paint}}}]}}"#
+        ))
+        .expect("parses");
+        style.layers.into_iter().next().expect("one layer")
+    }
+
+    /// A pattern that steps with zoom needs both sides of the step.
+    #[test]
+    fn a_stepped_pattern_needs_both_images() {
+        let layer =
+            layer(r#"{"fill-pattern": ["step", ["zoom"], "hatch-small", 14, "hatch-large"]}"#);
+        let paint = tessella_style::property::resolve_paint(&layer).expect("resolves");
+        let names = pattern_names(|name| paint.get(name), 14.0);
+        assert!(
+            names.contains(&"hatch-small".to_owned()) && names.contains(&"hatch-large".to_owned()),
+            "a tile at the step needs both: {names:?}"
+        );
+    }
+
+    /// A constant pattern is asked for once, not three times.
+    #[test]
+    fn a_constant_pattern_is_named_once() {
+        let layer = layer(r#"{"fill-pattern": "hatch"}"#);
+        let paint = tessella_style::property::resolve_paint(&layer).expect("resolves");
+        assert_eq!(pattern_names(|name| paint.get(name), 14.0), ["hatch"]);
+    }
+
+    /// A layer with no pattern needs no sprite.
+    #[test]
+    fn no_pattern_is_no_dependency() {
+        let layer = layer(r#"{"fill-color": "red"}"#);
+        let paint = tessella_style::property::resolve_paint(&layer).expect("resolves");
+        assert!(pattern_names(|name| paint.get(name), 14.0).is_empty());
+    }
+
+    /// Away from the step, only the reachable neighbour is named.
+    #[test]
+    fn only_the_reachable_neighbour_is_named() {
+        let layer =
+            layer(r#"{"fill-pattern": ["step", ["zoom"], "hatch-small", 14, "hatch-large"]}"#);
+        let paint = tessella_style::property::resolve_paint(&layer).expect("resolves");
+        // At zoom ten, z-1, z and z+1 are all below the step.
+        assert_eq!(pattern_names(|name| paint.get(name), 10.0), ["hatch-small"]);
+        // At eighteen they are all above it.
+        assert_eq!(pattern_names(|name| paint.get(name), 18.0), ["hatch-large"]);
+    }
+}

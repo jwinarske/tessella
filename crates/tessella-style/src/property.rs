@@ -238,6 +238,21 @@ pub struct ResolvedProperty {
     pub binding: Binding,
 }
 
+impl crate::crossfade::PatternSource for ResolvedProperty {
+    /// The sprite this names at `zoom`, if it names one.
+    ///
+    /// Anything but a string is no dependency: the layer that set no pattern resolves to null,
+    /// and a data-driven one cannot be answered by a zoom alone.
+    fn image_at(&self, zoom: f64) -> Option<alloc::string::String> {
+        use alloc::borrow::ToOwned as _;
+        match self.expression.evaluate(Some(zoom), None) {
+            Ok(Value::String(name)) if !name.is_empty() => Some(name),
+            _ => None,
+        }
+        .map(|name| name.as_str().to_owned())
+    }
+}
+
 impl ResolvedProperty {
     /// The value, when it does not depend on anything.
     #[must_use]

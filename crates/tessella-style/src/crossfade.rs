@@ -219,3 +219,60 @@ pub fn names_at<F: Fn(f64) -> Option<alloc::string::String>>(
     }
     names
 }
+
+/// The four paint properties whose value is a sprite name.
+///
+/// One per layer type that can carry a pattern, and the spec gives each the same shape: an
+/// `Image` property defaulting to nothing, so a layer that sets none resolves to null and needs
+/// no sprite at all.
+pub const PATTERN_PROPERTIES: [&str; 4] = [
+    "background-pattern",
+    "fill-extrusion-pattern",
+    "fill-pattern",
+    "line-pattern",
+];
+
+/// Every sprite a layer's patterns could need at `zoom`, in the order first seen.
+///
+/// # Why three zooms and not one
+///
+/// The value at the current zoom is the one drawn, and the value a level away is the one it is
+/// fading from or to. A tile that fetched only the current answer would cross an integer zoom
+/// and have nothing to fade against — mbgl asks its expression at `z - 1`, `z` and `z + 1` for
+/// exactly this reason, and so does [`faded`].
+///
+/// Deduplicated, because the common case is a constant that gives one name three times, and a
+/// tile should ask the sprite sheet for it once.
+///
+/// A property that resolves to anything but a string contributes nothing. That covers the layer
+/// that set no pattern, whose default is null, and it also covers a data-driven pattern — whose
+/// name depends on the feature, so a zoom alone cannot answer it. Those are collected per
+/// feature at bucket build instead.
+#[must_use]
+pub fn pattern_names<'a, P, E>(paint: P, zoom: f64) -> Vec<alloc::string::String>
+where
+    P: Fn(&str) -> Option<&'a E>,
+    E: PatternSource + 'a,
+{
+    let mut names = Vec::new();
+    for property in PATTERN_PROPERTIES {
+        let Some(source) = paint(property) else {
+            continue;
+        };
+        for name in names_at(|z| source.image_at(z), zoom) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names
+}
+
+/// A paint property that may name a sprite at a zoom.
+///
+/// A trait rather than a concrete type so this module stays arithmetic: what a property *is*
+/// belongs to `property`, and what a fade *needs* belongs here.
+pub trait PatternSource {
+    /// The sprite this names at `zoom`, if it names one.
+    fn image_at(&self, zoom: f64) -> Option<alloc::string::String>;
+}
