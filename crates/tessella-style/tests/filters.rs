@@ -277,7 +277,7 @@ fn filters_classify_as_data_driven() {
     ] {
         assert_eq!(
             filter(source).expression().dependency(),
-            Dependency::Feature,
+            Dependency::FEATURE,
             "{source}"
         );
     }
@@ -452,7 +452,7 @@ fn a_filter_may_bury_a_zoom_curve() {
     let compiled = filter(json);
     assert_eq!(
         compiled.expression().dependency(),
-        Dependency::ZoomAndFeature
+        Dependency::ZOOM.join(Dependency::FEATURE)
     );
 
     let path = TestFeature::new("LineString", vec![("class", Value::String("path".into()))]);

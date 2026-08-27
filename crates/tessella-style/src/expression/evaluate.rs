@@ -54,6 +54,13 @@ pub enum EvaluationError {
     /// The expression reads the zoom and none was supplied.
     #[error("expression needs a zoom")]
     MissingZoom,
+    /// The expression reads the camera beyond its zoom and none was supplied.
+    ///
+    /// Its own error rather than `MissingZoom`, because the two are supplied at different rates:
+    /// a caller can hold a zoom for a whole interval and still have no camera to offer, which is
+    /// precisely the case §12.1's per-interval cache is in.
+    #[error("expression needs a camera")]
+    MissingCamera,
     /// The expression reads the feature and none was supplied.
     ///
     /// Distinct from a feature that merely lacks the property, which yields null. This is the
@@ -82,9 +89,36 @@ pub enum EvaluationError {
 }
 
 /// What an evaluation can see.
+/// The camera facts an expression can read beyond the zoom.
+///
+/// # Why these are supplied rather than derived
+///
+/// A style crate has no viewport. Pitch it could carry without one, but the distance from the
+/// centre needs the projection and the feature's position both, and deriving it here would mean
+/// this crate knowing how a tile maps to a screen. It is a fact about the frame, so the frame
+/// provides it.
+///
+/// # The unit of `distance_from_center` is not settled here
+///
+/// `pitch` is degrees, unambiguously: it is the unit the root `pitch` style property uses and
+/// the unit a camera carries. `distance_from_center` is a Mapbox Style Spec v3 expression with
+/// no mbgl implementation, no entry in the vendored style-spec reference, and no oracle in this
+/// tree to measure against — mbgl went as far as reserving `Dependency::Location` and stopped.
+/// So this type carries the number and states no scale for it, and the producer that fills it
+/// in is where the definition belongs and where it has to be checked against a real style.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Camera {
+    /// Pitch in degrees.
+    pub pitch: f64,
+    /// Distance of the feature from the centre of the viewport.
+    pub distance_from_center: f64,
+}
+
 pub(super) struct Context<'a> {
     /// Current zoom, when there is one.
     pub(super) zoom: Option<f64>,
+    /// The camera beyond its zoom, when the caller holds one.
+    pub(super) camera: Option<Camera>,
     /// Current feature, when there is one.
     pub(super) feature: Option<&'a dyn Feature>,
     /// Names bound by enclosing `let`s, innermost first.
@@ -117,13 +151,18 @@ impl Binding<'_> {
 }
 
 impl Context<'_> {
-    /// A context with neither zoom nor feature, for constant folding.
+    /// A context with neither zoom, camera nor feature, for constant folding.
     pub(super) fn empty() -> Self {
         Self {
             zoom: None,
+            camera: None,
             feature: None,
             scope: None,
         }
+    }
+
+    fn camera(&self) -> Result<Camera, EvaluationError> {
+        self.camera.ok_or(EvaluationError::MissingCamera)
     }
 
     fn zoom(&self) -> Result<f64, EvaluationError> {
@@ -140,6 +179,8 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
     match expr {
         Expr::Literal(value) => Ok(value.clone()),
         Expr::Zoom => Ok(Value::Number(context.zoom()?)),
+        Expr::Pitch => Ok(Value::Number(context.camera()?.pitch)),
+        Expr::DistanceFromCenter => Ok(Value::Number(context.camera()?.distance_from_center)),
         Expr::GeometryType => Ok(Value::String(
             context.feature()?.geometry_type().to_string(),
         )),
@@ -765,6 +806,7 @@ fn evaluate_let(
     };
     let inner = Context {
         zoom: context.zoom,
+        camera: context.camera,
         feature: context.feature,
         scope: Some(&bound),
     };

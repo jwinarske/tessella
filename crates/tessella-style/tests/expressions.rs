@@ -52,46 +52,46 @@ fn eval(json: &str, zoom: Option<f64>, feature: Option<&dyn Feature>) -> Value {
 
 #[test]
 fn literals_are_constant() {
-    assert_eq!(dependency("3"), Dependency::None);
-    assert_eq!(dependency(r#""a""#), Dependency::None);
-    assert_eq!(dependency(r#"["literal", [1, 2]]"#), Dependency::None);
-    assert_eq!(dependency(r#"["+", 1, 2]"#), Dependency::None);
+    assert_eq!(dependency("3"), Dependency::NONE);
+    assert_eq!(dependency(r#""a""#), Dependency::NONE);
+    assert_eq!(dependency(r#"["literal", [1, 2]]"#), Dependency::NONE);
+    assert_eq!(dependency(r#"["+", 1, 2]"#), Dependency::NONE);
 }
 
 #[test]
 fn zoom_makes_an_expression_camera_only() {
-    assert_eq!(dependency(r#"["zoom"]"#), Dependency::Zoom);
+    assert_eq!(dependency(r#"["zoom"]"#), Dependency::ZOOM);
     assert_eq!(
         dependency(r#"["interpolate", ["linear"], ["zoom"], 10, 1, 16, 4]"#),
-        Dependency::Zoom
+        Dependency::ZOOM
     );
     // Written as a curve, because the spec allows zoom only as a curve's input: `["*",
     // ["zoom"], 2]` is rejected, which §12.1 explains — a camera-only expression is cached as
     // interpolation endpoints, and zoom buried in arithmetic has no endpoints to cache.
     assert_eq!(
         dependency(r#"["step", ["zoom"], 0, 10, 20]"#),
-        Dependency::Zoom
+        Dependency::ZOOM
     );
 }
 
 #[test]
 fn feature_access_makes_an_expression_data_driven() {
-    assert_eq!(dependency(r#"["get", "kind"]"#), Dependency::Feature);
-    assert_eq!(dependency(r#"["has", "kind"]"#), Dependency::Feature);
-    assert_eq!(dependency(r#"["geometry-type"]"#), Dependency::Feature);
-    assert_eq!(dependency(r#"["id"]"#), Dependency::Feature);
-    assert_eq!(dependency(r#"["properties"]"#), Dependency::Feature);
+    assert_eq!(dependency(r#"["get", "kind"]"#), Dependency::FEATURE);
+    assert_eq!(dependency(r#"["has", "kind"]"#), Dependency::FEATURE);
+    assert_eq!(dependency(r#"["geometry-type"]"#), Dependency::FEATURE);
+    assert_eq!(dependency(r#"["id"]"#), Dependency::FEATURE);
+    assert_eq!(dependency(r#"["properties"]"#), Dependency::FEATURE);
 }
 
 #[test]
 fn zoom_and_feature_together_join_to_both() {
     assert_eq!(
         dependency(r#"["interpolate", ["linear"], ["zoom"], 0, ["get", "scale"], 1, 2]"#),
-        Dependency::ZoomAndFeature
+        Dependency::ZOOM.join(Dependency::FEATURE)
     );
     assert_eq!(
         dependency(r#"["interpolate", ["linear"], ["zoom"], 10, ["get", "a"], 16, 4]"#),
-        Dependency::ZoomAndFeature
+        Dependency::ZOOM.join(Dependency::FEATURE)
     );
 }
 
@@ -101,43 +101,61 @@ fn zoom_and_feature_together_join_to_both() {
 #[test]
 fn an_untaken_branch_still_counts() {
     let match_expr = r#"["match", 1, 1, "constant", ["get", "kind"]]"#;
-    assert_eq!(dependency(match_expr), Dependency::Feature);
+    assert_eq!(dependency(match_expr), Dependency::FEATURE);
 
     let case_expr = r#"["case", false, ["get", "kind"], "fallback"]"#;
-    assert_eq!(dependency(case_expr), Dependency::Feature);
+    assert_eq!(dependency(case_expr), Dependency::FEATURE);
 
     // And the same for the fallback rather than the arms. Wrapped in a zoom curve because the
     // spec allows zoom only there, so a both-dependencies expression has to be written this
     // way — which is itself the shape §12.1 is built around.
     let fallback =
         r#"["step", ["zoom"], ["match", ["get", "n"], 1, "a", ["get", "kind"]], 10, "x"]"#;
-    assert_eq!(dependency(fallback), Dependency::ZoomAndFeature);
+    assert_eq!(
+        dependency(fallback),
+        Dependency::ZOOM.join(Dependency::FEATURE)
+    );
 }
 
 /// `get` reads the feature even when its key is a constant, which is the common case and the
 /// easy one to get wrong by classifying on the arguments alone.
 #[test]
 fn get_depends_on_the_feature_even_with_a_constant_key() {
-    assert_eq!(dependency(r#"["get", "kind"]"#), Dependency::Feature);
+    assert_eq!(dependency(r#"["get", "kind"]"#), Dependency::FEATURE);
 }
 
 #[test]
 fn the_dependency_lattice_joins_correctly() {
-    use Dependency::{Feature, None, Zoom, ZoomAndFeature};
-    assert_eq!(None.join(None), None);
-    assert_eq!(None.join(Zoom), Zoom);
-    assert_eq!(Zoom.join(None), Zoom);
-    assert_eq!(Zoom.join(Zoom), Zoom);
-    assert_eq!(Feature.join(Feature), Feature);
-    assert_eq!(Zoom.join(Feature), ZoomAndFeature);
-    assert_eq!(Feature.join(Zoom), ZoomAndFeature);
-    assert_eq!(ZoomAndFeature.join(None), ZoomAndFeature);
+    let none = Dependency::NONE;
+    let zoom = Dependency::ZOOM;
+    let feature = Dependency::FEATURE;
+    let camera = Dependency::CAMERA;
+    let both = zoom.join(feature);
 
-    assert!(None.is_constant());
-    assert!(!Zoom.is_constant());
-    assert!(Zoom.needs_zoom() && !Zoom.needs_feature());
-    assert!(Feature.needs_feature() && !Feature.needs_zoom());
-    assert!(ZoomAndFeature.needs_zoom() && ZoomAndFeature.needs_feature());
+    assert_eq!(none.join(none), none);
+    assert_eq!(none.join(zoom), zoom);
+    assert_eq!(zoom.join(none), zoom);
+    assert_eq!(zoom.join(zoom), zoom);
+    assert_eq!(feature.join(feature), feature);
+    assert_eq!(zoom.join(feature), both);
+    assert_eq!(feature.join(zoom), both);
+    assert_eq!(both.join(none), both);
+
+    assert!(none.is_constant());
+    assert!(!zoom.is_constant());
+    assert!(zoom.needs_zoom() && !zoom.needs_feature());
+    assert!(feature.needs_feature() && !feature.needs_zoom());
+    assert!(both.needs_zoom() && both.needs_feature());
+
+    // The camera is its own axis, and joins with the other two rather than replacing either.
+    assert!(camera.needs_camera());
+    assert!(!camera.needs_zoom() && !camera.needs_feature());
+    assert!(!zoom.needs_camera() && !feature.needs_camera());
+    let all = camera.join(both);
+    assert!(all.needs_camera() && all.needs_zoom() && all.needs_feature());
+    // Idempotent and commutative, which is what makes folding it up a tree well-defined.
+    assert_eq!(all.join(camera), all);
+    assert_eq!(camera.join(zoom), zoom.join(camera));
 }
 
 /// Constant folding is DR-11's first tier: a property that depends on nothing is evaluated
@@ -422,7 +440,7 @@ fn an_unknown_interpolation_is_refused() {
 #[test]
 fn literal_protects_data_from_being_parsed() {
     let e = expr(r#"["literal", ["get", "not-a-call"]]"#);
-    assert_eq!(e.dependency(), Dependency::None);
+    assert_eq!(e.dependency(), Dependency::NONE);
     assert_eq!(
         e.as_constant(),
         Some(Value::Array(vec![
@@ -521,19 +539,19 @@ fn binding_names_are_identifiers() {
 fn a_let_inherits_its_bindings_dependencies() {
     assert_eq!(
         dependency(r#"["let", "a", ["get", "x"], ["var", "a"]]"#),
-        Dependency::Feature
+        Dependency::FEATURE
     );
     assert_eq!(
         dependency(r#"["let", "a", 1, ["step", ["zoom"], ["var", "a"], 10, 2]]"#),
-        Dependency::Zoom
+        Dependency::ZOOM
     );
     assert_eq!(
         dependency(r#"["let", "a", ["get", "x"], ["step", ["zoom"], ["var", "a"], 10, 2]]"#),
-        Dependency::ZoomAndFeature
+        Dependency::ZOOM.join(Dependency::FEATURE)
     );
     assert_eq!(
         dependency(r#"["let", "a", 1, ["var", "a"]]"#),
-        Dependency::None,
+        Dependency::NONE,
         "a constant binding stays constant"
     );
 }
@@ -578,9 +596,9 @@ fn a_data_driven_expression_is_not_folded() {
 fn get_from_an_object_does_not_read_the_feature() {
     assert_eq!(
         dependency(r#"["get", "a", ["literal", {"a": 1}]]"#),
-        Dependency::None
+        Dependency::NONE
     );
-    assert_eq!(dependency(r#"["get", "a"]"#), Dependency::Feature);
+    assert_eq!(dependency(r#"["get", "a"]"#), Dependency::FEATURE);
     assert_eq!(
         eval(r#"["get", "a", ["literal", {"a": 7}]]"#, None, None),
         Value::Number(7.0)
@@ -1170,4 +1188,126 @@ mod cubic_bezier {
             );
         }
     }
+}
+
+/// `["pitch"]` and `["distance-from-center"]` are the camera's, not the zoom's.
+///
+/// The distinction is the whole reason the dependency set grew a third axis. §12.1 evaluates a
+/// zoom-only expression once per `(layer, zoom interval)` and holds the answer for every frame
+/// in that interval — sound for zoom, which does not change inside one, and wrong for pitch,
+/// which changes whenever the camera moves. A misclassification here would not fail a test
+/// anywhere else: it would render, and the label filter would simply stop responding to the
+/// camera until the zoom crossed an interval boundary.
+#[test]
+fn the_camera_operators_depend_on_the_camera() {
+    assert_eq!(dependency(r#"["pitch"]"#), Dependency::CAMERA);
+    assert_eq!(
+        dependency(r#"["distance-from-center"]"#),
+        Dependency::CAMERA
+    );
+
+    for json in [r#"["pitch"]"#, r#"["distance-from-center"]"#] {
+        let dependency = dependency(json);
+        assert!(dependency.needs_camera(), "{json} does not need the camera");
+        assert!(!dependency.needs_zoom(), "{json} was classified as zoom");
+        assert!(!dependency.is_constant(), "{json} folded to a constant");
+    }
+
+    // Joined up the tree like any other dependency, and alongside the other axes rather than
+    // in place of them: this is the filter shape a vendor style actually uses.
+    let mixed = dependency(r#"["all", ["<=", ["distance-from-center"], 2], ["get", "name"]]"#);
+    assert!(mixed.needs_camera() && mixed.needs_feature());
+}
+
+/// A camera expression evaluates against a camera, and says so when there is none.
+///
+/// The loud failure is what makes `evaluate` and `evaluate_with_camera` safe to have as two
+/// methods: a caller that reaches the wrong one gets an error naming what was missing, not a
+/// stale pitch silently standing in for the real one.
+#[test]
+fn the_camera_operators_read_the_camera() {
+    use tessella_style::expression::Camera;
+
+    let camera = Camera {
+        pitch: 55.0,
+        distance_from_center: 1.25,
+    };
+
+    assert_eq!(
+        expr(r#"["pitch"]"#).evaluate_with_camera(Some(15.0), Some(camera), None),
+        Ok(Value::Number(55.0))
+    );
+    assert_eq!(
+        expr(r#"["distance-from-center"]"#).evaluate_with_camera(Some(15.0), Some(camera), None),
+        Ok(Value::Number(1.25))
+    );
+
+    // A filter over the camera, which is where these actually appear.
+    assert_eq!(
+        expr(r#"["<=", ["distance-from-center"], 2]"#).evaluate_with_camera(
+            Some(15.0),
+            Some(camera),
+            None
+        ),
+        Ok(Value::Bool(true))
+    );
+
+    assert!(
+        expr(r#"["pitch"]"#).evaluate(Some(15.0), None).is_err(),
+        "a camera expression evaluated without a camera has to fail rather than invent one"
+    );
+}
+
+/// Both are numbers, so a filter can compare them without a cast.
+#[test]
+fn the_camera_operators_are_numbers() {
+    assert!(
+        expr(r#"["<=", ["distance-from-center"], 2]"#)
+            .as_constant()
+            .is_none(),
+        "a camera filter is not constant"
+    );
+    // A comparison type-checks, which it would not if the operand's type were unknown.
+    expr(r#"["<=", ["pitch"], 45]"#);
+    expr(r#"["+", ["pitch"], ["distance-from-center"]]"#);
+}
+
+/// The extension list stays sorted, disjoint from the generated one, and implemented.
+///
+/// Three ways this drifts. Unsorted, and `is_operator` binary-searches past a name that is
+/// there. Overlapping the generated table, which happens the day maplibre-native implements one
+/// of these — and would then be two sources for one name, with nothing saying which won.
+/// Listed but unparsed, which is worse than absent: `is_operator` would call it an expression,
+/// so `["pitch"]` would stop being a literal array and start being a parse error.
+#[test]
+fn the_extension_operators_are_declared_once_and_work() {
+    use tessella_style::EXTENSIONS;
+
+    let mut sorted = EXTENSIONS.to_vec();
+    sorted.sort_unstable();
+    assert_eq!(sorted.as_slice(), EXTENSIONS, "EXTENSIONS is not sorted");
+
+    for name in EXTENSIONS {
+        assert!(
+            !tessella_style::generated::operators::OPERATORS.contains(&name),
+            "{name} is in the generated mbgl table too: remove it from EXTENSIONS, \
+             the generated one is the source"
+        );
+        assert!(
+            tessella_style::is_operator(name),
+            "{name} is listed but is_operator says otherwise"
+        );
+        // Naming it is not implementing it: `is_operator` claiming a name the parser rejects
+        // turns a legal literal array into a parse error.
+        let json = alloc_json(name);
+        let value: Value = serde_json::from_str(&json).expect("valid json");
+        assert!(
+            Expression::parse(&value).is_ok(),
+            "{name} is claimed as an operator but does not parse"
+        );
+    }
+}
+
+fn alloc_json(name: &str) -> String {
+    format!("[{:?}]", name)
 }

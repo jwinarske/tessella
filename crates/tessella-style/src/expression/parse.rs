@@ -326,6 +326,17 @@ fn parse_rooted(
             expect_arity(operator, args, 0, 0)?;
             Ok(Expr::Zoom)
         }
+        // Mapbox Style Spec v3. mbgl's compound-expression registry has neither, so an mbgl
+        // build rejects any layer using one — which is exactly what a vendor style does to
+        // eleven of its layers, every one of them a label.
+        "pitch" => {
+            expect_arity(operator, args, 0, 0)?;
+            Ok(Expr::Pitch)
+        }
+        "distance-from-center" => {
+            expect_arity(operator, args, 0, 0)?;
+            Ok(Expr::DistanceFromCenter)
+        }
         "geometry-type" => {
             expect_arity(operator, args, 0, 0)?;
             Ok(Expr::GeometryType)

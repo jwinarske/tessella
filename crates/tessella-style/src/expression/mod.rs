@@ -29,7 +29,7 @@
 mod evaluate;
 mod parse;
 
-pub use evaluate::{EvaluationError, Feature};
+pub use evaluate::{Camera, EvaluationError, Feature};
 pub use parse::ParseError;
 
 use alloc::boxed::Box;
@@ -37,48 +37,60 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::value::Value;
-
 /// What an expression's value depends on.
 ///
 /// A lattice, joined up the tree: an expression depends on whatever its children do, plus
-/// whatever it introduces itself. `zoom` introduces [`Dependency::Zoom`]; `get`, `has`,
-/// `geometry-type`, `id` and `properties` introduce [`Dependency::Feature`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub enum Dependency {
-    /// Nothing. The expression is a constant and folds at parse.
-    #[default]
-    None,
-    /// Zoom only. Evaluated once per `(layer, zoom interval)`, process-wide (§12.1).
-    Zoom,
-    /// The feature only. Evaluated per feature at bucket build.
-    Feature,
-    /// Both. Evaluated per feature, and re-evaluated when the zoom interval changes.
-    ZoomAndFeature,
-}
+/// whatever it introduces itself. `zoom` introduces [`Dependency::ZOOM`]; `get`, `has`,
+/// `geometry-type`, `id` and `properties` introduce [`Dependency::FEATURE`]; `pitch` and
+/// `distance-from-center` introduce [`Dependency::CAMERA`].
+///
+/// # Why a set and not four names
+///
+/// This was an enum of `None`, `Zoom`, `Feature` and `ZoomAndFeature`, which is the lattice
+/// written out by hand. Three axes make eight names, and the join stops being a table anyone
+/// can read. mbgl reached the same shape from the other direction — its `Dependency` is a
+/// `uint32_t` of flags — and it reserved `Location = 1 << 3` for `distance-from-center` without
+/// implementing it.
+///
+/// The camera axis is not the zoom axis renamed. §12.1 evaluates a zoom-only expression once
+/// per `(layer, zoom interval)` and holds the result across every frame in that interval, which
+/// is sound because zoom is constant while the interval is. Pitch and the distance from the
+/// centre of the viewport are not: they change with every camera movement inside one interval,
+/// so an expression that reads them has to be re-evaluated per frame and must not enter that
+/// cache. Classifying one as `Zoom` would freeze it at whatever the camera was doing when the
+/// interval began.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash)]
+pub struct Dependency(u8);
 
 impl Dependency {
+    /// Nothing. The expression is a constant and folds at parse.
+    pub const NONE: Self = Self(0);
+    /// The zoom level. Evaluated once per `(layer, zoom interval)`, process-wide (§12.1).
+    pub const ZOOM: Self = Self(1 << 0);
+    /// The feature. Evaluated per feature at bucket build.
+    pub const FEATURE: Self = Self(1 << 1);
+    /// The camera beyond its zoom — pitch, and position within the viewport.
+    ///
+    /// Re-evaluated per frame. Never cached across a zoom interval, because it changes inside
+    /// one.
+    pub const CAMERA: Self = Self(1 << 2);
+
     /// The least dependency covering both.
     #[must_use]
     pub const fn join(self, other: Self) -> Self {
-        match (self, other) {
-            (Self::None, other) => other,
-            (other, Self::None) => other,
-            (Self::Zoom, Self::Zoom) => Self::Zoom,
-            (Self::Feature, Self::Feature) => Self::Feature,
-            _ => Self::ZoomAndFeature,
-        }
+        Self(self.0 | other.0)
     }
 
-    /// True when the value cannot change: no zoom, no feature.
+    /// True when the value cannot change: no zoom, no feature, no camera.
     #[must_use]
     pub const fn is_constant(self) -> bool {
-        matches!(self, Self::None)
+        self.0 == 0
     }
 
     /// True when zoom is involved.
     #[must_use]
     pub const fn needs_zoom(self) -> bool {
-        matches!(self, Self::Zoom | Self::ZoomAndFeature)
+        self.0 & Self::ZOOM.0 != 0
     }
 
     /// True when the feature is involved.
@@ -87,7 +99,16 @@ impl Dependency {
     /// uniform (§2.2), so it is load-bearing well beyond the evaluator.
     #[must_use]
     pub const fn needs_feature(self) -> bool {
-        matches!(self, Self::Feature | Self::ZoomAndFeature)
+        self.0 & Self::FEATURE.0 != 0
+    }
+
+    /// True when the camera beyond its zoom is involved.
+    ///
+    /// The property has to be re-evaluated per frame, and must not be held across a zoom
+    /// interval the way a zoom-only one is.
+    #[must_use]
+    pub const fn needs_camera(self) -> bool {
+        self.0 & Self::CAMERA.0 != 0
     }
 }
 
@@ -747,6 +768,22 @@ pub enum Expr {
     Literal(Value),
     /// The current zoom.
     Zoom,
+    /// The camera's pitch, in degrees.
+    ///
+    /// A Mapbox Style Spec v3 addition with no mbgl counterpart: its compound-expression
+    /// registry has no `pitch`, and its `Dependency` set has no bit for one. Degrees because
+    /// that is the unit the root `pitch` style property uses and the unit a camera carries.
+    Pitch,
+    /// How far the feature is from the centre of the viewport.
+    ///
+    /// The other v3 addition, and the one mbgl went furthest towards without arriving: it
+    /// reserved `Dependency::Location = 1 << 3` and commented it "not used yet,
+    /// \"distance-from-center\" not supported".
+    ///
+    /// The number is supplied by whoever holds the viewport, not computed here — see
+    /// [`Camera::distance_from_center`]. A style crate that derived it would need the
+    /// projection, and would be inventing the unit besides.
+    DistanceFromCenter,
     /// A feature property.
     Get {
         /// Property name.
@@ -1208,10 +1245,36 @@ impl Expression {
         zoom: Option<f64>,
         feature: Option<&dyn Feature>,
     ) -> Result<Value, EvaluationError> {
+        self.evaluate_with_camera(zoom, None, feature)
+    }
+
+    /// As [`evaluate`](Self::evaluate), with the camera facts beyond the zoom.
+    ///
+    /// Separate rather than a fourth parameter on `evaluate`, because almost no caller has a
+    /// camera to give: a bucket builder holds a zoom and a feature and nothing more, and §12.1's
+    /// per-interval cache holds a zoom and not even that. Passing `None` everywhere to serve the
+    /// few callers that do would put a hole in every call site.
+    ///
+    /// Reaching the wrong one is an error rather than a wrong answer.
+    /// [`EvaluationError::MissingCamera`] fires the moment a `pitch` or `distance-from-center`
+    /// is evaluated without one, which is what makes the split safe: the failure is loud, and it
+    /// names the thing that was missing.
+    ///
+    /// # Errors
+    ///
+    /// As [`evaluate`](Self::evaluate), and [`EvaluationError::MissingCamera`] when the
+    /// expression reads the camera and none was supplied.
+    pub fn evaluate_with_camera(
+        &self,
+        zoom: Option<f64>,
+        camera: Option<Camera>,
+        feature: Option<&dyn Feature>,
+    ) -> Result<Value, EvaluationError> {
         evaluate::evaluate(
             &self.root,
             &evaluate::Context {
                 zoom,
+                camera,
                 feature,
                 scope: None,
             },
@@ -1229,7 +1292,7 @@ impl Expr {
     pub fn result_type(&self) -> Type {
         match self {
             Self::Literal(value) => Type::of(value),
-            Self::Zoom => Type::Number,
+            Self::Zoom | Self::Pitch | Self::DistanceFromCenter => Type::Number,
             Self::GeometryType => Type::String,
             Self::Has { .. } | Self::Not(_) | Self::Compare { .. } => Type::Boolean,
             Self::All(_) | Self::Any(_) => Type::Boolean,
@@ -1280,7 +1343,7 @@ impl LegacyFunction {
     /// Whether the stops are composite: `[{"zoom": z, "value": v}, output]`.
     ///
     /// A composite function varies with zoom *and* the property, which is the only legacy form
-    /// that lands on [`Dependency::ZoomAndFeature`].
+    /// that depends on both [`Dependency::ZOOM`] and [`Dependency::FEATURE`].
     #[must_use]
     pub fn has_composite_stops(&self) -> bool {
         self.stops
@@ -1542,6 +1605,8 @@ fn children(expr: &Expr) -> Vec<&Expr> {
     match expr {
         Expr::Literal(_)
         | Expr::Zoom
+        | Expr::Pitch
+        | Expr::DistanceFromCenter
         | Expr::GeometryType
         | Expr::Id
         | Expr::Properties
@@ -1638,9 +1703,14 @@ fn children(expr: &Expr) -> Vec<&Expr> {
 /// Computes an expression's dependency as a join over its tree.
 fn classify(expr: &Expr) -> Dependency {
     match expr {
-        Expr::Literal(_) => Dependency::None,
-        Expr::Zoom => Dependency::Zoom,
-        Expr::GeometryType | Expr::Id | Expr::Properties => Dependency::Feature,
+        Expr::Literal(_) => Dependency::NONE,
+        Expr::Zoom => Dependency::ZOOM,
+        // Not ZOOM. §12.1 holds a zoom-only value across a whole zoom interval, which is sound
+        // because zoom does not change inside one; pitch and the distance from the centre do,
+        // on every camera movement. Classifying either as ZOOM would freeze it at whatever the
+        // camera happened to be doing when the interval began.
+        Expr::Pitch | Expr::DistanceFromCenter => Dependency::CAMERA,
+        Expr::GeometryType | Expr::Id | Expr::Properties => Dependency::FEATURE,
         // A legacy function reads the feature when it names a property and the zoom when it
         // does not. Composite stops — `[{"zoom": z, "value": v}, out]` — read both, which is
         // the case that makes this a lattice join rather than a choice.
@@ -1653,9 +1723,9 @@ fn classify(expr: &Expr) -> Dependency {
             .map(|(_, value)| classify(value))
             .fold(classify(body), Dependency::join),
         // The binding it reads carries the dependency; the read itself has none.
-        Expr::Var(_) => Dependency::None,
+        Expr::Var(_) => Dependency::NONE,
         Expr::Rgba { args } => join_all(args),
-        Expr::Format { sections } => sections.iter().fold(Dependency::None, |acc, section| {
+        Expr::Format { sections } => sections.iter().fold(Dependency::NONE, |acc, section| {
             let mut joined = acc.join(classify(&section.content));
             for part in [&section.scale, &section.font, &section.color]
                 .into_iter()
@@ -1694,19 +1764,19 @@ fn classify(expr: &Expr) -> Dependency {
         },
         Expr::LegacyFunction(function) => {
             let from_property = if function.property.is_some() {
-                Dependency::Feature
+                Dependency::FEATURE
             } else {
-                Dependency::Zoom
+                Dependency::ZOOM
             };
             if function.has_composite_stops() {
-                from_property.join(Dependency::Zoom)
+                from_property.join(Dependency::ZOOM)
             } else {
                 from_property
             }
         }
         // Legacy filters read the feature by construction; there is no camera-only form.
         Expr::FilterCompare { .. } | Expr::FilterHas { .. } | Expr::FilterIn { .. } => {
-            Dependency::Feature
+            Dependency::FEATURE
         }
         // `get` and `has` read the feature even when the key itself is a constant.
         // Reading a named object does not touch the feature. Classifying it as feature-driven
@@ -1714,7 +1784,7 @@ fn classify(expr: &Expr) -> Dependency {
         // table would be re-evaluated per feature forever.
         Expr::Get { key, object } | Expr::Has { key, object } => match object {
             Some(object) => classify(key).join(classify(object)),
-            None => Dependency::Feature.join(classify(key)),
+            None => Dependency::FEATURE.join(classify(key)),
         },
         Expr::Compare { lhs, rhs, .. } => classify(lhs).join(classify(rhs)),
         Expr::Not(inner) => classify(inner),
@@ -1760,5 +1830,5 @@ fn classify(expr: &Expr) -> Dependency {
 
 fn join_all(args: &[Expr]) -> Dependency {
     args.iter()
-        .fold(Dependency::None, |acc, arg| acc.join(classify(arg)))
+        .fold(Dependency::NONE, |acc, arg| acc.join(classify(arg)))
 }

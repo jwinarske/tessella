@@ -65,8 +65,28 @@ pub enum Error {
 /// `["Noto Sans Regular"]` is indistinguishable from a call to an operator of that name.
 ///
 /// The names come from mbgl (DR-6), so a version that gains an operator gains it here too
-/// rather than diverging silently.
+/// rather than diverging silently — plus [`EXTENSIONS`], for the ones this build has and mbgl
+/// does not.
 #[must_use]
 pub fn is_operator(name: &str) -> bool {
     generated::operators::OPERATORS.binary_search(&name).is_ok()
+        || EXTENSIONS.binary_search(&name).is_ok()
 }
+
+/// Operators this build implements that maplibre-native does not.
+///
+/// # Why these are not in the generated table
+///
+/// `generated::operators` says of itself that a diff of it is a diff of what mbgl supports, and
+/// DR-6 rests on that being exactly true: the table is regenerated from `expressionRegistry` and
+/// `compoundExpressionRegistry`, and anything hand-added would survive one regeneration and
+/// vanish at the next. Keeping the two apart means the generated file stays a faithful statement
+/// about mbgl, and this one is the statement about the difference.
+///
+/// Both are Mapbox Style Spec v3 additions. mbgl has no compound expression for either; it went
+/// as far as reserving `Dependency::Location = 1 << 3` for `distance-from-center` and commenting
+/// it "not used yet". They appear in filters on label layers in vendor styles, where their
+/// absence costs the layer rather than the property.
+///
+/// Sorted, for the same binary search as the generated table.
+pub const EXTENSIONS: [&str; 2] = ["distance-from-center", "pitch"];

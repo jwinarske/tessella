@@ -3,9 +3,13 @@
 //! mbgl's `Parser::parseLayer` converts each layer on its own and, on failure, logs a warning
 //! and returns — the layer never enters `layers` and the rest of the document does. Refusing
 //! the whole style instead is the difference between a map with a missing label layer and a
-//! blank screen, and on a real vendor style it is not hypothetical: `["distance-from-center"]`
-//! and `["pitch"]` are Mapbox GL JS v3 expressions with no mbgl compound expression, and they
-//! appear in filters on eleven of one style's hundred and fourteen layers.
+//! blank screen, and on a real vendor style it is not hypothetical: a hundred and fourteen
+//! layers, eleven of them filtered on Mapbox Style Spec v3 expressions.
+//!
+//! Two of those, `["distance-from-center"]` and `["pitch"]`, this build now implements, so they
+//! no longer cost their layers — see `the_camera_operators_are_no_longer_rejected` below. The
+//! rejection path is not thereby obsolete: `["config"]` and `["measure-light"]` remain, and an
+//! unknown operator is the ordinary way a style outruns a renderer.
 
 use tessella_style::Style;
 
@@ -23,7 +27,7 @@ fn one_bad_layer_does_not_take_the_style_with_it() {
     let mut style = style_with(
         r#"{"id": "under", "type": "fill", "source": "s", "source-layer": "l"},
            {"id": "vendor", "type": "symbol", "source": "s", "source-layer": "l",
-            "filter": ["<=", ["distance-from-center"], 2]},
+            "filter": ["<=", ["measure-light", "brightness"], 2]},
            {"id": "over", "type": "line", "source": "s", "source-layer": "l"}"#,
     );
 
@@ -31,7 +35,7 @@ fn one_bad_layer_does_not_take_the_style_with_it() {
     assert_eq!(rejected.len(), 1);
     assert_eq!(rejected[0].id, "vendor");
     assert!(
-        rejected[0].reason.contains("distance-from-center"),
+        rejected[0].reason.contains("measure-light"),
         "the reason names the operator: {}",
         rejected[0].reason
     );
@@ -71,4 +75,29 @@ fn a_compilable_style_is_untouched() {
     );
     assert!(style.reject_uncompilable().is_empty());
     assert_eq!(style.layers.len(), 1);
+}
+
+/// The two camera operators keep their layers now.
+///
+/// This is the whole point of implementing them: they appeared only in filters, and a filter
+/// that will not compile takes the layer with it. Every one of the layers they cost was a label
+/// layer, so the visible effect of the gap was a map with most of its labels missing.
+#[test]
+fn the_camera_operators_are_no_longer_rejected() {
+    let mut style = style_with(
+        r#"{"id": "far", "type": "symbol", "source": "s", "source-layer": "l",
+            "filter": ["<=", ["distance-from-center"], 2]},
+           {"id": "flat", "type": "symbol", "source": "s", "source-layer": "l",
+            "filter": [">", ["pitch"], 30]},
+           {"id": "both", "type": "symbol", "source": "s", "source-layer": "l",
+            "filter": ["all", ["<=", ["distance-from-center"], 2], [">", ["pitch"], 30]]}"#,
+    );
+
+    let rejected = style.reject_uncompilable();
+    assert!(
+        rejected.is_empty(),
+        "a camera filter should compile now: {rejected:?}"
+    );
+    let kept: Vec<&str> = style.layers.iter().map(|l| l.id.as_str()).collect();
+    assert_eq!(kept, ["far", "flat", "both"]);
 }

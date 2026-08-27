@@ -195,10 +195,10 @@ fn run_case(case: &Value) -> Result<(), String> {
         .and_then(Value::as_bool)
         .unwrap_or(true);
     let wanted = match (feature_constant, zoom_constant) {
-        (true, true) => Dependency::None,
-        (true, false) => Dependency::Zoom,
-        (false, true) => Dependency::Feature,
-        (false, false) => Dependency::ZoomAndFeature,
+        (true, true) => Dependency::NONE,
+        (true, false) => Dependency::ZOOM,
+        (false, true) => Dependency::FEATURE,
+        (false, false) => Dependency::ZOOM.join(Dependency::FEATURE),
     };
     if parsed.dependency() != wanted {
         return Err(format!(
