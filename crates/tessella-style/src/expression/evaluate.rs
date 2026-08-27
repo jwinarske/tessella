@@ -61,6 +61,13 @@ pub enum EvaluationError {
     /// evaluated without a feature (DR-11).
     #[error("expression needs a feature")]
     MissingFeature,
+    /// The style asked for a failure, or one that only the operator can phrase.
+    ///
+    /// `["error", message]` is the deliberate case: a style saying a branch should not be
+    /// reachable. The rest are messages with a value in them — an index and a bound — which no
+    /// fixed variant can carry.
+    #[error("{0}")]
+    Custom(alloc::string::String),
     /// Interpolation was asked for between values it cannot interpolate.
     #[error("cannot interpolate between {0}")]
     NotInterpolatable(&'static str),
@@ -187,6 +194,94 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
             }
             Ok(Value::String(parts.join(&separator)))
         }
+        // Rust's `to_uppercase` is the full Unicode mapping, which is the one that can change a
+        // string's *length* — `ß` upcases to `SS`. mbgl walks codepoints and maps each singly,
+        // so the two disagree on exactly those characters. The spec says "the input string
+        // converted to upper case" and names no algorithm, so the difference is real and
+        // unresolvable from the spec; the full mapping is chosen because it is the correct
+        // answer for a reader, and it is written down here so the disagreement is not a
+        // surprise if a golden ever covers it.
+        Expr::CaseFold { upper, arg } => {
+            let value = evaluate(arg, context)?;
+            let Some(text) = value.as_str() else {
+                return Err(EvaluationError::Type {
+                    expected: "string",
+                    got: value.type_name(),
+                });
+            };
+            Ok(Value::String(if *upper {
+                text.to_uppercase()
+            } else {
+                text.to_lowercase()
+            }))
+        }
+        // `["at", index, array]`. Out of range is an error rather than null: the spec says the
+        // index must be within the array, and a null would be indistinguishable from an element
+        // that is one.
+        Expr::At { index, array } => {
+            let position = number_of(evaluate(index, context)?)?;
+            let value = evaluate(array, context)?;
+            let Some(items) = value.as_array() else {
+                return Err(EvaluationError::Type {
+                    expected: "array",
+                    got: value.type_name(),
+                });
+            };
+            if position.fract() != 0.0 || position < 0.0 {
+                return Err(EvaluationError::Custom(alloc::format!(
+                    "Array index must be a non-negative integer, but found {position} instead."
+                )));
+            }
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let at = position as usize;
+            items.get(at).cloned().ok_or_else(|| {
+                EvaluationError::Custom(alloc::format!(
+                    "Array index out of bounds: {at} > {}.",
+                    items.len().saturating_sub(1)
+                ))
+            })
+        }
+        // An empty delimiter splits into *characters*, and mbgl means Unicode characters rather
+        // than bytes -- it steps by `getUnicodeCharacterOffset`. So this splits on `char`
+        // boundaries, which is the same thing for anything a style will hold.
+        Expr::Split { input, delimiter } => {
+            let text = string_of(evaluate(input, context)?)?;
+            let separator = string_of(evaluate(delimiter, context)?)?;
+            let parts: Vec<Value> = if separator.is_empty() {
+                text.chars().map(|c| Value::String(c.to_string())).collect()
+            } else {
+                text.split(separator.as_str())
+                    .map(|part| Value::String(part.to_string()))
+                    .collect()
+            };
+            Ok(Value::Array(parts))
+        }
+        // Un-premultiplied on the way out, and the alpha rounded to two places. Both are mbgl's
+        // `Color::toArray`, and both matter: colours are *stored* premultiplied here, so
+        // returning the channels as held would give a translucent red as a dark one.
+        Expr::ToRgba(inner) => {
+            let value = evaluate(inner, context)?;
+            let color = crate::property::as_color(&value).map_err(|_| EvaluationError::Type {
+                expected: "color",
+                got: value.type_name(),
+            })?;
+            if color.a == 0.0 {
+                return Ok(Value::Array(alloc::vec![Value::Number(0.0); 4]));
+            }
+            let channel = |c: f32| f64::from(c) * 255.0 / f64::from(color.a);
+            Ok(Value::Array(alloc::vec![
+                Value::Number(channel(color.r)),
+                Value::Number(channel(color.g)),
+                Value::Number(channel(color.b)),
+                Value::Number((f64::from(color.a) * 100.0 + 0.5).floor() / 100.0),
+            ]))
+        }
+        Expr::TypeOf(inner) => Ok(Value::String(spec_type_name(&evaluate(inner, context)?))),
+        // Always fails, which is the point: it is how a style says a branch should not be
+        // reachable. The message is the style's, so it is evaluated rather than quoted.
+        Expr::Error(inner) => Err(EvaluationError::Custom(string_of(evaluate(
+            inner, context,
+        )?)?)),
         Expr::Length(inner) => match evaluate(inner, context)? {
             Value::String(text) => Ok(Value::Number(text.chars().count() as f64)),
             Value::Array(items) => Ok(Value::Number(items.len() as f64)),
@@ -981,6 +1076,20 @@ fn arithmetic(
         ArithmeticOp::Floor => numbers[0].floor(),
         ArithmeticOp::Ceil => numbers[0].ceil(),
         ArithmeticOp::Round => round_half_away(numbers[0]),
+        // The spec's unary maths, each `<cmath>`'s function of the same name. A domain error --
+        // `sqrt` of a negative, `asin` past one, `ln` of zero -- produces NaN or an infinity
+        // rather than an error, which is what mbgl's `Result<double>` returns too: the C
+        // functions do not report, and the spec does not ask them to.
+        ArithmeticOp::Sqrt => numbers[0].sqrt(),
+        ArithmeticOp::Ln => numbers[0].ln(),
+        ArithmeticOp::Log2 => numbers[0].log2(),
+        ArithmeticOp::Log10 => numbers[0].log10(),
+        ArithmeticOp::Sin => numbers[0].sin(),
+        ArithmeticOp::Cos => numbers[0].cos(),
+        ArithmeticOp::Tan => numbers[0].tan(),
+        ArithmeticOp::Asin => numbers[0].asin(),
+        ArithmeticOp::Acos => numbers[0].acos(),
+        ArithmeticOp::Atan => numbers[0].atan(),
     };
     Ok(Value::Number(value))
 }
@@ -1172,6 +1281,69 @@ fn compare(op: CompareOp, lhs: &Value, rhs: &Value) -> Result<Value, EvaluationE
         }
     };
     Ok(Value::Bool(result))
+}
+
+/// The spec's name for a value's type, as `typeof` reports it.
+///
+/// An array names its element type and its length — `array<number, 3>` — and an array whose
+/// elements disagree is `array<value, N>`. mbgl builds it the same way, taking the first
+/// element's type and widening to `value` at the first that differs; an empty array has no
+/// element type to name, so it is `array` alone.
+fn spec_type_name(value: &Value) -> alloc::string::String {
+    use alloc::string::ToString as _;
+    match value {
+        Value::Array(items) => {
+            let mut element: Option<&'static str> = None;
+            for item in items {
+                let this = scalar_type_name(item);
+                match element {
+                    None => element = Some(this),
+                    Some(seen) if seen == this => {}
+                    Some(_) => {
+                        element = Some("value");
+                        break;
+                    }
+                }
+            }
+            match element {
+                Some(name) => alloc::format!("array<{name}, {}>", items.len()),
+                None => "array".to_string(),
+            }
+        }
+        other => scalar_type_name(other).to_string(),
+    }
+}
+
+/// A value's own type name, without descending into an array.
+fn scalar_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Object(_) => "object",
+        Value::Color(_) => "color",
+        Value::Array(_) => "array",
+    }
+}
+
+/// A number argument, or the type error the operator would have raised.
+fn number_of(value: Value) -> Result<f64, EvaluationError> {
+    value.as_number().ok_or(EvaluationError::Type {
+        expected: "number",
+        got: value.type_name(),
+    })
+}
+
+/// A string argument, or the type error the operator would have raised.
+fn string_of(value: Value) -> Result<alloc::string::String, EvaluationError> {
+    value
+        .as_str()
+        .map(alloc::string::ToString::to_string)
+        .ok_or(EvaluationError::Type {
+            expected: "string",
+            got: value.type_name(),
+        })
 }
 
 fn expect_number(value: &Value) -> Result<f64, EvaluationError> {

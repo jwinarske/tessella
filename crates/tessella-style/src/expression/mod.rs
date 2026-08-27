@@ -135,6 +135,63 @@ pub enum ArithmeticOp {
     Ceil,
     /// `round`
     Round,
+    /// `sqrt`
+    Sqrt,
+    /// `ln`, the natural logarithm.
+    Ln,
+    /// `log2`
+    Log2,
+    /// `log10`
+    Log10,
+    /// `sin`
+    Sin,
+    /// `cos`
+    Cos,
+    /// `tan`
+    Tan,
+    /// `asin`
+    Asin,
+    /// `acos`
+    Acos,
+    /// `atan`
+    Atan,
+}
+
+impl ArithmeticOp {
+    /// Whether this operator folds over an identity, so no arguments is a value rather than an
+    /// error.
+    ///
+    /// `["+"]` is zero and `["min"]` is positive infinity, because both are folds. `["-"]` and
+    /// `["sqrt"]` are not: they are missing an operand.
+    #[must_use]
+    pub const fn is_variadic(self) -> bool {
+        matches!(self, Self::Add | Self::Multiply | Self::Min | Self::Max)
+    }
+
+    /// Whether this operator takes exactly one argument.
+    ///
+    /// The spec's unary maths, which mbgl declares one at a time with a single-`double`
+    /// signature — so two arguments is an arity error rather than a fold over the extra.
+    #[must_use]
+    pub const fn is_unary(self) -> bool {
+        matches!(
+            self,
+            Self::Abs
+                | Self::Floor
+                | Self::Ceil
+                | Self::Round
+                | Self::Sqrt
+                | Self::Ln
+                | Self::Log2
+                | Self::Log10
+                | Self::Sin
+                | Self::Cos
+                | Self::Tan
+                | Self::Asin
+                | Self::Acos
+                | Self::Atan
+        )
+    }
 }
 
 /// A type coercion.
@@ -585,6 +642,33 @@ pub enum Expr {
     },
     /// `["length", v]`: the length of a string or array.
     Length(Box<Expr>),
+    /// `["at", index, array]`: an element by position.
+    At {
+        /// Which element.
+        index: Box<Expr>,
+        /// The array.
+        array: Box<Expr>,
+    },
+    /// `["split", input, delimiter]`: a string cut into an array.
+    Split {
+        /// What is cut.
+        input: Box<Expr>,
+        /// What it is cut on. Empty splits into characters.
+        delimiter: Box<Expr>,
+    },
+    /// `["to-rgba", color]`: a colour's four components as an array.
+    ToRgba(Box<Expr>),
+    /// `["typeof", v]`: the spec's name for a value's type.
+    TypeOf(Box<Expr>),
+    /// `["error", message]`: an expression that always fails.
+    Error(Box<Expr>),
+    /// `["upcase", s]` and `["downcase", s]`: a string's case, folded.
+    CaseFold {
+        /// Upper when true, lower when false.
+        upper: bool,
+        /// The string.
+        arg: Box<Expr>,
+    },
     /// `["in", needle, haystack]`: membership in an array, or substring in a string.
     In {
         /// What is looked for.
@@ -972,6 +1056,13 @@ impl Expr {
             Self::Rgba { .. } => Type::Color,
             Self::Format { .. } => Type::Formatted,
             Self::Length(_) | Self::IndexOf { .. } => Type::Number,
+            Self::CaseFold { .. } | Self::TypeOf(_) => Type::String,
+            // An element of an array whose type is not known statically, which is what makes
+            // `["at", …]` usable in a comparison the checker cannot otherwise admit.
+            Self::At { .. } => Type::Value,
+            Self::Split { .. } | Self::ToRgba(_) => Type::Array,
+            // It never produces one, so nothing constrains what it could have been.
+            Self::Error(_) => Type::Value,
             Self::Concat(_) | Self::Join { .. } => Type::String,
             Self::In { .. } => Type::Boolean,
             // `get`, `id`, and everything whose type depends on data or on branches this does
@@ -1263,6 +1354,10 @@ fn children(expr: &Expr) -> Vec<&Expr> {
             })
             .collect(),
         Expr::Not(inner) | Expr::Length(inner) => alloc::vec![&**inner],
+        Expr::CaseFold { arg, .. } => alloc::vec![&**arg],
+        Expr::ToRgba(inner) | Expr::TypeOf(inner) | Expr::Error(inner) => alloc::vec![&**inner],
+        Expr::At { index, array } => alloc::vec![&**index, &**array],
+        Expr::Split { input, delimiter } => alloc::vec![&**input, &**delimiter],
         Expr::Get { key, object } | Expr::Has { key, object } => {
             let mut out = alloc::vec![&**key];
             out.extend(object.as_deref());
@@ -1367,6 +1462,10 @@ fn classify(expr: &Expr) -> Dependency {
             joined
         }),
         Expr::Length(inner) => classify(inner),
+        Expr::CaseFold { arg, .. } => classify(arg),
+        Expr::ToRgba(inner) | Expr::TypeOf(inner) | Expr::Error(inner) => classify(inner),
+        Expr::At { index, array } => classify(index).join(classify(array)),
+        Expr::Split { input, delimiter } => classify(input).join(classify(delimiter)),
         Expr::Concat(args) => join_all(args),
         Expr::Join { items, separator } => classify(items).join(classify(separator)),
         Expr::In { needle, haystack } => classify(needle).join(classify(haystack)),

@@ -181,6 +181,39 @@ fn parse_rooted(
             expect_arity(operator, args, 1, 1)?;
             Ok(Expr::Length(Box::new(parse_in(&args[0], scope)?)))
         }
+        "at" => {
+            expect_arity(operator, args, 2, 2)?;
+            Ok(Expr::At {
+                index: Box::new(parse_in(&args[0], scope)?),
+                array: Box::new(parse_in(&args[1], scope)?),
+            })
+        }
+        "split" => {
+            expect_arity(operator, args, 2, 2)?;
+            Ok(Expr::Split {
+                input: Box::new(parse_in(&args[0], scope)?),
+                delimiter: Box::new(parse_in(&args[1], scope)?),
+            })
+        }
+        "to-rgba" => {
+            expect_arity(operator, args, 1, 1)?;
+            Ok(Expr::ToRgba(Box::new(parse_in(&args[0], scope)?)))
+        }
+        "typeof" => {
+            expect_arity(operator, args, 1, 1)?;
+            Ok(Expr::TypeOf(Box::new(parse_in(&args[0], scope)?)))
+        }
+        "error" => {
+            expect_arity(operator, args, 1, 1)?;
+            Ok(Expr::Error(Box::new(parse_in(&args[0], scope)?)))
+        }
+        "upcase" | "downcase" => {
+            expect_arity(operator, args, 1, 1)?;
+            Ok(Expr::CaseFold {
+                upper: operator == "upcase",
+                arg: Box::new(parse_in(&args[0], scope)?),
+            })
+        }
         "in" => {
             expect_arity(operator, args, 2, 2)?;
             Ok(Expr::In {
@@ -384,7 +417,27 @@ fn parse_rooted(
             to: CastKind::Number,
             args: parse_all(args, scope)?,
         }),
-        "+" | "-" | "*" | "/" | "%" | "^" | "min" | "max" | "abs" | "floor" | "ceil" | "round" => {
+        // The three constants, which mbgl declares with a no-argument signature. Folded to their
+        // value at parse rather than carried as operators: they depend on nothing, so an
+        // expression node for them would be a node the classifier has to walk and the evaluator
+        // has to visit to reach a number that was known here.
+        "e" | "pi" | "ln2" => {
+            if !args.is_empty() {
+                return Err(ParseError::Arity {
+                    operator: operator.to_string(),
+                    expected: "no arguments".to_string(),
+                    got: args.len(),
+                });
+            }
+            let value = match operator {
+                "e" => core::f64::consts::E,
+                "pi" => core::f64::consts::PI,
+                _ => core::f64::consts::LN_2,
+            };
+            Ok(Expr::Literal(Value::Number(value)))
+        }
+        "+" | "-" | "*" | "/" | "%" | "^" | "min" | "max" | "abs" | "floor" | "ceil" | "round"
+        | "sqrt" | "ln" | "log2" | "log10" | "sin" | "cos" | "tan" | "asin" | "acos" | "atan" => {
             let op = match operator {
                 "+" => ArithmeticOp::Add,
                 "-" => ArithmeticOp::Subtract,
@@ -397,21 +450,37 @@ fn parse_rooted(
                 "abs" => ArithmeticOp::Abs,
                 "floor" => ArithmeticOp::Floor,
                 "ceil" => ArithmeticOp::Ceil,
+                "sqrt" => ArithmeticOp::Sqrt,
+                "ln" => ArithmeticOp::Ln,
+                "log2" => ArithmeticOp::Log2,
+                "log10" => ArithmeticOp::Log10,
+                "sin" => ArithmeticOp::Sin,
+                "cos" => ArithmeticOp::Cos,
+                "tan" => ArithmeticOp::Tan,
+                "asin" => ArithmeticOp::Asin,
+                "acos" => ArithmeticOp::Acos,
+                "atan" => ArithmeticOp::Atan,
                 _ => ArithmeticOp::Round,
             };
             // `+`, `*`, `min` and `max` are folds over identities, so no arguments is not an
             // error but the identity itself: zero, one, positive infinity, negative infinity.
             // The evaluator already folds from those, so this is only the gate. The others have
             // no identity to return — `["-"]` and `["floor"]` are missing an operand.
-            let variadic = matches!(
-                op,
-                ArithmeticOp::Add | ArithmeticOp::Multiply | ArithmeticOp::Min | ArithmeticOp::Max
-            );
-            if args.is_empty() && !variadic {
+            if args.is_empty() && !op.is_variadic() {
                 return Err(ParseError::Arity {
                     operator: operator.to_string(),
                     expected: "at least 1 argument".to_string(),
                     got: 0,
+                });
+            }
+            // And a unary one takes exactly one. mbgl declares each with a single-`double`
+            // signature, so a second argument is an arity error rather than something to fold
+            // over -- `["sqrt", 4, 9]` names no function.
+            if op.is_unary() && args.len() != 1 {
+                return Err(ParseError::Arity {
+                    operator: operator.to_string(),
+                    expected: "1 argument".to_string(),
+                    got: args.len(),
                 });
             }
             Ok(Expr::Arithmetic {
