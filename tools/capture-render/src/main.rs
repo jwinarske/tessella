@@ -259,6 +259,9 @@ fn draw(scene: &Scene, arena: &SlabArena, width: u32, height: u32) -> Canvas {
             BuiltIn::LineShader => {
                 draw_line(&mut canvas, geometry, arena, &matrix, &paint, width, height);
             }
+            BuiltIn::CircleShader => {
+                draw_circle(&mut canvas, geometry, arena, &matrix, &paint, width, height);
+            }
             _ => draw_triangles(
                 &mut canvas,
                 geometry,
@@ -307,9 +310,15 @@ fn painter_order(scene: &Scene) -> Vec<usize> {
     out
 }
 
-/// A layer's colour, width and opacity, from its own evaluated-properties block.
+/// A layer's colour and the scalar its geometry is sized by.
+///
+/// One field for two different measurements, because they are the same thing to the shape: a
+/// line's half-width and a circle's radius are both "how far, in pixels, a vertex moves from
+/// the position the buffer holds". Neither is in the vertex, and both are why the geometry does
+/// not have to be rebuilt when the style changes.
 struct Paint {
     color: [f32; 4],
+    /// A line's stroke width, or a circle's radius plus its stroke.
     width: f32,
 }
 
@@ -320,7 +329,9 @@ fn layer_paint(scene: &Scene, shader: BuiltIn, layer_index: u32) -> Option<Paint
         }
         // A line's block is colour, then blur, opacity, gap width, offset and width.
         BuiltIn::LineShader => (ubo_slots::ID_LINE_EVALUATED_PROPS_UBO, 0, Some(32)),
-        BuiltIn::CircleShader => (ubo_slots::ID_CIRCLE_EVALUATED_PROPS_UBO, 0, None),
+        // A circle's is colour, stroke colour, then radius — and the stroke widens the quad
+        // beyond the radius, so a circle drawn at the radius alone is clipped by its own outline.
+        BuiltIn::CircleShader => (ubo_slots::ID_CIRCLE_EVALUATED_PROPS_UBO, 0, Some(32)),
         BuiltIn::FillExtrusionShader | BuiltIn::FillExtrusionInstancedShader => {
             (ubo_slots::ID_FILL_EXTRUSION_PROPS_UBO, 0, None)
         }
@@ -344,10 +355,12 @@ fn layer_paint(scene: &Scene, shader: BuiltIn, layer_index: u32) -> Option<Paint
         color[3] *= opacity;
     }
 
-    Some(Paint {
-        color,
-        width: width_at.and_then(|at| read_f32(bytes, at)).unwrap_or(1.0),
-    })
+    let mut width = width_at.and_then(|at| read_f32(bytes, at)).unwrap_or(1.0);
+    if matches!(shader, BuiltIn::CircleShader) {
+        width += read_f32(bytes, 44).unwrap_or(0.0);
+    }
+
+    Some(Paint { color, width })
 }
 
 /// The matrix for one drawable, out of its layer's consolidated buffer at the order's index.
@@ -431,25 +444,7 @@ fn draw_triangles(
         .map(|p| raster::project(matrix, p[0], p[1], width as f32, height as f32))
         .collect();
 
-    for segment in &geometry.segments {
-        let start = segment.index_offset as usize;
-        let end = start + segment.index_length as usize;
-        let Some(indices) = geometry.indices.get(start..end) else {
-            continue;
-        };
-        for triangle in indices.chunks_exact(3) {
-            let at = |index: u16| {
-                projected
-                    .get(segment.vertex_offset as usize + index as usize)
-                    .copied()
-                    .flatten()
-            };
-            if let (Some(a), Some(b), Some(c)) = (at(triangle[0]), at(triangle[1]), at(triangle[2]))
-            {
-                canvas.triangle(a, b, c, color);
-            }
-        }
-    }
+    triangles(canvas, geometry, &projected, color);
 }
 
 /// Draws a line by widening its centreline, which is what its shader does.
@@ -506,6 +501,62 @@ fn draw_line(
         })
         .collect();
 
+    triangles(canvas, geometry, &projected, paint.color);
+}
+
+/// Draws a circle layer by expanding each quad, which is what its shader does.
+///
+/// The buffer holds the centre *doubled*, with the corner's sign in the low bit of each axis —
+/// four vertices per point, all at the same place until something expands them. The radius is a
+/// uniform, so the expansion happens at draw time in pixels, and a consumer binding only the
+/// position gets four coincident vertices and two degenerate triangles per circle.
+///
+/// The disc itself is the shader's: mbgl draws a quad and discards outside the radius. Here the
+/// quad is filled, which is enough to say whether a circle layer is present, in the right place
+/// and the right size — a square where a disc belongs is a difference nobody can mistake for a
+/// bug in the producer.
+fn draw_circle(
+    canvas: &mut Canvas,
+    geometry: &Geometry,
+    arena: &SlabArena,
+    matrix: &[f32; 16],
+    paint: &Paint,
+    width: u32,
+    height: u32,
+) {
+    let Some((packed, ())) = positions(geometry, arena, POSITION) else {
+        return;
+    };
+    let projected: Vec<Option<[f32; 2]>> = packed
+        .iter()
+        .map(|v| {
+            // `floor(v / 2)` for the centre and `mod(v, 2) * 2 - 1` for the corner, which is
+            // mbgl's own arithmetic rather than a bit test -- the vertex was built by doubling
+            // and adding a zero or a one, so the halves recover exactly.
+            let centre = [(v[0] * 0.5).floor(), (v[1] * 0.5).floor()];
+            let corner = [
+                (v[0] - centre[0] * 2.0) * 2.0 - 1.0,
+                (v[1] - centre[1] * 2.0) * 2.0 - 1.0,
+            ];
+            let screen =
+                raster::project(matrix, centre[0], centre[1], width as f32, height as f32)?;
+            Some([
+                screen[0] + corner[0] * paint.width,
+                screen[1] + corner[1] * paint.width,
+            ])
+        })
+        .collect();
+
+    triangles(canvas, geometry, &projected, paint.color);
+}
+
+/// Walks a geometry's segments and fills its triangles from already-projected vertices.
+fn triangles(
+    canvas: &mut Canvas,
+    geometry: &Geometry,
+    projected: &[Option<[f32; 2]>],
+    color: [f32; 4],
+) {
     for segment in &geometry.segments {
         let start = segment.index_offset as usize;
         let end = start + segment.index_length as usize;
@@ -521,7 +572,7 @@ fn draw_line(
             };
             if let (Some(a), Some(b), Some(c)) = (at(triangle[0]), at(triangle[1]), at(triangle[2]))
             {
-                canvas.triangle(a, b, c, paint.color);
+                canvas.triangle(a, b, c, color);
             }
         }
     }
