@@ -1,5 +1,43 @@
 # MVT conformance fixtures
 
+## The redistribution rule
+
+**Mapbox-origin tile data ships here only if maplibre-native ships it too.** Not "only if it is
+openly licensed" and not "only if it carries no identifier" — the test is presence upstream.
+maplibre-native is BSD-2-Clause with Mapbox's copyright acknowledged (© 2014–2020), so a file it
+publishes is a file already redistributed on terms this repository can meet. A tile fetched from
+a Mapbox endpoint with an account's credentials is not, whatever it contains, and does not come
+in here.
+
+The rule is not about what a tile exposes. An MVT body is layer names, property keys, property
+values and packed geometry: no URL, no token, no account id — grep a real Mapbox Streets tile for
+any of them and it returns nothing. What identifies a customer lives in the *request URL*, which
+is why extracted glyphs are kept outside this repository and tiles need not be. Redistribution is
+a licensing question, and it is answered upstream or not at all.
+
+Data that is not Mapbox's answers to its own licence instead: `protomaps-berlin-14-8802-5373.mvt`
+and everything in `../live-fixtures/` are OpenStreetMap under ODbL, cut from a Protomaps planet
+extract, and are ours to ship on those terms.
+
+### Checking it
+
+Hash every committed fixture and look for the hash in a maplibre-native checkout:
+
+```sh
+find "$MLN" -type f -not -path '*/.git/*' -exec md5sum {} + | awk '{print $1}' | sort -u > /tmp/mln
+git ls-files | grep -vE '\.(rs|toml|md|yml|yaml|h|c|sh|lock|gitignore|txt)$' | while read -r f; do
+  grep -qx "$(md5sum "$f" | awk '{print $1}')" /tmp/mln || echo "not upstream: $f"
+done
+```
+
+Everything it names must be ours or ODbL. As of the last audit that is the golden dumps, the
+style JSONs, the codegen oracles, `LICENSE`/`NOTICE`, and the Protomaps tiles — every
+Mapbox-origin fixture, `real-world-0-0-0.mvt` and `streets-10-163-395.mvt` included, is
+byte-identical to a file maplibre-native commits.
+
+It is a review step rather than a test because it needs a maplibre-native checkout, which CI does
+not have and which DR-6's generated tables also need. Run it when adding a fixture.
+
 The Mapbox Vector Tile fixture suite, vendored from maplibre-native's `vector-tile` vendor tree
 (`test/mvt-fixtures`, version 2.1.0, ISC, © Mapbox). 14 valid tiles and 24 invalid ones, tracking
 MVT spec 2.1.
