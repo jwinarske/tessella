@@ -598,6 +598,134 @@ pub fn background_props_from_paint(
     )
 }
 
+/// One fill-extrusion drawable's entry.
+///
+/// A different shape from every other drawable block, and the difference is load-bearing. Where
+/// a fill's entry is a matrix and two mix factors, an extrusion's carries `height_factor` — what
+/// turns a height in metres into the tile-space z the shader raises a wall to — and the tile's
+/// pixel coordinate, split across two floats because the shader needs more precision in it than
+/// one `f32` holds at a high zoom.
+///
+/// Packing a fill's entry into this shape is not a near miss: the mix factors land where the
+/// pixel coordinate and the height factor belong, so `height_factor` reads as whatever the
+/// colour interpolation happened to be — zero, for a constant colour — and every building comes
+/// out flat. It draws, and it draws a fill layer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExtrusionDrawableEntry {
+    /// Tile-local to clip.
+    pub matrix: [f32; 16],
+    /// The tile's pixel coordinate, high and low halves.
+    pub pixel_coord_upper: [f32; 2],
+    /// The low halves.
+    pub pixel_coord_lower: [f32; 2],
+    /// What a height in metres multiplies by.
+    pub height_factor: f32,
+    /// Tile units per pixel, inverted.
+    pub tile_ratio: f32,
+    /// Mix factors for base, height and colour, in that order.
+    pub interpolations: [f32; 3],
+}
+
+impl ExtrusionDrawableEntry {
+    /// The entry for a tile under a view.
+    ///
+    /// # Errors
+    ///
+    /// [`camera::CameraError`] when the view has no area.
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_tile(
+        view: &ViewTransform,
+        z: u8,
+        x: u32,
+        y: u32,
+        wrap: i32,
+        layer_index: i32,
+        sub_layer_index: i32,
+        interpolations: [f32; 3],
+    ) -> Result<Self, camera::CameraError> {
+        let matrix = DrawableEntry::for_tile_with(
+            view,
+            z,
+            x,
+            y,
+            wrap,
+            layer_index,
+            sub_layer_index,
+            [0.0, 0.0],
+        )?
+        .matrix;
+
+        // mbgl's own arithmetic: the tile's pixel origin at the *integer* zoom, split so the
+        // shader can reconstruct it without losing the low bits. `tileSizeAtNearestZoom` is
+        // floored there, and the floor matters at a fractional zoom.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+        let integer_zoom = view.zoom.floor() as i32;
+        let zoom_scale = 2f64.powi(i32::from(z));
+        let nearest_zoom_scale = 2f64.powi(integer_zoom - i32::from(z));
+        let tile_size_at_nearest = (512.0 * nearest_zoom_scale).floor();
+        #[allow(clippy::cast_possible_truncation)]
+        let pixel_x = (tile_size_at_nearest * (f64::from(x) + f64::from(wrap) * zoom_scale)) as i32;
+        #[allow(clippy::cast_possible_truncation)]
+        let pixel_y = (tile_size_at_nearest * f64::from(y)) as i32;
+
+        // `1 / pixelsToTileUnits(1, integerZoom)`, which is the tile's extent over the pixels it
+        // covers at that zoom.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+        let tile_ratio = (512.0 * 2f64.powi(integer_zoom - i32::from(z)) / camera::EXTENT) as f32;
+
+        #[allow(clippy::cast_precision_loss)]
+        Ok(Self {
+            matrix,
+            pixel_coord_upper: [(pixel_x >> 16) as f32, (pixel_y >> 16) as f32],
+            pixel_coord_lower: [(pixel_x & 0xffff) as f32, (pixel_y & 0xffff) as f32],
+            height_factor: height_factor(z),
+            tile_ratio,
+            interpolations,
+        })
+    }
+}
+
+/// A fill-extrusion layer's consolidated drawable buffer.
+#[must_use]
+pub fn pack_extrusion_drawable_buffer(entries: &[ExtrusionDrawableEntry], stride: u32) -> Vec<u8> {
+    let stride = stride as usize;
+    let mut out = Vec::with_capacity(entries.len() * stride);
+    for entry in entries {
+        let start = out.len();
+        push_f32s(&mut out, &entry.matrix);
+        push_f32s(&mut out, &entry.pixel_coord_upper);
+        push_f32s(&mut out, &entry.pixel_coord_lower);
+        push_f32s(&mut out, &[entry.height_factor, entry.tile_ratio]);
+        push_f32s(&mut out, &entry.interpolations);
+        out.resize(start + stride, 0);
+    }
+    out
+}
+
+/// The base, height and colour mix factors an extrusion's drawable block carries.
+#[must_use]
+pub fn extrusion_interpolations(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    bucket_zoom: f64,
+    view_zoom: f64,
+) -> [f32; 3] {
+    let factor = |name: &str| {
+        paint
+            .get(name)
+            .map_or(0.0, |property| match property.binding {
+                Binding::Attribute { interpolated: true } => {
+                    property.expression.zoom_mix_factor(bucket_zoom, view_zoom)
+                }
+                _ => 0.0,
+            })
+    };
+    [
+        factor("fill-extrusion-base"),
+        factor("fill-extrusion-height"),
+        factor("fill-extrusion-color"),
+    ]
+}
+
 /// A fill-extrusion layer's evaluated properties, from its paint and the style light.
 ///
 /// Three of the five blocks are the light, which is why it is a parameter rather than something
@@ -1162,22 +1290,26 @@ const _: () = assert!(
 
 /// Bytes one mesh placement occupies in the layer's consolidated buffer.
 ///
-/// A matrix and one scalar, padded to the sixteen-byte alignment every block on this protocol
-/// has. Sized here rather than read from a generated layout for the reason the slot is.
-pub const MESH_DRAWABLE_UBO_SIZE: usize = 80;
+/// A matrix and nothing else. It was a matrix and a height factor until the factor turned out
+/// not to be a conversion — see [`MeshPlacement`] — and a `mat4` is already the sixteen-byte
+/// alignment every block on this protocol has, so nothing pads it. Sized here rather than read
+/// from a generated layout for the reason the slot is.
+pub const MESH_DRAWABLE_UBO_SIZE: usize = 64;
 
 /// Converts a height in metres into the vertical unit the tile matrix works in.
 ///
-/// mbgl's `heightFactor`, `-numTiles / tileSize_D / 8.0`, and it applies to a model tile for a
-/// measured reason rather than an assumed one: a Mapbox buildings mesh puts x and y in tile units
-/// — its node translations span the extent, 60 to 8189 across a real store — while its z is in
-/// **metres**, with node z-scale exactly 1.0 and heights running to 330. That is the same mixed
-/// convention `fill-extrusion` uses, which is why the same factor converts it.
+/// mbgl's `heightFactor`, `-numTiles / tileSize_D / 8.0`, and what it is *for* is narrower than
+/// it looks: it walks a pattern up an extrusion's wall. The whole shader set uses it once, in
+/// `fill_extrusion_pattern`'s `vec2 pos = vec2(edgedistance, z * drawable.height_factor)`.
 ///
-/// There is no latitude term, and that is not an omission. Heights are drawn in Mercator-scaled
-/// units so that a building keeps its proportion against the locally-scaled ground around it;
-/// putting the latitude in here would make a building at sixty degrees correct against the metre
-/// and wrong against its own street.
+/// It is **not** the conversion from metres to the shader's z. Nothing converts: the position
+/// shader passes the height straight in, `gl_Position = matrix * vec4(pos, z, 1.0)`, because
+/// `getWorldToCamera` has already scaled the matrix's third column by `pixelsPerMeter`. Reading
+/// it as the conversion scales a building by the tile count — four thousand at z14 — which is
+/// how it was read here until a pitched render showed one swallowing the map.
+///
+/// There is no latitude term, and that is not an omission: the pattern walks in the same
+/// Mercator-scaled units the geometry is drawn in.
 #[must_use]
 pub fn height_factor(z: u8) -> f32 {
     #[allow(clippy::cast_possible_truncation)]
@@ -1186,13 +1318,29 @@ pub fn height_factor(z: u8) -> f32 {
     }
 }
 
-/// Where one mesh tile goes, and how a metre becomes a vertical unit there.
+/// Where one mesh tile goes.
+///
+/// # A matrix and nothing else, because the matrix already converts
+///
+/// This used to carry `height_factor` beside the matrix, described as what a height in metres
+/// multiplies by. That was wrong, and wrong by a factor of four thousand at z14.
+///
+/// mbgl's fill-extrusion shader settles it:
+/// `gl_Position = drawable.matrix * vec4(in_position + decimals, z, 1.0)`, with `z` the height in
+/// **metres** and no conversion in front of it. It needs none: `getWorldToCamera` scales the
+/// matrix's third column by `pixelsPerMeter`, precisely so a height in metres and a position in
+/// tile units can share one matrix. `heightFactor` appears once in the whole shader set, in the
+/// *pattern* variant, walking a texture up a wall — `vec2(edgedistance, z * height_factor)` —
+/// which is not a conversion of the position and has no meaning for a mesh at all.
+///
+/// The measurement behind the original claim still holds: a buildings mesh really is tile units
+/// in x and y and metres in z, across 972 nodes of a real store. What was wrong was the
+/// conversion, not the convention — and the conversion is the matrix's.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MeshPlacement {
-    /// Tile-local to clip, as every other drawable matrix on this protocol is.
+    /// Tile-local to clip, as every other drawable matrix on this protocol is. Its third column
+    /// carries `pixelsPerMeter`, so a mesh's metres go in unscaled.
     pub matrix: [f32; 16],
-    /// What a height in metres multiplies by, from [`height_factor`].
-    pub height_factor: f32,
 }
 
 impl MeshPlacement {
@@ -1218,7 +1366,6 @@ impl MeshPlacement {
         let entry = DrawableEntry::for_tile(view, z, x, y, wrap, layer_index, sub_layer_index)?;
         Ok(Self {
             matrix: entry.matrix,
-            height_factor: height_factor(z),
         })
     }
 }
@@ -1244,8 +1391,6 @@ pub fn pack_mesh_drawable_buffer(placements: &[MeshPlacement], stride: u32) -> V
         for (index, value) in placement.matrix.iter().enumerate() {
             slot[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
         }
-        slot[64..68].copy_from_slice(&placement.height_factor.to_le_bytes());
-        // The three words after it are padding to the block's alignment, and stay zero.
     }
     out
 }

@@ -566,12 +566,37 @@ fn write_layer_state(
             )?;
         }
         LayerKind::FillExtrusion => {
+            // Its own entry shape, not a fill's. An extrusion's block carries the height factor
+            // and the tile's split pixel coordinate where a fill's carries mix factors, so a
+            // fill entry packed into it reads the colour interpolation as `height_factor` --
+            // zero, for a constant colour -- and draws every building flat on the ground.
+            //
             // Both passes: a translucent extrusion takes a depth pass in front of its colour
-            // pass, and both read the same drawable buffer.
-            let mut all = entries(0);
-            all.extend(entries(1));
-            let buffer =
-                ubo::pack_drawable_buffer(&all, ubo_layouts::FILL_EXTRUSION_DRAWABLE_UBO.stride);
+            // pass, and both read the same buffer.
+            let interpolations = ubo::extrusion_interpolations(&paint, view.zoom, view.zoom);
+            let entry = |sub_layer_index: i32| -> Vec<ubo::ExtrusionDrawableEntry> {
+                matrices(sub_layer_index)
+                    .filter_map(|tile| {
+                        ubo::ExtrusionDrawableEntry::for_tile(
+                            view,
+                            tile.z,
+                            tile.x,
+                            tile.y,
+                            i32::from(tile.wrap),
+                            layer_index,
+                            sub_layer_index,
+                            interpolations,
+                        )
+                        .ok()
+                    })
+                    .collect()
+            };
+            let mut all = entry(0);
+            all.extend(entry(1));
+            let buffer = ubo::pack_extrusion_drawable_buffer(
+                &all,
+                ubo_layouts::FILL_EXTRUSION_DRAWABLE_UBO.stride,
+            );
             ubo::write(
                 producer,
                 view_id,

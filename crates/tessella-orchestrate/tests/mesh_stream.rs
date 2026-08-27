@@ -110,7 +110,11 @@ fn an_unknown_mesh_format_is_refused() {
     assert_eq!(MeshFormat::from_repr(255), None);
 }
 
-/// Placement: where a model tile goes, and how its metres become vertical units.
+/// Placement: where a model tile goes.
+///
+/// `height_factor` is still pinned here, because it is still mbgl's and still a real field —
+/// of the *fill-extrusion* drawable block, where it walks a pattern up a wall. What changed is
+/// that it is not a mesh's business and never was a conversion.
 mod placement {
     use tessella_orchestrate::ubo::{
         MESH_DRAWABLE_UBO, MESH_DRAWABLE_UBO_SIZE, MeshPlacement, height_factor,
@@ -125,8 +129,11 @@ mod placement {
     /// units — half the nodes are flat because a buildings tile carries a footprint mesh beside
     /// each extruded one.
     ///
-    /// That is the same mixed convention `fill-extrusion` uses, which is why mbgl's own
-    /// `heightFactor` is the conversion rather than something derived here.
+    /// The *convention* is the same one `fill-extrusion` uses. The conversion is not
+    /// `heightFactor`, which was the original claim here and was wrong: mbgl's position shader
+    /// passes the height straight into the matrix, `gl_Position = matrix * vec4(pos, z, 1.0)`,
+    /// because `getWorldToCamera` has already scaled its third column by `pixelsPerMeter`.
+    /// `heightFactor` walks a pattern up a wall and appears nowhere else.
     #[test]
     fn the_height_factor_is_mbgls() {
         // `-numTiles / tileSize_D / 8.0`, with tileSize_D 512.
@@ -147,18 +154,18 @@ mod placement {
         }
     }
 
-    /// A hundred-metre building comes out a plausible fraction of its tile.
+    /// A mesh's placement is the matrix and nothing else.
     ///
-    /// The check that the factor is the right *magnitude* and not merely the right formula. At
-    /// z14 a tile is roughly 2.4 km at the equator and 8192 units across, so a hundred metres
-    /// should land in the low hundreds of units. A factor off by the 512 or the 8 would put it
-    /// out by an order of magnitude, which is a city of towers or a city of kerbs.
+    /// It carried `height_factor` beside the matrix, as what a metre multiplies by, and that
+    /// told a consumer to scale a building by four thousand at z14. The matrix already converts:
+    /// its third column carries `pixelsPerMeter`, which is why mbgl's own shader passes a height
+    /// in metres straight into it.
     #[test]
-    fn a_building_is_a_plausible_fraction_of_its_tile() {
-        let units = (100.0 * height_factor(14)).abs();
-        assert!(
-            (100.0..1000.0).contains(&units),
-            "100 m at z14 came to {units} tile units"
+    fn a_placement_carries_no_conversion_of_its_own() {
+        assert_eq!(
+            MESH_DRAWABLE_UBO_SIZE,
+            core::mem::size_of::<[f32; 16]>(),
+            "a placement is a mat4; anything more is a conversion the matrix already did"
         );
     }
 
@@ -174,14 +181,8 @@ mod placement {
         second[15] = 9.0;
 
         let placements = [
-            MeshPlacement {
-                matrix: first,
-                height_factor: height_factor(14),
-            },
-            MeshPlacement {
-                matrix: second,
-                height_factor: height_factor(15),
-            },
+            MeshPlacement { matrix: first },
+            MeshPlacement { matrix: second },
         ];
         // A stride wider than the block is what an alignment requirement produces.
         let packed = pack_mesh_drawable_buffer(&placements, 96);
@@ -191,12 +192,8 @@ mod placement {
             f32::from_le_bytes(packed[offset..offset + 4].try_into().expect("four bytes"))
         };
         assert_eq!(at(0), 3.0, "the first matrix");
-        assert_eq!(at(64), -4.0, "its height factor, at z14");
+        assert_eq!(at(60), 0.0, "and the rest of it");
         assert_eq!(at(96 + 60), 9.0, "the second matrix, one stride on");
-        assert_eq!(at(96 + 64), -8.0, "its height factor, at z15");
-
-        // The words after the factor are padding to the block's alignment and stay zero.
-        assert_eq!([at(68), at(72), at(76)], [0.0; 3]);
         assert!(
             packed[MESH_DRAWABLE_UBO_SIZE..96]
                 .iter()
@@ -240,7 +237,7 @@ mod placement {
 /// arithmetic to keep in step, and they would agree right up until the day they did not.
 #[test]
 fn a_mesh_uses_the_same_matrix_as_every_other_drawable() {
-    use tessella_orchestrate::ubo::{DrawableEntry, MeshPlacement, height_factor};
+    use tessella_orchestrate::ubo::{DrawableEntry, MeshPlacement};
     use tessella_tile::camera;
     use tessella_tile::cover::ViewTransform;
 
@@ -258,7 +255,6 @@ fn a_mesh_uses_the_same_matrix_as_every_other_drawable() {
     let placement = MeshPlacement::for_tile(&view, 14, 8189, 5447, 0, 3, 1).expect("a placement");
 
     assert_eq!(placement.matrix, entry.matrix);
-    assert_eq!(placement.height_factor, height_factor(14));
 
     // And the bias is genuinely in there: a different sublayer is a different matrix.
     let deeper = MeshPlacement::for_tile(&view, 14, 8189, 5447, 0, 3, 2).expect("a placement");

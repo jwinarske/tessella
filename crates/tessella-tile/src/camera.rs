@@ -174,15 +174,45 @@ pub fn world_size(zoom: f64) -> f64 {
 ///
 /// The `0.5 * worldSize - x` is the negation the comment in mbgl describes: the stored value
 /// places the map, and the camera moves opposite to it.
+///
+/// # The camera orbits; it does not hover
+///
+/// mbgl moves the camera *back along its own forward direction* by the centre distance:
+///
+/// ```text
+/// const vec3 forward = camera.forward();
+/// const vec3 orbitPosition = {-forward[0] * d, -forward[1] * d, -forward[2] * d};
+/// vec3 cameraPosition = {dx + orbitPosition[0], dy + orbitPosition[1], z + orbitPosition[2]};
+/// ```
+///
+/// This used to return `[dx, dy, distance]`, which is that expression only when `forward` is
+/// `(0, 0, -1)` — a camera looking straight down. At any pitch the camera stayed directly over
+/// the centre while the view rotated beneath it, so the map swung out of frame: at a pitch of
+/// fifty-five degrees a tile projected several viewports away and mirrored in x.
+///
+/// Nothing caught it because nothing looked. The unrotated path is checked against the golden
+/// dump bit for bit, and there is no dump at a non-zero pitch — so the pitched path was
+/// arithmetic nobody had ever compared to anything. It took drawing a building to see it, which
+/// is the first thing this build has done that a pitch is visible in at all.
+///
+/// At zero pitch and zero bearing the orientation is the identity, `forward` is exactly
+/// `(0, 0, -1)`, and this returns what it returned before — so every golden still holds.
 #[must_use]
 pub fn camera_position(view: &ViewTransform) -> [f64; 3] {
     let world = world_size(view.zoom);
     let [x, y] = center_offset(view.longitude, view.latitude, view.zoom);
     let distance = camera_to_center_distance(view.height);
+
+    // `forward` is the negated third column of the orientation matrix: the camera looks down
+    // its own -z, and mbgl says so in as many words.
+    let rotation =
+        orientation(0.0, pitch_radians(view), bearing_radians(view)).to_rotation_matrix();
+    let forward = [-rotation[8], -rotation[9], -rotation[10]];
+
     [
-        (0.5 * world - x) / world,
-        (0.5 * world - y) / world,
-        distance / world,
+        (0.5 * world - x - forward[0] * distance) / world,
+        (0.5 * world - y - forward[1] * distance) / world,
+        -forward[2] * distance / world,
     ]
 }
 
@@ -252,6 +282,33 @@ pub fn center_zoom0(view: &ViewTransform) -> [f64; 2] {
 /// horizon and the far distance diverges — the projection has no bottom of the world to stop at,
 /// so a pitch of ninety degrees asks for every tile there is.
 pub const MAX_PITCH: f64 = 89.25 * core::f64::consts::PI / 180.0;
+
+/// The view's pitch in radians, clamped to what the projection can reach.
+///
+/// # Degrees in, radians out, and why that was a bug
+///
+/// [`ViewTransform::pitch`] is degrees — it is a style-spec value and the spec says degrees —
+/// while [`orientation`] takes radians and [`MAX_PITCH`] *is* a radian constant. The three
+/// places that read the pitch passed the degrees straight through, so a clamp against
+/// `MAX_PITCH` compared a number of degrees against 1.558 radians and any pitch above about a
+/// degree and a half came out as 89.25°. One of the three did not clamp at all, so it saw a
+/// different angle again from the other two.
+///
+/// At zero it is zero, which is the whole reason nothing caught it: the goldens are captured
+/// unpitched, and a build that only ever draws flat maps never evaluates a `tan` or a
+/// quaternion that is not the identity.
+#[must_use]
+pub fn pitch_radians(view: &ViewTransform) -> f64 {
+    view.pitch.to_radians().clamp(0.0, MAX_PITCH)
+}
+
+/// The view's bearing in radians.
+///
+/// Degrees on the way in, for the reason [`pitch_radians`] gives.
+#[must_use]
+pub fn bearing_radians(view: &ViewTransform) -> f64 {
+    view.bearing.to_radians()
+}
 
 /// A rotation, as mbgl's `Quaternion`.
 ///
@@ -369,7 +426,7 @@ fn world_to_camera(view: &ViewTransform) -> Mat4 {
     // The camera's inverse rotation. For an unrotated camera every angle is zero, the quaternion
     // is the identity, and this is the identity matrix — which is what makes the unrotated path
     // bit-for-bit what it was before rotation existed, and what the goldens keep it to.
-    let mut result = orientation(0.0, view.pitch, view.bearing)
+    let mut result = orientation(0.0, pitch_radians(view), bearing_radians(view))
         .conjugate()
         .to_rotation_matrix();
     translate_in_place(
@@ -418,7 +475,7 @@ pub fn proj_matrix(view: &ViewTransform) -> Result<Mat4, CameraError> {
     // The clamp to 0.99 is what stops it diverging. At ninety degrees the top of the screen is
     // the horizon, which is infinitely far, so a pitch approaching it asks for every tile there
     // is; `MAX_PITCH` bounds the angle and this bounds the arithmetic.
-    let limited_pitch = view.pitch.clamp(0.0, MAX_PITCH);
+    let limited_pitch = pitch_radians(view);
     // With no centre offset, no roll and no camera altitude, which is what this build's views
     // are. Each of those is a term mbgl carries and none of them is expressible here yet.
     let tan_above_centre = 2.0 * (DEFAULT_FOV / 2.0).tan() * 0.5;

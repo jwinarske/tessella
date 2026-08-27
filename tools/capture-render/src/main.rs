@@ -55,6 +55,15 @@ const POSITION: u32 = 0;
 /// A line's second attribute: the extrusion and the distance along the line.
 const LINE_DATA: u32 = 1;
 
+/// An extrusion's packed fraction, whose low bit says the ring closes here.
+const EXTRUSION_DECIMALS: u32 = 1;
+
+/// An extrusion's per-feature height, in metres.
+const EXTRUSION_HEIGHT: u32 = 5;
+
+/// An extrusion's per-feature base, in metres.
+const EXTRUSION_BASE: u32 = 3;
+
 /// A symbol's anchor and this corner's offset from it.
 const SYMBOL_POS_OFFSET: u32 = 0;
 
@@ -110,6 +119,7 @@ fn parse_args() -> Result<Args, String> {
     let mut at = None;
     let (mut lon, mut lat, mut zoom) = (0.0, 0.0, 0.0);
     let (mut width, mut height) = (1024.0, 768.0);
+    let (mut bearing, mut pitch) = (0.0, 0.0);
 
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
@@ -129,6 +139,10 @@ fn parse_args() -> Result<Args, String> {
             "--zoom" => zoom = number(&value()?)?,
             "--width" => width = number(&value()?)?,
             "--height" => height = number(&value()?)?,
+            "--bearing" => bearing = number(&value()?)?,
+            // Without a pitch an extrusion is invisible: a roof raised straight up sits exactly
+            // over its own footprint, and its walls are edge-on.
+            "--pitch" => pitch = number(&value()?)?,
             "--help" | "-h" => return Err(usage()),
             other => return Err(format!("unknown flag {other}\n\n{}", usage())),
         }
@@ -147,8 +161,8 @@ fn parse_args() -> Result<Args, String> {
             zoom,
             width,
             height,
-            bearing: 0.0,
-            pitch: 0.0,
+            bearing,
+            pitch,
         }),
     })
 }
@@ -194,7 +208,7 @@ fn address_from_name(path: &str) -> Option<(u8, u32, u32)> {
 fn usage() -> String {
     "usage: capture-render --style <path> --tile <path.mvt> [--out map.png] [--source src]\n\
      \x20                     [--glyphs <dir>] [--tile-at z/x/y] [--lon 0] [--lat 0] [--zoom 0]\n\
-      \x20                     [--width 1024] [--height 768]"
+      \x20                     [--width 1024] [--height 768] [--bearing 0] [--pitch 0]"
         .to_string()
 }
 
@@ -211,7 +225,16 @@ fn run() -> Result<String, String> {
     let decoded =
         Tile::decode(&bytes).map_err(|error| format!("decoding {}: {error}", args.tile))?;
 
-    let tiles = cover::cover(&args.view).map_err(|error| format!("covering: {error}"))?;
+    // The cover is computed flat even when the view is pitched, because `cover::cover` refuses a
+    // pitched view -- a frustum cover is not implemented -- and because this tool does not need
+    // one: the tile set is *given*, either by `--tile-at` or by the filename, so the cover only
+    // decides where a background is painted and which tiles get a clip mask. Everything that
+    // depends on the camera, matrices included, uses the pitched view.
+    let flat = camera::settled(&ViewTransform {
+        pitch: 0.0,
+        ..args.view
+    });
+    let tiles = cover::cover(&flat).map_err(|error| format!("covering: {error}"))?;
     // Where this tile's features actually belong. Given, or read off the filename, or nowhere —
     // and "nowhere" means every address, which repeats the tile across the viewport.
     let at = args.at.or_else(|| address_from_name(&args.tile));
@@ -390,6 +413,19 @@ fn draw(scene: &Scene, arena: &SlabArena, width: u32, height: u32) -> Canvas {
             continue;
         };
         drawn += 1;
+        if tracing && drawn == 1 {
+            for corner in [
+                [0.0f32, 0.0f32],
+                [8192.0, 0.0],
+                [8192.0, 8192.0],
+                [0.0, 8192.0],
+            ] {
+                eprintln!(
+                    "    corner {corner:?} -> {:?}",
+                    raster::project(&matrix, corner[0], corner[1], width as f32, height as f32)
+                );
+            }
+        }
 
         match geometry.shader {
             BuiltIn::LineShader => {
@@ -400,6 +436,9 @@ fn draw(scene: &Scene, arena: &SlabArena, width: u32, height: u32) -> Canvas {
             }
             BuiltIn::SymbolSDFShader | BuiltIn::SymbolIconShader => {
                 draw_symbol(&mut canvas, geometry, arena, scene, &matrix, &paint);
+            }
+            BuiltIn::FillExtrusionShader | BuiltIn::FillExtrusionInstancedShader => {
+                draw_extrusion(&mut canvas, geometry, arena, &matrix, &paint);
             }
             _ => draw_triangles(&mut canvas, geometry, arena, &matrix, paint.color),
         }
@@ -451,6 +490,10 @@ struct Paint {
     color: [f32; 4],
     /// A line's stroke width, or a circle's radius plus its stroke.
     width: f32,
+    /// An extrusion's layer-wide height and base, in metres. The per-feature values override
+    /// them when the properties are data-driven, as they usually are.
+    height: f32,
+    base: f32,
 }
 
 fn layer_paint(scene: &Scene, shader: BuiltIn, layer_index: u32) -> Option<Paint> {
@@ -475,6 +518,8 @@ fn layer_paint(scene: &Scene, shader: BuiltIn, layer_index: u32) -> Option<Paint
             return Some(Paint {
                 color: [0.1, 0.1, 0.12, 1.0],
                 width: 1.0,
+                height: 0.0,
+                base: 0.0,
             });
         }
         _ => return None,
@@ -502,7 +547,27 @@ fn layer_paint(scene: &Scene, shader: BuiltIn, layer_index: u32) -> Option<Paint
         width += read_f32(bytes, 44).unwrap_or(0.0);
     }
 
-    Some(Paint { color, width })
+    // Only an extrusion's block has these, at the offsets the generated layout gives. Reading
+    // them from any other block would take whatever that block keeps at 44 and 48 -- a circle's
+    // stroke width, for one -- and call it a building's height.
+    let extrusion = matches!(
+        shader,
+        BuiltIn::FillExtrusionShader | BuiltIn::FillExtrusionInstancedShader
+    );
+    Some(Paint {
+        color,
+        width,
+        base: if extrusion {
+            read_f32(bytes, 44).unwrap_or(0.0)
+        } else {
+            0.0
+        },
+        height: if extrusion {
+            read_f32(bytes, 48).unwrap_or(0.0)
+        } else {
+            0.0
+        },
+    })
 }
 
 /// The matrix for one drawable, out of its layer's consolidated buffer at the order's index.
@@ -779,6 +844,177 @@ fn vertex_colors(geometry: &Geometry, arena: &SlabArena) -> Option<Vec<[f32; 4]>
         })
         .collect();
     colors.iter().any(|c| c[3] > 0.0).then_some(colors)
+}
+
+/// Draws an extrusion: the roof at its height, and a wall under every edge.
+///
+/// # Why the walls are not in the buffer
+///
+/// DR-16 settled this build on Vulkan, where mbgl defines `MLN_USE_FILL_EXTRUSION_INSTANCING`,
+/// so the bucket is the *instanced* branch's: the ring's own outline and an earcut roof, and
+/// nothing else. The walls are instances the shader raises over the same vertices. A consumer
+/// that draws only what is in the buffer therefore gets roofs — which, drawn at the ground, is
+/// a fill layer wearing an extrusion's name.
+///
+/// The non-instanced branch would have put four extra vertices and six extra indices in the
+/// buffer *per edge*, which is the five-times-the-geometry the layout module refuses.
+///
+/// # The height goes in as metres
+///
+/// `gl_Position = drawable.matrix * vec4(in_position + decimals, z, 1.0)`, with `z` the height
+/// in metres and no conversion in front of it: the matrix's third column already carries
+/// `pixelsPerMeter`, which `getWorldToCamera` puts there precisely so heights and positions can
+/// share a matrix while being in different units.
+///
+/// `height_factor` is not that conversion, which is easy to assume and wrong. It appears once in
+/// mbgl's shaders, in the *pattern* variant, to walk a texture up a wall:
+/// `vec2 pos = vec2(edgedistance, z * drawable.height_factor)`. Using it on the position scales
+/// every building by the tile count — at z14 a factor of four thousand — and buries the map
+/// under one of them.
+///
+/// Per feature when `fill-extrusion-height` is data-driven, in which case it is a vertex
+/// attribute and the uniform beside it is the property's default — the same split that made
+/// every data-driven colour come out black.
+///
+/// # Which edges get a wall
+///
+/// The one the ring's closing point does not: it has no edge leaving it, and the layout packs
+/// that as the low bit of `decimals`. Raising a wall there joins the last point of one ring to
+/// the first point of the next, which draws a wall across the middle of a building.
+fn draw_extrusion(
+    canvas: &mut Canvas,
+    geometry: &Geometry,
+    arena: &SlabArena,
+    matrix: &[f32; 16],
+    paint: &Paint,
+) {
+    let Some(position) = geometry.attribute(POSITION) else {
+        return;
+    };
+    let Some(decimals) = geometry.attribute(EXTRUSION_DECIMALS) else {
+        return;
+    };
+    let (Some(pos_bytes), Some(dec_bytes)) = (
+        arena.resolve(position.source),
+        arena.resolve(decimals.source),
+    ) else {
+        return;
+    };
+
+    let heights = float_attribute(geometry, arena, EXTRUSION_HEIGHT);
+    let bases = float_attribute(geometry, arena, EXTRUSION_BASE);
+    let colors = vertex_colors(geometry, arena);
+    let count = geometry.vertex_count as usize;
+
+    let at = |index: usize| -> Option<([f32; 2], bool, f32, f32)> {
+        let pos_at = position.offset as usize + index * position.stride as usize;
+        let short = |offset: usize| {
+            pos_bytes
+                .get(pos_at + offset..pos_at + offset + 2)
+                .map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])))
+        };
+        let dec_at = decimals.offset as usize + index * decimals.stride as usize;
+        let packed = dec_bytes
+            .get(dec_at..dec_at + 2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))?;
+        // `(frac.x * 256 + frac.y) * 2 + discarded`: the flag rides in the low bit, which is
+        // why the fraction was multiplied by two on the way in.
+        let discarded = packed & 1 == 1;
+        let height = heights.as_ref().and_then(|h| h.get(index).copied());
+        let base = bases.as_ref().and_then(|b| b.get(index).copied());
+        Some((
+            [short(0)?, short(2)?],
+            discarded,
+            height.unwrap_or(paint.height),
+            base.unwrap_or(paint.base),
+        ))
+    };
+
+    let color_at = |index: usize| {
+        colors
+            .as_ref()
+            .and_then(|c| c.get(index).copied())
+            .map_or(paint.color, |mut supplied| {
+                supplied[3] *= paint.color[3];
+                supplied
+            })
+    };
+
+    // Walls first, then the roof over them: with no depth buffer the roof has to be painted
+    // last or a wall behind the building covers it.
+    for index in 0..count.saturating_sub(1) {
+        let (Some((a, discarded, height, base)), Some((b, ..))) = (at(index), at(index + 1)) else {
+            continue;
+        };
+        if discarded {
+            continue;
+        }
+        let (top, bottom) = (height, base);
+        let corner = |p: [f32; 2], z: f32| {
+            raster::project_3d(
+                matrix,
+                p[0],
+                p[1],
+                z,
+                canvas.width as f32,
+                canvas.height as f32,
+            )
+        };
+        let (Some(a0), Some(a1), Some(b0), Some(b1)) = (
+            corner(a, bottom),
+            corner(a, top),
+            corner(b, bottom),
+            corner(b, top),
+        ) else {
+            continue;
+        };
+        // Walls are shaded so the geometry is legible as a solid rather than a silhouette. mbgl
+        // computes this from the style light per face; a flat darkening says the same thing
+        // about whether the wall is *there*, which is what this is for.
+        let mut wall = color_at(index);
+        for channel in &mut wall[..3] {
+            *channel *= 0.78;
+        }
+        canvas.triangle(a0, a1, b1, wall);
+        canvas.triangle(a0, b1, b0, wall);
+    }
+
+    let projected: Vec<Option<[f32; 2]>> = (0..count)
+        .map(|index| {
+            let (point, _, height, _) = at(index)?;
+            raster::project_3d(
+                matrix,
+                point[0],
+                point[1],
+                height,
+                canvas.width as f32,
+                canvas.height as f32,
+            )
+        })
+        .collect();
+    triangles(canvas, geometry, &projected, paint.color, colors.as_deref());
+}
+
+/// A single-float vertex attribute, when the property behind it is data-driven.
+fn float_attribute(geometry: &Geometry, arena: &SlabArena, attr_id: u32) -> Option<Vec<f32>> {
+    let descriptor = geometry.attribute(attr_id)?;
+    if descriptor.binding < 0 {
+        return None;
+    }
+    let bytes = arena.resolve(descriptor.source)?;
+    let stride = descriptor.stride as usize;
+    let base = descriptor.offset as usize;
+    Some(
+        (0..geometry.vertex_count as usize)
+            .map(|index| {
+                let at = base + index * stride;
+                bytes
+                    .get(at..at + 4)
+                    .map(|four| f32::from_le_bytes([four[0], four[1], four[2], four[3]]))
+                    .unwrap_or(0.0)
+            })
+            .collect(),
+    )
 }
 
 /// Draws a symbol layer's quads, sampling the glyph atlas the geometry names.

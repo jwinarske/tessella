@@ -172,10 +172,26 @@ pub(crate) fn project(
     width: f32,
     height: f32,
 ) -> Option<[f32; 2]> {
+    project_3d(matrix, x, y, 0.0, width, height)
+}
+
+/// As [`project`], with a height above the tile plane.
+///
+/// The third column is not decoration here. An extrusion's roof sits at `height * heightFactor`
+/// in tile space, and dropping the term draws every building flat on the ground — a picture that
+/// looks like a fill layer, from a matrix that was right all along.
+pub(crate) fn project_3d(
+    matrix: &[f32; 16],
+    x: f32,
+    y: f32,
+    z: f32,
+    width: f32,
+    height: f32,
+) -> Option<[f32; 2]> {
     let clip = [
-        matrix[0] * x + matrix[4] * y + matrix[12],
-        matrix[1] * x + matrix[5] * y + matrix[13],
-        matrix[3] * x + matrix[7] * y + matrix[15],
+        matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12],
+        matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13],
+        matrix[3] * x + matrix[7] * y + matrix[11] * z + matrix[15],
     ];
     let w = clip[2];
     if w.abs() < 1e-6 {

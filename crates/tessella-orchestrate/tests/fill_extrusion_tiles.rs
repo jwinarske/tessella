@@ -197,3 +197,62 @@ fn a_filter_sees_the_tiles_zoom() {
     assert!(!geometry(&below), "the filter excludes everything below z3");
     assert!(geometry(&above), "and admits it above");
 }
+
+/// The drawable block is an extrusion's own shape, not a fill's.
+///
+/// Every layer kind has its own block, and this one differs from a fill's in the fields that
+/// decide whether a building has a height at all: `height_factor` and the tile's split pixel
+/// coordinate sit where a fill keeps its mix factors. Packing a fill entry into it puts the
+/// colour interpolation — zero, for a constant colour — where `height_factor` belongs, and every
+/// building comes out flat on the ground. It draws, and what it draws is a fill layer.
+#[test]
+fn the_drawable_block_is_an_extrusions_own() {
+    use tessella_capture_abi::generated::ubo_layouts::FILL_EXTRUSION_DRAWABLE_UBO;
+    use tessella_orchestrate::ubo::{
+        ExtrusionDrawableEntry, height_factor, pack_extrusion_drawable_buffer,
+    };
+    use tessella_tile::camera;
+    use tessella_tile::cover::ViewTransform;
+
+    let view = camera::settled(&ViewTransform {
+        longitude: 13.4,
+        latitude: 52.5,
+        zoom: 14.0,
+        width: 1024.0,
+        height: 768.0,
+        bearing: 0.0,
+        pitch: 0.0,
+    });
+    let entry = ExtrusionDrawableEntry::for_tile(&view, 14, 8802, 5373, 0, 1, 0, [0.0, 0.0, 0.0])
+        .expect("an entry");
+
+    let packed = pack_extrusion_drawable_buffer(&[entry], FILL_EXTRUSION_DRAWABLE_UBO.stride);
+    assert_eq!(packed.len(), FILL_EXTRUSION_DRAWABLE_UBO.stride as usize);
+
+    let at = |offset: usize| {
+        f32::from_le_bytes(packed[offset..offset + 4].try_into().expect("four bytes"))
+    };
+    // The offsets are the generated layout's, read by name rather than counted by hand.
+    let field = |name: &str| {
+        FILL_EXTRUSION_DRAWABLE_UBO
+            .fields
+            .iter()
+            .find(|f| f.name == name)
+            .unwrap_or_else(|| panic!("no field {name}"))
+            .offset as usize
+    };
+    assert_eq!(
+        at(field("height_factor")),
+        height_factor(14),
+        "the height factor is not where the shader reads it"
+    );
+    assert_eq!(at(field("height_factor")), -4.0, "-2^14 / 512 / 8");
+
+    // The pixel coordinate is split because one f32 cannot hold it at a high zoom: 8802 tiles of
+    // 512 pixels is over four million, past f32's exact integer range once a fraction is added.
+    let upper = at(field("pixel_coord_upper"));
+    let lower = at(field("pixel_coord_lower"));
+    #[allow(clippy::cast_possible_truncation)]
+    let rejoined = (upper as i32) << 16 | (lower as i32);
+    assert_eq!(rejoined, 8802 * 512, "the halves do not rejoin");
+}
