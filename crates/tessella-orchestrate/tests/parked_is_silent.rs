@@ -69,13 +69,14 @@ fn emit_tile(producer: &mut Producer, arena: &mut SlabArena) {
             .map(|attribute| (attribute.binding, attribute.declared))
     });
 
-    let encoded = encode_fill(
+    let (encoded, _) = encode_fill(
         arena,
         GeometryId(1),
         bucket,
         &vertex_layout,
         layer_bucket.binder.data(),
         key,
+        None,
     );
     tessella_orchestrate::emit::write(producer, &encoded).expect("the ring takes it");
 }

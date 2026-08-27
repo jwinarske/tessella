@@ -239,7 +239,8 @@ fn emit_group(
     let mut bound: Vec<GeometryBinding> = Vec::new();
     // One entry per bucket that reached the arena, so a bucket's second drawable reuses the
     // bytes rather than copying them.
-    let mut packed_bytes: BTreeMap<(usize, usize), emit::Encoded> = BTreeMap::new();
+    let mut packed_bytes: BTreeMap<(usize, usize), (emit::Encoded, Option<emit::FillShared>)> =
+        BTreeMap::new();
 
     for (index, (tile, tile_buckets)) in buckets.iter().enumerate() {
         // A raster tile's picture goes up before any drawable names it, for the reason the glyph
@@ -343,19 +344,41 @@ fn emit_group(
         // clarity: `ViewRelease` is keyed by (geometry, view), so one release would drop both
         // drawables with nothing in the stream saying so. Nothing requires two geometries'
         // ranges to be disjoint — a slab reference is an offset.
+        //
+        // A fill is the exception, and the oracle is what says so: its two drawables take
+        // *different* shaders over different index buffers — `FillShader` on earcut's triangles
+        // and `FillOutlineShader` on a line loop. So the record cannot be reused, only the
+        // buffers under it, which is what `FillShared` carries. Copying the record for a fill
+        // is what made the outline draw the interior a second time and `fill-outline-color`
+        // render nothing at all.
         let encoded = match packed_bytes.get(&(tile_index, bucket_index)) {
-            Some(first) => {
+            Some((_, Some(shared))) => {
+                let shared = *shared;
+                let Some((outline, _)) = encode(
+                    arena,
+                    bucket,
+                    entry.geometry,
+                    fonts,
+                    raster_texture,
+                    Some(shared),
+                ) else {
+                    continue;
+                };
+                outline
+            }
+            Some((first, None)) => {
                 let mut copy: emit::Encoded = first.clone();
                 copy.record.geometry = entry.geometry;
                 copy
             }
             None => {
-                let Some(fresh) = encode(arena, bucket, entry.geometry, fonts, raster_texture)
+                let Some(fresh) =
+                    encode(arena, bucket, entry.geometry, fonts, raster_texture, None)
                 else {
                     continue;
                 };
                 packed_bytes.insert((tile_index, bucket_index), fresh.clone());
-                fresh
+                fresh.0
             }
         };
         emit::write(producer, &encoded)?;
@@ -417,7 +440,8 @@ fn encode(
     geometry: tessella_capture_abi::envelope::GeometryId,
     fonts: Option<&Fonts>,
     raster_texture: tessella_capture_abi::envelope::TextureId,
-) -> Option<emit::Encoded> {
+    shared: Option<emit::FillShared>,
+) -> Option<(emit::Encoded, Option<emit::FillShared>)> {
     let bind = |family: &[BuiltIn], shader: BuiltIn| {
         let ids = attribute_ids(family);
         let key = permutation_key(&bucket.paint, &ids);
@@ -427,17 +451,22 @@ fn encode(
         (vertex_layout, key)
     };
 
-    match &bucket.content {
+    // Set by the fill arm, which is the only kind whose two drawables share buffers.
+    let mut fill_shared = None;
+    let encoded = match &bucket.content {
         Content::Fill(fill) => {
             let (vertex_layout, key) = bind(FILL_FAMILY, BuiltIn::FillShader);
-            Some(emit::encode_fill(
+            let (encoded, buffers) = emit::encode_fill(
                 arena,
                 geometry,
                 fill,
                 &vertex_layout,
                 bucket.binder.data(),
                 key,
-            ))
+                shared,
+            );
+            fill_shared = Some(buffers);
+            Some(encoded)
         }
         Content::Line(line) => {
             let (vertex_layout, key) = bind(LINE_FAMILY, BuiltIn::LineShader);
@@ -502,7 +531,8 @@ fn encode(
         )),
         // A background's quad is the consumer's to synthesize.
         _ => None,
-    }
+    }?;
+    Some((encoded, fill_shared))
 }
 
 /// Writes one layer's clip masks and uniform blocks.

@@ -396,6 +396,36 @@ pub fn texture_refs(shader: BuiltIn, bound: &[TextureId]) -> Vec<TextureRef> {
 /// oracle does — its three data-driven descriptors share one source hash and differ only in
 /// `off`. The permutation key says which of the shader's declared attributes this variant
 /// actually supplies; see [`crate::binder::permutation_key`] for why it is a mask.
+/// Which of a fill's two drawables is being encoded.
+///
+/// The oracle gives a fill layer two, and they differ in more than an id: sub-layer 1 is
+/// `FillShader` over earcut's triangles, sub-layer 2 is `FillOutlineShader` over a line loop.
+/// The vertex buffer is the same one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FillPart {
+    /// The filled interior.
+    Triangles,
+    /// The outline, over the same vertices.
+    Outline,
+}
+
+/// The buffers a fill's two drawables share.
+///
+/// Returned by the triangles and handed back for the outline, so the vertices and the
+/// interleaved paint buffer are allocated once for the pair. Only the indices differ.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FillShared {
+    /// The position buffer.
+    vertices: SlabRef,
+    /// The interleaved data-driven paint buffer.
+    interleaved: SlabRef,
+}
+
+/// Encodes one of a fill's drawables.
+///
+/// Pass `None` for the triangles, which allocates; pass what that returned for the outline,
+/// which reuses it. Encoding the outline from scratch would put a second copy of every vertex
+/// in the arena for a buffer the oracle shares.
 pub fn encode_fill(
     arena: &mut SlabArena,
     geometry: GeometryId,
@@ -403,12 +433,28 @@ pub fn encode_fill(
     layout: &VertexLayout,
     attributes: &[u8],
     permutation_key: u64,
-) -> Encoded {
-    let vertex_bytes = as_bytes_i16(&bucket.vertices);
-    let index_bytes = as_bytes_u16(&bucket.indices);
+    shared: Option<FillShared>,
+) -> (Encoded, FillShared) {
+    let part = if shared.is_some() {
+        FillPart::Outline
+    } else {
+        FillPart::Triangles
+    };
+    let (indices, draw_segments) = match part {
+        FillPart::Triangles => (&bucket.indices, &bucket.segments),
+        FillPart::Outline => (&bucket.line_indices, &bucket.line_segments),
+    };
+    let index_bytes = as_bytes_u16(indices);
 
-    let vertices = arena.alloc(&vertex_bytes);
+    // The indices are this drawable's; the vertices are the pair's.
     let indexes = arena.alloc(&index_bytes);
+    let vertices = match shared {
+        Some(shared) => shared.vertices,
+        None => {
+            let vertex_bytes = as_bytes_i16(&bucket.vertices);
+            arena.alloc(&vertex_bytes)
+        }
+    };
 
     let position = AttributeDesc {
         attr_id: POSITION_ATTRIBUTE,
@@ -427,8 +473,11 @@ pub fn encode_fill(
 
     // One allocation for the whole interleaved buffer, shared by every data-driven attribute.
     // Allocating per attribute would give each its own slab and lose the interleaving that the
-    // stride describes.
-    let interleaved = arena.alloc(attributes);
+    // stride describes. Shared with the outline for the same reason the vertices are.
+    let interleaved = match shared {
+        Some(shared) => shared.interleaved,
+        None => arena.alloc(attributes),
+    };
 
     let mut descriptors = alloc::vec![position];
     for attribute in &layout.attributes {
@@ -451,8 +500,7 @@ pub fn encode_fill(
     let attrs = push_span(&mut payload, &descriptors);
     let segments = push_span(
         &mut payload,
-        &bucket
-            .segments
+        &draw_segments
             .iter()
             .map(|segment| AbiSegment {
                 vertex_offset: segment.vertex_offset,
@@ -473,13 +521,22 @@ pub fn encode_fill(
         instance_attrs: Span::default(),
         segments,
         texture_refs: Span::default(),
-        builtin_shader: BuiltIn::FillShader as i32,
+        builtin_shader: match part {
+            FillPart::Triangles => BuiltIn::FillShader as i32,
+            FillPart::Outline => BuiltIn::FillOutlineShader as i32,
+        },
         vertex_type: AttributeDataType::Short2 as u8,
         reason: AddReason::Created as u8,
         _pad: [0; 2],
     };
 
-    Encoded { record, payload }
+    (
+        Encoded { record, payload },
+        FillShared {
+            vertices,
+            interleaved,
+        },
+    )
 }
 
 /// The attribute ids of the fixed, non-data-driven parts of a vertex.
@@ -1263,13 +1320,14 @@ mod tests {
     fn encoding_describes_the_bucket() {
         let mut arena = SlabArena::new();
         let bucket = bucket();
-        let encoded = encode_fill(
+        let (encoded, _) = encode_fill(
             &mut arena,
             GeometryId(7),
             &bucket,
             &VertexLayout::default(),
             &[],
             0,
+            None,
         );
         arena.seal();
 
@@ -1296,13 +1354,14 @@ mod tests {
     fn the_position_attribute_addresses_the_vertex_bytes() {
         let mut arena = SlabArena::new();
         let bucket = bucket();
-        let encoded = encode_fill(
+        let (encoded, _) = encode_fill(
             &mut arena,
             GeometryId(1),
             &bucket,
             &VertexLayout::default(),
             &[],
             0,
+            None,
         );
         arena.seal();
 
@@ -1329,13 +1388,14 @@ mod tests {
     #[test]
     fn every_span_fits_its_payload() {
         let mut arena = SlabArena::new();
-        let encoded = encode_fill(
+        let (encoded, _) = encode_fill(
             &mut arena,
             GeometryId(1),
             &bucket(),
             &VertexLayout::default(),
             &[],
             0,
+            None,
         );
         let len = encoded.payload.len();
 
@@ -1416,13 +1476,14 @@ mod descriptor_tests {
         });
 
         let mut arena = SlabArena::new();
-        let encoded = encode_fill(
+        let (encoded, _) = encode_fill(
             &mut arena,
             GeometryId(1),
             &bucket,
             &vertex_layout,
             &packed,
             key,
+            None,
         );
         arena.seal();
 
@@ -1511,13 +1572,14 @@ mod descriptor_tests {
         let bucket =
             tessella_layout::fill::build(&[alloc::vec![[0, 0], [10, 0], [10, 10], [0, 0]]]);
         let packed = alloc::vec![0u8; vertex_layout.stride as usize * bucket.vertices.len()];
-        let encoded = encode_fill(
+        let (encoded, _) = encode_fill(
             &mut arena,
             GeometryId(1),
             &bucket,
             &vertex_layout,
             &packed,
             key,
+            None,
         );
 
         let (start, end) = encoded
