@@ -495,6 +495,59 @@ pub fn proj_matrix(view: &ViewTransform) -> Result<Mat4, CameraError> {
     Ok(multiply(&camera_to_clip, &world_to_camera(view)))
 }
 
+/// The inverse of a 4x4, or `None` when it is singular.
+///
+/// mbgl's `matrix::invert`, which is the cofactor expansion gl-matrix uses. Transcribed rather
+/// than replaced with a general solver because the frustum is built from this and a different
+/// but algebraically equal inverse disagrees in the last bits — which for a plane equation is a
+/// tile at the edge of the screen appearing in one cover and not the other.
+#[must_use]
+#[allow(clippy::many_single_char_names)]
+pub fn invert(a: &Mat4) -> Option<Mat4> {
+    let (a00, a01, a02, a03) = (a[0], a[1], a[2], a[3]);
+    let (a10, a11, a12, a13) = (a[4], a[5], a[6], a[7]);
+    let (a20, a21, a22, a23) = (a[8], a[9], a[10], a[11]);
+    let (a30, a31, a32, a33) = (a[12], a[13], a[14], a[15]);
+
+    let b00 = a00 * a11 - a01 * a10;
+    let b01 = a00 * a12 - a02 * a10;
+    let b02 = a00 * a13 - a03 * a10;
+    let b03 = a01 * a12 - a02 * a11;
+    let b04 = a01 * a13 - a03 * a11;
+    let b05 = a02 * a13 - a03 * a12;
+    let b06 = a20 * a31 - a21 * a30;
+    let b07 = a20 * a32 - a22 * a30;
+    let b08 = a20 * a33 - a23 * a30;
+    let b09 = a21 * a32 - a22 * a31;
+    let b10 = a21 * a33 - a23 * a31;
+    let b11 = a22 * a33 - a23 * a32;
+
+    let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+    if det == 0.0 || !det.is_finite() {
+        return None;
+    }
+    let d = 1.0 / det;
+
+    Some([
+        (a11 * b11 - a12 * b10 + a13 * b09) * d,
+        (a02 * b10 - a01 * b11 - a03 * b09) * d,
+        (a31 * b05 - a32 * b04 + a33 * b03) * d,
+        (a22 * b04 - a21 * b05 - a23 * b03) * d,
+        (a12 * b08 - a10 * b11 - a13 * b07) * d,
+        (a00 * b11 - a02 * b08 + a03 * b07) * d,
+        (a32 * b02 - a30 * b05 - a33 * b01) * d,
+        (a20 * b05 - a22 * b02 + a23 * b01) * d,
+        (a10 * b10 - a11 * b08 + a13 * b06) * d,
+        (a01 * b08 - a00 * b10 - a03 * b06) * d,
+        (a30 * b04 - a31 * b02 + a33 * b00) * d,
+        (a21 * b02 - a20 * b04 - a23 * b00) * d,
+        (a11 * b07 - a10 * b09 - a12 * b06) * d,
+        (a00 * b09 - a01 * b07 + a02 * b06) * d,
+        (a31 * b01 - a30 * b03 - a32 * b00) * d,
+        (a20 * b03 - a21 * b01 + a22 * b00) * d,
+    ])
+}
+
 /// mbgl's `matrix::scale`: scales the first three columns and leaves the translation.
 #[must_use]
 pub fn scale(a: &Mat4, x: f64, y: f64, z: f64) -> Mat4 {

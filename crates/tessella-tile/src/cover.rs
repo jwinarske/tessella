@@ -31,6 +31,7 @@
 use std::collections::BTreeSet;
 
 use crate::projection;
+use crate::{camera, frustum};
 
 /// The highest zoom a cover is computed at.
 ///
@@ -104,12 +105,12 @@ impl ViewTransform {
 /// A cover that could not be computed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CoverError {
-    /// The view is pitched, which needs a frustum this does not compute.
+    /// A pitched view whose camera will not resolve into a projection.
     ///
-    /// A pitched view sees a trapezoid receding toward the horizon whose footprint is unbounded
-    /// as pitch approaches ninety degrees. Its bounding rectangle would be cheap to compute and
-    /// would fetch a great many tiles that are never drawn.
-    #[error("pitched views need a frustum cover, which is not implemented")]
+    /// The frustum is built by inverting the projection matrix, so this is a camera with no
+    /// viewport or a degenerate one — not a pitch this build declines to cover. It used to be
+    /// exactly that, and the name is kept because the variant is public.
+    #[error("the camera has no projection to build a frustum from")]
     Pitched,
     /// The viewport asks for more tiles than [`MAX_TILES`].
     ///
@@ -135,6 +136,52 @@ pub fn cover(view: &ViewTransform) -> Result<Vec<TileCoord>, CoverError> {
     cover_at(view, view.tile_zoom())
 }
 
+/// The cover of a pitched view, by walking the tile quadtree against the view frustum.
+///
+/// # Why not the bounding rectangle
+///
+/// A pitched view sees a trapezoid receding towards the horizon, and its bounding rectangle is
+/// very much larger than it: at fifty-five degrees the rectangle holds several times the tiles
+/// the view can see, and each one is a fetch, a decode and a build for ground nobody looks at.
+///
+/// So the frustum is walked instead, which is what mbgl does. See [`crate::frustum`] for what
+/// that is and for the level-of-detail pass this leaves out.
+///
+/// # Errors
+///
+/// [`CoverError::TooLarge`] when the frustum crosses more than [`MAX_TILES`], and
+/// [`CoverError::Pitched`] when the camera will not resolve into a matrix to build a frustum
+/// from — a camera with no viewport, in practice.
+fn pitched_cover(view: &ViewTransform, z: u8) -> Result<Vec<TileCoord>, CoverError> {
+    let projection = camera::proj_matrix(view).map_err(|_| CoverError::Pitched)?;
+    let world_size = camera::world_size(view.zoom);
+    let frustum = frustum::Frustum::from_projection(&projection, world_size, f64::from(z))
+        .ok_or(CoverError::Pitched)?;
+
+    // The centre in tile units at *this* level, which is what the nearest-first sort measures
+    // from. Not the view's fractional zoom: a tile index is an integer-level thing.
+    let centre = projection::tile_units(view.longitude, view.latitude, z);
+
+    let world = i64::from(1u32 << z);
+    let found = frustum::covered(&frustum, z, centre, WORLD_COPIES, MAX_TILES).ok_or(
+        CoverError::TooLarge {
+            tiles: MAX_TILES as u64 + 1,
+        },
+    )?;
+
+    Ok(found
+        .into_iter()
+        .filter(|(_, _, y, _)| i64::from(*y) < world)
+        .map(|(z, x, y, wrap)| TileCoord { z, x, y, wrap })
+        .collect())
+}
+
+/// How many copies of the world the frustum walk visits on each side.
+///
+/// mbgl's three. A view along the antimeridian sees the same ground approached from both
+/// directions, and each copy is its own `wrap` over one shared store key.
+const WORLD_COPIES: i32 = 3;
+
 /// The tiles a view needs at a stated integer zoom.
 ///
 /// [`cover`] is this at the view's own [`ViewTransform::tile_zoom`], which is what a vector
@@ -155,7 +202,7 @@ pub fn cover(view: &ViewTransform) -> Result<Vec<TileCoord>, CoverError> {
 /// asked for needs more than [`MAX_TILES`].
 pub fn cover_at(view: &ViewTransform, z: u8) -> Result<Vec<TileCoord>, CoverError> {
     if view.pitch.abs() > f64::EPSILON {
-        return Err(CoverError::Pitched);
+        return pitched_cover(view, z.min(MAX_ZOOM));
     }
 
     let z = z.min(MAX_ZOOM);
@@ -591,13 +638,56 @@ mod tests {
     /// horizon whose footprint is unbounded near ninety degrees, and its bounding rectangle would
     /// fetch a great many tiles that are never drawn.
     #[test]
-    fn pitch_is_refused() {
+    fn a_pitched_view_covers_and_covers_more() {
         let mut view = probe_view();
-        view.pitch = 30.0;
-        assert_eq!(cover(&view), Err(CoverError::Pitched));
+        let flat = cover(&view).expect("a flat cover");
 
-        view.pitch = 0.0;
-        assert!(cover(&view).is_ok());
+        view.pitch = 45.0;
+        let pitched = cover(&view).expect("a pitched cover");
+
+        // Pitching sees further, so it needs more tiles -- and it must still contain what the
+        // flat view saw, because tilting the camera does not remove ground from the middle of
+        // the screen.
+        assert!(
+            pitched.len() > flat.len(),
+            "a pitched view covered {} tiles where flat covered {}",
+            pitched.len(),
+            flat.len()
+        );
+        for tile in &flat {
+            assert!(
+                pitched.contains(tile),
+                "pitching lost {tile:?}, which is in the flat cover"
+            );
+        }
+    }
+
+    /// The frustum is walked, not its bounding box.
+    ///
+    /// The difference is the whole reason for the traversal. A pitched view's visible ground is
+    /// a trapezoid, and its bounding rectangle holds a great many tiles behind the camera and
+    /// off to the sides that the frustum never crosses. Covering the rectangle would draw none
+    /// of them and fetch all of them.
+    #[test]
+    fn the_cover_is_the_frustum_and_not_its_box() {
+        let mut view = probe_view();
+        view.pitch = 60.0;
+        let tiles = cover(&view).expect("a pitched cover");
+
+        let (mut min_x, mut max_x) = (u32::MAX, 0);
+        let (mut min_y, mut max_y) = (u32::MAX, 0);
+        for tile in &tiles {
+            min_x = min_x.min(tile.x);
+            max_x = max_x.max(tile.x);
+            min_y = min_y.min(tile.y);
+            max_y = max_y.max(tile.y);
+        }
+        let box_tiles = ((max_x - min_x + 1) as usize) * ((max_y - min_y + 1) as usize);
+        assert!(
+            tiles.len() < box_tiles,
+            "the cover fills its own bounding box ({} of {box_tiles}), so nothing was culled",
+            tiles.len()
+        );
     }
 
     /// Longitude wraps and latitude does not. A viewport past the antimeridian sees the other

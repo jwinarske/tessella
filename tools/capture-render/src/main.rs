@@ -225,16 +225,7 @@ fn run() -> Result<String, String> {
     let decoded =
         Tile::decode(&bytes).map_err(|error| format!("decoding {}: {error}", args.tile))?;
 
-    // The cover is computed flat even when the view is pitched, because `cover::cover` refuses a
-    // pitched view -- a frustum cover is not implemented -- and because this tool does not need
-    // one: the tile set is *given*, either by `--tile-at` or by the filename, so the cover only
-    // decides where a background is painted and which tiles get a clip mask. Everything that
-    // depends on the camera, matrices included, uses the pitched view.
-    let flat = camera::settled(&ViewTransform {
-        pitch: 0.0,
-        ..args.view
-    });
-    let tiles = cover::cover(&flat).map_err(|error| format!("covering: {error}"))?;
+    let tiles = cover::cover(&args.view).map_err(|error| format!("covering: {error}"))?;
     // Where this tile's features actually belong. Given, or read off the filename, or nowhere —
     // and "nowhere" means every address, which repeats the tile across the viewport.
     let at = args.at.or_else(|| address_from_name(&args.tile));

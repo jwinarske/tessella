@@ -36,6 +36,7 @@
 
 pub mod camera;
 pub mod cover;
+pub mod frustum;
 pub mod mask;
 pub mod polygon;
 pub mod projection;
