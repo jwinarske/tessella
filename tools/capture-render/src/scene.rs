@@ -56,6 +56,30 @@ pub(crate) struct Texture {
 }
 
 impl Texture {
+    /// The colour at a pixel, premultiplied as the decoder produced it.
+    ///
+    /// Alpha-only textures answer white at the stored alpha, so one sampler serves a glyph atlas
+    /// and a raster tile without a branch at the call site.
+    pub(crate) fn rgba(&self, x: u32, y: u32) -> [f32; 4] {
+        if x >= self.width || y >= self.height {
+            return [0.0; 4];
+        }
+        let at = (y as usize * self.width as usize + x as usize) * self.channels;
+        let Some(pixel) = self.pixels.get(at..at + self.channels) else {
+            return [0.0; 4];
+        };
+        let channel = |value: u8| f32::from(value) / 255.0;
+        match self.channels {
+            1 => [1.0, 1.0, 1.0, channel(pixel[0])],
+            _ => [
+                channel(pixel[0]),
+                channel(pixel[1]),
+                channel(pixel[2]),
+                channel(pixel[3]),
+            ],
+        }
+    }
+
     /// The alpha at a pixel, which for a glyph atlas is the signed distance.
     pub(crate) fn alpha(&self, x: u32, y: u32) -> f32 {
         if x >= self.width || y >= self.height {

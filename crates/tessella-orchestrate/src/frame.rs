@@ -116,6 +116,13 @@ pub struct Frame<'a> {
 const GLYPH_ATLAS: tessella_capture_abi::envelope::TextureId =
     tessella_capture_abi::envelope::TextureId(2);
 
+/// The first texture id a raster tile's picture takes.
+///
+/// One per tile rather than one per layer: a raster tile *is* its picture, and two raster layers
+/// over one source are two buckets sharing one image (§11.5). Numbered above the atlases so a
+/// raster texture and a glyph atlas never collide.
+const RASTER_TEXTURE_BASE: u64 = 16;
+
 /// Emits a whole frame: state, geometry, uniforms, order, camera — in that order.
 ///
 /// # Errors
@@ -182,7 +189,22 @@ pub fn emit(
     let mut by_layer: BTreeMap<i32, Vec<GeometryBinding>> = BTreeMap::new();
     let mut emitted = Emitted::default();
 
-    for (tile, tile_buckets) in buckets {
+    for (index, (tile, tile_buckets)) in buckets.iter().enumerate() {
+        // A raster tile's picture goes up before any drawable names it, for the reason the glyph
+        // atlas does: a texture reference the consumer has not been given samples whatever was
+        // last at that slot.
+        #[allow(clippy::cast_possible_truncation)]
+        let raster_texture =
+            tessella_capture_abi::envelope::TextureId(RASTER_TEXTURE_BASE + index as u64);
+        for bucket in tile_buckets {
+            if let Content::Raster(raster) = &bucket.content
+                && let Some(upload) = texture::raster_tile(raster_texture, &raster.image)
+            {
+                texture::write(producer, &upload)?;
+                break;
+            }
+        }
+
         let at = order::tile_of(tile.z, tile.x, tile.y);
         let bindings = order::bindings_for(view_id, at, tile_buckets, &mut next_id);
 
@@ -200,7 +222,9 @@ pub fn emit(
                     break;
                 };
                 binding_index += 1;
-                if let Some(encoded) = encode(arena, bucket, binding.geometry, fonts) {
+                if let Some(encoded) =
+                    encode(arena, bucket, binding.geometry, fonts, raster_texture)
+                {
                     emit::write(producer, &encoded)?;
                     emitted.geometries += 1;
                 }
@@ -266,6 +290,7 @@ fn encode(
     bucket: &LayerBucket,
     geometry: tessella_capture_abi::envelope::GeometryId,
     fonts: Option<&Fonts>,
+    raster_texture: tessella_capture_abi::envelope::TextureId,
 ) -> Option<emit::Encoded> {
     let bind = |family: &[BuiltIn], shader: BuiltIn| {
         let ids = attribute_ids(family);
@@ -343,8 +368,13 @@ fn encode(
                 GLYPH_ATLAS,
             ))
         }
-        // A background's quad is the consumer's to synthesize; a raster carries its own picture
-        // and is emitted by its own path.
+        Content::Raster(raster) => Some(emit::encode_raster(
+            arena,
+            geometry,
+            &raster.bucket,
+            raster_texture,
+        )),
+        // A background's quad is the consumer's to synthesize.
         _ => None,
     }
 }
@@ -687,6 +717,46 @@ fn write_layer_state(
                 view_id,
                 layer_index,
                 ubo_slots::ID_SYMBOL_EVALUATED_PROPS_UBO,
+                &props,
+            )?;
+        }
+        LayerKind::Raster => {
+            // The smallest drawable block of any layer: a matrix and nothing else. A raster tile
+            // carries no per-feature anything, so there is nothing to interpolate and nothing to
+            // bind — the picture is the tile.
+            let matrices: Vec<[f32; 16]> = matrices(0)
+                .filter_map(|tile| {
+                    DrawableEntry::for_tile(
+                        view,
+                        tile.z,
+                        tile.x,
+                        tile.y,
+                        i32::from(tile.wrap),
+                        layer_index,
+                        0,
+                    )
+                    .ok()
+                    .map(|entry| entry.matrix)
+                })
+                .collect();
+            let buffer = ubo::pack_raster_drawable_buffer(
+                &matrices,
+                ubo_layouts::RASTER_DRAWABLE_UBO.stride,
+            );
+            ubo::write(
+                producer,
+                view_id,
+                layer_index,
+                ubo_slots::ID_RASTER_DRAWABLE_UBO,
+                &buffer,
+            )?;
+
+            let props = ubo::raster_props_from_paint(&paint, view.zoom);
+            ubo::write(
+                producer,
+                view_id,
+                layer_index,
+                ubo_slots::ID_RASTER_EVALUATED_PROPS_UBO,
                 &props,
             )?;
         }

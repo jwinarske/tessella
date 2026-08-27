@@ -316,3 +316,130 @@ fn a_symbol_layer_carries_its_quads_and_its_atlas() {
         "the atlas size is {width}x{height}, which divides every texture coordinate to zero"
     );
 }
+
+/// A raster layer reaches the wire: the quad, the picture, and the reference between them.
+///
+/// A raster tile *is* its picture, so the two travel together or neither means anything. The
+/// geometry carries a texture reference and the image is uploaded ahead of it — a reference to a
+/// texture the consumer has not been given samples whatever was last at that slot, which on a
+/// tiled source is a neighbouring tile's photograph.
+#[test]
+fn a_raster_layer_carries_its_quad_and_its_picture() {
+    use std::sync::Arc;
+    use tessella_capture_abi::envelope::{GeometryAdd, TextureUpdate, WireRecord as _};
+    use tessella_orchestrate::tile::build_raster_tile;
+    use tessella_source::image::Image;
+
+    let style = Style::parse(
+        r#"{"version": 8, "sources": {"src": {"type": "raster", "tiles": [], "tileSize": 512}},
+            "layers": [{"id": "sat", "type": "raster", "source": "src"}]}"#,
+    )
+    .expect("the style parses");
+
+    // Four pixels of RGBA, which is a picture as far as the protocol is concerned.
+    let picture = Arc::new(Image {
+        width: 2,
+        height: 2,
+        pixels: vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+        ],
+    });
+
+    let view = view();
+    let tiles = cover::cover(&view).expect("covers");
+    let mut buckets = Vec::new();
+    for tile in &tiles {
+        let id = TileId::new(tile.z, tile.x, tile.y);
+        let built = build_raster_tile(
+            &style,
+            "src",
+            Arc::clone(&picture),
+            &[tessella_tile::mask::WHOLE_TILE],
+        )
+        .expect("the raster tile builds");
+        buckets.push((id, built));
+    }
+
+    let mut ring = Ring::new(1 << 22);
+    let (producer, consumer) = ring.split();
+    let mut arena = SlabArena::new();
+    frame::emit(
+        producer,
+        &mut arena,
+        &Frame {
+            style: &style,
+            view: &view,
+            view_id: ViewId(0),
+            tiles: &tiles,
+            buckets: &buckets,
+            light: &Light::default(),
+            fonts: None,
+        },
+    )
+    .expect("the frame emits");
+
+    let mut named: Vec<u64> = Vec::new();
+    let mut uploaded: Vec<u64> = Vec::new();
+    let mut upload_seen_first = true;
+    while let Some(record) = consumer.peek() {
+        match record.kind {
+            EnvelopeKind::TextureUpdate => {
+                if let Some(update) = TextureUpdate::from_bytes(record.record) {
+                    uploaded.push(update.texture.0);
+                }
+            }
+            EnvelopeKind::GeometryAdd => {
+                if let Some(add) = GeometryAdd::from_bytes(record.record)
+                    && add.builtin_shader == tessella_capture_abi::BuiltIn::RasterShader as i32
+                {
+                    // Two references to one picture. The raster shader samples two images so
+                    // it can crossfade a tile against its parent while the child loads; with no
+                    // parent in hand both slots get the same one, which is what mbgl binds.
+                    let refs = read_texture_refs(record.payload, add);
+                    assert_eq!(refs.len(), 2, "a raster quad binds both image slots");
+                    assert_eq!(refs[0], refs[1], "the two slots hold different pictures");
+                    if !uploaded.contains(&refs[0]) {
+                        upload_seen_first = false;
+                    }
+                    named.push(refs[0]);
+                }
+            }
+            _ => {}
+        }
+        let consumed = record.consumed();
+        consumer.advance(consumed);
+    }
+
+    assert!(!named.is_empty(), "no raster geometry was announced");
+    assert!(
+        upload_seen_first,
+        "a raster quad named a texture that had not been uploaded"
+    );
+    // One picture per tile, not one shared between them: each tile fetched its own.
+    assert_eq!(
+        named.len(),
+        tiles.len(),
+        "one raster drawable per tile of the cover"
+    );
+    let distinct: std::collections::BTreeSet<u64> = named.iter().copied().collect();
+    assert_eq!(
+        distinct.len(),
+        tiles.len(),
+        "two tiles share one texture id"
+    );
+}
+
+/// The texture ids a geometry names.
+fn read_texture_refs(payload: &[u8], add: tessella_capture_abi::envelope::GeometryAdd) -> Vec<u64> {
+    use tessella_capture_abi::envelope::{TextureRef, WireRecord as _};
+    let size = core::mem::size_of::<TextureRef>();
+    let start = add.texture_refs.offset as usize;
+    (0..add.texture_refs.count as usize)
+        .filter_map(|index| {
+            payload
+                .get(start + index * size..)
+                .and_then(TextureRef::from_bytes)
+                .map(|reference| reference.texture.0)
+        })
+        .collect()
+}

@@ -144,6 +144,58 @@ impl Canvas {
     }
 }
 
+impl Canvas {
+    /// Blends one triangle, taking its *colour* from a sampled image rather than a constant.
+    ///
+    /// The sibling of [`Canvas::sampled_triangle`], which takes coverage from a field and colour
+    /// from a uniform. A raster tile is the other way round: the picture is the colour, and the
+    /// layer's opacity is the only uniform in it.
+    pub(crate) fn textured_triangle(
+        &mut self,
+        points: [[f32; 2]; 3],
+        uv: [[f32; 2]; 3],
+        opacity: f32,
+        sample: &dyn Fn([f32; 2]) -> [f32; 4],
+    ) {
+        let [a, b, c] = points;
+        let min_x = a[0].min(b[0]).min(c[0]).floor().max(0.0);
+        let max_x = a[0].max(b[0]).max(c[0]).ceil().min(self.width as f32);
+        let min_y = a[1].min(b[1]).min(c[1]).floor().max(0.0);
+        let max_y = a[1].max(b[1]).max(c[1]).ceil().min(self.height as f32);
+        if min_x >= max_x || min_y >= max_y {
+            return;
+        }
+        let area = edge(a, b, c);
+        if area.abs() < f32::EPSILON {
+            return;
+        }
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        for y in min_y as u32..max_y as u32 {
+            for x in min_x as u32..max_x as u32 {
+                let p = [x as f32 + 0.5, y as f32 + 0.5];
+                let (w0, w1, w2) = (
+                    edge(b, c, p) / area,
+                    edge(c, a, p) / area,
+                    edge(a, b, p) / area,
+                );
+                if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                    continue;
+                }
+                let at = [
+                    uv[0][0] * w0 + uv[1][0] * w1 + uv[2][0] * w2,
+                    uv[0][1] * w0 + uv[1][1] * w1 + uv[2][1] * w2,
+                ];
+                let mut color = sample(at);
+                color[3] *= opacity;
+                if color[3] > 0.0 {
+                    self.blend(x, y, color);
+                }
+            }
+        }
+    }
+}
+
 fn edge(a: [f32; 2], b: [f32; 2], p: [f32; 2]) -> f32 {
     (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
 }

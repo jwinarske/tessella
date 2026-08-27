@@ -23,7 +23,7 @@ serde_json.workspace = true
 tessella-capture-abi.workspace = true
 tessella-orchestrate = { version = "0.0.0", path = "../../crates/tessella-orchestrate" }
 tessella-glyph.workspace = true
-tessella-source.workspace = true
+tessella-source = { workspace = true, features = ["image"] }
 tessella-storage.workspace = true
 tessella-style.workspace = true
 tessella-tile.workspace = true

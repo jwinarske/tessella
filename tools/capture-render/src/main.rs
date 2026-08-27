@@ -39,7 +39,7 @@ use tessella_capture_abi::ring::Ring;
 use tessella_glyph::fonts::Fonts;
 use tessella_orchestrate::SlabArena;
 use tessella_orchestrate::frame::{self, Frame};
-use tessella_orchestrate::tile::{TileId, build_mvt_tile, build_sourceless};
+use tessella_orchestrate::tile::{TileId, build_mvt_tile, build_raster_tile, build_sourceless};
 use tessella_source::mvt::Tile;
 use tessella_style::Style;
 use tessella_style::light::Light;
@@ -54,6 +54,12 @@ const POSITION: u32 = 0;
 
 /// A line's second attribute: the extrusion and the distance along the line.
 const LINE_DATA: u32 = 1;
+
+/// Tile units across, which both a raster quad's position and its texture position are in.
+const EXTENT: f32 = 8192.0;
+
+/// A raster quad's position in the picture, in the same units as its position on the ground.
+const RASTER_TEXTURE: u32 = 1;
 
 /// An extrusion's packed fraction, whose low bit says the ring closes here.
 const EXTRUSION_DECIMALS: u32 = 1;
@@ -101,6 +107,8 @@ struct Args {
     source: String,
     /// A directory laid out as `{fontstack}/{range}.pbf`, for the symbol layers.
     glyphs: Option<String>,
+    /// A picture for the raster layers, decoded and placed at the same address as the tile.
+    raster: Option<String>,
     /// Where the tile belongs, as `z/x/y`.
     ///
     /// `None` means it is drawn at every address the cover names, which is a diagnostic rather
@@ -117,6 +125,7 @@ fn parse_args() -> Result<Args, String> {
     let mut source = String::from("src");
     let mut glyphs = None;
     let mut at = None;
+    let mut raster = None;
     let (mut lon, mut lat, mut zoom) = (0.0, 0.0, 0.0);
     let (mut width, mut height) = (1024.0, 768.0);
     let (mut bearing, mut pitch) = (0.0, 0.0);
@@ -134,6 +143,7 @@ fn parse_args() -> Result<Args, String> {
             "--source" => source = value()?,
             "--glyphs" => glyphs = Some(value()?),
             "--tile-at" => at = Some(address(&value()?)?),
+            "--raster" => raster = Some(value()?),
             "--lon" => lon = number(&value()?)?,
             "--lat" => lat = number(&value()?)?,
             "--zoom" => zoom = number(&value()?)?,
@@ -154,6 +164,7 @@ fn parse_args() -> Result<Args, String> {
         out,
         source,
         glyphs,
+        raster,
         at,
         view: camera::settled(&ViewTransform {
             longitude: lon,
@@ -207,7 +218,8 @@ fn address_from_name(path: &str) -> Option<(u8, u32, u32)> {
 
 fn usage() -> String {
     "usage: capture-render --style <path> --tile <path.mvt> [--out map.png] [--source src]\n\
-     \x20                     [--glyphs <dir>] [--tile-at z/x/y] [--lon 0] [--lat 0] [--zoom 0]\n\
+     \x20                     [--glyphs <dir>] [--raster <image>] [--tile-at z/x/y]\n\
+      \x20                     [--lon 0] [--lat 0] [--zoom 0]\n\
       \x20                     [--width 1024] [--height 768] [--bearing 0] [--pitch 0]"
         .to_string()
 }
@@ -219,6 +231,20 @@ fn run() -> Result<String, String> {
         .map_err(|error| format!("reading {}: {error}", args.style))?;
     let mut style = Style::parse(&text).map_err(|error| format!("parsing the style: {error}"))?;
     let rejected = style.reject_uncompilable();
+
+    // A raster layer draws from a *picture* rather than from features, so it is decoded here and
+    // built by its own path -- the same picture at the tile's own address, which is what a
+    // raster source would have fetched for it.
+    let picture = match &args.raster {
+        Some(path) => {
+            let bytes = std::fs::read(path).map_err(|error| format!("reading {path}: {error}"))?;
+            Some(std::sync::Arc::new(
+                tessella_source::image::decode(&bytes)
+                    .map_err(|error| format!("decoding {path}: {error}"))?,
+            ))
+        }
+        None => None,
+    };
 
     let bytes =
         std::fs::read(&args.tile).map_err(|error| format!("reading {}: {error}", args.tile))?;
@@ -241,6 +267,20 @@ fn run() -> Result<String, String> {
         if at.is_none_or(|(z, x, y)| (z, x, y) == (tile.z, tile.x, tile.y)) {
             built = build_mvt_tile(&style, &args.source, id, &decoded)
                 .map_err(|error| format!("building {id}: {error}"))?;
+            // A raster layer draws from a *picture*, not from features, so it is built by its
+            // own path -- the same picture at the same address, which is what a raster source
+            // would have fetched for this tile.
+            if let Some(picture) = &picture {
+                built.extend(
+                    build_raster_tile(
+                        &style,
+                        &args.source,
+                        std::sync::Arc::clone(picture),
+                        &[tessella_tile::mask::WHOLE_TILE],
+                    )
+                    .map_err(|error| format!("raster {id}: {error}"))?,
+                );
+            }
             placed += 1;
         }
         built.extend(
@@ -431,6 +471,9 @@ fn draw(scene: &Scene, arena: &SlabArena, width: u32, height: u32) -> Canvas {
             BuiltIn::FillExtrusionShader | BuiltIn::FillExtrusionInstancedShader => {
                 draw_extrusion(&mut canvas, geometry, arena, &matrix, &paint);
             }
+            BuiltIn::RasterShader => {
+                draw_raster(&mut canvas, geometry, arena, scene, &matrix, &paint);
+            }
             _ => draw_triangles(&mut canvas, geometry, arena, &matrix, paint.color),
         }
     }
@@ -500,23 +543,24 @@ fn layer_paint(scene: &Scene, shader: BuiltIn, layer_index: u32) -> Option<Paint
         BuiltIn::FillExtrusionShader | BuiltIn::FillExtrusionInstancedShader => {
             (ubo_slots::ID_FILL_EXTRUSION_PROPS_UBO, 0, None)
         }
-        // A symbol's colour is per vertex rather than per layer when `text-color` is
-        // data-driven, and the layer block carries it otherwise. Neither is written yet, so the
-        // colour is the one thing here this does not take from the stream -- stated rather than
-        // hidden, because a black label on a pale map is exactly what an unwritten uniform looks
-        // like.
+        // A symbol's block opens with the text half -- fill colour, halo colour, opacity --
+        // and carries the icon half behind it, because one shader samples both and the buffer
+        // is its interface. The text half is what a label reads.
         BuiltIn::SymbolSDFShader | BuiltIn::SymbolIconShader => {
-            return Some(Paint {
-                color: [0.1, 0.1, 0.12, 1.0],
-                width: 1.0,
-                height: 0.0,
-                base: 0.0,
-            });
+            (ubo_slots::ID_SYMBOL_EVALUATED_PROPS_UBO, 0, None)
         }
+        // A raster's block has no colour at all -- its pixels are the colour. Only the opacity
+        // is read, from where the generated layout puts it.
+        BuiltIn::RasterShader => (ubo_slots::ID_RASTER_EVALUATED_PROPS_UBO, usize::MAX, None),
         _ => return None,
     };
     let bytes = scene.ubo(layer_index, slot)?;
-    let mut color = read_color(bytes, color_at)?;
+    // `usize::MAX` means the block holds no colour; white leaves a sampled texture unchanged.
+    let mut color = if color_at == usize::MAX {
+        [1.0, 1.0, 1.0, 1.0]
+    } else {
+        read_color(bytes, color_at)?
+    };
 
     // Opacity is a separate scalar in every one of these blocks, and a layer drawn without it is
     // opaque where the style asked for glass.
@@ -525,6 +569,10 @@ fn layer_paint(scene: &Scene, shader: BuiltIn, layer_index: u32) -> Option<Paint
         BuiltIn::LineShader => Some(20),
         BuiltIn::CircleShader => Some(40),
         BuiltIn::FillExtrusionShader | BuiltIn::FillExtrusionInstancedShader => Some(60),
+        // `text_opacity`, past the two colours.
+        BuiltIn::SymbolSDFShader | BuiltIn::SymbolIconShader => Some(32),
+        // `opacity`, past the spin weights, the parent-tile fade and the buffer scale.
+        BuiltIn::RasterShader => Some(36),
         _ => None,
     };
     if let Some(at) = opacity_at
@@ -596,6 +644,12 @@ fn matrix_for(
         BuiltIn::SymbolSDFShader | BuiltIn::SymbolIconShader => (
             ubo_slots::ID_SYMBOL_DRAWABLE_UBO,
             ubo_layouts::SYMBOL_DRAWABLE_UBO.stride,
+        ),
+        // The smallest block of any layer: a matrix and nothing else, because a raster tile has
+        // nothing per feature to interpolate.
+        BuiltIn::RasterShader => (
+            ubo_slots::ID_RASTER_DRAWABLE_UBO,
+            ubo_layouts::RASTER_DRAWABLE_UBO.stride,
         ),
         _ => return None,
     };
@@ -1125,6 +1179,106 @@ fn draw_symbol(
                 continue;
             };
             canvas.sampled_triangle([pa, pb, pc], [ua, ub, uc], paint.color, &sample);
+        }
+    }
+}
+
+/// Draws a raster layer: a quad, sampling the tile's own picture.
+///
+/// # The picture is the tile
+///
+/// A raster source carries no features, so the geometry is a quad — or one per entry of the
+/// tile's mask, where a parent tile stands in for children that have not arrived. Both corners
+/// of every vertex carry a position on the ground *and* a position in the image, in the same
+/// units, which is what lets one quad show a sub-rectangle of a parent's picture without any
+/// arithmetic on this side.
+///
+/// The texture comes from the geometry's own reference, as a symbol's atlas does. Choosing one
+/// here would draw whichever picture happened to be uploaded last, which on a tiled source is a
+/// neighbour's.
+fn draw_raster(
+    canvas: &mut Canvas,
+    geometry: &Geometry,
+    arena: &SlabArena,
+    scene: &Scene,
+    matrix: &[f32; 16],
+    paint: &Paint,
+) {
+    let Some(position) = geometry.attribute(POSITION) else {
+        return;
+    };
+    let Some(texture) = geometry.attribute(RASTER_TEXTURE) else {
+        return;
+    };
+    let (Some(pos_bytes), Some(tex_bytes)) = (
+        arena.resolve(position.source),
+        arena.resolve(texture.source),
+    ) else {
+        return;
+    };
+    let Some(image) = geometry
+        .texture_refs
+        .first()
+        .and_then(|reference| scene.textures.get(&reference.texture.0))
+    else {
+        return;
+    };
+
+    let count = geometry.vertex_count as usize;
+    let mut projected = Vec::with_capacity(count);
+    let mut uvs = Vec::with_capacity(count);
+    for index in 0..count {
+        let pos_at = position.offset as usize + index * position.stride as usize;
+        let tex_at = texture.offset as usize + index * texture.stride as usize;
+        let short = |bytes: &[u8], at: usize, offset: usize| {
+            bytes
+                .get(at + offset..at + offset + 2)
+                .map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])))
+                .unwrap_or(0.0)
+        };
+        projected.push(raster::project(
+            matrix,
+            short(pos_bytes, pos_at, 0),
+            short(pos_bytes, pos_at, 2),
+            canvas.width as f32,
+            canvas.height as f32,
+        ));
+        // Tile units, so the extent maps to the image's own size.
+        uvs.push([
+            short(tex_bytes, tex_at, 0) / EXTENT * image.width as f32,
+            short(tex_bytes, tex_at, 2) / EXTENT * image.height as f32,
+        ]);
+    }
+
+    let sample_rgb = |uv: [f32; 2]| -> [f32; 4] {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        image.rgba(uv[0].round() as u32, uv[1].round() as u32)
+    };
+
+    for segment in &geometry.segments {
+        let start = segment.index_offset as usize;
+        let end = start + segment.index_length as usize;
+        let Some(indices) = geometry.indices.get(start..end) else {
+            continue;
+        };
+        for triangle in indices.chunks_exact(3) {
+            let slot = |index: u16| segment.vertex_offset as usize + index as usize;
+            let (a, b, c) = (slot(triangle[0]), slot(triangle[1]), slot(triangle[2]));
+            let (Some(Some(pa)), Some(Some(pb)), Some(Some(pc))) = (
+                projected.get(a).copied(),
+                projected.get(b).copied(),
+                projected.get(c).copied(),
+            ) else {
+                continue;
+            };
+            let (Some(ua), Some(ub), Some(uc)) = (
+                uvs.get(a).copied(),
+                uvs.get(b).copied(),
+                uvs.get(c).copied(),
+            ) else {
+                continue;
+            };
+            canvas.textured_triangle([pa, pb, pc], [ua, ub, uc], paint.color[3], &sample_rgb);
         }
     }
 }
