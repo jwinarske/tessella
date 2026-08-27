@@ -1154,6 +1154,62 @@ pub fn pack_symbol_tile_props(
     out
 }
 
+/// Where a pattern's two images sit in the atlas, and how big the atlas is.
+///
+/// One of these per drawable, matching `FillPatternTilePropsUBO` — `pattern_from` and
+/// `pattern_to` as `vec4` rectangles, then the atlas size as a `vec2` and two words of padding.
+/// `LinePatternTilePropsUBO` and the background's are the same shape at their own slots.
+///
+/// # The rectangles are atlas positions, not sheet coordinates
+///
+/// mbgl uploads a tile's sprites into a process-wide `DynamicTextureAtlas` and gets back where
+/// they landed, so a rectangle here names a place in that shared atlas rather than in the sprite
+/// sheet the style pointed at. Two tiles using one sprite name one rectangle; nothing is
+/// duplicated per tile but the position map.
+///
+/// # Both rectangles are the same for a constant pattern, and that is correct
+///
+/// A pattern that does not vary with zoom still fades — between two copies of one image, which
+/// is a no-op that costs nothing and keeps one code path. The capture shows it: for a constant
+/// `fill-pattern` the two `vec4`s are byte-identical, twenty-four blocks of the rectangle to
+/// twelve of the size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PatternPlacement {
+    /// The image being faded from, as `tlbr` in atlas pixels.
+    pub from: [u16; 4],
+    /// The image being faded to.
+    pub to: [u16; 4],
+    /// The atlas's dimensions.
+    pub texsize: [u16; 2],
+}
+
+/// Packs `FillPatternTilePropsUBO`, one entry per drawable.
+///
+/// The rectangles are written as `f32` although they are whole pixels: the shader declares
+/// `vec4`, and DR-6's generated layout says so. Writing them as integers would pack the same
+/// number of bytes and be read as denormals.
+#[must_use]
+pub fn pack_pattern_tile_props(entries: &[PatternPlacement]) -> Vec<u8> {
+    const STRIDE: usize = 48;
+    let mut out = Vec::with_capacity(entries.len() * STRIDE);
+    for entry in entries {
+        for rect in [entry.from, entry.to] {
+            for value in rect {
+                out.extend_from_slice(&f32::from(value).to_le_bytes());
+            }
+        }
+        for value in entry.texsize {
+            out.extend_from_slice(&f32::from(value).to_le_bytes());
+        }
+        // pad1 and pad2, which the block declares and the shader ignores. Zero rather than
+        // uninitialized: the buffer is compared byte for byte against the oracle's.
+        out.extend_from_slice(&0f32.to_le_bytes());
+        out.extend_from_slice(&0f32.to_le_bytes());
+    }
+    debug_assert_eq!(out.len(), entries.len() * STRIDE);
+    out
+}
+
 /// Packs `SymbolEvaluatedPropsUBO`.
 ///
 /// Ninety-six bytes: text colour, halo colour, opacity, halo width and blur, then the same five
