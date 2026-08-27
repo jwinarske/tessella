@@ -586,6 +586,32 @@ pub fn fill_props_from_paint(
     )
 }
 
+/// A fill-extrusion layer's evaluated properties, from its paint and the style light.
+///
+/// Three of the five blocks are the light, which is why it is a parameter rather than something
+/// read from the paint: an extrusion is the first thing here whose colour depends on more than
+/// its own layer, and a build that packed the paint and left the light at zero draws every
+/// building flat black.
+#[must_use]
+pub fn fill_extrusion_props_from_paint(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    zoom: f64,
+    light: &tessella_style::light::Light,
+) -> Vec<u8> {
+    let color = light.color;
+    let fill = uniform_color(paint, "fill-extrusion-color", zoom);
+    pack_fill_extrusion_props(
+        [fill.r, fill.g, fill.b, fill.a],
+        [color.r, color.g, color.b],
+        light.cartesian(),
+        uniform_number(paint, "fill-extrusion-base", zoom),
+        uniform_number(paint, "fill-extrusion-height", zoom),
+        light.intensity,
+        uniform_number(paint, "fill-extrusion-vertical-gradient", zoom),
+        uniform_number(paint, "fill-extrusion-opacity", zoom),
+    )
+}
+
 /// One circle drawable's entry.
 ///
 /// Its `extrude_scale` is the counterpart of a line's `ratio`: what turns `circle-radius` into

@@ -36,7 +36,11 @@ use tessella_capture_abi::envelope::{
 use tessella_capture_abi::generated::texture_slots;
 use tessella_capture_abi::ring::{Full, Producer};
 use tessella_capture_abi::{AttributeDataType, BuiltIn, EnvelopeKind};
+use tessella_layout::circle::CircleBucket;
 use tessella_layout::fill::FillBucket;
+use tessella_layout::fill::Segment;
+use tessella_layout::fill_extrusion::FillExtrusionBucket;
+use tessella_layout::line::LineBucket;
 use tessella_layout::raster::{RasterBucket, RasterVertex};
 use tessella_layout::symbol_bucket::{SymbolBuffers, SymbolVertex};
 
@@ -348,6 +352,243 @@ pub fn encode_fill(
     };
 
     Encoded { record, payload }
+}
+
+/// The attribute ids of the fixed, non-data-driven parts of a vertex.
+///
+/// Position is always attribute zero; a line and an extrusion each carry a second fixed
+/// attribute beside it, because the shader needs more per vertex than a point. They are fixed in
+/// the sense that matters here: the layout generator does not produce them and the paint binder
+/// never supplies them, so they are written by whichever encoder knows the bucket's own struct.
+const LINE_DATA_ATTRIBUTE: u32 = 1;
+
+/// `decimals` and the edge distance, packed together.
+const EXTRUSION_DECIMALS_ATTRIBUTE: u32 = 1;
+
+/// A line vertex: two shorts and four bytes.
+const LINE_STRIDE: u32 = 8;
+
+/// An extrusion vertex: two shorts, then two unsigned shorts.
+const EXTRUSION_STRIDE: u32 = 8;
+
+/// Builds the descriptor run shared by every encoder: the fixed attributes this bucket's struct
+/// supplies, then whatever the paint binder made data-driven.
+///
+/// The split is not cosmetic. The fixed ones come from the bucket's own vertex struct and their
+/// offsets are properties of that struct; the data-driven ones come from a separate interleaved
+/// buffer whose stride the binder decides, and pointing them at the vertex buffer — or the
+/// reverse — reads one buffer with the other's stride and produces geometry made of noise.
+fn descriptors(
+    fixed: &[(u32, i32, u32, AttributeDataType)],
+    vertices: SlabRef,
+    vertex_stride: u32,
+    layout: &VertexLayout,
+    interleaved: SlabRef,
+) -> Vec<AttributeDesc> {
+    let mut out = Vec::with_capacity(fixed.len() + layout.attributes.len());
+    for &(attr_id, binding, offset, data_type) in fixed {
+        out.push(AttributeDesc {
+            attr_id,
+            binding,
+            source: vertices,
+            offset,
+            vertex_offset: 0,
+            stride: vertex_stride,
+            // Neither supplied nor declared is interpolated: these are the geometry itself.
+            data_type: data_type as u8,
+            declared_data_type: data_type as u8,
+            _pad: [0; 2],
+        });
+    }
+    for attribute in &layout.attributes {
+        out.push(AttributeDesc {
+            attr_id: attribute.attr_id,
+            // -1 when the shader declares no slot; the consumer drops it but the bytes stay,
+            // because another shader reading this bucket may declare it (§2.2).
+            binding: attribute.binding,
+            source: interleaved,
+            offset: attribute.offset,
+            vertex_offset: 0,
+            stride: layout.stride,
+            data_type: attribute.supplied as u8,
+            declared_data_type: attribute.declared as u8,
+            _pad: [0; 2],
+        });
+    }
+    out
+}
+
+/// Packs the descriptor and segment runs into a payload, and builds the record around them.
+fn geometry_add(
+    geometry: GeometryId,
+    permutation_key: u64,
+    indexes: SlabRef,
+    vertex_count: usize,
+    descriptors: &[AttributeDesc],
+    segments: &[Segment],
+    shader: BuiltIn,
+) -> Encoded {
+    let mut payload = Vec::new();
+    let attrs = push_span(&mut payload, descriptors);
+    let segments = push_span(
+        &mut payload,
+        &segments
+            .iter()
+            .map(|segment| AbiSegment {
+                vertex_offset: segment.vertex_offset,
+                index_offset: segment.index_offset,
+                vertex_length: segment.vertex_length,
+                index_length: segment.index_length,
+            })
+            .collect::<Vec<_>>(),
+    );
+
+    #[allow(clippy::cast_possible_truncation)]
+    let record = GeometryAdd {
+        geometry,
+        permutation_key,
+        indexes,
+        vertex_count: vertex_count as u32,
+        attrs,
+        instance_attrs: Span::default(),
+        segments,
+        texture_refs: Span::default(),
+        builtin_shader: shader as i32,
+        vertex_type: AttributeDataType::Short2 as u8,
+        reason: AddReason::Created as u8,
+        _pad: [0; 2],
+    };
+
+    Encoded { record, payload }
+}
+
+/// Encodes a line layer's geometry.
+///
+/// Two fixed attributes rather than one, and the second is what makes a line a line. A
+/// `LineBucket` holds the *centreline*, doubled: `pos_normal` is the point times two with the
+/// cap and side flags in the low bits, and `data` carries the extrusion as two biased bytes
+/// beside the distance along the line. The shader reads both and widens the centreline into a
+/// quad at draw time, in screen space, which is why a line's width is a uniform rather than
+/// geometry and why zooming does not rebuild the bucket.
+///
+/// A consumer that binds only the position therefore draws nothing visible: every vertex of a
+/// segment sits on the centreline and its triangles are degenerate. That is not a defect in the
+/// encoding, it is what the second attribute is for.
+pub fn encode_line(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    bucket: &LineBucket,
+    layout: &VertexLayout,
+    attributes: &[u8],
+    permutation_key: u64,
+) -> Encoded {
+    let mut vertex_bytes = Vec::with_capacity(bucket.vertices.len() * LINE_STRIDE as usize);
+    for vertex in &bucket.vertices {
+        vertex_bytes.extend_from_slice(&vertex.pos_normal[0].to_le_bytes());
+        vertex_bytes.extend_from_slice(&vertex.pos_normal[1].to_le_bytes());
+        vertex_bytes.extend_from_slice(&vertex.data);
+    }
+
+    let vertices = arena.alloc(&vertex_bytes);
+    let indexes = arena.alloc(&as_bytes_u16(&bucket.indices));
+    let interleaved = arena.alloc(attributes);
+
+    let fixed = [
+        (POSITION_ATTRIBUTE, 0, 0, AttributeDataType::Short2),
+        (LINE_DATA_ATTRIBUTE, 1, 4, AttributeDataType::UByte4),
+    ];
+    let descriptors = descriptors(&fixed, vertices, LINE_STRIDE, layout, interleaved);
+    geometry_add(
+        geometry,
+        permutation_key,
+        indexes,
+        bucket.vertices.len(),
+        &descriptors,
+        &bucket.segments,
+        BuiltIn::LineShader,
+    )
+}
+
+/// Encodes a circle layer's geometry.
+///
+/// The same vertex as a fill's — two shorts — and for the same reason a line's is not: a circle
+/// is a quad per point with the disc drawn inside it by the shader, so the geometry is the
+/// centre doubled with a corner bit in the low bits and nothing else. The radius is a uniform.
+pub fn encode_circle(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    bucket: &CircleBucket,
+    layout: &VertexLayout,
+    attributes: &[u8],
+    permutation_key: u64,
+) -> Encoded {
+    let vertices = arena.alloc(&as_bytes_i16(&bucket.vertices));
+    let indexes = arena.alloc(&as_bytes_u16(&bucket.indices));
+    let interleaved = arena.alloc(attributes);
+
+    let fixed = [(POSITION_ATTRIBUTE, 0, 0, AttributeDataType::Short2)];
+    let descriptors = descriptors(&fixed, vertices, POSITION_STRIDE, layout, interleaved);
+    geometry_add(
+        geometry,
+        permutation_key,
+        indexes,
+        bucket.vertices.len(),
+        &descriptors,
+        &bucket.segments,
+        BuiltIn::CircleShader,
+    )
+}
+
+/// Encodes a fill-extrusion layer's geometry.
+///
+/// The second attribute is three things at once, which is why it cannot be dropped as padding:
+/// `decimals` holds the fractional part of both axes packed with a discard flag, and the edge
+/// distance rides beside it. The fraction is what keeps a wall's foot on its own outline rather
+/// than half a tile unit away from it, and the discard flag is what stops a ring's closing point
+/// raising a wall it has no edge for.
+///
+/// The bucket is the *instanced* branch's, so what is here is the ground outline and the earcut
+/// roof. The walls are instances the shader raises over the same buffer; a consumer drawing only
+/// these vertices gets roofs and outlines, which is a flat city rather than an empty one.
+pub fn encode_extrusion(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    bucket: &FillExtrusionBucket,
+    layout: &VertexLayout,
+    attributes: &[u8],
+    permutation_key: u64,
+) -> Encoded {
+    let mut vertex_bytes = Vec::with_capacity(bucket.vertices.len() * EXTRUSION_STRIDE as usize);
+    for vertex in &bucket.vertices {
+        vertex_bytes.extend_from_slice(&vertex.position[0].to_le_bytes());
+        vertex_bytes.extend_from_slice(&vertex.position[1].to_le_bytes());
+        vertex_bytes.extend_from_slice(&vertex.decimals.to_le_bytes());
+        vertex_bytes.extend_from_slice(&vertex.edge_distance.to_le_bytes());
+    }
+
+    let vertices = arena.alloc(&vertex_bytes);
+    let indexes = arena.alloc(&as_bytes_u16(&bucket.indices));
+    let interleaved = arena.alloc(attributes);
+
+    let fixed = [
+        (POSITION_ATTRIBUTE, 0, 0, AttributeDataType::Short2),
+        (
+            EXTRUSION_DECIMALS_ATTRIBUTE,
+            1,
+            4,
+            AttributeDataType::UShort2,
+        ),
+    ];
+    let descriptors = descriptors(&fixed, vertices, EXTRUSION_STRIDE, layout, interleaved);
+    geometry_add(
+        geometry,
+        permutation_key,
+        indexes,
+        bucket.vertices.len(),
+        &descriptors,
+        &bucket.segments,
+        BuiltIn::FillExtrusionShader,
+    )
 }
 
 /// Encodes a symbol layer's geometry.

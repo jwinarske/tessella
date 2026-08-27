@@ -47,6 +47,7 @@ pub mod camera;
 pub mod counters;
 pub mod damage;
 pub mod emit;
+pub mod frame;
 #[cfg(all(feature = "std", feature = "offline"))]
 pub mod offline;
 pub mod order;
@@ -65,6 +66,6 @@ pub mod viewcover;
 pub use binder::{BoundAttribute, VertexLayout, pack_color};
 pub use counters::{SharedCounters, SharedWork};
 pub use damage::{CameraKey, DamageTracker, Traffic, TrafficMeter, Work};
-pub use emit::{Encoded, SlabArena, encode_fill};
+pub use emit::{Encoded, SlabArena, encode_circle, encode_extrusion, encode_fill, encode_line};
 pub use tile::{Content, LayerBucket, TileError, TileId, build_tile};
 pub use view::{GeometryBinding, ViewError, ViewSession};

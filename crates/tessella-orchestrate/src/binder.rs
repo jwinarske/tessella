@@ -258,6 +258,25 @@ pub const LINE_FAMILY: &[BuiltIn] = &[
     BuiltIn::LineSDFShader,
 ];
 
+/// The circle shaders.
+///
+/// One entry, and it is not an oversight: `CollisionCircleShader` shares the name but not the id
+/// space — it draws debug geometry for the placement pass and reads a vertex a circle layer
+/// never produces.
+pub const CIRCLE_FAMILY: &[BuiltIn] = &[BuiltIn::CircleShader];
+
+/// The fill-extrusion shaders, which share one attribute id space.
+///
+/// Both instanced variants are here because DR-16 settled this build on Vulkan, where mbgl's own
+/// header defines `MLN_USE_FILL_EXTRUSION_INSTANCING` — so the instanced pair is the branch the
+/// target backend takes, and the non-instanced two are what the same ids mean elsewhere.
+pub const FILL_EXTRUSION_FAMILY: &[BuiltIn] = &[
+    BuiltIn::FillExtrusionShader,
+    BuiltIn::FillExtrusionInstancedShader,
+    BuiltIn::FillExtrusionPatternShader,
+    BuiltIn::FillExtrusionPatternInstancedShader,
+];
+
 /// The shader permutation a layer's paint requires.
 ///
 /// # What the key means
