@@ -421,20 +421,62 @@ pub struct FillShared {
     interleaved: SlabRef,
 }
 
+/// What a fill drawable needs beyond its geometry.
+///
+/// Grouped because they travel together and decide each other: `shared` says which of the two
+/// drawables this is, and with `pattern_atlas` that chooses one of four shaders.
+#[derive(Debug, Clone, Copy)]
+pub struct FillDraw<'a> {
+    /// The vertex layout the paint binder produced.
+    pub layout: &'a VertexLayout,
+    /// The interleaved data-driven paint buffer.
+    pub attributes: &'a [u8],
+    /// Distinguishes shader-family variants.
+    pub permutation_key: u64,
+    /// `None` for the triangles, which allocates; what that returned for the outline.
+    pub shared: Option<FillShared>,
+    /// The sprite atlas, when the layer carries a pattern.
+    pub pattern_atlas: Option<TextureId>,
+}
+
+impl<'a> FillDraw<'a> {
+    /// The usual case, spelled out at a call site without naming every field.
+    #[must_use]
+    pub fn new(
+        layout: &'a VertexLayout,
+        attributes: &'a [u8],
+        permutation_key: u64,
+        shared: Option<FillShared>,
+        pattern_atlas: Option<TextureId>,
+    ) -> Self {
+        Self {
+            layout,
+            attributes,
+            permutation_key,
+            shared,
+            pattern_atlas,
+        }
+    }
+}
+
 /// Encodes one of a fill's drawables.
 ///
-/// Pass `None` for the triangles, which allocates; pass what that returned for the outline,
-/// which reuses it. Encoding the outline from scratch would put a second copy of every vertex
-/// in the arena for a buffer the oracle shares.
+/// Pass `shared: None` for the triangles, which allocates; pass what that returned for the
+/// outline, which reuses it. Encoding the outline from scratch would put a second copy of every
+/// vertex in the arena for a buffer the oracle shares.
 pub fn encode_fill(
     arena: &mut SlabArena,
     geometry: GeometryId,
     bucket: &FillBucket,
-    layout: &VertexLayout,
-    attributes: &[u8],
-    permutation_key: u64,
-    shared: Option<FillShared>,
+    draw: &FillDraw<'_>,
 ) -> (Encoded, FillShared) {
+    let &FillDraw {
+        layout,
+        attributes,
+        permutation_key,
+        shared,
+        pattern_atlas,
+    } = draw;
     let part = if shared.is_some() {
         FillPart::Outline
     } else {
@@ -496,8 +538,22 @@ pub fn encode_fill(
         });
     }
 
+    // A pattern is a different shader over the same geometry, so it is chosen here rather than
+    // by the caller: the oracle gives layer 1 sub-layer 1 shader 13 where a plain fill gets 11,
+    // and sub-layer 2 shader 14 where a plain fill gets 12.
+    let shader = match (part, pattern_atlas.is_some()) {
+        (FillPart::Triangles, false) => BuiltIn::FillShader,
+        (FillPart::Triangles, true) => BuiltIn::FillPatternShader,
+        (FillPart::Outline, false) => BuiltIn::FillOutlineShader,
+        (FillPart::Outline, true) => BuiltIn::FillOutlinePatternShader,
+    };
+
     let mut payload = Vec::new();
     let attrs = push_span(&mut payload, &descriptors);
+    let textures = push_span(
+        &mut payload,
+        &pattern_atlas.map_or_else(Vec::new, |atlas| texture_refs(shader, &[atlas])),
+    );
     let segments = push_span(
         &mut payload,
         &draw_segments
@@ -520,11 +576,8 @@ pub fn encode_fill(
         attrs,
         instance_attrs: Span::default(),
         segments,
-        texture_refs: Span::default(),
-        builtin_shader: match part {
-            FillPart::Triangles => BuiltIn::FillShader as i32,
-            FillPart::Outline => BuiltIn::FillOutlineShader as i32,
-        },
+        texture_refs: textures,
+        builtin_shader: shader as i32,
         vertex_type: AttributeDataType::Short2 as u8,
         reason: AddReason::Created as u8,
         _pad: [0; 2],
@@ -1324,10 +1377,7 @@ mod tests {
             &mut arena,
             GeometryId(7),
             &bucket,
-            &VertexLayout::default(),
-            &[],
-            0,
-            None,
+            &FillDraw::new(&VertexLayout::default(), &[], 0, None, None),
         );
         arena.seal();
 
@@ -1358,10 +1408,7 @@ mod tests {
             &mut arena,
             GeometryId(1),
             &bucket,
-            &VertexLayout::default(),
-            &[],
-            0,
-            None,
+            &FillDraw::new(&VertexLayout::default(), &[], 0, None, None),
         );
         arena.seal();
 
@@ -1392,10 +1439,7 @@ mod tests {
             &mut arena,
             GeometryId(1),
             &bucket(),
-            &VertexLayout::default(),
-            &[],
-            0,
-            None,
+            &FillDraw::new(&VertexLayout::default(), &[], 0, None, None),
         );
         let len = encoded.payload.len();
 
@@ -1480,10 +1524,7 @@ mod descriptor_tests {
             &mut arena,
             GeometryId(1),
             &bucket,
-            &vertex_layout,
-            &packed,
-            key,
-            None,
+            &FillDraw::new(&vertex_layout, &packed, key, None, None),
         );
         arena.seal();
 
@@ -1576,10 +1617,7 @@ mod descriptor_tests {
             &mut arena,
             GeometryId(1),
             &bucket,
-            &vertex_layout,
-            &packed,
-            key,
-            None,
+            &FillDraw::new(&vertex_layout, &packed, key, None, None),
         );
 
         let (start, end) = encoded

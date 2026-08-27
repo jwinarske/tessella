@@ -27,8 +27,11 @@ use tessella_capture_abi::generated::{ubo_layouts, ubo_slots};
 use tessella_capture_abi::ring::{Full, Producer};
 use tessella_capture_abi::{BuiltIn, CameraMode, declared_for};
 use tessella_glyph::fonts::Fonts;
+use tessella_glyph::sprite::IconPosition;
 use tessella_layout::symbol_layout::{Alignments, Placement};
+use tessella_style::crossfade::ZoomHistory;
 use tessella_style::light::Light;
+use tessella_style::property::ResolvedProperty;
 use tessella_style::{LayerKind, Style};
 use tessella_tile::cover::{TileCoord, ViewTransform};
 
@@ -122,6 +125,58 @@ pub struct Frame<'a> {
     /// evaluated against the tile's own features, so a caller that has not run that round trip
     /// has nothing to pass and no way to invent it.
     pub fonts: Option<&'a Fonts>,
+    /// Sprites, for the layers that carry a pattern.
+    ///
+    /// `None` for the same reason `fonts` may be: a pattern's sprites are a fetch, and which
+    /// ones a frame needs is discovered only once each layer's pattern expression has been
+    /// evaluated at the zooms a fade can reach. A caller that has not made that round trip has
+    /// nothing to pass, and every pattern layer then draws as a plain fill.
+    pub patterns: Option<&'a Patterns<'a>>,
+}
+
+/// The sprites a frame's patterns resolve against, and where the camera has been.
+///
+/// # Built by the caller, like the glyph atlas
+///
+/// The frame emitter does not pack an atlas any more than it fetches a glyph range. It is
+/// handed one, and the caller decides how long it lives — which matters because the atlas is
+/// *shared across tiles*, as mbgl's is: one copy of each sprite, referenced by every tile that
+/// names it, with only the position map per tile. An atlas per tile would put the same fifty by
+/// fifty pixels in the stream once per tile of the cover.
+pub struct Patterns<'a> {
+    /// The texture the atlas was uploaded as.
+    pub texture: tessella_capture_abi::envelope::TextureId,
+    /// Its dimensions, which the shader needs to turn a rectangle into texture coordinates.
+    pub size: [u16; 2],
+    /// Where each sprite was packed, by name.
+    pub positions: &'a alloc::collections::BTreeMap<alloc::string::String, IconPosition>,
+    /// Which way the camera last crossed an integer zoom, which chooses a fade's `from`.
+    pub history: ZoomHistory,
+}
+
+impl Patterns<'_> {
+    /// The two rectangles a layer's pattern is between at `zoom`, if both are packed.
+    ///
+    /// `None` when the layer has no pattern, when its expression names nothing, or when a name
+    /// it does give is missing from the atlas — see [`ubo::pattern_placement`] for why a missing
+    /// image places nothing rather than falling back.
+    #[must_use]
+    pub fn placement(
+        &self,
+        paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+        property: &str,
+        zoom: f64,
+    ) -> Option<ubo::PatternPlacement> {
+        use tessella_style::crossfade::{PatternSource as _, faded};
+
+        let source = paint.get(property)?;
+        let pair = faded(|z| source.image_at(z), zoom, &self.history);
+        ubo::pattern_placement(
+            self.positions.get(pair.from?.as_str()),
+            self.positions.get(pair.to?.as_str()),
+            self.size,
+        )
+    }
 }
 
 /// The texture a symbol drawable samples.
@@ -185,6 +240,7 @@ fn emit_group(
         buckets,
         light,
         fonts,
+        patterns,
     } = *frame;
 
     let mut session = ViewSession::new();
@@ -358,8 +414,12 @@ fn emit_group(
                     arena,
                     bucket,
                     entry.geometry,
-                    fonts,
-                    raster_texture,
+                    &Encoding {
+                        fonts,
+                        patterns,
+                        raster_texture,
+                        zoom: view.zoom,
+                    },
                     Some(shared),
                 ) else {
                     continue;
@@ -372,9 +432,18 @@ fn emit_group(
                 copy
             }
             None => {
-                let Some(fresh) =
-                    encode(arena, bucket, entry.geometry, fonts, raster_texture, None)
-                else {
+                let Some(fresh) = encode(
+                    arena,
+                    bucket,
+                    entry.geometry,
+                    &Encoding {
+                        fonts,
+                        patterns,
+                        raster_texture,
+                        zoom: view.zoom,
+                    },
+                    None,
+                ) else {
                     continue;
                 };
                 packed_bytes.insert((tile_index, bucket_index), fresh.clone());
@@ -434,14 +503,35 @@ fn symbol_stacks(buckets: &[(TileId, Vec<LayerBucket>)]) -> Vec<Vec<alloc::strin
 ///
 /// A background is the one that legitimately carries none: it fills the viewport, so its quad is
 /// something the consumer synthesizes rather than something the producer sends (§2.2).
+/// What every bucket's encoding reads from the frame around it.
+///
+/// Grouped rather than passed one by one: they are all "what this frame has fetched and where
+/// its camera is", and a bucket picks the ones its kind needs.
+#[derive(Clone, Copy)]
+struct Encoding<'a> {
+    /// Glyphs, for a symbol layer.
+    fonts: Option<&'a Fonts>,
+    /// Sprites, for a layer with a pattern.
+    patterns: Option<&'a Patterns<'a>>,
+    /// The texture this tile's raster picture went to.
+    raster_texture: tessella_capture_abi::envelope::TextureId,
+    /// The camera's zoom, which a pattern's fade is chosen at.
+    zoom: f64,
+}
+
 fn encode(
     arena: &mut SlabArena,
     bucket: &LayerBucket,
     geometry: tessella_capture_abi::envelope::GeometryId,
-    fonts: Option<&Fonts>,
-    raster_texture: tessella_capture_abi::envelope::TextureId,
+    context: &Encoding<'_>,
     shared: Option<emit::FillShared>,
 ) -> Option<(emit::Encoded, Option<emit::FillShared>)> {
+    let &Encoding {
+        fonts,
+        patterns,
+        raster_texture,
+        zoom,
+    } = context;
     let bind = |family: &[BuiltIn], shader: BuiltIn| {
         let ids = attribute_ids(family);
         let key = permutation_key(&bucket.paint, &ids);
@@ -456,14 +546,20 @@ fn encode(
     let encoded = match &bucket.content {
         Content::Fill(fill) => {
             let (vertex_layout, key) = bind(FILL_FAMILY, BuiltIn::FillShader);
+            // A pattern binds the atlas and a different shader; without one the layer draws
+            // as a plain fill, which is what a frame with no sprites fetched should do.
+            let atlas = patterns
+                .filter(|patterns| {
+                    patterns
+                        .placement(&bucket.paint, "fill-pattern", zoom)
+                        .is_some()
+                })
+                .map(|patterns| patterns.texture);
             let (encoded, buffers) = emit::encode_fill(
                 arena,
                 geometry,
                 fill,
-                &vertex_layout,
-                bucket.binder.data(),
-                key,
-                shared,
+                &emit::FillDraw::new(&vertex_layout, bucket.binder.data(), key, shared, atlas),
             );
             fill_shared = Some(buffers);
             Some(encoded)

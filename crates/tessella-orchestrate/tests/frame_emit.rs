@@ -75,6 +75,7 @@ fn emit_frame() -> (Vec<EnvelopeKind>, frame::Emitted, usize) {
             buckets: &buckets,
             light: &Light::default(),
             fonts: None,
+            patterns: None,
         },
     )
     .expect("the frame emits");
@@ -257,6 +258,7 @@ fn a_symbol_layer_carries_its_quads_and_its_atlas() {
             tiles: &tiles,
             buckets: &buckets,
             light: &Light::default(),
+            patterns: None,
             fonts: Some(&fonts),
         },
     )
@@ -374,6 +376,7 @@ fn a_raster_layer_carries_its_quad_and_its_picture() {
             buckets: &buckets,
             light: &Light::default(),
             fonts: None,
+            patterns: None,
         },
     )
     .expect("the frame emits");

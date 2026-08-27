@@ -119,6 +119,7 @@ fn frame_stream() -> (BTreeMap<u64, Binding>, Vec<OrderEntry>) {
             buckets: &buckets,
             light: &Light::default(),
             fonts: None,
+            patterns: None,
         },
     )
     .expect("the frame emits");

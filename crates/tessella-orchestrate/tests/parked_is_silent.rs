@@ -12,6 +12,7 @@ use tessella_capture_abi::envelope::ViewId;
 use tessella_capture_abi::ring::{Producer, Ring};
 use tessella_orchestrate::binder::{FILL_FAMILY, attribute_ids, layout, permutation_key};
 use tessella_orchestrate::damage::{CameraKey, DamageTracker, TrafficMeter};
+use tessella_orchestrate::emit::FillDraw;
 use tessella_orchestrate::tile::{TileId, bucket_for, build_tile};
 use tessella_orchestrate::{SlabArena, encode_fill};
 use tessella_source::geojson;
@@ -73,10 +74,7 @@ fn emit_tile(producer: &mut Producer, arena: &mut SlabArena) {
         arena,
         GeometryId(1),
         bucket,
-        &vertex_layout,
-        layer_bucket.binder.data(),
-        key,
-        None,
+        &FillDraw::new(&vertex_layout, layer_bucket.binder.data(), key, None, None),
     );
     tessella_orchestrate::emit::write(producer, &encoded).expect("the ring takes it");
 }
