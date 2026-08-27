@@ -209,6 +209,51 @@ fn structs() -> Vec<Struct> {
             ]
         ),
         c_struct!(
+            SlabEntry,
+            "slab_entry",
+            "One slab's place in a packed slab region.\n\n\
+             A slab_ref names a slab by handle, which is only meaningful against something \
+             that maps it. In process a consumer holds the slabs directly and never sees this; \
+             a consumer across a mapping reads a region laid out as slab_region, then count of \
+             these, then the bytes they describe. Every slab begins eight-aligned so its \
+             contents can be read at their natural alignment.",
+            [
+                (
+                    offset,
+                    "uint64_t offset",
+                    "Byte offset of this slab's bytes from the start of the region."
+                ),
+                (length, "uint64_t length", "Bytes in this slab."),
+            ]
+        ),
+        c_struct!(
+            SlabRegion,
+            "slab_region",
+            "The header of a packed slab region, followed by count slab_entry and then the \
+             bytes.\n\n\
+             abi_rev is here as well as on the ring because the two regions are mapped \
+             separately and may be handed over by different means; a consumer that checked \
+             only the ring would accept a slab region from another revision. Validate every \
+             entry against total_len before dereferencing it.",
+            [
+                (
+                    abi_rev,
+                    "uint32_t abi_rev",
+                    "ABI revision the producer packed this region with."
+                ),
+                (
+                    count,
+                    "uint32_t count",
+                    "Number of slab_entry following this header."
+                ),
+                (
+                    total_len,
+                    "uint64_t total_len",
+                    "Total bytes in the region, this header included."
+                ),
+            ]
+        ),
+        c_struct!(
             AttributeDesc,
             "attribute_desc",
             "One vertex attribute, as a binding rather than as bytes.\n\n\
@@ -1094,6 +1139,10 @@ mod tests {
             "record_header",
             "reverse_channel",
             "view_slot",
+            // Not on the ring, but shared the same way and just as unusable without a
+            // declaration: a slab handle names nothing to a consumer that cannot map it.
+            "slab_entry",
+            "slab_region",
         ] {
             let expected = format!("{PREFIX}_{name}");
             assert!(declared.contains(&expected), "{expected} is not declared");

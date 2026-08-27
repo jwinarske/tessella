@@ -151,6 +151,44 @@ impl Span {
     }
 }
 
+/// One slab's place in a packed slab region.
+///
+/// # Why this exists
+///
+/// A [`SlabRef`] names a slab by *handle* and offsets within it, which §3.5 relies on: an
+/// envelope holds no in-process pointer, so nothing in the ABI precludes a consumer in another
+/// process. But a handle is only meaningful against something that maps it, and the ABI defined
+/// no such thing — a C consumer could read every envelope and had no way to reach a single
+/// vertex. The gap was found the way gaps like it are found, by writing the consumer.
+///
+/// So a slab region is a table of these followed by the bytes they describe, and a handle is an
+/// index into the table. An in-process Rust consumer still holds `Arc`s and never packs one
+/// (§3.6's elision); a consumer across a mapping reads this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[repr(C)]
+pub struct SlabEntry {
+    /// Byte offset of this slab's bytes from the start of the region.
+    pub offset: u64,
+    /// Bytes in this slab.
+    pub length: u64,
+}
+
+/// The header of a packed slab region, followed by `count` [`SlabEntry`] and then the bytes.
+///
+/// `abi_rev` is here as well as on the ring because the two regions are mapped separately and
+/// may be handed over by different means; a consumer that checked only the ring would accept a
+/// slab region from another revision.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[repr(C)]
+pub struct SlabRegion {
+    /// ABI revision the producer packed this region with.
+    pub abi_rev: u32,
+    /// Number of [`SlabEntry`] following this header.
+    pub count: u32,
+    /// Total bytes in the region, this header included. Validate every entry against it.
+    pub total_len: u64,
+}
+
 /// A reference into a refcounted geometry slab.
 ///
 /// The consumer holds the slab alive until the driver's copy completes — for Filament, until
@@ -871,6 +909,10 @@ wire_records!(
     AttributeDesc,
     Segment,
     TextureRef,
+    // Not envelopes: the header and table of a packed slab region, which travels beside the
+    // ring rather than in it. `WireRecord` is what gives them a byte view either way.
+    SlabEntry,
+    SlabRegion,
 );
 
 const _: () = {
@@ -894,6 +936,8 @@ const _: () = {
     layout!(Extent, 8, 4);
     layout!(Span, 8, 4);
     layout!(SlabRef, 12, 4);
+    layout!(SlabEntry, 16, 8);
+    layout!(SlabRegion, 16, 8);
     layout!(AddReason, 1, 1);
     layout!(DrawFlags, 1, 1);
     layout!(AttributeDesc, 36, 4);

@@ -284,6 +284,52 @@ TSL_ASSERT(offsetof(tsl_slab_ref, offset) == 4, "tsl_slab_ref.offset moved");
 TSL_ASSERT(offsetof(tsl_slab_ref, length) == 8, "tsl_slab_ref.length moved");
 
 /*
+ * One slab's place in a packed slab region.
+ *
+ * A slab_ref names a slab by handle, which is only meaningful against something that maps it. In
+ * process a consumer holds the slabs directly and never sees this; a consumer across a mapping
+ * reads a region laid out as slab_region, then count of these, then the bytes they describe.
+ * Every slab begins eight-aligned so its contents can be read at their natural alignment.
+ *
+ * Mirrors `SlabEntry`.
+ */
+typedef struct tsl_slab_entry {
+    /* Byte offset of this slab's bytes from the start of the region. */
+    uint64_t offset;
+    /* Bytes in this slab. */
+    uint64_t length;
+} tsl_slab_entry;
+
+TSL_ASSERT(sizeof(tsl_slab_entry) == 16, "tsl_slab_entry size differs from the Rust definition");
+TSL_ASSERT(TSL_ALIGNOF(tsl_slab_entry) == 8, "tsl_slab_entry alignment differs from the Rust definition");
+TSL_ASSERT(offsetof(tsl_slab_entry, offset) == 0, "tsl_slab_entry.offset moved");
+TSL_ASSERT(offsetof(tsl_slab_entry, length) == 8, "tsl_slab_entry.length moved");
+
+/*
+ * The header of a packed slab region, followed by count slab_entry and then the bytes.
+ *
+ * abi_rev is here as well as on the ring because the two regions are mapped separately and may
+ * be handed over by different means; a consumer that checked only the ring would accept a slab
+ * region from another revision. Validate every entry against total_len before dereferencing it.
+ *
+ * Mirrors `SlabRegion`.
+ */
+typedef struct tsl_slab_region {
+    /* ABI revision the producer packed this region with. */
+    uint32_t abi_rev;
+    /* Number of slab_entry following this header. */
+    uint32_t count;
+    /* Total bytes in the region, this header included. */
+    uint64_t total_len;
+} tsl_slab_region;
+
+TSL_ASSERT(sizeof(tsl_slab_region) == 16, "tsl_slab_region size differs from the Rust definition");
+TSL_ASSERT(TSL_ALIGNOF(tsl_slab_region) == 8, "tsl_slab_region alignment differs from the Rust definition");
+TSL_ASSERT(offsetof(tsl_slab_region, abi_rev) == 0, "tsl_slab_region.abi_rev moved");
+TSL_ASSERT(offsetof(tsl_slab_region, count) == 4, "tsl_slab_region.count moved");
+TSL_ASSERT(offsetof(tsl_slab_region, total_len) == 8, "tsl_slab_region.total_len moved");
+
+/*
  * One vertex attribute, as a binding rather than as bytes.
  *
  * binding of -1 means the geometry supplied an override the shader does not declare, and the

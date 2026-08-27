@@ -31,7 +31,7 @@ use alloc::vec::Vec;
 
 use tessella_capture_abi::envelope::{
     AddReason, AttributeDesc, GeometryAdd, GeometryId, GeometryRemove, MeshAdd, MeshFormat,
-    Segment as AbiSegment, SlabRef, Span, TextureId, TextureRef, WireRecord,
+    Segment as AbiSegment, SlabEntry, SlabRef, SlabRegion, Span, TextureId, TextureRef, WireRecord,
 };
 use tessella_capture_abi::generated::texture_slots;
 use tessella_capture_abi::ring::{Full, Producer};
@@ -162,6 +162,62 @@ impl SlabArena {
     #[must_use]
     pub fn slab(&self, id: u32) -> Option<&Arc<Slab>> {
         self.sealed.iter().find(|slab| slab.id == id)
+    }
+
+    /// Packs every sealed slab into one region a consumer can map.
+    ///
+    /// # Why an arena is not already that
+    ///
+    /// In process, a slab is an `Arc` and a handle is an index into a `Vec` of them — which is
+    /// all a Rust consumer needs, and §3.6's elision is exactly that: the geometry "copy"
+    /// degenerates to a refcount bump. A consumer across a mapping has neither the `Vec` nor the
+    /// `Arc`, so a handle names nothing until the slabs are laid out contiguously with a table
+    /// saying where each one begins.
+    ///
+    /// §3.5 says the ABI precludes nothing here because "slab handles are offsets". That is true
+    /// of the *handle* and was undefined for the thing it offsets into — a C consumer could read
+    /// every envelope and reach not one vertex. Found the way that kind of gap is found, by
+    /// writing the consumer.
+    ///
+    /// The layout is [`SlabRegion`], then `count` [`SlabEntry`], then the bytes. Each slab starts
+    /// on an eight-byte boundary so a consumer can read its contents at their natural alignment
+    /// rather than byte-wise.
+    ///
+    /// Sealed slabs only. The open one is not in `slabs()` either, and it is the slab the
+    /// producer is still writing.
+    #[must_use]
+    pub fn pack(&self) -> Vec<u8> {
+        let header = core::mem::size_of::<SlabRegion>();
+        let table = core::mem::size_of::<SlabEntry>() * self.sealed.len();
+
+        let mut entries = Vec::with_capacity(self.sealed.len());
+        let mut offset = (header + table).next_multiple_of(8);
+        for slab in &self.sealed {
+            entries.push(SlabEntry {
+                offset: offset as u64,
+                length: slab.bytes.len() as u64,
+            });
+            offset += slab.bytes.len().next_multiple_of(8);
+        }
+
+        #[allow(clippy::cast_possible_truncation)]
+        let region = SlabRegion {
+            abi_rev: tessella_capture_abi::ABI_REV,
+            count: self.sealed.len() as u32,
+            total_len: offset as u64,
+        };
+
+        let mut out = Vec::with_capacity(offset);
+        out.extend_from_slice(region.as_bytes());
+        for entry in &entries {
+            out.extend_from_slice(entry.as_bytes());
+        }
+        for (slab, entry) in self.sealed.iter().zip(&entries) {
+            out.resize(entry.offset as usize, 0);
+            out.extend_from_slice(&slab.bytes);
+        }
+        out.resize(offset, 0);
+        out
     }
 
     /// Resolves a reference against the sealed slabs.
