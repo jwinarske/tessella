@@ -278,7 +278,60 @@ struct Node {
     fully_visible: bool,
 }
 
-/// The tiles at `zoom` whose ground the frustum crosses, nearest to the centre first.
+/// How far the descent may stop short of the target zoom, for a view that would otherwise ask
+/// for more tiles than a pitched frustum can afford.
+///
+/// # Why a pitched view needs this and a flat one does not
+///
+/// A flat view's frustum crosses a bounded patch of ground, so descending to the target zoom
+/// everywhere costs a bounded number of tiles. Tilting it puts the top of the screen near the
+/// horizon, where a single screen pixel covers an unbounded amount of ground — so the same
+/// descent asks for tiles that occupy a pixel each. Measured on a 1920×1080 view at z15: fifteen
+/// tiles flat, forty-two at 55°, and nine hundred and ninety-two at 70°.
+///
+/// The answer is not to draw less but to draw it coarser. A tile near the horizon is a few
+/// pixels tall whatever its zoom, so a parent covering four times the ground looks the same and
+/// costs a quarter as much. That is what stopping the descent early means.
+///
+/// mbgl gates this on the pitch exceeding sixty degrees, which is also `DEFAULT_PITCH_MAX` — so
+/// with its defaults the camera cannot reach the angle that turns it on. This build's
+/// [`MAX_PITCH`](crate::camera::MAX_PITCH) is the horizon clamp, 89.25°, so it reaches angles
+/// mbgl's default camera refuses and needs the mechanism mbgl reserved for them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Lod {
+    /// The shallowest zoom the descent may stop at.
+    ///
+    /// mbgl's `zoomRange.min`, which is the source's minimum: a cover may not name a tile the
+    /// source cannot serve.
+    pub min_zoom: u8,
+    /// How many tiles of the target zoom are kept around the centre, at least.
+    ///
+    /// mbgl's `tileLodMinRadius`, three, and it asserts the value is at least one. Zero would
+    /// let the centre of the screen — the part being looked at — go coarse.
+    pub min_radius: f64,
+    /// Scales the distance at which a tile stops splitting.
+    ///
+    /// mbgl's `tileLodScale`, one. Above one the cover coarsens sooner and costs less; below
+    /// one it holds detail further out.
+    pub scale: f64,
+}
+
+impl Default for Lod {
+    /// mbgl's defaults: `tileLodMinRadius` 3, `tileLodScale` 1, and a source floor of zero.
+    fn default() -> Self {
+        Self {
+            min_zoom: 0,
+            min_radius: 3.0,
+            scale: 1.0,
+        }
+    }
+}
+
+/// The tiles whose ground the frustum crosses, nearest to the centre first.
+///
+/// Every tile is at `zoom` when `lod` is `None`. With `Some`, a tile far enough from the centre
+/// stops short — see [`Lod`] — so the cover mixes zoom levels the way mbgl's does above sixty
+/// degrees of pitch.
 ///
 /// `wraps` is how many copies of the world to walk on each side; mbgl uses three, so an
 /// east-west view near the antimeridian sees the same ground from both directions.
@@ -289,6 +342,7 @@ pub fn covered(
     centre: [f64; 2],
     wraps: i32,
     limit: usize,
+    lod: Option<Lod>,
 ) -> Option<Vec<(u8, u32, u32, i32)>> {
     let tiles = f64::from(1u32 << zoom.min(30));
 
@@ -324,7 +378,25 @@ pub fn covered(
             }
         }
 
-        if node.zoom == zoom {
+        // Whether this node is close enough to the centre to be worth four children.
+        //
+        // mbgl's radial rule. A parent in a quadtree is twice its child per dimension, so the
+        // distance at which level k stops splitting is `radius + 2 + 4 + ... + 2^k`, which is
+        // `radius + 2^(k+1) - 2` — and `k` here is `zoom - node.zoom`, the levels still to go.
+        // The distance itself is the *longest* axis of the gap between the box and the centre,
+        // not the euclidean length: mbgl takes `max_element` over `distanceXYZ`, which measures
+        // the ring of tiles around the centre in tiles rather than in a circle.
+        let should_split = lod.is_none_or(|lod| {
+            let gap = node.aabb.distance_xyz([centre[0], centre[1], 0.0]);
+            let longest = gap.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            // `1 << (zoom - node.zoom)` in mbgl, as a float because the shift overflows once
+            // the gap between the levels passes the width of the integer.
+            let to_split = lod.min_radius + 2.0f64.powi(i32::from(zoom - node.zoom)) - 2.0;
+            longest * lod.scale < to_split
+        });
+        let floor = lod.map_or(zoom, |lod| lod.min_zoom.min(zoom));
+
+        if node.zoom == zoom || (!should_split && node.zoom >= floor) {
             let dx = f64::from(node.wrap) * tiles + f64::from(node.x) + 0.5 - centre[0];
             let dy = f64::from(node.y) + 0.5 - centre[1];
             found.push((dx * dx + dy * dy, (node.zoom, node.x, node.y, node.wrap)));

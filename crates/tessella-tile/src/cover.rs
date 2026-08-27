@@ -152,6 +152,11 @@ pub fn cover(view: &ViewTransform) -> Result<Vec<TileCoord>, CoverError> {
 /// [`CoverError::TooLarge`] when the frustum crosses more than [`MAX_TILES`], and
 /// [`CoverError::Pitched`] when the camera will not resolve into a matrix to build a frustum
 /// from — a camera with no viewport, in practice.
+/// The pitch past which the cover stops descending to a single zoom.
+///
+/// mbgl's `tileLodPitchThreshold`, `(60.0 / 180.0) * pi`, compared with `>` as mbgl compares it.
+const LOD_PITCH_THRESHOLD: f64 = core::f64::consts::PI / 3.0;
+
 fn pitched_cover(view: &ViewTransform, z: u8) -> Result<Vec<TileCoord>, CoverError> {
     let projection = camera::proj_matrix(view).map_err(|_| CoverError::Pitched)?;
     let world_size = camera::world_size(view.zoom);
@@ -162,8 +167,16 @@ fn pitched_cover(view: &ViewTransform, z: u8) -> Result<Vec<TileCoord>, CoverErr
     // from. Not the view's fractional zoom: a tile index is an integer-level thing.
     let centre = projection::tile_units(view.longitude, view.latitude, z);
 
-    let world = i64::from(1u32 << z);
-    let found = frustum::covered(&frustum, z, centre, WORLD_COPIES, MAX_TILES).ok_or(
+    // Above sixty degrees the descent stops short of the target zoom for tiles far from the
+    // centre, so the cover mixes levels rather than asking for a tile per pixel at the horizon.
+    //
+    // Sixty is mbgl's `tileLodPitchThreshold`, and it is also mbgl's `DEFAULT_PITCH_MAX` — so
+    // with mbgl's own defaults the camera stops exactly where this would begin, and the
+    // mechanism never runs. This build's `MAX_PITCH` is the horizon clamp instead, 89.25°, so
+    // it reaches the angles the threshold was written for.
+    let lod = (camera::pitch_radians(view) > LOD_PITCH_THRESHOLD).then(frustum::Lod::default);
+
+    let found = frustum::covered(&frustum, z, centre, WORLD_COPIES, MAX_TILES, lod).ok_or(
         CoverError::TooLarge {
             tiles: MAX_TILES as u64 + 1,
         },
@@ -171,7 +184,10 @@ fn pitched_cover(view: &ViewTransform, z: u8) -> Result<Vec<TileCoord>, CoverErr
 
     Ok(found
         .into_iter()
-        .filter(|(_, _, y, _)| i64::from(*y) < world)
+        // Against the tile's *own* level, not the target: a cover that mixes levels holds tiles
+        // whose y is bounded by their own zoom, and testing them all against the deepest one
+        // would let a wrapped row through at every level above it.
+        .filter(|(tz, _, y, _)| i64::from(*y) < i64::from(1u32 << *tz))
         .map(|(z, x, y, wrap)| TileCoord { z, x, y, wrap })
         .collect())
 }
