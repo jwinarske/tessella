@@ -258,6 +258,12 @@ pub const LINE_FAMILY: &[BuiltIn] = &[
     BuiltIn::LineSDFShader,
 ];
 
+/// The symbol shaders, which share one attribute id space.
+///
+/// Two, and which one a drawable names is decided per drawable rather than per layer: text is
+/// always SDF, an icon may be either, and the answer is already packed into each vertex.
+pub const SYMBOL_FAMILY: &[BuiltIn] = &[BuiltIn::SymbolIconShader, BuiltIn::SymbolSDFShader];
+
 /// The circle shaders.
 ///
 /// One entry, and it is not an oversight: `CollisionCircleShader` shares the name but not the id

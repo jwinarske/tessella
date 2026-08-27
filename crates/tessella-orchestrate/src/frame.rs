@@ -26,13 +26,15 @@ use tessella_capture_abi::envelope::{OrderEpoch, ViewId};
 use tessella_capture_abi::generated::{ubo_layouts, ubo_slots};
 use tessella_capture_abi::ring::{Full, Producer};
 use tessella_capture_abi::{BuiltIn, CameraMode, declared_for};
+use tessella_glyph::fonts::Fonts;
+use tessella_layout::symbol_layout::{Alignments, Placement};
 use tessella_style::light::Light;
 use tessella_style::{LayerKind, Style};
 use tessella_tile::cover::{TileCoord, ViewTransform};
 
 use crate::binder::{
-    CIRCLE_FAMILY, FILL_EXTRUSION_FAMILY, FILL_FAMILY, LINE_FAMILY, attribute_ids, layout,
-    permutation_key,
+    CIRCLE_FAMILY, FILL_EXTRUSION_FAMILY, FILL_FAMILY, LINE_FAMILY, SYMBOL_FAMILY, attribute_ids,
+    layout, permutation_key,
 };
 use crate::camera::CameraBlock;
 use crate::emit::SlabArena;
@@ -97,7 +99,22 @@ pub struct Frame<'a> {
     pub buckets: &'a [(TileId, Vec<LayerBucket>)],
     /// The style light, which travels in the camera block (§2.2).
     pub light: &'a Light,
+    /// Glyphs, for the symbol layers.
+    ///
+    /// `None` means no symbol layer is drawn, and that is a legitimate frame rather than an
+    /// error: a symbol layer's glyphs are a *fetch*, discovered only once `text-field` has been
+    /// evaluated against the tile's own features, so a caller that has not run that round trip
+    /// has nothing to pass and no way to invent it.
+    pub fonts: Option<&'a Fonts>,
 }
+
+/// The texture a symbol drawable samples.
+///
+/// One texture whichever kind of symbol it is. mbgl's `DrawableAtlasesTweaker` is explicit:
+/// a shader declaring no separate icon sampler gets the glyph atlas for a text drawable and the
+/// *icon* atlas for an icon drawable, at the same slot either way.
+const GLYPH_ATLAS: tessella_capture_abi::envelope::TextureId =
+    tessella_capture_abi::envelope::TextureId(2);
 
 /// Emits a whole frame: state, geometry, uniforms, order, camera — in that order.
 ///
@@ -116,6 +133,7 @@ pub fn emit(
         tiles,
         buckets,
         light,
+        fonts,
     } = *frame;
 
     let mut session = ViewSession::new();
@@ -129,6 +147,26 @@ pub fn emit(
     for upload in texture::placeholders() {
         texture::write(producer, &upload)?;
     }
+    // The glyph atlas, before any drawable names it. A symbol geometry carries a texture
+    // reference, and a reference to a texture the consumer has not been given is a drawable that
+    // samples whatever was last at that slot.
+    if let Some(fonts) = fonts {
+        for stack in symbol_stacks(buckets) {
+            if let Some(atlas) = fonts.atlas(&stack) {
+                let (width, height) = atlas.size();
+                let whole = [tessella_glyph::atlas::Rect {
+                    x: 0,
+                    y: 0,
+                    width,
+                    height,
+                }];
+                if let Some(upload) = texture::glyph_atlas(GLYPH_ATLAS, atlas, &whole) {
+                    texture::write(producer, &upload)?;
+                }
+            }
+        }
+    }
+
     let global = ubo::GlobalPaintParams::for_view(view, [64.0, 64.0], 1.0).pack();
     ubo::write(
         producer,
@@ -162,7 +200,7 @@ pub fn emit(
                     break;
                 };
                 binding_index += 1;
-                if let Some(encoded) = encode(arena, bucket, binding.geometry) {
+                if let Some(encoded) = encode(arena, bucket, binding.geometry, fonts) {
                     emit::write(producer, &encoded)?;
                     emitted.geometries += 1;
                 }
@@ -197,6 +235,28 @@ pub fn emit(
     Ok(emitted)
 }
 
+/// Every font stack the frame's symbol layers shape with, once each.
+///
+/// A stack rather than a font: `text-font` is a list, and the glyphs a label draws come from the
+/// first entry that has each codepoint. The atlas is keyed by the whole stack for that reason,
+/// so asking for one font's atlas would miss every label that fell through to the second.
+fn symbol_stacks(buckets: &[(TileId, Vec<LayerBucket>)]) -> Vec<Vec<alloc::string::String>> {
+    let mut stacks: Vec<Vec<alloc::string::String>> = Vec::new();
+    for (_, tile_buckets) in buckets {
+        for bucket in tile_buckets {
+            let Content::Symbol(layout) = &bucket.content else {
+                continue;
+            };
+            for stack in layout.stacks() {
+                if !stacks.contains(&stack) {
+                    stacks.push(stack);
+                }
+            }
+        }
+    }
+    stacks
+}
+
 /// Encodes one bucket for the wire, or `None` for a kind that carries no vertex buffer.
 ///
 /// A background is the one that legitimately carries none: it fills the viewport, so its quad is
@@ -205,6 +265,7 @@ fn encode(
     arena: &mut SlabArena,
     bucket: &LayerBucket,
     geometry: tessella_capture_abi::envelope::GeometryId,
+    fonts: Option<&Fonts>,
 ) -> Option<emit::Encoded> {
     let bind = |family: &[BuiltIn], shader: BuiltIn| {
         let ids = attribute_ids(family);
@@ -260,8 +321,30 @@ fn encode(
                 key,
             ))
         }
-        // A background's quad is the consumer's to synthesize; a raster and a symbol need a
-        // texture this function is not given, so they are emitted by their own paths.
+        Content::Symbol(layout) => {
+            // Shaping is where a symbol layer's geometry comes from, and it cannot happen
+            // earlier: the quads are a function of the glyphs, which are a function of the
+            // shaped text, which is a function of the tile's features. So the bucket carries a
+            // *layout* and the vertices are made here.
+            let (buffers, _laid) = layout.lay_out(fonts?);
+            if buffers.vertices.is_empty() {
+                return None;
+            }
+            let ids = attribute_ids(SYMBOL_FAMILY);
+            let key = permutation_key(&bucket.paint, &ids);
+            // Text is always SDF. An icon may be either, and the flag is already packed into
+            // each vertex's size field, so this only decides which shader is named.
+            Some(emit::encode_symbol(
+                arena,
+                geometry,
+                &buffers,
+                key,
+                true,
+                GLYPH_ATLAS,
+            ))
+        }
+        // A background's quad is the consumer's to synthesize; a raster carries its own picture
+        // and is emitted by its own path.
         _ => None,
     }
 }
@@ -506,7 +589,113 @@ fn write_layer_state(
                 &props,
             )?;
         }
+        LayerKind::Symbol => {
+            // A symbol's drawable block is three matrices, not one: the clip matrix, the matrix
+            // of the plane the label was laid out in, and that plane back to clip. A label
+            // placed along a line is positioned in the label plane and only then projected, so
+            // a consumer given the clip matrix alone can place a point label and nothing else.
+            let Some(fonts) = frame.fonts else {
+                return Ok(());
+            };
+            let Some(atlas_size) = symbol_atlas_size(style, layer, fonts) else {
+                return Ok(());
+            };
+            let zoom = view.zoom;
+            let placement = Placement::of(layer, zoom);
+            let alignments = Alignments::of(layer, zoom, placement, "text");
+            // The layer-wide `text-size`, which is what the shader interpolates against. A
+            // data-driven one is in the vertex instead and this is then the fallback the
+            // constant path never reads.
+            let size = tessella_style::property::resolve_layout(layer)
+                .ok()
+                .and_then(|layout| {
+                    let property = layout.get("text-size")?;
+                    property.expression.evaluate(Some(zoom), None).ok()
+                })
+                .and_then(|value| value.as_number())
+                .unwrap_or(16.0);
+            #[allow(clippy::cast_possible_truncation)]
+            let size = size as f32;
+
+            let entries: Vec<ubo::SymbolDrawableEntry> = matrices(0)
+                .filter_map(|tile| {
+                    ubo::SymbolDrawableEntry::for_tile(
+                        view,
+                        tile.z,
+                        tile.x,
+                        tile.y,
+                        i32::from(tile.wrap),
+                        layer_index,
+                        0,
+                        atlas_size,
+                        [0.0, 0.0],
+                        size,
+                        alignments,
+                        placement,
+                    )
+                    .ok()
+                })
+                .collect();
+            let buffer =
+                ubo::pack_symbol_drawable_buffer(&entries, ubo_layouts::SYMBOL_DRAWABLE_UBO.stride);
+            ubo::write(
+                producer,
+                view_id,
+                layer_index,
+                ubo_slots::ID_SYMBOL_DRAWABLE_UBO,
+                &buffer,
+            )?;
+
+            let gamma = ubo::symbol_gamma_scale(view, alignments.pitch);
+            let tile_props = ubo::pack_symbol_tile_props(entries.len(), true, false, gamma);
+            ubo::write(
+                producer,
+                view_id,
+                layer_index,
+                ubo_slots::ID_SYMBOL_TILE_PROPS_UBO,
+                &tile_props,
+            )?;
+
+            let props = ubo::symbol_props_from_paint(&paint, zoom);
+            ubo::write(
+                producer,
+                view_id,
+                layer_index,
+                ubo_slots::ID_SYMBOL_EVALUATED_PROPS_UBO,
+                &props,
+            )?;
+        }
         _ => {}
     }
     Ok(())
+}
+
+/// The glyph atlas a symbol layer samples, in pixels.
+///
+/// From the atlas itself rather than from a constant: the shader divides a vertex's texture
+/// coordinates by this to reach `0..1`, so a size that disagrees with the texture stretches
+/// every glyph by the ratio between them — legible, wrong, and easy to mistake for a font.
+fn symbol_atlas_size(
+    style: &Style,
+    layer: &tessella_style::Layer,
+    fonts: &Fonts,
+) -> Option<[f32; 2]> {
+    let _ = style;
+    let stack = layer
+        .layout
+        .get("text-font")
+        .and_then(|value| match value {
+            tessella_style::PropertyValue::Literal(literal) => literal.as_array(),
+            tessella_style::PropertyValue::Expression(_) => None,
+        })
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.as_str().map(alloc::string::ToString::to_string))
+                .collect::<Vec<_>>()
+        })?;
+    let atlas = fonts.atlas(&stack)?;
+    let (width, height) = atlas.size();
+    #[allow(clippy::cast_precision_loss)]
+    Some([width as f32, height as f32])
 }

@@ -25,6 +25,7 @@
 //! rather than a map: one tile's features repeated is enough to see whether a layer draws, where
 //! it lands, and in what colour.
 
+mod glyphs;
 mod png;
 mod raster;
 mod scene;
@@ -35,6 +36,7 @@ use tessella_capture_abi::BuiltIn;
 use tessella_capture_abi::envelope::{AttributeDesc, ViewId};
 use tessella_capture_abi::generated::{ubo_layouts, ubo_slots};
 use tessella_capture_abi::ring::Ring;
+use tessella_glyph::fonts::Fonts;
 use tessella_orchestrate::SlabArena;
 use tessella_orchestrate::frame::{self, Frame};
 use tessella_orchestrate::tile::{TileId, build_mvt_tile, build_sourceless};
@@ -52,6 +54,19 @@ const POSITION: u32 = 0;
 
 /// A line's second attribute: the extrusion and the distance along the line.
 const LINE_DATA: u32 = 1;
+
+/// A symbol's anchor and this corner's offset from it.
+const SYMBOL_POS_OFFSET: u32 = 0;
+
+/// A symbol's place in the atlas, beside the packed size range.
+const SYMBOL_DATA: u32 = 1;
+
+/// Where a glyph's edge sits in its signed-distance encoding.
+///
+/// `(256 - 64) / 256`, which is mbgl's `buff` for SDF text: the rasterizer writes the distance
+/// biased so that this value is the outline, and a threshold picked by eye instead would thicken
+/// or thin every letter at once.
+const SDF_EDGE: f32 = 0.75;
 
 /// The scale a line's extrusion was stored at. 63 rather than 127, because the encoding must
 /// also carry the longer extrusions a bevel join produces.
@@ -75,6 +90,8 @@ struct Args {
     tile: String,
     out: String,
     source: String,
+    /// A directory laid out as `{fontstack}/{range}.pbf`, for the symbol layers.
+    glyphs: Option<String>,
     view: ViewTransform,
 }
 
@@ -83,6 +100,7 @@ fn parse_args() -> Result<Args, String> {
     let mut tile = None;
     let mut out = String::from("map.png");
     let mut source = String::from("src");
+    let mut glyphs = None;
     let (mut lon, mut lat, mut zoom) = (0.0, 0.0, 0.0);
     let (mut width, mut height) = (1024.0, 768.0);
 
@@ -97,6 +115,7 @@ fn parse_args() -> Result<Args, String> {
             "--tile" => tile = Some(value()?),
             "--out" => out = value()?,
             "--source" => source = value()?,
+            "--glyphs" => glyphs = Some(value()?),
             "--lon" => lon = number(&value()?)?,
             "--lat" => lat = number(&value()?)?,
             "--zoom" => zoom = number(&value()?)?,
@@ -112,6 +131,7 @@ fn parse_args() -> Result<Args, String> {
         tile: tile.ok_or_else(|| format!("--tile is required\n\n{}", usage()))?,
         out,
         source,
+        glyphs,
         view: camera::settled(&ViewTransform {
             longitude: lon,
             latitude: lat,
@@ -135,7 +155,8 @@ fn number(text: &str) -> Result<f64, String> {
 
 fn usage() -> String {
     "usage: capture-render --style <path> --tile <path.mvt> [--out map.png] [--source src]\n\
-     \x20                     [--lon 0] [--lat 0] [--zoom 0] [--width 1024] [--height 768]"
+     \x20                     [--glyphs <dir>] [--lon 0] [--lat 0] [--zoom 0]\n\
+      \x20                     [--width 1024] [--height 768]"
         .to_string()
 }
 
@@ -165,6 +186,25 @@ fn run() -> Result<String, String> {
         buckets.push((id, built));
     }
 
+    // Shaping is a two-phase thing and this is the round trip between the phases: the buckets
+    // are built first, they say which glyphs they want, those are fetched, and only then can the
+    // quads be made. A tool that loaded a font up front would have to load all of it.
+    let mut fonts = None;
+    if let Some(directory) = &args.glyphs {
+        let mut store = Fonts::new("glyphs://{fontstack}/{range}.pbf");
+        let files = glyphs::Directory::new(directory);
+        for (_, tile_buckets) in &buckets {
+            for bucket in tile_buckets {
+                if let Some(layout) = bucket.content.as_symbol() {
+                    store
+                        .fetch(&layout.dependencies(), &files)
+                        .map_err(|error| format!("glyphs: {error}"))?;
+                }
+            }
+        }
+        fonts = Some(store);
+    }
+
     let mut ring = Ring::new(1 << 26);
     let mut arena = SlabArena::new();
     let emitted = {
@@ -179,6 +219,7 @@ fn run() -> Result<String, String> {
                 tiles: &tiles,
                 buckets: &buckets,
                 light: &Light::default(),
+                fonts: fonts.as_ref(),
             },
         )
         .map_err(|error| format!("emitting: {error}"))?
@@ -257,20 +298,15 @@ fn draw(scene: &Scene, arena: &SlabArena, width: u32, height: u32) -> Canvas {
 
         match geometry.shader {
             BuiltIn::LineShader => {
-                draw_line(&mut canvas, geometry, arena, &matrix, &paint, width, height);
+                draw_line(&mut canvas, geometry, arena, &matrix, &paint);
             }
             BuiltIn::CircleShader => {
-                draw_circle(&mut canvas, geometry, arena, &matrix, &paint, width, height);
+                draw_circle(&mut canvas, geometry, arena, &matrix, &paint);
             }
-            _ => draw_triangles(
-                &mut canvas,
-                geometry,
-                arena,
-                &matrix,
-                paint.color,
-                width,
-                height,
-            ),
+            BuiltIn::SymbolSDFShader | BuiltIn::SymbolIconShader => {
+                draw_symbol(&mut canvas, geometry, arena, scene, &matrix, &paint);
+            }
+            _ => draw_triangles(&mut canvas, geometry, arena, &matrix, paint.color),
         }
     }
     if tracing {
@@ -335,6 +371,17 @@ fn layer_paint(scene: &Scene, shader: BuiltIn, layer_index: u32) -> Option<Paint
         BuiltIn::FillExtrusionShader | BuiltIn::FillExtrusionInstancedShader => {
             (ubo_slots::ID_FILL_EXTRUSION_PROPS_UBO, 0, None)
         }
+        // A symbol's colour is per vertex rather than per layer when `text-color` is
+        // data-driven, and the layer block carries it otherwise. Neither is written yet, so the
+        // colour is the one thing here this does not take from the stream -- stated rather than
+        // hidden, because a black label on a pale map is exactly what an unwritten uniform looks
+        // like.
+        BuiltIn::SymbolSDFShader | BuiltIn::SymbolIconShader => {
+            return Some(Paint {
+                color: [0.1, 0.1, 0.12, 1.0],
+                width: 1.0,
+            });
+        }
         _ => return None,
     };
     let bytes = scene.ubo(layer_index, slot)?;
@@ -392,6 +439,13 @@ fn matrix_for(
             ubo_slots::ID_FILL_EXTRUSION_DRAWABLE_UBO,
             ubo_layouts::FILL_EXTRUSION_DRAWABLE_UBO.stride,
         ),
+        // A symbol's block opens with the clip matrix and carries two more behind it: the label
+        // plane and the way back. Only the first is read here, because a point label is placed
+        // in clip space directly -- a line-following one is not, and would need the other two.
+        BuiltIn::SymbolSDFShader | BuiltIn::SymbolIconShader => (
+            ubo_slots::ID_SYMBOL_DRAWABLE_UBO,
+            ubo_layouts::SYMBOL_DRAWABLE_UBO.stride,
+        ),
         _ => return None,
     };
     let bytes = scene.ubo(layer_index, slot)?;
@@ -433,15 +487,21 @@ fn draw_triangles(
     arena: &SlabArena,
     matrix: &[f32; 16],
     color: [f32; 4],
-    width: u32,
-    height: u32,
 ) {
     let Some((points, ())) = positions(geometry, arena, POSITION) else {
         return;
     };
     let projected: Vec<Option<[f32; 2]>> = points
         .iter()
-        .map(|p| raster::project(matrix, p[0], p[1], width as f32, height as f32))
+        .map(|p| {
+            raster::project(
+                matrix,
+                p[0],
+                p[1],
+                canvas.width as f32,
+                canvas.height as f32,
+            )
+        })
         .collect();
 
     triangles(canvas, geometry, &projected, color);
@@ -459,8 +519,6 @@ fn draw_line(
     arena: &SlabArena,
     matrix: &[f32; 16],
     paint: &Paint,
-    width: u32,
-    height: u32,
 ) {
     let Some(position) = geometry.attribute(POSITION) else {
         return;
@@ -494,7 +552,13 @@ fn draw_line(
                 (byte(1) - 128.0) / EXTRUDE_SCALE,
             ];
 
-            let screen = raster::project(matrix, point[0], point[1], width as f32, height as f32)?;
+            let screen = raster::project(
+                matrix,
+                point[0],
+                point[1],
+                canvas.width as f32,
+                canvas.height as f32,
+            )?;
             // Y is negated with the projection's flip, so the offset follows the same axis the
             // point did rather than mirroring across it.
             Some([screen[0] + extrude[0] * half, screen[1] - extrude[1] * half])
@@ -521,8 +585,6 @@ fn draw_circle(
     arena: &SlabArena,
     matrix: &[f32; 16],
     paint: &Paint,
-    width: u32,
-    height: u32,
 ) {
     let Some((packed, ())) = positions(geometry, arena, POSITION) else {
         return;
@@ -538,8 +600,13 @@ fn draw_circle(
                 (v[0] - centre[0] * 2.0) * 2.0 - 1.0,
                 (v[1] - centre[1] * 2.0) * 2.0 - 1.0,
             ];
-            let screen =
-                raster::project(matrix, centre[0], centre[1], width as f32, height as f32)?;
+            let screen = raster::project(
+                matrix,
+                centre[0],
+                centre[1],
+                canvas.width as f32,
+                canvas.height as f32,
+            )?;
             Some([
                 screen[0] + corner[0] * paint.width,
                 screen[1] + corner[1] * paint.width,
@@ -548,6 +615,127 @@ fn draw_circle(
         .collect();
 
     triangles(canvas, geometry, &projected, paint.color);
+}
+
+/// Draws a symbol layer's quads, sampling the glyph atlas the geometry names.
+///
+/// # What is in the vertex, and what is not
+///
+/// A symbol vertex is three attributes at a stride of twenty-four. The first holds the label's
+/// *anchor* in tile units beside this corner's offset from it in thirty-seconds of a pixel — the
+/// anchor is the same for all four corners of a glyph, so a consumer binding only the position
+/// draws four coincident points. The second holds this corner's place in the atlas, which is why
+/// the letter can be sampled at all rather than approximated with a box.
+///
+/// # Why the offset is applied after projection
+///
+/// It is in pixels. A label is a screen measurement — that is the whole reason `text-size` is a
+/// uniform and a bucket survives a zoom — so the anchor projects and the corner offset is added
+/// to the result. Adding it in tile units instead gives text that grows as you zoom in, which
+/// looks almost right and is the failure this makes obvious.
+fn draw_symbol(
+    canvas: &mut Canvas,
+    geometry: &Geometry,
+    arena: &SlabArena,
+    scene: &Scene,
+    matrix: &[f32; 16],
+    paint: &Paint,
+) {
+    let Some(pos) = geometry.attribute(SYMBOL_POS_OFFSET) else {
+        return;
+    };
+    let Some(data) = geometry.attribute(SYMBOL_DATA) else {
+        return;
+    };
+    let (Some(pos_bytes), Some(data_bytes)) =
+        (arena.resolve(pos.source), arena.resolve(data.source))
+    else {
+        return;
+    };
+    // The texture the geometry itself names, not one chosen here. A drawable that referenced an
+    // atlas nobody uploaded would otherwise sample whatever was last at the slot.
+    let Some(atlas) = geometry
+        .texture_refs
+        .first()
+        .and_then(|reference| scene.textures.get(&reference.texture.0))
+    else {
+        return;
+    };
+
+    let mut corners: Vec<Option<[f32; 2]>> = Vec::with_capacity(geometry.vertex_count as usize);
+    let mut uvs: Vec<[f32; 2]> = Vec::with_capacity(geometry.vertex_count as usize);
+    for index in 0..geometry.vertex_count as usize {
+        let at = pos.offset as usize + index * pos.stride as usize;
+        let short = |offset: usize| {
+            pos_bytes
+                .get(at + offset..at + offset + 2)
+                .map(|pair| f32::from(i16::from_le_bytes([pair[0], pair[1]])))
+                .unwrap_or(0.0)
+        };
+        let anchor = [short(0), short(2)];
+        // Thirty-seconds of a pixel, which is what the layout packed.
+        let offset = [short(4) / 32.0, short(6) / 32.0];
+
+        let data_at = data.offset as usize + index * data.stride as usize;
+        let ushort = |offset: usize| {
+            data_bytes
+                .get(data_at + offset..data_at + offset + 2)
+                .map(|pair| f32::from(u16::from_le_bytes([pair[0], pair[1]])))
+                .unwrap_or(0.0)
+        };
+        uvs.push([ushort(0), ushort(2)]);
+
+        corners.push(
+            raster::project(
+                matrix,
+                anchor[0],
+                anchor[1],
+                canvas.width as f32,
+                canvas.height as f32,
+            )
+            .map(|screen| {
+                // Y follows the projection's flip, so the offset moves the same way the
+                // anchor did rather than mirroring across it.
+                [screen[0] + offset[0], screen[1] + offset[1]]
+            }),
+        );
+    }
+
+    // The signed-distance edge. mbgl's SDF text shader takes its cutoff from the same constant
+    // the glyph rasterizer encoded with, so a threshold chosen here rather than derived would
+    // fatten or thin every letter uniformly.
+    let sample = |uv: [f32; 2]| -> f32 {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let distance = atlas.alpha(uv[0].round() as u32, uv[1].round() as u32);
+        f32::from(distance > SDF_EDGE)
+    };
+
+    for segment in &geometry.segments {
+        let start = segment.index_offset as usize;
+        let end = start + segment.index_length as usize;
+        let Some(indices) = geometry.indices.get(start..end) else {
+            continue;
+        };
+        for triangle in indices.chunks_exact(3) {
+            let slot = |index: u16| segment.vertex_offset as usize + index as usize;
+            let (a, b, c) = (slot(triangle[0]), slot(triangle[1]), slot(triangle[2]));
+            let (Some(Some(pa)), Some(Some(pb)), Some(Some(pc))) = (
+                corners.get(a).copied(),
+                corners.get(b).copied(),
+                corners.get(c).copied(),
+            ) else {
+                continue;
+            };
+            let (Some(ua), Some(ub), Some(uc)) = (
+                uvs.get(a).copied(),
+                uvs.get(b).copied(),
+                uvs.get(c).copied(),
+            ) else {
+                continue;
+            };
+            canvas.sampled_triangle([pa, pb, pc], [ua, ub, uc], paint.color, &sample);
+        }
+    }
 }
 
 /// Walks a geometry's segments and fills its triangles from already-projected vertices.

@@ -87,6 +87,63 @@ impl Canvas {
     }
 }
 
+impl Canvas {
+    /// Blends one triangle, taking its coverage from a sampled field rather than from the shape.
+    ///
+    /// The corners carry texture coordinates and `sample` answers a coverage in `0..=1` for a
+    /// point in that space. That is what a glyph is: the quad is a rectangle, and the letter
+    /// inside it comes out of the atlas — so drawing symbol quads as solid boxes would say a
+    /// label is *somewhere* and nothing about whether the right glyphs were shaped, packed and
+    /// addressed.
+    pub(crate) fn sampled_triangle(
+        &mut self,
+        points: [[f32; 2]; 3],
+        uv: [[f32; 2]; 3],
+        color: [f32; 4],
+        sample: &dyn Fn([f32; 2]) -> f32,
+    ) {
+        let [a, b, c] = points;
+        let min_x = a[0].min(b[0]).min(c[0]).floor().max(0.0);
+        let max_x = a[0].max(b[0]).max(c[0]).ceil().min(self.width as f32);
+        let min_y = a[1].min(b[1]).min(c[1]).floor().max(0.0);
+        let max_y = a[1].max(b[1]).max(c[1]).ceil().min(self.height as f32);
+        if min_x >= max_x || min_y >= max_y {
+            return;
+        }
+        let area = edge(a, b, c);
+        if area.abs() < f32::EPSILON {
+            return;
+        }
+
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        for y in min_y as u32..max_y as u32 {
+            for x in min_x as u32..max_x as u32 {
+                let p = [x as f32 + 0.5, y as f32 + 0.5];
+                // Barycentric, normalized by the signed area so the winding cancels and the
+                // weights are the same either way round.
+                let (w0, w1, w2) = (
+                    edge(b, c, p) / area,
+                    edge(c, a, p) / area,
+                    edge(a, b, p) / area,
+                );
+                if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                    continue;
+                }
+                let at = [
+                    uv[0][0] * w0 + uv[1][0] * w1 + uv[2][0] * w2,
+                    uv[0][1] * w0 + uv[1][1] * w1 + uv[2][1] * w2,
+                ];
+                let coverage = sample(at);
+                if coverage > 0.0 {
+                    let mut blended = color;
+                    blended[3] *= coverage;
+                    self.blend(x, y, blended);
+                }
+            }
+        }
+    }
+}
+
 fn edge(a: [f32; 2], b: [f32; 2], p: [f32; 2]) -> f32 {
     (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
 }

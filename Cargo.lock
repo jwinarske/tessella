@@ -106,8 +106,10 @@ dependencies = [
  "flate2",
  "serde_json",
  "tessella-capture-abi",
+ "tessella-glyph",
  "tessella-orchestrate",
  "tessella-source",
+ "tessella-storage",
  "tessella-style",
  "tessella-tile",
 ]

@@ -74,6 +74,7 @@ fn emit_frame() -> (Vec<EnvelopeKind>, frame::Emitted, usize) {
             tiles: &tiles,
             buckets: &buckets,
             light: &Light::default(),
+            fonts: None,
         },
     )
     .expect("the frame emits");
@@ -177,5 +178,141 @@ fn every_drawable_has_a_geometry_of_its_own() {
         emitted.geometries + tiles,
         emitted.drawables,
         "one geometry per drawable, less one synthesized background quad per tile"
+    );
+}
+
+/// A symbol layer reaches the wire: shaped quads, the atlas they sample, and its size.
+///
+/// Three things have to arrive together and each is useless without the others. The quads carry
+/// per-corner texture coordinates, so a consumer can draw a letter rather than a box — but only
+/// if the atlas they index was uploaded, and only if the drawable block says how big it is,
+/// because the shader divides by that to reach `0..1`. A size that disagrees with the texture
+/// stretches every glyph by the ratio between them, which reads as a font problem.
+#[test]
+fn a_symbol_layer_carries_its_quads_and_its_atlas() {
+    use tessella_glyph::fonts::Fonts;
+    use tessella_storage::source::{FetchError, FileSource, Response};
+
+    const GLYPHS: &[u8] = include_bytes!("../../../tests/glyph-fixtures/TestFont/0-255.pbf");
+
+    struct Fixture;
+    impl FileSource for Fixture {
+        fn fetch(&self, _url: &str) -> Result<Response, FetchError> {
+            Ok(Response {
+                status: 200,
+                body: GLYPHS.to_vec(),
+                ..Response::default()
+            })
+        }
+    }
+
+    // A city tile rather than the world one: labels need features that carry a name, and the
+    // world fixture's water has no text to shape.
+    const BERLIN: &[u8] =
+        include_bytes!("../../../tests/mvt-fixtures/protomaps-berlin-14-8802-5373.mvt");
+
+    let style = Style::parse(
+        r#"{"version": 8, "sources": {"src": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "labels", "type": "symbol", "source": "src",
+                        "source-layer": "places",
+                        "layout": {"text-field": "{name}", "text-font": ["TestFont"],
+                                   "text-size": 16}}]}"#,
+    )
+    .expect("the style parses");
+
+    let view = view();
+    let tiles = cover::cover(&view).expect("covers");
+    let decoded = Tile::decode(BERLIN).expect("the fixture decodes");
+
+    let mut buckets = Vec::new();
+    for tile in &tiles {
+        let id = TileId::new(tile.z, tile.x, tile.y);
+        let built = build_mvt_tile(&style, "src", id, &decoded).expect("the tile builds");
+        buckets.push((id, built));
+    }
+
+    // The round trip between the two phases of shaping: the buckets say which glyphs they want,
+    // and only once those are here can the quads be made.
+    let mut fonts = Fonts::new("glyphs://{fontstack}/{range}.pbf");
+    for (_, tile_buckets) in &buckets {
+        for bucket in tile_buckets {
+            if let Some(layout) = bucket.content.as_symbol() {
+                fonts
+                    .fetch(&layout.dependencies(), &Fixture)
+                    .expect("glyphs");
+            }
+        }
+    }
+
+    let mut ring = Ring::new(1 << 22);
+    let (producer, consumer) = ring.split();
+    let mut arena = SlabArena::new();
+    frame::emit(
+        producer,
+        &mut arena,
+        &Frame {
+            style: &style,
+            view: &view,
+            view_id: ViewId(0),
+            tiles: &tiles,
+            buckets: &buckets,
+            light: &Light::default(),
+            fonts: Some(&fonts),
+        },
+    )
+    .expect("the frame emits");
+
+    let mut atlas_uploads = 0;
+    let mut symbol_geometries = 0;
+    let mut atlas_size = None;
+    while let Some(record) = consumer.peek() {
+        match record.kind {
+            EnvelopeKind::TextureUpdate => atlas_uploads += 1,
+            EnvelopeKind::GeometryAdd => {
+                use tessella_capture_abi::envelope::{GeometryAdd, WireRecord as _};
+                if let Some(add) = GeometryAdd::from_bytes(record.record)
+                    && add.builtin_shader == tessella_capture_abi::BuiltIn::SymbolSDFShader as i32
+                {
+                    symbol_geometries += 1;
+                    assert!(
+                        add.texture_refs.count > 0,
+                        "a symbol geometry names the atlas it samples"
+                    );
+                }
+            }
+            EnvelopeKind::UboUpdate => {
+                use tessella_capture_abi::envelope::{UboUpdate, WireRecord as _};
+                if let Some(update) = UboUpdate::from_bytes(record.record)
+                    && update.slot
+                        == tessella_capture_abi::generated::ubo_slots::ID_SYMBOL_DRAWABLE_UBO
+                {
+                    // `texsize` is at offset 192, past the three matrices.
+                    let start = update.data.offset as usize + 192;
+                    let read = |at: usize| {
+                        record
+                            .payload
+                            .get(at..at + 4)
+                            .map(|four| f32::from_le_bytes([four[0], four[1], four[2], four[3]]))
+                    };
+                    atlas_size = Some((read(start), read(start + 4)));
+                }
+            }
+            _ => {}
+        }
+        let consumed = record.consumed();
+        consumer.advance(consumed);
+    }
+
+    assert!(symbol_geometries > 0, "no symbol geometry was announced");
+    assert!(
+        atlas_uploads > 2,
+        "the glyph atlas is uploaded beside the two placeholders, got {atlas_uploads}"
+    );
+    let (Some(width), Some(height)) = atlas_size.expect("a symbol drawable block") else {
+        panic!("the drawable block carries no atlas size");
+    };
+    assert!(
+        width > 0.0 && height > 0.0,
+        "the atlas size is {width}x{height}, which divides every texture coordinate to zero"
     );
 }
