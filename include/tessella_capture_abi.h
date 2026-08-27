@@ -269,7 +269,8 @@ TSL_ASSERT(offsetof(tsl_span, count) == 4, "tsl_span.count moved");
  * Mirrors `SlabRef`.
  */
 typedef struct tsl_slab_ref {
-    /* Slab this data lives in. */
+    /* Slab this data lives in. Across a mapping, an index into a slab_region's table of */
+    /* slab_entry. */
     uint32_t slab;
     /* Byte offset within the slab. */
     uint32_t offset;
@@ -290,6 +291,11 @@ TSL_ASSERT(offsetof(tsl_slab_ref, length) == 8, "tsl_slab_ref.length moved");
  * process a consumer holds the slabs directly and never sees this; a consumer across a mapping
  * reads a region laid out as slab_region, then count of these, then the bytes they describe.
  * Every slab begins eight-aligned so its contents can be read at their natural alignment.
+ *
+ * slab_ref.slab is an index into that table, so a reference resolves to region +
+ * entry[ref.slab].offset + ref.offset for ref.length bytes. Reject a handle that is not less
+ * than slab_region.count: the table is the only thing that gives a handle a meaning, and a
+ * handle it does not cover has none.
  *
  * Mirrors `SlabEntry`.
  */

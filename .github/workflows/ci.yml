@@ -62,6 +62,13 @@ jobs:
         run: gcc -std=c11 -Wall -Wextra -Werror -Iinclude -fsyntax-only tools/abi-header/probe.c
       - name: compile as C++17
         run: g++ -std=c++17 -Wall -Wextra -Werror -Iinclude -x c++ -fsyntax-only tools/abi-header/probe.c
+      # The probe only proves the header parses. This one is a consumer: it walks a ring and
+      # resolves slab handles knowing nothing of ours but the header, and `c_consumer.rs` runs
+      # it against a real frame. Built as C++ too, because the mirror is C++.
+      - name: build the C consumer
+        run: gcc -std=c11 -Wall -Wextra -Werror -Iinclude -o /tmp/consumer tools/abi-header/consumer.c
+      - name: build the consumer as C++17
+        run: g++ -std=c++17 -Wall -Wextra -Werror -Iinclude -x c++ -fsyntax-only tools/abi-header/consumer.c
 
   cross:
     # R-6: layout asserts compile on every target. `cargo check` only — no linking, so no

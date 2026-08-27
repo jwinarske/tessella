@@ -203,7 +203,12 @@ fn structs() -> Vec<Struct> {
             "A reference into a refcounted geometry slab. Hold the slab until the driver's \
              copy completes.",
             [
-                (slab, "uint32_t slab", "Slab this data lives in."),
+                (
+                    slab,
+                    "uint32_t slab",
+                    "Slab this data lives in. Across a mapping, an index into a slab_region's \
+                     table of slab_entry."
+                ),
                 (offset, "uint32_t offset", "Byte offset within the slab."),
                 (length, "uint32_t length", "Length in bytes."),
             ]
@@ -216,7 +221,11 @@ fn structs() -> Vec<Struct> {
              that maps it. In process a consumer holds the slabs directly and never sees this; \
              a consumer across a mapping reads a region laid out as slab_region, then count of \
              these, then the bytes they describe. Every slab begins eight-aligned so its \
-             contents can be read at their natural alignment.",
+             contents can be read at their natural alignment.\n\n\
+             slab_ref.slab is an index into that table, so a reference resolves to \
+             region + entry[ref.slab].offset + ref.offset for ref.length bytes. Reject a handle \
+             that is not less than slab_region.count: the table is the only thing that gives a \
+             handle a meaning, and a handle it does not cover has none.",
             [
                 (
                     offset,
