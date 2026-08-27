@@ -214,10 +214,12 @@ impl Server {
                             let paths = Arc::clone(&paths);
                             std::thread::spawn(move || serve(stream, &held, &paths));
                         }
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        Err(error) => {
+                            if accept_error_is_fatal(error.kind()) {
+                                break;
+                            }
                             std::thread::sleep(std::time::Duration::from_millis(1));
                         }
-                        Err(_) => break,
                     }
                 }
             })
@@ -264,6 +266,33 @@ impl Server {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
     }
+}
+
+/// Whether an `accept` error should end the serving loop. Nothing does.
+///
+/// # Why the answer is always no
+///
+/// It used to be "anything but `WouldBlock`", and that turns a *transient* failure into a server
+/// that is bound, alive and permanently deaf. The test it is serving then fails somewhere
+/// unrelated, with a fetch error, while the same test passes alone — because alone there is no
+/// transient failure to have.
+///
+/// `accept` fails for reasons that are nothing to do with this end and clear on their own:
+///
+/// - `ConnectionAborted` — a client hung up between the SYN and the accept.
+/// - `Interrupted` — a signal arrived mid-call.
+/// - `WouldBlock` — nothing is waiting, which is the ordinary case for a non-blocking listener.
+/// - Out of descriptors, which has no `ErrorKind` of its own on stable Rust and arrives as
+///   `Uncategorized`. A workspace test run with a binary per crate and sockets in several of
+///   them reaches the process or system limit and leaves it as soon as one of them finishes.
+///
+/// The last is why this cannot enumerate the kinds it forgives: the one that matters most is the
+/// one with no name. So the policy is inverted — nothing is fatal — and nothing is lost by it,
+/// because the loop is bounded by the shutdown flag that `Drop` sets. A listener that is
+/// genuinely dead costs a one-millisecond poll until the server goes out of scope.
+#[must_use]
+pub const fn accept_error_is_fatal(_kind: std::io::ErrorKind) -> bool {
+    false
 }
 
 impl Drop for Server {
