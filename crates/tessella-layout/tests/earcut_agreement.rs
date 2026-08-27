@@ -15,6 +15,8 @@
 //!
 //! Expectations come from running mbgl's vendored `earcut.hpp` on these polygons.
 
+use tessella_layout::fill::{self, Ring};
+
 /// Canonicalizes a triangle list the way the oracle's dump does.
 ///
 /// Each triangle is rotated to start at its lowest index, then the triangles are sorted.
@@ -148,4 +150,89 @@ fn canonicalization_keeps_winding_and_drops_the_rest() {
     assert_eq!(canonical(&base), canonical(&[1, 2, 0, 4, 5, 3]));
     // One triangle reversed: a different, culled-differently triangle.
     assert_ne!(canonical(&base), canonical(&[0, 2, 1, 3, 4, 5]));
+}
+
+/// A polygon keeps at most five hundred holes, and keeps the largest.
+///
+/// mbgl's `limitHoles(polygon, 500)` runs before every fill and extrusion triangulation, and it
+/// is not an optimization this build is free to skip. earcut eliminates holes by bridging each
+/// one to the outer ring through a scan, so the cost is quadratic in the hole count — but the
+/// reason it has to be matched is the diff, not the clock: a bucket built without the cap has
+/// *more* geometry than the oracle's for the same feature.
+#[test]
+fn a_polygon_keeps_its_five_hundred_largest_holes() {
+    // An exterior big enough to hold everything, then holes of descending size — the smallest
+    // first, so a cap that kept the leading holes rather than the largest would be visible.
+    let exterior: Ring = vec![[0, 0], [20000, 0], [20000, 20000], [0, 20000]];
+    let mut polygon = vec![exterior];
+    for index in 0..600i16 {
+        let x = (index % 30) * 600 + 10;
+        let y = (index / 30) * 600 + 10;
+        // Size grows with the index, so the *last* holes are the largest.
+        let size = 1 + index / 10;
+        polygon.push(vec![
+            [x, y],
+            [x, y + size],
+            [x + size, y + size],
+            [x + size, y],
+        ]);
+    }
+
+    let mut capped = polygon.clone();
+    fill::limit_holes(&mut capped);
+    assert_eq!(capped.len(), 1 + fill::MAX_HOLES);
+    assert_eq!(
+        capped[0], polygon[0],
+        "the exterior is not ranked with the holes"
+    );
+
+    let smallest_kept = capped[1..]
+        .iter()
+        .map(|ring| fill::signed_area(ring).abs())
+        .min()
+        .expect("holes");
+    let largest_dropped = polygon[1..]
+        .iter()
+        .filter(|ring| !capped[1..].contains(ring))
+        .map(|ring| fill::signed_area(ring).abs())
+        .max()
+        .expect("something was dropped");
+    assert!(
+        smallest_kept >= largest_dropped,
+        "a dropped hole ({largest_dropped}) is larger than a kept one ({smallest_kept})"
+    );
+}
+
+/// Under the cap, nothing is touched.
+#[test]
+fn a_polygon_under_the_cap_is_unchanged() {
+    let mut polygon = vec![vec![[0i16, 0], [1000, 0], [1000, 1000], [0, 1000]]];
+    for index in 0..10i16 {
+        let x = index * 50 + 10;
+        polygon.push(vec![[x, 10], [x, 30], [x + 20, 30], [x + 20, 10]]);
+    }
+    let before = polygon.clone();
+    fill::limit_holes(&mut polygon);
+    assert_eq!(polygon, before);
+}
+
+/// The cap is stable: the same rings in, the same holes out.
+///
+/// mbgl selects with `std::nth_element`, which partitions rather than sorts and promises nothing
+/// about ties. A producer that chose differently between two builds of the same tile would emit
+/// a geometry the consumer had to re-upload for no reason a viewer could see.
+#[test]
+fn the_cap_is_stable_across_runs() {
+    let mut polygon = vec![vec![[0i16, 0], [30000, 0], [30000, 30000], [0, 30000]]];
+    for index in 0..700i16 {
+        let x = (index % 26) * 1000 + 10;
+        let y = (index / 26) * 1000 + 10;
+        // Every hole the same size, so every choice is a tie.
+        polygon.push(vec![[x, y], [x, y + 100], [x + 100, y + 100], [x + 100, y]]);
+    }
+    let mut once = polygon.clone();
+    let mut twice = polygon.clone();
+    fill::limit_holes(&mut once);
+    fill::limit_holes(&mut twice);
+    assert_eq!(once, twice);
 }

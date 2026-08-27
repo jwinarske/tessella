@@ -96,6 +96,18 @@ impl Placed {
     /// down, precisely so a layer lands on the same slot in both; ordering by it is what puts
     /// the topmost layer first within a pass.
     ///
+    /// # Topmost first is not a mistake, and a consumer has to know it
+    ///
+    /// It looks like one, because painting a translucent layer over the layer above it is what
+    /// a back-to-front rasterizer would need. mbgl does not paint that way: it draws
+    /// front-to-back against a depth buffer, with each layer at its own slot, so a lower layer
+    /// is rejected where a higher one already covered. The golden capture is unambiguous about
+    /// it — style layer 4 draws at slot 1, layer 3 at slot 2, layer 2 at slot 3.
+    ///
+    /// A consumer with no depth buffer therefore cannot paint the order as given; it has to
+    /// reverse each translucent run itself. That is the consumer's business, and putting the
+    /// reversal here would have made the stream disagree with the oracle it is measured against.
+    ///
     /// Then sublayer, then sort key, then tile. Sublayer above the sort key because a sort key
     /// that reordered within a layer would separate a fill's outline from the triangles it
     /// outlines, and the outline has to follow the fill.
@@ -220,13 +232,22 @@ impl DrawOrder {
         }
         expanded.sort_by_key(|(placed, pass)| placed.sort_key(*pass, self.layer_count));
 
-        // Per pass, from this view's own draw order. A drawable in both passes takes a slot in
-        // each, because it is written to both consolidated buffers.
-        let mut next: [u32; 8] = [0; 8];
+        // Per *layer*, from this view's own draw order. mbgl's tweakers are handed a layer
+        // group and size their vector to `layerGroup.getDrawableCount()`, incrementing `i` once
+        // per drawable they visit — so the index addresses that layer's consolidated buffer and
+        // resets at each layer.
+        //
+        // Numbering per pass across the whole view was the earlier rule, and it is wrong in a
+        // way nothing arithmetic could see: the buffers are written per `(view, layer, slot)`,
+        // so a second layer's drawables index past the end of their own buffer and pick up
+        // whatever the first layer left at that offset. The picture is a layer drawn with
+        // another layer's matrices — every tile in the wrong place — and every value that went
+        // into it is correct.
+        let mut next: alloc::collections::BTreeMap<i32, u32> = alloc::collections::BTreeMap::new();
         expanded
             .iter()
             .map(|(placed, pass)| {
-                let slot = &mut next[usize::from(pass.bits() & 0x7)];
+                let slot = next.entry(placed.binding.layer_index).or_default();
                 let ubo_index = *slot;
                 *slot += 1;
                 #[allow(clippy::cast_sign_loss)]
@@ -540,12 +561,19 @@ mod tests {
         );
     }
 
-    /// `ubo_index` is dense from zero within each pass, not across the whole order.
+    /// `ubo_index` is dense from zero within each *layer*, not across the view.
     ///
-    /// It is a slot in the pass's consolidated buffer, so numbering it globally would leave
-    /// holes in both buffers and index past the end of the shorter one.
+    /// It addresses that layer's consolidated buffer, which is written per
+    /// `(view, layer, slot)`. mbgl assigns it the same way: its tweakers take a layer group,
+    /// size their vector to `layerGroup.getDrawableCount()`, and increment once per drawable
+    /// visited.
+    ///
+    /// Numbering across the view instead is the failure that has no arithmetic symptom. Every
+    /// matrix is right and every buffer is right; the second layer's drawables simply read
+    /// past the end of their own buffer, and the map comes out with one layer's tiles wearing
+    /// another layer's matrices.
     #[test]
-    fn ubo_indices_are_dense_within_each_pass() {
+    fn ubo_indices_are_dense_within_each_layer() {
         let mut order = DrawOrder::new(5);
         order.bind(background(4092));
         order.bind(fill(1, 1, 4092));
@@ -553,16 +581,17 @@ mod tests {
         order.bind(fill(1, 1, 4093));
 
         let resolved = order.resolve();
-        let mut by_pass: alloc::collections::BTreeMap<u8, Vec<u32>> = Default::default();
+        let mut by_layer: alloc::collections::BTreeMap<u32, Vec<u32>> = Default::default();
         for entry in &resolved {
-            by_pass
-                .entry(entry.pass.bits())
+            by_layer
+                .entry(entry.layer_index)
                 .or_default()
                 .push(entry.ubo_index);
         }
-        for (pass, slots) in by_pass {
+        assert_eq!(by_layer.len(), 2, "two layers");
+        for (layer, slots) in by_layer {
             let expected: Vec<u32> = (0..slots.len() as u32).collect();
-            assert_eq!(slots, expected, "pass {pass}");
+            assert_eq!(slots, expected, "layer {layer}");
         }
     }
 

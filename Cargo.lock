@@ -100,6 +100,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc652a48c352aef3ea3aed32080501cf3ef6ed5da78602a020c991775b0aff04"
 
 [[package]]
+name = "capture-render"
+version = "0.0.0"
+dependencies = [
+ "flate2",
+ "serde_json",
+ "tessella-capture-abi",
+ "tessella-orchestrate",
+ "tessella-source",
+ "tessella-style",
+ "tessella-tile",
+]
+
+[[package]]
 name = "cc"
 version = "1.4.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

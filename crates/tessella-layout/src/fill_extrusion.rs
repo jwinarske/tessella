@@ -32,7 +32,7 @@
 
 use alloc::vec::Vec;
 
-use crate::fill::{Position, Ring, Segment, classify_rings};
+use crate::fill::{Position, Ring, Segment, classify_rings, limit_holes};
 
 /// One extrusion vertex, in the layout the instanced shader binds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,7 +157,12 @@ pub fn build_features(features: &[&[Ring]]) -> FillExtrusionBucket {
 
 fn build_into(bucket: &mut FillExtrusionBucket, rings: &[Ring]) {
     {
-        for polygon in classify_rings(rings) {
+        for mut polygon in classify_rings(rings) {
+            // mbgl caps an extrusion's interior rings exactly as it caps a fill's -- the call
+            // is in `FillExtrusionBucket::addFeature`, with the same five hundred. Capping one
+            // and not the other gives a building's roof a different triangulation from the
+            // fill beneath it, for the same rings.
+            limit_holes(&mut polygon);
             let total: usize = polygon.iter().map(|ring| ring.len()).sum();
             if total == 0 {
                 continue;

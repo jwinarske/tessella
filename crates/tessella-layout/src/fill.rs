@@ -131,6 +131,43 @@ pub fn classify_rings(rings: &[Ring]) -> Vec<Vec<Ring>> {
     polygons
 }
 
+/// The most interior rings a polygon is triangulated with. mbgl's `limitHoles(polygon, 500)`.
+pub const MAX_HOLES: usize = 500;
+
+/// Drops all but the largest holes, as mbgl does before triangulating.
+///
+/// # Why a cap at all
+///
+/// earcut's hole elimination is quadratic in the hole count: each hole is joined to the outer
+/// ring by a bridge found by scanning, so a polygon with thousands of interior rings costs
+/// seconds and produces a triangulation nobody can see the difference in. mbgl caps it at five
+/// hundred, and the cap is not an optimization this build chose — a bucket built without it has
+/// *more* geometry than the oracle's for the same feature, which fails the diff.
+///
+/// # Why the largest, and why the order after is not defined
+///
+/// Largest by absolute area, because a dropped hole is a hole that gets painted over and the
+/// visible cost of that scales with its size. mbgl selects them with `std::nth_element`, which
+/// partitions rather than sorts: everything before the nth is no smaller than everything after,
+/// and nothing more is promised. So the kept holes' relative order is unspecified there, and
+/// matching it exactly is neither possible nor necessary — earcut's output does not depend on
+/// the order holes are presented in, only on which ones are.
+pub fn limit_holes(polygon: &mut Vec<Ring>) {
+    if polygon.len() <= 1 + MAX_HOLES {
+        return;
+    }
+    // The exterior stays put; only the holes are ranked.
+    polygon[1..].sort_by(|a, b| {
+        signed_area(b)
+            .abs()
+            .cmp(&signed_area(a).abs())
+            // A stable tiebreak so a rebuild of the same tile keeps the same holes, which a
+            // partition does not guarantee and a diff against a previous frame relies on.
+            .then_with(|| b.len().cmp(&a.len()))
+    });
+    polygon.truncate(1 + MAX_HOLES);
+}
+
 /// Builds a fill bucket from a feature's rings.
 ///
 /// Rings are added to the vertex buffer in order, then each polygon is triangulated and its
@@ -184,7 +221,11 @@ pub fn build_features_tracked(features: &[&[Ring]]) -> (FillBucket, Vec<usize>) 
 }
 
 fn build_polygons(bucket: &mut FillBucket, polygons: Vec<Vec<Ring>>) {
-    for polygon in polygons {
+    for mut polygon in polygons {
+        // Before anything is counted: the cap changes the vertex count as well as the
+        // triangulation, and a segment sized against the uncapped count is a segment whose
+        // length does not describe its own buffer.
+        limit_holes(&mut polygon);
         let total_vertices: usize = polygon.iter().map(Vec::len).sum();
         if total_vertices == 0 {
             continue;

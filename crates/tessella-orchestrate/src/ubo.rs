@@ -586,6 +586,18 @@ pub fn fill_props_from_paint(
     )
 }
 
+/// A background layer's properties, from its resolved paint.
+#[must_use]
+pub fn background_props_from_paint(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    zoom: f64,
+) -> Vec<u8> {
+    pack_background_props(
+        uniform_color(paint, "background-color", zoom),
+        uniform_number(paint, "background-opacity", zoom),
+    )
+}
+
 /// A fill-extrusion layer's evaluated properties, from its paint and the style light.
 ///
 /// Three of the five blocks are the light, which is why it is a parameter rather than something

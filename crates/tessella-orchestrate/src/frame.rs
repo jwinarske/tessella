@@ -27,7 +27,6 @@ use tessella_capture_abi::generated::{ubo_layouts, ubo_slots};
 use tessella_capture_abi::ring::{Full, Producer};
 use tessella_capture_abi::{BuiltIn, CameraMode, declared_for};
 use tessella_style::light::Light;
-use tessella_style::property::Color;
 use tessella_style::{LayerKind, Style};
 use tessella_tile::cover::{TileCoord, ViewTransform};
 
@@ -348,12 +347,12 @@ fn write_layer_state(
                 &buffer,
             )?;
 
-            let color = paint
-                .get("background-color")
-                .and_then(|property| property.expression.evaluate(Some(view.zoom), None).ok())
-                .and_then(|value| value.as_str().and_then(|text| Color::parse(text).ok()))
-                .unwrap_or_else(Color::black);
-            let props = ubo::pack_background_props(color, 1.0);
+            // Through the same reader every other uniform colour uses. Evaluating the
+            // expression here and asking the result for a *string* gets `None` for every style
+            // ever written: the property boundary coerces a colour-typed property to a colour,
+            // so the value is already `Value::Color` — and the fallback that catches is black,
+            // which is a background nobody chose and one that looks deliberate.
+            let props = ubo::background_props_from_paint(&paint, view.zoom);
             ubo::write(
                 producer,
                 view_id,

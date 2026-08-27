@@ -1,0 +1,30 @@
+# A consumer, written to look at the stream rather than to ship in anything.
+#
+# Every other test of this producer inspects the values it computed. This one binds them the way
+# a renderer would -- through the descriptors, at the strides they name, with the matrices out of
+# the consolidated buffers -- and draws the result. A descriptor that names the wrong buffer or
+# the wrong stride is arithmetically fine and visibly wrong, and there was no way to see that.
+
+[package]
+name = "capture-render"
+description = "Rasterizes a capture stream to a PNG, for looking at"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[dependencies]
+flate2 = "1"
+serde_json.workspace = true
+tessella-capture-abi.workspace = true
+tessella-orchestrate = { version = "0.0.0", path = "../../crates/tessella-orchestrate" }
+tessella-source.workspace = true
+tessella-style.workspace = true
+tessella-tile.workspace = true
+
+[lints]
+workspace = true
