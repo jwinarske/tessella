@@ -92,6 +92,12 @@ struct Args {
     source: String,
     /// A directory laid out as `{fontstack}/{range}.pbf`, for the symbol layers.
     glyphs: Option<String>,
+    /// Where the tile belongs, as `z/x/y`.
+    ///
+    /// `None` means it is drawn at every address the cover names, which is a diagnostic rather
+    /// than a map: the same features repeat across the viewport, each copy correctly placed for
+    /// an address that is not the tile's own.
+    at: Option<(u8, u32, u32)>,
     view: ViewTransform,
 }
 
@@ -101,6 +107,7 @@ fn parse_args() -> Result<Args, String> {
     let mut out = String::from("map.png");
     let mut source = String::from("src");
     let mut glyphs = None;
+    let mut at = None;
     let (mut lon, mut lat, mut zoom) = (0.0, 0.0, 0.0);
     let (mut width, mut height) = (1024.0, 768.0);
 
@@ -116,6 +123,7 @@ fn parse_args() -> Result<Args, String> {
             "--out" => out = value()?,
             "--source" => source = value()?,
             "--glyphs" => glyphs = Some(value()?),
+            "--tile-at" => at = Some(address(&value()?)?),
             "--lon" => lon = number(&value()?)?,
             "--lat" => lat = number(&value()?)?,
             "--zoom" => zoom = number(&value()?)?,
@@ -132,6 +140,7 @@ fn parse_args() -> Result<Args, String> {
         out,
         source,
         glyphs,
+        at,
         view: camera::settled(&ViewTransform {
             longitude: lon,
             latitude: lat,
@@ -153,9 +162,38 @@ fn number(text: &str) -> Result<f64, String> {
         .map_err(|_| format!("`{text}` is not a number"))
 }
 
+/// Parses `z/x/y`.
+fn address(text: &str) -> Result<(u8, u32, u32), String> {
+    let parts: Vec<&str> = text.split('/').collect();
+    let [z, x, y] = parts[..] else {
+        return Err(format!("`{text}` is not a z/x/y address"));
+    };
+    let parse = |part: &str| -> Result<u32, String> {
+        part.parse()
+            .map_err(|_| format!("`{text}` is not a z/x/y address"))
+    };
+    let z = u8::try_from(parse(z)?).map_err(|_| format!("`{text}`: zoom out of range"))?;
+    Ok((z, parse(x)?, parse(y)?))
+}
+
+/// The address a fixture's filename ends in, as `...-z-x-y.mvt`.
+///
+/// Guessed, and only used when nothing better was given. A tile drawn at an address that is not
+/// its own is still drawn *correctly* for that address -- the projection does not care that the
+/// features came from somewhere else -- so getting this wrong repeats the map rather than
+/// breaking it, which is why a guess is tolerable and why `--tile-at` exists to override it.
+fn address_from_name(path: &str) -> Option<(u8, u32, u32)> {
+    let stem = std::path::Path::new(path).file_stem()?.to_str()?;
+    let mut parts = stem.rsplit('-');
+    let y = parts.next()?.parse().ok()?;
+    let x = parts.next()?.parse().ok()?;
+    let z = parts.next()?.parse().ok()?;
+    Some((z, x, y))
+}
+
 fn usage() -> String {
     "usage: capture-render --style <path> --tile <path.mvt> [--out map.png] [--source src]\n\
-     \x20                     [--glyphs <dir>] [--lon 0] [--lat 0] [--zoom 0]\n\
+     \x20                     [--glyphs <dir>] [--tile-at z/x/y] [--lon 0] [--lat 0] [--zoom 0]\n\
       \x20                     [--width 1024] [--height 768]"
         .to_string()
 }
@@ -174,11 +212,23 @@ fn run() -> Result<String, String> {
         Tile::decode(&bytes).map_err(|error| format!("decoding {}: {error}", args.tile))?;
 
     let tiles = cover::cover(&args.view).map_err(|error| format!("covering: {error}"))?;
+    // Where this tile's features actually belong. Given, or read off the filename, or nowhere —
+    // and "nowhere" means every address, which repeats the tile across the viewport.
+    let at = args.at.or_else(|| address_from_name(&args.tile));
+
     let mut buckets = Vec::new();
+    let mut placed = 0;
     for tile in &tiles {
         let id = TileId::new(tile.z, tile.x, tile.y);
-        let mut built = build_mvt_tile(&style, &args.source, id, &decoded)
-            .map_err(|error| format!("building {id}: {error}"))?;
+        // A background reads no source, so it is built for every tile of the cover whether or
+        // not this tile's features belong there. Dropping it with the features would leave the
+        // rest of the viewport unpainted rather than empty.
+        let mut built = Vec::new();
+        if at.is_none_or(|(z, x, y)| (z, x, y) == (tile.z, tile.x, tile.y)) {
+            built = build_mvt_tile(&style, &args.source, id, &decoded)
+                .map_err(|error| format!("building {id}: {error}"))?;
+            placed += 1;
+        }
         built.extend(
             build_sourceless(&style, id).map_err(|error| format!("background {id}: {error}"))?,
         );
@@ -225,6 +275,13 @@ fn run() -> Result<String, String> {
         .map_err(|error| format!("emitting: {error}"))?
     };
 
+    // Seal before resolving anything. `SlabArena::resolve` looks in the *sealed* slabs, so the
+    // one still open holds whatever was encoded last and answers `None` for it -- which a
+    // consumer sees as a geometry whose position attribute has no bytes, and draws as nothing.
+    // The layer that disappears is whichever happened to be encoded last, which is why the
+    // symptom moves when the style changes.
+    arena.seal();
+
     let scene = Scene::drain(ring.consumer(), &arena);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let (width, height) = (args.view.width as u32, args.view.height as u32);
@@ -234,13 +291,24 @@ fn run() -> Result<String, String> {
     std::fs::write(&args.out, &image).map_err(|error| format!("writing {}: {error}", args.out))?;
 
     let mut note = format!(
-        "{} geometries, {} drawables, {} tiles -> {} ({} bytes)",
+        "{} geometries, {} drawables, {} of {} cover tiles carry features -> {} ({} bytes)",
         emitted.geometries,
         emitted.drawables,
+        placed,
         tiles.len(),
         args.out,
         image.len()
     );
+    match at {
+        Some((z, x, y)) if placed == 0 => note.push_str(&format!(
+            "\nthe tile belongs at {z}/{x}/{y}, which this view does not cover"
+        )),
+        Some((z, x, y)) => note.push_str(&format!("\nplaced at {z}/{x}/{y}")),
+        None => note.push_str(
+            "\nno address for this tile: drawn at every cover address, so the map repeats. \
+             Pass --tile-at z/x/y.",
+        ),
+    }
     if !rejected.is_empty() {
         note.push_str(&format!("\n{} layer(s) dropped:", rejected.len()));
         for layer in &rejected {
