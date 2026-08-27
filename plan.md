@@ -766,6 +766,23 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   measurement. All three wait on the same thing — the probe is unrotated, so there is no capture
   to check any of it against, which is R0's second qualification reappearing rather than a new
   one.
+  What that qualification cost came due when a building was first drawn at a pitch. The pitched
+  camera had never been *evaluated*, let alone compared: it hovered over the map's centre instead
+  of orbiting back along its own forward direction, and the pitch was read as radians where it is
+  documented and passed in degrees. Both are the identity at zero, so every golden held over
+  both. The lesson is not that transcription failed — it is that arithmetic nothing runs is
+  arithmetic nobody has checked, and a capture is not the only way to run it. A picture is
+  another.
+  The pitched **cover** is no longer held back. A pitched view sees a trapezoid whose bounding
+  rectangle holds several times the tiles it can — so mbgl walks the tile quadtree against the
+  view frustum and discards a subtree the moment its box falls outside, and that is transcribed:
+  `Frustum::fromInvProjMatrix`, the conservative separating-axis test, and the depth-first
+  traversal. What is left out is named rather than approximated: the level-of-detail pass that
+  returns a *mixed* set of zooms, and `intersectsPrecise`, whose own comment puts its yield under
+  one percent. Without LOD a sixty-degree view at z14 covers 324 tiles where a flat one covers
+  nine, and that is the cost of the omission rather than a defect in the walk. With no capture to
+  diff against, what stands in is an independent computation: unproject a grid of screen pixels
+  onto the ground and assert the cover holds every tile they land in.
   The SDF glyph range format reads, as `tessella-glyph/pbf`: `{fontstack}/{first}-{last}.pbf`,
   256 codepoints a file, metrics and a distance field with the ecosystem's three-pixel border.
   Almost all of it is rejection, and that is the part that matters — proto2 makes every field
