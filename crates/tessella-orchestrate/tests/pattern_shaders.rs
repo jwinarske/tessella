@@ -119,10 +119,12 @@ fn atlas() -> BTreeMap<String, IconPosition> {
 #[test]
 fn a_resolved_pattern_binds_the_pattern_shaders() {
     let positions = atlas();
+    let pixels = vec![0u8; 512 * 512 * 4];
     let patterns = Patterns {
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
+        pixels: &pixels,
         history: ZoomHistory::new(),
     };
     let (shaders, textures) = emit_with(Some(&patterns));
@@ -161,10 +163,12 @@ fn a_missing_sprite_draws_as_a_fill() {
     let mut positions = atlas();
     positions.remove("sand_noise");
     positions.insert("something_else".to_owned(), atlas()["sand_noise"]);
+    let pixels = vec![0u8; 512 * 512 * 4];
     let patterns = Patterns {
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
+        pixels: &pixels,
         history: ZoomHistory::new(),
     };
     let (shaders, textures) = emit_with(Some(&patterns));
@@ -173,4 +177,113 @@ fn a_missing_sprite_draws_as_a_fill() {
         "should fall back to a fill: {shaders:?}"
     );
     assert_eq!(textures, 0);
+}
+
+/// The atlas goes up as a texture, and the placements reach slot 4.
+///
+/// The last two pieces: a drawable that references a texture the consumer was never given
+/// samples whatever was last at that slot, and a pattern shader with no rectangles has nothing
+/// to sample even when the texture is there.
+#[test]
+fn the_atlas_is_uploaded_and_the_placements_are_written() {
+    use tessella_capture_abi::envelope::{TextureUpdate, UboUpdate};
+
+    let positions = atlas();
+    let pixels = vec![0u8; 512 * 512 * 4];
+    let patterns = Patterns {
+        texture: TextureId(20),
+        size: [512, 512],
+        positions: &positions,
+        pixels: &pixels,
+        history: ZoomHistory::new(),
+    };
+
+    let style = Style::parse(STYLE).expect("parses");
+    let view = camera::settled(&ViewTransform {
+        longitude: 0.0,
+        latitude: 0.0,
+        zoom: 2.0,
+        width: 512.0,
+        height: 512.0,
+        bearing: 0.0,
+        pitch: 0.0,
+    });
+    let tiles = cover::cover(&view).expect("covers");
+    let decoded = Tile::decode(REAL_TILE).expect("decodes");
+    let mut buckets = Vec::new();
+    for tile in &tiles {
+        let id = TileId::new(tile.z, tile.x, tile.y);
+        let mut built = build_mvt_tile(&style, "s", id, &decoded).expect("builds");
+        built.extend(build_sourceless(&style, id).expect("background"));
+        built.sort_by_key(|bucket| bucket.layer_index);
+        buckets.push((id, built));
+    }
+
+    let mut arena = SlabArena::new();
+    let mut ring = Ring::new(1 << 24);
+    let (producer, consumer) = ring.split();
+    frame::emit(
+        producer,
+        &mut arena,
+        &Frame {
+            style: &style,
+            view: &view,
+            view_id: ViewId(0),
+            tiles: &tiles,
+            buckets: &buckets,
+            light: &Light::default(),
+            fonts: None,
+            patterns: Some(&patterns),
+        },
+    )
+    .expect("emits");
+
+    let mut atlas_uploaded = false;
+    let mut slot4 = Vec::new();
+    let mut first_texture = None;
+    while let Some(record) = consumer.peek() {
+        match record.kind {
+            EnvelopeKind::TextureUpdate => {
+                if let Some(update) = TextureUpdate::from_bytes(record.record) {
+                    if update.texture == TextureId(20) {
+                        atlas_uploaded = true;
+                        assert_eq!(update.size.width, 512);
+                        assert_eq!(update.size.height, 512);
+                    }
+                    first_texture.get_or_insert(update.texture);
+                }
+            }
+            EnvelopeKind::UboUpdate => {
+                if let Some(update) = UboUpdate::from_bytes(record.record)
+                    && update.slot == 4
+                    && update.layer_index >= 0
+                {
+                    let start = update.data.offset as usize;
+                    let end = start + update.data.count as usize;
+                    if let Some(bytes) = record.payload.get(start..end) {
+                        slot4 = bytes.to_vec();
+                    }
+                }
+            }
+            _ => {}
+        }
+        let consumed = record.consumed();
+        consumer.advance(consumed);
+    }
+
+    assert!(atlas_uploaded, "the atlas never reached the wire");
+    assert!(!slot4.is_empty(), "nothing was written to slot 4");
+    assert_eq!(slot4.len() % 48, 0, "whole blocks of the pattern layout");
+
+    // The rectangle the atlas placed sand_noise at: [56, 9, 106, 59], twice, then the size.
+    let word = |at: usize| f32::from_le_bytes(slot4[at..at + 4].try_into().expect("four bytes"));
+    assert_eq!(
+        [word(0), word(4), word(8), word(12)],
+        [56.0, 9.0, 106.0, 59.0]
+    );
+    assert_eq!(
+        [word(16), word(20), word(24), word(28)],
+        [56.0, 9.0, 106.0, 59.0]
+    );
+    assert_eq!([word(32), word(36)], [512.0, 512.0], "the atlas size");
 }

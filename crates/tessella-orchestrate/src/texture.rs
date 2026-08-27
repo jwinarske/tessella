@@ -297,6 +297,29 @@ fn union_of(rects: &[Rect16]) -> Rect16 {
     }
 }
 
+/// Uploads a packed sprite atlas.
+///
+/// Distinct from `sprite_sheet`, which uploads the *sheet* a style pointed at. The atlas is
+/// what a tile's patterns actually index: only the sprites some layer named, packed together
+/// and shared across every tile that names one.
+///
+/// `None` when the pixels do not match the size, which is a caller that packed one atlas and
+/// described another.
+#[must_use]
+pub fn pattern_atlas(texture: TextureId, size: [u16; 2], pixels: &[u8]) -> Option<Upload> {
+    let extent = Extent {
+        width: u32::from(size[0]),
+        height: u32::from(size[1]),
+    };
+    let expected = (extent.width as usize)
+        .checked_mul(extent.height as usize)?
+        .checked_mul(4)?;
+    if pixels.len() != expected {
+        return None;
+    }
+    Some(whole(texture, extent, SPRITE_SHEET_FORMAT, pixels))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

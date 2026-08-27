@@ -150,6 +150,8 @@ pub struct Patterns<'a> {
     pub size: [u16; 2],
     /// Where each sprite was packed, by name.
     pub positions: &'a alloc::collections::BTreeMap<alloc::string::String, IconPosition>,
+    /// The atlas's pixels, RGBA, which go up before any drawable names the texture.
+    pub pixels: &'a [u8],
     /// Which way the camera last crossed an integer zoom, which chooses a fade's `from`.
     pub history: ZoomHistory,
 }
@@ -272,6 +274,16 @@ fn emit_group(
                 }
             }
         }
+    }
+
+    // The sprite atlas, before any drawable names it — the reason the glyph atlas goes up
+    // here, and the same failure if it does not: a texture reference the consumer has not been
+    // given samples whatever was last at that slot.
+    if let Some(patterns) = patterns
+        && let Some(upload) =
+            texture::pattern_atlas(patterns.texture, patterns.size, patterns.pixels)
+    {
+        texture::write(producer, &upload)?;
     }
 
     let global = ubo::GlobalPaintParams::for_view(view, [64.0, 64.0], 1.0).pack();
@@ -650,6 +662,7 @@ fn write_layer_state(
         style,
         view,
         view_id,
+        patterns,
         ..
     } = *frame;
 
@@ -740,10 +753,22 @@ fn write_layer_state(
                 &buffer,
             )?;
 
-            let tile_props = ubo::pack_tile_props_buffer(
-                all.len(),
-                ubo_layouts::FILL_TILE_PROPS_UNION_UBO.stride,
-            );
+            // Where the pattern's two images sit, when the layer has one. The buffer is the
+            // same length either way — `FillPatternTilePropsUBO` is the union's stride, and a
+            // layer with no pattern writes the zeroes the shader ignores.
+            //
+            // One placement repeated, not one per drawable computed separately: a pattern that
+            // is not data-driven resolves to the same pair of rectangles for every tile, which
+            // is what the capture carries — twelve identical blocks over twelve drawables.
+            let tile_props = match patterns
+                .and_then(|patterns| patterns.placement(&paint, "fill-pattern", view.zoom))
+            {
+                Some(placement) => ubo::pack_pattern_tile_props(&alloc::vec![placement; all.len()]),
+                None => ubo::pack_tile_props_buffer(
+                    all.len(),
+                    ubo_layouts::FILL_TILE_PROPS_UNION_UBO.stride,
+                ),
+            };
             ubo::write(
                 producer,
                 view_id,
