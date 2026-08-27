@@ -783,6 +783,17 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   nine, and that is the cost of the omission rather than a defect in the walk. With no capture to
   diff against, what stands in is an independent computation: unproject a grid of screen pixels
   onto the ground and assert the cover holds every tile they land in.
+  **Collation is measured and deferred**, which is worth stating precisely because
+  "unimplemented" reads like an oversight. A comparison may take a third argument, a collator,
+  and twelve suite cases exercise it. mbgl's own default implementation says in a comment that it
+  ignores the locale and would need ICU for it; what it does have is DUCET collation order and
+  nunicode's `unaccent`. Approximating that with casefold, NFD decomposition and codepoint order
+  was tried against the suite and passes **five of twelve** — the seven that fail need DUCET,
+  where `a` sorts before `A` and codepoint order says the reverse. Shipping the approximation
+  would be a comparison that looks right and is wrong for the same reason a linear stand-in for
+  `cubic-bezier` would be, so it is not shipped. What it needs is the collation table, and that
+  is a generator against `allkeys.txt` rather than a judgement call.
+
   The SDF glyph range format reads, as `tessella-glyph/pbf`: `{fontstack}/{first}-{last}.pbf`,
   256 codepoints a file, metrics and a distance field with the ecosystem's three-pixel border.
   Almost all of it is rejection, and that is the part that matters — proto2 makes every field

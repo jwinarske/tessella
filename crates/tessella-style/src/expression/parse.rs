@@ -575,18 +575,26 @@ fn check_comparable(
         CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge
     );
 
-    if ordering && !(left.is_ordered() && right.is_ordered()) {
-        let unordered = if left.is_ordered() { right } else { left };
-        return Err(ParseError::Malformed {
-            operator: operator.to_string(),
-            detail: format!("{} has no ordering", unordered.name()),
-        });
+    // Each operand on its own first, which is the check that was missing. An array, an object
+    // or a colour cannot be compared *at all*, whatever it is compared against — and asking
+    // only whether the two could be equal never finds out, because an unknown could equal
+    // anything and `["get", …]` is always unknown.
+    for (side, kind) in [(left, "left"), (right, "right")] {
+        if !side.is_comparable(ordering) {
+            return Err(ParseError::Malformed {
+                operator: operator.to_string(),
+                detail: format!(
+                    "comparisons are not supported for type {} ({kind} operand)",
+                    side.name()
+                ),
+            });
+        }
     }
 
     if !left.could_equal(right) {
         return Err(ParseError::Malformed {
             operator: operator.to_string(),
-            detail: format!("{} and {} can never be equal", left.name(), right.name()),
+            detail: format!("cannot compare {} and {}", left.name(), right.name()),
         });
     }
     Ok(())

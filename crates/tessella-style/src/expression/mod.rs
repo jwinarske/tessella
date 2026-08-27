@@ -243,6 +243,28 @@ pub enum Type {
 }
 
 impl Type {
+    /// Whether a value of this type can be compared at all, by this kind of comparison.
+    ///
+    /// mbgl's `isComparableType`, and it is a property of *one* operand rather than of the pair:
+    /// `["==", ["get", "x"], ["literal", [1]]]` is refused because an array cannot be compared,
+    /// however unknown the other side is. Checking only whether the two *could* be equal misses
+    /// it entirely, because an unknown compares with anything.
+    ///
+    /// Equality admits the scalars and `Value`. Ordering admits fewer: strings, numbers and
+    /// `Value` — booleans have no order the spec is willing to invent, and null has nothing to
+    /// order.
+    #[must_use]
+    pub const fn is_comparable(self, ordering: bool) -> bool {
+        if ordering {
+            matches!(self, Self::String | Self::Number | Self::Value)
+        } else {
+            matches!(
+                self,
+                Self::String | Self::Number | Self::Boolean | Self::Null | Self::Value
+            )
+        }
+    }
+
     /// Whether two values of these types could ever be equal.
     ///
     /// Unknowns compare with anything, because the unknown might turn out to match.

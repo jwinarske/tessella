@@ -40,10 +40,13 @@ cos/basic
 divide/basic
 downcase/basic
 e/basic
+equal/array
+equal/color
 equal/mismatch
 equal/null-lhs
 equal/null-rhs
 equal/number
+equal/object
 equal/string
 equal/value
 floor/basic

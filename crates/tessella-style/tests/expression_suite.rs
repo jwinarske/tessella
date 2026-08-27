@@ -390,6 +390,17 @@ fn report_the_pass_rate() {
             };
         *by_cause.entry(cause).or_default() += 1;
     }
+    // And, when asked, the cases behind one cause — because "twelve valid expressions are
+    // rejected" says what to do and not where to start.
+    if let Ok(wanted) = std::env::var("TESSELLA_SUITE_CAUSE") {
+        println!("cases whose cause contains `{wanted}`:");
+        for (name, reason) in &failures {
+            if reason.contains(&wanted) {
+                println!("  {name}: {reason}");
+            }
+        }
+    }
+
     let mut ranked: Vec<(&String, &usize)> = by_cause.iter().collect();
     ranked.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
     println!("failures by cause:");
