@@ -572,7 +572,13 @@ fn draw_triangles(
         })
         .collect();
 
-    triangles(canvas, geometry, &projected, color);
+    triangles(
+        canvas,
+        geometry,
+        &projected,
+        color,
+        vertex_colors(geometry, arena).as_deref(),
+    );
 }
 
 /// Draws a line by widening its centreline, which is what its shader does.
@@ -633,7 +639,13 @@ fn draw_line(
         })
         .collect();
 
-    triangles(canvas, geometry, &projected, paint.color);
+    triangles(
+        canvas,
+        geometry,
+        &projected,
+        paint.color,
+        vertex_colors(geometry, arena).as_deref(),
+    );
 }
 
 /// Draws a circle layer by expanding each quad, which is what its shader does.
@@ -682,7 +694,64 @@ fn draw_circle(
         })
         .collect();
 
-    triangles(canvas, geometry, &projected, paint.color);
+    triangles(
+        canvas,
+        geometry,
+        &projected,
+        paint.color,
+        vertex_colors(geometry, arena).as_deref(),
+    );
+}
+
+/// The attribute a shader reads a per-feature colour from, when it has one.
+///
+/// Each family numbers its own; there is no shared "colour is attribute one" rule, and assuming
+/// there were reads a line's blur as its colour.
+const fn color_attribute(shader: BuiltIn) -> Option<u32> {
+    match shader {
+        BuiltIn::FillShader | BuiltIn::FillOutlineShader | BuiltIn::CircleShader => Some(1),
+        BuiltIn::LineShader => Some(2),
+        BuiltIn::FillExtrusionShader | BuiltIn::FillExtrusionInstancedShader => Some(4),
+        _ => None,
+    }
+}
+
+/// Per-vertex colours, when the layer's colour is data-driven.
+///
+/// # Why a uniform is not enough
+///
+/// DR-11 splits a property by what it depends on, and the split decides how it reaches the GPU:
+/// a constant or camera-only colour is a uniform, a colour that varies per feature is a vertex
+/// attribute. A consumer that reads only the uniform therefore gets the property's *default* for
+/// every data-driven layer — and `line-color`'s default is black, so a real style comes out as a
+/// map drawn in thick black lines. That is not a wrong value on the wire; it is the wire's other
+/// half never being read.
+///
+/// The bytes are in the binder's interleaved buffer, at the binder's stride, which is not the
+/// vertex buffer's — the descriptor says which, and following it is the whole point.
+fn vertex_colors(geometry: &Geometry, arena: &SlabArena) -> Option<Vec<[f32; 4]>> {
+    let descriptor = geometry.attribute(color_attribute(geometry.shader)?)?;
+    // -1 is the consumer's signal to drop an attribute the shader does not declare (§2.2).
+    if descriptor.binding < 0 {
+        return None;
+    }
+    let bytes = arena.resolve(descriptor.source)?;
+    let stride = descriptor.stride as usize;
+    let base = descriptor.offset as usize;
+    let colors: Vec<[f32; 4]> = (0..geometry.vertex_count as usize)
+        .map(|index| {
+            let at = base + index * stride;
+            let mut color = [0.0f32; 4];
+            for (lane, channel) in color.iter_mut().enumerate() {
+                *channel = bytes
+                    .get(at + lane * 4..at + lane * 4 + 4)
+                    .map(|four| f32::from_le_bytes([four[0], four[1], four[2], four[3]]))
+                    .unwrap_or(0.0);
+            }
+            color
+        })
+        .collect();
+    colors.iter().any(|c| c[3] > 0.0).then_some(colors)
 }
 
 /// Draws a symbol layer's quads, sampling the glyph atlas the geometry names.
@@ -812,6 +881,7 @@ fn triangles(
     geometry: &Geometry,
     projected: &[Option<[f32; 2]>],
     color: [f32; 4],
+    per_vertex: Option<&[[f32; 4]]>,
 ) {
     for segment in &geometry.segments {
         let start = segment.index_offset as usize;
@@ -828,6 +898,22 @@ fn triangles(
             };
             if let (Some(a), Some(b), Some(c)) = (at(triangle[0]), at(triangle[1]), at(triangle[2]))
             {
+                // One colour for the triangle rather than three interpolated: a data-driven
+                // colour is per *feature*, so every vertex of a triangle already carries the
+                // same one, and interpolating would only blur the seam between two features
+                // that happen to share an edge.
+                let color = per_vertex
+                    .and_then(|colors| {
+                        colors
+                            .get(segment.vertex_offset as usize + triangle[0] as usize)
+                            .copied()
+                    })
+                    .map_or(color, |mut supplied| {
+                        // The layer's own opacity still applies: it is a uniform even when the
+                        // colour beside it is not.
+                        supplied[3] *= color[3];
+                        supplied
+                    });
                 canvas.triangle(a, b, c, color);
             }
         }
