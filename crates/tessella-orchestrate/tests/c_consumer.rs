@@ -221,6 +221,83 @@ fn c_reads_the_frame() {
     );
 }
 
+/// The uniform buffers and the camera, read from C and checked against the producer.
+///
+/// # Why these two and not the other nine
+///
+/// Counting geometry proves the record walk. It does not prove that the *contents* of a record
+/// are reachable, and for a mirror the contents that matter are these: DR-16 consolidates one
+/// uniform buffer per (view, layer) and indexes it by the order entry's `ubo_index`, and the
+/// camera carries the projection every drawable is transformed by. A consumer that could read
+/// geometry and not these would register a whole scene and draw none of it.
+///
+/// The camera is also the only record whose fields are almost all `double`. A misread offset
+/// there does not fail loudly — it lands in the next field or in padding and yields a plausible
+/// number, which is why the check is against values the producer computed rather than against
+/// the record merely being present.
+#[test]
+fn c_reads_the_uniforms_and_the_camera() {
+    let dir = std::env::temp_dir().join(format!("tessella-c-uniforms-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a working directory");
+    let (ring, slabs, _) = emit_frame();
+    let counts = run(&dir, &ring, &slabs);
+    std::fs::remove_dir_all(&dir).ok();
+
+    assert!(
+        counts.get("ubos").copied().unwrap_or(0) > 0,
+        "no uniform buffers were read: {counts:?}"
+    );
+    assert!(
+        counts.get("ubo_bytes").copied().unwrap_or(0) > 0,
+        "the buffers were found but their spans resolved to nothing: {counts:?}"
+    );
+    assert_eq!(
+        counts.get("ubo_truncated").copied(),
+        Some(0),
+        "a buffer's span ran past the payload that carries it: {counts:?}"
+    );
+    // `GlobalPaintParams` is written frame-wide, at layer -1. A consumer that read the layer
+    // index as unsigned would see 4294967295 and never find one.
+    assert!(
+        counts.get("ubo_frame_wide").copied().unwrap_or(0) > 0,
+        "no frame-wide buffer was seen, so layer_index was read unsigned: {counts:?}"
+    );
+
+    assert_eq!(
+        counts.get("cameras").copied(),
+        Some(1),
+        "exactly one camera closes a frame: {counts:?}"
+    );
+    assert_eq!(
+        counts.get("camera_bad").copied(),
+        Some(0),
+        "the projection read back as zeroes, which is a misread offset: {counts:?}"
+    );
+
+    // Against what the producer put there, not merely against being non-zero. The view is
+    // pitched at forty-five degrees and the light is the style default.
+    assert_eq!(
+        counts.get("camera_pitch_milli").copied(),
+        Some(45_000),
+        "C read a different pitch than the view was built with: {counts:?}"
+    );
+    assert_eq!(
+        counts.get("camera_light_milli").copied(),
+        Some(500),
+        "the light's intensity is mbgl's default of one half: {counts:?}"
+    );
+    // The epoch ties the camera to the order it was computed against, which is the rule a
+    // consumer needs to avoid drawing one frame's order against another's camera.
+    assert!(
+        counts.get("camera_epoch").copied().unwrap_or(0) > 0,
+        "the camera names no order epoch: {counts:?}"
+    );
+    assert!(
+        counts.get("camera_proj0_micro").copied().unwrap_or(0) != 0,
+        "the projection's first element is zero: {counts:?}"
+    );
+}
+
 /// The same walk across the buffer's wrap, where the protocol is subtlest.
 ///
 /// A record never straddles the end of the data region: one that would not fit is preceded by a

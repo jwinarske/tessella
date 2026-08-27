@@ -137,6 +137,14 @@ int main(int argc, char **argv) {
     uint64_t geometries = 0, drawables = 0, order_entries = 0;
     uint64_t vertices = 0, attributes = 0, resolved_bytes = 0;
     uint64_t unresolved = 0;
+    /* Uniform buffers, which are what a mirror actually binds. DR-16 consolidates one per
+     * (view, layer) and indexes it by the order entry's ubo_index, so a consumer that could
+     * read geometry and not these could register a scene and draw none of it. */
+    uint64_t ubos = 0, ubo_bytes = 0, ubo_frame_wide = 0, ubo_truncated = 0;
+    uint64_t cameras = 0, camera_bad = 0;
+    /* Carried out so the producer's own numbers can be checked against them. */
+    double first_proj0 = 0.0, first_pitch = -1.0, first_intensity = -1.0;
+    uint64_t first_epoch = 0, first_cutoff = 0;
 
     /* Read once, as a consumer racing a live producer must: a head that advanced mid-walk would
      * otherwise let the loop run past the bytes that were published when it started. */
@@ -209,6 +217,50 @@ int main(int argc, char **argv) {
         case TSL_ENVELOPE_KIND_VIEW_USE:
             drawables++;
             break;
+        case TSL_ENVELOPE_KIND_UBO_UPDATE: {
+            tsl_ubo_update update;
+            if (record.record_len < sizeof update) {
+                break;
+            }
+            memcpy(&update, fixed, sizeof update);
+            ubos++;
+            /* A span's offset and count are into the payload region, and the header says to
+             * validate both against payload_len before trusting either. For a ubo the count is
+             * a byte count rather than an element count -- the struct says so, and reading it
+             * as elements would multiply by a stride that does not exist. */
+            if ((uint64_t)update.data.offset + update.data.count > record.payload_len) {
+                ubo_truncated++;
+                break;
+            }
+            ubo_bytes += update.data.count;
+            if (update.layer_index < 0) {
+                ubo_frame_wide++;
+            }
+            break;
+        }
+        case TSL_ENVELOPE_KIND_CAMERA_UPDATE: {
+            tsl_camera_update camera;
+            if (record.record_len < sizeof camera) {
+                camera_bad++;
+                break;
+            }
+            memcpy(&camera, fixed, sizeof camera);
+            if (cameras == 0) {
+                first_proj0 = camera.proj_matrix[0];
+                first_pitch = camera.pitch;
+                first_intensity = camera.light.intensity;
+                first_epoch = camera.order_epoch;
+                first_cutoff = camera.opaque_pass_cutoff;
+            }
+            /* A projection whose first column is zero is not a projection. Cheap, and it is the
+             * shape of failure a wrong offset produces: the read lands in padding and every
+             * double comes back zero. */
+            if (camera.proj_matrix[0] == 0.0 && camera.proj_matrix[5] == 0.0) {
+                camera_bad++;
+            }
+            cameras++;
+            break;
+        }
         case TSL_ENVELOPE_KIND_ORDER_UPDATE: {
             tsl_order_update update;
             if (record.record_len < sizeof update) {
@@ -234,5 +286,18 @@ int main(int argc, char **argv) {
     printf("attributes %llu\n", (unsigned long long)attributes);
     printf("resolved_bytes %llu\n", (unsigned long long)resolved_bytes);
     printf("unresolved %llu\n", (unsigned long long)unresolved);
-    return unresolved == 0 ? 0 : 1;
+    printf("ubos %llu\n", (unsigned long long)ubos);
+    printf("ubo_bytes %llu\n", (unsigned long long)ubo_bytes);
+    printf("ubo_frame_wide %llu\n", (unsigned long long)ubo_frame_wide);
+    printf("ubo_truncated %llu\n", (unsigned long long)ubo_truncated);
+    printf("cameras %llu\n", (unsigned long long)cameras);
+    printf("camera_bad %llu\n", (unsigned long long)camera_bad);
+    /* Scaled to integers so the harness can compare them without parsing doubles: the point is
+     * that C read the same number the producer wrote, not that it round-trips a decimal. */
+    printf("camera_proj0_micro %lld\n", (long long)(first_proj0 * 1000000.0));
+    printf("camera_pitch_milli %lld\n", (long long)(first_pitch * 1000.0));
+    printf("camera_light_milli %lld\n", (long long)(first_intensity * 1000.0));
+    printf("camera_epoch %llu\n", (unsigned long long)first_epoch);
+    printf("camera_cutoff %llu\n", (unsigned long long)first_cutoff);
+    return (unresolved == 0 && ubo_truncated == 0 && camera_bad == 0) ? 0 : 1;
 }
