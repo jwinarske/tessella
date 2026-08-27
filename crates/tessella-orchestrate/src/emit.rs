@@ -77,6 +77,19 @@ const SLAB_BYTES: usize = 64 * 1024;
 /// same rule applied one level down.
 const SLAB_ALIGN: usize = 8;
 
+/// Where an arena stood, so work that does not complete can be undone.
+///
+/// See [`SlabArena::mark`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SlabMark {
+    /// Sealed slabs at the mark.
+    sealed: usize,
+    /// Next id at the mark, so a rewind reissues the same ids rather than skipping them.
+    next_id: u32,
+    /// Whether a slab was open at the mark.
+    open: bool,
+}
+
 /// A refcounted block of geometry bytes.
 #[derive(Debug)]
 pub struct Slab {
@@ -172,6 +185,35 @@ impl SlabArena {
             slab: slab.id,
             offset,
             length: bytes.len() as u32,
+        }
+    }
+
+    /// A mark to roll back to, for work that may not complete.
+    ///
+    /// A frame that fails partway has put slabs in here that nothing will ever name: the ring
+    /// records that would have referenced them were discarded, and the retry encodes the same
+    /// buckets afresh. Without a rollback those slabs stay, and `pack()` copies them across the
+    /// mapping every frame thereafter — a leak that grows by a whole cover each time the ring
+    /// is full, which is exactly when there is least room to spare.
+    #[must_use]
+    pub fn mark(&self) -> SlabMark {
+        SlabMark {
+            sealed: self.sealed.len(),
+            next_id: self.next_id,
+            open: self.open.is_some(),
+        }
+    }
+
+    /// Discards everything allocated since `mark`.
+    ///
+    /// The open slab goes whole: a mark is taken between frames, so a slab open at the mark
+    /// belongs to the frame being rolled back. Handing back a partly-filled slab would leave
+    /// the next frame appending to another frame's bytes.
+    pub fn rewind(&mut self, mark: SlabMark) {
+        self.sealed.truncate(mark.sealed);
+        self.next_id = mark.next_id;
+        if !mark.open {
+            self.open = None;
         }
     }
 

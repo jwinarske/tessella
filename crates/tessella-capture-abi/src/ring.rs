@@ -212,6 +212,11 @@ pub struct Producer {
     /// Cached `tail`, refreshed only when a reservation does not obviously fit. Reading the
     /// consumer's counter pulls its cache line, so the common case avoids it entirely.
     cached_tail: u64,
+    /// Where writing has reached while a group is open, ahead of the published `head`.
+    ///
+    /// `None` outside a group, and then every write publishes as it lands. See
+    /// [`begin`](Self::begin).
+    uncommitted: Option<u64>,
 }
 
 /// Consumer half of the ring.
@@ -265,6 +270,7 @@ pub unsafe fn init(base: *mut u8, capacity: usize) -> (Producer, Consumer) {
             base,
             capacity,
             cached_tail: 0,
+            uncommitted: None,
         },
         Consumer {
             base,
@@ -294,6 +300,7 @@ pub unsafe fn attach(base: *mut u8, capacity: usize) -> Option<(Producer, Consum
             base,
             capacity,
             cached_tail: tail,
+            uncommitted: None,
         },
         Consumer {
             base,
@@ -355,7 +362,10 @@ impl Producer {
 
         // SAFETY: the region outlives this half.
         let control = unsafe { control(self.base) };
-        let head = control.head.load(Ordering::Relaxed);
+        // Inside a group this is ahead of what the consumer can see; outside one they agree.
+        let head = self
+            .uncommitted
+            .unwrap_or_else(|| control.head.load(Ordering::Relaxed));
         let offset = (head as usize) & (self.capacity - 1);
         let to_end = self.capacity - offset;
 
@@ -397,9 +407,73 @@ impl Producer {
         self.write_bytes(record_at, record);
         self.write_bytes(record_at + align_up(record.len(), 8), payload);
 
-        // Release: everything written above is visible to a consumer that acquires this.
-        control.head.store(cursor + total as u64, Ordering::Release);
+        let reached = cursor + total as u64;
+        match &mut self.uncommitted {
+            // Held back until the group commits, so a consumer never sees half of one.
+            Some(local) => *local = reached,
+            // Release: everything written above is visible to a consumer that acquires this.
+            None => control.head.store(reached, Ordering::Release),
+        }
         Ok(())
+    }
+
+    /// Opens a group of records that becomes visible all at once, or not at all.
+    ///
+    /// # What this is for
+    ///
+    /// A frame is not a record, it is thirty or six hundred of them, and they only mean anything
+    /// together: geometry a consumer registers, an order that says where to draw it, a camera
+    /// naming the epoch that order belongs to. Writing them one at a time published each as it
+    /// landed, so a ring that filled halfway through left a consumer holding geometry with no
+    /// order to draw it and no camera to date it — and the producer's retry registered the same
+    /// buckets again under fresh ids. The frame emitter's `Full` error has always documented
+    /// "a frame is emitted whole or not at all"; this is what makes that true.
+    ///
+    /// Between [`begin`](Self::begin) and [`commit`](Self::commit) the writes land in the ring's
+    /// memory but the published `head` does not move, so the bytes are invisible. Room is still
+    /// reserved against them, because the free-space check measures from the group's own head,
+    /// so an open group cannot overwrite what the consumer has not read.
+    ///
+    /// Nested calls are not: a second `begin` keeps the first group's start, and one `commit`
+    /// publishes everything since it.
+    ///
+    /// # Aborting
+    ///
+    /// [`abort`](Self::abort) drops the group by leaving `head` where it was. Nothing needs
+    /// clearing: bytes past `head` are bytes the consumer will never read and the next write
+    /// overwrites.
+    pub fn begin(&mut self) {
+        if self.uncommitted.is_none() {
+            // SAFETY: the region outlives this half.
+            let control = unsafe { control(self.base) };
+            self.uncommitted = Some(control.head.load(Ordering::Relaxed));
+        }
+    }
+
+    /// Publishes everything written since [`begin`](Self::begin), in one release.
+    ///
+    /// A single store, so a consumer that acquires `head` sees either none of the group or all
+    /// of it. Does nothing when no group is open.
+    pub fn commit(&mut self) {
+        if let Some(reached) = self.uncommitted.take() {
+            // SAFETY: the region outlives this half.
+            let control = unsafe { control(self.base) };
+            control.head.store(reached, Ordering::Release);
+        }
+    }
+
+    /// Discards everything written since [`begin`](Self::begin).
+    ///
+    /// The published `head` never moved, so the group was never visible and there is nothing to
+    /// undo. Does nothing when no group is open.
+    pub fn abort(&mut self) {
+        self.uncommitted = None;
+    }
+
+    /// Whether a group is open.
+    #[must_use]
+    pub fn in_group(&self) -> bool {
+        self.uncommitted.is_some()
     }
 
     /// Bytes ever written, monotonic.
@@ -408,6 +482,12 @@ impl Producer {
     /// whether the consumer has passed it.
     #[must_use]
     pub fn head(&self) -> u64 {
+        // Bytes *written*, which inside an open group is ahead of what has been published. The
+        // coalescer marks where a record ended so it can ask later whether the consumer has
+        // passed it, and that mark has to name the record's real position.
+        if let Some(reached) = self.uncommitted {
+            return reached;
+        }
         // SAFETY: the region outlives this half.
         let control = unsafe { control(self.base) };
         control.head.load(Ordering::Relaxed)

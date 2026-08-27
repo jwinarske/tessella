@@ -64,6 +64,22 @@ impl From<Full> for FrameError {
     }
 }
 
+impl From<crate::view::ViewError> for FrameError {
+    /// Keeps a full ring distinguishable from a view fault.
+    ///
+    /// These used to be flattened into `View(format!("{error}"))`, which turned backpressure
+    /// into a string. A caller cannot act on that: a full ring is the ordinary consequence of a
+    /// consumer that stalled for a frame and the response is to try again, where a view fault is
+    /// a protocol error and retrying repeats it. The message read "view: the ring is full",
+    /// which says the right words under the wrong variant.
+    fn from(error: crate::view::ViewError) -> Self {
+        match error {
+            crate::view::ViewError::Full => Self::Full,
+            other => Self::View(alloc::format!("{other}")),
+        }
+    }
+}
+
 /// What one frame put on the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Emitted {
@@ -133,6 +149,34 @@ pub fn emit(
     arena: &mut SlabArena,
     frame: &Frame<'_>,
 ) -> Result<Emitted, FrameError> {
+    // A frame is thirty records or six hundred, and they only mean anything together: geometry
+    // to register, an order saying where to draw it, a camera naming that order's epoch. Written
+    // one at a time they published as they landed, so a ring that filled halfway left a consumer
+    // holding geometry with no order and no camera — and the retry registered the same buckets
+    // again under fresh ids. `FrameError::Full` has always claimed a frame is emitted whole or
+    // not at all; this is the claim being made true.
+    producer.begin();
+    let mark = arena.mark();
+    match emit_group(producer, arena, frame) {
+        Ok(emitted) => {
+            producer.commit();
+            Ok(emitted)
+        }
+        Err(error) => {
+            producer.abort();
+            // The arena as well as the ring. The discarded records were the only things that
+            // would ever have named these slabs.
+            arena.rewind(mark);
+            Err(error)
+        }
+    }
+}
+
+fn emit_group(
+    producer: &mut Producer,
+    arena: &mut SlabArena,
+    frame: &Frame<'_>,
+) -> Result<Emitted, FrameError> {
     let Frame {
         style,
         view,
@@ -146,7 +190,7 @@ pub fn emit(
     let mut session = ViewSession::new();
     session
         .declare(producer, view_id, CameraMode::Producer)
-        .map_err(|error| FrameError::View(alloc::format!("{error}")))?;
+        .map_err(FrameError::from)?;
 
     // Frame-wide state the shaders read whatever the style says. The placeholders matter: a
     // shader samples its texture slots unconditionally, so a drawable whose layer binds none
@@ -322,7 +366,7 @@ pub fn emit(
     for binding in bound {
         session
             .use_geometry(producer, binding)
-            .map_err(|error| FrameError::View(alloc::format!("{error}")))?;
+            .map_err(FrameError::from)?;
         emitted.drawables += 1;
     }
 
