@@ -98,19 +98,31 @@ pub enum EvaluationError {
 /// this crate knowing how a tile maps to a screen. It is a fact about the frame, so the frame
 /// provides it.
 ///
-/// # The unit of `distance_from_center` is not settled here
+/// # Units
 ///
-/// `pitch` is degrees, unambiguously: it is the unit the root `pitch` style property uses and
-/// the unit a camera carries. `distance_from_center` is a Mapbox Style Spec v3 expression with
-/// no mbgl implementation, no entry in the vendored style-spec reference, and no oracle in this
-/// tree to measure against — mbgl went as far as reserving `Dependency::Location` and stopped.
-/// So this type carries the number and states no scale for it, and the producer that fills it
-/// in is where the definition belongs and where it has to be checked against a real style.
+/// Both from the Mapbox Style Spec, which is the only specification either has: maplibre-native
+/// implements neither, and the vendored style-spec reference lists neither.
+///
+/// `pitch` is degrees, which is also the unit the root `pitch` style property uses.
+///
+/// `distance_from_center` is "the distance of a symbol instance from the center of the map",
+/// measured in *pixels divided by the height of the map container* — so it is a ratio, not a
+/// length, and a symbol at the top edge of a viewport of any size sits near 0.5. Dividing by the
+/// height and not the diagonal is what makes a filter written against it behave the same on a
+/// tall screen and a short one.
+///
+/// # Where they may appear
+///
+/// Both are filter-only, and symbol-only: the spec says of each that it "may only be used in
+/// the `filter` expression for a `symbol` layer". `Style::reject_uncompilable` enforces it, and
+/// the reason is not pedantry — a camera-dependent *paint* property has nowhere correct to be
+/// evaluated, because §12.1 holds a property's value for a whole zoom interval and would serve
+/// a stale pitch for every frame in it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Camera {
     /// Pitch in degrees.
     pub pitch: f64,
-    /// Distance of the feature from the centre of the viewport.
+    /// Distance from the centre of the map, in pixels over the container's height.
     pub distance_from_center: f64,
 }
 

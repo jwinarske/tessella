@@ -780,9 +780,10 @@ pub enum Expr {
     /// reserved `Dependency::Location = 1 << 3` and commented it "not used yet,
     /// \"distance-from-center\" not supported".
     ///
-    /// The number is supplied by whoever holds the viewport, not computed here — see
-    /// [`Camera::distance_from_center`]. A style crate that derived it would need the
-    /// projection, and would be inventing the unit besides.
+    /// The spec measures it in pixels over the height of the map container, so it is a ratio
+    /// rather than a length — see [`Camera::distance_from_center`]. The number is supplied by
+    /// whoever holds the viewport rather than computed here, because a style crate has no
+    /// projection to measure a screen distance with.
     DistanceFromCenter,
     /// A feature property.
     Get {

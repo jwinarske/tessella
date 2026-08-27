@@ -457,7 +457,22 @@ fn compile_check(layer: &Layer) -> Result<(), alloc::string::String> {
     use alloc::string::ToString;
 
     if let Some(filter) = &layer.filter {
-        crate::filter::Filter::parse(filter).map_err(|error| error.to_string())?;
+        let parsed = crate::filter::Filter::parse(filter).map_err(|error| error.to_string())?;
+        // `pitch` and `distance-from-center` "may only be used in the `filter` expression for a
+        // `symbol` layer" — the style spec says so of both, in the same words. This is the
+        // second half of that: a filter, yes, but only a symbol's.
+        //
+        // The dependency does the detecting. `Dependency::CAMERA` is introduced by exactly
+        // these two operators and by nothing else, so a filter that needs the camera is a
+        // filter that used one — no second walk of the tree, and a third camera operator would
+        // be covered the day it is added.
+        if parsed.expression().dependency().needs_camera() && layer.kind != LayerKind::Symbol {
+            return Err(alloc::format!(
+                "`pitch` and `distance-from-center` are only allowed in a symbol layer's \
+                 filter, and this is a {} layer",
+                alloc::format!("{:?}", layer.kind).to_lowercase()
+            ));
+        }
     }
     crate::property::resolve_paint(layer).map_err(|error| error.to_string())?;
     crate::property::resolve_layout(layer).map_err(|error| error.to_string())?;
@@ -476,7 +491,19 @@ fn compile_check(layer: &Layer) -> Result<(), alloc::string::String> {
     // label layers compiled clean and shaped no labels.
     for value in layer.layout.values().chain(layer.paint.values()) {
         if let PropertyValue::Expression(expression) = value {
-            crate::Expression::parse(expression.value()).map_err(|error| error.to_string())?;
+            let parsed =
+                crate::Expression::parse(expression.value()).map_err(|error| error.to_string())?;
+            // And the first half: a filter, not a paint or layout property. Allowing one here
+            // would be worse than refusing it, because it would appear to work — the value is
+            // real, and §12.1's per-interval cache would then hold a camera-dependent number
+            // for the length of a zoom interval and hand back a stale pitch for every frame in
+            // it. The spec forbids the case that has nowhere correct to be evaluated.
+            if parsed.dependency().needs_camera() {
+                return Err(alloc::string::String::from(
+                    "`pitch` and `distance-from-center` are only allowed in a filter, \
+                     not in a paint or layout property",
+                ));
+            }
         }
     }
     Ok(())

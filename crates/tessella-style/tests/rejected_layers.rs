@@ -101,3 +101,57 @@ fn the_camera_operators_are_no_longer_rejected() {
     let kept: Vec<&str> = style.layers.iter().map(|l| l.id.as_str()).collect();
     assert_eq!(kept, ["far", "flat", "both"]);
 }
+
+/// The camera operators are filter-only, and symbol-only, as the spec says twice.
+///
+/// Of both `pitch` and `distance-from-center` the Mapbox Style Spec says they "may only be used
+/// in the `filter` expression for a `symbol` layer". Two restrictions, and this build honoured
+/// neither when it first implemented them.
+///
+/// The paint half is the one that would have hurt. A camera-dependent paint property has
+/// nowhere correct to be evaluated: §12.1 holds a property's value for the length of a zoom
+/// interval, so a `pitch`-driven colour would freeze at whatever the camera was doing when the
+/// interval began and stay there for every frame in it. Refusing the layer is honest; rendering
+/// it with a stale pitch is not.
+#[test]
+fn the_camera_operators_are_filter_only_and_symbol_only() {
+    // In a paint property, even on a symbol layer.
+    let mut painted = style_with(
+        r#"{"id": "painted", "type": "symbol", "source": "s", "source-layer": "l",
+            "paint": {"text-opacity": ["case", [">", ["pitch"], 30], 1, 0]}}"#,
+    );
+    let rejected = painted.reject_uncompilable();
+    assert_eq!(rejected.len(), 1, "a camera paint property must be refused");
+    assert!(
+        rejected[0].reason.contains("filter"),
+        "the reason says where it may go: {}",
+        rejected[0].reason
+    );
+
+    // In a filter, but not on a symbol layer.
+    let mut filled = style_with(
+        r#"{"id": "filled", "type": "fill", "source": "s", "source-layer": "l",
+            "filter": ["<=", ["distance-from-center"], 2]}"#,
+    );
+    let rejected = filled.reject_uncompilable();
+    assert_eq!(
+        rejected.len(),
+        1,
+        "a camera filter on a fill must be refused"
+    );
+    assert!(
+        rejected[0].reason.contains("symbol"),
+        "the reason says which layer type: {}",
+        rejected[0].reason
+    );
+
+    // And the case the spec allows still passes, so this has not just banned them.
+    let mut allowed = style_with(
+        r#"{"id": "allowed", "type": "symbol", "source": "s", "source-layer": "l",
+            "filter": ["all", ["<=", ["distance-from-center"], 2], [">", ["pitch"], 30]]}"#,
+    );
+    assert!(
+        allowed.reject_uncompilable().is_empty(),
+        "a symbol layer's filter is exactly where these belong"
+    );
+}
