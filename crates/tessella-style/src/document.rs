@@ -55,6 +55,17 @@ pub struct Style {
     /// Default transition timing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transition: Option<Transition>,
+    /// Definitions of the configuration options `["config", …]` reads.
+    ///
+    /// Mapbox Style Spec v3; maplibre-native has no counterpart. See [`crate::config`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub schema: BTreeMap<String, crate::config::ConfigOption>,
+    /// Styles this one imports, for the sake of the values they were given.
+    ///
+    /// Nothing fetches them: merging an imported style's layers is a feature of its own. They
+    /// are here so `["config", name, import-id]` can name one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub imports: Vec<crate::config::Import>,
     /// Sources by id.
     #[serde(default)]
     pub sources: BTreeMap<String, Source>,
@@ -415,7 +426,14 @@ impl Style {
     ///
     /// Compiling here also means the tile builders cannot meet these failures: everything left
     /// in `layers` has had its filter, paint and layout compiled once, on the way in.
+    ///
+    /// # Config first
+    ///
+    /// [`Self::resolve_config`] runs before any of it, because a `["config", …]` call is not
+    /// something the compile step can make sense of — the value lives in the document's own
+    /// `schema`, not in the expression. Compiling first would drop every layer that reads one.
     pub fn reject_uncompilable(&mut self) -> Vec<RejectedLayer> {
+        self.resolve_config();
         let mut rejected = Vec::new();
         self.layers.retain(|layer| match compile_check(layer) {
             Ok(()) => true,
@@ -428,6 +446,41 @@ impl Style {
             }
         });
         rejected
+    }
+
+    /// Substitutes every `["config", …]` call with the value it resolves to.
+    ///
+    /// A config value is fixed for a style load — no zoom, no feature, no camera in it — so it
+    /// belongs in the document rather than in the evaluator. After this no `config` call
+    /// remains, and an expression that used one is constant in that part and folds like any
+    /// other constant (DR-11).
+    ///
+    /// Called by [`Self::reject_uncompilable`] before anything is compiled, because that is the
+    /// point of it: a style whose labels read `["config", "language"]` has twelve layers that
+    /// compile only once the call has become a value.
+    ///
+    /// Idempotent — a second pass finds no calls to replace.
+    pub fn resolve_config(&mut self) {
+        let values = crate::config::ConfigValues::new(&self.schema, &self.imports);
+        for layer in &mut self.layers {
+            if let Some(filter) = &layer.filter {
+                layer.filter = Some(crate::config::substitute(filter, &values));
+            }
+            for value in layer.layout.values_mut().chain(layer.paint.values_mut()) {
+                let PropertyValue::Expression(expression) = value else {
+                    continue;
+                };
+                let resolved = crate::config::substitute(expression.value(), &values);
+                // A property that *was* a config call is now a plain value, and has to stop
+                // being an expression or the compile step reads a literal as a call. One that
+                // merely contained a call is still an expression, with a literal inside it.
+                *value = if resolved.looks_like_expression() {
+                    PropertyValue::Expression(ExpressionValue(resolved))
+                } else {
+                    PropertyValue::Literal(resolved)
+                };
+            }
+        }
     }
 
     /// Looks up a layer by id.

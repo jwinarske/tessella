@@ -25,6 +25,7 @@
 
 extern crate alloc;
 
+pub mod config;
 pub mod document;
 pub mod expression;
 pub mod filter;
@@ -88,5 +89,17 @@ pub fn is_operator(name: &str) -> bool {
 /// it "not used yet". They appear in filters on label layers in vendor styles, where their
 /// absence costs the layer rather than the property.
 ///
+/// # Two of these the parser handles, and one the document does
+///
+/// `pitch` and `distance-from-center` become expression nodes and are evaluated. `config` never
+/// reaches the evaluator: [`Style::resolve_config`](document::Style::resolve_config) replaces
+/// every call with the value it resolves to, because a config value is fixed for a style load
+/// and belongs in the document rather than in the evaluator.
+///
+/// It is listed here all the same, and has to be. `is_operator` is what tells a call from a
+/// literal array, so without the entry `["config", "language"]` in a `text-field` would
+/// deserialize as an array of two strings — a font stack, as far as the property is concerned —
+/// and the substitution would never see it.
+///
 /// Sorted, for the same binary search as the generated table.
-pub const EXTENSIONS: [&str; 2] = ["distance-from-center", "pitch"];
+pub const EXTENSIONS: [&str; 3] = ["config", "distance-from-center", "pitch"];

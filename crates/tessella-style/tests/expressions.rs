@@ -1297,14 +1297,19 @@ fn the_extension_operators_are_declared_once_and_work() {
             tessella_style::is_operator(name),
             "{name} is listed but is_operator says otherwise"
         );
-        // Naming it is not implementing it: `is_operator` claiming a name the parser rejects
-        // turns a legal literal array into a parse error.
-        let json = alloc_json(name);
-        let value: Value = serde_json::from_str(&json).expect("valid json");
-        assert!(
-            Expression::parse(&value).is_ok(),
-            "{name} is claimed as an operator but does not parse"
-        );
+        // Naming it is not implementing it, but the two are implemented in different places.
+        // `pitch` and `distance-from-center` are expression nodes and must parse. `config` is
+        // substituted out of the document before anything parses -- see
+        // `Style::resolve_config` -- so the parser never meets one and rejecting it here is
+        // correct rather than a gap. `config_is_resolved_from_the_schema` covers that path.
+        if name != "config" {
+            let json = alloc_json(name);
+            let value: Value = serde_json::from_str(&json).expect("valid json");
+            assert!(
+                Expression::parse(&value).is_ok(),
+                "{name} is claimed as an operator but does not parse"
+            );
+        }
     }
 }
 
