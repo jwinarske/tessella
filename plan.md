@@ -514,10 +514,15 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   `ViewDeclare`/`ViewUse`/`ViewRelease`, `UboUpdate` (all six buffers, byte-exact),
   `TextureUpdate`, `StencilTiles` (matrix hashes), `OrderUpdate` (painter order element for
   element) and `CameraUpdate` (all sixteen projection elements plus light and centre, bit-exact).
-  Parked bytes are zero over five hundred settled frames. Qualifications: GeoJSON polygon vertex
-  *order* is a rotation of the oracle's, which DR-19 explains and declines to chase; and
-  `proj_matrix` refuses bearing and pitch, the probe being unrotated, so the quaternion path
-  waits for a capture to check it against.
+  Parked bytes are zero over five hundred settled frames. Qualification: GeoJSON polygon vertex
+  *order* is a rotation of the oracle's, which DR-19 explains and declines to chase.
+  The second qualification is discharged. `proj_matrix` refused bearing and pitch, so the
+  quaternion path was waiting for a capture that does not exist; it carries them now, and the
+  cover walks a frustum for them. What replaced the missing capture was not a capture: the
+  unrotated path is unchanged bit for bit — the orientation is the identity at zero, so every
+  golden still holds — and the rotated path is checked by properties a perspective must have,
+  and by unprojecting the screen and asking the cover to contain what it lands on. Two faults
+  came out of that, both invisible at zero pitch and both recorded under R3.
   Mirrors C++ Phase 0: style parse, inline GeoJSON, background/fill buckets,
   orchestrator skeleton, ring transport, damage gates (§6.3/§6.5 — cheap now, expensive
   later), shared-store ownership + namespace split (architecture only; one view), DR-9 camera modes
