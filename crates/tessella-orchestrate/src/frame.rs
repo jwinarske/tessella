@@ -19,7 +19,7 @@
 //! them; it does not build tiles, choose a cover, or own a source. That split is §5.1's: the
 //! store is process-scoped and the frame is per view.
 
-use alloc::collections::BTreeMap;
+use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 use tessella_capture_abi::envelope::{OrderEpoch, ViewId};
@@ -188,6 +188,11 @@ pub fn emit(
     let mut next_id = 0;
     let mut by_layer: BTreeMap<i32, Vec<GeometryBinding>> = BTreeMap::new();
     let mut emitted = Emitted::default();
+    // Which bucket each geometry id came from, so the packing pass below can revisit them in
+    // draw order rather than in the order the tiles arrived.
+    let mut source: BTreeMap<u64, (usize, usize, tessella_capture_abi::envelope::TextureId)> =
+        BTreeMap::new();
+    let mut bound: Vec<GeometryBinding> = Vec::new();
 
     for (index, (tile, tile_buckets)) in buckets.iter().enumerate() {
         // A raster tile's picture goes up before any drawable names it, for the reason the glyph
@@ -212,7 +217,7 @@ pub fn emit(
         // its outline. Each gets its own geometry id from `bindings_for`, so each is announced
         // separately rather than one being bound to an id nothing declared.
         let mut binding_index = 0;
-        for bucket in tile_buckets {
+        for (bucket_index, bucket) in tile_buckets.iter().enumerate() {
             if !bucket.content.has_data() {
                 continue;
             }
@@ -222,12 +227,7 @@ pub fn emit(
                     break;
                 };
                 binding_index += 1;
-                if let Some(encoded) =
-                    encode(arena, bucket, binding.geometry, fonts, raster_texture)
-                {
-                    emit::write(producer, &encoded)?;
-                    emitted.geometries += 1;
-                }
+                source.insert(binding.geometry.0, (index, bucket_index, raster_texture));
             }
         }
 
@@ -236,12 +236,62 @@ pub fn emit(
                 .entry(binding.layer_index)
                 .or_default()
                 .push(binding);
-            session
-                .use_geometry(producer, binding)
-                .map_err(|error| FrameError::View(alloc::format!("{error}")))?;
             draw_order.bind(binding);
-            emitted.drawables += 1;
+            bound.push(binding);
         }
+    }
+
+    // The geometry, packed in the order it will be drawn.
+    //
+    // Nothing about the wire requires this: a `GeometryAdd` names its own slab, so a consumer
+    // reads the same scene whichever order the buckets were packed in. What it requires is a
+    // slab per drawable, because the packing order was the tile loop above and the draw order
+    // is by layer — so a layer's forty-two tiles land in forty-two different slabs, and a
+    // consumer that wanted to draw them together cannot: one draw call reads one vertex buffer.
+    //
+    // Packing in `resolve()`'s order instead puts a layer's tiles adjacent in the arena, where
+    // they share a slab whenever one holds them. That is the whole of what the producer can do
+    // for batching, and it is worth doing here rather than leaving the consumer to copy the
+    // buckets into a buffer of its own — a copy per frame of every byte of geometry.
+    let mut packed: BTreeSet<u64> = BTreeSet::new();
+    let mut open: Option<(u32, i32)> = None;
+    for entry in draw_order.resolve() {
+        // A drawable whose pass is a mask appears once per pass; its geometry is packed once.
+        if !packed.insert(entry.geometry.0) {
+            continue;
+        }
+        // One slab per (view, layer), which is DR-16's consolidated buffer. Sub-layer counts as
+        // part of the layer here because it separates drawables that never batch anyway — a
+        // fill's triangles from its own outline, an extrusion's depth pass from its colour pass.
+        // Each of those binds a different shader, so keeping them apart costs nothing and keeps
+        // a slab equal to exactly one batch.
+        let layer = (entry.layer_index, entry.sub_layer_index);
+        if open.is_some_and(|previous| previous != layer) {
+            arena.seal();
+        }
+        open = Some(layer);
+        let Some(&(tile_index, bucket_index, raster_texture)) = source.get(&entry.geometry.0)
+        else {
+            continue;
+        };
+        let Some(bucket) = buckets
+            .get(tile_index)
+            .and_then(|(_, tile_buckets)| tile_buckets.get(bucket_index))
+        else {
+            continue;
+        };
+        if let Some(encoded) = encode(arena, bucket, entry.geometry, fonts, raster_texture) {
+            emit::write(producer, &encoded)?;
+            emitted.geometries += 1;
+        }
+    }
+
+    // Every geometry is announced before any drawable names one.
+    for binding in bound {
+        session
+            .use_geometry(producer, binding)
+            .map_err(|error| FrameError::View(alloc::format!("{error}")))?;
+        emitted.drawables += 1;
     }
 
     for (layer_index, bindings) in &by_layer {

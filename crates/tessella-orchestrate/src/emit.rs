@@ -62,9 +62,20 @@ const SYMBOL_STRIDE: u32 = 24;
 /// A raster vertex: a tile position and a texture position, two shorts each.
 const RASTER_STRIDE: u32 = 8;
 
-/// Default slab size. Large enough that a tile's geometry rarely spans two, small enough that a
-/// mostly-empty one is not worth worrying about.
+/// A slab's starting capacity, so a frame of a few small buckets does not rebuild its buffer on
+/// every allocation. It is not a ceiling — see [`SlabArena::alloc`].
 const SLAB_BYTES: usize = 64 * 1024;
+
+/// Every allocation starts eight-aligned within its slab.
+///
+/// A slab holds many buckets' attributes back to back, and a `SlabRef` is where one of them
+/// begins. Appending without padding puts the next one wherever the previous ended — a fill's
+/// index buffer is six bytes per triangle, so a bucket with an odd triangle count leaves the
+/// following vertex buffer on a two-byte boundary. The consumer binds that as a vertex buffer of
+/// `i16` pairs or of floats, which is an unaligned load: tolerated on x86, a fault on some of the
+/// targets §16 cross-compiles for. §16's own rule for the packed region is eight, so this is the
+/// same rule applied one level down.
+const SLAB_ALIGN: usize = 8;
 
 /// A refcounted block of geometry bytes.
 #[derive(Debug)]
@@ -103,10 +114,25 @@ impl SlabArena {
         Self::default()
     }
 
-    /// Copies `bytes` into a slab and returns a reference to them.
+    /// Copies `bytes` into the open slab and returns a reference to them.
     ///
     /// An empty input still yields a valid reference, with zero length, so a caller does not
     /// have to special-case a bucket with no indices.
+    ///
+    /// # A slab ends where the caller says, not at a byte count
+    ///
+    /// This used to open a new slab whenever the current one would overflow a fixed size, which
+    /// made the slab an accident of how much geometry happened to precede it. That is the wrong
+    /// boundary, because a slab is what a consumer binds as one vertex buffer and *one draw call
+    /// reads one vertex buffer*: two buckets in different slabs cannot be drawn together however
+    /// alike they are. With the fixed size a layer's forty-two tiles landed in forty-two slabs
+    /// and every tile was its own draw.
+    ///
+    /// So the split is the caller's: [`seal`](Self::seal) closes a slab, and DR-16 says what the
+    /// caller should close it on — "consolidated buffer per (view, layer)". Between seals this
+    /// grows, and the only limit it keeps is the one the ABI imposes: a `SlabRef` addresses its
+    /// slab with a `u32`, so an allocation that would push the end past that opens a new slab
+    /// whatever the caller intended.
     pub fn alloc(&mut self, bytes: &[u8]) -> SlabRef {
         if bytes.is_empty() {
             return SlabRef {
@@ -116,19 +142,23 @@ impl SlabArena {
             };
         }
 
-        // A bucket larger than the default gets a slab of its own rather than being split:
-        // an attribute's bytes have to be contiguous for a single offset and stride to
-        // describe them.
+        // Pad first, so the *reference* is aligned rather than merely the slab.
+        if let Some(slab) = self.open.as_mut() {
+            let padding = slab.bytes.len().next_multiple_of(SLAB_ALIGN) - slab.bytes.len();
+            slab.bytes.resize(slab.bytes.len() + padding, 0);
+        }
+
         let needs_new = match &self.open {
             None => true,
-            Some(slab) => slab.bytes.len() + bytes.len() > slab.bytes.capacity(),
+            // Not a tuning threshold: past this the offset no longer fits the field that carries
+            // it, and the reference would name the wrong bytes.
+            Some(slab) => slab.bytes.len() + bytes.len() > u32::MAX as usize,
         };
         if needs_new {
             self.seal();
-            let capacity = SLAB_BYTES.max(bytes.len());
             self.open = Some(Slab {
                 id: self.next_id,
-                bytes: Vec::with_capacity(capacity),
+                bytes: Vec::with_capacity(SLAB_BYTES.max(bytes.len())),
             });
             self.next_id += 1;
         }
@@ -1083,9 +1113,63 @@ mod tests {
 
         assert_eq!(arena.resolve(first), Some(&[1, 2, 3, 4][..]));
         assert_eq!(arena.resolve(second), Some(&[5, 6][..]));
-        // The second allocation follows the first in the same slab.
+        // The second allocation follows the first in the same slab, at the next eight-byte
+        // boundary rather than immediately after — four bytes of geometry are padded to eight so
+        // that whatever the consumer binds at `second` is naturally aligned.
         assert_eq!(first.slab, second.slab);
-        assert_eq!(second.offset, 4);
+        assert_eq!(second.offset, 8);
+    }
+
+    /// Every reference is eight-aligned, whatever lengths precede it.
+    ///
+    /// Lengths chosen to be coprime with eight, so each one would leave the next unaligned if
+    /// nothing padded it. This matters more than it used to: a slab now holds a whole layer's
+    /// buckets rather than as many as fit in sixty-four kilobytes, so there are many more
+    /// interior references and every one of them is a buffer binding.
+    #[test]
+    fn every_reference_is_aligned() {
+        let mut arena = SlabArena::new();
+        let refs: Vec<SlabRef> = [1usize, 3, 7, 13, 31, 5]
+            .iter()
+            .map(|length| arena.alloc(&alloc::vec![0xa5; *length]))
+            .collect();
+        arena.seal();
+
+        for (reference, length) in refs.iter().zip([1usize, 3, 7, 13, 31, 5]) {
+            assert_eq!(
+                reference.offset % 8,
+                0,
+                "an allocation of {length} bytes landed at {}",
+                reference.offset
+            );
+            assert_eq!(
+                arena.resolve(*reference),
+                Some(&alloc::vec![0xa5; length][..])
+            );
+        }
+    }
+
+    /// A caller that never seals gets one slab, however much it allocates.
+    ///
+    /// The old arena split at a fixed size, which is what put a layer's tiles in separate
+    /// buffers and made each one its own draw call. The boundary is the caller's now.
+    #[test]
+    fn nothing_splits_a_slab_but_the_caller() {
+        let mut arena = SlabArena::new();
+        let refs: Vec<SlabRef> = (0..8)
+            .map(|_| arena.alloc(&alloc::vec![9u8; SLAB_BYTES]))
+            .collect();
+        arena.seal();
+
+        assert_eq!(
+            arena.slabs().len(),
+            1,
+            "one slab, because seal was called once"
+        );
+        assert!(
+            refs.windows(2).all(|pair| pair[0].slab == pair[1].slab),
+            "every reference names it"
+        );
     }
 
     /// A range that does not fit resolves to nothing rather than a truncated read. A `SlabRef`
