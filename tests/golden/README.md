@@ -15,6 +15,7 @@ maplibre-native build. Regenerating them needs both.
 | `composite_style_z13_5.dump` | the same | 51.505, -0.11 @ **z13.5**, 1024x768 |
 | `live_protomaps_z5.dump` | `crates/tessella-style/tests/live_style.json` | 51.505, -0.11 @ z5, 1024x768 |
 | `symbol_style.dump` | `crates/tessella-style/tests/symbol_style.json` | 51.505, -0.11 @ z13, 1024x768 |
+| `pattern_style.dump` | `crates/tessella-style/tests/pattern_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 
 ### The one that is not hermetic
 
@@ -63,6 +64,56 @@ The style's `glyphs` URL carries a `TESSELLA` placeholder for the checkout path,
 `tests/glyph-fixtures/TestFont/0-255.pbf`, so both the probe and the frontend read identical
 bytes.
 
+### The one for a feature that is not built yet
+
+`pattern_style.dump` is the oracle for the pattern binders, captured before the binders exist.
+§12's list recorded them as **blocked rather than deferred** — "no golden carries a pattern layer
+until R3 brings the textures, so writing the binder now means writing it against nothing to diff
+it with". This is that golden, so they are no longer blocked.
+
+Its style is a delta from `composite_style.json`: identical source geometry, so nothing about the
+geometry is what differs, plus a sprite and four pattern layers chosen to cover the cases that
+bind differently — a `background-pattern`, a constant `fill-pattern`, a `fill-pattern` that steps
+across the capture zoom so `from` and `to` name *different* sprites, and a `line-pattern`.
+
+It settles several things that reading mbgl's source did not:
+
+- Each layer's shader: background 4, fill 13 with its outline 14, line 27.
+- **A stepped pattern binds no vertex attribute either.** Only `id=0`, the position, appears on
+  any of the thirty-six drawables. A cross-faded binder goes composite only when the expression
+  is *data-driven*; a zoom step is a camera function, so it stays constant and both rectangles
+  travel as uniforms. The constant path covers more than its name suggests.
+- The image atlas is **shared across tiles**, not built per tile. All six tiles bind the same
+  texture; what is per tile is the position map, not the pixels. mbgl uploads into a
+  process-wide `DynamicTextureAtlas` and hands each tile back where its images landed plus
+  refcounted handles, released when the tile goes obsolete. So a rectangle in the capture is a
+  position in that shared atlas rather than a coordinate in the source sheet.
+
+The sprite is `tests/sprite-fixtures/emerald`, which is maplibre-native's own fixture, so the
+probe and the frontend read identical bytes. Its base URL carries the `TESSELLA` placeholder the
+way `symbol_style.json`'s `glyphs` does.
+
+### The pattern capture's five elided lines
+
+Same cause as the symbol capture's seven, one level along: mbgl packs that shared image atlas in
+the order images arrive, and the order is not deterministic. Over three consecutive captures
+four or five lines of two hundred and fifty-two moved and nothing else did.
+
+What moves is the atlas texture's hash and the rectangle each pattern UBO carries — a rectangle
+names where an image was packed, so a different packing is a different rectangle for the same
+sprite. The *size* does not move: `sand_noise` is fifty by fifty in every capture, only its
+origin travels. The texture count moves too, because some runs emit an extra 1x1 placeholder.
+
+`tools/mbgl-codegen/oracles/elide_pattern_atlas.py` elides the three pattern buffers and the
+atlas hash, and drops the placeholders. It keeps each buffer's `size=`, which is a property of
+the shader's block rather than of the packing, so a wrong block size still fails. Run it after
+capturing or the file will not match.
+
+What remains pins all thirty-six drawables, the shaders, the texture slot each binds, every
+attribute descriptor and segment, the index buffers, the painter order and the camera. What it
+cannot pin is where in the atlas a pattern landed — which wants the same fix as the symbol case,
+a deterministic packing on mbgl's side.
+
 ### Why there are three hermetic ones
 
 The hermetic style has no paint property that varies with zoom *and* per feature, so it says
@@ -93,6 +144,12 @@ sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/symbol_style
 ./mbgl-capture-probe file:///tmp/symbol.json --dump=<tessella>/tests/golden/symbol_style.dump
 python3 <tessella>/tools/mbgl-codegen/oracles/elide_symbol_atlas.py \
     <tessella>/tests/golden/symbol_style.dump
+
+# The pattern capture needs the same substitution, and its own elision.
+sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/pattern_style.json > /tmp/pattern.json
+./mbgl-capture-probe file:///tmp/pattern.json --dump=<tessella>/tests/golden/pattern_style.dump
+python3 <tessella>/tools/mbgl-codegen/oracles/elide_pattern_atlas.py \
+    <tessella>/tests/golden/pattern_style.dump
 
 ./mbgl-capture-probe --dump=<tessella>/tests/golden/hermetic_style.dump
 ./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/composite_style.json \

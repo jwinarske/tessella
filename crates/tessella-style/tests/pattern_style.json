@@ -1,0 +1,178 @@
+{
+  "version": 8,
+  "name": "capture-probe-pattern",
+  "sprite": "file://TESSELLA/tests/sprite-fixtures/emerald",
+  "sources": {
+    "probe": {
+      "type": "geojson",
+      "data": {
+        "type": "FeatureCollection",
+        "features": [
+          {
+            "type": "Feature",
+            "properties": {
+              "kind": "a"
+            },
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [
+                    -0.1,
+                    51.49
+                  ],
+                  [
+                    -0.1,
+                    51.53
+                  ],
+                  [
+                    -0.05,
+                    51.53
+                  ],
+                  [
+                    -0.05,
+                    51.49
+                  ],
+                  [
+                    -0.1,
+                    51.49
+                  ]
+                ]
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {
+              "kind": "b"
+            },
+            "geometry": {
+              "type": "Polygon",
+              "coordinates": [
+                [
+                  [
+                    -0.16,
+                    51.49
+                  ],
+                  [
+                    -0.16,
+                    51.52
+                  ],
+                  [
+                    -0.12,
+                    51.52
+                  ],
+                  [
+                    -0.12,
+                    51.49
+                  ],
+                  [
+                    -0.16,
+                    51.49
+                  ]
+                ]
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {
+              "kind": "a"
+            },
+            "geometry": {
+              "type": "LineString",
+              "coordinates": [
+                [
+                  -0.18,
+                  51.48
+                ],
+                [
+                  -0.12,
+                  51.51
+                ],
+                [
+                  -0.06,
+                  51.5
+                ],
+                [
+                  -0.02,
+                  51.53
+                ]
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {
+              "kind": "b"
+            },
+            "geometry": {
+              "type": "Point",
+              "coordinates": [
+                -0.09,
+                51.505
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "layers": [
+    {
+      "id": "bg",
+      "type": "background",
+      "paint": {
+        "background-pattern": "grass_pattern"
+      }
+    },
+    {
+      "id": "fill-pattern-constant",
+      "type": "fill",
+      "source": "probe",
+      "filter": [
+        "==",
+        "$type",
+        "Polygon"
+      ],
+      "paint": {
+        "fill-pattern": "sand_noise"
+      }
+    },
+    {
+      "id": "fill-pattern-stepped",
+      "type": "fill",
+      "source": "probe",
+      "filter": [
+        "==",
+        "$type",
+        "Polygon"
+      ],
+      "paint": {
+        "fill-pattern": [
+          "step",
+          [
+            "zoom"
+          ],
+          "hospital_striped",
+          13,
+          "school_striped"
+        ]
+      }
+    },
+    {
+      "id": "line-pattern",
+      "type": "line",
+      "source": "probe",
+      "filter": [
+        "==",
+        "$type",
+        "LineString"
+      ],
+      "paint": {
+        "line-pattern": "grass_pattern",
+        "line-width": 6
+      }
+    }
+  ]
+}
