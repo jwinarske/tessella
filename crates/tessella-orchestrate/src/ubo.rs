@@ -1183,6 +1183,56 @@ pub struct PatternPlacement {
     pub texsize: [u16; 2],
 }
 
+/// The atlas rectangle a sprite occupies, as the shader reads it.
+///
+/// # Two conventions named the same thing
+///
+/// mbgl's `ImagePosition::paddedRect` is the *whole slot*, padding included, and its `tlbr()`
+/// insets by the padding to get the sprite's own bounds. This build's [`IconPosition`] has
+/// already done that inset: its `padded_rect` is the sprite's bounds, despite the name it
+/// shares. So the conversion here adds nothing and insets nothing — it is `[x, y, x + w, y + h]`
+/// — where applying mbgl's arithmetic to it a second time would shrink every pattern by two
+/// pixels in each direction and sample a border of its neighbours.
+///
+/// Checked against the capture: `hospital_striped` is three by three in the sheet, sits in a
+/// five-by-five slot at origin one, and the oracle writes `[2, 2, 5, 5]`. Its bounds are
+/// therefore `x = 2, y = 2, w = 3, h = 3`, and `[x, y, x + w, y + h]` is that rectangle.
+///
+/// [`IconPosition`]: tessella_glyph::sprite::IconPosition
+#[must_use]
+pub fn atlas_rect(position: &tessella_glyph::sprite::IconPosition) -> [u16; 4] {
+    let rect = position.padded_rect;
+    #[allow(clippy::cast_possible_truncation)]
+    [
+        rect.x as u16,
+        rect.y as u16,
+        (rect.x + rect.width) as u16,
+        (rect.y + rect.height) as u16,
+    ]
+}
+
+/// Where a pattern's two images sit, given the atlas each was packed into.
+///
+/// `from` and `to` are the pair [`tessella_style::crossfade::faded`] chose — the level being
+/// left and the level being entered. They are the same sprite for a pattern that does not vary
+/// with zoom, and the block carries the rectangle twice, which is what the oracle does.
+///
+/// `None` when either image is missing from the atlas. A pattern naming a sprite the sheet does
+/// not have has nothing to draw, and drawing it against a stale rectangle would sample whatever
+/// was packed there instead — a different sprite, at full opacity, with nothing reporting it.
+#[must_use]
+pub fn pattern_placement(
+    from: Option<&tessella_glyph::sprite::IconPosition>,
+    to: Option<&tessella_glyph::sprite::IconPosition>,
+    texsize: [u16; 2],
+) -> Option<PatternPlacement> {
+    Some(PatternPlacement {
+        from: atlas_rect(from?),
+        to: atlas_rect(to?),
+        texsize,
+    })
+}
+
 /// Packs `FillPatternTilePropsUBO`, one entry per drawable.
 ///
 /// The rectangles are written as `f32` although they are whole pixels: the shader declares

@@ -111,3 +111,61 @@ fn a_stepped_pattern_carries_two_different_rectangles() {
     }]);
     assert_ne!(&packed[0..16], &packed[16..32], "the two images differ");
 }
+
+/// The atlas rectangle, and the convention trap in getting there.
+mod rects {
+    use tessella_glyph::atlas::Rect;
+    use tessella_glyph::sprite::IconPosition;
+    use tessella_orchestrate::ubo::{atlas_rect, pattern_placement};
+
+    fn position(x: u32, y: u32, width: u32, height: u32) -> IconPosition {
+        IconPosition {
+            padded_rect: Rect {
+                x,
+                y,
+                width,
+                height,
+            },
+            pixel_ratio: 1.0,
+            sdf: false,
+            content: None,
+            text_fit_width: None,
+            text_fit_height: None,
+        }
+    }
+
+    /// The capture's own numbers, reached from this build's rectangle convention.
+    ///
+    /// `hospital_striped` is three by three in the sheet and the oracle writes `[2, 2, 5, 5]`.
+    /// mbgl gets there from a five-by-five slot at origin one, insetting by the padding; this
+    /// build's `IconPosition` has already inset, so its rectangle is the sprite's own bounds and
+    /// the conversion adds nothing. Insetting again gives `[3, 3, 4, 4]` — a pattern two pixels
+    /// short in each direction, which renders, wrongly.
+    #[test]
+    fn a_rectangle_is_the_sprite_bounds_not_the_slot() {
+        assert_eq!(atlas_rect(&position(2, 2, 3, 3)), [2, 2, 5, 5]);
+        // And the fifty-by-fifty case the constant fill layer decoded to.
+        assert_eq!(atlas_rect(&position(56, 9, 50, 50)), [56, 9, 106, 59]);
+    }
+
+    /// A pattern that does not vary carries one rectangle twice.
+    #[test]
+    fn a_constant_pattern_places_one_image_twice() {
+        let sand = position(56, 9, 50, 50);
+        let placed = pattern_placement(Some(&sand), Some(&sand), [512, 512]).expect("placed");
+        assert_eq!(placed.from, placed.to);
+        assert_eq!(placed.texsize, [512, 512]);
+    }
+
+    /// A missing image places nothing.
+    ///
+    /// Drawing it against whatever rectangle was to hand would sample a different sprite at full
+    /// opacity, with nothing in the stream saying the pattern was never found.
+    #[test]
+    fn a_missing_image_places_nothing() {
+        let present = position(1, 1, 4, 4);
+        assert!(pattern_placement(None, Some(&present), [512, 512]).is_none());
+        assert!(pattern_placement(Some(&present), None, [512, 512]).is_none());
+        assert!(pattern_placement(None, None, [512, 512]).is_none());
+    }
+}
