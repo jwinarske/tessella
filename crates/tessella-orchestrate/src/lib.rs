@@ -54,6 +54,7 @@ pub mod order;
 #[cfg(feature = "std")]
 pub mod pool;
 pub mod project;
+pub mod registry;
 pub mod stencil;
 pub mod sweep;
 pub mod symbols;
