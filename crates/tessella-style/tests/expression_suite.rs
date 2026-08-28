@@ -305,12 +305,27 @@ fn values_match(got: &Value, want: &Value) -> bool {
     }
 }
 
-/// The committed pass set.
+/// Whether a case needs the collator, wherever in the suite it lives.
+///
+/// The `collator/` directory is most of them and `equal/collator-value` is not in it, which is
+/// the sort of thing a prefix test gets wrong quietly: the build without the feature would be
+/// told it regressed on a case it never could have passed.
+fn needs_collator(case: &str) -> bool {
+    case.starts_with("collator/") || case.contains("collator")
+}
+
+/// The committed pass set, for the features this build has.
+///
+/// The collator cases need the DUCET table, which is behind the `collator` feature for its size
+/// (DR-12). A build without it cannot pass them and should not be told it regressed — so they
+/// are filtered rather than listed twice, and the baseline stays one file that the regenerator
+/// writes whole.
 fn baseline() -> BTreeSet<String> {
     include_str!("expression_baseline.txt")
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter(|line| cfg!(feature = "collator") || !needs_collator(line))
         .map(ToString::to_string)
         .collect()
 }

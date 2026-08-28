@@ -112,6 +112,41 @@ impl Dependency {
     }
 }
 
+/// A `["collator", …]`, whose members are themselves expressions.
+///
+/// Held as a struct rather than as an [`Expr`] variant because a collator is not a value here:
+/// the spec allows one only as a comparison's third argument or as `resolved-locale`'s only one,
+/// and both of those are places where the *expression* is known at parse time. A style that
+/// bound one with `let` and passed it by `var` would be legal by the spec's type system and is
+/// refused here, with the message saying so — a named limit rather than a silently different
+/// answer.
+#[cfg(feature = "collator")]
+#[derive(Debug, Clone, PartialEq)]
+pub struct CollatorSpec {
+    /// `case-sensitive`, defaulting to false.
+    pub case_sensitive: Option<Expr>,
+    /// `diacritic-sensitive`, defaulting to false.
+    pub diacritic_sensitive: Option<Expr>,
+    /// `locale`, which this build reports back as none whatever it is given.
+    pub locale: Option<Expr>,
+}
+
+#[cfg(feature = "collator")]
+impl CollatorSpec {
+    /// Its members, for walks that treat every child alike.
+    #[must_use]
+    pub fn children(&self) -> alloc::vec::Vec<&Expr> {
+        [
+            self.case_sensitive.as_ref(),
+            self.diacritic_sensitive.as_ref(),
+            self.locale.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect()
+    }
+}
+
 /// Comparison operators.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompareOp {
@@ -945,6 +980,25 @@ pub enum Expr {
         /// Right side.
         rhs: Box<Expr>,
     },
+    /// A comparison under a collator.
+    ///
+    /// Separate from [`Expr::Compare`] rather than an option on it, so that a build without the
+    /// `collator` feature is the same shape it always was: there is no table to compare against,
+    /// so there is no variant either.
+    #[cfg(feature = "collator")]
+    CompareWith {
+        /// Which comparison.
+        op: CompareOp,
+        /// Left side.
+        lhs: Box<Expr>,
+        /// Right side.
+        rhs: Box<Expr>,
+        /// How to order text: the three members of a `["collator", …]`.
+        collator: Box<CollatorSpec>,
+    },
+    /// The locale a collator resolved to, which for this build is none.
+    #[cfg(feature = "collator")]
+    ResolvedLocale(Box<CollatorSpec>),
     /// Logical negation.
     Not(Box<Expr>),
     /// Logical conjunction, short-circuiting.
@@ -1634,6 +1688,16 @@ fn children(expr: &Expr) -> Vec<&Expr> {
             out
         }
         Expr::Compare { lhs, rhs, .. } => alloc::vec![&**lhs, &**rhs],
+        #[cfg(feature = "collator")]
+        Expr::CompareWith {
+            lhs, rhs, collator, ..
+        } => {
+            let mut out = alloc::vec![&**lhs, &**rhs];
+            out.extend(collator.children());
+            out
+        }
+        #[cfg(feature = "collator")]
+        Expr::ResolvedLocale(collator) => collator.children(),
         Expr::All(args)
         | Expr::Any(args)
         | Expr::Coalesce(args)
@@ -1788,6 +1852,18 @@ fn classify(expr: &Expr) -> Dependency {
             None => Dependency::FEATURE.join(classify(key)),
         },
         Expr::Compare { lhs, rhs, .. } => classify(lhs).join(classify(rhs)),
+        #[cfg(feature = "collator")]
+        Expr::CompareWith {
+            lhs, rhs, collator, ..
+        } => collator
+            .children()
+            .into_iter()
+            .fold(classify(lhs).join(classify(rhs)), |seen, child| {
+                seen.join(classify(child))
+            }),
+        // Constant: this build resolves no locale, so the answer does not depend on anything.
+        #[cfg(feature = "collator")]
+        Expr::ResolvedLocale(_) => Dependency::NONE,
         Expr::Not(inner) => classify(inner),
         Expr::All(args) | Expr::Any(args) | Expr::Coalesce(args) => join_all(args),
         Expr::Arithmetic { args, .. } | Expr::Cast { args, .. } => join_all(args),

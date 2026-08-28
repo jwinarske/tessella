@@ -904,6 +904,20 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   the 964 contractions, sequences collating as one unit such as Danish `aa`, which need a
   longest-match scan rather than a lookup per character. The generated table carries the number
   so the omission is countable.
+  Wired into the evaluator, **all sixteen of the suite's collator cases pass** — the fifteen in
+  the directory and `equal/collator-value` outside it, where the approximation passed five. Two
+  of them are compile errors rather than comparisons: a collator given numbers to order is a
+  category error the spec catches statically, and the two cases that assert it had been passing
+  for the wrong reason, because `collator` was an unknown operator and the parse failed for that.
+  A collator is taken only where one is *written* — a comparison's third argument, or
+  `resolved-locale`'s only one — rather than being a value. The spec's type system does have a
+  collator type, so binding one with `let` and passing it by `var` is legal by it and refused
+  here with a message saying so. Making it a value would mean a `Value` variant, which is a
+  wider change than the one position it buys.
+  The baseline is filtered by feature rather than kept twice, since a build without the table
+  cannot pass those cases and should not be told it regressed. The filter is by *name* and not by
+  directory: `equal/collator-value` lives elsewhere, which is exactly what a prefix test gets
+  wrong quietly.
 
   The SDF glyph range format reads, as `tessella-glyph/pbf`: `{fontstack}/{first}-{last}.pbf`,
   256 codepoints a file, metrics and a distance field with the ecosystem's three-pixel border.

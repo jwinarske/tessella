@@ -21,6 +21,24 @@ pub enum ParseError {
     /// output rather than as a diagnostic.
     #[error("unknown expression operator `{0}`")]
     UnknownOperator(String),
+    /// A collator was written where a value goes.
+    ///
+    /// The spec's type system has a collator type, so `["let", "c", ["collator", …], …]` is
+    /// legal by it. This build takes a collator only where one is written directly — a
+    /// comparison's third argument, or `resolved-locale`'s only one — because that is where the
+    /// expression is in hand without a value to carry it in. Named rather than accepted, since
+    /// the alternative is a comparison that quietly ignores the collator it was given.
+    #[cfg(feature = "collator")]
+    #[error("a collator may only be written where one is expected, not bound and passed")]
+    CollatorNotAValue,
+    /// A comparison's third argument, or `resolved-locale`'s, was not a collator.
+    #[cfg(feature = "collator")]
+    #[error("expected a `[\"collator\", {{…}}]`")]
+    NotACollator,
+    /// A collator was given a comparison that is not between strings.
+    #[cfg(feature = "collator")]
+    #[error("cannot use collator to compare non-string type `{0:?}`")]
+    CollatorOnNonString(Type),
 
     /// A constant expression that cannot be evaluated.
     ///
@@ -374,7 +392,25 @@ fn parse_rooted(
                     .map(Box::new),
             })
         }
+        #[cfg(feature = "collator")]
+        "collator" => {
+            expect_arity(operator, args, 1, 1)?;
+            Err(ParseError::CollatorNotAValue)
+        }
+        #[cfg(feature = "collator")]
+        "resolved-locale" => {
+            expect_arity(operator, args, 1, 1)?;
+            Ok(Expr::ResolvedLocale(alloc::boxed::Box::new(
+                parse_collator(&args[0], scope)?,
+            )))
+        }
         "==" | "!=" | "<" | "<=" | ">" | ">=" => {
+            // Two, or three with a collator. The spec allows the third only on these six, and
+            // only as a collator — so it is parsed as one here rather than as an expression that
+            // might turn out to be one.
+            #[cfg(feature = "collator")]
+            expect_arity(operator, args, 2, 3)?;
+            #[cfg(not(feature = "collator"))]
             expect_arity(operator, args, 2, 2)?;
             let op = match operator {
                 "==" => CompareOp::Eq,
@@ -387,6 +423,26 @@ fn parse_rooted(
             let lhs = parse_in(&args[0], scope)?;
             let rhs = parse_in(&args[1], scope)?;
             check_comparable(operator, op, &lhs, &rhs)?;
+            #[cfg(feature = "collator")]
+            if let Some(third) = args.get(2) {
+                // Both sides must be text. A collator orders letters, so ordering numbers with
+                // one is a category error rather than a comparison that happens to ignore it —
+                // and the spec catches it at compile time, which is where a style author sees
+                // it. `Type::Value` passes: an expression whose type is not yet known may still
+                // turn out to be a string, and refusing it would reject `["get", "name"]`.
+                for side in [&lhs, &rhs] {
+                    let kind = side.result_type();
+                    if !matches!(kind, Type::String | Type::Value) {
+                        return Err(ParseError::CollatorOnNonString(kind));
+                    }
+                }
+                return Ok(Expr::CompareWith {
+                    op,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                    collator: Box::new(parse_collator(third, scope)?),
+                });
+            }
             Ok(Expr::Compare {
                 op,
                 lhs: Box::new(lhs),
@@ -811,6 +867,33 @@ fn parse_legacy_function(value: &Value, spec: &PropertySpec) -> Result<Option<Ex
 
 fn parse_all(args: &[Value], scope: &[String]) -> Result<Vec<Expr>, ParseError> {
     args.iter().map(|arg| parse_in(arg, scope)).collect()
+}
+
+/// Parses a `["collator", {…}]` in the one position the spec allows one.
+///
+/// Not through [`parse_in`], because a collator is not a value here: it may be written where a
+/// comparison takes its third argument and where `resolved-locale` takes its only one, and both
+/// are places the expression itself is in hand. A style that bound one with `let` and passed it
+/// by `var` would be legal by the spec's type system and is refused, with the message saying so.
+#[cfg(feature = "collator")]
+fn parse_collator(value: &Value, scope: &[String]) -> Result<super::CollatorSpec, ParseError> {
+    let items = value.as_array().ok_or(ParseError::NotACollator)?;
+    if items.first().and_then(Value::as_str) != Some("collator") {
+        return Err(ParseError::NotACollator);
+    }
+    let options = items
+        .get(1)
+        .and_then(Value::as_object)
+        .ok_or(ParseError::NotACollator)?;
+
+    let member = |name: &str| -> Result<Option<Expr>, ParseError> {
+        options.get(name).map(|value| parse_in(value, scope)).transpose()
+    };
+    Ok(super::CollatorSpec {
+        case_sensitive: member("case-sensitive")?,
+        diacritic_sensitive: member("diacritic-sensitive")?,
+        locale: member("locale")?,
+    })
 }
 
 fn expect_arity(operator: &str, args: &[Value], min: usize, max: usize) -> Result<(), ParseError> {

@@ -17,6 +17,32 @@ use super::{
 };
 use crate::value::Value;
 
+/// Builds a collator from the members a `["collator", …]` carried.
+///
+/// Its members are expressions, so they are evaluated where the comparison happens rather than
+/// where it was written — `["collator", {"case-sensitive": ["get", "exact"]}]` is legal, and a
+/// collator built at parse time could not honour it.
+#[cfg(feature = "collator")]
+fn build_collator(
+    spec: &super::CollatorSpec,
+    context: &Context<'_>,
+) -> Result<crate::collator::Collator, EvaluationError> {
+    let flag = |expr: Option<&Expr>| -> Result<bool, EvaluationError> {
+        match expr {
+            Some(expr) => Ok(truthy(&evaluate(expr, context)?)),
+            None => Ok(false),
+        }
+    };
+    Ok(crate::collator::Collator {
+        case_sensitive: flag(spec.case_sensitive.as_ref())?,
+        diacritic_sensitive: flag(spec.diacritic_sensitive.as_ref())?,
+        locale: match spec.locale.as_ref() {
+            Some(expr) => evaluate(expr, context)?.as_str().map(ToString::to_string),
+            None => None,
+        },
+    })
+}
+
 /// The feature an expression is being evaluated against.
 ///
 /// A trait rather than a concrete type because the source of features differs by pipeline
@@ -497,6 +523,35 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
             let rhs = evaluate(rhs, context)?;
             compare(*op, &lhs, &rhs)
         }
+        #[cfg(feature = "collator")]
+        Expr::CompareWith {
+            op,
+            lhs,
+            rhs,
+            collator,
+        } => {
+            let lhs = evaluate(lhs, context)?;
+            let rhs = evaluate(rhs, context)?;
+            // Both sides must be strings: the spec's collator comparison is over text, and the
+            // suite has a case for a number given to one. Anything else is the error the
+            // ordinary comparison would give, since `compare` refuses mixed types too.
+            let (Some(left), Some(right)) = (lhs.as_str(), rhs.as_str()) else {
+                return compare(*op, &lhs, &rhs);
+            };
+            let ordering = build_collator(collator, context)?.compare(left, right);
+            Ok(Value::Bool(match op {
+                CompareOp::Eq => ordering == core::cmp::Ordering::Equal,
+                CompareOp::Ne => ordering != core::cmp::Ordering::Equal,
+                CompareOp::Lt => ordering == core::cmp::Ordering::Less,
+                CompareOp::Le => ordering != core::cmp::Ordering::Greater,
+                CompareOp::Gt => ordering == core::cmp::Ordering::Greater,
+                CompareOp::Ge => ordering != core::cmp::Ordering::Less,
+            }))
+        }
+        #[cfg(feature = "collator")]
+        Expr::ResolvedLocale(collator) => Ok(Value::String(
+            String::from(build_collator(collator, context)?.resolved_locale()),
+        )),
         Expr::Not(inner) => Ok(Value::Bool(!truthy(&evaluate(inner, context)?))),
         Expr::All(args) => {
             for arg in args {
