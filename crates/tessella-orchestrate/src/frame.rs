@@ -134,6 +134,23 @@ pub struct Frame<'a> {
     pub patterns: Option<&'a Patterns<'a>>,
 }
 
+impl crate::tile::PatternLookup for Patterns<'_> {
+    /// One feature's pattern, for whichever of the four properties the layer carries.
+    ///
+    /// The layer's kind decides which property to read, and a layer carries at most one — so
+    /// trying each in turn costs a map lookup and saves the caller having to say.
+    fn resolve(
+        &self,
+        layer: &tessella_style::Layer,
+        zoom: f64,
+        feature: &dyn tessella_style::expression::Feature,
+    ) -> Option<([u16; 4], [u16; 4])> {
+        tessella_style::crossfade::PATTERN_PROPERTIES
+            .iter()
+            .find_map(|property| self.feature_placement(layer, property, zoom, feature))
+    }
+}
+
 /// The sprites a frame's patterns resolve against, and where the camera has been.
 ///
 /// # Built by the caller, like the glyph atlas
@@ -182,6 +199,34 @@ impl Patterns<'_> {
             history.update(zoom, None);
         }
         history
+    }
+
+    /// The pair of rectangles a feature's pattern resolves to, for the composite binder.
+    ///
+    /// Distinct from [`Self::placement`], which answers for the *layer* at a zoom. This answers
+    /// for one feature, which is the case a uniform cannot carry.
+    #[must_use]
+    pub fn feature_placement(
+        &self,
+        layer: &tessella_style::Layer,
+        property: &str,
+        zoom: f64,
+        feature: &dyn tessella_style::expression::Feature,
+    ) -> Option<([u16; 4], [u16; 4])> {
+        use tessella_style::crossfade::faded;
+
+        let value = layer.paint.get(property)?;
+        let expression = value.as_expression()?;
+        let parsed = tessella_style::Expression::parse(expression.value()).ok()?;
+        let image = |z: f64| match parsed.evaluate(Some(z), Some(feature)) {
+            Ok(tessella_style::Value::String(name)) if !name.is_empty() => Some(name),
+            _ => None,
+        };
+        let pair = faded(image, zoom, &self.seeded(zoom));
+        Some((
+            ubo::atlas_rect(self.positions.get(pair.from?.as_str())?),
+            ubo::atlas_rect(self.positions.get(pair.to?.as_str())?),
+        ))
     }
 
     /// A background's block, which needs the images' display sizes as well as their rectangles.
@@ -622,12 +667,16 @@ fn encode(
                         .is_some()
                 })
                 .map(|patterns| patterns.texture);
-            let (encoded, buffers) = emit::encode_fill(
-                arena,
-                geometry,
-                fill,
-                &emit::FillDraw::new(&vertex_layout, bucket.binder.data(), key, shared, atlas),
-            );
+            let (encoded, buffers) = emit::encode_fill(arena, geometry, fill, &{
+                let draw =
+                    emit::FillDraw::new(&vertex_layout, bucket.binder.data(), key, shared, atlas);
+                // A data-driven pattern's rectangles, when the bucket build resolved any.
+                if bucket.pattern_vertices.covers(fill.vertices.len()) {
+                    draw.with_pattern_vertices(&bucket.pattern_vertices)
+                } else {
+                    draw
+                }
+            });
             fill_shared = Some(buffers);
             Some(encoded)
         }

@@ -32,6 +32,7 @@
 //! because the index is what painter order is expressed in and what a consumer keys uniforms
 //! by. Skipping unimplemented layers while renumbering the rest would silently restack the map.
 
+use crate::emit::PatternVertices;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
@@ -124,6 +125,11 @@ pub struct LayerBucket {
     pub content: Content,
     /// Resolved paint properties, carrying each one's binding.
     pub paint: alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    /// A data-driven pattern's rectangles, one pair per vertex.
+    ///
+    /// Empty unless the layer's pattern varies with the feature, which is the only case that
+    /// cannot travel as a uniform. See [`PatternLookup`].
+    pub pattern_vertices: PatternVertices,
     /// The interleaved data-driven paint buffer, one entry per vertex.
     ///
     /// Empty-strided when every property is a uniform, which is the common case and is why it
@@ -191,6 +197,68 @@ pub enum TileError {
     },
 }
 
+/// Fills one pair of rectangles per vertex, from each feature's own pattern.
+///
+/// `ends` is cumulative, so feature *i* owns the vertices from `ends[i - 1]` to `ends[i]` — the
+/// same boundaries the paint binder writes between.
+///
+/// A feature whose pattern does not resolve gets zeroes rather than being skipped. mbgl does the
+/// same and says why: it cannot know at draw time whether every feature resolved, so a buffer
+/// short of the vertex count is a read past its end for everything after the gap. Returning an
+/// empty set when *nothing* resolved is different — then there is no pattern to draw and the
+/// attributes are not written at all.
+fn resolve_pattern_vertices(
+    patterns: Option<&dyn PatternLookup>,
+    layer: &tessella_style::Layer,
+    zoom: f64,
+    features: &[&dyn tessella_style::expression::Feature],
+    ends: &[usize],
+) -> PatternVertices {
+    let Some(patterns) = patterns else {
+        return PatternVertices::default();
+    };
+
+    let mut out = PatternVertices::default();
+    let mut resolved_any = false;
+    let mut start = 0;
+    for (feature, end) in features.iter().zip(ends) {
+        let pair = patterns.resolve(layer, zoom, *feature);
+        resolved_any |= pair.is_some();
+        let (from, to) = pair.unwrap_or(([0; 4], [0; 4]));
+        for _ in start..*end {
+            out.from.push(from);
+            out.to.push(to);
+        }
+        start = *end;
+    }
+
+    if resolved_any {
+        out
+    } else {
+        PatternVertices::default()
+    }
+}
+
+/// Where a data-driven pattern's rectangles come from.
+///
+/// # Why a trait rather than the atlas itself
+///
+/// A tile builder has no business knowing what an atlas is. It knows a layer, a zoom and a
+/// feature, and what it needs back is the pair of rectangles that feature's pattern resolves to
+/// — mbgl threads `patternPositions` into `addFeature` for the same reason and with the same
+/// shape. Passing the atlas would put sprite packing, the sheet, and the zoom history into a
+/// module whose job is turning geometry into buckets.
+pub trait PatternLookup {
+    /// The `from` and `to` rectangles for this feature's pattern, or `None` when the layer has
+    /// none, the expression names nothing, or the atlas does not hold what it named.
+    fn resolve(
+        &self,
+        layer: &tessella_style::Layer,
+        zoom: f64,
+        feature: &dyn tessella_style::expression::Feature,
+    ) -> Option<([u16; 4], [u16; 4])>;
+}
+
 /// Builds every implemented layer's contribution to one tile.
 ///
 /// Layers of a kind this build does not implement are skipped, keeping their index. Layers that
@@ -206,6 +274,25 @@ pub fn build_tile(
     tile: TileId,
     features: &[GeoJsonFeature],
     options: TilingOptions,
+) -> Result<Vec<LayerBucket>, TileError> {
+    build_tile_with_patterns(style, source, tile, features, options, None)
+}
+
+/// As [`build_tile`], resolving each feature's pattern through `patterns`.
+///
+/// Separate rather than a sixth parameter on `build_tile`: sixty call sites want the plain one,
+/// and a `None` at every one of them says less than a name does.
+///
+/// # Errors
+///
+/// As [`build_tile`].
+pub fn build_tile_with_patterns(
+    style: &Style,
+    source: &str,
+    tile: TileId,
+    features: &[GeoJsonFeature],
+    options: TilingOptions,
+    patterns: Option<&dyn PatternLookup>,
 ) -> Result<Vec<LayerBucket>, TileError> {
     let (lo, hi) = options.clip_range();
     let (lo, hi) = (f64::from(lo), f64::from(hi));
@@ -230,6 +317,7 @@ pub fn build_tile(
 
         let mut binder =
             PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint, bucket_zoom);
+        let mut pattern_vertices = PatternVertices::default();
 
         let content = match layer.kind {
             // A raster layer over a *feature* source draws nothing, and that is not a silent
@@ -371,6 +459,20 @@ pub fn build_tile(
                             source,
                         })?;
                 }
+                // A pattern that varies with the feature, one pair of rectangles per vertex.
+                // `ends` is the cumulative vertex count, so each feature owns the range from the
+                // previous end to its own — the same boundaries the binder writes between.
+                let borrowed_features: Vec<&dyn tessella_style::expression::Feature> = kept
+                    .iter()
+                    .map(|feature| *feature as &dyn tessella_style::expression::Feature)
+                    .collect();
+                pattern_vertices = resolve_pattern_vertices(
+                    patterns,
+                    layer,
+                    bucket_zoom,
+                    &borrowed_features,
+                    &ends,
+                );
                 content
             }
             LayerKind::Line => {
@@ -485,6 +587,7 @@ pub fn build_tile(
             content,
             paint,
             binder,
+            pattern_vertices,
         });
     }
 
@@ -544,6 +647,8 @@ pub fn build_sourceless(style: &Style, tile: TileId) -> Result<Vec<LayerBucket>,
             content,
             paint,
             binder,
+            // A background and a raster have no features, so no per-feature pattern.
+            pattern_vertices: PatternVertices::default(),
         });
     }
     Ok(buckets)
@@ -633,8 +738,10 @@ pub fn build_raster_tile(
             }),
             paint,
             // None of a raster layer's paint properties is data-driven, and that is structural
-            // rather than a gap: there is no feature for one to vary over.
+            // rather than a gap: there is no feature for one to vary over. The same is why it
+            // carries no pattern rectangles.
             binder: PaintBinder::default(),
+            pattern_vertices: PatternVertices::default(),
         });
     }
     Ok(buckets)
@@ -662,6 +769,21 @@ pub fn build_mvt_tile(
     tile: TileId,
     decoded: &tessella_source::mvt::Tile,
 ) -> Result<Vec<LayerBucket>, TileError> {
+    build_mvt_tile_with_patterns(style, source, tile, decoded, None)
+}
+
+/// As [`build_mvt_tile`], resolving each feature's pattern through `patterns`.
+///
+/// # Errors
+///
+/// As [`build_mvt_tile`].
+pub fn build_mvt_tile_with_patterns(
+    style: &Style,
+    source: &str,
+    tile: TileId,
+    decoded: &tessella_source::mvt::Tile,
+    patterns: Option<&dyn PatternLookup>,
+) -> Result<Vec<LayerBucket>, TileError> {
     let mut buckets = Vec::new();
 
     // Filters are evaluated at the tile's own zoom, as mbgl's layouts do — `zoom` there is
@@ -683,6 +805,7 @@ pub fn build_mvt_tile(
 
         let mut binder =
             PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint, bucket_zoom);
+        let mut pattern_vertices = PatternVertices::default();
 
         let content = match layer.kind {
             LayerKind::Background => Content::Background,
@@ -740,6 +863,17 @@ pub fn build_mvt_tile(
                 }
                 let borrowed: Vec<&[Ring]> = per_feature.iter().map(Vec::as_slice).collect();
                 let (content, ends) = build_fill_content(layer, &paint, &borrowed);
+                let borrowed_features: Vec<&dyn tessella_style::expression::Feature> = kept
+                    .iter()
+                    .map(|feature| feature as &dyn tessella_style::expression::Feature)
+                    .collect();
+                pattern_vertices = resolve_pattern_vertices(
+                    patterns,
+                    layer,
+                    bucket_zoom,
+                    &borrowed_features,
+                    &ends,
+                );
                 for (feature, end) in kept.iter().zip(&ends) {
                     binder
                         .push(*end, &paint, feature)
@@ -904,6 +1038,7 @@ pub fn build_mvt_tile(
             content,
             paint,
             binder,
+            pattern_vertices,
         });
     }
 
