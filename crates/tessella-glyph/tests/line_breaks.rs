@@ -41,34 +41,34 @@ fn latin(text: &str, advance: f32) -> Vec<Char> {
 fn zero_width_spaces_break_where_mbgl_breaks() {
     // 中中 中中 中中 中中中中中中 中中, at five ems: three lines.
     let text = cjk("中中\u{200b}中中\u{200b}中中\u{200b}中中中中中中\u{200b}中中");
-    assert_eq!(split_lines(&text, 5.0 * ONE_EM).len(), 3);
+    assert_eq!(split_lines(&text, 5.0 * ONE_EM, 0.0).len(), 3);
 
     // 中中 中, at one em: two lines.
     let text = cjk("中中\u{200b}中");
-    assert_eq!(split_lines(&text, ONE_EM).len(), 2);
+    assert_eq!(split_lines(&text, ONE_EM, 0.0).len(), 2);
 
     // 中中, at two ems: one line — the trailing break opportunity is not a break.
     let text = cjk("中中\u{200b}");
-    assert_eq!(split_lines(&text, 2.0 * ONE_EM).len(), 1);
+    assert_eq!(split_lines(&text, 2.0 * ONE_EM, 0.0).len(), 1);
 
     // Five zero-width spaces and nothing else, at one em: five lines.
     let text = cjk("\u{200b}\u{200b}\u{200b}\u{200b}\u{200b}");
-    assert_eq!(split_lines(&text, ONE_EM).len(), 5);
+    assert_eq!(split_lines(&text, ONE_EM, 0.0).len(), 5);
 }
 
 /// A width of zero means no wrapping, which is how a style asks for one line.
 #[test]
 fn no_maximum_width_means_one_line() {
     let text = latin("a long label that would otherwise wrap", 10.0);
-    assert!(line_breaks(&text, 0.0).is_empty());
-    assert_eq!(split_lines(&text, 0.0).len(), 1);
+    assert!(line_breaks(&text, 0.0, 0.0).is_empty());
+    assert_eq!(split_lines(&text, 0.0, 0.0).len(), 1);
 }
 
 /// Empty text has no breaks and no lines.
 #[test]
 fn empty_text_has_no_lines() {
-    assert!(line_breaks(&[], 100.0).is_empty());
-    assert!(split_lines(&[], 100.0).is_empty());
+    assert!(line_breaks(&[], 100.0, 0.0).is_empty());
+    assert!(split_lines(&[], 100.0, 0.0).is_empty());
 }
 
 /// Text with no break opportunities stays on one line however wide it is.
@@ -78,8 +78,8 @@ fn empty_text_has_no_lines() {
 #[test]
 fn text_with_nowhere_to_break_overflows_rather_than_splitting() {
     let text = latin("Llanfairpwllgwyngyll", 10.0);
-    assert!(line_breaks(&text, ONE_EM).is_empty());
-    assert_eq!(split_lines(&text, ONE_EM).len(), 1);
+    assert!(line_breaks(&text, ONE_EM, 0.0).is_empty());
+    assert_eq!(split_lines(&text, ONE_EM, 0.0).len(), 1);
 }
 
 /// A newline is a break the author asked for, and it happens wherever it appears.
@@ -91,7 +91,7 @@ fn text_with_nowhere_to_break_overflows_rather_than_splitting() {
 fn an_explicit_newline_always_breaks() {
     // Short enough that balance would prefer a single line by a wide margin.
     let text = latin("a\nb", 10.0);
-    let lines = split_lines(&text, 100.0 * ONE_EM);
+    let lines = split_lines(&text, 100.0 * ONE_EM, 0.0);
     assert_eq!(lines.len(), 2, "the newline must win");
 }
 
@@ -104,7 +104,7 @@ fn an_explicit_newline_always_breaks() {
 fn lines_balance_instead_of_filling() {
     // Four words of one unit each plus separating spaces, at a width fitting three words.
     let text = latin("aa aa aa aa", 12.0);
-    let lines = split_lines(&text, 3.0 * ONE_EM);
+    let lines = split_lines(&text, 3.0 * ONE_EM, 0.0);
 
     assert_eq!(
         lines.len(),
@@ -139,7 +139,7 @@ fn lines_balance_instead_of_filling() {
 #[test]
 fn an_opening_parenthesis_is_penalised_at_the_end_of_a_line() {
     let text = latin("ab (cd ef", 12.0);
-    let breaks = line_breaks(&text, 2.0 * ONE_EM);
+    let breaks = line_breaks(&text, 2.0 * ONE_EM, 0.0);
 
     assert!(
         breaks.contains(&3),
@@ -159,7 +159,7 @@ fn an_opening_parenthesis_is_penalised_at_the_end_of_a_line() {
 #[test]
 fn a_short_last_line_is_preferred_to_a_long_one() {
     let text = latin("ab (cd ef", 12.0);
-    let breaks = line_breaks(&text, 3.0 * ONE_EM);
+    let breaks = line_breaks(&text, 3.0 * ONE_EM, 0.0);
 
     assert_eq!(
         breaks.iter().copied().collect::<Vec<_>>(),
@@ -176,7 +176,7 @@ fn a_short_last_line_is_preferred_to_a_long_one() {
 #[test]
 fn trailing_whitespace_is_not_measured() {
     let text = latin("aa aa aa", 12.0);
-    let breaks = line_breaks(&text, 2.0 * ONE_EM);
+    let breaks = line_breaks(&text, 2.0 * ONE_EM, 0.0);
 
     assert_eq!(
         breaks.iter().copied().collect::<Vec<_>>(),

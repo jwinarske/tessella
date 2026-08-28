@@ -41,7 +41,13 @@ use crate::text::{self, ZWSP};
 pub struct Char {
     /// The codepoint.
     pub codepoint: u32,
-    /// How far the pen moves for it, already scaled and spaced.
+    /// How far the pen moves for it: the glyph's own advance at its section's scale.
+    ///
+    /// Letter spacing is *not* in here, and mbgl is the reason. `shapeLines` lays out with
+    /// `metrics.advance * scale` and adds the spacing itself; `getGlyphAdvance`, which line
+    /// breaking measures with, returns the same thing *plus* the spacing. One number cannot be
+    /// both, and folding the spacing in here made every spaced label a little wider than mbgl's
+    /// — the shaper added it a second time.
     pub advance: f32,
     /// Whether there is a glyph to draw for it.
     ///
@@ -155,8 +161,11 @@ fn penalty(codepoint: u32, next: u32, penalizable_ideographic: bool) -> f32 {
 }
 
 /// The width a line should aim for: the total, divided by how many lines it will take.
-fn average_line_width(text: &[Char], max_width: f32) -> f32 {
-    let total: f32 = text.iter().map(|character| character.advance).sum();
+fn average_line_width(text: &[Char], max_width: f32, spacing: f32) -> f32 {
+    let total: f32 = text
+        .iter()
+        .map(|character| character.advance + spacing)
+        .sum();
     let lines = (total / max_width).ceil().max(1.0);
     total / lines
 }
@@ -205,12 +214,12 @@ fn evaluate(
 /// because the visual order depends on where the lines break. Deciding in visual order would
 /// need the answer to compute the question.
 #[must_use]
-pub fn line_breaks(text: &[Char], max_width: f32) -> BTreeSet<usize> {
+pub fn line_breaks(text: &[Char], max_width: f32, spacing: f32) -> BTreeSet<usize> {
     if max_width <= 0.0 || text.is_empty() {
         return BTreeSet::new();
     }
 
-    let target = average_line_width(text, max_width);
+    let target = average_line_width(text, max_width, spacing);
     let mut candidates: Vec<Candidate> = Vec::new();
     let mut x = 0.0f32;
 
@@ -221,7 +230,9 @@ pub fn line_breaks(text: &[Char], max_width: f32) -> BTreeSet<usize> {
     for (index, character) in text.iter().enumerate() {
         // Whitespace at a break is dropped, so it does not count toward the line's width.
         if !text::is_whitespace(character.codepoint) {
-            x += character.advance;
+            // `getGlyphAdvance`, which is the advance *and* the spacing: breaking measures the
+            // line as it will be set, and the gap after each character is part of that.
+            x += character.advance + spacing;
         }
 
         if index + 1 >= text.len() {
@@ -258,8 +269,8 @@ pub fn line_breaks(text: &[Char], max_width: f32) -> BTreeSet<usize> {
 ///
 /// A convenience over the index set, and the form a shaper wants.
 #[must_use]
-pub fn split_lines(text: &[Char], max_width: f32) -> Vec<Vec<Char>> {
-    let breaks = line_breaks(text, max_width);
+pub fn split_lines(text: &[Char], max_width: f32, spacing: f32) -> Vec<Vec<Char>> {
+    let breaks = line_breaks(text, max_width, spacing);
     let mut lines = Vec::new();
     let mut start = 0;
     for boundary in breaks.iter().copied().chain(core::iter::once(text.len())) {
@@ -607,7 +618,7 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
     let shaped_text = apply_arabic(text);
     let text: &[Char] = &shaped_text;
 
-    let broken = split_lines(text, options.max_width);
+    let broken = split_lines(text, options.max_width, options.spacing);
     let line_count = broken.len();
 
     for line in &broken {

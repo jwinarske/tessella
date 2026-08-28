@@ -29,6 +29,7 @@ use tessella_style::{Layer, Value};
 use alloc::collections::{BTreeMap, BTreeSet};
 
 use tessella_glyph::fonts::Fonts;
+use tessella_glyph::text::ONE_EM;
 
 use crate::anchors::EXTENT;
 use crate::symbol::{self, GlyphDependencies};
@@ -149,7 +150,11 @@ fn text_options(layer: &Layer, zoom: f64, feature: Option<&dyn Feature>) -> Symb
     SymbolOptions {
         size: number("text-size").unwrap_or(16.0),
         max_width_ems: number("text-max-width").unwrap_or(10.0),
-        letter_spacing: number("text-letter-spacing").unwrap_or(0.0),
+        // `text-letter-spacing` is in ems and everything downstream of it is in pixels, so it
+        // is resolved here where the unit changes rather than carried in the spec's unit and
+        // multiplied wherever it happens to be read. mbgl does the same, one line above its
+        // line height, and the two were wrong here in the same way.
+        letter_spacing: number("text-letter-spacing").unwrap_or(0.0) * ONE_EM,
         line_height_ems: number("text-line-height").unwrap_or(1.2),
         ..SymbolOptions::default()
     }

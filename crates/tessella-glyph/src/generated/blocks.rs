@@ -1,7 +1,7 @@
 //! Unicode blocks that permit a line break without a space, generated from
 //! maplibre-native.
 //!
-//! Source revision: 5f9d3f77caac
+//! Source revision: b5a2922844c9
 //!
 //! Taken from `i18n.cpp`'s own table rather than from Unicode's Blocks.txt: mbgl
 //! comments out the blocks it does not consult, and a table built from the standard

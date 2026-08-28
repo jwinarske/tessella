@@ -73,3 +73,18 @@ pub fn allows_ideographic_breaking(codepoint: u32) -> bool {
         .iter()
         .any(|(first, last)| codepoint >= *first && codepoint <= *last)
 }
+
+/// Whether letter spacing may be applied to a label at all.
+///
+/// mbgl's `allowsLetterSpacing`, which holds when every character passes
+/// `charAllowsLetterSpacing` — and that is exactly the Arabic blocks, the same set
+/// [`crate::vertical::is_complex_shaping`] names. The reason is the same reason: these letters
+/// are drawn joined to their neighbours, so tracking them apart does not loosen the word, it
+/// breaks the joins and leaves a row of disconnected forms.
+#[must_use]
+pub fn allows_letter_spacing(text: &[u32]) -> bool {
+    !text
+        .iter()
+        .copied()
+        .any(crate::vertical::is_complex_shaping)
+}

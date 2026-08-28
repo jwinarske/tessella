@@ -26,6 +26,7 @@ pub mod quads;
 pub mod shaping;
 pub mod sprite;
 pub mod text;
+pub mod vertical;
 
 /// What a symbol layer needs to know about a glyph.
 ///

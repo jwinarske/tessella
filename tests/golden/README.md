@@ -17,6 +17,7 @@ maplibre-native build. Regenerating them needs both.
 | `symbol_style.dump` | `crates/tessella-style/tests/symbol_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `pattern_style.dump` | `crates/tessella-style/tests/pattern_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `scaled_style.dump` | `crates/tessella-style/tests/scaled_style.json` | 51.505, -0.11 @ z13, 1024x768 |
+| `spaced_style.dump` | `crates/tessella-style/tests/spaced_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 
 ### The one that is not hermetic
 
@@ -197,6 +198,12 @@ sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/scaled_style
 ./mbgl-capture-probe file:///tmp/scaled.json --dump=<tessella>/tests/golden/scaled_style.dump
 python3 <tessella>/tools/mbgl-codegen/oracles/elide_symbol_atlas.py \
     <tessella>/tests/golden/scaled_style.dump
+
+# The letter-spacing capture, substituted and elided the same way.
+sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/spaced_style.json > /tmp/spaced.json
+./mbgl-capture-probe file:///tmp/spaced.json --dump=<tessella>/tests/golden/spaced_style.dump
+python3 <tessella>/tools/mbgl-codegen/oracles/elide_symbol_atlas.py \
+    <tessella>/tests/golden/spaced_style.dump
 
 # The pattern capture needs the same substitution, and its own elision.
 sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/pattern_style.json > /tmp/pattern.json

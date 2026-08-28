@@ -372,10 +372,23 @@ pub struct LaidOut {
 ///
 /// The advance is `metrics.advance * scale + spacing`, which is mbgl's: the glyph scales and the
 /// letter spacing does not, so a double-size word is not also a loosely-set one.
+/// The spacing a label actually gets, which is not always the one the style asked for.
+///
+/// mbgl's `allowsLetterSpacing` gate, applied where the label's characters are known rather
+/// than where its options are read: a label with any Arabic in it is set without tracking, no
+/// matter what `text-letter-spacing` says.
+fn letter_spacing(chars: &[tessella_glyph::shaping::Char], spacing: f32) -> f32 {
+    let codepoints: Vec<u32> = chars.iter().map(|character| character.codepoint).collect();
+    if tessella_glyph::text::allows_letter_spacing(&codepoints) {
+        spacing
+    } else {
+        0.0
+    }
+}
+
 fn chars_of<G: tessella_glyph::Glyphs + ?Sized>(
     sections: &[crate::symbol::Section],
     glyphs: &G,
-    letter_spacing: f32,
 ) -> Vec<tessella_glyph::shaping::Char> {
     use tessella_glyph::shaping::Char;
     let mut out = Vec::new();
@@ -383,7 +396,7 @@ fn chars_of<G: tessella_glyph::Glyphs + ?Sized>(
         for character in section.text.chars() {
             let codepoint = character as u32;
             #[allow(clippy::cast_precision_loss)]
-            let scaled = |advance: u32| advance as f32 * section.scale + letter_spacing;
+            let scaled = |advance: u32| advance as f32 * section.scale;
             let built = match glyphs.metrics(codepoint) {
                 Some((metrics, true)) => Char::new(codepoint, scaled(metrics.advance)),
                 Some((metrics, false)) => Char::blank(codepoint, scaled(metrics.advance)),
@@ -419,7 +432,8 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
     let mut out = Vec::with_capacity(labels.len());
 
     for label in labels {
-        let chars = chars_of(&label.sections, glyphs, options.letter_spacing);
+        let chars = chars_of(&label.sections, glyphs);
+        let spacing = letter_spacing(&chars, options.letter_spacing);
 
         let shaping = shaping::shape(
             &chars,
@@ -428,7 +442,7 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
                 line_height: options.line_height_ems * ONE_EM,
                 anchor: options.anchor,
                 justify: options.justify,
-                spacing: options.letter_spacing,
+                spacing,
             },
         );
 
@@ -550,7 +564,8 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
     for label in labels {
         // The same sections a point label gets. A line-placed label is set the same way; what
         // differs is where it is put, not how it is shaped.
-        let chars = chars_of(&label.sections, glyphs, options.symbol.letter_spacing);
+        let chars = chars_of(&label.sections, glyphs);
+        let spacing = letter_spacing(&chars, options.symbol.letter_spacing);
 
         let shaping = shaping::shape(
             &chars,
@@ -562,7 +577,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                 line_height: options.symbol.line_height_ems * ONE_EM,
                 anchor: options.symbol.anchor,
                 justify: options.symbol.justify,
-                spacing: options.symbol.letter_spacing,
+                spacing,
             },
         );
 

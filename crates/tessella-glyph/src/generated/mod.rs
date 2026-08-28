@@ -7,3 +7,4 @@
 
 pub mod arabic;
 pub mod blocks;
+pub mod vertical;

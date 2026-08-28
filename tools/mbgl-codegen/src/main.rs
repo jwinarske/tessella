@@ -112,6 +112,9 @@ const OPERATOR_OUTPUT: &str = "crates/tessella-style/src/generated/operators.rs"
 /// Where the Unicode block table lands.
 const BLOCK_OUTPUT: &str = "crates/tessella-glyph/src/generated/blocks.rs";
 
+/// Where the vertical-orientation tables land.
+const VERTICAL_OUTPUT: &str = "crates/tessella-glyph/src/generated/vertical.rs";
+
 /// One parsed C++ enumerator.
 struct Enumerator {
     name: String,
@@ -203,6 +206,16 @@ fn main() -> ExitCode {
         }
     };
 
+    // The one table that needs the probe built rather than only the sources checked out. A
+    // checkout without one regenerates everything else and leaves this alone.
+    let vertical = match generate_vertical_orientation(&mbgl) {
+        Ok(text) => text.map(|text| rustfmt(&text)),
+        Err(err) => {
+            eprintln!("{err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let out = workspace.join(OUTPUT);
     let shader_out = workspace.join(SHADER_OUTPUT);
     let texture_out = workspace.join(TEXTURE_OUTPUT);
@@ -210,6 +223,7 @@ fn main() -> ExitCode {
     let slot_out = workspace.join(SLOT_OUTPUT);
     let operator_out = workspace.join(OPERATOR_OUTPUT);
     let block_out = workspace.join(BLOCK_OUTPUT);
+    let vertical_out = workspace.join(VERTICAL_OUTPUT);
     if check {
         let mut stale = false;
         for (path, name, want) in [
@@ -228,6 +242,23 @@ fn main() -> ExitCode {
                 eprintln!("{name} differs from the pinned mbgl tree; re-run without --check");
                 stale = true;
             }
+        }
+        match &vertical {
+            Some(want) => {
+                let current = std::fs::read_to_string(&vertical_out).unwrap_or_default();
+                if current == *want {
+                    println!("{VERTICAL_OUTPUT} is up to date");
+                } else {
+                    eprintln!(
+                        "{VERTICAL_OUTPUT} differs from the pinned mbgl tree; re-run without \
+                         --check"
+                    );
+                    stale = true;
+                }
+            }
+            // Unverified is not stale. Saying so is the point: a lane without the probe should
+            // not claim the table is current, and should not fail for a tool it cannot build.
+            None => println!("{VERTICAL_OUTPUT} not checked: no {PROBE} in the mbgl tree to ask"),
         }
         return if stale {
             ExitCode::FAILURE
@@ -258,6 +289,16 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
         println!("wrote {name}");
+    }
+    match &vertical {
+        Some(text) => {
+            if let Err(err) = std::fs::write(&vertical_out, text) {
+                eprintln!("writing {}: {err}", vertical_out.display());
+                return ExitCode::FAILURE;
+            }
+            println!("wrote {VERTICAL_OUTPUT}");
+        }
+        None => println!("skipped {VERTICAL_OUTPUT}: no {PROBE} in the mbgl tree to ask"),
     }
     ExitCode::SUCCESS
 }
@@ -2531,4 +2572,151 @@ fn generate_unicode_blocks(mbgl: &Path) -> Result<String, String> {
     }
     out.push_str("];\n");
     Ok(out)
+}
+
+/// Where the probe that answers the vertical-orientation predicates is built.
+const PROBE: &str = "build-capture/mbgl-capture-probe";
+
+/// Generates the vertical-orientation tables by *asking* mbgl rather than reading it.
+///
+/// `hasUprightVerticalOrientation` is a hundred and twenty lines of nested block tests with
+/// exclusions carved out of them one character at a time — not a table, and not a shape a parser
+/// can be trusted over. Every other generator here reads a declaration; this one reads an
+/// *answer*. The probe calls the predicate for every code unit in the Basic Multilingual Plane
+/// and prints the ranges where it holds, so the table below is right by construction rather than
+/// by review.
+///
+/// Only the BMP, because the predicates take a `char16_t`. mbgl never asks about a supplementary
+/// codepoint as itself — it reaches these functions as a surrogate pair — so a table covering
+/// more would be answering a question mbgl does not ask.
+///
+/// Needs the probe built, which is not something `cargo run -p mbgl-codegen` can arrange.
+/// Returns `Ok(None)` when it is absent so a checkout without one still regenerates everything
+/// else, and `--check` reports the table as unverified rather than stale.
+fn generate_vertical_orientation(mbgl: &Path) -> Result<Option<String>, String> {
+    let probe = mbgl.join(PROBE);
+    if !probe.exists() {
+        return Ok(None);
+    }
+    let revision = tree_revision(mbgl);
+    let output = Command::new(&probe)
+        .arg("--dump-vertical")
+        .output()
+        .map_err(|err| format!("running {}: {err}", probe.display()))?;
+    if !output.status.success() {
+        return Err(format!(
+            "{} --dump-vertical failed: {}",
+            probe.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let text = String::from_utf8(output.stdout)
+        .map_err(|err| format!("{} --dump-vertical: not UTF-8: {err}", probe.display()))?;
+
+    let mut upright: Vec<(u32, u32)> = Vec::new();
+    let mut neutral: Vec<(u32, u32)> = Vec::new();
+    let mut complex: Vec<(u32, u32)> = Vec::new();
+    let mut punctuation: Vec<(u32, u32)> = Vec::new();
+    for line in text.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        if fields.len() != 3 {
+            return Err(format!("--dump-vertical: cannot read {line:?}"));
+        }
+        let value = |at: usize| {
+            u32::from_str_radix(fields[at], 16)
+                .map_err(|err| format!("--dump-vertical: {line:?}: {err}"))
+        };
+        let pair = (value(1)?, value(2)?);
+        match fields[0] {
+            "upright" => upright.push(pair),
+            "neutral" => neutral.push(pair),
+            "complex" => complex.push(pair),
+            "punctuation" => punctuation.push(pair),
+            other => return Err(format!("--dump-vertical: unknown kind {other:?}")),
+        }
+    }
+    for (name, table) in [
+        ("upright", &upright),
+        ("neutral", &neutral),
+        ("complex", &complex),
+        ("punctuation", &punctuation),
+    ] {
+        if table.is_empty() {
+            return Err(format!(
+                "--dump-vertical produced no {name} rows — has the probe's dump changed shape?"
+            ));
+        }
+    }
+
+    let mut out = String::new();
+    out.push_str("//! Vertical writing orientation, generated from maplibre-native.\n");
+    out.push_str("//!\n");
+    out.push_str(&format!("//! Source revision: {revision}\n"));
+    out.push_str("//!\n");
+    out.push_str(
+        "//! Produced by *running* mbgl rather than by reading it. The predicates behind\n",
+    );
+    out.push_str(
+        "//! these tables are nested block tests with single characters excluded from the\n",
+    );
+    out.push_str(
+        "//! middle of them by hand, so the probe calls each one for every code unit in the\n",
+    );
+    out.push_str(
+        "//! Basic Multilingual Plane and reports the ranges where it holds. The result is\n",
+    );
+    out.push_str("//! mbgl's answer by construction; a transcription would be a claim about it.\n");
+    out.push_str("//!\n");
+    out.push_str("//! The plane stops at U+FFFF because the predicates take a `char16_t`: a\n");
+    out.push_str(
+        "//! supplementary codepoint reaches them as a surrogate pair and never as itself.\n",
+    );
+    out.push_str("//!\n");
+    out.push_str("//! Generated by `cargo run -p mbgl-codegen`. Do not edit.\n\n");
+    out.push_str("/// A range of code units, inclusive at both ends.\n");
+    out.push_str("pub type Range = (u32, u32);\n\n");
+
+    let mut table = |name: &str, doc: &str, rows: &[(u32, u32)]| {
+        out.push_str(doc);
+        out.push_str(&format!("pub const {name}: [Range; {}] = [\n", rows.len()));
+        for (first, last) in rows {
+            out.push_str(&format!("    (0x{first:04X}, 0x{last:04X}),\n"));
+        }
+        out.push_str("];\n\n");
+    };
+    table(
+        "UPRIGHT",
+        "/// Where `hasUprightVerticalOrientation` holds: characters drawn as they are when the\n\
+         /// line runs downwards, rather than rotated a quarter turn.\n",
+        &upright,
+    );
+    table(
+        "NEUTRAL",
+        "/// Where `hasNeutralVerticalOrientation` holds. Neutral is not upright — it is the set\n\
+         /// mbgl declines to rotate *and* declines to call upright, and it exists only to make\n\
+         /// `hasRotatedVerticalOrientation` the complement of the two together.\n",
+        &neutral,
+    );
+    table(
+        "COMPLEX_SHAPING",
+        "/// Where `isCharInComplexShapingScript` holds. These are never verticalized when\n\
+         /// vertical placement is allowed, because their shaping already depends on their\n\
+         /// neighbours and turning one on its side would break the join.\n",
+        &complex,
+    );
+
+    out.push_str(
+        "/// The vertical forms of punctuation, as `from` and the character to draw instead.\n\
+         ///\n\
+         /// Sorted by `from`, so a lookup is a binary search.\n",
+    );
+    out.push_str(&format!(
+        "pub const PUNCTUATION: [(u32, u32); {}] = [\n",
+        punctuation.len()
+    ));
+    for (from, to) in &punctuation {
+        out.push_str(&format!("    (0x{from:04X}, 0x{to:04X}),\n"));
+    }
+    out.push_str("];\n");
+    Ok(Some(out))
 }
