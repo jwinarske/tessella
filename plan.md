@@ -855,6 +855,19 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   test compares is one it derives — and it had never been compared, because the elision took it
   whole. It is compared now, and it matches byte for byte: the glyph positions and label anchors
   of both tiles of the symbol capture. The encoding was right; nothing had said so.
+  **Per-section scaling is built, and building it found two defects older than it.** Neither is
+  about scaling; both were only reachable once a capture could be read attribute by attribute.
+  A symbol's anchor was up to a tile unit low, because a fill or a line reaches the tile through
+  `to_tile_ring`, which rounds — geojson-vt rounds a tile's coordinates before mbgl sees one —
+  and the symbol path took the projected float straight while the symbol vertex packs its anchor
+  by truncating. Every point label, at every zoom. The layout test that passes against the glyph
+  capture projects with its own helper rather than building a tile, so it could not see it.
+  And the shaper was given `ONE_EM` as its line height, ignoring `text-line-height` — default
+  1.2 — so every line of every multi-line label sat 4.8 pixels too close to the one above.
+  A single line hides that completely: the vertical alignment branch a one-line label takes does
+  not use the block height, and both values give a zero shift there. It takes a line that has
+  *grown* to reach the other branch, which is exactly what a larger section does. The feature
+  that needed the oracle is what made the older bug reachable.
   **Was held behind a capture, and is not any longer**: the pitched paths, which stood here in
   three different states because the probe was unrotated and there was no capture to check any of
   them against — R0's second qualification reappearing rather than a new one. A line label's
