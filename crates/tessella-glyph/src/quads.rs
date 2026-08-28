@@ -107,8 +107,13 @@ where
                 continue;
             }
 
+            // Scaled by the section's `font-scale`, as every measurement of this glyph is:
+            // mbgl reads `positionedGlyph.scale` at each of them. A glyph twice the size is
+            // twice as wide, sits twice as far from its own centre, and covers twice as much of
+            // the atlas rectangle it samples — and getting one of the three wrong shows as text
+            // that is the right size in the wrong place, or the wrong size in the right one.
             #[allow(clippy::cast_precision_loss)]
-            let half_advance = metrics.advance as f32 / 2.0;
+            let half_advance = metrics.advance as f32 * glyph.scale / 2.0;
 
             // For a point label the position is baked into the corners. Along a line it moves
             // to `glyph_offset`, because the shader has to project it before applying it.
@@ -125,13 +130,13 @@ where
             };
 
             #[allow(clippy::cast_precision_loss)]
-            let x1 = (metrics.left as f32 - RECT_BUFFER) - half_advance + built_in.0;
+            let x1 = (metrics.left as f32 - RECT_BUFFER) * glyph.scale - half_advance + built_in.0;
             #[allow(clippy::cast_precision_loss)]
-            let y1 = (-(metrics.top as f32) - RECT_BUFFER) + built_in.1;
+            let y1 = (-(metrics.top as f32) - RECT_BUFFER) * glyph.scale + built_in.1;
             #[allow(clippy::cast_precision_loss)]
-            let x2 = x1 + rect.width as f32;
+            let x2 = x1 + rect.width as f32 * glyph.scale;
             #[allow(clippy::cast_precision_loss)]
-            let y2 = y1 + rect.height as f32;
+            let y2 = y1 + rect.height as f32 * glyph.scale;
 
             let mut quad = Quad {
                 tl: (x1, y1),

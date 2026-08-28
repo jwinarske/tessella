@@ -287,6 +287,8 @@ pub enum Anchoring {
 pub struct Pending {
     /// What it says, after tokens and expressions. Empty for an icon with no label.
     pub text: String,
+    /// Its sections, which concatenate to [`Self::text`]. One for an ordinary label.
+    pub sections: Vec<crate::symbol::Section>,
     /// The sprite its `icon-image` names, if it has one.
     ///
     /// A symbol is a label, an icon, or both. Most markers on a map are the middle case, which is
@@ -390,7 +392,9 @@ impl SymbolLayout {
             .as_ref()
             .map(|label| label.fonts.clone())
             .unwrap_or_default();
-        let text = label.map(|label| label.text).unwrap_or_default();
+        let (text, sections) = label
+            .map(|label| (label.text, label.sections))
+            .unwrap_or_default();
 
         for ring in rings {
             let anchoring = if self.placement.along_line() {
@@ -418,6 +422,7 @@ impl SymbolLayout {
 
             self.pending.push(Pending {
                 text: text.clone(),
+                sections: sections.clone(),
                 icon: icon.clone(),
                 fonts: fonts.clone(),
                 anchoring,
@@ -752,6 +757,7 @@ impl SymbolLayout {
                     .filter_map(|(offset, pending)| match &pending.anchoring {
                         Anchoring::Line(line) => Some(LineLabel {
                             pending: start_of_run + offset,
+                            sections: pending.sections.clone(),
                             icon: self.icon_extent(pending, icons),
                             text: pending.text.to_string(),
                             line: line.clone(),
@@ -772,6 +778,7 @@ impl SymbolLayout {
                     .filter_map(|(offset, pending)| match pending.anchoring {
                         Anchoring::Point(anchor) => Some(Label {
                             pending: start_of_run + offset,
+                            sections: pending.sections.clone(),
                             text: pending.text.to_string(),
                             anchor,
                         }),

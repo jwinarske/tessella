@@ -39,6 +39,7 @@ fn one_glyph(x: f32, y: f32) -> Shaping {
             codepoint: u32::from(b'A'),
             x,
             y,
+        scale: 1.0,
         }]],
         ..Shaping::default()
     }
@@ -133,11 +134,13 @@ fn an_unplaced_glyph_is_skipped() {
                 codepoint: u32::from(b'A'),
                 x: 0.0,
                 y: 0.0,
+            scale: 1.0,
             },
             PositionedGlyph {
                 codepoint: u32::from(b'B'),
                 x: 24.0,
                 y: 0.0,
+            scale: 1.0,
             },
         ]],
         ..Shaping::default()

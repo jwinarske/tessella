@@ -59,6 +59,7 @@ fn lay_out(entries: &[(&str, (f32, f32))]) -> (SymbolBuffers, Vec<FrameLabel<'st
         .iter()
         .map(|(text, anchor)| Label {
         pending: 0,
+        sections: vec![tessella_layout::symbol::Section { text: (*text).to_string(), scale: 1.0 }],
             text: (*text).to_string(),
             anchor: *anchor,
         })
@@ -374,6 +375,7 @@ fn a_line_label_reserves_its_road_and_not_its_box() {
     let (_, laid) = build_line_symbols(
         &[LineLabel {
         pending: 0,
+        sections: vec![tessella_layout::symbol::Section { text: "Diagonal Road".to_string(), scale: 1.0 }],
         icon: (0.0, 0.0),
             text: "Diagonal Road".to_string(),
             line: road.clone(),
@@ -391,6 +393,7 @@ fn a_line_label_reserves_its_road_and_not_its_box() {
     let (_, beside) = build_symbols(
         &[Label {
         pending: 0,
+        sections: vec![tessella_layout::symbol::Section { text: "Beside".to_string(), scale: 1.0 }],
             text: "Beside".to_string(),
             anchor: (2880.0, 1600.0),
         }],

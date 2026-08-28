@@ -285,6 +285,8 @@ pub use tessella_glyph::Glyphs;
 pub struct Label {
     /// Which of the layout's pending symbols this is, stamped into every instance it produces.
     pub pending: usize,
+    /// The label's sections, which concatenate to its text. One for an ordinary label.
+    pub sections: Vec<crate::symbol::Section>,
     /// The text, already resolved from `text-field`.
     pub text: alloc::string::String,
     /// Its anchor, in tile units.
@@ -357,6 +359,35 @@ pub struct LaidOut {
     pub vertices: core::ops::Range<usize>,
 }
 
+/// One label's characters, section by section, with each section's scale carried on them.
+///
+/// The advance is `metrics.advance * scale + spacing`, which is mbgl's: the glyph scales and the
+/// letter spacing does not, so a double-size word is not also a loosely-set one.
+fn chars_of<G: tessella_glyph::Glyphs + ?Sized>(
+    sections: &[crate::symbol::Section],
+    glyphs: &G,
+    letter_spacing: f32,
+) -> Vec<tessella_glyph::shaping::Char> {
+    use tessella_glyph::shaping::Char;
+    let mut out = Vec::new();
+    for section in sections {
+        for character in section.text.chars() {
+            let codepoint = character as u32;
+            #[allow(clippy::cast_precision_loss)]
+            let scaled = |advance: u32| advance as f32 * section.scale + letter_spacing;
+            let built = match glyphs.metrics(codepoint) {
+                Some((metrics, true)) => Char::new(codepoint, scaled(metrics.advance)),
+                Some((metrics, false)) => Char::blank(codepoint, scaled(metrics.advance)),
+                // A codepoint the stack does not carry: no advance and nothing to draw, so the
+                // rest of the label still sets correctly around the gap.
+                None => Char::blank(codepoint, 0.0),
+            };
+            out.push(built.at_scale(section.scale));
+        }
+    }
+    out
+}
+
 /// Lays out a layer's labels into one tile's buffers.
 ///
 /// Every label's quads go into the same buffers, in the order given, which is what makes the
@@ -372,33 +403,14 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
     options: &SymbolOptions,
 ) -> (SymbolBuffers, Vec<LaidOut>) {
     use tessella_glyph::quads::{self, Placed};
-    use tessella_glyph::shaping::{self, Char, Options as ShapeOptions};
+    use tessella_glyph::shaping::{self, Options as ShapeOptions};
     use tessella_glyph::text::ONE_EM;
 
     let mut buffers = SymbolBuffers::default();
     let mut out = Vec::with_capacity(labels.len());
 
     for label in labels {
-        let chars: Vec<Char> = label
-            .text
-            .chars()
-            .map(|character| {
-                let codepoint = character as u32;
-                match glyphs.metrics(codepoint) {
-                    #[allow(clippy::cast_precision_loss)]
-                    Some((metrics, true)) => {
-                        Char::new(codepoint, metrics.advance as f32 + options.letter_spacing)
-                    }
-                    #[allow(clippy::cast_precision_loss)]
-                    Some((metrics, false)) => {
-                        Char::blank(codepoint, metrics.advance as f32 + options.letter_spacing)
-                    }
-                    // A codepoint the stack does not carry: no advance and nothing to draw, so
-                    // the rest of the label still sets correctly around the gap.
-                    None => Char::blank(codepoint, 0.0),
-                }
-            })
-            .collect();
+        let chars = chars_of(&label.sections, glyphs, options.letter_spacing);
 
         let shaping = shaping::shape(
             &chars,
@@ -461,6 +473,8 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
 pub struct LineLabel {
     /// Which of the layout's pending symbols this is, stamped into every instance it produces.
     pub pending: usize,
+    /// The label's sections, which concatenate to its text. One for an ordinary label.
+    pub sections: Vec<crate::symbol::Section>,
     /// The icon's horizontal extent around the anchor, as `(left, right)` in logical pixels.
     ///
     /// mbgl passes both the shaped text's and the shaped icon's to `getAnchors`, so a symbol
@@ -518,33 +532,16 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
 ) -> (SymbolBuffers, Vec<LaidOut>) {
     use crate::anchors::{get_anchors, get_center_anchor};
     use tessella_glyph::quads::{self, Placed};
-    use tessella_glyph::shaping::{self, Char, Options as ShapeOptions};
+    use tessella_glyph::shaping::{self, Options as ShapeOptions};
     use tessella_glyph::text::ONE_EM;
 
     let mut buffers = SymbolBuffers::default();
     let mut out = Vec::new();
 
     for label in labels {
-        let chars: Vec<Char> = label
-            .text
-            .chars()
-            .map(|character| {
-                let codepoint = character as u32;
-                match glyphs.metrics(codepoint) {
-                    #[allow(clippy::cast_precision_loss)]
-                    Some((metrics, true)) => Char::new(
-                        codepoint,
-                        metrics.advance as f32 + options.symbol.letter_spacing,
-                    ),
-                    #[allow(clippy::cast_precision_loss)]
-                    Some((metrics, false)) => Char::blank(
-                        codepoint,
-                        metrics.advance as f32 + options.symbol.letter_spacing,
-                    ),
-                    None => Char::blank(codepoint, 0.0),
-                }
-            })
-            .collect();
+        // The same sections a point label gets. A line-placed label is set the same way; what
+        // differs is where it is put, not how it is shaped.
+        let chars = chars_of(&label.sections, glyphs, options.symbol.letter_spacing);
 
         let shaping = shaping::shape(
             &chars,

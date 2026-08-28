@@ -201,6 +201,7 @@ fn draw_a_frame() {
         .iter()
         .map(|(text, anchor)| Label {
         pending: 0,
+        sections: vec![tessella_layout::symbol::Section { text: text.clone(), scale: 1.0 }],
             text: text.clone(),
             anchor: *anchor,
         })
@@ -429,6 +430,7 @@ fn draw_line_labels() {
             #[allow(clippy::cast_precision_loss)]
             labels.push(LineLabel {
         pending: 0,
+        sections: vec![tessella_layout::symbol::Section { text: text.to_string(), scale: 1.0 }],
         icon: (0.0, 0.0),
                 text: text.to_string(),
                 line: ring

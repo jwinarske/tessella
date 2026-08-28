@@ -19,6 +19,10 @@ fn layout(features: &[(&str, &[(i32, i32)])]) -> SymbolLayout {
         .iter()
         .map(|(text, points)| Pending {
             text: (*text).to_string(),
+            sections: vec![tessella_layout::symbol::Section {
+                text: (*text).to_string(),
+                scale: 1.0,
+            }],
             icon: None,
             fonts: vec!["TestFont".to_string()],
             anchoring: Anchoring::Line(

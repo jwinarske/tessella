@@ -50,6 +50,16 @@ pub struct Char {
     /// has already happened, so the outcome is carried. It is not the same as a zero advance —
     /// a space has no glyph *and* an advance, and both facts matter.
     pub drawable: bool,
+    /// The `font-scale` of the section this character came from.
+    ///
+    /// One for an ordinary label. A `["format", …]` may set it per section, which changes the
+    /// glyph's drawn size, its advance, and — through the largest scale on a line — that line's
+    /// height and where every glyph on it sits against the baseline.
+    ///
+    /// The advance in [`Self::advance`] is already scaled, because the caller computes it from
+    /// metrics this type does not carry. This is kept beside it for the two things the caller
+    /// cannot do: the line's height, which depends on its neighbours, and the quad's size.
+    pub scale: f32,
 }
 
 impl Char {
@@ -60,6 +70,7 @@ impl Char {
             codepoint,
             advance,
             drawable: true,
+            scale: 1.0,
         }
     }
 
@@ -71,7 +82,19 @@ impl Char {
             codepoint,
             advance,
             drawable: false,
+            scale: 1.0,
         }
+    }
+
+    /// The same character, marked as belonging to a section at `scale`.
+    ///
+    /// Only the mark: the advance is the caller's, and deliberately, because mbgl scales the
+    /// glyph's *metric* and adds letter spacing to the result — `metrics.advance * scale +
+    /// spacing`. Scaling the finished advance would scale the spacing too, and a double-size
+    /// word would sit twice as loosely as the text beside it.
+    #[must_use]
+    pub const fn at_scale(self, scale: f32) -> Self {
+        Self { scale, ..self }
     }
 }
 
@@ -348,6 +371,11 @@ pub struct PositionedGlyph {
     pub x: f32,
     /// Vertical position, relative to the anchor.
     pub y: f32,
+    /// Its section's `font-scale`, which the quad builder needs and the shaper cannot apply.
+    ///
+    /// Shaping places a glyph; the quad is where its size is decided, and a scaled glyph is
+    /// larger as well as further along. Carrying it here is how the two stay one decision.
+    pub scale: f32,
 }
 
 /// A shaped label: its glyphs in lines, and the box they occupy.
@@ -591,12 +619,26 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
         let mut x = 0.0f32;
         let mut last_advance = 0.0f32;
 
+        // The largest scale on this line, which is what its height is set by and what every
+        // glyph on it is offset against. mbgl's `line.getMaxScale()`: a line holding one
+        // double-size word is a double-height line, and the small text on it sits on the same
+        // baseline rather than floating at the top of it.
+        let line_scale = line
+            .iter()
+            .map(|character| character.scale)
+            .fold(1.0f32, f32::max);
+
         for character in line {
             if character.drawable {
                 glyphs.push(PositionedGlyph {
                     codepoint: character.codepoint,
                     x,
-                    y,
+                    // mbgl's `baselineOffset`. Laid out at one em, a glyph scaled differently
+                    // from its line has to drop by the difference to keep its feet on the
+                    // baseline; at the line's own scale it is zero, which is every ordinary
+                    // label.
+                    y: y + (line_scale - character.scale) * crate::text::ONE_EM,
+                    scale: character.scale,
                 });
                 last_advance = character.advance;
             }
@@ -614,8 +656,10 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
             justify_line(&mut glyphs, last_advance, justify);
         }
 
-        y += options.line_height;
-        max_line_height = max_line_height.max(options.line_height);
+        // `lineHeight * lineMaxScale`, so a line with a bigger section is a taller line.
+        let line_height = options.line_height * line_scale;
+        y += line_height;
+        max_line_height = max_line_height.max(line_height);
         shaping.lines.push(glyphs);
     }
 

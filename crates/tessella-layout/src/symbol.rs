@@ -56,9 +56,28 @@ fn evaluate(value: &Value, zoom: f64, feature: &dyn Feature) -> Option<Value> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Label {
     /// What it says, after tokens and expressions are resolved.
+    ///
+    /// The whole label, with every section run together. Everything that asks *what a label
+    /// says* rather than how it is set reads this: the glyphs it needs, the key a line label is
+    /// joined across tile seams by, whether it is blank.
     pub text: String,
+    /// Its sections, which concatenate to [`Self::text`].
+    ///
+    /// One section for an ordinary label. A `["format", …]` gives several, and they can differ
+    /// in scale — which is not a property of the text but of how it is drawn, so it is carried
+    /// beside the text rather than inside it.
+    pub sections: Vec<Section>,
     /// The font stack it is set in, as the style names it.
     pub fonts: Vec<String>,
+}
+
+/// One run of a label set the same way.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Section {
+    /// The text of this run.
+    pub text: String,
+    /// Its `font-scale`, defaulting to one.
+    pub scale: f32,
 }
 
 /// Resolves `{token}` against the feature's properties.
@@ -183,6 +202,11 @@ pub fn icon_image(layer: &Layer, zoom: f64, feature: &dyn Feature) -> Option<Str
 pub fn label(layer: &Layer, zoom: f64, feature: &dyn Feature) -> Option<Label> {
     let field = layer.layout.get("text-field")?;
 
+    // A `["format", …]` evaluates to `{"sections": [...]}`, and the sections carry what the flat
+    // text cannot: each run's own scale. Read here rather than reconstructed later, because by
+    // the time anything downstream has the string the structure is gone.
+    let mut sections: Vec<Section> = Vec::new();
+
     let text = match field {
         // A literal string is a token template; a literal anything else is taken as written.
         PropertyValue::Literal(Value::String(template)) => replace_tokens(template, feature),
@@ -194,6 +218,10 @@ pub fn label(layer: &Layer, zoom: f64, feature: &dyn Feature) -> Option<Label> {
                 // them afterwards, and styles written against the legacy syntax and then
                 // wrapped in an expression rely on it.
                 Value::String(text) => replace_tokens(&text, feature),
+                Value::Object(ref members) if members.contains_key("sections") => {
+                    sections = read_sections(members.get("sections"), feature);
+                    sections.iter().map(|section| section.text.as_str()).collect()
+                }
                 other => stringify(&other),
             }
         }
@@ -205,10 +233,48 @@ pub fn label(layer: &Layer, zoom: f64, feature: &dyn Feature) -> Option<Label> {
         return None;
     }
 
+    // An ordinary label is one section at scale one, so nothing downstream needs to ask which
+    // kind of label it has.
+    if sections.is_empty() {
+        sections.push(Section {
+            text: text.clone(),
+            scale: 1.0,
+        });
+    }
+
     Some(Label {
         text,
+        sections,
         fonts: font_stack(layer, zoom, feature),
     })
+}
+
+/// Reads the sections a `["format", …]` evaluated to.
+///
+/// Each is `{text, image, scale, fontStack, textColor}`. Only the text and the scale are read:
+/// an image section draws a sprite in the line and a per-section font stack sets it in another
+/// face, and neither is built — a section carrying an image contributes no text, which is what
+/// it would contribute anyway until the shaper can place one.
+fn read_sections(sections: Option<&Value>, feature: &dyn Feature) -> Vec<Section> {
+    let Some(Value::Array(entries)) = sections else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let members = entry.as_object()?;
+            let text = match members.get("text") {
+                Some(Value::String(text)) => replace_tokens(text, feature),
+                _ => String::new(),
+            };
+            #[allow(clippy::cast_possible_truncation)]
+            let scale = match members.get("scale") {
+                Some(Value::Number(scale)) if *scale > 0.0 => *scale as f32,
+                _ => 1.0,
+            };
+            Some(Section { text, scale })
+        })
+        .collect()
 }
 
 /// Which glyphs a tile's symbol layers need, per font stack.

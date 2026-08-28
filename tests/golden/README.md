@@ -16,6 +16,7 @@ maplibre-native build. Regenerating them needs both.
 | `live_protomaps_z5.dump` | `crates/tessella-style/tests/live_style.json` | 51.505, -0.11 @ z5, 1024x768 |
 | `symbol_style.dump` | `crates/tessella-style/tests/symbol_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `pattern_style.dump` | `crates/tessella-style/tests/pattern_style.json` | 51.505, -0.11 @ z13, 1024x768 |
+| `scaled_style.dump` | `crates/tessella-style/tests/scaled_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 
 ### The one that is not hermetic
 
@@ -168,6 +169,17 @@ camera off an integer.
 The R0 reference is deliberately left alone: it is what the whole stream is diffed against and
 it is frozen, so a new question gets a new capture rather than an amended one.
 
+### The one that exists because a capture could not see something
+
+`scaled_style.dump` is one label written `["format", "Big", {"font-scale": 2}, "small",
+{"font-scale": 0.5}]`, and it is a capture of its own rather than a layer added to
+`symbol_style.dump` — the rule above, that a new question gets a new capture. Adding it there
+moved counts that nine tests assert, none of which is about scaling.
+
+It is also the capture that `fld=` exists for. Before the per-attribute hash, this label and the
+same one at scale one produced byte-identical dumps: the difference lives in the glyph vertex
+buffer, and that buffer is elided whole because the glyph atlas is packed in arrival order.
+
 ## Regenerating
 
 ```sh
@@ -179,6 +191,12 @@ sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/symbol_style
 ./mbgl-capture-probe file:///tmp/symbol.json --dump=<tessella>/tests/golden/symbol_style.dump
 python3 <tessella>/tools/mbgl-codegen/oracles/elide_symbol_atlas.py \
     <tessella>/tests/golden/symbol_style.dump
+
+# The scaled-section capture, substituted and elided as the symbol one is.
+sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/scaled_style.json > /tmp/scaled.json
+./mbgl-capture-probe file:///tmp/scaled.json --dump=<tessella>/tests/golden/scaled_style.dump
+python3 <tessella>/tools/mbgl-codegen/oracles/elide_symbol_atlas.py \
+    <tessella>/tests/golden/scaled_style.dump
 
 # The pattern capture needs the same substitution, and its own elision.
 sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/pattern_style.json > /tmp/pattern.json

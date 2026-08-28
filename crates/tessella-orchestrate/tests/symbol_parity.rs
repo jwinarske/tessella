@@ -202,6 +202,7 @@ fn build(labels: &[&str], font: &Font) -> SymbolBuffers {
         .iter()
         .map(|text| Label {
         pending: 0,
+        sections: vec![tessella_layout::symbol::Section { text: (*text).to_string(), scale: 1.0 }],
             text: (*text).to_string(),
             anchor: (0.0, 0.0),
         })
@@ -360,6 +361,7 @@ fn the_position_buffer_matches_the_oracle() {
             .iter()
             .map(|(text, anchor)| Label {
         pending: 0,
+        sections: vec![tessella_layout::symbol::Section { text: (*text).to_string(), scale: 1.0 }],
                 text: (*text).to_string(),
                 anchor: *anchor,
             })
@@ -1368,6 +1370,7 @@ fn the_glyph_layout_buffer_matches_the_oracle() {
             .iter()
             .map(|(text, anchor)| Label {
                 pending: 0,
+                sections: vec![tessella_layout::symbol::Section { text: (*text).to_string(), scale: 1.0 }],
                 text: (*text).to_string(),
                 anchor: *anchor,
             })
