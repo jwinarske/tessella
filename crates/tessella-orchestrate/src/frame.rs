@@ -625,6 +625,22 @@ fn emit_group(
     // they share a slab whenever one holds them. That is the whole of what the producer can do
     // for batching, and it is worth doing here rather than leaving the consumer to copy the
     // buckets into a buffer of its own — a copy per frame of every byte of geometry.
+    // Which buckets have anything new in them. The skip below is bucket-scoped rather than
+    // drawable-scoped because a bucket's drawables share an encoding: a fill's outline is built
+    // from the fill's own vertices, out of the `packed_bytes` entry the fill's encode left
+    // behind. Skipping the fill and then encoding the outline would find no entry and take the
+    // fresh path, which encodes a *fill* under the outline's id — the corruption is silent,
+    // because the record is well formed and simply draws the wrong thing.
+    //
+    // In practice a bucket's drawables are always fresh or known together: they enter the
+    // registry in the same binding pass and leave the cover in the same frame. Scoping the
+    // skip to the bucket means nothing has to rely on that.
+    let fresh_buckets: BTreeSet<(usize, usize)> = source
+        .iter()
+        .filter(|(geometry, _)| keyed.get(geometry).is_some_and(|key| fresh.contains(key)))
+        .map(|(_, &(tile_index, bucket_index, _))| (tile_index, bucket_index))
+        .collect();
+
     let mut packed: BTreeSet<u64> = BTreeSet::new();
     let mut open: Option<u32> = None;
     for entry in draw_order.resolve() {
@@ -675,6 +691,16 @@ fn emit_group(
         // buffers under it, which is what `FillShared` carries. Copying the record for a fill
         // is what made the outline draw the interior a second time and `fill-outline-color`
         // render nothing at all.
+        // Geometry the consumer already has is not re-encoded. This test has to come before the
+        // encoding, not after it: `encode` writes into the arena, so deciding late meant a
+        // second view drawing a tile the first already holds packed a whole second copy of its
+        // vertices, indices and attributes that no registry entry ever referenced. Dead bytes
+        // in proportion to cover times views, every frame — §11.5's allocation churn, arriving
+        // by the one path retention was supposed to close.
+        if registry.is_some() && !fresh_buckets.contains(&(tile_index, bucket_index)) {
+            continue;
+        }
+
         let encoded = match packed_bytes.get(&(tile_index, bucket_index)) {
             Some((_, Some(shared))) => {
                 let shared = *shared;
@@ -718,9 +744,9 @@ fn emit_group(
                 fresh.0
             }
         };
-        // A drawable the consumer already has is not announced again. `fresh` is empty without
-        // a registry, so the unregistered path announces everything, which is what
-        // `GeometryId`'s documentation describes.
+        // And a *drawable* the consumer already has is not announced again, even where its
+        // bucket had to be encoded for a sibling's sake. `fresh` is empty without a registry, so
+        // the unregistered path announces everything, which is what `GeometryId` documents.
         let key = keyed.get(&entry.geometry.0).copied();
         if registry.is_some() && key.is_some_and(|key| !fresh.contains(&key)) {
             continue;
@@ -739,6 +765,12 @@ fn emit_group(
             registry.record_refs(key, refs);
         }
     }
+
+    // The last layer's slab, which the loop above never closed: it seals on a *change* of
+    // layer, and there is no change after the last one. An open slab is in none of the arena's
+    // sealed list, so nothing could sweep it, measure its live fraction, or resolve a reference
+    // into it across a mapping — it was invisible to retention entirely.
+    arena.seal();
 
     // Every geometry is announced before any drawable names one.
     //
@@ -773,7 +805,13 @@ fn emit_group(
         // And the bytes go only for those no view holds afterwards — §5.3's "removed when the
         // last view releases". A tile leaving one view's cover while another still draws it
         // keeps its geometry and loses only that view's use.
-        for (key, _) in registry.retired() {
+        for (key, geometry) in registry.retired() {
+            // The record first, then the bytes. The arena hands a released range back to the
+            // next geometry that fits it, and the consumer is holding the old one's id against
+            // that same range: without the removal it reads whatever was written over it. Every
+            // release for this geometry has already gone out above, so nothing is drawing it
+            // when it goes.
+            emit::remove(producer, geometry).map_err(FrameError::from)?;
             for reference in registry.refs_of(&key) {
                 arena.release(*reference);
             }
@@ -848,6 +886,95 @@ fn symbol_stacks(buckets: &[(TileId, Vec<LayerBucket>)]) -> Vec<Vec<alloc::strin
         }
     }
     stacks
+}
+
+/// Tears a view down: releases what it held, removes what nothing holds, and undeclares it.
+///
+/// # What teardown has to do that a frame does not
+///
+/// R4 calls for a teardown protocol, and until the lifecycle existed there was nothing to
+/// protocol: nothing was ever retained, so nothing had to be let go. Now a view holds uses and
+/// geometry holds bytes, and dropping a view without saying so leaves a consumer with buffers
+/// nothing will mention again and a declared view nothing will draw.
+///
+/// So this is the eviction path with an empty cover, plus the undeclaration: every use released,
+/// every geometry no *other* view holds removed, its bytes handed back, and the view forgotten.
+/// A view sharing geometry with another leaves that geometry alone, which is §5.3's rule and
+/// exactly the rule an ordinary frame follows.
+///
+/// # Whole or not at all
+///
+/// Grouped like a frame, and for the same reason: a teardown that failed halfway would leave a
+/// consumer holding some releases and not others, with no record saying which. On failure the
+/// session is untouched and the caller may try again.
+///
+/// # Errors
+///
+/// [`FrameError::Full`] when the ring cannot take the records, and [`FrameError::View`] when the
+/// view was never declared — tearing down a view that does not exist is a caller fault, not a
+/// silent no-op.
+pub fn teardown_view(
+    producer: &mut Producer,
+    arena: &mut SlabArena,
+    session: &mut Session,
+    view_id: ViewId,
+) -> Result<Emitted, FrameError> {
+    producer.begin();
+    match teardown_group(producer, arena, session, view_id) {
+        Ok(emitted) => {
+            session.registry().retire();
+            session.forget(view_id);
+            producer.commit();
+            Ok(emitted)
+        }
+        Err(error) => {
+            producer.abort();
+            session.registry().rollback();
+            Err(error)
+        }
+    }
+}
+
+fn teardown_group(
+    producer: &mut Producer,
+    arena: &mut SlabArena,
+    session: &mut Session,
+    view_id: ViewId,
+) -> Result<Emitted, FrameError> {
+    // A view this session never declared cannot be torn down: there is nothing to release and
+    // nothing to undeclare, and saying so is more useful than a silent no-op.
+    if session.needs_declaring(view_id) {
+        return Err(FrameError::View(alloc::format!(
+            "view {} was never declared",
+            view_id.0
+        )));
+    }
+
+    let mut view = ViewSession::new();
+    // Legitimate as far as this session is concerned; the consumer was told when the view first
+    // drew, or it would be holding nothing to release.
+    view.declare_if(producer, view_id, CameraMode::Producer, false)
+        .map_err(FrameError::from)?;
+
+    // An empty frame for this view: everything it held is now unseen, so `released` is its whole
+    // set and `retired` is whatever no other view keeps.
+    session.registry().begin_frame(view_id);
+
+    let mut emitted = Emitted::default();
+    for (_, geometry) in session.registry().released() {
+        view.release_geometry(producer, view_id, geometry)
+            .map_err(FrameError::from)?;
+    }
+    for (key, geometry) in session.registry().retired() {
+        emit::remove(producer, geometry).map_err(FrameError::from)?;
+        for reference in session.registry().refs_of(&key) {
+            arena.release(*reference);
+        }
+        emitted.removed += 1;
+    }
+
+    view.undeclare(producer, view_id).map_err(FrameError::from)?;
+    Ok(emitted)
 }
 
 /// How empty a slab has to be before its survivors are moved out of it.

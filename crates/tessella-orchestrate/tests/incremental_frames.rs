@@ -212,6 +212,12 @@ fn a_pan_sends_only_the_difference() {
         "one release per drawable that left"
     );
     assert_eq!(
+        kinds.get("GeometryRemove").copied().unwrap_or(0),
+        second.removed,
+        "and one removal each: the arena hands those ranges to the next geometry that fits, so \
+         a consumer not told they are gone reads whatever gets written over them"
+    );
+    assert_eq!(
         second.drawables, first.drawables,
         "the cover is the same size either way"
     );
@@ -711,4 +717,133 @@ fn a_displaced_drawable_is_announced_again() {
         "exactly what was displaced comes back"
     );
     assert_eq!(after.removed, 0, "and nothing left the cover");
+}
+
+/// Tearing a view down releases what it held and leaves the others alone.
+///
+/// # Why this had nothing to protocol before
+///
+/// R4 asks for a teardown protocol, and until the lifecycle existed there was nothing to
+/// protocol — nothing was retained, so nothing had to be let go. A view now holds uses and
+/// geometry holds bytes, and dropping one without saying so leaves the consumer with buffers
+/// nothing will mention again and a declared view nothing will draw.
+mod teardown {
+    use super::{Scene, scene};
+    use std::collections::BTreeMap;
+    use tessella_capture_abi::envelope::ViewId;
+    use tessella_capture_abi::ring::Ring;
+    use tessella_orchestrate::SlabArena;
+    use tessella_orchestrate::frame::{self, Frame};
+    use tessella_orchestrate::registry::Session;
+    use tessella_style::light::Light;
+
+    fn frame_of<'a>(scene: &'a Scene, view: ViewId, light: &'a Light) -> Frame<'a> {
+        Frame {
+            style: &scene.style,
+            view: &scene.view,
+            view_id: view,
+            tiles: &scene.tiles,
+            buckets: &scene.buckets,
+            light,
+            fonts: None,
+            patterns: None,
+        }
+    }
+
+    fn draw(scene: &Scene, view: ViewId, arena: &mut SlabArena, session: &mut Session) -> usize {
+        let mut ring = Ring::new(1 << 22);
+        let (producer, _consumer) = ring.split();
+        let light = Light::default();
+        frame::emit_incremental(producer, arena, &frame_of(scene, view, &light), session)
+            .expect("emits")
+            .geometries
+    }
+
+    fn tear(view: ViewId, arena: &mut SlabArena, session: &mut Session) -> BTreeMap<String, usize> {
+        let mut ring = Ring::new(1 << 22);
+        let (producer, consumer) = ring.split();
+        frame::teardown_view(producer, arena, session, view).expect("tears down");
+        let mut kinds = BTreeMap::new();
+        while let Some(record) = consumer.peek() {
+            *kinds.entry(format!("{:?}", record.kind)).or_insert(0) += 1;
+            let consumed = record.consumed();
+            consumer.advance(consumed);
+        }
+        kinds
+    }
+
+    /// The only view: everything it held is released, removed, and the view undeclared.
+    #[test]
+    fn the_last_view_releases_everything() {
+        let scene = scene(0.0);
+        let mut arena = SlabArena::new();
+        let mut session = Session::new();
+        draw(&scene, ViewId(0), &mut arena, &mut session);
+        let held = session.registry().len();
+        assert!(held > 0);
+
+        let kinds = tear(ViewId(0), &mut arena, &mut session);
+        assert_eq!(
+            kinds.get("ViewRelease").copied().unwrap_or(0),
+            held,
+            "one release per drawable it held: {kinds:?}"
+        );
+        assert_eq!(
+            kinds.get("GeometryRemove").copied().unwrap_or(0),
+            held,
+            "and one removal per geometry no other view holds: {kinds:?}"
+        );
+        assert_eq!(
+            kinds.get("ViewUndeclare").copied(),
+            Some(1),
+            "and the view itself: {kinds:?}"
+        );
+        assert_eq!(session.registry().len(), 0, "nothing is held afterwards");
+        assert!(!arena.sweep().is_empty(), "the bytes go back too");
+    }
+
+    /// A view sharing geometry with another releases its use and removes nothing.
+    #[test]
+    fn a_shared_geometry_survives_one_view_going() {
+        let scene = scene(0.0);
+        let mut arena = SlabArena::new();
+        let mut session = Session::new();
+        draw(&scene, ViewId(0), &mut arena, &mut session);
+        draw(&scene, ViewId(1), &mut arena, &mut session);
+        let held = session.registry().len();
+
+        let kinds = tear(ViewId(0), &mut arena, &mut session);
+        assert_eq!(
+            kinds.get("ViewRelease").copied().unwrap_or(0),
+            held,
+            "view 0 releases its uses: {kinds:?}"
+        );
+        assert_eq!(
+            kinds.get("GeometryRemove").copied().unwrap_or(0),
+            0,
+            "but removes nothing: view 1 still draws it"
+        );
+        assert_eq!(session.registry().len(), held, "the geometry stays for view 1");
+        assert!(arena.sweep().is_empty(), "and so do its bytes");
+
+        // View 1 is undisturbed: it still has everything, so it announces nothing.
+        assert_eq!(
+            draw(&scene, ViewId(1), &mut arena, &mut session),
+            0,
+            "view 1 draws on without re-announcing a thing"
+        );
+    }
+
+    /// A view this session never declared cannot be torn down.
+    #[test]
+    fn tearing_down_an_unknown_view_is_a_fault() {
+        let mut arena = SlabArena::new();
+        let mut session = Session::new();
+        let mut ring = Ring::new(1 << 16);
+        let (producer, _consumer) = ring.split();
+        assert!(
+            frame::teardown_view(producer, &mut arena, &mut session, ViewId(3)).is_err(),
+            "undeclaring a view nobody declared is a caller fault, not a silent no-op"
+        );
+    }
 }
