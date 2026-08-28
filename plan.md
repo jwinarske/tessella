@@ -1356,6 +1356,28 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   width. That needed a new capture, so `pattern_style.json` gained a data-driven line layer and
   a second line feature beside it, one line being unable to tell a per-vertex stream from a
   uniform that happened to be right.
+  **Fill-extrusion walls land instanced**, which the encoder note had deferred as "a question
+  about the extrusion's geometry that predates patterns". The capture shows two shaders per tile
+  and this build emitted one: the roof and ground outline, which is a flat city rather than an
+  empty one and wrong in a way that looks deliberate. The walls are a unit quad — four vertices
+  for the whole map — with the building's own outline fed to it *per instance*, read out of the
+  roof's buffer at the roof's stride. `GeometryAdd` has carried an `instance_attrs` span since R0
+  and nothing had filled it.
+  Three things had to come first. The generated attribute table had no entry for either instanced
+  shader, because mbgl wraps their `using` declarations after the `=` and declares their
+  per-instance attributes in a second array the generator never read — the third parser bug of
+  that shape here, all sharing a failure mode where a missed declaration produces a smaller table
+  rather than an error. `doDepthPass = (!opaque || hasPattern)` was quoted in two comments and
+  implemented as `!opaque`, so an opaque patterned extrusion got one pass where the capture has
+  two. And `colorBuilder->setEnableStencil(doDepthPass)` was implemented as no stencil at all,
+  under a comment whose reasoning was sound and whose fact was wrong — the colour pass tests the
+  stencil the prepass wrote, and without a prepass there is nothing to test, which is how both
+  halves of that comment can be true at once.
+  The drawable dispatch changed with it. It cached one record per bucket and copied it for the
+  second pass, which is right for a bucket whose drawables differ only in render state and
+  silently wrong for one with two *geometries*; it caches the bucket's records as a list now and
+  picks by sub-layer. An extrusion is four drawables — roof and walls, in the depth pass and
+  again in the colour pass — where the fill it was modelled on is two.
   The sprite index lands first, as `tessella-glyph/sprite`: mbgl's `SpriteParser`. A style names
   one sprite *base* and the origin serves two resources for it, the suffix going before the
   extension rather than after the URL — `sprite@2x.json`, not `sprite.json@2x` — and a query
