@@ -1233,6 +1233,72 @@ pub fn pattern_placement(
     })
 }
 
+/// A background pattern's block, which is a third shape again.
+///
+/// `BackgroundPatternPropsUBO` splits each rectangle into a `tl` and a `br` `vec2` where a fill
+/// and a line carry one `vec4`, adds the images' display sizes, and puts the crossfade's two
+/// scales and its mix in the last sixteen bytes beside the layer's opacity. Sixty-four bytes,
+/// like a line's, arranged differently.
+///
+/// It is also the *props* block rather than a tile-props one: a background has no tiles to vary
+/// over, so there is one of these for the layer where a fill writes one per drawable.
+///
+/// # Display size is not the rectangle's size
+///
+/// `pattern_size` is the sprite's size in *logical* pixels — its own dimensions over its pixel
+/// ratio — where the rectangle is in atlas pixels. They agree at a ratio of one and diverge on a
+/// retina sheet, and using the rectangle's width for both draws a `@2x` pattern at half scale.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BackgroundPatternPlacement {
+    /// Where the two images sit, top-left and bottom-right.
+    pub placement: PatternPlacement,
+    /// The images' sizes in logical pixels, `from` then `to`.
+    pub display: [[f32; 2]; 2],
+    /// The crossfade.
+    pub crossfade: tessella_style::crossfade::Crossfade,
+    /// `background-opacity`.
+    pub opacity: f32,
+}
+
+/// Packs `BackgroundPatternPropsUBO`, one block for the layer.
+#[must_use]
+pub fn pack_background_pattern_props(entry: &BackgroundPatternPlacement) -> Vec<u8> {
+    let mut out = Vec::with_capacity(64);
+    // Each rectangle as its two corners rather than as one four-vector.
+    for rect in [entry.placement.from, entry.placement.to] {
+        for value in rect {
+            out.extend_from_slice(&f32::from(value).to_le_bytes());
+        }
+    }
+    for size in entry.display {
+        for value in size {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    for value in [
+        entry.crossfade.from_scale,
+        entry.crossfade.to_scale,
+        entry.crossfade.t,
+        entry.opacity,
+    ] {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+    debug_assert_eq!(out.len(), 64);
+    out
+}
+
+/// The sprite's size in logical pixels, which is what `pattern_size` carries.
+///
+/// mbgl's `ImagePosition::displaySize`. Its own dimensions over its pixel ratio, so a `@2x`
+/// sprite occupying a hundred atlas pixels is fifty logical ones and draws at the size the style
+/// author drew it.
+#[must_use]
+pub fn display_size(position: &tessella_glyph::sprite::IconPosition) -> [f32; 2] {
+    let (width, height) = position.display_size();
+    #[allow(clippy::cast_possible_truncation)]
+    [width as f32, height as f32]
+}
+
 /// A line pattern's block, which carries more than a fill's.
 ///
 /// `LinePatternTilePropsUBO` is sixty-four bytes to a fill's forty-eight, and the difference is

@@ -279,3 +279,99 @@ mod line {
         );
     }
 }
+
+/// A background pattern's block, against the capture's decoded values.
+mod background {
+    use tessella_orchestrate::ubo::{
+        BackgroundPatternPlacement, PatternPlacement, pack_background_pattern_props,
+    };
+    use tessella_style::crossfade::Crossfade;
+
+    /// The capture's `ubo layer:0 slot=5`, field for field.
+    ///
+    /// Sixty-four bytes, one block for the layer rather than one per drawable — a background has
+    /// no tiles to vary over. Its blocks decoded to `[1, 1, 51, 51]` twice, `[50, 50, 50, 50]`,
+    /// and `[0.5, 1, 1, 1]`.
+    ///
+    /// `grass_pattern` is fifty by fifty, so its padded slot is fifty-two and its rectangle runs
+    /// from one to fifty-one. The sizes are the *display* sizes, fifty, which agree with the
+    /// rectangle's width only because the sheet is not retina.
+    ///
+    /// `[0.5, 1]` is the crossfade zooming out and `1` its mix, the same pair the line layer
+    /// carries at the same camera.
+    #[test]
+    fn a_background_block_matches_the_capture() {
+        let packed = pack_background_pattern_props(&BackgroundPatternPlacement {
+            placement: PatternPlacement {
+                from: [1, 1, 51, 51],
+                to: [1, 1, 51, 51],
+                texsize: [512, 512],
+            },
+            display: [[50.0, 50.0], [50.0, 50.0]],
+            crossfade: Crossfade {
+                from_scale: 0.5,
+                to_scale: 1.0,
+                t: 1.0,
+            },
+            opacity: 1.0,
+        });
+        assert_eq!(packed.len(), 64);
+
+        let word =
+            |at: usize| f32::from_le_bytes(packed[at..at + 4].try_into().expect("four bytes"));
+        // tl_a, br_a as two vec2s rather than one vec4 — the same numbers, split.
+        assert_eq!([word(0), word(4)], [1.0, 1.0], "pattern_tl_a");
+        assert_eq!([word(8), word(12)], [51.0, 51.0], "pattern_br_a");
+        assert_eq!([word(16), word(20)], [1.0, 1.0], "pattern_tl_b");
+        assert_eq!([word(24), word(28)], [51.0, 51.0], "pattern_br_b");
+        assert_eq!([word(32), word(36)], [50.0, 50.0], "pattern_size_a");
+        assert_eq!([word(40), word(44)], [50.0, 50.0], "pattern_size_b");
+        assert_eq!(word(48), 0.5, "scale_a is the crossfade's from");
+        assert_eq!(word(52), 1.0, "scale_b is its to");
+        assert_eq!(word(56), 1.0, "mix is its t");
+        assert_eq!(word(60), 1.0, "opacity");
+    }
+
+    /// The three pattern blocks are three different shapes, and none is another's.
+    ///
+    /// A fill is forty-eight bytes of two rectangles and a size. A line is sixty-four, adding a
+    /// scale vector and a fade. A background is sixty-four arranged differently again: corners
+    /// rather than rectangles, display sizes, and the crossfade beside the opacity. Reaching for
+    /// the last one's packer because the size matched is the mistake this guards.
+    #[test]
+    fn the_three_blocks_are_not_interchangeable() {
+        use tessella_orchestrate::ubo::{
+            LinePatternPlacement, pack_line_pattern_tile_props, pack_pattern_tile_props,
+        };
+
+        let placement = PatternPlacement {
+            from: [1, 1, 51, 51],
+            to: [1, 1, 51, 51],
+            texsize: [512, 512],
+        };
+        let crossfade = Crossfade {
+            from_scale: 0.5,
+            to_scale: 1.0,
+            t: 1.0,
+        };
+
+        let fill = pack_pattern_tile_props(&[placement]);
+        let line = pack_line_pattern_tile_props(&[LinePatternPlacement {
+            placement,
+            pixel_ratio: 1.0,
+            units_per_pixel: 0.0625,
+            crossfade,
+        }]);
+        let background = pack_background_pattern_props(&BackgroundPatternPlacement {
+            placement,
+            display: [[50.0, 50.0], [50.0, 50.0]],
+            crossfade,
+            opacity: 1.0,
+        });
+
+        assert_eq!((fill.len(), line.len(), background.len()), (48, 64, 64));
+        // The line and the background are the same length and different bytes, which is the
+        // case a length check alone would miss.
+        assert_ne!(line, background);
+    }
+}
