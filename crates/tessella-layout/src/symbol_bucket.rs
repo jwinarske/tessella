@@ -154,6 +154,13 @@ pub struct SymbolBuffers {
     pub opacity: Vec<f32>,
     /// Two triangles per glyph.
     pub indices: Vec<u16>,
+    /// Whether any label in here draws a sprite inline.
+    ///
+    /// mbgl's `SymbolBucket::iconsInText`, and it chooses the shader rather than describing the
+    /// contents: a buffer of glyphs samples one texture, and a buffer holding both glyphs and
+    /// sprites samples two, so a bucket with one image in it is bound to
+    /// `SymbolTextAndIconShader` for all of it.
+    pub icons_in_text: bool,
     /// How far along its line each glyph sits, one per quad.
     ///
     /// mbgl's `PlacedSymbol::glyphOffsets`, and it is deliberately *not* in the vertex: the
@@ -202,6 +209,8 @@ impl SymbolBuffers {
         self.dynamic.extend_from_slice(&other.dynamic);
         self.opacity.extend_from_slice(&other.opacity);
         self.glyph_offsets.extend_from_slice(&other.glyph_offsets);
+        // One image anywhere in the layer makes the whole layer's drawable the two-texture one.
+        self.icons_in_text |= other.icons_in_text;
 
         #[allow(clippy::cast_possible_truncation)]
         let offset = base as u16;
@@ -393,6 +402,13 @@ pub struct LaidOut {
 ///
 /// The advance is `metrics.advance * scale + spacing`, which is mbgl's: the glyph scales and the
 /// letter spacing does not, so a double-size word is not also a loosely-set one.
+/// U+FFFC, which stands in for an image section.
+///
+/// mbgl uses the same one, and what matters about it is that it is not a character any font is
+/// asked for: the label needs a position in the run for the sprite to occupy, and a codepoint
+/// that reached the glyph manager would send a request for a picture.
+const OBJECT_REPLACEMENT: u32 = 0xFFFC;
+
 /// The codepoints of a shaped-in-waiting label, which several i18n predicates ask about.
 fn codepoints(chars: &[tessella_glyph::shaping::Char]) -> Vec<u32> {
     chars.iter().map(|character| character.codepoint).collect()
@@ -431,10 +447,39 @@ fn letter_spacing(chars: &[tessella_glyph::shaping::Char], spacing: f32) -> f32 
 fn chars_of<G: tessella_glyph::Glyphs + ?Sized>(
     sections: &[crate::symbol::Section],
     glyphs: &G,
+    sprites: Option<&tessella_glyph::sprite::Positions>,
 ) -> Vec<tessella_glyph::shaping::Char> {
-    use tessella_glyph::shaping::Char;
+    use tessella_glyph::shaping::{Char, Image};
     let mut out = Vec::new();
     for section in sections {
+        // An image section is one character standing for a whole sprite. mbgl uses the object
+        // replacement character for it, and the choice matters twice over: the shaper needs
+        // *something* to advance past, and the codepoint must be one no font is asked for, or a
+        // glyph request would go out for a picture.
+        if let Some(name) = &section.image {
+            let Some(position) = sprites.and_then(|sprites| sprites.get(name)) else {
+                // A sprite that has not loaded draws nothing and takes no room, which is what
+                // mbgl does when the lookup misses — it skips the character entirely.
+                continue;
+            };
+            #[allow(clippy::cast_possible_truncation)]
+            let size = position.display_size();
+            out.push(Char {
+                codepoint: OBJECT_REPLACEMENT,
+                // The shaper computes an image's advance itself: it depends on the writing mode,
+                // which is not known here.
+                advance: 0.0,
+                drawable: true,
+                scale: section.scale,
+                image: Some(Image {
+                    size: (size.0 as f32, size.1 as f32),
+                    rect: position.padded_rect,
+                    pixel_ratio: position.pixel_ratio as f32,
+                    sdf: position.sdf,
+                }),
+            });
+            continue;
+        }
         for character in section.text.chars() {
             let codepoint = character as u32;
             #[allow(clippy::cast_precision_loss)]
@@ -464,6 +509,7 @@ fn chars_of<G: tessella_glyph::Glyphs + ?Sized>(
 pub fn build_symbols<G: Glyphs + ?Sized>(
     labels: &[Label],
     glyphs: &G,
+    sprites: Option<&tessella_glyph::sprite::Positions>,
     options: &SymbolOptions,
 ) -> (SymbolBuffers, Vec<LaidOut>) {
     use tessella_glyph::quads::{self, Placed};
@@ -474,7 +520,7 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
     let mut out = Vec::with_capacity(labels.len());
 
     for label in labels {
-        let chars = chars_of(&label.sections, glyphs);
+        let chars = chars_of(&label.sections, glyphs, sprites);
         let spacing = letter_spacing(&chars, options.letter_spacing);
 
         let shape = |mode, justify, chars: &[shaping::Char]| {
@@ -488,6 +534,7 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
                     spacing,
                     writing_mode: mode,
                     allow_vertical_placement: options.allow_vertical_placement,
+                    text_size: options.size,
                 },
             )
         };
@@ -527,12 +574,13 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
                         quad.tex.height as u16,
                     ),
                     SizeRange::constant(size),
-                    true,
+                    quad.sdf,
                     1.0,
                 );
             }
         }
 
+        buffers.icons_in_text |= shaping.icons_in_text;
         emit(
             &mut buffers,
             label.anchor,
@@ -640,6 +688,7 @@ impl Default for LineOptions {
 pub fn build_line_symbols<G: Glyphs + ?Sized>(
     labels: &[LineLabel],
     glyphs: &G,
+    sprites: Option<&tessella_glyph::sprite::Positions>,
     options: &LineOptions,
 ) -> (SymbolBuffers, Vec<LaidOut>) {
     use crate::anchors::{get_anchors, get_center_anchor};
@@ -653,7 +702,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
     for label in labels {
         // The same sections a point label gets. A line-placed label is set the same way; what
         // differs is where it is put, not how it is shaped.
-        let chars = chars_of(&label.sections, glyphs);
+        let chars = chars_of(&label.sections, glyphs, sprites);
         let spacing = letter_spacing(&chars, options.symbol.letter_spacing);
 
         let shaping = shaping::shape(
@@ -669,6 +718,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                 spacing,
                 writing_mode: options.symbol.writing_mode,
                 allow_vertical_placement: options.symbol.allow_vertical_placement,
+                text_size: options.symbol.size,
             },
         );
 
@@ -715,6 +765,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
         };
 
         // Shaped once; emitted once per anchor.
+        buffers.icons_in_text |= shaping.icons_in_text;
         let quads = quads::glyph_quads(&shaping, placed, &quad_options);
 
         // A label following a line is set vertically when it *can* be, whatever the layer's
@@ -733,6 +784,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                     spacing,
                     writing_mode: tessella_glyph::shaping::WritingMode::Vertical,
                     allow_vertical_placement: options.symbol.allow_vertical_placement,
+                    text_size: options.symbol.size,
                 },
             );
             Some(quads::glyph_quads(&shaped, placed, &quad_options))
@@ -755,7 +807,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                         quad.tex.height as u16,
                     ),
                     SizeRange::constant(options.symbol.size),
-                    true,
+                    quad.sdf,
                     1.0,
                 );
             }
@@ -774,7 +826,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                             quad.tex.height as u16,
                         ),
                         SizeRange::constant(options.symbol.size),
-                        true,
+                        quad.sdf,
                         1.0,
                     );
                 }

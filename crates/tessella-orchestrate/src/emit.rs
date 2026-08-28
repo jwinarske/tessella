@@ -1755,13 +1755,17 @@ pub fn encode_extrusion_walls(
 /// `is_sdf` picks the shader. Text is always SDF; an icon may be either, and the flag is already
 /// packed into each vertex's size field, so this only decides which shader is named.
 ///
-/// `atlas` is the texture this drawable samples, and it is *one* texture whichever kind of
-/// symbol this is. mbgl's `DrawableAtlasesTweaker` is explicit about it: a shader declaring a
+/// `atlas` is the texture this drawable samples, and it is usually *one* texture whichever kind
+/// of symbol this is. mbgl's `DrawableAtlasesTweaker` is explicit about it: a shader declaring a
 /// separate icon sampler gets both atlases, and a shader that does not gets the glyph atlas for
 /// a text drawable and the *icon* atlas for an icon drawable — at the same slot 0 either way.
-/// Neither shader named here declares the second sampler, so the caller passes whichever atlas
-/// this drawable's symbols came out of. The golden's single `tex ... slot=0` line per symbol
-/// drawable is that rule seen from outside.
+///
+/// `sprites` is the exception, and it is the whole of images in text. A label with an
+/// `["image", …]` section draws glyphs and sprites out of one buffer, from two different
+/// atlases, so it is bound to `SymbolTextAndIconShader` — the one shader here that *does*
+/// declare the second sampler — and both go in. Passing it for a drawable with no images would
+/// bind a texture nothing samples; passing `None` for one that has them would leave the sprite
+/// sampler unbound, which draws a label with holes in it and reports nothing.
 pub fn encode_symbol(
     arena: &mut SlabArena,
     geometry: GeometryId,
@@ -1769,6 +1773,7 @@ pub fn encode_symbol(
     permutation_key: u64,
     is_sdf: bool,
     atlas: TextureId,
+    sprites: Option<TextureId>,
 ) -> Encoded {
     let vertex_bytes = as_symbol_bytes(&buffers.vertices);
     let index_bytes = as_bytes_u16(&buffers.indices);
@@ -1857,12 +1862,15 @@ pub fn encode_symbol(
         }],
     );
 
-    let shader = if is_sdf {
-        BuiltIn::SymbolSDFShader
-    } else {
-        BuiltIn::SymbolIconShader
+    let (shader, textures) = match sprites {
+        Some(sprites) => (
+            BuiltIn::SymbolTextAndIconShader,
+            alloc::vec![atlas, sprites],
+        ),
+        None if is_sdf => (BuiltIn::SymbolSDFShader, alloc::vec![atlas]),
+        None => (BuiltIn::SymbolIconShader, alloc::vec![atlas]),
     };
-    let texture_refs = push_span(&mut payload, &texture_refs(shader, &[atlas]));
+    let texture_refs = push_span(&mut payload, &texture_refs(shader, &textures));
 
     #[allow(clippy::cast_possible_truncation)]
     let record = GeometryAdd {

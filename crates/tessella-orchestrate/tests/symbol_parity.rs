@@ -205,12 +205,13 @@ fn build(labels: &[&str], font: &Font) -> SymbolBuffers {
             sections: vec![tessella_layout::symbol::Section {
                 text: (*text).to_string(),
                 scale: 1.0,
+                image: None,
             }],
             text: (*text).to_string(),
             anchor: (0.0, 0.0),
         })
         .collect();
-    build_symbols(&entries, font, &SymbolOptions::default()).0
+    build_symbols(&entries, font, None, &SymbolOptions::default()).0
 }
 
 /// The golden holds exactly the symbol drawables this style should produce.
@@ -367,12 +368,13 @@ fn the_position_buffer_matches_the_oracle() {
                 sections: vec![tessella_layout::symbol::Section {
                     text: (*text).to_string(),
                     scale: 1.0,
+                    image: None,
                 }],
                 text: (*text).to_string(),
                 anchor: *anchor,
             })
             .collect();
-        let (_, laid) = build_symbols(&entries, &font, &SymbolOptions::default());
+        let (_, laid) = build_symbols(&entries, &font, None, &SymbolOptions::default());
 
         let mut bytes = Vec::new();
         for (label, entry) in laid.iter().zip(&entries) {
@@ -683,7 +685,7 @@ mod through_the_builder {
         for (symbol, layout) in &layouts {
             let (buffers, _) = layout.lay_out(&fonts, None);
             let mut arena = SlabArena::default();
-            let encoded = encode_symbol(&mut arena, GeometryId(1), &buffers, 0, true, ATLAS);
+            let encoded = encode_symbol(&mut arena, GeometryId(1), &buffers, 0, true, ATLAS, None);
 
             let mut attributes: Vec<(u32, u32, u32, u32)> = encoded
                 .attributes()
@@ -767,7 +769,7 @@ fn an_encoded_symbol_binds_its_atlas_at_the_oracle_s_slot() {
     let mut arena = SlabArena::default();
 
     for is_sdf in [true, false] {
-        let encoded = encode_symbol(&mut arena, GeometryId(1), &buffers, 0, is_sdf, atlas);
+        let encoded = encode_symbol(&mut arena, GeometryId(1), &buffers, 0, is_sdf, atlas, None);
         assert_eq!(encoded.record.texture_refs.count, 1, "sdf={is_sdf}");
 
         let size = core::mem::size_of::<TextureRef>();
@@ -1379,12 +1381,13 @@ fn the_glyph_layout_buffer_matches_the_oracle() {
                 sections: vec![tessella_layout::symbol::Section {
                     text: (*text).to_string(),
                     scale: 1.0,
+                    image: None,
                 }],
                 text: (*text).to_string(),
                 anchor: *anchor,
             })
             .collect();
-        let buffers = build_symbols(&entries, &font, &SymbolOptions::default()).0;
+        let buffers = build_symbols(&entries, &font, None, &SymbolOptions::default()).0;
 
         // The attribute's own bytes, gathered as the probe gathers them: `pos_offset` is the
         // first eight of every twenty-four.

@@ -65,17 +65,19 @@ fn labelled(text: &str) -> (SlabArena, emit::Encoded, usize) {
             sections: vec![tessella_layout::symbol::Section {
                 text: text.to_string(),
                 scale: 1.0,
+                image: None,
             }],
             text: text.to_string(),
             anchor: (1000.0, 2000.0),
         }],
         &font,
+        None,
         &SymbolOptions::default(),
     );
     let glyphs = buffers.glyphs();
 
     let mut arena = SlabArena::new();
-    let encoded = emit::encode_symbol(&mut arena, GeometryId(7), &buffers, 0, true, ATLAS);
+    let encoded = emit::encode_symbol(&mut arena, GeometryId(7), &buffers, 0, true, ATLAS, None);
     arena.seal();
     (arena, encoded, glyphs)
 }
@@ -104,15 +106,17 @@ fn a_non_sdf_symbol_names_the_icon_shader() {
             sections: vec![tessella_layout::symbol::Section {
                 text: "Alpha".to_string(),
                 scale: 1.0,
+                image: None,
             }],
             text: "Alpha".to_string(),
             anchor: (0.0, 0.0),
         }],
         &font,
+        None,
         &SymbolOptions::default(),
     );
     let mut arena = SlabArena::new();
-    let encoded = emit::encode_symbol(&mut arena, GeometryId(1), &buffers, 0, false, ATLAS);
+    let encoded = emit::encode_symbol(&mut arena, GeometryId(1), &buffers, 0, false, ATLAS, None);
     assert_eq!(
         encoded.record.builtin_shader,
         BuiltIn::SymbolIconShader as i32
@@ -241,17 +245,19 @@ fn an_empty_layer_encodes_to_nothing() {
             sections: vec![tessella_layout::symbol::Section {
                 text: "Alpha".to_string(),
                 scale: 1.0,
+                image: None,
             }],
             text: "Alpha".to_string(),
             anchor: (0.0, 0.0),
         }],
         &font,
+        None,
         &SymbolOptions::default(),
     );
     assert!(buffers.is_empty());
 
     let mut arena = SlabArena::new();
-    let encoded = emit::encode_symbol(&mut arena, GeometryId(1), &buffers, 0, true, ATLAS);
+    let encoded = emit::encode_symbol(&mut arena, GeometryId(1), &buffers, 0, true, ATLAS, None);
     assert_eq!(encoded.record.vertex_count, 0);
     assert_eq!(encoded.segments()[0].vertex_length, 0);
 }

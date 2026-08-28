@@ -1,0 +1,96 @@
+{
+  "version": 8,
+  "name": "symbol-probe",
+  "glyphs": "file://TESSELLA/tests/glyph-fixtures/{fontstack}/{range}.pbf",
+  "sources": {
+    "probe": {
+      "type": "geojson",
+      "data": {
+        "type": "FeatureCollection",
+        "features": [
+          {
+            "type": "Feature",
+            "properties": {
+              "name": "Alpha"
+            },
+            "geometry": {
+              "type": "Point",
+              "coordinates": [
+                -0.13,
+                51.515
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {
+              "name": "Bravo"
+            },
+            "geometry": {
+              "type": "Point",
+              "coordinates": [
+                -0.09,
+                51.495
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {
+              "name": "Charlie"
+            },
+            "geometry": {
+              "type": "Point",
+              "coordinates": [
+                -0.11,
+                51.505
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "layers": [
+    {
+      "id": "bg",
+      "type": "background",
+      "paint": {
+        "background-color": "#101418"
+      }
+    },
+    {
+      "id": "inline-image",
+      "type": "symbol",
+      "source": "probe",
+      "filter": [
+        "==",
+        [
+          "get",
+          "name"
+        ],
+        "Alpha"
+      ],
+      "layout": {
+        "text-field": [
+          "format",
+          "A",
+          {},
+          [
+            "image",
+            "us_state_1"
+          ],
+          {},
+          "B",
+          {}
+        ],
+        "text-font": [
+          "TestFont"
+        ],
+        "text-size": 16,
+        "text-allow-overlap": true
+      }
+    }
+  ],
+  "sprite": "file://TESSELLA/tests/sprite-fixtures/emerald"
+}

@@ -78,6 +78,13 @@ pub struct Section {
     pub text: String,
     /// Its `font-scale`, defaulting to one.
     pub scale: f32,
+    /// The sprite this section draws, if it is an `["image", …]` rather than text.
+    ///
+    /// A section is one or the other. mbgl carries both slots on its `SectionOptions` and
+    /// branches on which is set, and the same branch runs all the way down: an image is measured
+    /// from the sprite, drawn from the icon atlas, and sized in pixels where a glyph is sized in
+    /// ems.
+    pub image: Option<String>,
 }
 
 /// Resolves `{token}` against the feature's properties.
@@ -242,6 +249,7 @@ pub fn label(layer: &Layer, zoom: f64, feature: &dyn Feature) -> Option<Label> {
         sections.push(Section {
             text: text.clone(),
             scale: 1.0,
+            image: None,
         });
     }
 
@@ -275,7 +283,14 @@ fn read_sections(sections: Option<&Value>, feature: &dyn Feature) -> Vec<Section
                 Some(Value::Number(scale)) if *scale > 0.0 => *scale as f32,
                 _ => 1.0,
             };
-            Some(Section { text, scale })
+            let image = match members.get("image") {
+                Some(Value::Object(members)) => match members.get("name") {
+                    Some(Value::String(name)) => Some(name.clone()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            Some(Section { text, scale, image })
         })
         .collect()
 }

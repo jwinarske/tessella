@@ -89,10 +89,10 @@ fn the_bounding_box_matches_mbgl() {
 #[test]
 fn zero_width_spaces_are_not_placed() {
     let shaping = shape(&cjk("中中\u{200b}中"), &centred(1.0));
-    let placed: usize = shaping.lines.iter().map(Vec::len).sum();
+    let placed: usize = shaping.lines.iter().map(|line| line.glyphs.len()).sum();
     assert_eq!(placed, 3, "three ideographs and no space");
     for line in &shaping.lines {
-        for glyph in line {
+        for glyph in &line.glyphs {
             assert_ne!(glyph.codepoint, 0x200b);
         }
     }
@@ -182,8 +182,8 @@ fn justification_places_a_short_line_against_a_long_one() {
             },
         );
         assert_eq!(shaping.lines.len(), 2, "{shaping:?}");
-        let first = shaping.lines[0].first().expect("a glyph").x;
-        let second = shaping.lines[1].first().expect("a glyph").x;
+        let first = shaping.lines[0].glyphs.first().expect("a glyph").x;
+        let second = shaping.lines[1].glyphs.first().expect("a glyph").x;
         (first, second)
     };
 
@@ -224,8 +224,8 @@ fn a_trailing_space_does_not_shift_the_line() {
 
     assert_eq!(with_space.lines.len(), 2);
     assert_eq!(
-        with_space.lines[0].first().expect("a glyph").x,
-        without.lines[0].first().expect("a glyph").x,
+        with_space.lines[0].glyphs.first().expect("a glyph").x,
+        without.lines[0].glyphs.first().expect("a glyph").x,
         "the space at the break must not move the line"
     );
 }
@@ -272,8 +272,8 @@ fn right_justification_counts_the_final_advance() {
 
     // Three glyphs of 12: the line is 36 wide, centred on the anchor, so it runs -18..18.
     assert_eq!(shaping.left, -18.0);
-    assert_eq!(shaping.lines[0].first().expect("a glyph").x, -18.0);
-    assert_eq!(shaping.lines[0].last().expect("a glyph").x, 6.0);
+    assert_eq!(shaping.lines[0].glyphs.first().expect("a glyph").x, -18.0);
+    assert_eq!(shaping.lines[0].glyphs.last().expect("a glyph").x, 6.0);
 }
 
 /// Leading whitespace is dropped before the line is laid out.
@@ -292,8 +292,8 @@ fn leading_whitespace_is_trimmed() {
         "the spaces must not widen the line"
     );
     assert_eq!(
-        indented.lines[0].first().expect("a glyph").x,
-        plain.lines[0].first().expect("a glyph").x,
+        indented.lines[0].glyphs.first().expect("a glyph").x,
+        plain.lines[0].glyphs.first().expect("a glyph").x,
         "nor move it"
     );
 }

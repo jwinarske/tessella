@@ -874,6 +874,16 @@ pub enum Expr {
         /// One entry per `content, options` pair.
         sections: Vec<FormatSection>,
     },
+    /// `["image", name]`: a sprite, named for drawing inline in a label.
+    ///
+    /// It evaluates to an object rather than a string because the answer has two parts. The
+    /// name is what the sprite index is asked for, and *whether the sprite exists* is the other:
+    /// the spec says an image expression is "available" only when the style's sprite sheet
+    /// carries it, so a `coalesce` can fall back from a missing icon to a present one. Whether
+    /// it is available is not known here — the sheet is loaded elsewhere and later — so this
+    /// carries the name and lets the layout decide, which is where a missing sprite is already
+    /// handled by drawing nothing.
+    Image(Box<Expr>),
     /// `["concat", …]`: the arguments, coerced to text and run together.
     Concat(Vec<Expr>),
     /// `["join", array, separator]`: an array of strings with a separator between.
@@ -1706,6 +1716,8 @@ fn children(expr: &Expr) -> Vec<&Expr> {
         | Expr::Assert { args, .. }
         | Expr::Rgba { args }
         | Expr::Concat(args) => args.iter().collect(),
+        // Its one child is the name.
+        Expr::Image(name) => alloc::vec![name.as_ref()],
         Expr::Join { items, separator } => alloc::vec![&**items, &**separator],
         Expr::AssertArray {
             value, fallback, ..
@@ -1806,6 +1818,8 @@ fn classify(expr: &Expr) -> Dependency {
         Expr::At { index, array } => classify(index).join(classify(array)),
         Expr::Split { input, delimiter } => classify(input).join(classify(delimiter)),
         Expr::Concat(args) => join_all(args),
+        // A sprite name is as data-driven as whatever produced it.
+        Expr::Image(name) => classify(name),
         Expr::Join { items, separator } => classify(items).join(classify(separator)),
         Expr::In { needle, haystack } => classify(needle).join(classify(haystack)),
         Expr::IndexOf {

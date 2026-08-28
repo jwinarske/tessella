@@ -19,6 +19,7 @@ maplibre-native build. Regenerating them needs both.
 | `scaled_style.dump` | `crates/tessella-style/tests/scaled_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `spaced_style.dump` | `crates/tessella-style/tests/spaced_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `vertical_style.dump` | `crates/tessella-style/tests/vertical_style.json` | 51.505, -0.11 @ z13, 1024x768 |
+| `image_text_style.dump` | `crates/tessella-style/tests/image_text_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 
 ### The one that is not hermetic
 
@@ -212,6 +213,13 @@ sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/vertical_sty
 ./mbgl-capture-probe file:///tmp/vertical.json --dump=<tessella>/tests/golden/vertical_style.dump
 python3 <tessella>/tools/mbgl-codegen/oracles/elide_symbol_atlas.py \
     <tessella>/tests/golden/vertical_style.dump
+
+# The inline-image capture. Its drawable is `sh0034` rather than `sh0033` — one image in a layer
+# binds the whole of it to the shader that samples both atlases — so only one line elides.
+sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/image_text_style.json > /tmp/image_text.json
+./mbgl-capture-probe file:///tmp/image_text.json --dump=<tessella>/tests/golden/image_text_style.dump
+python3 <tessella>/tools/mbgl-codegen/oracles/elide_symbol_atlas.py \
+    <tessella>/tests/golden/image_text_style.dump
 
 # The pattern capture needs the same substitution, and its own elision.
 sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/pattern_style.json > /tmp/pattern.json

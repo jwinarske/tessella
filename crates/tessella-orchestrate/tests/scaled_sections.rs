@@ -103,7 +103,7 @@ fn the_line_takes_its_largest_scale() {
         },
     );
 
-    let line = shaping.lines.first().expect("one line");
+    let line = &shaping.lines.first().expect("one line").glyphs;
     assert_eq!(line.len(), 8);
 
     // The big section defines the baseline, so it is not offset at all.

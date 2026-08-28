@@ -66,6 +66,37 @@ pub struct Char {
     /// metrics this type does not carry. This is kept beside it for the two things the caller
     /// cannot do: the line's height, which depends on its neighbours, and the quad's size.
     pub scale: f32,
+    /// The sprite this character is, if it is an `["image", …]` section rather than text.
+    ///
+    /// Everything an image section needs travels with it, because nothing downstream can look a
+    /// sprite up: the shaper is given advances rather than a font, and the quad builder asks for
+    /// a glyph by codepoint — which an image does not have. mbgl reaches the sprite index from
+    /// inside `shapeLines`; here the caller has already resolved it, and the resolved answer is
+    /// what moves.
+    pub image: Option<Image>,
+}
+
+/// A sprite drawn inline in a label.
+///
+/// Its size is in *logical* pixels, which is what `ImagePosition::displaySize` returns and is
+/// the padded rectangle divided by the sprite's own pixel ratio. Both the shaper and the quad
+/// builder need it and they need it for different things — the shaper for the line's height,
+/// the builder for the quad's — so it is carried once rather than recomputed from the rectangle
+/// at each.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Image {
+    /// Its display size in logical pixels.
+    pub size: (f32, f32),
+    /// Its padded rectangle in the icon atlas.
+    pub rect: crate::atlas::Rect,
+    /// How many texture pixels the sprite has per logical one.
+    pub pixel_ratio: f32,
+    /// Whether it is a signed distance field rather than a picture.
+    ///
+    /// The shader has to know: an SDF is recoloured and haloed like a glyph, and a picture is
+    /// drawn as it is. It is per *quad* rather than per drawable, because a label with an image
+    /// in it draws both from one buffer.
+    pub sdf: bool,
 }
 
 impl Char {
@@ -77,6 +108,7 @@ impl Char {
             advance,
             drawable: true,
             scale: 1.0,
+            image: None,
         }
     }
 
@@ -89,6 +121,7 @@ impl Char {
             advance,
             drawable: false,
             scale: 1.0,
+            image: None,
         }
     }
 
@@ -239,7 +272,13 @@ pub fn line_breaks(text: &[Char], max_width: f32, spacing: f32) -> BTreeSet<usiz
             continue;
         }
         let ideographic = text::allows_ideographic_breaking(character.codepoint);
-        if !ideographic && !text::allows_word_breaking(character.codepoint) {
+        // An image is always somewhere a line may break. mbgl says so directly — a sprite is a
+        // unit of its own, and there is no reason to keep it on the same line as the word beside
+        // it the way there is for two letters.
+        if character.image.is_none()
+            && !ideographic
+            && !text::allows_word_breaking(character.codepoint)
+        {
             continue;
         }
         let next = text[index + 1].codepoint;
@@ -395,6 +434,8 @@ pub struct PositionedGlyph {
     /// character gets is [`crate::vertical`]'s answer, and the quad builder is where it is acted
     /// on.
     pub vertical: bool,
+    /// The sprite it is, if it is an image section rather than a glyph.
+    pub image: Option<Image>,
 }
 
 /// Which way a label's lines run.
@@ -413,11 +454,35 @@ pub enum WritingMode {
     Vertical,
 }
 
+/// One line of a shaped label.
+///
+/// mbgl's `PositionedLine`, and the offset is why it is a type rather than a list of glyphs. A
+/// line is normally as tall as the text on it; an image taller than an em pushes it down, and
+/// how far is a property of the *line* — every glyph on it moves together, and the quad builder
+/// needs the amount again afterwards to re-centre a vertical column.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Line {
+    /// Its placed glyphs.
+    pub glyphs: Vec<PositionedGlyph>,
+    /// How far something taller than the text pushed this line down, in pixels.
+    pub offset: f32,
+}
+
+impl From<Vec<PositionedGlyph>> for Line {
+    /// A line of glyphs that nothing pushed down, which is every line without an image on it.
+    fn from(glyphs: Vec<PositionedGlyph>) -> Self {
+        Self {
+            glyphs,
+            offset: 0.0,
+        }
+    }
+}
+
 /// A shaped label: its glyphs in lines, and the box they occupy.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Shaping {
-    /// The lines, each a list of placed glyphs.
-    pub lines: Vec<Vec<PositionedGlyph>>,
+    /// The lines.
+    pub lines: Vec<Line>,
     /// Top of the bounding box, relative to the anchor.
     pub top: f32,
     /// Bottom of the bounding box.
@@ -433,6 +498,12 @@ pub struct Shaping {
     /// with one ideograph in it is still a vertical line, and every glyph on it is centred as
     /// one.
     pub verticalizable: bool,
+    /// Whether any section of it is an image rather than text.
+    ///
+    /// mbgl's `Shaping::iconsInText`, and it decides which shader the label is drawn with: a
+    /// buffer holding both glyphs and sprites samples two textures, so the bucket carrying one
+    /// binds `SymbolTextAndIconShader` rather than the plain SDF one.
+    pub icons_in_text: bool,
 }
 
 impl Shaping {
@@ -443,7 +514,7 @@ impl Shaping {
     /// asserts five of them.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.lines.iter().all(Vec::is_empty)
+        self.lines.iter().all(|line| line.glyphs.is_empty())
     }
 }
 
@@ -470,6 +541,14 @@ pub struct Options {
     /// a point label the style asked to set vertically — everything is kept upright *except*
     /// whitespace and the scripts whose letters join, which would be broken by it.
     pub allow_vertical_placement: bool,
+    /// `text-size` at this zoom, in pixels.
+    ///
+    /// Only an image section reads it, and it is the one measurement in the shaper that is not
+    /// in ems. A glyph is laid out at one em and scaled by the text size later; a sprite has a
+    /// size of its own in pixels, so to sit on a line of 16-pixel text at half height it has to
+    /// be rescaled by `ONE_EM / text-size` — which is mbgl's `layoutTextSize` and is why its
+    /// image branch computes a section scale of its own rather than using `font-scale` directly.
+    pub text_size: f32,
 }
 
 impl Default for Options {
@@ -482,6 +561,7 @@ impl Default for Options {
             spacing: 0.0,
             writing_mode: WritingMode::Horizontal,
             allow_vertical_placement: false,
+            text_size: 16.0,
         }
     }
 }
@@ -510,8 +590,8 @@ fn trim(line: &[Char]) -> &[Char] {
 /// mbgl's `justifyLine`. The indent is the line's *drawn* extent times the justify factor, and
 /// the drawn extent includes the last glyph's advance — a right-justified line ends where its
 /// last glyph's pen ends, not where that glyph starts.
-fn justify_line(glyphs: &mut [PositionedGlyph], last_advance: f32, justify: f32) {
-    if justify == 0.0 {
+fn justify_line(glyphs: &mut [PositionedGlyph], last_advance: f32, justify: f32, line_offset: f32) {
+    if justify == 0.0 && line_offset == 0.0 {
         return;
     }
     let Some(last) = glyphs.last() else {
@@ -520,6 +600,9 @@ fn justify_line(glyphs: &mut [PositionedGlyph], last_advance: f32, justify: f32)
     let indent = (last.x + last_advance) * justify;
     for glyph in glyphs.iter_mut() {
         glyph.x -= indent;
+        // The line's own downward shift, applied with the horizontal one because mbgl applies
+        // both here — a line an image pushed down moves as a whole, after it is set.
+        glyph.y += line_offset;
     }
 }
 
@@ -697,6 +780,8 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
         let mut glyphs: Vec<PositionedGlyph> = Vec::with_capacity(line.len());
         let mut x = 0.0f32;
         let mut last_advance = 0.0f32;
+        // How far an image taller than the line's text pushes this line down. Zero for text.
+        let mut line_offset = 0.0f32;
 
         // The largest scale on this line, which is what its height is set by and what every
         // glyph on it is offset against. mbgl's `line.getMaxScale()`: a line holding one
@@ -707,34 +792,76 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
             .map(|character| character.scale)
             .fold(1.0f32, f32::max);
 
+        // `(lineMaxScale - 1) * ONE_EM`: how far the line's baseline has already dropped to make
+        // room for its largest text, which an image has to clear as well as its own height.
+        let max_line_offset = (line_scale - 1.0) * crate::text::ONE_EM;
+
         for character in line {
             let vertical = is_vertical(character.codepoint, options);
+
+            // An image section is measured from the sprite rather than the font, and everything
+            // about it differs: its scale is rescaled out of pixels into ems, its baseline
+            // offset aligns its *bottom* to the line rather than its feet, and if it is taller
+            // than the line it makes the line taller instead of overlapping what is above.
+            let (scale, baseline_offset, advance) = match character.image {
+                Some(image) => {
+                    let scale = character.scale * crate::text::ONE_EM / options.text_size;
+                    // The gap between one em and the image's own height, which is what sits
+                    // between the image's bottom and the baseline.
+                    let image_offset = crate::text::ONE_EM - image.size.1 * scale;
+                    let advance = if vertical { image.size.1 } else { image.size.0 };
+
+                    // A sprite bigger than the line's em box pushes the whole line down by the
+                    // difference rather than growing upwards into the line above.
+                    let over = if vertical { image.size.0 } else { image.size.1 } * scale
+                        - crate::text::ONE_EM * line_scale;
+                    if over > 0.0 && over > line_offset {
+                        line_offset = over;
+                    }
+                    (scale, max_line_offset + image_offset, advance * scale)
+                }
+                // mbgl's `baselineOffset`. Laid out at one em, a glyph scaled differently
+                // from its line has to drop by the difference to keep its feet on the
+                // baseline; at the line's own scale it is zero, which is every ordinary
+                // label.
+                None => (
+                    character.scale,
+                    (line_scale - character.scale) * crate::text::ONE_EM,
+                    character.advance,
+                ),
+            };
+
             if character.drawable {
                 glyphs.push(PositionedGlyph {
                     codepoint: character.codepoint,
                     x,
-                    // mbgl's `baselineOffset`. Laid out at one em, a glyph scaled differently
-                    // from its line has to drop by the difference to keep its feet on the
-                    // baseline; at the line's own scale it is zero, which is every ordinary
-                    // label.
-                    y: y + (line_scale - character.scale) * crate::text::ONE_EM,
-                    scale: character.scale,
+                    y: y + baseline_offset,
+                    scale,
                     vertical,
+                    image: character.image,
                 });
-                last_advance = character.advance;
+                last_advance = advance;
+            }
+            if character.image.is_some() {
+                shaping.icons_in_text = true;
             }
             if vertical {
                 // An upright glyph on a vertical line advances by a full em whatever its own
                 // advance is, because the line is a column of square cells and the glyph sits in
-                // one. Unconditionally, too: the zero-advance guard below is about a combining
-                // mark riding the glyph before it, and a mark that stays upright still takes its
-                // own cell.
-                x += crate::text::ONE_EM * character.scale + options.spacing;
+                // one. An image is the exception: it advances by its own height, which is what
+                // it occupies going down. Unconditionally either way — the zero-advance guard
+                // below is about a combining mark riding the glyph before it, and a mark that
+                // stays upright still takes its own cell.
+                x += if character.image.is_some() {
+                    advance
+                } else {
+                    crate::text::ONE_EM * scale
+                } + options.spacing;
                 shaping.verticalizable = true;
-            } else if character.advance > 0.01 {
+            } else if advance > 0.01 {
                 // A zero-advance glyph is a combining mark sitting on the one before it, and must
                 // not push the pen along or take the spacing.
-                x += character.advance + options.spacing;
+                x += advance + options.spacing;
             }
         }
 
@@ -742,11 +869,12 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
             // The trailing spacing is not part of the line: it is the gap before a character
             // that never came.
             max_line_length = max_line_length.max(x - options.spacing);
-            justify_line(&mut glyphs, last_advance, justify);
+            justify_line(&mut glyphs, last_advance, justify, line_offset);
         }
 
-        // `lineHeight * lineMaxScale`, so a line with a bigger section is a taller line.
-        let line_height = options.line_height * line_scale;
+        // `lineHeight * lineMaxScale`, so a line with a bigger section is a taller line — plus
+        // whatever an oversized image added to it.
+        let line_height = options.line_height * line_scale + line_offset;
         y += line_height;
         // A line with no characters at all still takes its space, but it does not set the
         // maximum: mbgl returns from the loop before reaching that, and the difference decides
@@ -756,7 +884,12 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
         if !line.is_empty() {
             max_line_height = max_line_height.max(line_height);
         }
-        shaping.lines.push(glyphs);
+        shaping.lines.push(Line {
+            glyphs,
+            // The larger of the two, because both are reasons this line's glyphs sit lower than
+            // the line above's and the quad builder needs the total when it re-centres a column.
+            offset: line_offset.max(max_line_offset),
+        });
     }
 
     let height = y - Y_OFFSET;
@@ -773,7 +906,7 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
     };
 
     for line in &mut shaping.lines {
-        for glyph in line.iter_mut() {
+        for glyph in &mut line.glyphs {
             glyph.x += shift_x;
             glyph.y += shift_y;
         }

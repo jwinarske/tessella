@@ -783,7 +783,7 @@ impl SymbolLayout {
                     symbol: head.symbol,
                     ..self.line
                 };
-                build_line_symbols(&labels, &glyphs, &options)
+                build_line_symbols(&labels, &glyphs, icons, &options)
             } else {
                 let labels: Vec<Label> = run
                     .iter()
@@ -799,7 +799,7 @@ impl SymbolLayout {
                         Anchoring::Line(_) => None,
                     })
                     .collect();
-                build_symbols(&labels, &glyphs, &head.symbol)
+                build_symbols(&labels, &glyphs, icons, &head.symbol)
             };
 
             // Each run's ranges address its own buffer, so they shift by what was already here.

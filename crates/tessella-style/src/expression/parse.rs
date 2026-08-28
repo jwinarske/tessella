@@ -303,6 +303,10 @@ fn parse_rooted(
             }
             Ok(Expr::Format { sections })
         }
+        "image" => {
+            expect_arity(operator, args, 1, 1)?;
+            Ok(Expr::Image(Box::new(parse_in(&args[0], scope)?)))
+        }
         "rgb" | "rgba" => {
             let arity = if operator == "rgb" { 3 } else { 4 };
             expect_arity(operator, args, arity, arity)?;

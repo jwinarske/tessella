@@ -9,7 +9,7 @@
 use tessella_glyph::atlas::Rect;
 use tessella_glyph::pbf::Metrics;
 use tessella_glyph::quads::{Options, Placed, Quad, RECT_BUFFER, glyph_quads};
-use tessella_glyph::shaping::{PositionedGlyph, Shaping};
+use tessella_glyph::shaping::{Line, PositionedGlyph, Shaping};
 
 /// mbgl's 1x glyph: 24 by 24, sitting eight above the baseline, advancing 24.
 fn metrics_24() -> Metrics {
@@ -35,13 +35,14 @@ fn rect_32() -> Rect {
 /// A one-glyph label placed at the origin.
 fn one_glyph(x: f32, y: f32) -> Shaping {
     Shaping {
-        lines: vec![vec![PositionedGlyph {
+        lines: vec![Line::from(vec![PositionedGlyph {
             codepoint: u32::from(b'A'),
             x,
             y,
             scale: 1.0,
             vertical: false,
-        }]],
+            image: None,
+        }])],
         ..Shaping::default()
     }
 }
@@ -130,13 +131,14 @@ fn the_text_offset_shifts_the_quad() {
 #[test]
 fn an_unplaced_glyph_is_skipped() {
     let shaping = Shaping {
-        lines: vec![vec![
+        lines: vec![Line::from(vec![
             PositionedGlyph {
                 codepoint: u32::from(b'A'),
                 x: 0.0,
                 y: 0.0,
                 scale: 1.0,
                 vertical: false,
+                image: None,
             },
             PositionedGlyph {
                 codepoint: u32::from(b'B'),
@@ -144,8 +146,9 @@ fn an_unplaced_glyph_is_skipped() {
                 y: 0.0,
                 scale: 1.0,
                 vertical: false,
+                image: None,
             },
-        ]],
+        ])],
         ..Shaping::default()
     };
 

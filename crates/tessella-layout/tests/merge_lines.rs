@@ -22,6 +22,7 @@ fn layout(features: &[(&str, &[(i32, i32)])]) -> SymbolLayout {
             sections: vec![tessella_layout::symbol::Section {
                 text: (*text).to_string(),
                 scale: 1.0,
+                image: None,
             }],
             icon: None,
             fonts: vec!["TestFont".to_string()],

@@ -60,6 +60,7 @@ fn label(text: &str, line: Vec<(f32, f32)>) -> LineLabel {
         sections: vec![tessella_layout::symbol::Section {
             text: text.to_string(),
             scale: 1.0,
+            image: None,
         }],
         icon: (0.0, 0.0),
         text: text.to_string(),
@@ -74,6 +75,7 @@ fn a_name_repeats_along_its_road() {
     let (buffers, laid) = build_line_symbols(
         &[label("Main Street", road())],
         &font,
+        None,
         &LineOptions::default(),
     );
 
@@ -96,6 +98,7 @@ fn the_repetitions_are_spaced_along_the_line() {
     let (_, laid) = build_line_symbols(
         &[label("Main Street", road())],
         &font,
+        None,
         &LineOptions::default(),
     );
 
@@ -126,6 +129,7 @@ fn the_along_line_position_is_not_in_the_corners() {
     let (buffers, laid) = build_line_symbols(
         &[label("Main Street", road())],
         &font,
+        None,
         &LineOptions::default(),
     );
 
@@ -159,6 +163,7 @@ fn the_along_line_position_is_recorded_per_glyph() {
     let (buffers, laid) = build_line_symbols(
         &[label("Main Street", road())],
         &font,
+        None,
         &LineOptions::default(),
     );
 
@@ -201,6 +206,7 @@ fn every_repetition_draws_identical_glyphs() {
     let (buffers, laid) = build_line_symbols(
         &[label("Main Street", road())],
         &font,
+        None,
         &LineOptions::default(),
     );
     assert!(laid.len() >= 2);
@@ -226,6 +232,7 @@ fn a_centred_label_appears_once() {
     let (_, laid) = build_line_symbols(
         &[label("Main Street", road())],
         &font,
+        None,
         &LineOptions {
             centred: true,
             ..LineOptions::default()
@@ -249,6 +256,7 @@ fn a_label_longer_than_its_road_is_not_placed() {
     let (buffers, laid) = build_line_symbols(
         &[label("Extraordinarily Long Boulevard", stub)],
         &font,
+        None,
         &LineOptions::default(),
     );
 
@@ -270,6 +278,7 @@ fn two_roads_share_a_buffer_without_sharing_vertices() {
     let (buffers, laid) = build_line_symbols(
         &[label("Main Street", road()), label("High Road", other)],
         &font,
+        None,
         &LineOptions::default(),
     );
 
@@ -308,6 +317,7 @@ fn a_bend_thins_the_repetitions() {
     let generous = build_line_symbols(
         &[label("Winding Way", zigzag.clone())],
         &font,
+        None,
         &LineOptions {
             max_angle: core::f32::consts::PI,
             ..LineOptions::default()
@@ -316,6 +326,7 @@ fn a_bend_thins_the_repetitions() {
     let strict = build_line_symbols(
         &[label("Winding Way", zigzag)],
         &font,
+        None,
         &LineOptions {
             max_angle: core::f32::consts::PI / 16.0,
             ..LineOptions::default()
@@ -348,6 +359,7 @@ fn a_line_label_never_wraps() {
     let (_, laid) = build_line_symbols(
         &[label(text, road())],
         &font,
+        None,
         &LineOptions {
             // A width that would wrap this text several times if it were honoured.
             symbol: SymbolOptions {

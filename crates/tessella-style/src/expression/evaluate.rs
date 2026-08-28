@@ -413,6 +413,14 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
                 _ => unreachable!("checked by sequence_length"),
             })
         }
+        Expr::Image(name) => {
+            // mbgl's `Image`, whose serialization is an object with the name in it. The `format`
+            // evaluator above recognises an image section by exactly that key.
+            let name = to_string(&evaluate(name, context)?);
+            let mut members = alloc::collections::BTreeMap::new();
+            members.insert("name".to_string(), Value::String(name));
+            Ok(Value::Object(members))
+        }
         Expr::Format { sections } => {
             let mut out = Vec::with_capacity(sections.len());
             for section in sections {

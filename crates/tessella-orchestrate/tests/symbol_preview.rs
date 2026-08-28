@@ -204,12 +204,13 @@ fn draw_a_frame() {
             sections: vec![tessella_layout::symbol::Section {
                 text: text.clone(),
                 scale: 1.0,
+                image: None,
             }],
             text: text.clone(),
             anchor: *anchor,
         })
         .collect();
-    let (buffers, laid) = build_symbols(&labels, &font, &SymbolOptions::default());
+    let (buffers, laid) = build_symbols(&labels, &font, None, &SymbolOptions::default());
 
     let frame_labels: Vec<FrameLabel> = laid
         .into_iter()
@@ -436,6 +437,7 @@ fn draw_line_labels() {
                 sections: vec![tessella_layout::symbol::Section {
                     text: text.to_string(),
                     scale: 1.0,
+                    image: None,
                 }],
                 icon: (0.0, 0.0),
                 text: text.to_string(),
@@ -463,6 +465,7 @@ fn draw_line_labels() {
     let (buffers, laid) = build_line_symbols(
         &labels,
         &font,
+        None,
         &LineOptions {
             spacing: 400.0,
             max_angle: core::f32::consts::PI / 5.0,

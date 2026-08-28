@@ -53,6 +53,7 @@ fn label(text: &str, anchor: (f32, f32)) -> Label {
         sections: vec![tessella_layout::symbol::Section {
             text: text.to_string(),
             scale: 1.0,
+            image: None,
         }],
         text: text.to_string(),
         anchor,
@@ -66,6 +67,7 @@ fn a_label_becomes_quads() {
     let (buffers, laid) = build_symbols(
         &[label("Alpha", (1000.0, 2000.0))],
         &font,
+        None,
         &SymbolOptions::default(),
     );
 
@@ -91,6 +93,7 @@ fn two_labels_share_a_buffer_without_sharing_vertices() {
             label("Bravo", (2000.0, 2000.0)),
         ],
         &font,
+        None,
         &SymbolOptions::default(),
     );
 
@@ -130,6 +133,7 @@ fn each_label_keeps_its_own_anchor() {
             label("Bravo", (2000.0, 2000.0)),
         ],
         &font,
+        None,
         &SymbolOptions::default(),
     );
 
@@ -154,6 +158,7 @@ fn a_partly_packed_label_draws_what_it_has() {
     let (buffers, laid) = build_symbols(
         &[label("Alpha", (0.0, 0.0))],
         &font,
+        None,
         &SymbolOptions::default(),
     );
 
@@ -172,6 +177,7 @@ fn an_unknown_label_draws_nothing() {
     let (buffers, laid) = build_symbols(
         &[label("\u{4e2d}\u{6587}", (0.0, 0.0))],
         &font,
+        None,
         &SymbolOptions::default(),
     );
 
@@ -186,11 +192,13 @@ fn letter_spacing_widens_the_label() {
     let tight = build_symbols(
         &[label("Alpha", (0.0, 0.0))],
         &font,
+        None,
         &SymbolOptions::default(),
     );
     let loose = build_symbols(
         &[label("Alpha", (0.0, 0.0))],
         &font,
+        None,
         &SymbolOptions {
             letter_spacing: 4.0,
             ..SymbolOptions::default()
@@ -219,6 +227,7 @@ fn a_wrapped_label_stays_one_buffer() {
     let (buffers, laid) = build_symbols(
         &[label("Alpha Bravo Charlie", (0.0, 0.0))],
         &font,
+        None,
         &SymbolOptions {
             max_width_ems: 4.0,
             ..SymbolOptions::default()
@@ -236,7 +245,7 @@ fn a_wrapped_label_stays_one_buffer() {
 #[test]
 fn no_labels_is_an_empty_buffer() {
     let font = Font::new("");
-    let (buffers, laid) = build_symbols(&[], &font, &SymbolOptions::default());
+    let (buffers, laid) = build_symbols(&[], &font, None, &SymbolOptions::default());
     assert!(buffers.is_empty());
     assert!(laid.is_empty());
 }

@@ -50,6 +50,12 @@ pub struct Quad {
     /// following a line it is the glyph's distance along that line, which the shader needs
     /// after projecting.
     pub glyph_offset: (f32, f32),
+    /// Whether it samples a signed distance field rather than a picture.
+    ///
+    /// True for every glyph, and for an image only when its sprite is an SDF. It is per quad
+    /// because a label with an image in it draws both from one buffer, and the shader has to
+    /// recolour one and not the other.
+    pub sdf: bool,
 }
 
 /// What a label's quads are built against.
@@ -106,9 +112,45 @@ where
     };
 
     for line in &shaping.lines {
-        for glyph in line {
-            let Some(Placed { rect, metrics }) = placed(glyph.codepoint) else {
-                continue;
+        for glyph in &line.glyphs {
+            // An image section is not in the font and has no codepoint to ask about: its
+            // rectangle is in the icon atlas and its metrics are the sprite's own size. mbgl
+            // synthesizes exactly these — a left bearing of the atlas padding, a top of minus
+            // the glyph border, and the display size as the width and height — so that
+            // everything below can treat a sprite as a very large glyph.
+            let (rect, metrics, rect_buffer, pixel_ratio, sdf) = match glyph.image {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                Some(image) => (
+                    image.rect,
+                    Metrics {
+                        width: image.size.0 as u32,
+                        height: image.size.1 as u32,
+                        left: SPRITE_PADDING,
+                        top: -(BORDER as i32),
+                        // The advance is the side it occupies, which is not the same side
+                        // going down as going across.
+                        advance: if glyph.vertical {
+                            image.size.1 as u32
+                        } else {
+                            image.size.0 as u32
+                        },
+                    },
+                    // The padding is in texture pixels and everything here is in logical ones,
+                    // so a sprite drawn at two texture pixels per logical one carries half the
+                    // buffer a glyph does.
+                    #[allow(clippy::cast_precision_loss)]
+                    {
+                        SPRITE_PADDING as f32 / image.pixel_ratio
+                    },
+                    image.pixel_ratio,
+                    image.sdf,
+                ),
+                None => {
+                    let Some(Placed { rect, metrics }) = placed(glyph.codepoint) else {
+                        continue;
+                    };
+                    (rect, metrics, RECT_BUFFER, 1.0, true)
+                }
             };
             // A glyph with no area has nothing to sample. It should not have been placed, but
             // an atlas that ran out of room can hand one back.
@@ -136,7 +178,16 @@ where
             // line's cell, and the correction is the difference. mbgl folds the line's own offset
             // in here as well, which is what pushes a line down that an oversized image grew.
             let line_offset = if options.allow_vertical_placement && shaping.verticalizable {
-                -(glyph.scale - 1.0) * crate::text::ONE_EM
+                #[allow(clippy::cast_precision_loss)]
+                let centred = match glyph.image {
+                    // An image is centred on its own width in the column.
+                    Some(_) => (crate::text::ONE_EM - metrics.width as f32 * glyph.scale) / 2.0,
+                    // A scaled glyph is offset by how much bigger than the column it is, with
+                    // the sign the other way round — which is why mbgl writes the two as one
+                    // subtraction and negates the image half.
+                    None => -(glyph.scale - 1.0) * crate::text::ONE_EM,
+                };
+                line.offset / 2.0 + centred
             } else {
                 0.0
             };
@@ -168,13 +219,13 @@ where
             };
 
             #[allow(clippy::cast_precision_loss)]
-            let x1 = (metrics.left as f32 - RECT_BUFFER) * glyph.scale - half_advance + built_in.0;
+            let x1 = (metrics.left as f32 - rect_buffer) * glyph.scale - half_advance + built_in.0;
             #[allow(clippy::cast_precision_loss)]
-            let y1 = (-(metrics.top as f32) - RECT_BUFFER) * glyph.scale + built_in.1;
+            let y1 = (-(metrics.top as f32) - rect_buffer) * glyph.scale + built_in.1;
             #[allow(clippy::cast_precision_loss)]
-            let x2 = x1 + rect.width as f32 * glyph.scale;
+            let x2 = x1 + rect.width as f32 * glyph.scale / pixel_ratio;
             #[allow(clippy::cast_precision_loss)]
-            let y2 = y1 + rect.height as f32 * glyph.scale;
+            let y2 = y1 + rect.height as f32 * glyph.scale / pixel_ratio;
 
             let mut quad = Quad {
                 tl: (x1, y1),
@@ -183,6 +234,7 @@ where
                 br: (x2, y2),
                 tex: rect,
                 glyph_offset,
+                sdf,
             };
 
             if rotate_vertical {
@@ -199,7 +251,15 @@ where
                 // come back up by the difference or it hangs below its cell.
                 let center = (-half_advance, half_advance - Y_OFFSET);
                 let half_width = crate::text::ONE_EM / 2.0 - half_advance;
-                let correction = (5.0 - Y_OFFSET - half_width, 0.0);
+                // An image turned on its side is pulled up by the same difference the
+                // correction pushes it along by, because its box is not a square em and the two
+                // axes do not cancel the way a glyph's do.
+                let image_correction = if glyph.image.is_some() {
+                    half_width
+                } else {
+                    0.0
+                };
+                let correction = (5.0 - Y_OFFSET - half_width, -image_correction);
                 let turn = |point: (f32, f32)| {
                     let about = (point.0 - center.0, point.1 - center.1);
                     // A quarter turn anticlockwise, which is `(x, y) -> (y, -x)` and is written
@@ -238,6 +298,14 @@ where
 /// The pad is on the *quad* and not on the texture rectangle — the extra pixel samples the
 /// atlas padding, which is why the atlas reserves it.
 pub const ICON_QUAD_BORDER: f32 = 1.0;
+
+/// The padding the icon atlas reserves around each sprite, in texture pixels.
+///
+/// mbgl's `ImagePosition::padding`. It is the sprite's counterpart to [`RECT_BUFFER`] and it is
+/// three pixels smaller, because a picture needs only enough room that linear filtering cannot
+/// reach a neighbour, while a distance field needs a border wide enough to carry the field
+/// itself. An image drawn inline in a label uses this where a glyph uses the other.
+pub const SPRITE_PADDING: i32 = 1;
 
 /// Where an icon sits relative to its anchor, before it becomes a quad.
 ///
@@ -428,6 +496,10 @@ pub fn icon_quad(icon: PositionedIcon, tex: Rect, radians: f32) -> Quad {
         br: (right, bottom),
         tex,
         glyph_offset: (0.0, 0.0),
+        // An icon layer's drawable is bound to one shader or the other by the sprite's own
+        // flag, so its quads do not each need to carry one. The field is here because the type
+        // is shared with a label's, where a quad *is* what decides.
+        sdf: false,
     };
 
     if radians != 0.0 {

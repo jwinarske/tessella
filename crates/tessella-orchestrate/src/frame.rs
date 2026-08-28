@@ -1194,7 +1194,14 @@ fn encode_parts(
             let ids = attribute_ids(SYMBOL_FAMILY);
             let key = permutation_key(&bucket.paint, &ids);
             // Text is always SDF. An icon may be either, and the flag is already packed into
-            // each vertex's size field, so this only decides which shader is named.
+            // each vertex's size field, so this only decides which shader is named — unless the
+            // label draws a sprite inline, which needs the shader that samples both atlases.
+            // The sprite atlas the labels' images came out of, which is the one the pattern
+            // and icon layers already share. Only bound when a label actually draws one.
+            let sprites = buffers
+                .icons_in_text
+                .then(|| patterns.map(|patterns| patterns.texture))
+                .flatten();
             Some(emit::encode_symbol(
                 arena,
                 PLACEHOLDER,
@@ -1202,6 +1209,7 @@ fn encode_parts(
                 key,
                 true,
                 GLYPH_ATLAS,
+                sprites,
             ))
         }
         Content::Raster(raster) => Some(emit::encode_raster(
