@@ -850,12 +850,21 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   rectangle holds several times the tiles it can — so mbgl walks the tile quadtree against the
   view frustum and discards a subtree the moment its box falls outside, and that is transcribed:
   `Frustum::fromInvProjMatrix`, the conservative separating-axis test, and the depth-first
-  traversal. What is left out is named rather than approximated: the level-of-detail pass that
-  returns a *mixed* set of zooms, and `intersectsPrecise`, whose own comment puts its yield under
-  one percent. Without LOD a sixty-degree view at z14 covers 324 tiles where a flat one covers
-  nine, and that is the cost of the omission rather than a defect in the walk. With no capture to
-  diff against, what stands in is an independent computation: unproject a grid of screen pixels
-  onto the ground and assert the cover holds every tile they land in.
+  traversal. What is left out is `intersectsPrecise`, whose own comment puts its yield under one
+  percent. With no capture to diff against, what stands in is an independent computation:
+  unproject a grid of screen pixels onto the ground and assert the cover holds every tile they
+  land in.
+  **The level-of-detail pass landed** (`cover::LOD_PITCH_THRESHOLD`, `frustum::Lod`), and it had
+  to. Without it the count runs away with the angle rather than merely being large: on a
+  1920×1080 view at z15, forty-two tiles at 55° and nine hundred and ninety-two at 70°, and past
+  about seventy-five it exceeded `MAX_TILES` and the cover failed outright — the map went blank
+  at exactly the angles a driving view uses. Drawing it coarser is the answer rather than drawing
+  less of it: a tile near the horizon is a few pixels tall whatever its zoom, so its parent looks
+  the same and costs a quarter as much.
+  mbgl gates this on `tileLodPitchThreshold`, sixty degrees, which is also its
+  `DEFAULT_PITCH_MAX` — so its camera stops exactly where the mechanism would start and with
+  stock settings it never runs the code it carries. This build clamps to the horizon angle
+  instead, so it reaches the angles the threshold was written for.
   **Collation is measured and deferred**, which is worth stating precisely because
   "unimplemented" reads like an oversight. A comparison may take a third argument, a collator,
   and twelve suite cases exercise it. mbgl's own default implementation says in a comment that it

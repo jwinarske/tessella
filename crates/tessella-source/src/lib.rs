@@ -1,7 +1,8 @@
 //! Vector, raster and GeoJSON sources — plan.md §7, descends from mbgl `style/sources` and
 //! `renderer/sources`.
 //!
-//! Scope: source definitions, TileJSON, MVT decode, and GeoJSON including clustering.
+//! Scope: source definitions, TileJSON, MVT decode, and GeoJSON. Clustering belongs here and is
+//! not built — see the status below, which the previous wording of this line contradicted.
 //! Decode is zero-copy by design (§12.2): a varint cursor over the fetch buffer with
 //! geometry decoded straight into the slab arena, and no intermediate feature
 //! materialization for layers that never read properties.
