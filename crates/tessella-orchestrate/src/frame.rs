@@ -42,6 +42,7 @@ use crate::binder::{
 use crate::camera::CameraBlock;
 use crate::emit::SlabArena;
 use crate::order::{self, DrawOrder};
+use crate::registry::{DrawableKey, GeometryRegistry};
 use crate::tile::{Content, LayerBucket, TileId};
 use crate::ubo::{self, DrawableEntry};
 use crate::view::{GeometryBinding, ViewSession};
@@ -89,7 +90,13 @@ pub struct Emitted {
     /// Geometries announced.
     pub geometries: usize,
     /// Per-view uses bound into the order.
+    ///
+    /// Every drawable in the frame, announced this time or not. A caller comparing this against
+    /// `geometries` is comparing what was drawn against what had to be sent, which is the whole
+    /// measure of an incremental emission.
     pub drawables: usize,
+    /// Drawables released and removed because they left the cover.
+    pub removed: usize,
     /// The order epoch the camera names.
     pub epoch: OrderEpoch,
 }
@@ -99,6 +106,7 @@ impl Default for Emitted {
         Self {
             geometries: 0,
             drawables: 0,
+            removed: 0,
             epoch: OrderEpoch(0),
         }
     }
@@ -310,10 +318,56 @@ pub fn emit(
     // holding geometry with no order and no camera — and the retry registered the same buckets
     // again under fresh ids. `FrameError::Full` has always claimed a frame is emitted whole or
     // not at all; this is the claim being made true.
+    emit_into(producer, arena, frame, None)
+}
+
+/// As [`emit`], sending only what the consumer does not already have.
+///
+/// # What changes
+///
+/// [`emit`] announces every geometry every time, which is why `GeometryId`'s documentation says
+/// an emission replaces the previous set entire and an id is not a cache key. Given a registry,
+/// an id belongs to a drawable instead — the tile, the layer, the order within it — so a tile
+/// that survives a pan keeps its id, its geometry is announced once, and only what arrived is
+/// sent. What left is released and removed.
+///
+/// The registry and the arena both have to outlive the frame, and that is the point: the arena
+/// keeps a retained geometry's bytes, and `GeometryRemove` is what says they can go. Passing a
+/// fresh one of either each frame reduces this to [`emit`] with more steps.
+///
+/// # Errors
+///
+/// As [`emit`]. A frame that fails retires nothing and retains nothing — the registry is only
+/// swept on success, so a retry sees the state the failed attempt started from.
+pub fn emit_incremental(
+    producer: &mut Producer,
+    arena: &mut SlabArena,
+    frame: &Frame<'_>,
+    registry: &mut GeometryRegistry,
+) -> Result<Emitted, FrameError> {
+    emit_into(producer, arena, frame, Some(registry))
+}
+
+fn emit_into(
+    producer: &mut Producer,
+    arena: &mut SlabArena,
+    frame: &Frame<'_>,
+    registry: Option<&mut GeometryRegistry>,
+) -> Result<Emitted, FrameError> {
     producer.begin();
     let mark = arena.mark();
-    match emit_group(producer, arena, frame) {
+    let mut session = registry;
+    if let Some(registry) = session.as_deref_mut() {
+        registry.begin_frame();
+    }
+    match emit_group(producer, arena, frame, session.as_deref_mut()) {
         Ok(emitted) => {
+            // Only now: a frame that could not be written must leave the registry as it found
+            // it, so the retry announces the same geometry rather than assuming the consumer
+            // has what the failed attempt never sent.
+            if let Some(registry) = session {
+                registry.retire();
+            }
             producer.commit();
             Ok(emitted)
         }
@@ -322,6 +376,12 @@ pub fn emit(
             // The arena as well as the ring. The discarded records were the only things that
             // would ever have named these slabs.
             arena.rewind(mark);
+            // And the registry, which handed out ids during the binding pass before anything
+            // was written. All three roll back together or the retry is working from a state
+            // the consumer never saw.
+            if let Some(registry) = session {
+                registry.rollback();
+            }
             Err(error)
         }
     }
@@ -331,6 +391,7 @@ fn emit_group(
     producer: &mut Producer,
     arena: &mut SlabArena,
     frame: &Frame<'_>,
+    registry: Option<&mut GeometryRegistry>,
 ) -> Result<Emitted, FrameError> {
     let Frame {
         style,
@@ -407,6 +468,11 @@ fn emit_group(
     // bytes rather than copying them.
     let mut packed_bytes: BTreeMap<(usize, usize), (emit::Encoded, Option<emit::FillShared>)> =
         BTreeMap::new();
+    // Which drawables this frame is announcing for the first time, and what each id names.
+    // Empty without a registry, which is what makes the unregistered path emit everything.
+    let mut fresh: BTreeSet<DrawableKey> = BTreeSet::new();
+    let mut keyed: BTreeMap<u64, DrawableKey> = BTreeMap::new();
+    let mut registry = registry;
 
     for (index, (tile, tile_buckets)) in buckets.iter().enumerate() {
         // A raster tile's picture goes up before any drawable names it, for the reason the glyph
@@ -425,7 +491,26 @@ fn emit_group(
         }
 
         let at = order::tile_of(tile.z, tile.x, tile.y);
-        let bindings = order::bindings_for(view_id, at, tile_buckets, &mut next_id);
+        let mut bindings = order::bindings_for(view_id, at, tile_buckets, &mut next_id);
+
+        // With a registry the id belongs to the drawable rather than to its place in this
+        // frame's cover, so `bindings_for`'s sequential numbering is replaced. It still runs:
+        // it is what decides how many drawables a bucket makes and which sub-layers they take,
+        // and only the number it stamped is wrong for a retained stream.
+        if let Some(registry) = registry.as_deref_mut() {
+            for binding in &mut bindings {
+                let key = DrawableKey {
+                    tile: binding.tile,
+                    layer_index: binding.layer_index,
+                    sub_layer_index: binding.sub_layer_index,
+                };
+                if registry.is_new(&key) {
+                    fresh.insert(key);
+                }
+                binding.geometry = registry.id_for(key);
+                keyed.insert(binding.geometry.0, key);
+            }
+        }
 
         // A binding per drawable, and a bucket may produce two of them — a fill's triangles and
         // its outline. Each gets its own geometry id from `bindings_for`, so each is announced
@@ -560,16 +645,61 @@ fn emit_group(
                 fresh.0
             }
         };
+        // A drawable the consumer already has is not announced again. `fresh` is empty without
+        // a registry, so the unregistered path announces everything, which is what
+        // `GeometryId`'s documentation describes.
+        let key = keyed.get(&entry.geometry.0).copied();
+        if registry.is_some() && key.is_some_and(|key| !fresh.contains(&key)) {
+            continue;
+        }
+
         emit::write(producer, &encoded)?;
         emitted.geometries += 1;
+
+        // The bytes are wanted until the drawable leaves, and the registry remembers where they
+        // are because nothing else survives the frame that encoded them.
+        if let (Some(registry), Some(key)) = (registry.as_deref_mut(), key) {
+            let refs = emit::slab_refs(&encoded);
+            for reference in &refs {
+                arena.retain(*reference);
+            }
+            registry.record_refs(key, refs);
+        }
     }
 
     // Every geometry is announced before any drawable names one.
+    //
+    // A `ViewUse` is as durable as the geometry it names — the view, layer, sub-layer, tile,
+    // pass and flags do not change while a drawable is in the cover — so with a registry it is
+    // sent once and released when the drawable goes. Without one it is sent every frame, beside
+    // the `GeometryAdd` it accompanies.
     for binding in bound {
+        let key = DrawableKey {
+            tile: binding.tile,
+            layer_index: binding.layer_index,
+            sub_layer_index: binding.sub_layer_index,
+        };
+        if registry.is_some() && !fresh.contains(&key) {
+            emitted.drawables += 1;
+            continue;
+        }
         session
             .use_geometry(producer, binding)
             .map_err(FrameError::from)?;
         emitted.drawables += 1;
+    }
+
+    // What left the cover: released, removed, and its bytes handed back.
+    if let Some(registry) = registry {
+        for (key, geometry) in registry.retired() {
+            session
+                .release_geometry(producer, view_id, geometry)
+                .map_err(FrameError::from)?;
+            for reference in registry.refs_of(&key) {
+                arena.release(*reference);
+            }
+            emitted.removed += 1;
+        }
     }
 
     for (layer_index, bindings) in &by_layer {

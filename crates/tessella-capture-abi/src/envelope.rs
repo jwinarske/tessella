@@ -84,7 +84,9 @@ pub struct OrderEpoch(pub u64);
 /// Field order differs from mbgl's `OverscaledTileID`, which nests a `CanonicalTileID` and
 /// pads. Rev 2 is our protocol rather than a mirror of theirs, so the fields are ordered to
 /// pack without holes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+// Ordered as well as hashed, so a tile can key an ordered map. Derives change no layout and the
+// header is generated from the fields, not from these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
 #[repr(C)]
 pub struct TileId {
     /// Canonical x.

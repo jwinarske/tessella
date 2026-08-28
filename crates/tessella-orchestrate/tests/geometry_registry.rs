@@ -10,12 +10,18 @@
 //! Everything here is about the case that breaks: a cover that *changes* while overlapping. A
 //! registry keyed on anything positional passes a test that only pans by a whole cover.
 
+use tessella_capture_abi::envelope::TileId;
 use tessella_orchestrate::registry::{DrawableKey, GeometryRegistry};
-use tessella_orchestrate::tile::TileId;
 
 fn key(x: u32, layer: i32, sub: i32) -> DrawableKey {
     DrawableKey {
-        tile: Some(TileId::new(3, x, 4)),
+        tile: Some(TileId {
+            x,
+            y: 4,
+            z: 3,
+            overscaled_z: 3,
+            wrap: 0,
+        }),
         layer_index: layer,
         sub_layer_index: sub,
     }

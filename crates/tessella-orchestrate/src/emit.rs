@@ -378,6 +378,30 @@ impl SlabArena {
     }
 }
 
+/// Every slab range an encoded geometry names.
+///
+/// The index buffer and each attribute's source. Deduplicated, because a fill's two drawables
+/// share their vertex buffer and every data-driven attribute shares one interleaved buffer —
+/// retaining a range twice would keep its slab alive after the drawable that wanted it left.
+#[must_use]
+pub fn slab_refs(encoded: &Encoded) -> Vec<SlabRef> {
+    let mut refs = alloc::vec![encoded.record.indexes];
+    let size = core::mem::size_of::<AttributeDesc>();
+    let start = encoded.record.attrs.offset as usize;
+    for index in 0..encoded.record.attrs.count as usize {
+        if let Some(desc) = encoded
+            .payload
+            .get(start + index * size..)
+            .and_then(AttributeDesc::from_bytes)
+            && !refs.contains(&desc.source)
+        {
+            refs.push(desc.source);
+        }
+    }
+    refs.retain(|reference| reference.length > 0);
+    refs
+}
+
 /// A geometry envelope and the payload bytes that follow it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Encoded {

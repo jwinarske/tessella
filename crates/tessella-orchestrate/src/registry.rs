@@ -31,9 +31,7 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
-use tessella_capture_abi::envelope::GeometryId;
-
-use crate::tile::TileId;
+use tessella_capture_abi::envelope::{GeometryId, SlabRef, TileId};
 
 /// What names one drawable across frames.
 ///
@@ -42,11 +40,28 @@ use crate::tile::TileId;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct DrawableKey {
     /// The tile it covers, or `None` for a viewport-filling drawable.
+    ///
+    /// The wire's `TileId`, not the tile builder's: it carries the world copy and the overscaled
+    /// zoom, and two tiles that differ only in the wrap are two drawables.
     pub tile: Option<TileId>,
     /// Position of the layer in the style document.
     pub layer_index: i32,
     /// Order within the layer: 1 for a fill's triangles, 2 for its outline.
     pub sub_layer_index: i32,
+}
+
+/// What a registry remembers about one drawable.
+#[derive(Debug, Clone)]
+struct Entry {
+    id: GeometryId,
+    /// The slab ranges its geometry occupies, so eviction can release them.
+    ///
+    /// Held here because nothing else survives the frame that encoded them: an unchanged
+    /// geometry is not re-encoded, so by the time it is evicted the `Encoded` that named its
+    /// bytes is long gone. The arena cannot hold them either — it counts bytes per slab and
+    /// knows nothing about which drawable they belong to, which is the split that keeps it
+    /// usable by a caller with a different lifecycle.
+    refs: alloc::vec::Vec<SlabRef>,
 }
 
 /// Hands out geometry ids and remembers which drawable each belongs to.
@@ -58,9 +73,13 @@ pub struct DrawableKey {
 /// second is a different thing.
 #[derive(Debug, Default)]
 pub struct GeometryRegistry {
-    live: BTreeMap<DrawableKey, GeometryId>,
+    live: BTreeMap<DrawableKey, Entry>,
     /// Keys seen since [`Self::begin_frame`], so the rest can be reported as gone.
     seen: BTreeSet<DrawableKey>,
+    /// Keys this frame allocated, so a frame that fails can give them back.
+    added: BTreeSet<DrawableKey>,
+    /// What `next` was when the frame began, for the same reason.
+    next_at_frame_start: u64,
     next: u64,
 }
 
@@ -74,6 +93,8 @@ impl GeometryRegistry {
     /// Starts a frame, forgetting which drawables the last one used.
     pub fn begin_frame(&mut self) {
         self.seen.clear();
+        self.added.clear();
+        self.next_at_frame_start = self.next;
     }
 
     /// The id for a drawable, allocating one if it is new.
@@ -83,12 +104,29 @@ impl GeometryRegistry {
     pub fn id_for(&mut self, key: DrawableKey) -> GeometryId {
         self.seen.insert(key);
         if let Some(existing) = self.live.get(&key) {
-            return *existing;
+            return existing.id;
         }
         let id = GeometryId(self.next);
         self.next += 1;
-        self.live.insert(key, id);
+        self.added.insert(key);
+        self.live.insert(
+            key,
+            Entry {
+                id,
+                refs: alloc::vec::Vec::new(),
+            },
+        );
         id
+    }
+
+    /// Records where a newly announced drawable's bytes live, so eviction can release them.
+    ///
+    /// Called only for a drawable that was new: one already known was not re-encoded, and its
+    /// references are the ones recorded when it was.
+    pub fn record_refs(&mut self, key: DrawableKey, refs: alloc::vec::Vec<SlabRef>) {
+        if let Some(entry) = self.live.get_mut(&key) {
+            entry.refs = refs;
+        }
     }
 
     /// Whether this drawable was already known before the current frame asked for it.
@@ -111,13 +149,38 @@ impl GeometryRegistry {
         self.live
             .iter()
             .filter(|(key, _)| !self.seen.contains(*key))
-            .map(|(key, id)| (*key, *id))
+            .map(|(key, entry)| (*key, entry.id))
             .collect()
+    }
+
+    /// The slab ranges a retired drawable held, for the arena to release.
+    #[must_use]
+    pub fn refs_of(&self, key: &DrawableKey) -> &[SlabRef] {
+        self.live.get(key).map_or(&[], |entry| &entry.refs)
     }
 
     /// Drops everything [`Self::retired`] reported.
     pub fn retire(&mut self) {
         self.live.retain(|key, _| self.seen.contains(key));
+    }
+
+    /// Undoes everything the current frame allocated.
+    ///
+    /// An id is handed out during the binding pass, before a single record is written, so a
+    /// frame that then fails has already put its new drawables here. Leaving them makes the
+    /// retry believe the consumer holds geometry the failed attempt never sent — and the tile is
+    /// missing until the cover changes again, which is a fault appearing one pan after its
+    /// cause.
+    ///
+    /// The counter rewinds too. Ids are retired rather than reused when a drawable is *removed*,
+    /// because a consumer was told about them; a frame that failed told nobody anything, so its
+    /// numbers are free.
+    pub fn rollback(&mut self) {
+        for key in &self.added {
+            self.live.remove(key);
+        }
+        self.added.clear();
+        self.next = self.next_at_frame_start;
     }
 
     /// How many drawables are known.
