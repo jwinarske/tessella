@@ -222,6 +222,12 @@ impl SlabArena {
     /// the next frame appending to another frame's bytes.
     pub fn rewind(&mut self, mark: SlabMark) {
         self.sealed.truncate(mark.sealed);
+        // What the discarded slabs had retained goes with them. The counter rewinds too, so the
+        // next frame's first slab takes the id the failed frame's did: leaving its live count
+        // behind would credit a fresh, empty slab with the bytes a rolled-back frame retained,
+        // and a slab that starts life owing bytes nothing holds never sweeps and never reports
+        // a live fraction anyone can act on.
+        self.live.retain(|id, _| *id < mark.next_id);
         self.next_id = mark.next_id;
         if !mark.open {
             self.open = None;
@@ -270,6 +276,16 @@ impl SlabArena {
         }
     }
 
+    /// How many of a slab's bytes are still wanted.
+    ///
+    /// The arena's side of the retention accounting, against which a caller can check its own:
+    /// this should equal the lengths of every reference the caller still holds into the slab,
+    /// and a divergence is a retain or a release that happened without its counterpart.
+    #[must_use]
+    pub fn live_bytes(&self, id: u32) -> usize {
+        self.live.get(&id).copied().unwrap_or(0)
+    }
+
     /// How much of a sealed slab is still wanted, from zero to one.
     ///
     /// `None` for a slab this arena does not hold. A slab with no live bytes reports zero and is
@@ -284,7 +300,7 @@ impl SlabArena {
             return Some(0.0);
         }
         #[allow(clippy::cast_precision_loss)]
-        Some(self.live.get(&id).copied().unwrap_or(0) as f64 / total as f64)
+        Some(self.live_bytes(id) as f64 / total as f64)
     }
 
     /// Drops every sealed slab nothing wants, returning their ids.

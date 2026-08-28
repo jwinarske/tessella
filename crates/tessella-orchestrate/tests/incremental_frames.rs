@@ -847,3 +847,233 @@ mod teardown {
         );
     }
 }
+
+/// A frame or a teardown that fails moves nothing — the arena included.
+///
+/// # What was wrong
+///
+/// The ring, the registry, the camera and the declaration all rolled back together, and the
+/// arena did not. Two ways.
+///
+/// A retirement released its slab ranges as it was decided, before the records saying so were
+/// finished. A frame that then hit a full ring left the arena believing those bytes free while
+/// the registry still held them, and the retry — working from the registry — released them a
+/// second time. `release` saturates, so the second one took the count to zero and the next sweep
+/// freed a slab whose geometry was still announced and still being drawn.
+///
+/// And `rewind` truncated the discarded slabs without dropping what they had retained, while
+/// restoring the id counter. The next frame's first slab took the failed frame's id and
+/// inherited its live count: a fresh slab owing bytes nothing holds, which never sweeps and
+/// never reports a live fraction worth acting on.
+///
+/// R4 calls this teardown under fault, and it is the same discipline as backpressure under
+/// stall: recovery is to try again, which only works if the failed attempt left nothing behind.
+mod under_fault {
+    use super::{Scene, scene};
+    use std::collections::BTreeMap;
+    use tessella_capture_abi::envelope::{GeometryId, ViewId};
+    use tessella_capture_abi::ring::Ring;
+    use tessella_orchestrate::SlabArena;
+    use tessella_orchestrate::emit;
+    use tessella_orchestrate::frame::{self, Frame};
+    use tessella_orchestrate::registry::Session;
+    use tessella_style::light::Light;
+
+    /// Big enough for any frame here.
+    const ROOMY: usize = 1 << 22;
+    /// Too small for one: enough to take a record or two before it fills.
+    const CRAMPED: usize = 512;
+
+    fn emit(
+        scene: &Scene,
+        view: ViewId,
+        capacity: usize,
+        arena: &mut SlabArena,
+        session: &mut Session,
+    ) -> Result<usize, ()> {
+        emit_measured(scene, view, capacity, arena, session).0
+    }
+
+    /// Emits, and says how many bytes of ring the attempt took.
+    fn emit_measured(
+        scene: &Scene,
+        view: ViewId,
+        capacity: usize,
+        arena: &mut SlabArena,
+        session: &mut Session,
+    ) -> (Result<usize, ()>, usize) {
+        emit_after_filler(scene, view, capacity, 0, arena, session)
+    }
+
+    /// Emits into a ring already holding `filler` bytes of records nobody consumed.
+    ///
+    /// Capacity is a power of two, so a frame's failure cannot be placed by sizing the ring; it
+    /// is placed by taking the space away in front of it instead. What is left when the frame
+    /// starts is `capacity - filler`, to the byte.
+    fn emit_after_filler(
+        scene: &Scene,
+        view: ViewId,
+        capacity: usize,
+        filler: usize,
+        arena: &mut SlabArena,
+        session: &mut Session,
+    ) -> (Result<usize, ()>, usize) {
+        let mut ring = Ring::new(capacity);
+        let (producer, consumer) = ring.split();
+        if filler > 0 {
+            producer.begin();
+            let mut id = 1u64 << 40;
+            while consumer.occupancy() < filler {
+                emit::remove(producer, GeometryId(id)).expect("the filler fits");
+                id += 1;
+                producer.commit();
+                producer.begin();
+            }
+            producer.commit();
+        }
+        let before = consumer.occupancy();
+        let light = Light::default();
+        let result = frame::emit_incremental(
+            producer,
+            arena,
+            &Frame {
+                style: &scene.style,
+                view: &scene.view,
+                view_id: view,
+                tiles: &scene.tiles,
+                buckets: &scene.buckets,
+                light: &light,
+                fonts: None,
+                patterns: None,
+            },
+            session,
+        )
+        .map(|emitted| emitted.removed)
+        .map_err(|_| ());
+        (result, consumer.occupancy() - before)
+    }
+
+    /// Bytes a failed retirement decided to free are still held when the frame does not commit.
+    #[test]
+    fn a_failed_frame_frees_nothing() {
+        let here = scene(0.0);
+        let there = scene(60.0);
+        let mut arena = SlabArena::new();
+        let mut session = Session::new();
+        emit(&here, ViewId(0), ROOMY, &mut arena, &mut session).expect("settles");
+        let held = session.registry().len();
+
+        // A ring a little short of what the pan needs. Sized by measuring rather than guessed:
+        // the retirements are emitted before the layer state, the order and the camera, so a
+        // frame that runs out in its last few bytes is one that had already decided every
+        // retirement — which is the window this is about. Guessing a small ring instead fails
+        // long before the retirements and proves nothing.
+        let (_, needed) = {
+            let mut arena = SlabArena::new();
+            let mut session = Session::new();
+            emit(&here, ViewId(0), ROOMY, &mut arena, &mut session).expect("settles");
+            emit_measured(&there, ViewId(0), ROOMY, &mut arena, &mut session)
+        };
+        let capacity = needed.next_power_of_two() * 2;
+        let (attempt, _) = emit_after_filler(
+            &there,
+            ViewId(0),
+            capacity,
+            capacity - needed + 8,
+            &mut arena,
+            &mut session,
+        );
+        attempt.expect_err("runs out in the last few bytes");
+        assert_eq!(session.registry().len(), held, "the registry is untouched");
+        assert!(
+            arena.sweep().is_empty(),
+            "and so is the arena: nothing was retired, because nothing said so"
+        );
+
+        // The retry does the whole retirement, once.
+        let removed = emit(&there, ViewId(0), ROOMY, &mut arena, &mut session).expect("retries");
+        assert!(removed > 0, "the retry is what retires them");
+
+        // The two sides of the accounting agree. Asserting on a sweep instead is too coarse to
+        // catch this: the surviving geometry in the same slab keeps the count above zero, so a
+        // double release shows up as a slab that is simply undercounted — until enough of one
+        // retires at once to take it to zero, and then a live slab is swept out from under the
+        // geometry still drawing it.
+        accounting_agrees(&arena, &mut session);
+    }
+
+    /// Every byte the arena believes is wanted is a byte the registry is holding a reference to.
+    fn accounting_agrees(arena: &SlabArena, session: &mut Session) {
+        let mut expected: BTreeMap<u32, usize> = BTreeMap::new();
+        for (_, refs) in session.registry().live_refs() {
+            for reference in refs {
+                *expected.entry(reference.slab).or_default() += reference.length as usize;
+            }
+        }
+        for (slab, wanted) in &expected {
+            assert!(
+                arena.slab(*slab).is_some(),
+                "slab {slab} was swept while the registry still holds {wanted} bytes of it"
+            );
+            assert_eq!(
+                arena.live_bytes(*slab),
+                *wanted,
+                "slab {slab}: the arena and the registry disagree about what is wanted"
+            );
+        }
+    }
+
+    /// A rewound slab id starts its next life empty.
+    #[test]
+    fn a_reused_slab_id_carries_nothing_over() {
+        let here = scene(0.0);
+        let mut arena = SlabArena::new();
+        let mut session = Session::new();
+
+        emit(&here, ViewId(0), CRAMPED, &mut arena, &mut session).expect_err("fills the ring");
+        emit(&here, ViewId(0), ROOMY, &mut arena, &mut session).expect("the retry lands");
+
+        // Tearing the only view down releases every byte the successful frame retained. A slab
+        // still crediting the failed frame's retains would survive this.
+        let mut ring = Ring::new(ROOMY);
+        let (producer, _consumer) = ring.split();
+        frame::teardown_view(producer, &mut arena, &mut session, ViewId(0)).expect("tears down");
+        arena.sweep();
+        assert!(
+            arena.slabs().is_empty(),
+            "every slab went: {} left holding bytes nothing wants",
+            arena.slabs().len()
+        );
+    }
+
+    /// A teardown that fails leaves the view intact and tears down cleanly on the retry.
+    #[test]
+    fn a_failed_teardown_leaves_the_view_standing() {
+        let here = scene(0.0);
+        let mut arena = SlabArena::new();
+        let mut session = Session::new();
+        emit(&here, ViewId(0), ROOMY, &mut arena, &mut session).expect("settles");
+        let held = session.registry().len();
+
+        let mut ring = Ring::new(CRAMPED);
+        let (producer, _consumer) = ring.split();
+        frame::teardown_view(producer, &mut arena, &mut session, ViewId(0))
+            .expect_err("fills the ring");
+        assert_eq!(session.registry().len(), held, "the view still holds it all");
+        assert!(arena.sweep().is_empty(), "and the bytes are still there");
+        accounting_agrees(&arena, &mut session);
+
+        // Which means the view can still draw, announcing nothing.
+        assert_eq!(
+            emit(&here, ViewId(0), ROOMY, &mut arena, &mut session),
+            Ok(0),
+            "the failed teardown is invisible to the next frame"
+        );
+
+        // And the retry tears it down whole.
+        let mut ring = Ring::new(ROOMY);
+        let (producer, _consumer) = ring.split();
+        frame::teardown_view(producer, &mut arena, &mut session, ViewId(0)).expect("retries");
+        assert_eq!(session.registry().len(), 0, "nothing is held afterwards");
+    }
+}

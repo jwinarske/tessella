@@ -87,6 +87,8 @@ pub struct GeometryRegistry {
     view: u32,
     /// Keys this frame allocated, so a frame that fails can give them back.
     added: BTreeSet<DrawableKey>,
+    /// Slab ranges this frame has decided to let go, applied on [`Self::retire`].
+    releasing: Vec<SlabRef>,
     /// What `next` was when the frame began, for the same reason.
     next_at_frame_start: u64,
     next: u64,
@@ -200,14 +202,35 @@ impl GeometryRegistry {
     }
 
     /// Applies this frame's releases, dropping whatever no view holds afterwards.
-    pub fn retire(&mut self) {
+    ///
+    /// Returns the slab ranges those drawables held, together with any staged by
+    /// [`Self::displace`], for the caller to release on the arena.
+    ///
+    /// # Why the caller releases and this does not
+    ///
+    /// Because a frame can fail after deciding what to retire and before finishing the records
+    /// that say so. Releasing as each retirement was decided left a failed frame with bytes the
+    /// arena thought free and the registry still holding — and the retry, working from the
+    /// registry, released them a second time. The count is saturating, so the second release
+    /// took it to zero and the next sweep freed a slab whose geometry was still announced and
+    /// still being drawn. Staging them here means the arena moves only when the frame commits,
+    /// which is the same discipline the ring, the registry and the session already keep.
+    pub fn retire(&mut self) -> Vec<SlabRef> {
         let view = self.view;
         for (key, entry) in &mut self.live {
             if !self.seen.contains(key) {
                 entry.users.remove(&view);
             }
         }
-        self.live.retain(|_, entry| !entry.users.is_empty());
+        let mut releasing = core::mem::take(&mut self.releasing);
+        self.live.retain(|_, entry| {
+            if entry.users.is_empty() {
+                releasing.extend_from_slice(&entry.refs);
+                return false;
+            }
+            true
+        });
+        releasing
     }
 
     /// Undoes everything the current frame allocated.
@@ -226,6 +249,9 @@ impl GeometryRegistry {
             self.live.remove(key);
         }
         self.added.clear();
+        // Nothing this frame staged for release happens, because nothing this frame said so
+        // reached the consumer.
+        self.releasing.clear();
         self.next = self.next_at_frame_start;
     }
 
@@ -278,8 +304,22 @@ impl GeometryRegistry {
     /// before the records were written would leave a consumer holding geometry nothing will ever
     /// mention again.
     pub fn displace(&mut self, key: &DrawableKey) {
-        self.live.remove(key);
+        if let Some(entry) = self.live.remove(key) {
+            // Staged rather than released, for [`Self::retire`]'s reason: a displacement decided
+            // by a frame that then fails must not have moved the arena.
+            self.releasing.extend_from_slice(&entry.refs);
+        }
         self.seen.remove(key);
+    }
+
+    /// Every known drawable's geometry and the slab ranges it holds.
+    ///
+    /// The arena's counterpart to [`Self::len`]: what the registry believes is still wanted, for
+    /// a caller checking the arena agrees.
+    pub fn live_refs(&self) -> impl Iterator<Item = (GeometryId, &[SlabRef])> {
+        self.live
+            .values()
+            .map(|entry| (entry.id, entry.refs.as_slice()))
     }
 
     /// How many drawables are known.

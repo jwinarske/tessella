@@ -391,7 +391,11 @@ fn emit_into(
             // it, so the retry announces the same geometry rather than assuming the consumer
             // has what the failed attempt never sent.
             if let Some(session) = session {
-                session.registry().retire();
+                // The arena moves with the commit and not before: `retire` hands back what this
+                // frame let go, staged there since it was decided.
+                for reference in session.registry().retire() {
+                    arena.release(reference);
+                }
                 session.record_camera(frame.view_id, key);
                 session.record_declared(frame.view_id);
             }
@@ -805,16 +809,13 @@ fn emit_group(
         // And the bytes go only for those no view holds afterwards — §5.3's "removed when the
         // last view releases". A tile leaving one view's cover while another still draws it
         // keeps its geometry and loses only that view's use.
-        for (key, geometry) in registry.retired() {
+        for (_, geometry) in registry.retired() {
             // The record first, then the bytes. The arena hands a released range back to the
             // next geometry that fits it, and the consumer is holding the old one's id against
             // that same range: without the removal it reads whatever was written over it. Every
             // release for this geometry has already gone out above, so nothing is drawing it
             // when it goes.
             emit::remove(producer, geometry).map_err(FrameError::from)?;
-            for reference in registry.refs_of(&key) {
-                arena.release(*reference);
-            }
             emitted.removed += 1;
         }
 
@@ -829,9 +830,6 @@ fn emit_group(
             session
                 .release_geometry(producer, view_id, geometry)
                 .map_err(FrameError::from)?;
-            for reference in registry.refs_of(&key) {
-                arena.release(*reference);
-            }
             registry.displace(&key);
             emitted.displaced += 1;
         }
@@ -920,9 +918,11 @@ pub fn teardown_view(
     view_id: ViewId,
 ) -> Result<Emitted, FrameError> {
     producer.begin();
-    match teardown_group(producer, arena, session, view_id) {
+    match teardown_group(producer, session, view_id) {
         Ok(emitted) => {
-            session.registry().retire();
+            for reference in session.registry().retire() {
+                arena.release(reference);
+            }
             session.forget(view_id);
             producer.commit();
             Ok(emitted)
@@ -937,7 +937,6 @@ pub fn teardown_view(
 
 fn teardown_group(
     producer: &mut Producer,
-    arena: &mut SlabArena,
     session: &mut Session,
     view_id: ViewId,
 ) -> Result<Emitted, FrameError> {
@@ -965,11 +964,8 @@ fn teardown_group(
         view.release_geometry(producer, view_id, geometry)
             .map_err(FrameError::from)?;
     }
-    for (key, geometry) in session.registry().retired() {
+    for (_, geometry) in session.registry().retired() {
         emit::remove(producer, geometry).map_err(FrameError::from)?;
-        for reference in session.registry().refs_of(&key) {
-            arena.release(*reference);
-        }
         emitted.removed += 1;
     }
 
