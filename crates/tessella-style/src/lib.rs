@@ -25,6 +25,8 @@
 
 extern crate alloc;
 
+#[cfg(feature = "collator")]
+pub mod collator;
 pub mod config;
 pub mod crossfade;
 pub mod document;
