@@ -725,9 +725,9 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   device. §5.4's one process-scoped pool now exists, with the three
   priority classes, and the cold start queues onto it rather than spawning threads per view; a
   waiter helps with work at or above its own class only, so an hours-long region download at
-  the background class cannot get in front of a view trying to draw. Remaining for exit: a
-  budget to hold the worker count against, on the RK3566 lane rather than on a workstation
-  loopback. Decode and bucket build are now shared as well as
+  the background class cannot get in front of a view trying to draw. The budget the count is
+  held against is the RK3566 measurement above, taken on the device lane rather than on a
+  workstation loopback. Decode and bucket build are now shared as well as
   fetched once: the bucket cache is consulted *before* the network, so a warm view costs no
   request at all — which matters because coalescing alone dedupes only *concurrent* fetches and
   is deliberately not a cache, so flatness across time waits on §12.6's byte cache or on a
@@ -737,7 +737,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   — are built once per tile rather than once per source. `boot` covers both kinds and their
   different lifecycles: a vector source is fetched once per tile because the server cut it up,
   a GeoJSON source once in total because this side does the cutting.
-- **R1.5** — *in progress.* Four views over the same style (§13). §9.2's three invariants are
+- **R1.5** — *exit met.* Four views over the same style (§13). §9.2's three invariants are
   green, the third — screen-space UBOs per view over shared geometry — asserted in both halves
   at once, since either alone is a property a wrong implementation also has. §13.1's counters
   are at zero. §13.3's sweep now runs through the real per-view state rather than recomputing
@@ -790,16 +790,19 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   it is named where it is missed: vertical writing, images in text and per-section scaling all
   change a line's *height* as well as its width, and none of them has an oracle without the
   sprite atlas.
-  **Held behind a capture**: the pitched paths, in three different states, and the difference
-  between them matters. A line label's collision circles *do* carry the signed distance from the
-  anchor that selects a prefix of the run under pitch — computed, stored, and read by nothing.
-  `gamma_scale` is written as its pitch-zero value of one, and the perspective ratio mbgl scales
-  it by is not written at all. The label-plane and coordinate matrices have a map-aligned branch
-  that scales by tile units per pixel and rotates by the bearing, and that branch is deliberately
-  absent rather than written and untested: producing it would put a matrix on the wire against no
-  measurement. All three wait on the same thing — the probe is unrotated, so there is no capture
-  to check any of it against, which is R0's second qualification reappearing rather than a new
-  one.
+  **Was held behind a capture, and is not any longer**: the pitched paths, which stood here in
+  three different states because the probe was unrotated and there was no capture to check any of
+  them against — R0's second qualification reappearing rather than a new one. A line label's
+  collision circles carried the signed distance from the anchor that selects a prefix of the run
+  under pitch, computed and stored and read by nothing. `gamma_scale` was written as its
+  pitch-zero value of one, with the perspective ratio mbgl scales it by not written at all. And
+  the map-aligned branch of the label-plane and coordinate matrices — tile units per pixel,
+  rotated by the bearing — was deliberately absent rather than written and untested, since
+  producing it would have put a matrix on the wire against no measurement.
+  All three closed under R3, once the camera stopped refusing rotation: the label planes land
+  there with their map-aligned branch, `gamma_scale` stops being one, and the collision prefix
+  turns out to be two mechanisms — a reach along the line and the thinning of the circles — that
+  had been described here as one.
   What that qualification cost came due when a building was first drawn at a pitch. The pitched
   camera had never been *evaluated*, let alone compared: it hovered over the map's centre instead
   of orbiting back along its own forward direction, and the pitch was read as radians where it is
@@ -1737,9 +1740,9 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   left-to-right and shaping runs per label per tile, so that is the difference between the pass
   being free for them and costing an allocation each.
   Arabic *shaping* — the contextual letter forms, mbgl's `applyArabicShaping` over ICU's
-  `u_shapeArabic` — is the remaining half and is not ported. Arabic now reorders correctly and
-  each letter is drawn in its isolated form rather than joined to its neighbours. mbgl's
-  `BiDi.ArabicShaping`, `Tashkeel` and `MixedShaping` state the exact strings, and it lands next.
+  `u_shapeArabic` — was the remaining half, and lands here. Reordering alone left each letter in
+  its isolated form rather than joined to its neighbours; mbgl's `BiDi.ArabicShaping`, `Tashkeel`
+  and `MixedShaping` state the exact strings, and they pass.
   Arabic is written joined: which of a letter's four shapes is drawn depends on whether the
   letters either side join to it, so the same letter is four different pictures and text is
   *stored* as none of them. A renderer drawing the stored forms produces something a reader can
@@ -2081,6 +2084,17 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   of having put the mesh in the geometry id space.
 - **R4** — hardening: ring backpressure under stall ✅, teardown protocol under fault ✅,
   process-isolation spike (§3.5) ✅, riscv64 soak.
+  Two things elsewhere in this document are assigned to this phase and were not on this line,
+  which is how a phase comes to look nearly finished while work is still pointed at it. §12.8's
+  **pacing counters** land in R4. And §13.2's **acknowledged-renderable**: `TileState::renderable`
+  still means *built*, and making it mean acknowledged needs this phase's reverse-channel epoch.
+  The substitution algorithm does not change — what changes is what counts as a tile that can
+  stand in for another, and until then a crossing can retire an ancestor against a tile the
+  consumer has not drawn.
+  The §3.5 spike leaves one item pointed at §11.3 rather than at R4: the slab region is packed
+  after the frame that names it, so a cross-process consumer can hold a handle the region does
+  not yet cover. An arena allocating out of the shared region removes the step rather than
+  sequencing around it.
 
 ---
 
@@ -2146,6 +2160,13 @@ the §6.4 rect list maps one-to-one onto sub-region `setImage` over the shared a
 Obligations on the Rust side: slabs immutable once emitted (already guaranteed — drawables
 are immutable after build; the AddReason premise), and slab lifetime extends to the Filament
 release callback, which is exported C ABI back into the Rust half.
+
+**A second reason to want this, from §3.5's spike.** A consumer that does not share the arena
+reaches geometry through a region `SlabArena::pack` builds *after* the frame that named it, so
+it can hold a `GeometryAdd` whose handle the region does not yet cover. In process there is no
+window, because the arena is the same object on both sides. Allocating slabs out of the shared
+region removes the pack step rather than sequencing around it, and the ordering problem goes
+with it — the bytes are in place before the record naming them can be written.
 
 ### 11.4 Reverse channel (DR-10)
 
