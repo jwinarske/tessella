@@ -1457,13 +1457,17 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   on it, which also removes a latent fault: the pairing was by position into the pending list,
   which holds only where the two lists are the same length — point placement, the one case that
   reached it.
-  **What is still short of mbgl**: it computes a feature's anchors once from *both* extents,
-  `getAnchors(…, shapedText.left, shapedText.right, shapedIcon.left, shapedIcon.right, …)`, so a
-  symbol with an icon and no text still gets anchors from the icon. Here the icon is shaped in a
-  second pass that needs the sprite positions the first does not have, so a line-placed symbol
-  with no text produces no instances and no icon — a layer of oneway arrows draws nothing, where
-  a shield with a label draws. Closing it means shaping icons before anchors, which is the
-  ordering mbgl has and this does not.
+  **And the icon is shaped before the anchors**, which is the ordering mbgl has and this did
+  not. It computes a feature's anchors once from *both* extents — `getAnchors(…,
+  shapedText.left, shapedText.right, shapedIcon.left, shapedIcon.right, …)` — so a symbol with an
+  icon and no text still gets anchors, from the icon. Laying out takes the sprite index for that
+  reason, and two things follow. A `symbol-placement: line` layer carrying only an `icon-image`
+  draws: oneway arrows and lane markings, which drew nothing before because a feature with no
+  text had no extent, produced no instances, and had nowhere to hang an icon. And the icon's own
+  width decides where its repetitions go, since `get_anchors` measures whether a label fits
+  between two bends and a wide shield is rejected where a narrow one is accepted — asserted by
+  placing the same road with an eighteen-pixel sprite and a four-hundred-pixel one and requiring
+  the counts to differ, which zeroing the extent makes fail.
   The sheet itself then decodes, with `zune-png` behind an off-by-default `png` feature — the
   pattern `cache` and `tls` already use, and for a different reason than `tls` has: `zune-png` is
   pure Rust, so unlike `rustls` it costs the cross lane nothing even enabled. It is a feature for

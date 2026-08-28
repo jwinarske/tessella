@@ -638,6 +638,36 @@ impl SymbolLayout {
         build_icons(&labels, positions)
     }
 
+    /// A pending symbol's icon extent around its anchor, as `(left, right)` in logical pixels.
+    ///
+    /// mbgl shapes the icon *before* it computes anchors and hands `getAnchors` both extents, so
+    /// the anchors a feature gets depend on how wide its shield is as well as on its label. This
+    /// is why laying out takes the sprite index: without it the icon can only be shaped in the
+    /// second pass, which is after the anchors it should have contributed to.
+    ///
+    /// Zero for a symbol with no icon, or one whose sprite the sheet does not hold — the same
+    /// zero mbgl passes when `shapedIcon` is absent.
+    fn icon_extent(
+        &self,
+        pending: &Pending,
+        icons: Option<&tessella_glyph::sprite::Positions>,
+    ) -> (f32, f32) {
+        let Some(image) = pending.icon.as_ref() else {
+            return (0.0, 0.0);
+        };
+        let Some(position) = icons.and_then(|icons| icons.get(image)) else {
+            return (0.0, 0.0);
+        };
+        let (width, height) = position.display_size();
+        #[allow(clippy::cast_possible_truncation)]
+        let placed = tessella_glyph::quads::shape_icon(
+            (width as f32, height as f32),
+            pending.icon_options.offset,
+            pending.icon_options.anchor,
+        );
+        (placed.left, placed.right)
+    }
+
     /// Whether this layer draws anything on this tile.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -687,7 +717,11 @@ impl SymbolLayout {
     /// When the joined buffers would exceed what a `u16` index reaches. See
     /// [`SymbolBuffers::append`].
     #[must_use]
-    pub fn lay_out(&self, fonts: &Fonts) -> (SymbolBuffers, Vec<LaidOut>) {
+    pub fn lay_out(
+        &self,
+        fonts: &Fonts,
+        icons: Option<&tessella_glyph::sprite::Positions>,
+    ) -> (SymbolBuffers, Vec<LaidOut>) {
         let mut buffers = SymbolBuffers::default();
         let mut laid = Vec::new();
 
@@ -706,25 +740,19 @@ impl SymbolLayout {
             // their own positions afterwards.
             let glyphs = fonts.stack(&head.fonts);
             let (built, entries) = if self.placement.along_line() {
-                // Only the text-bearing ones, which is where line placement is still short of
-                // mbgl. It computes a feature's anchors once from *both* extents —
-                // `getAnchors(..., shapedText.left, shapedText.right, shapedIcon.left,
-                // shapedIcon.right, ...)` — so a symbol with an icon and no text still gets
-                // anchors, from the icon. Here the icon is shaped in a second pass that needs
-                // the sprite positions this one does not have, so a line-placed symbol with no
-                // text produces no instances and therefore no icon.
-                //
-                // What that costs: a `symbol-placement: line` layer whose features carry only an
-                // `icon-image` — oneway arrows are the usual one — draws nothing. A shield with
-                // a label draws, which is the case below. Closing it means shaping icons before
-                // anchors, which is the ordering mbgl has and this does not.
                 let labels: Vec<LineLabel> = run
                     .iter()
                     .enumerate()
-                    .filter(|(_, pending)| !pending.text.is_empty())
+                    .filter(|(_, pending)| {
+                        // Text *or* an icon. A symbol with only an icon still has anchors — from
+                        // the icon's own extent — and dropping it here is what made a layer of
+                        // oneway arrows draw nothing.
+                        !pending.text.is_empty() || pending.icon.is_some()
+                    })
                     .filter_map(|(offset, pending)| match &pending.anchoring {
                         Anchoring::Line(line) => Some(LineLabel {
                             pending: start_of_run + offset,
+                            icon: self.icon_extent(pending, icons),
                             text: pending.text.to_string(),
                             line: line.clone(),
                         }),

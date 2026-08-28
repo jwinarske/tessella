@@ -601,7 +601,7 @@ mod through_the_builder {
         assert_eq!(layouts.len(), 2);
 
         for (symbol, layout) in &layouts {
-            let (buffers, laid) = layout.lay_out(&fonts);
+            let (buffers, laid) = layout.lay_out(&fonts, None);
             assert_eq!(
                 buffers.vertices.len(),
                 symbol.vertices,
@@ -630,7 +630,7 @@ mod through_the_builder {
         let fonts = fonts(&layouts);
 
         for (symbol, layout) in &layouts {
-            let (buffers, _) = layout.lay_out(&fonts);
+            let (buffers, _) = layout.lay_out(&fonts, None);
             let bytes: Vec<u8> = buffers
                 .indices
                 .iter()
@@ -656,7 +656,7 @@ mod through_the_builder {
         let fonts = fonts(&layouts);
 
         for (symbol, layout) in &layouts {
-            let (buffers, _) = layout.lay_out(&fonts);
+            let (buffers, _) = layout.lay_out(&fonts, None);
             let mut arena = SlabArena::default();
             let encoded = encode_symbol(&mut arena, GeometryId(1), &buffers, 0, true, ATLAS);
 

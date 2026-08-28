@@ -182,7 +182,7 @@ fn run(zooms: &[f64]) -> (Vec<Vec<Opacities>>, usize) {
                     continue;
                 }
                 fonts.fetch(&merged(layout), &Disk).expect("the font reads");
-                let (_, laid) = layout.lay_out(&fonts);
+                let (_, laid) = layout.lay_out(&fonts, None);
                 if laid.is_empty() {
                     continue;
                 }

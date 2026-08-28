@@ -429,6 +429,7 @@ fn draw_line_labels() {
             #[allow(clippy::cast_precision_loss)]
             labels.push(LineLabel {
         pending: 0,
+        icon: (0.0, 0.0),
                 text: text.to_string(),
                 line: ring
                     .iter()

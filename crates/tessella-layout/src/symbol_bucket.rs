@@ -461,6 +461,12 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
 pub struct LineLabel {
     /// Which of the layout's pending symbols this is, stamped into every instance it produces.
     pub pending: usize,
+    /// The icon's horizontal extent around the anchor, as `(left, right)` in logical pixels.
+    ///
+    /// mbgl passes both the shaped text's and the shaped icon's to `getAnchors`, so a symbol
+    /// with an icon and no text still gets anchors — from the icon. Zero where there is none,
+    /// which is what mbgl passes for the same case.
+    pub icon: (f32, f32),
     /// The text, already resolved from `text-field`.
     pub text: alloc::string::String,
     /// The line it follows, in tile units.
@@ -561,8 +567,8 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                 options.max_angle,
                 shaping.left,
                 shaping.right,
-                0.0,
-                0.0,
+                label.icon.0,
+                label.icon.1,
                 ONE_EM,
                 1.0,
             )
@@ -575,8 +581,8 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                 options.max_angle,
                 shaping.left,
                 shaping.right,
-                0.0,
-                0.0,
+                label.icon.0,
+                label.icon.1,
                 ONE_EM,
                 1.0,
                 options.overscaling,

@@ -197,7 +197,7 @@ fn the_glyphs_turn_the_layout_into_vertices() {
     let layout = buckets[0].content.as_symbol().expect("a symbol layout");
 
     let (fonts, _) = fonts_for(layout);
-    let (buffers, laid) = layout.lay_out(&fonts);
+    let (buffers, laid) = layout.lay_out(&fonts, None);
 
     assert!(!laid.is_empty(), "nothing was laid out");
     assert_eq!(buffers.vertices.len(), buffers.glyphs() * 4);
@@ -228,8 +228,8 @@ fn laying_out_twice_gives_the_same_thing() {
     let layout = buckets[0].content.as_symbol().expect("a symbol layout");
     let (fonts, _) = fonts_for(layout);
 
-    let (first, first_laid) = layout.lay_out(&fonts);
-    let (second, second_laid) = layout.lay_out(&fonts);
+    let (first, first_laid) = layout.lay_out(&fonts, None);
+    let (second, second_laid) = layout.lay_out(&fonts, None);
     assert_eq!(first, second, "the same layout produced different buffers");
     assert_eq!(first_laid, second_laid);
 }
@@ -267,8 +267,8 @@ fn placement_decides_point_or_line() {
     // spacing of 400 the two effects together give 873 from 1773 roads, so a count alone says
     // nothing about whether repetition happens.
     let (fonts, _) = fonts_for(line);
-    let (_, point_laid) = point.lay_out(&fonts);
-    let (_, line_laid) = line.lay_out(&fonts);
+    let (_, point_laid) = point.lay_out(&fonts, None);
+    let (_, line_laid) = line.lay_out(&fonts, None);
     assert_eq!(point_laid.len(), point.pending.len());
     assert!(
         !line_laid.is_empty(),
@@ -279,7 +279,7 @@ fn placement_decides_point_or_line() {
     let closer =
         build_mvt_tile(&road_style_spaced("line", 100.0), "v", ID, &tile()).expect("builds");
     let closer = closer[0].content.as_symbol().expect("a symbol layout");
-    let (_, closer_laid) = closer.lay_out(&fonts);
+    let (_, closer_laid) = closer.lay_out(&fonts, None);
     assert!(
         closer_laid.len() > line_laid.len() * 2,
         "{} at spacing 400 and {} at 100",
@@ -288,7 +288,7 @@ fn placement_decides_point_or_line() {
     );
 
     // And a line-placed label records where along its road each glyph sits.
-    let (buffers, _) = line.lay_out(&fonts);
+    let (buffers, _) = line.lay_out(&fonts, None);
     assert!(
         buffers.glyph_offsets.iter().any(|offset| *offset != 0.0),
         "a line label recorded no along-line distances"
@@ -360,7 +360,7 @@ fn a_tile_of_labels_costs_one_request() {
     assert_eq!(origin.asked().len(), 1);
 
     // The store answers for it without another byte off the network.
-    let (buffers, laid) = again.lay_out(&fonts);
+    let (buffers, laid) = again.lay_out(&fonts, None);
     assert!(!laid.is_empty());
     assert!(!buffers.is_empty());
 }
@@ -398,7 +398,7 @@ fn text_size_can_vary_per_feature() {
 
     // And the sizes reach the vertices, packed the way the shader reads them.
     let (fonts, _) = fonts_for(layout);
-    let (buffers, laid) = layout.lay_out(&fonts);
+    let (buffers, laid) = layout.lay_out(&fonts, None);
     let unpack = |vertex: &tessella_layout::symbol_bucket::SymbolVertex| {
         // The minimum size is the size times 128, shifted up one with `isSDF` in the low bit.
         f32::from(vertex.data[2] >> 1) / 128.0
@@ -443,7 +443,7 @@ fn a_varying_size_does_not_reorder_the_buffer() {
     let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
     let layout = buckets[0].content.as_symbol().expect("a symbol layout");
     let (fonts, _) = fonts_for(layout);
-    let (buffers, laid) = layout.lay_out(&fonts);
+    let (buffers, laid) = layout.lay_out(&fonts, None);
 
     // The sizes are interleaved rather than sorted, which is what says nothing was gathered.
     let sizes: Vec<f32> = layout
@@ -580,7 +580,7 @@ fn a_symbol_can_have_both_halves() {
 
     // And the text still lays out, unaffected by the icon beside it.
     let (fonts, _) = fonts_for(layout);
-    let (buffers, laid) = layout.lay_out(&fonts);
+    let (buffers, laid) = layout.lay_out(&fonts, None);
     assert!(!laid.is_empty());
     assert!(!buffers.is_empty());
 }
@@ -609,7 +609,7 @@ fn icons_lay_out_against_the_sprite_index() {
     assert!(asked.len() > 2, "{asked:?} is too few to prove a miss");
 
     let (fonts, _) = fonts_for(layout);
-    let (_, instances) = layout.lay_out(&fonts);
+    let (_, instances) = layout.lay_out(&fonts, None);
     let (buffers, laid) = layout.lay_out_icons(&sprites, &instances);
     assert!(!laid.is_empty(), "nothing was laid out");
     assert_eq!(buffers.vertices.len(), laid.len() * 4, "one quad an icon");
@@ -698,7 +698,7 @@ fn the_sprite_decides_whether_it_is_a_field() {
     };
 
     let (fonts, _) = fonts_for(layout);
-    let (_, instances) = layout.lay_out(&fonts);
+    let (_, instances) = layout.lay_out(&fonts, None);
     let (as_field, _) = layout.lay_out_icons(&field, &instances);
     let (as_plain, _) = layout.lay_out_icons(&plain, &instances);
     assert!(is_sdf(&as_field), "an sdf sprite was drawn as an image");
@@ -810,7 +810,7 @@ fn a_shield_stretches_around_its_number() {
     .collect();
 
     let (fonts, _) = fonts_for(layout);
-    let (_, text) = layout.lay_out(&fonts);
+    let (_, text) = layout.lay_out(&fonts, None);
     assert_eq!(
         text.len(),
         layout.pending.len(),
@@ -893,7 +893,7 @@ fn an_icon_with_no_label_is_not_stretched() {
     .collect();
 
     let (fonts, _) = fonts_for(layout);
-    let (_, instances) = layout.lay_out(&fonts);
+    let (_, instances) = layout.lay_out(&fonts, None);
     let (_, laid) = layout.lay_out_icons(&sprites, &instances);
     assert!(!laid.is_empty());
     for entry in &laid {
@@ -1113,7 +1113,7 @@ fn a_line_placed_icon_repeats_with_its_label() {
     let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
     let layout = buckets[0].content.as_symbol().expect("a symbol layout");
     let (fonts, _) = fonts_for(layout);
-    let (_, instances) = layout.lay_out(&fonts);
+    let (_, instances) = layout.lay_out(&fonts, None);
     let sprites = positions(&[("primary", false)]);
 
     assert!(
@@ -1157,5 +1157,95 @@ fn a_line_placed_icon_repeats_with_its_label() {
     assert!(
         anchors.is_subset(&label_anchors),
         "an icon is drawn at the instance it belongs to"
+    );
+}
+
+/// A line-placed symbol with an icon and no text draws its icons.
+///
+/// # The case
+///
+/// Oneway arrows, lane markings, any `symbol-placement: line` layer whose features carry an
+/// `icon-image` and no `text-field`. It drew nothing, and the reason was an ordering: anchors
+/// were computed from the shaped text alone, so a feature with no text had no extent, produced
+/// no instances, and had nowhere to hang an icon.
+///
+/// mbgl computes a feature's anchors once from *both* extents — `getAnchors(…, shapedText.left,
+/// shapedText.right, shapedIcon.left, shapedIcon.right, …)` — which means it shapes the icon
+/// first. Laying out takes the sprite index now for exactly that, so the icon's own width is
+/// what decides where its repetitions go.
+#[test]
+fn an_icon_only_line_layer_draws() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "arrows", "type": "symbol", "source": "v",
+                        "source-layer": "road",
+                        "layout": {"symbol-placement": "line", "symbol-spacing": 250,
+                                   "icon-image": "primary"}}]}"#,
+    )
+    .expect("a style");
+
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+    let (fonts, _) = fonts_for(layout);
+    let sprites = positions(&[("primary", false)]);
+
+    let (_, instances) = layout.lay_out(&fonts, Some(&sprites));
+    assert!(
+        !instances.is_empty(),
+        "a feature with an icon and no text still has anchors, from the icon"
+    );
+    assert!(
+        instances.iter().all(|instance| instance.glyphs == 0),
+        "and shapes no glyphs, having no text"
+    );
+
+    let (buffers, laid) = layout.lay_out_icons(&sprites, &instances);
+    assert!(!laid.is_empty(), "an icon-only line layer drew nothing");
+    assert_eq!(buffers.vertices.len(), laid.len() * 4, "one quad an icon");
+
+    let anchors: std::collections::BTreeSet<(u32, u32)> = laid
+        .iter()
+        .map(|icon| (icon.anchor.0.to_bits(), icon.anchor.1.to_bits()))
+        .collect();
+    assert!(
+        anchors.len() > 1,
+        "the arrows repeat along the road rather than sharing a point"
+    );
+}
+
+/// The icon's own width is what decides where its repetitions go.
+///
+/// Not decoration: `get_anchors` measures whether a label fits between two bends, and a wide
+/// shield is rejected where a narrow one is accepted. Passing zero for the icon — which is what
+/// this did before the sprite index reached the first pass — makes every icon look like a point
+/// and places them where a point would go.
+#[test]
+fn a_wider_icon_places_differently() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "arrows", "type": "symbol", "source": "v",
+                        "source-layer": "road",
+                        "layout": {"symbol-placement": "line", "symbol-spacing": 250,
+                                   "icon-image": "primary"}}]}"#,
+    )
+    .expect("a style");
+
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+    let (fonts, _) = fonts_for(layout);
+
+    let narrow = positions(&[("primary", false)]);
+    let mut wide = narrow.clone();
+    let entry = wide.get_mut("primary").expect("the sprite");
+    entry.padded_rect.width = 400;
+
+    let (_, with_narrow) = layout.lay_out(&fonts, Some(&narrow));
+    let (_, with_wide) = layout.lay_out(&fonts, Some(&wide));
+
+    assert_ne!(
+        with_narrow.len(),
+        with_wide.len(),
+        "a shield four hundred pixels wide does not fit where an eighteen-pixel one does, and \
+         passing zero for the icon's extent would place both the same"
     );
 }

@@ -374,6 +374,7 @@ fn a_line_label_reserves_its_road_and_not_its_box() {
     let (_, laid) = build_line_symbols(
         &[LineLabel {
         pending: 0,
+        icon: (0.0, 0.0),
             text: "Diagonal Road".to_string(),
             line: road.clone(),
         }],

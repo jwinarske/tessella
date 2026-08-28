@@ -57,6 +57,7 @@ fn road() -> Vec<(f32, f32)> {
 fn label(text: &str, line: Vec<(f32, f32)>) -> LineLabel {
     LineLabel {
         pending: 0,
+        icon: (0.0, 0.0),
         text: text.to_string(),
         line,
     }

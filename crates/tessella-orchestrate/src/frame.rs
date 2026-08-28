@@ -1184,7 +1184,7 @@ fn encode_parts(
             // earlier: the quads are a function of the glyphs, which are a function of the
             // shaped text, which is a function of the tile's features. So the bucket carries a
             // *layout* and the vertices are made here.
-            let (buffers, _laid) = layout.lay_out(fonts?);
+            let (buffers, _laid) = layout.lay_out(fonts?, patterns.map(|p| p.positions));
             if buffers.vertices.is_empty() {
                 return None;
             }
