@@ -42,6 +42,14 @@
 //! the region is written and mapped before anything resolves against it — and the durable answer
 //! is §11.3's arena allocating out of the shared region, where there is no pack step to be late.
 //! Recorded in §3.5 rather than worked around here.
+//!
+//! # Why it is Unix-only
+//!
+//! `mmap` and a shared file are how two processes come to hold one ring, and there is no
+//! portable spelling of that. The targets this ships to are Linux, and the cross lane checks
+//! them with `cargo check`, which does not build tests — so this is guarded rather than
+//! abstracted, and a port would replace the mapping, not the test.
+#![cfg(unix)]
 
 use std::os::unix::io::AsRawFd as _;
 use std::path::{Path, PathBuf};
