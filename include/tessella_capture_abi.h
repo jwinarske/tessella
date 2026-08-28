@@ -1332,6 +1332,25 @@ TSL_ASSERT(offsetof(tsl_wide_vector_uniforms_ubo, pad1) == 392, "tsl_wide_vector
 TSL_ASSERT(offsetof(tsl_wide_vector_uniforms_ubo, pad2) == 396, "tsl_wide_vector_uniforms_ubo.pad2 moved");
 
 /*
+ * Uniform slots that hold one of several blocks.
+ *
+ * mbgl declares these as a union: one slot, one stride, and which member is present depends on
+ * the drawable. Only the stride is emitted, because that is the part a consumer cannot derive --
+ * it is the largest member's, not the one in front of it, and indexing a consolidated buffer by
+ * anything else walks off the array.
+ */
+/* BackgroundDrawableUnionUBO holds: BackgroundDrawableUBO, BackgroundPatternDrawableUBO. */
+#define TSL_STRIDE_BACKGROUND_DRAWABLE_UNION_UBO 96u
+/* FillDrawableUnionUBO holds: FillDrawableUBO, FillOutlineDrawableUBO, FillPatternDrawableUBO, FillOutlinePatternDrawableUBO, FillOutlineTriangulatedDrawableUBO. */
+#define TSL_STRIDE_FILL_DRAWABLE_UNION_UBO 96u
+/* FillTilePropsUnionUBO holds: FillPatternTilePropsUBO, FillOutlinePatternTilePropsUBO. */
+#define TSL_STRIDE_FILL_TILE_PROPS_UNION_UBO 48u
+/* LineDrawableUnionUBO holds: LineDrawableUBO, LineGradientDrawableUBO, LinePatternDrawableUBO, LineSDFDrawableUBO. */
+#define TSL_STRIDE_LINE_DRAWABLE_UNION_UBO 128u
+/* LineTilePropsUnionUBO holds: LinePatternTilePropsUBO, LineSDFTilePropsUBO. */
+#define TSL_STRIDE_LINE_TILE_PROPS_UNION_UBO 64u
+
+/*
  * Blocks mbgl declares that are deliberately not here:
  *   LineEvaluatedPropsUBO (line_layer_ubo.hpp): unmodelled type `LineExpressionMask`.
  *   LineExpressionUBO (line_layer_ubo.hpp): no closing size comment.

@@ -1304,6 +1304,40 @@ fn emit_ubo_layouts(w: &mut String) {
         writeln!(w).unwrap();
     }
 
+    // The unions. mbgl gives one slot to a family of blocks -- a fill drawable's uniform is one
+    // shape with a pattern and another without -- and a consolidated buffer strides by the
+    // largest. A consumer that strided by the member it happened to be reading would walk off
+    // the array on every drawable after the first.
+    writeln!(w, "/*").unwrap();
+    writeln!(w, " * Uniform slots that hold one of several blocks.").unwrap();
+    writeln!(w, " *").unwrap();
+    for line in wrap(
+        "mbgl declares these as a union: one slot, one stride, and which member is present \
+         depends on the drawable. Only the stride is emitted, because that is the part a \
+         consumer cannot derive -- it is the largest member's, not the one in front of it, and \
+         indexing a consolidated buffer by anything else walks off the array.",
+        94,
+    ) {
+        if line.is_empty() {
+            writeln!(w, " *").unwrap();
+        } else {
+            writeln!(w, " * {line}").unwrap();
+        }
+    }
+    writeln!(w, " */").unwrap();
+    for union in ubo_layouts::UNIONS {
+        let name = screaming(union.name);
+        writeln!(
+            w,
+            "/* {} holds: {}. */",
+            union.name,
+            union.members.join(", ")
+        )
+        .unwrap();
+        writeln!(w, "#define TSL_STRIDE_{name} {}u", union.stride).unwrap();
+    }
+    writeln!(w).unwrap();
+
     // Blocks the layout generator declined to vouch for. Named rather than omitted, for the
     // reason it gives: a block missing because it could not be parsed and one missing because
     // mbgl does not have it are different situations for a consumer that needs it.
