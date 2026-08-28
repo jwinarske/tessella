@@ -3119,6 +3119,15 @@ of tile requests, which is the wrong number to quote on its own — the copies a
 the sweep, they are concentrated in the frames below z2 where they are two thirds of the cover.
 The worst frame is z0, where eight of twelve requests are copies.
 
+The **count** is the result there and the sweep's clock is not, which is worth being explicit
+about: the two policies differ by tens of microseconds over a sweep whose own repeat-to-repeat
+spread is wider than that, so the timing columns say which frames are expensive and nothing
+about the difference between the rows. The count is exact — the same cameras give the same
+covers every run — and it is turned into a time separately, by measuring what a cover entry
+costs against the nine vendored Protomaps tiles and multiplying. That median is 522 µs, so the
+eighty removed requests are about 42 ms of producer work over the sweep, each of which was also
+a subdivision and a draw the consumer no longer makes.
+
 ## 16. Open questions (rev 0.4 targets)
 
 - ~~PMTiles in tessella-storage~~ closed: `tessella-storage/pmtiles` reads a v3 archive in

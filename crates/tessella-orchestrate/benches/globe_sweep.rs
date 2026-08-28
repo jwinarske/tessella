@@ -23,6 +23,17 @@
 //! paid twice at the zooms where an edge splits into ninety segments. What this measures is the
 //! producer-side part of that bill.
 //!
+//! # The tile count is the result; the sweep's clock is not
+//!
+//! The two policies differ by tens of microseconds over a sweep whose own repeat-to-repeat
+//! spread is larger than that, so the timing columns below cannot separate them and are not
+//! asked to. What they are for is the *shape*: which frames are expensive, and whether a bad
+//! maximum is one outlier or a fat tail.
+//!
+//! The result is the tile count, which is exact and deterministic — the same cameras give the
+//! same covers every run. Turning it into a time is done separately and honestly, by measuring
+//! what a real tile costs and multiplying, rather than by reading a difference out of noise.
+//!
 //! # Not criterion, and no warm-up discarded
 //!
 //! For the reasons `four_view_sweep` gives: the question is the tail rather than the mean, and
@@ -36,6 +47,56 @@ use tessella_orchestrate::tile::{TileBuilder, TileId};
 use tessella_source::tiling::TilingOptions;
 use tessella_style::{Source, Style};
 use tessella_tile::cover::{self, ViewTransform, WorldCopies};
+
+/// The vendored Protomaps tiles the live parity test runs against, largest first.
+///
+/// Real geometry, chosen by nobody, which is what turns the sweep's tile *count* into a time.
+/// The hermetic style's four features cost almost nothing to build, so a saving measured only
+/// against it says the shape and not the size.
+///
+/// All of them and not one: the nine span three orders of magnitude — 301 bytes of empty ocean
+/// to 147 KiB of coastline — and quoting either end as "a real tile" would be picking the
+/// answer. The median across them is what a cover entry costs on average, which is the number a
+/// count should be multiplied by.
+const LIVE_TILES: [(&str, &[u8]); 9] = [
+    (
+        "16-11",
+        include_bytes!("../../../tests/live-fixtures/world_z7-5-16-11.mvt"),
+    ),
+    (
+        "16-10",
+        include_bytes!("../../../tests/live-fixtures/world_z7-5-16-10.mvt"),
+    ),
+    (
+        "15-11",
+        include_bytes!("../../../tests/live-fixtures/world_z7-5-15-11.mvt"),
+    ),
+    (
+        "15-10",
+        include_bytes!("../../../tests/live-fixtures/world_z7-5-15-10.mvt"),
+    ),
+    (
+        "16-9",
+        include_bytes!("../../../tests/live-fixtures/world_z7-5-16-9.mvt"),
+    ),
+    (
+        "15-9",
+        include_bytes!("../../../tests/live-fixtures/world_z7-5-15-9.mvt"),
+    ),
+    (
+        "14-11",
+        include_bytes!("../../../tests/live-fixtures/world_z7-5-14-11.mvt"),
+    ),
+    (
+        "14-10",
+        include_bytes!("../../../tests/live-fixtures/world_z7-5-14-10.mvt"),
+    ),
+    (
+        "14-9",
+        include_bytes!("../../../tests/live-fixtures/world_z7-5-14-9.mvt"),
+    ),
+];
+const LIVE_STYLE: &str = include_str!("../../tessella-style/tests/live_style.json");
 
 const HERMETIC: &str = include_str!("../../tessella-style/tests/hermetic_style.json");
 
@@ -78,6 +139,14 @@ fn main() {
         report(copies, tiles, times);
     }
 
+    real_tile_cost(repeated_minus_one(&counts));
+
+    println!(
+        "\n(The clock columns describe the shape of a frame, not the difference between the two \
+         rows:\n the policies are tens of microseconds apart over a sweep whose own repeats \
+         spread further.)"
+    );
+
     let (repeated, one) = (counts[0], counts[1]);
     println!(
         "\n{} of {repeated} tile requests over the sweep are copies of a patch already asked \
@@ -118,6 +187,72 @@ fn main() {
          same\npatch. Per-frame time is small here because the hermetic style is four features \
          — the shape\nis what this says, and the tile count is the part that scales with real \
          data."
+    );
+}
+
+/// How many tile requests the policy removed over the sweep.
+fn repeated_minus_one(counts: &[usize]) -> usize {
+    counts[0] - counts[1]
+}
+
+/// What one real tile costs to decode and build, and what the sweep's saving is worth in those
+/// units.
+///
+/// The sweep above runs the hermetic style, whose four features cost almost nothing — so its
+/// per-frame times say the shape of the curve and not the size of the bill. This measures a real
+/// tile once and multiplies, which is the honest way to turn a count into a time: the identity of
+/// the tiles a low-zoom cover asks for is not this one, but the work of decoding and bucketing a
+/// tile of real data is, and that is the part that scales.
+fn real_tile_cost(saved: usize) {
+    let style = match Style::parse(LIVE_STYLE) {
+        Ok(style) => style,
+        Err(error) => {
+            println!("\n(skipping the real-tile cost: {error})");
+            return;
+        }
+    };
+
+    // Decode included, because a cover entry the policy removes is a decode as well as a build.
+    // Repeated because one sample of a microsecond-scale measurement is noise.
+    let mut medians = Vec::with_capacity(LIVE_TILES.len());
+    for (name, bytes) in LIVE_TILES {
+        let mut samples = Vec::with_capacity(32);
+        for _ in 0..32 {
+            let started = Instant::now();
+            let decoded = tessella_source::mvt::Tile::decode(bytes).expect("the fixture decodes");
+            let buckets = tessella_orchestrate::tile::build_mvt_tile(
+                &style,
+                "world",
+                TileId::new(5, 14, 10),
+                &decoded,
+            )
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+            // Kept so the build is not optimized away, and so a fixture that produced nothing
+            // would be visible rather than fast.
+            std::hint::black_box(&buckets);
+            samples.push(started.elapsed());
+        }
+        samples.sort_unstable();
+        medians.push((samples[samples.len() / 2], name, bytes.len()));
+    }
+
+    medians.sort_unstable();
+    let median = medians[medians.len() / 2];
+    println!(
+        "\nA cover entry, over the nine vendored Protomaps tiles: {:.1?} median, \
+         {:.1?} to {:.1?}\n(the cheapest is {} bytes, the dearest {} — and they are not the \
+         same order as the byte counts, because\nwhat costs is the geometry the style's three \
+         layers read, not the tile's size).",
+        median.0,
+        medians[0].0,
+        medians[medians.len() - 1].0,
+        medians[0].2,
+        medians[medians.len() - 1].2,
+    );
+    println!(
+        "At the median the {saved} requests the policy removes are {:.1?} of producer work over \
+         the\nsweep — and each was also a subdivision and a draw the consumer no longer makes.",
+        median.0 * u32::try_from(saved).unwrap_or(u32::MAX)
     );
 }
 
