@@ -55,6 +55,7 @@
 /// Producer-side coalescing for the state envelopes (§4).
 pub mod coalesce;
 pub mod envelope;
+pub mod mapping;
 
 /// SPSC transport for the lossless envelope stream (§4).
 pub mod reverse;

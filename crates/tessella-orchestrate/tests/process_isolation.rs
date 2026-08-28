@@ -33,15 +33,19 @@
 //! a completed buffer and threw it away — and against a live producer it is a stall on the first
 //! full ring. So half of this seam had never been exercised at all, which is what a spike is for.
 //!
-//! # The one thing it does not close
+//! # The gap it used to leave
 //!
-//! Geometry bytes reach a consumer through a region packed by `SlabArena::pack`, and today that
-//! runs *after* the frame that named them is on the ring. In process there is no window, because
-//! the arena is the same object on both sides. Across a mapping there is: a consumer can hold a
-//! `GeometryAdd` whose handle the region does not yet cover. The spike sequences it explicitly —
-//! the region is written and mapped before anything resolves against it — and the durable answer
-//! is §11.3's arena allocating out of the shared region, where there is no pack step to be late.
-//! Recorded in §3.5 rather than worked around here.
+//! Geometry bytes reached a consumer through a region packed by `SlabArena::pack`, which ran
+//! *after* the frame that named them was on the ring. In process there is no window, because the
+//! arena is the same object on both sides. Across a mapping there was: a consumer could hold a
+//! `GeometryAdd` whose handle the region did not yet cover.
+//!
+//! The producer here allocates out of the shared region — §11.3's answer, and there is no pack
+//! step left to be late. The ordering is the ring's own: a frame's records become visible with
+//! one releasing store of `head`, every byte written before it included, so a consumer that
+//! acquires `head` and then reads the region sees the slabs of every record it can see. The C
+//! consumer resolves every attribute it meets and reports what it could not, which is the
+//! assertion — `unresolved` is zero, and it would not be if a handle could outrun its bytes.
 //!
 //! # Why it is Unix-only
 //!
@@ -56,6 +60,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
 use tessella_capture_abi::envelope::ViewId;
+use tessella_capture_abi::mapping::Mapping;
 use tessella_capture_abi::ring::{self, region_size};
 use tessella_orchestrate::SlabArena;
 use tessella_orchestrate::frame::{self, Frame};
@@ -88,6 +93,13 @@ const CAPACITY: usize = 1 << 13;
 
 /// How long the consumer waits without progress before calling the producer dead.
 const TIMEOUT_MS: u64 = 30_000;
+
+/// The shared slab region, and how many slabs it can hold at once.
+///
+/// Generous on both counts, because a region that filled would be testing DR-21's compaction
+/// rather than the ordering this is about — and `RegionFull` has its own test.
+const SLAB_REGION: usize = 1 << 24;
+const SLAB_SLOTS: usize = 256;
 
 /// A file of exactly `len` bytes, mapped shared and writable.
 ///
@@ -252,7 +264,9 @@ fn a_consumer_in_another_process_reads_a_live_stream() {
     let dir = tempfile::tempdir().expect("a temporary directory");
     let consumer = build_consumer(dir.path());
     let ring_path = dir.path().join("ring.shm");
+    let slab_path = dir.path().join("slabs.shm");
     let shared = Shared::create(&ring_path, region_size(CAPACITY));
+    let slabs = Shared::create(&slab_path, SLAB_REGION);
 
     // SAFETY: the mapping is `region_size(CAPACITY)` bytes and freshly zeroed, and nothing else
     // has touched it. The consumer half is unused: this process only produces.
@@ -261,12 +275,18 @@ fn a_consumer_in_another_process_reads_a_live_stream() {
     let child = Command::new(&consumer)
         .arg("--live")
         .arg(&ring_path)
+        .arg(&slab_path)
         .arg(TIMEOUT_MS.to_string())
         .stdout(std::process::Stdio::piped())
         .spawn()
         .expect("the consumer starts");
 
-    let mut arena = SlabArena::new();
+    // SAFETY: `slabs` holds the mapping and outlives the arena built over it, and nothing else
+    // in this process writes those bytes.
+    let mut arena = SlabArena::in_region(
+        unsafe { Mapping::new(slabs.base, SLAB_REGION) },
+        SLAB_SLOTS,
+    );
     let mut session = Session::new();
     let mut geometries = 0;
     let mut uses = 0;
@@ -336,6 +356,16 @@ fn a_consumer_in_another_process_reads_a_live_stream() {
         counted.get("camera_bad").copied(),
         Some(0),
         "and every camera read as a camera"
+    );
+    assert!(
+        counted.get("attributes").copied().unwrap_or(0) > 0,
+        "there were attributes to resolve: {counted:?}"
+    );
+    assert_eq!(
+        counted.get("unresolved").copied(),
+        Some(0),
+        "and every one of them resolved against the shared region, from a process that had \
+         only the handle: a record cannot become visible before the bytes it names"
     );
 }
 

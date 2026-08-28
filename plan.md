@@ -194,13 +194,12 @@ change is the whole of it. Two things only a second process could show.
   the second into a hang, which across a process boundary is indistinguishable from a consumer
   that died. Both sides of the distinction are now tested.
 
-**The one gap it leaves.** Geometry bytes reach a consumer through a region packed by
-`SlabArena::pack`, which runs *after* the frame naming them is on the ring. In process there is
-no window — the arena is the same object on both sides — but across a mapping a consumer can
-hold a `GeometryAdd` whose handle the region does not yet cover. The spike sequences it
-explicitly rather than working around it. The durable answer is §11.3's arena allocating out of
-the shared region, where there is no pack step to be late; until then, a cross-process producer
-must publish the region before the records that name it.
+**The gap it left, since closed.** Geometry bytes reached a consumer through a region packed by
+`SlabArena::pack`, which ran *after* the frame naming them was on the ring — no window in
+process, where the arena is the same object on both sides, but across a mapping a consumer could
+hold a `GeometryAdd` whose handle the region did not yet cover. §11.3's `SlabArena::in_region`
+closes it: the producer allocates out of the shared region, and the test's consumer resolves
+every handle it meets from the other process.
 
 ### 3.6 Second consumer: impeller-rs (DR-14)
 
@@ -2091,10 +2090,9 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   The substitution algorithm does not change — what changes is what counts as a tile that can
   stand in for another, and until then a crossing can retire an ancestor against a tile the
   consumer has not drawn.
-  The §3.5 spike leaves one item pointed at §11.3 rather than at R4: the slab region is packed
-  after the frame that names it, so a cross-process consumer can hold a handle the region does
-  not yet cover. An arena allocating out of the shared region removes the step rather than
-  sequencing around it.
+  The item §3.5's spike pointed at §11.3 — the slab region packed after the frame that names it —
+  is closed there: `SlabArena::in_region` allocates out of the shared region, and the isolation
+  test now resolves every handle from the other process rather than sequencing around it.
 
 ---
 
@@ -2161,12 +2159,31 @@ Obligations on the Rust side: slabs immutable once emitted (already guaranteed �
 are immutable after build; the AddReason premise), and slab lifetime extends to the Filament
 release callback, which is exported C ABI back into the Rust half.
 
-**A second reason to want this, from §3.5's spike.** A consumer that does not share the arena
-reaches geometry through a region `SlabArena::pack` builds *after* the frame that named it, so
-it can hold a `GeometryAdd` whose handle the region does not yet cover. In process there is no
-window, because the arena is the same object on both sides. Allocating slabs out of the shared
-region removes the pack step rather than sequencing around it, and the ordering problem goes
-with it — the bytes are in place before the record naming them can be written.
+**A second reason to want this, from §3.5's spike — done.** A consumer that does not share the
+arena reached geometry through a region `SlabArena::pack` built *after* the frame that named it,
+so it could hold a `GeometryAdd` whose handle the region did not yet cover. In process there is
+no window, because the arena is the same object on both sides.
+
+`SlabArena::in_region` writes into a mapping the caller owns, and there is no pack step left to
+be late. The ordering then comes free from the ring rather than needing anything of its own: a
+frame's records become visible with one releasing store of `head`, every byte written before it
+included, so a consumer that acquires `head` and then reads the region sees the slabs of every
+record it can see. The isolation test asserts it from the other process — every attribute of
+every record it can see resolves, and the same counter read forty unresolved before this.
+
+Two things the region costs, both recorded rather than hidden. The table is *reserved* at
+construction, because a handle indexes it and the bytes have to start at a fixed offset, so the
+slot count bounds how many slabs can be live at once — not how many over time, since a sweep
+recycles a slot. And the byte allocator is a bump cursor, so the space a swept slab leaves is
+recovered only once everything above it has gone: a region that fills reports `RegionFull` and
+the caller's recourse is DR-21's, displacing what its poorly-packed slabs still hold so the
+survivors are re-announced into fresh slots. Compacting behind the caller would move a slab a
+consumer holds a handle to, which is the one thing the region promises not to do.
+
+The `Mapping` the arena takes lives in `tessella-capture-abi` beside `ring::init`, which does
+the same job for the ring. `tessella-orchestrate` is `deny(unsafe_code)` and has never needed an
+allowance; stating the obligation once, at the constructor that can break it, is what keeps that
+true.
 
 ### 11.4 Reverse channel (DR-10)
 

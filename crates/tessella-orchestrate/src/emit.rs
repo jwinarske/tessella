@@ -30,6 +30,7 @@ use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use tessella_capture_abi::mapping::Mapping;
 use tessella_capture_abi::envelope::{
     AddReason, AttributeDesc, GeometryAdd, GeometryId, GeometryRemove, MeshAdd, MeshFormat,
     Segment as AbiSegment, SlabEntry, SlabRef, SlabRegion, Span, TextureId, TextureRef, WireRecord,
@@ -87,22 +88,79 @@ pub struct SlabMark {
     slots: usize,
     /// Whether a slab was open at the mark.
     open: bool,
+    /// How far into the region the arena had allocated, for an arena over one.
+    cursor: usize,
 }
 
 /// A refcounted block of geometry bytes.
+///
+/// Where the bytes are depends on how the arena was built. An arena of its own holds them here,
+/// and a consumer in this process takes an `Arc` of the slab — §3.6's elision, where a geometry
+/// "copy" is a refcount bump. An arena over a region (see [`SlabArena::in_region`]) holds a
+/// range of that region instead, because the bytes were written straight into it and a second
+/// copy here would be exactly the copy the region exists to avoid.
 #[derive(Debug)]
 pub struct Slab {
     /// Handle the envelope carries.
     pub id: u32,
-    bytes: Vec<u8>,
+    bytes: Bytes,
+}
+
+/// A slab's storage: its own, or a range of the arena's region.
+#[derive(Debug)]
+enum Bytes {
+    Owned(Vec<u8>),
+    /// Offset and length within the region. Not a slice, because the region is behind a `&mut`
+    /// while a slab is open in it.
+    Region(usize, usize),
+}
+
+impl Bytes {
+    fn len(&self) -> usize {
+        match self {
+            Self::Owned(bytes) => bytes.len(),
+            Self::Region(_, length) => *length,
+        }
+    }
 }
 
 impl Slab {
-    /// The bytes.
+    /// How many bytes the slab holds.
     #[must_use]
-    pub fn bytes(&self) -> &[u8] {
-        &self.bytes
+    pub fn len(&self) -> usize {
+        self.bytes.len()
     }
+
+    /// Whether the slab holds nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.bytes.len() == 0
+    }
+}
+
+/// Where an arena puts the bytes it is given.
+#[derive(Debug, Default)]
+enum Backing {
+    /// Its own allocations, one per slab, shared by `Arc`.
+    #[default]
+    Owned,
+    /// A region the caller mapped, written in place.
+    Region {
+        /// The mapping.
+        region: Mapping,
+        /// Entries reserved in the table, and so the highest slot this arena can hand out.
+        slots: usize,
+        /// Next free byte.
+        cursor: usize,
+        /// Set when an allocation did not fit, and cleared by [`SlabArena::mark`].
+        ///
+        /// Reported rather than returned because `alloc` is called from every encoder and a
+        /// `Result` there would put a region's capacity in the same channel as "this bucket has
+        /// nothing to encode". The frame checks it once, before it commits, and fails whole —
+        /// which is the same shape as a full ring, and for the same reason: what a consumer
+        /// must never see is a record naming bytes that are not there.
+        full: bool,
+    },
 }
 
 /// Allocates geometry bytes into refcounted slabs.
@@ -112,8 +170,15 @@ impl Slab {
 /// reference, because nothing will rewrite it. A bucket that does not fit the current slab
 /// starts a new one rather than being split, so a single attribute's bytes are always
 /// contiguous.
+///
+/// [`new`](Self::new) keeps the bytes here, one allocation per slab, which is what an
+/// in-process consumer wants: it takes an `Arc` of the slab and the "copy" is a refcount bump.
+/// [`in_region`](Self::in_region) writes them into a mapping instead, for a consumer that has
+/// no `Arc` to take.
 #[derive(Debug, Default)]
 pub struct SlabArena {
+    /// Where the bytes go.
+    backing: Backing,
     /// Sealed slabs, indexed by the handle a `SlabRef` carries.
     ///
     /// A handle is a *slot*, not a position. The two were the same thing until something was
@@ -147,11 +212,141 @@ pub struct SlabArena {
     live: BTreeMap<u32, usize>,
 }
 
+/// Bytes the region's header and table occupy before the first slab.
+fn region_data_start(slots: usize) -> usize {
+    let header = core::mem::size_of::<SlabRegion>();
+    let table = core::mem::size_of::<SlabEntry>() * slots;
+    (header + table).next_multiple_of(SLAB_ALIGN)
+}
+
 impl SlabArena {
     /// An empty arena.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// An arena that writes into a region the caller has mapped.
+    ///
+    /// # What this is for
+    ///
+    /// A consumer that does not share this process reaches geometry through the packed region,
+    /// and [`pack`](Self::pack) builds that *after* the frame naming a slab is on the ring.
+    /// In process there is no window, because the arena is the same object on both sides; across
+    /// a mapping there is, and a consumer can hold a `GeometryAdd` whose handle the region does
+    /// not yet cover. §3.5's spike sequenced around it and §11.3 says what closes it: allocate
+    /// out of the shared region, so the bytes are in place before the record naming them can be
+    /// written. That is this. There is no pack step left to be late.
+    ///
+    /// The ring's own publication is what orders it for the consumer. A frame's records become
+    /// visible with one releasing store of `head`, every byte written before it included, so a
+    /// consumer that acquires `head` and then reads the region sees the slabs of every record it
+    /// can see. Nothing further is needed here, and nothing weaker would do.
+    ///
+    /// # The table is reserved, not grown
+    ///
+    /// `slots` entries are written whether or not a slab occupies them, because a handle indexes
+    /// the table and the bytes have to start somewhere fixed. It is therefore also the number of
+    /// slabs this arena can hold at once: slots are recycled by [`sweep`](Self::sweep), so this
+    /// bounds concurrent slabs and not slabs over time.
+    ///
+    /// # A full region
+    ///
+    /// Reported by [`is_full`](Self::is_full) rather than returned by `alloc`, and the caller's
+    /// recourse is DR-21's: displace what a poorly-packed slab still holds, sweep, and try the
+    /// frame again. A bump cursor only recovers the space above the last live slab, so a region
+    /// with holes in it needs the survivors re-announced before it can be reclaimed — which is
+    /// what displacement already does, and why this reports rather than compacting behind the
+    /// caller's back. Moving a slab a consumer holds a handle to would be the one thing the
+    /// region promises not to do.
+    ///
+    /// # Panics
+    ///
+    /// When the mapping cannot hold its own header and table — at least
+    /// `size_of::<SlabRegion>() + slots * size_of::<SlabEntry>()`, rounded up to eight. That is
+    /// a caller arithmetic error rather than a runtime condition, and a region that cannot
+    /// describe itself has nothing useful to report later.
+    #[must_use]
+    pub fn in_region(mut region: Mapping, slots: usize) -> Self {
+        let start = region_data_start(slots);
+        assert!(region.len() >= start, "the region cannot hold its own table");
+        let bytes = region.bytes_mut();
+        bytes[..start].fill(0);
+        #[allow(clippy::cast_possible_truncation)]
+        let header = SlabRegion {
+            abi_rev: tessella_capture_abi::ABI_REV,
+            count: slots as u32,
+            total_len: start as u64,
+        };
+        bytes[..core::mem::size_of::<SlabRegion>()].copy_from_slice(header.as_bytes());
+        Self {
+            backing: Backing::Region {
+                region,
+                slots,
+                cursor: start,
+                full: false,
+            },
+            ..Self::default()
+        }
+    }
+
+    /// Whether an allocation since the last [`mark`](Self::mark) did not fit the region.
+    #[must_use]
+    pub fn is_full(&self) -> bool {
+        matches!(self.backing, Backing::Region { full: true, .. })
+    }
+
+    /// The region, for an arena built over one.
+    ///
+    /// The bytes are already there — this borrows them rather than producing them, which is the
+    /// whole difference from [`pack`](Self::pack).
+    #[must_use]
+    pub fn region(&self) -> Option<&[u8]> {
+        match &self.backing {
+            Backing::Owned => None,
+            Backing::Region { region, .. } => Some(region.bytes()),
+        }
+    }
+
+    /// Writes one table entry, or clears it when the slot is empty.
+    fn write_entry(&mut self, id: u32, entry: SlabEntry) {
+        let Backing::Region { region, slots, .. } = &mut self.backing else {
+            return;
+        };
+        let index = id as usize;
+        assert!(index < *slots, "slot {index} is outside the reserved table");
+        let at = core::mem::size_of::<SlabRegion>() + index * core::mem::size_of::<SlabEntry>();
+        region.bytes_mut()[at..at + core::mem::size_of::<SlabEntry>()]
+            .copy_from_slice(entry.as_bytes());
+    }
+
+    /// Empties one table entry, for a slot that is going away.
+    ///
+    /// Only within the reserved table: a rewind drops slots that were never handed out, and
+    /// those have no entry to clear.
+    fn clear_entry(&mut self, id: u32) {
+        let Backing::Region { slots, .. } = &self.backing else {
+            return;
+        };
+        if (id as usize) < *slots {
+            self.write_entry(
+                id,
+                SlabEntry {
+                    offset: 0,
+                    length: 0,
+                },
+            );
+        }
+    }
+
+    /// Publishes how far the region extends, so a consumer can bound its reads.
+    fn write_total(&mut self) {
+        let Backing::Region { region, cursor, .. } = &mut self.backing else {
+            return;
+        };
+        let total = (*cursor as u64).to_ne_bytes();
+        let at = core::mem::offset_of!(SlabRegion, total_len);
+        region.bytes_mut()[at..at + total.len()].copy_from_slice(&total);
     }
 
     /// A slot for a new slab: a swept one if there is one, otherwise a fresh one.
@@ -198,34 +393,98 @@ impl SlabArena {
         }
 
         // Pad first, so the *reference* is aligned rather than merely the slab.
-        if let Some(slab) = self.open.as_mut() {
-            let padding = slab.bytes.len().next_multiple_of(SLAB_ALIGN) - slab.bytes.len();
-            slab.bytes.resize(slab.bytes.len() + padding, 0);
-        }
+        let padding = self
+            .open
+            .as_ref()
+            .map_or(0, |slab| slab.len().next_multiple_of(SLAB_ALIGN) - slab.len());
 
         let needs_new = match &self.open {
             None => true,
             // Not a tuning threshold: past this the offset no longer fits the field that carries
             // it, and the reference would name the wrong bytes.
-            Some(slab) => slab.bytes.len() + bytes.len() > u32::MAX as usize,
+            Some(slab) => slab.len() + padding + bytes.len() > u32::MAX as usize,
         };
         if needs_new {
             self.seal();
+            let id = self.take_slot();
             self.open = Some(Slab {
-                id: self.take_slot(),
-                bytes: Vec::with_capacity(SLAB_BYTES.max(bytes.len())),
+                id,
+                bytes: self.open_bytes(id, SLAB_BYTES.max(bytes.len())),
             });
         }
 
-        let slab = self.open.as_mut().expect("just opened");
-        #[allow(clippy::cast_possible_truncation)]
-        let offset = slab.bytes.len() as u32;
-        slab.bytes.extend_from_slice(bytes);
-        #[allow(clippy::cast_possible_truncation)]
-        SlabRef {
-            slab: slab.id,
-            offset,
-            length: bytes.len() as u32,
+        match &mut self.backing {
+            Backing::Owned => {
+                let Some(Slab {
+                    bytes: Bytes::Owned(held),
+                    id,
+                }) = self.open.as_mut()
+                else {
+                    unreachable!("an owned arena opens owned slabs")
+                };
+                held.resize(held.len() + padding, 0);
+                #[allow(clippy::cast_possible_truncation)]
+                let offset = held.len() as u32;
+                held.extend_from_slice(bytes);
+                #[allow(clippy::cast_possible_truncation)]
+                SlabRef {
+                    slab: *id,
+                    offset,
+                    length: bytes.len() as u32,
+                }
+            }
+            Backing::Region {
+                region,
+                cursor,
+                full,
+                ..
+            } => {
+                let Some(Slab {
+                    bytes: Bytes::Region(start, length),
+                    id,
+                }) = self.open.as_mut()
+                else {
+                    unreachable!("a region arena opens region slabs")
+                };
+                // The open slab is the top of the region, so growing it is the same bump the
+                // region itself does — there is nothing above it to move.
+                let wanted = padding + bytes.len();
+                if *cursor + wanted > region.len() {
+                    // Nothing is written, and the frame will be told before it commits. Handing
+                    // back a reference to bytes that were not written is the one answer that
+                    // must not be given: a `GeometryAdd` naming it would be well formed.
+                    *full = true;
+                    return SlabRef {
+                        slab: *id,
+                        offset: 0,
+                        length: 0,
+                    };
+                }
+                region.bytes_mut()[*cursor..*cursor + padding].fill(0);
+                region.bytes_mut()[*cursor + padding..*cursor + wanted].copy_from_slice(bytes);
+                *cursor += wanted;
+                #[allow(clippy::cast_possible_truncation)]
+                let offset = (*length + padding) as u32;
+                *length += wanted;
+                debug_assert_eq!(*start + *length, *cursor, "the open slab is the region's top");
+                #[allow(clippy::cast_possible_truncation)]
+                SlabRef {
+                    slab: *id,
+                    offset,
+                    length: bytes.len() as u32,
+                }
+            }
+        }
+    }
+
+    /// Storage for a slab about to be opened.
+    fn open_bytes(&mut self, id: u32, hint: usize) -> Bytes {
+        match &mut self.backing {
+            Backing::Owned => Bytes::Owned(Vec::with_capacity(hint)),
+            Backing::Region { cursor, .. } => {
+                let _ = id;
+                Bytes::Region(*cursor, 0)
+            }
         }
     }
 
@@ -240,9 +499,17 @@ impl SlabArena {
     pub fn mark(&mut self) -> SlabMark {
         // The frame starts owing nothing: whatever the last one recycled, it kept.
         self.recycled.clear();
+        let cursor = match &mut self.backing {
+            Backing::Owned => 0,
+            Backing::Region { cursor, full, .. } => {
+                *full = false;
+                *cursor
+            }
+        };
         SlabMark {
             slots: self.slots.len(),
             open: self.open.is_some(),
+            cursor,
         }
     }
 
@@ -258,28 +525,54 @@ impl SlabArena {
         for id in core::mem::take(&mut self.recycled) {
             self.slots[id as usize] = None;
             self.live.remove(&id);
+            self.clear_entry(id);
             self.free.push(id);
         }
         // By slot rather than by the slab in it: a frame that failed before its last layer
         // closed leaves that slab *open*, so its slot is empty while its retains are not — and
         // a live count left behind credits whatever takes the slot next with bytes nothing
         // holds, so it never sweeps and never reports a fraction worth acting on.
-        for (offset, _) in self.slots.drain(mark.slots..).enumerate() {
+        let dropped: Vec<u32> = {
             #[allow(clippy::cast_possible_truncation)]
-            let id = (mark.slots + offset) as u32;
+            let ids = (mark.slots..self.slots.len()).map(|slot| slot as u32);
+            ids.collect()
+        };
+        self.slots.truncate(mark.slots);
+        for id in dropped {
             self.live.remove(&id);
+            self.clear_entry(id);
         }
         if !mark.open {
             self.open = None;
         }
+        // And the region's own cursor, so the next attempt writes over the bytes the failed one
+        // wrote rather than past them. The entries naming them went with their slots above.
+        if let Backing::Region { cursor, full, .. } = &mut self.backing {
+            *cursor = mark.cursor;
+            *full = false;
+        }
+        self.write_total();
     }
 
     /// Seals the open slab, making it immutable and shareable.
     pub fn seal(&mut self) {
-        if let Some(slab) = self.open.take() {
-            let id = slab.id as usize;
-            self.slots[id] = Some(Arc::new(slab));
+        let Some(slab) = self.open.take() else { return };
+        // The entry is what makes the slab findable, and it goes in after its bytes: a consumer
+        // reading a table entry that named bytes not yet written would read whatever was there.
+        // Nothing publishes it further, because the ring's commit does — every write here
+        // precedes the releasing store of `head` that lets a consumer see the records naming it.
+        if let Bytes::Region(start, length) = slab.bytes {
+            self.write_entry(
+                slab.id,
+                SlabEntry {
+                    offset: start as u64,
+                    length: length as u64,
+                },
+            );
+            self.write_total();
         }
+        let id = slab.id as usize;
+        self.slots[id] = Some(Arc::new(slab));
     }
 
     /// Every sealed slab, in slot order.
@@ -366,6 +659,13 @@ impl SlabArena {
             // The slot goes back into circulation. Its entry in a packed region becomes empty
             // rather than disappearing, so a handle nobody should still be holding refuses
             // instead of resolving to whatever takes the slot next.
+            self.write_entry(
+                *id,
+                SlabEntry {
+                    offset: 0,
+                    length: 0,
+                },
+            );
             self.free.push(*id);
         }
         freed
@@ -394,6 +694,13 @@ impl SlabArena {
     /// producer is still writing.
     #[must_use]
     pub fn pack(&self) -> Vec<u8> {
+        // An arena over a region has been writing one all along, which is the point of it.
+        if let Some(region) = self.region() {
+            let total = SlabRegion::from_bytes(region).map_or(region.len(), |header| {
+                (header.total_len as usize).min(region.len())
+            });
+            return region[..total].to_vec();
+        }
         let header = core::mem::size_of::<SlabRegion>();
         let table = core::mem::size_of::<SlabEntry>() * self.slots.len();
 
@@ -432,7 +739,7 @@ impl SlabArena {
         for (slot, entry) in self.slots.iter().zip(&entries) {
             let Some(slab) = slot else { continue };
             out.resize(entry.offset as usize, 0);
-            out.extend_from_slice(&slab.bytes);
+            out.extend_from_slice(self.slab_bytes(slab).unwrap_or(&[]));
         }
         out.resize(offset, 0);
         out
@@ -448,7 +755,23 @@ impl SlabArena {
         let slab = self.slab(reference.slab)?;
         let start = reference.offset as usize;
         let end = start.checked_add(reference.length as usize)?;
-        slab.bytes.get(start..end)
+        self.slab_bytes(slab)?.get(start..end)
+    }
+
+    /// A sealed slab's bytes, wherever they live.
+    ///
+    /// `None` for a region slab whose range the region no longer covers, which is a producer
+    /// fault rather than something a caller has to handle: the region is only ever bump
+    /// allocated, so a range it once covered it still covers.
+    #[must_use]
+    pub fn slab_bytes<'a>(&'a self, slab: &'a Slab) -> Option<&'a [u8]> {
+        match (&slab.bytes, &self.backing) {
+            (Bytes::Owned(bytes), _) => Some(bytes),
+            (Bytes::Region(start, length), Backing::Region { region, .. }) => {
+                region.bytes().get(*start..*start + *length)
+            }
+            (Bytes::Region(..), Backing::Owned) => None,
+        }
     }
 }
 

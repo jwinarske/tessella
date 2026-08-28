@@ -166,22 +166,22 @@ static uint64_t now_ms(void) {
 int main(int argc, char **argv) {
     int live = 0;
     uint64_t timeout_ms = 0;
-    if (argc == 4 && strcmp(argv[1], "--live") == 0) {
+    if (argc == 5 && strcmp(argv[1], "--live") == 0) {
         live = 1;
-        timeout_ms = strtoull(argv[3], NULL, 10);
+        timeout_ms = strtoull(argv[4], NULL, 10);
     } else if (argc != 3) {
         fprintf(stderr, "usage: consumer <ring.bin> <slabs.bin>\n");
-        fprintf(stderr, "       consumer --live <ring> <timeout-ms>\n");
+        fprintf(stderr, "       consumer --live <ring> <slabs> <timeout-ms>\n");
         return 2;
     }
 
-    uint8_t *shared = NULL;
+    uint8_t *shared = NULL, *unused = NULL;
     buffer ring = live ? map_shared(argv[2], &shared) : read_file(argv[1]);
-    /* Live mode has no slab region: it is the ring's coupling that is under test, and the
-     * region a handle resolves against is packed after the frame that named it, so there is
-     * nothing for a consumer racing the producer to resolve against yet (plan.md 3.5). An
-     * empty buffer refuses every handle, which is why the attempts are not counted below. */
-    buffer slabs = live ? (buffer){NULL, 0} : read_file(argv[2]);
+    /* The slab region is mapped too, and is the producer's arena rather than a copy of it: a
+     * producer allocating out of the shared region has the bytes in place before the record
+     * naming them can be published, so a handle read off a visible record resolves (plan.md
+     * 11.3). Resolving here is what tests that — `unresolved` is nonzero if it is not true. */
+    buffer slabs = live ? map_shared(argv[3], &unused) : read_file(argv[2]);
 
     tsl_ring_control control;
     if (ring.len < sizeof control) {
@@ -312,10 +312,6 @@ int main(int argc, char **argv) {
                 attributes++;
 
                 uint64_t length = 0;
-                if (live) {
-                    /* Counted, so a stream whose attributes went missing is still visible. */
-                    continue;
-                }
                 if (resolve(slabs, desc.source, &length)) {
                     resolved_bytes += length;
                 } else if (desc.source.length != 0) {

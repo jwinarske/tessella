@@ -60,6 +60,15 @@ pub enum FrameError {
     /// The view could not be declared.
     #[error("view: {0}")]
     View(alloc::string::String),
+    /// The arena's region had no room for the frame's geometry.
+    ///
+    /// Distinct from [`Self::Full`], because the recourse differs. A full ring clears when the
+    /// consumer drains it and the producer waits. A full region does not clear on its own: the
+    /// arena bump allocates, so the space a swept slab left is only recovered once everything
+    /// above it has gone too. The caller displaces what its poorly-packed slabs still hold —
+    /// DR-21's compaction — sweeps, and tries again.
+    #[error("the slab region is full")]
+    RegionFull,
 }
 
 impl From<Full> for FrameError {
@@ -386,14 +395,23 @@ fn emit_into(
     if let Some(session) = session.as_deref_mut() {
         session.registry().begin_frame(frame.view_id);
     }
-    match emit_group(
+    let attempt = emit_group(
         producer,
         arena,
         frame,
         session.as_deref_mut(),
         camera_moved,
         declare,
-    ) {
+    );
+    // Checked here rather than at each allocation, and before the commit rather than after it.
+    // An arena over a shared region reports a short allocation instead of returning a reference
+    // to bytes it did not write — a `GeometryAdd` naming those would be perfectly well formed
+    // and name nothing — so this is where that becomes a frame that did not happen.
+    let attempt = match attempt {
+        Ok(_) if arena.is_full() => Err(FrameError::RegionFull),
+        other => other,
+    };
+    match attempt {
         Ok(emitted) => {
             // Only now: a frame that could not be written must leave the registry as it found
             // it, so the retry announces the same geometry rather than assuming the consumer

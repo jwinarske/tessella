@@ -364,3 +364,137 @@ fn a_handle_survives_a_sweep() {
         );
     }
 }
+
+/// An arena that writes into a region the caller mapped.
+///
+/// # What it is for
+///
+/// A consumer that does not share this process reaches geometry through the packed region, and
+/// `pack` built that *after* the frame naming a slab was already on the ring. In process there
+/// is no window, because the arena is the same object on both sides; across a mapping there is,
+/// and a consumer can hold a `GeometryAdd` whose handle the region does not cover yet. §11.3's
+/// answer is to allocate out of the region, so there is no pack step left to be late — and the
+/// ordering then comes free from the ring, whose commit is a releasing store made after every
+/// byte here.
+mod in_region {
+    use tessella_capture_abi::mapping::Mapping;
+    use tessella_orchestrate::SlabArena;
+
+    /// Enough for these, and small enough that the full case is reachable.
+    const SLOTS: usize = 8;
+
+    /// A region of `len` bytes, with an arena over it.
+    fn arena(bytes: &mut Vec<u8>) -> SlabArena {
+        let len = bytes.len();
+        // SAFETY: `bytes` outlives the arena in every caller below, and nothing else writes it.
+        SlabArena::in_region(unsafe { Mapping::new(bytes.as_mut_ptr(), len) }, SLOTS)
+    }
+
+    /// The region is the packed region: a handle resolves in it exactly as it does in process.
+    #[test]
+    fn the_region_is_already_packed() {
+        let mut bytes = vec![0u8; 1 << 16];
+        let mut arena = arena(&mut bytes);
+
+        let first = arena.alloc(&[0xAA; 48]);
+        arena.seal();
+        let second = arena.alloc(&[0xBB; 16]);
+        arena.seal();
+
+        let region = arena.region().expect("an arena over a region has one");
+        for reference in [first, second] {
+            assert_eq!(
+                super::resolve(region, reference).expect("the handle resolves"),
+                arena.resolve(reference).expect("and in process"),
+                "handle {} disagrees across the mapping",
+                reference.slab
+            );
+        }
+
+        // And `pack` hands back what is already there rather than building it again.
+        assert_eq!(&arena.pack()[..], &region[..arena.pack().len()]);
+    }
+
+    /// A swept slot's entry empties, so a handle nobody should hold refuses.
+    #[test]
+    fn a_swept_slot_stops_resolving() {
+        let mut bytes = vec![0u8; 1 << 16];
+        let mut arena = arena(&mut bytes);
+
+        let reference = arena.alloc(&[0xCC; 32]);
+        arena.seal();
+        assert!(super::resolve(arena.region().unwrap(), reference).is_some());
+
+        assert_eq!(arena.sweep(), vec![reference.slab], "nothing wanted it");
+        assert!(
+            super::resolve(arena.region().unwrap(), reference).is_none(),
+            "a stale handle must refuse rather than resolve to whatever takes the slot next"
+        );
+    }
+
+    /// A region that cannot take the bytes says so, and writes none of them.
+    ///
+    /// Reported rather than returned from `alloc`, because `alloc` is called from every encoder
+    /// and a `Result` there would put the region's capacity in the same channel as "this bucket
+    /// has nothing to encode". What must never happen is a reference to bytes that were not
+    /// written: the `GeometryAdd` naming it would be perfectly well formed.
+    #[test]
+    fn a_full_region_is_reported_and_writes_nothing() {
+        let mut bytes = vec![0u8; 1024];
+        let mut arena = arena(&mut bytes);
+
+        assert!(!arena.is_full());
+        let fits = arena.alloc(&[1; 64]);
+        assert!(!arena.is_full(), "that fitted");
+
+        let refused = arena.alloc(&[2; 4096]);
+        assert!(arena.is_full(), "and that did not");
+        assert_eq!(refused.length, 0, "a refusal names no bytes");
+
+        arena.seal();
+        // The one that fitted is untouched: a short allocation is not a corrupt region.
+        assert_eq!(
+            arena.resolve(fits).expect("still there"),
+            &[1u8; 64],
+            "the refusal did not disturb what was already written"
+        );
+    }
+
+    /// A rolled-back frame leaves the region as it found it.
+    #[test]
+    fn a_rewind_gives_the_bytes_back() {
+        let mut bytes = vec![0u8; 1 << 16];
+        let mut arena = arena(&mut bytes);
+
+        let kept = arena.alloc(&[0xDD; 32]);
+        arena.seal();
+        arena.retain(kept);
+
+        let mark = arena.mark();
+        let discarded = arena.alloc(&[0xEE; 32]);
+        arena.seal();
+        arena.rewind(mark);
+
+        assert!(
+            arena.resolve(discarded).is_none(),
+            "the rolled-back slab is gone"
+        );
+        assert!(
+            super::resolve(arena.region().unwrap(), discarded).is_none(),
+            "and its table entry with it"
+        );
+        assert_eq!(
+            arena.resolve(kept).expect("the survivor is untouched"),
+            &[0xDDu8; 32]
+        );
+
+        // The cursor went back too, so the next frame writes over those bytes rather than past
+        // them — otherwise a region leaks the whole of every failed frame.
+        let after = arena.alloc(&[0xFF; 32]);
+        arena.seal();
+        assert_eq!(
+            after.slab, discarded.slab,
+            "the slot is reissued, and so is the space"
+        );
+    }
+}
