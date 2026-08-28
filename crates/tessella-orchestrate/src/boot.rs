@@ -210,11 +210,16 @@ pub enum BootError {
 /// # Why this is not `available_parallelism`
 ///
 /// The obvious default is the host's core count, and it is wrong for this target class. An
-/// RK3566 has four cores that the deployment wants split — §5.4 puts decode workers on the
-/// little ones and reserves the big ones for the orchestrator and the renderer — so a cold
-/// start that took every core would take them from the things that have to stay responsive.
-/// And a number derived from the host makes a measurement on a workstation say nothing about
-/// the device, which is the measurement that matters.
+/// RK3566 has four cores that the deployment wants split, so a cold start that took every one
+/// would take them from the things that have to stay responsive. And a number derived from the
+/// host makes a measurement on a workstation say nothing about the device, which is the
+/// measurement that matters.
+///
+/// *Which* cores those are is not written down anywhere here — see [`crate::topology`], where
+/// the part is asked instead. This paragraph used to say §5.4's "little cores for decode, big
+/// cores for the orchestrator", which is an RK3588 and not the board the number was taken on.
+/// The count survives that correction because its reason never depended on the split: four
+/// workers leave something over on a four-core part however alike those cores are.
 ///
 /// mbgl reaches the same conclusion: its background `ThreadPool` is a fixed three, not a
 /// derived count.

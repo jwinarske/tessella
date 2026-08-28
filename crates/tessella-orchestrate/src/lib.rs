@@ -61,6 +61,7 @@ pub mod sweep;
 pub mod symbols;
 pub mod texture;
 pub mod tile;
+pub mod topology;
 pub mod ubo;
 pub mod view;
 pub mod viewcover;

@@ -345,10 +345,47 @@ Irreducibly per-view — listed so nobody "optimizes" them into incorrect sharin
 cover decisions; placement + collision + fades; global paint UBOs; CameraUpdate/OrderUpdate;
 StencilTiles; screen-space UBO variants (R-2).
 
-Four-view sizing: decode workers pinned to little cores, big cores for orchestrator +
-Filament; ring sized for a four-view simultaneous integer crossing at worst-case tile counts;
-per-view maxzoom clamps by view class (a cluster inset capped at z14 never joins a z16
+Four-view sizing: affinity is a policy evaluated against the part rather than a fact written
+here — see below; ring sized for a four-view simultaneous integer crossing at worst-case tile
+counts; per-view maxzoom clamps by view class (a cluster inset capped at z14 never joins a z16
 crossing burst).
+
+**Core affinity is queried, not prescribed** (`orchestrate::topology`, and it closes §16's
+"explicit pinning vs scheduler hints, per target"). This section used to read "decode workers
+pinned to little cores, big cores for orchestrator + Filament", and R1's measurement had to
+correct it: an RK3566 is four Cortex-A55s in one cluster and has no big cores, so the sentence
+described an RK3588 and not the board. The correction is not a different sentence. A frontend
+that runs on an RK3566, an RK3588, a VisionFive 2 and a workstation cannot hold a right answer
+about cores, and every one of those parts already reports what it is.
+
+The number is the kernel's own: `cpu_capacity`, out of 1024, derived on arm64 from the device
+tree's `capacity-dmips-mhz` and present exactly where capacity-aware scheduling is. Asking the
+same source the scheduler asks is the difference between a policy that agrees with it and one
+that fights it. Where it is absent — x86, hybrid parts included — `cpufreq/cpuinfo_max_freq`
+stands in, normalised so the largest core is 1024; a worse measure, since frequency is not
+throughput across microarchitectures, but it separates the tiers it has to. The two are never
+mixed: a part answering one for some cores and the other for the rest would put them on
+incomparable scales and the tiers would be an artefact of which file existed.
+
+`Affinity` is then a preference with two answers, defaulting to leaving the scheduler alone —
+which is what a capacity-aware scheduler deserves, and pinning against one is how a decode
+worker ends up queued behind another on a small core while a large one idles. `SpareTheLargest`
+is §5.4's old intent stated as a policy: everything below the top tier is decode's, the top is
+the orchestrator's and the renderer's, and on a part with one tier it asks for nothing at all.
+That last case is the RK3566, and it is the whole of the correction — reached by measurement
+rather than by assertion.
+
+Two things it deliberately does not do. It opens no file: this crate is `no_std` and has no
+business growing an I/O dependency for four reads, so every path and every parse is here and the
+caller supplies the bytes — which is also what makes an RK3566, an RK3588, an Intel hybrid and a
+uniform server testable without owning one. And it pins nothing: applying an affinity is
+`sched_setaffinity`, a syscall, and this crate is `deny(unsafe_code)` with no allowance and no
+libc. The policy says which CPUs a class of work wants; the embedder, which already owns thread
+creation, is where that becomes a call.
+
+The worker *count* is not derived from any of this and deliberately: `Workers::DEFAULT` stays a
+constant for the reason it always was — a number derived from the host makes a measurement on a
+workstation say nothing about the device.
 
 ---
 
@@ -2862,7 +2899,10 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
   class; needs the §13.3 rig before choosing.
 - Compiled-style cache format (§12.5): bespoke vs rkyv-class zero-copy archive; invalidation
   keyed by style etag + plan ABI rev.
-- Little/big core affinity policy (§5.5): explicit pinning vs scheduler hints, per target.
+- ~~Little/big core affinity policy (§5.5): explicit pinning vs scheduler hints, per target~~
+  closed: the part is asked rather than assumed, so it is one policy rather than one per target.
+  `orchestrate::topology` reads the kernel's own capacity numbers and `Affinity` says what to
+  make of them, defaulting to scheduler hints. See §5.4.
 - ~~Second-consumer sequencing~~ closed by DR-16: the impeller-rs mirror (Vulkan HAL) lands
   beside the R0 stub.
 - ~~UBO floor~~ closed by DR-16: SSBO-only, Vulkan-first.
