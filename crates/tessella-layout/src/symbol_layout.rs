@@ -156,6 +156,14 @@ fn text_options(layer: &Layer, zoom: f64, feature: Option<&dyn Feature>) -> Symb
         // line height, and the two were wrong here in the same way.
         letter_spacing: number("text-letter-spacing").unwrap_or(0.0) * ONE_EM,
         line_height_ems: number("text-line-height").unwrap_or(1.2),
+        // `text-writing-mode` is a list, and only whether it *contains* `vertical` matters here:
+        // it decides which characters a vertical shaping keeps upright, and whether one is made
+        // at all. The order the list gives is a placement preference, and placement is where it
+        // is read.
+        allow_vertical_placement: layout_value(layer, "text-writing-mode", zoom, feature)
+            .as_ref()
+            .and_then(Value::as_array)
+            .is_some_and(|modes| modes.iter().any(|mode| mode.as_str() == Some("vertical"))),
         ..SymbolOptions::default()
     }
 }
@@ -824,6 +832,7 @@ impl SymbolLayout {
                             // An empty extent places as nothing, which is what a symbol with no
                             // text should reserve.
                             extent: (0.0, 0.0, 0.0, 0.0),
+                            vertical: None,
                             glyphs: 0,
                             content_margins: None,
                             segment: 0,

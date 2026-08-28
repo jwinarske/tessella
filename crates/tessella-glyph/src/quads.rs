@@ -22,7 +22,7 @@
 
 use crate::atlas::Rect;
 use crate::pbf::{BORDER, Metrics};
-use crate::shaping::{Anchor, Shaping};
+use crate::shaping::{Anchor, Shaping, Y_OFFSET};
 use crate::sprite::TextFit;
 
 /// How far outside the ink a quad reaches, in pixels.
@@ -61,6 +61,15 @@ pub struct Options {
     pub text_rotate: f32,
     /// Whether the label follows a line rather than sitting at a point.
     pub along_line: bool,
+    /// Whether the layer's `text-writing-mode` lists `vertical`.
+    ///
+    /// mbgl's `allowVerticalPlacement`, and it reaches the quads for two separate reasons. It is
+    /// half of whether an upright glyph is turned at all — a label following a line is turned
+    /// with the line whether or not the style asked for vertical placement, which is the other
+    /// half. And with [`Shaping::verticalizable`] it decides whether every glyph on the line is
+    /// re-centred in its column, which is what keeps a scaled glyph or an image from sitting
+    /// against one edge of it.
+    pub allow_vertical_placement: bool,
 }
 
 /// What the atlas and the glyph manager know about one glyph.
@@ -83,8 +92,8 @@ fn rotate(point: (f32, f32), sin: f32, cos: f32) -> (f32, f32) {
 /// rather than drawn from a rectangle that is not there — a label whose glyphs have not all
 /// arrived draws the ones that have, which is what keeps a map readable while a font loads.
 ///
-/// Vertical writing and images in text are not built here; both change which corner of the quad
-/// the metrics describe, and neither has an oracle until R3.
+/// Images in text are not built here: an image's metrics come from the sprite rather than the
+/// font, and its rectangle is in the icon atlas.
 pub fn glyph_quads<F>(shaping: &Shaping, mut placed: F, options: &Options) -> Vec<Quad>
 where
     F: FnMut(u32) -> Option<Placed>,
@@ -115,18 +124,47 @@ where
             #[allow(clippy::cast_precision_loss)]
             let half_advance = metrics.advance as f32 * glyph.scale / 2.0;
 
+            // A glyph is turned when it kept its upright orientation *and* the line it is on is
+            // one that turns: a label following a line turns with the line, and a point label
+            // turns only where the style asked for vertical placement. Both are the label's
+            // business rather than the glyph's, which is why the flag alone does not decide it.
+            let rotate_vertical =
+                (options.along_line || options.allow_vertical_placement) && glyph.vertical;
+
+            // Every glyph on a vertical line is re-centred in its column. The column is one em
+            // wide and what sits in it need not be: a scaled glyph is wider or narrower than its
+            // line's cell, and the correction is the difference. mbgl folds the line's own offset
+            // in here as well, which is what pushes a line down that an oversized image grew.
+            let line_offset = if options.allow_vertical_placement && shaping.verticalizable {
+                -(glyph.scale - 1.0) * crate::text::ONE_EM
+            } else {
+                0.0
+            };
+
             // For a point label the position is baked into the corners. Along a line it moves
             // to `glyph_offset`, because the shader has to project it before applying it.
-            let (glyph_offset, built_in) = if options.along_line {
+            let (glyph_offset, mut built_in) = if options.along_line {
                 ((glyph.x + half_advance, glyph.y), (0.0, 0.0))
             } else {
                 (
                     (0.0, 0.0),
                     (
                         glyph.x + half_advance + options.text_offset[0],
-                        glyph.y + options.text_offset[1],
+                        glyph.y + options.text_offset[1] - line_offset,
                     ),
                 )
+            };
+
+            // A turned quad is rotated about a point of its own and only then moved to where the
+            // label wants it, so the offset comes out of the corners first and is added back
+            // after. Rotating a quad that already carried it would swing the label's position
+            // around the origin along with the glyph.
+            let verticalized_offset = if rotate_vertical {
+                let held = built_in;
+                built_in = (0.0, 0.0);
+                held
+            } else {
+                (0.0, 0.0)
             };
 
             #[allow(clippy::cast_precision_loss)]
@@ -146,6 +184,38 @@ where
                 tex: rect,
                 glyph_offset,
             };
+
+            if rotate_vertical {
+                // A glyph that stays upright on a vertical line is drawn from a horizontal
+                // layout, so the label is rotated a quarter turn clockwise and each such glyph a
+                // quarter turn back. The centre is the middle of the left edge of its own em
+                // box, which is where the two rotations cancel: turning about it lands the
+                // glyph's middle on the line's midline, so the `Y_OFFSET` that pulled it up
+                // there is no longer wanted — and is what the correction below takes out again,
+                // along with the pull to the left that the same rotation introduces.
+                //
+                // The half-width term is for a glyph narrower than the column. A full-width
+                // ideograph advances a whole em and it is zero; a half-width character has to
+                // come back up by the difference or it hangs below its cell.
+                let center = (-half_advance, half_advance - Y_OFFSET);
+                let half_width = crate::text::ONE_EM / 2.0 - half_advance;
+                let correction = (5.0 - Y_OFFSET - half_width, 0.0);
+                let turn = |point: (f32, f32)| {
+                    let about = (point.0 - center.0, point.1 - center.1);
+                    // A quarter turn anticlockwise, which is `(x, y) -> (y, -x)` and is written
+                    // out rather than taken from a sine and a cosine that are exactly one and
+                    // zero.
+                    let turned = (about.1, -about.0);
+                    (
+                        turned.0 + center.0 + correction.0 + verticalized_offset.0,
+                        turned.1 + center.1 + correction.1 + verticalized_offset.1,
+                    )
+                };
+                quad.tl = turn(quad.tl);
+                quad.tr = turn(quad.tr);
+                quad.bl = turn(quad.bl);
+                quad.br = turn(quad.br);
+            }
 
             if options.text_rotate != 0.0 {
                 quad.tl = rotate(quad.tl, sin, cos);

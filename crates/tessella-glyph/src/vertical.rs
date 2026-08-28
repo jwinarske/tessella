@@ -106,3 +106,14 @@ pub fn verticalize_punctuation(text: &[u32]) -> Vec<u32> {
         })
         .collect()
 }
+
+/// Whether a label may be set vertically at all.
+///
+/// mbgl's `allowsVerticalWritingMode`: one character with an upright orientation is enough.
+/// Without it a vertical shaping would be the horizontal one with every glyph turned on its
+/// side, which is not vertical writing — it is a horizontal label read sideways, and mbgl
+/// declines to make one.
+#[must_use]
+pub fn allows_vertical_writing_mode(text: &[u32]) -> bool {
+    text.iter().copied().any(is_upright)
+}

@@ -43,6 +43,7 @@ fn centred(max_width_in_chars: f32) -> Options {
         anchor: Anchor::Center,
         justify: Justify::Center,
         spacing: 0.0,
+        ..Options::default()
     }
 }
 

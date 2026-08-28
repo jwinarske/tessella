@@ -1,0 +1,88 @@
+{
+  "version": 8,
+  "name": "symbol-probe",
+  "glyphs": "file://TESSELLA/tests/glyph-fixtures/{fontstack}/{range}.pbf",
+  "sources": {
+    "probe": {
+      "type": "geojson",
+      "data": {
+        "type": "FeatureCollection",
+        "features": [
+          {
+            "type": "Feature",
+            "properties": {
+              "name": "Alpha"
+            },
+            "geometry": {
+              "type": "Point",
+              "coordinates": [
+                -0.13,
+                51.515
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {
+              "name": "Bravo"
+            },
+            "geometry": {
+              "type": "Point",
+              "coordinates": [
+                -0.09,
+                51.495
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {
+              "name": "Charlie"
+            },
+            "geometry": {
+              "type": "Point",
+              "coordinates": [
+                -0.11,
+                51.505
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "layers": [
+    {
+      "id": "bg",
+      "type": "background",
+      "paint": {
+        "background-color": "#101418"
+      }
+    },
+    {
+      "id": "vertical",
+      "type": "symbol",
+      "source": "probe",
+      "filter": [
+        "==",
+        [
+          "get",
+          "name"
+        ],
+        "Alpha"
+      ],
+      "layout": {
+        "text-field": "\u4e00\u4e09\u4e8c",
+        "text-font": [
+          "TestFont"
+        ],
+        "text-size": 24,
+        "text-writing-mode": [
+          "vertical",
+          "horizontal"
+        ],
+        "text-allow-overlap": true
+      }
+    }
+  ]
+}

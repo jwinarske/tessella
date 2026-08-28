@@ -387,6 +387,30 @@ pub struct PositionedGlyph {
     /// Shaping places a glyph; the quad is where its size is decided, and a scaled glyph is
     /// larger as well as further along. Carrying it here is how the two stay one decision.
     pub scale: f32,
+    /// Whether this glyph keeps its upright orientation on a vertical line.
+    ///
+    /// Only ever true in a vertical shaping, and not for every glyph in one: a CJK ideograph
+    /// stays upright and advances by a full em, while a Latin letter beside it is left alone so
+    /// that rotating the whole line turns it a quarter turn with the line. Which of the two a
+    /// character gets is [`crate::vertical`]'s answer, and the quad builder is where it is acted
+    /// on.
+    pub vertical: bool,
+}
+
+/// Which way a label's lines run.
+///
+/// Not a property of the label so much as a question asked of it twice: mbgl shapes a label
+/// that permits it both ways and keeps both answers, because which one is drawn is a placement
+/// decision that the shaper does not get to make. A vertical shaping is laid out along the same
+/// axis as a horizontal one and turned by the quad builder — the glyphs run down the screen
+/// because each quad is rotated, not because the shaper moved the pen downwards.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WritingMode {
+    /// Lines run across.
+    #[default]
+    Horizontal,
+    /// Lines run down.
+    Vertical,
 }
 
 /// A shaped label: its glyphs in lines, and the box they occupy.
@@ -402,6 +426,13 @@ pub struct Shaping {
     pub left: f32,
     /// Right of the bounding box.
     pub right: f32,
+    /// Whether any glyph in it stayed upright.
+    ///
+    /// mbgl's `Shaping::verticalizable`, and the quad builder reads it rather than the per-glyph
+    /// flag to decide whether the *label* is one being set vertically — a line of rotated Latin
+    /// with one ideograph in it is still a vertical line, and every glyph on it is centred as
+    /// one.
+    pub verticalizable: bool,
 }
 
 impl Shaping {
@@ -429,6 +460,16 @@ pub struct Options {
     pub justify: Justify,
     /// Extra tracking between characters.
     pub spacing: f32,
+    /// Which way this shaping's lines run.
+    pub writing_mode: WritingMode,
+    /// Whether the layer permits vertical placement, which changes *which* glyphs stay upright.
+    ///
+    /// mbgl's `allowVerticalPlacement`, and the two answers are close to opposites. Without it —
+    /// a label following a line that happens to run downwards — only a character with an upright
+    /// orientation of its own is kept upright, and everything else turns with the line. With it —
+    /// a point label the style asked to set vertically — everything is kept upright *except*
+    /// whitespace and the scripts whose letters join, which would be broken by it.
+    pub allow_vertical_placement: bool,
 }
 
 impl Default for Options {
@@ -439,6 +480,8 @@ impl Default for Options {
             anchor: Anchor::Center,
             justify: Justify::Center,
             spacing: 0.0,
+            writing_mode: WritingMode::Horizontal,
+            allow_vertical_placement: false,
         }
     }
 }
@@ -579,28 +622,53 @@ pub fn reorder(line: &[Char]) -> std::borrow::Cow<'_, [Char]> {
     Cow::Owned(out)
 }
 
+/// Whether a character keeps its upright orientation on a vertical line.
+///
+/// mbgl's condition, which is written there as the negation of four disqualifications and reads
+/// more plainly split in two. Nothing is upright in a horizontal shaping. In a vertical one,
+/// what counts depends on *why* the line is vertical: a label following a line that runs
+/// downwards keeps upright only the characters that have an upright form of their own, and turns
+/// the rest with the line; a label the style asked to set vertically keeps everything upright
+/// except whitespace and the scripts whose letters join.
+///
+/// mbgl has a third disqualification, for a glyph that did not come from a font PBF. That is its
+/// HarfBuzz path for locally-installed fonts, where the type is generated per font; every glyph
+/// here comes from a PBF, so the test is constant and is not transcribed.
+fn is_vertical(codepoint: u32, options: &Options) -> bool {
+    if options.writing_mode == WritingMode::Horizontal {
+        return false;
+    }
+    if options.allow_vertical_placement {
+        !(text::is_whitespace(codepoint) || crate::vertical::is_complex_shaping(codepoint))
+    } else {
+        crate::vertical::is_upright(codepoint)
+    }
+}
+
 /// Lays a label out: breaks it into lines, places its glyphs, and aligns the result.
 ///
-/// A transcription of mbgl's `shapeLines` for horizontal text in one font stack. Vertical
-/// writing, images in text and per-section scaling are not implemented; each of those changes
-/// the line's height as well as its width.
+/// A transcription of mbgl's `shapeLines` for one font stack, both writing modes.
 ///
-/// # Why the capture cannot check them, which is not the reason first given
+/// # What it does not do
 ///
-/// This used to say they had no oracle "until R3 brings the sprite atlas". R3 brought it and
-/// they still have none, for a different reason: what a scaled section changes is the *glyph
-/// vertex buffer*, and that buffer is elided from every symbol capture because mbgl packs its
-/// glyph atlas in the order glyphs arrive and that order is not deterministic.
+/// Images in text. A `["image", …]` section draws from the sprite atlas rather than the font,
+/// and its metrics come from the sprite's display size — so it changes what a line's *height*
+/// is as well as its width, and the shaper cannot ask a `Char` for any of it.
 ///
-/// Measured rather than assumed. A capture of `["format", "Big", {"font-scale": 2}, "small",
-/// {"font-scale": 0.5}]` and one of the same label at scale one produce *byte-identical*
-/// comparable data — same vertex count, same index buffer hash, same both per-frame buffers.
-/// The two maps differ visibly and the capture cannot tell them apart at all.
+/// # How the other two came to be checkable
 ///
-/// So implementing this against the oracle is not possible as the oracle stands. What would
-/// change that is the probe, which is ours: a dump of the shaped extent — the line heights and
-/// advances `shapeLines` computes — would be comparable where the packed vertices are not, and
-/// is the number these features actually decide.
+/// Per-section scaling and vertical writing were both listed here as unimplementable against the
+/// oracle, and the reason given was wrong twice. First it said they waited on the sprite atlas;
+/// R3 brought it and nothing changed. Then it said what they change is the *glyph vertex
+/// buffer*, which every symbol capture elides because mbgl packs its glyph atlas in the order
+/// glyphs arrive and that order is not deterministic. That was true, and measured: a capture of
+/// `["format", "Big", {"font-scale": 2}, …]` and one of the same label unscaled produced
+/// byte-identical comparable data.
+///
+/// What changed is the probe, which is this project's. It hashes each attribute over its *own*
+/// bytes now rather than over the buffer it shares, so the two attributes that carry no texture
+/// coordinates stopped being elided along with the one that does — and those two are exactly
+/// where a scaled section and a turned glyph show up.
 #[must_use]
 pub fn shape(text: &[Char], options: &Options) -> Shaping {
     let justify = options.justify.factor();
@@ -640,6 +708,7 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
             .fold(1.0f32, f32::max);
 
         for character in line {
+            let vertical = is_vertical(character.codepoint, options);
             if character.drawable {
                 glyphs.push(PositionedGlyph {
                     codepoint: character.codepoint,
@@ -650,12 +719,21 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
                     // label.
                     y: y + (line_scale - character.scale) * crate::text::ONE_EM,
                     scale: character.scale,
+                    vertical,
                 });
                 last_advance = character.advance;
             }
-            // A zero-advance glyph is a combining mark sitting on the one before it, and must
-            // not push the pen along or take the spacing.
-            if character.advance > 0.01 {
+            if vertical {
+                // An upright glyph on a vertical line advances by a full em whatever its own
+                // advance is, because the line is a column of square cells and the glyph sits in
+                // one. Unconditionally, too: the zero-advance guard below is about a combining
+                // mark riding the glyph before it, and a mark that stays upright still takes its
+                // own cell.
+                x += crate::text::ONE_EM * character.scale + options.spacing;
+                shaping.verticalizable = true;
+            } else if character.advance > 0.01 {
+                // A zero-advance glyph is a combining mark sitting on the one before it, and must
+                // not push the pen along or take the spacing.
                 x += character.advance + options.spacing;
             }
         }
@@ -670,7 +748,14 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
         // `lineHeight * lineMaxScale`, so a line with a bigger section is a taller line.
         let line_height = options.line_height * line_scale;
         y += line_height;
-        max_line_height = max_line_height.max(line_height);
+        // A line with no characters at all still takes its space, but it does not set the
+        // maximum: mbgl returns from the loop before reaching that, and the difference decides
+        // which branch the whole block's alignment takes. A label that is nothing but blank
+        // lines has a maximum of zero there, which is not its line height, so it aligns as a
+        // block that grew rather than as a whole number of lines.
+        if !line.is_empty() {
+            max_line_height = max_line_height.max(line_height);
+        }
         shaping.lines.push(glyphs);
     }
 

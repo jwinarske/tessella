@@ -312,6 +312,17 @@ pub struct SymbolOptions {
     pub line_height_ems: f32,
     /// Where the label sits relative to its anchor.
     pub anchor: tessella_glyph::shaping::Anchor,
+    /// Which way its lines run.
+    ///
+    /// A label that permits vertical writing is shaped *twice*, once each way, and placement
+    /// picks — so this names which of the two shapings is being built rather than a property of
+    /// the label. mbgl's `applyShaping` takes it as an argument for the same reason.
+    pub writing_mode: tessella_glyph::shaping::WritingMode,
+    /// Whether the layer's `text-writing-mode` lists `vertical`.
+    ///
+    /// Distinct from [`Self::writing_mode`]: this is what the style asked for, and it decides
+    /// *which* characters stay upright in a vertical shaping rather than whether one is made.
+    pub allow_vertical_placement: bool,
     /// How its lines align.
     pub justify: tessella_glyph::shaping::Justify,
 }
@@ -324,6 +335,8 @@ impl Default for SymbolOptions {
             letter_spacing: 0.0,
             line_height_ems: 1.2,
             anchor: tessella_glyph::shaping::Anchor::Center,
+            writing_mode: tessella_glyph::shaping::WritingMode::Horizontal,
+            allow_vertical_placement: false,
             justify: tessella_glyph::shaping::Justify::Center,
         }
     }
@@ -359,6 +372,14 @@ pub struct LaidOut {
     /// searching the line is both slower and ambiguous where a line crosses itself. Zero for a
     /// point label, which has no line.
     pub segment: usize,
+    /// Where this label's *vertical* shaping starts within [`Self::vertices`].
+    ///
+    /// `None` unless the label was shaped both ways, which mbgl does when the layer's
+    /// `text-writing-mode` lists `vertical` and some character in the label has an upright
+    /// orientation of its own. Both shapings go into the same buffer, horizontal first, and
+    /// placement draws one of them: it tries the horizontal box and falls back to the vertical,
+    /// so it needs to know where one ends and the other begins.
+    pub vertical: Option<usize>,
     /// Which vertices of the shared buffer are this label's.
     ///
     /// A layer's labels share one buffer, so per-frame state — the opacity a fade produced, the
@@ -372,6 +393,27 @@ pub struct LaidOut {
 ///
 /// The advance is `metrics.advance * scale + spacing`, which is mbgl's: the glyph scales and the
 /// letter spacing does not, so a double-size word is not also a loosely-set one.
+/// The codepoints of a shaped-in-waiting label, which several i18n predicates ask about.
+fn codepoints(chars: &[tessella_glyph::shaping::Char]) -> Vec<u32> {
+    chars.iter().map(|character| character.codepoint).collect()
+}
+
+/// The same characters with their punctuation in vertical form.
+///
+/// mbgl's `TaggedString::verticalizePunctuation`, which rewrites in place and never changes the
+/// length — its sections are indexed by character position, and so are these advances.
+fn verticalized(chars: &[tessella_glyph::shaping::Char]) -> Vec<tessella_glyph::shaping::Char> {
+    let turned = tessella_glyph::vertical::verticalize_punctuation(&codepoints(chars));
+    chars
+        .iter()
+        .zip(turned)
+        .map(|(character, codepoint)| tessella_glyph::shaping::Char {
+            codepoint,
+            ..*character
+        })
+        .collect()
+}
+
 /// The spacing a label actually gets, which is not always the one the style asked for.
 ///
 /// mbgl's `allowsLetterSpacing` gate, applied where the label's characters are known rather
@@ -435,47 +477,93 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
         let chars = chars_of(&label.sections, glyphs);
         let spacing = letter_spacing(&chars, options.letter_spacing);
 
-        let shaping = shaping::shape(
-            &chars,
-            &ShapeOptions {
-                max_width: options.max_width_ems * ONE_EM,
-                line_height: options.line_height_ems * ONE_EM,
-                anchor: options.anchor,
-                justify: options.justify,
-                spacing,
-            },
-        );
+        let shape = |mode, justify, chars: &[shaping::Char]| {
+            shaping::shape(
+                chars,
+                &ShapeOptions {
+                    max_width: options.max_width_ems * ONE_EM,
+                    line_height: options.line_height_ems * ONE_EM,
+                    anchor: options.anchor,
+                    justify,
+                    spacing,
+                    writing_mode: mode,
+                    allow_vertical_placement: options.allow_vertical_placement,
+                },
+            )
+        };
+        let placed = |codepoint| {
+            let (metrics, _) = glyphs.metrics(codepoint)?;
+            Some(Placed {
+                rect: glyphs.rect(codepoint)?,
+                metrics,
+            })
+        };
+
+        let shaping = shape(options.writing_mode, options.justify, &chars);
 
         let before = buffers.glyphs();
-        let quads = quads::glyph_quads(
-            &shaping,
-            |codepoint| {
-                let (metrics, _) = glyphs.metrics(codepoint)?;
-                Some(Placed {
-                    rect: glyphs.rect(codepoint)?,
-                    metrics,
-                })
-            },
-            &quads::Options::default(),
-        );
+        let horizontal = quads::Options {
+            allow_vertical_placement: options.allow_vertical_placement,
+            ..quads::Options::default()
+        };
 
-        for quad in quads {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            buffers.add_quad(
-                label.anchor,
-                [quad.tl, quad.tr, quad.bl, quad.br],
-                quad.glyph_offset,
-                (
-                    quad.tex.x as u16,
-                    quad.tex.y as u16,
-                    quad.tex.width as u16,
-                    quad.tex.height as u16,
-                ),
-                SizeRange::constant(options.size),
-                true,
-                1.0,
-            );
+        /// Puts a shaping's quads into the buffers at one anchor.
+        ///
+        /// A function rather than a closure because the caller needs the buffers back between
+        /// the two calls: where the horizontal half ends is a *count of emitted quads*, and
+        /// `glyph_quads` drops a glyph whose rectangle is not in the atlas yet, so it cannot be
+        /// derived from the shaping.
+        fn emit(buffers: &mut SymbolBuffers, anchor: (f32, f32), quads: &[quads::Quad], size: f32) {
+            for quad in quads {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                buffers.add_quad(
+                    anchor,
+                    [quad.tl, quad.tr, quad.bl, quad.br],
+                    quad.glyph_offset,
+                    (
+                        quad.tex.x as u16,
+                        quad.tex.y as u16,
+                        quad.tex.width as u16,
+                        quad.tex.height as u16,
+                    ),
+                    SizeRange::constant(size),
+                    true,
+                    1.0,
+                );
+            }
         }
+
+        emit(
+            &mut buffers,
+            label.anchor,
+            &quads::glyph_quads(&shaping, placed, &horizontal),
+            options.size,
+        );
+        let vertices = buffers.vertices.len();
+
+        // The same label, set the other way. mbgl shapes it twice and keeps both, because which
+        // one is drawn is a *placement* decision — a label that will not fit across may still
+        // fit down — and placement runs per view, long after the tile is built. Left-justified
+        // whatever the layer says: vertical placement is meant for scripts that are written that
+        // way, and mbgl notes that a Latin one would need this reconsidered.
+        let vertical = if options.allow_vertical_placement
+            && tessella_glyph::vertical::allows_vertical_writing_mode(&codepoints(&chars))
+        {
+            let shaped = shape(
+                tessella_glyph::shaping::WritingMode::Vertical,
+                tessella_glyph::shaping::Justify::Left,
+                &verticalized(&chars),
+            );
+            emit(
+                &mut buffers,
+                label.anchor,
+                &quads::glyph_quads(&shaped, placed, &horizontal),
+                options.size,
+            );
+            Some(vertices)
+        } else {
+            None
+        };
 
         out.push(LaidOut {
             pending: label.pending,
@@ -484,6 +572,7 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
             glyphs: buffers.glyphs() - before,
             content_margins: None,
             segment: 0,
+            vertical,
             vertices: before * 4..buffers.vertices.len(),
         });
     }
@@ -578,6 +667,8 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                 anchor: options.symbol.anchor,
                 justify: options.symbol.justify,
                 spacing,
+                writing_mode: options.symbol.writing_mode,
+                allow_vertical_placement: options.symbol.allow_vertical_placement,
             },
         );
 
@@ -610,21 +701,44 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
             )
         };
 
+        let placed = |codepoint| {
+            let (metrics, _) = glyphs.metrics(codepoint)?;
+            Some(Placed {
+                rect: glyphs.rect(codepoint)?,
+                metrics,
+            })
+        };
+        let quad_options = quads::Options {
+            along_line: true,
+            allow_vertical_placement: options.symbol.allow_vertical_placement,
+            ..quads::Options::default()
+        };
+
         // Shaped once; emitted once per anchor.
-        let quads = quads::glyph_quads(
-            &shaping,
-            |codepoint| {
-                let (metrics, _) = glyphs.metrics(codepoint)?;
-                Some(Placed {
-                    rect: glyphs.rect(codepoint)?,
-                    metrics,
-                })
-            },
-            &quads::Options {
-                along_line: true,
-                ..quads::Options::default()
-            },
-        );
+        let quads = quads::glyph_quads(&shaping, placed, &quad_options);
+
+        // A label following a line is set vertically when it *can* be, whatever the layer's
+        // writing mode says — mbgl gates this on `textAlongLine` alone. A road name in CJK
+        // running down the screen is the case: the line decides the direction and the shaping
+        // decides whether the characters turn with it.
+        let turned = if tessella_glyph::vertical::allows_vertical_writing_mode(&codepoints(&chars))
+        {
+            let shaped = shaping::shape(
+                &verticalized(&chars),
+                &ShapeOptions {
+                    max_width: 0.0,
+                    line_height: options.symbol.line_height_ems * ONE_EM,
+                    anchor: options.symbol.anchor,
+                    justify: options.symbol.justify,
+                    spacing,
+                    writing_mode: tessella_glyph::shaping::WritingMode::Vertical,
+                    allow_vertical_placement: options.symbol.allow_vertical_placement,
+                },
+            );
+            Some(quads::glyph_quads(&shaped, placed, &quad_options))
+        } else {
+            None
+        };
 
         for anchor in anchors {
             let before = buffers.glyphs();
@@ -645,6 +759,27 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                     1.0,
                 );
             }
+            let vertical = turned.as_ref().map(|turned| {
+                let at = buffers.vertices.len();
+                for quad in turned {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    buffers.add_quad(
+                        anchor.point,
+                        [quad.tl, quad.tr, quad.bl, quad.br],
+                        quad.glyph_offset,
+                        (
+                            quad.tex.x as u16,
+                            quad.tex.y as u16,
+                            quad.tex.width as u16,
+                            quad.tex.height as u16,
+                        ),
+                        SizeRange::constant(options.symbol.size),
+                        true,
+                        1.0,
+                    );
+                }
+                at
+            });
             out.push(LaidOut {
                 pending: label.pending,
                 anchor: anchor.point,
@@ -652,6 +787,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                 glyphs: buffers.glyphs() - before,
                 content_margins: None,
                 segment: anchor.segment,
+                vertical,
                 vertices: before * 4..buffers.vertices.len(),
             });
         }
@@ -818,6 +954,8 @@ pub fn build_icons(
         out.push(LaidOut {
             pending: label.pending,
             anchor: label.anchor,
+            // An icon has one orientation: `text-writing-mode` is about text.
+            vertical: None,
             extent: (placed.top, placed.bottom, placed.left, placed.right),
             glyphs: buffers.glyphs() - before,
             content_margins: margins,

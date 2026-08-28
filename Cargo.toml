@@ -5,10 +5,12 @@ resolver = "3"
 members = ["crates/*", "tools/*"]
 # Codegen scripts rather than crates. `tools/*` globs members, and a directory of Python under it
 # is not one — the mbgl oracles live inside `tools/mbgl-codegen` and so are covered by its
-# manifest, while this reads the Unicode Character Database and belongs to no crate.
+# manifest, while these belong to no crate: `unicode-codegen` reads the Unicode Character
+# Database, and `glyph-fixtures` writes the synthetic glyph ranges the vertical-writing captures
+# need.
 # `fuzz` is its own workspace: libFuzzer needs nightly and DR-17 pins this one to the stable the
 # target's Yocto release carries.
-exclude = ["tools/unicode-codegen", "fuzz"]
+exclude = ["tools/unicode-codegen", "tools/glyph-fixtures", "fuzz"]
 
 [workspace.package]
 version = "0.0.0"
