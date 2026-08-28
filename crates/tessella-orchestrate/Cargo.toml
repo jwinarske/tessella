@@ -44,6 +44,11 @@ webp = ["image", "tessella-glyph/webp"]
 [dev-dependencies]
 tessella-storage = { workspace = true, features = ["cache", "http", "pmtiles"] }
 tempfile = "3"
+# The process-isolation spike (plan.md 3.5) needs `mmap`, which std has no equivalent of, and a
+# producer that maps a file rather than a `Vec` is the whole point of it. Dev-only, and already
+# in the tree by way of `tempfile`, so the cross-compile lane is unaffected -- `libc` is bindings
+# rather than C, and builds for a target without a C toolchain for it.
+libc = "0.2"
 tile-server = { path = "../../tools/tile-server" }
 serde_json.workspace = true
 

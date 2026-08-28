@@ -17,15 +17,44 @@
  *
  * Not that the buffers are aligned: every read of a shared structure goes through memcpy, since
  * the producer promises alignment within its region and says nothing about where a consumer
- * mapped it. Not that the counters are stable: head is read once up front, as a consumer racing
+ * mapped it. Not that the counters are stable: head is read once per pass, as a consumer racing
  * a live producer must. Not that a record is well-formed: a length that overruns its own record
  * is refused rather than followed.
+ *
+ * # Live mode
+ *
+ * `--live <ring> <timeout-ms>` maps the ring shared instead of reading a copy of it, and is the
+ * consumer half of the process-isolation spike (plan.md 3.5). Two things separate it from the
+ * file mode, and neither is cosmetic.
+ *
+ * It re-reads `head` with an acquiring load every pass, so it sees a group the moment the
+ * producer's releasing store publishes it -- which is what makes the coupling live rather than
+ * a walk over a finished buffer.
+ *
+ * And it publishes `tail`, which the file mode never had to. A ring is a fixed number of bytes:
+ * a producer cannot write past what the consumer has consumed, and a consumer that reads
+ * without publishing looks exactly like one that stalled. Across a mapping that is the whole of
+ * backpressure, and it is why this mode is what proves the seam works: with a ring smaller than
+ * the frames going through it, the producer only makes progress because this process says it
+ * has.
+ *
+ * It stops on `ViewUndeclare` -- the producer tearing its view down is the end of the stream --
+ * or when the timeout expires with no progress, which is what a dead producer looks like.
  */
 
+/* mmap, clock_gettime and nanosleep are POSIX rather than C11, and this compiles as C11. */
+#define _POSIX_C_SOURCE 200809L
+
+#include <fcntl.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "tessella_capture_abi.h"
 
@@ -102,13 +131,57 @@ static const uint8_t *resolve(buffer region, tsl_slab_ref ref, uint64_t *length_
     return region.bytes + entry.offset + ref.offset;
 }
 
+/* Maps a file shared, so writes by the other process are seen by this one. */
+static buffer map_shared(const char *path, uint8_t **writable) {
+    buffer out = {NULL, 0};
+    int fd = open(path, O_RDWR);
+    if (fd < 0) {
+        fprintf(stderr, "consumer: cannot open %s\n", path);
+        exit(2);
+    }
+    struct stat info;
+    if (fstat(fd, &info) != 0 || info.st_size <= 0) {
+        fprintf(stderr, "consumer: cannot size %s\n", path);
+        exit(2);
+    }
+    void *base = mmap(NULL, (size_t)info.st_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (base == MAP_FAILED) {
+        fprintf(stderr, "consumer: cannot map %s\n", path);
+        exit(2);
+    }
+    *writable = (uint8_t *)base;
+    out.bytes = (const uint8_t *)base;
+    out.len = (size_t)info.st_size;
+    return out;
+}
+
+/* Milliseconds on a clock that does not step. */
+static uint64_t now_ms(void) {
+    struct timespec at;
+    clock_gettime(CLOCK_MONOTONIC, &at);
+    return (uint64_t)at.tv_sec * 1000u + (uint64_t)(at.tv_nsec / 1000000);
+}
+
 int main(int argc, char **argv) {
-    if (argc != 3) {
+    int live = 0;
+    uint64_t timeout_ms = 0;
+    if (argc == 4 && strcmp(argv[1], "--live") == 0) {
+        live = 1;
+        timeout_ms = strtoull(argv[3], NULL, 10);
+    } else if (argc != 3) {
         fprintf(stderr, "usage: consumer <ring.bin> <slabs.bin>\n");
+        fprintf(stderr, "       consumer --live <ring> <timeout-ms>\n");
         return 2;
     }
-    buffer ring = read_file(argv[1]);
-    buffer slabs = read_file(argv[2]);
+
+    uint8_t *shared = NULL;
+    buffer ring = live ? map_shared(argv[2], &shared) : read_file(argv[1]);
+    /* Live mode has no slab region: it is the ring's coupling that is under test, and the
+     * region a handle resolves against is packed after the frame that named it, so there is
+     * nothing for a consumer racing the producer to resolve against yet (plan.md 3.5). An
+     * empty buffer refuses every handle, which is why the attempts are not counted below. */
+    buffer slabs = live ? (buffer){NULL, 0} : read_file(argv[2]);
 
     tsl_ring_control control;
     if (ring.len < sizeof control) {
@@ -153,11 +226,26 @@ int main(int argc, char **argv) {
     double first_proj0 = 0.0, first_pitch = -1.0, first_intensity = -1.0;
     uint64_t first_epoch = 0, first_cutoff = 0;
 
-    /* Read once, as a consumer racing a live producer must: a head that advanced mid-walk would
-     * otherwise let the loop run past the bytes that were published when it started. */
-    uint64_t head = control.head;
-    uint64_t cursor = control.tail;
+    /* The counters live in the shared region, not in the snapshot above: `control` was copied
+     * before the producer had written anything more, and its head and tail are already stale.
+     * In file mode there is no other process and the copy is the whole truth. */
+    uint64_t *head_at = NULL, *tail_at = NULL;
+    if (live) {
+        head_at = (uint64_t *)(void *)(shared + offsetof(tsl_ring_control, head));
+        tail_at = (uint64_t *)(void *)(shared + offsetof(tsl_ring_control, tail));
+    }
 
+    /* Read once per pass, as a consumer racing a live producer must: a head that advanced
+     * mid-walk would otherwise let the loop run past the bytes that were published when it
+     * started. The acquire is what the header asks for -- "producer releases, consumer
+     * acquires" -- and without it the records a published head points at are not guaranteed
+     * visible to this thread, whatever the counter says. */
+    uint64_t head = live ? __atomic_load_n(head_at, __ATOMIC_ACQUIRE) : control.head;
+    uint64_t cursor = live ? __atomic_load_n(tail_at, __ATOMIC_RELAXED) : control.tail;
+    uint64_t started = now_ms(), progressed = started;
+    int ended = !live;
+
+    while (!ended || cursor < head) {
     while (cursor < head) {
         size_t offset = (size_t)(cursor & (control.capacity - 1));
         tsl_record_header record;
@@ -224,6 +312,10 @@ int main(int argc, char **argv) {
                 attributes++;
 
                 uint64_t length = 0;
+                if (live) {
+                    /* Counted, so a stream whose attributes went missing is still visible. */
+                    continue;
+                }
                 if (resolve(slabs, desc.source, &length)) {
                     resolved_bytes += length;
                 } else if (desc.source.length != 0) {
@@ -311,6 +403,36 @@ int main(int argc, char **argv) {
         }
 
         cursor += record.total_len;
+        if (record.kind == TSL_ENVELOPE_KIND_VIEW_UNDECLARE) {
+            ended = 1;
+        }
+    }
+
+    if (!live) {
+        break;
+    }
+    /* The bytes this pass consumed are the producer's to reuse. Released, so the producer's
+     * acquiring load of tail cannot see the space before it sees that the reads are done. */
+    __atomic_store_n(tail_at, cursor, __ATOMIC_RELEASE);
+    if (ended) {
+        break;
+    }
+    uint64_t reached = __atomic_load_n(head_at, __ATOMIC_ACQUIRE);
+    if (reached != head) {
+        head = reached;
+        progressed = now_ms();
+        continue;
+    }
+    if (now_ms() - progressed > timeout_ms) {
+        fprintf(stderr, "consumer: no progress for %llums; the producer is gone\n",
+                (unsigned long long)timeout_ms);
+        return 3;
+    }
+    /* A sleep rather than a spin: this is a spike proving the coupling, not a latency
+     * measurement, and burning a core to shave microseconds off it would prove nothing. */
+    struct timespec pause = {0, 200000};
+    nanosleep(&pause, NULL);
+    head = __atomic_load_n(head_at, __ATOMIC_ACQUIRE);
     }
 
     printf("records %llu\n", (unsigned long long)records);

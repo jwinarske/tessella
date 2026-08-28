@@ -95,6 +95,13 @@ pub struct Emitted {
     /// `geometries` is comparing what was drawn against what had to be sent, which is the whole
     /// measure of an incremental emission.
     pub drawables: usize,
+    /// `ViewUse` records actually written.
+    ///
+    /// Which is not [`Self::drawables`] once a registry is in play: a use is durable, so a
+    /// drawable already bound is drawn again without a record. The difference between the two is
+    /// what retention saves; conflating them reads a settled frame as though it had re-sent
+    /// everything it drew.
+    pub uses: usize,
     /// Drawables released and removed because they left the cover.
     pub removed: usize,
     /// Drawables let go so their slab could be emptied, to be announced again next frame.
@@ -111,6 +118,7 @@ impl Default for Emitted {
         Self {
             geometries: 0,
             drawables: 0,
+            uses: 0,
             removed: 0,
             displaced: 0,
             epoch: OrderEpoch(0),
@@ -796,6 +804,7 @@ fn emit_group(
             .use_geometry(producer, binding)
             .map_err(FrameError::from)?;
         emitted.drawables += 1;
+        emitted.uses += 1;
     }
 
     // What left the cover: released, removed, and its bytes handed back.

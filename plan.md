@@ -178,6 +178,30 @@ sandbox direction if network-facing tile decode ever wants isolation. Not in sco
 so nothing in the ABI precludes it (no in-process pointers in envelopes — slab handles are
 offsets, §2.1 already guarantees this).
 
+**Spiked at R4** (`process_isolation`). The producer maps a file shared and calls `ring::init`
+over the mapping; the C consumer of §9 maps the same file, attaches, and reads the stream while
+the producer is still writing it. The claim holds: no envelope needed changing, and the linker
+change is the whole of it. Two things only a second process could show.
+
+- **`tail` had never been published.** Every in-process consumer drains a finished buffer and is
+  thrown away, so the counter the producer reads to know what it may overwrite was write-only in
+  practice. Against a live producer that is a stall on the first full ring. The spike's ring is
+  deliberately smaller than the frames going through it, so the producer makes progress only
+  because the other process publishes — and the test asserts it was forced to wait, because a run
+  where nothing filled up proves nothing.
+- **A full ring and a ring too small for a frame are the same `Full`.** The first clears when the
+  consumer catches up; the second never does. A producer that retries without a deadline turns
+  the second into a hang, which across a process boundary is indistinguishable from a consumer
+  that died. Both sides of the distinction are now tested.
+
+**The one gap it leaves.** Geometry bytes reach a consumer through a region packed by
+`SlabArena::pack`, which runs *after* the frame naming them is on the ring. In process there is
+no window — the arena is the same object on both sides — but across a mapping a consumer can
+hold a `GeometryAdd` whose handle the region does not yet cover. The spike sequences it
+explicitly rather than working around it. The durable answer is §11.3's arena allocating out of
+the shared region, where there is no pack step to be late; until then, a cross-process producer
+must publish the region before the records that name it.
+
 ### 3.6 Second consumer: impeller-rs (DR-14)
 
 impeller-rs (pure-Rust Impeller reimplementation: canvas/recording over an entity layer over
@@ -2055,8 +2079,8 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   The placement travels as a `UboUpdate` — a consolidated buffer, one entry per mesh in the
   layer's draw order, exactly as a fill's does. Nothing new on the wire for it, which is the point
   of having put the mesh in the geometry id space.
-- **R4** — hardening: ring backpressure under stall, teardown protocol under fault, process-
-  isolation spike (§3.5) if the sandbox plan wants it, riscv64 soak.
+- **R4** — hardening: ring backpressure under stall ✅, teardown protocol under fault ✅,
+  process-isolation spike (§3.5) ✅, riscv64 soak.
 
 ---
 
