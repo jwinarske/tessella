@@ -200,3 +200,90 @@ fn nothing_is_released_because_nothing_is_retained() {
         );
     }
 }
+
+/// A tile's world copy reaches the wire, so two copies of one tile are two drawables.
+///
+/// # What was wrong
+///
+/// A cover walks three world copies on each side, so at low zooms the same `z/x/y` appears
+/// several times and only the wrap tells them apart. `tile_of` wrote zero for all of them, and a
+/// consumer given two `ViewUse` records for `0/0/0` had no way to know they were different
+/// ground.
+///
+/// It stayed invisible because geometry ids were sequential: two copies got different ids from
+/// the counter regardless, so nothing downstream had to distinguish them. Keying an id on the
+/// tile is what made them collide — two drawables became one, and the frame drew half the world.
+#[test]
+fn a_wrapped_tile_is_not_its_own_copy() {
+    use tessella_capture_abi::envelope::{ViewUse, WireRecord as _};
+
+    let style = Style::parse(STYLE).expect("parses");
+    // Zoom zero, where the whole world is one tile and every copy is `0/0/0`.
+    let view = camera::settled(&ViewTransform {
+        longitude: 0.0,
+        latitude: 0.0,
+        zoom: 0.0,
+        width: 1024.0,
+        height: 512.0,
+        bearing: 0.0,
+        pitch: 0.0,
+    });
+    let tiles = cover::cover(&view).expect("covers");
+    let wrapped = tiles.iter().filter(|tile| tile.wrap != 0).count();
+    assert!(
+        wrapped > 0,
+        "this camera should see more than one world copy: {tiles:?}"
+    );
+
+    let decoded = Tile::decode(REAL_TILE).expect("decodes");
+    let mut buckets = Vec::new();
+    for tile in &tiles {
+        let id = TileId::new(tile.z, tile.x, tile.y);
+        let mut built = build_mvt_tile(&style, "s", id, &decoded).expect("builds");
+        built.extend(build_sourceless(&style, id).expect("background"));
+        built.sort_by_key(|bucket| bucket.layer_index);
+        buckets.push((id, built));
+    }
+
+    let mut arena = SlabArena::new();
+    let mut ring = Ring::new(1 << 22);
+    let (producer, consumer) = ring.split();
+    let emitted = frame::emit(
+        producer,
+        &mut arena,
+        &Frame {
+            style: &style,
+            view: &view,
+            view_id: ViewId(0),
+            tiles: &tiles,
+            buckets: &buckets,
+            light: &Light::default(),
+            fonts: None,
+            patterns: None,
+        },
+    )
+    .expect("emits");
+
+    let mut wraps = std::collections::BTreeSet::new();
+    let mut uses = 0;
+    while let Some(record) = consumer.peek() {
+        if record.kind == EnvelopeKind::ViewUse
+            && let Some(use_) = ViewUse::from_bytes(record.record)
+        {
+            uses += 1;
+            wraps.insert(use_.tile.wrap);
+        }
+        let consumed = record.consumed();
+        consumer.advance(consumed);
+    }
+
+    assert_eq!(uses, emitted.drawables, "every drawable is bound");
+    assert!(
+        wraps.len() > 1,
+        "every use claimed the same world copy: {wraps:?}"
+    );
+    assert!(
+        wraps.contains(&0),
+        "the first copy should be there too: {wraps:?}"
+    );
+}

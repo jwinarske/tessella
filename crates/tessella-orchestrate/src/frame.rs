@@ -318,7 +318,10 @@ pub fn emit(
     // holding geometry with no order and no camera — and the retry registered the same buckets
     // again under fresh ids. `FrameError::Full` has always claimed a frame is emitted whole or
     // not at all; this is the claim being made true.
-    emit_into(producer, arena, frame, None)
+    // A session that lives exactly as long as this call, which makes every drawable new, every
+    // geometry announced and the view declared — the full emission, as the degenerate case of
+    // the incremental one rather than as a second implementation of it.
+    emit_into(producer, arena, frame, Some(&mut Session::new()))
 }
 
 /// As [`emit()`], sending only what the consumer does not already have.
@@ -535,7 +538,12 @@ fn emit_group(
             }
         }
 
-        let at = order::tile_of(tile.z, tile.x, tile.y);
+        // The wrap comes from the cover, which is the only place that has it: a bucket's
+        // `TileId` is canonical and carries no world copy. `Frame::buckets` is documented as
+        // being in cover order, and this is what depends on that — at low zooms the same
+        // `z/x/y` appears in several copies and only the wrap tells them apart.
+        let wrap = tiles.get(index).map_or(0, |coord| coord.wrap);
+        let at = order::wrapped_tile_of(tile.z, tile.x, tile.y, wrap);
         let mut bindings = order::bindings_for(view_id, at, tile_buckets, &mut next_id);
 
         // With a registry the id belongs to the drawable rather than to its place in this

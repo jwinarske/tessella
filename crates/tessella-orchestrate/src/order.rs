@@ -461,12 +461,32 @@ pub fn bindings_for(
 /// A tile ordered the way painter order orders tiles.
 #[must_use]
 pub fn tile_of(z: u8, x: u32, y: u32) -> TileId {
+    wrapped_tile_of(z, x, y, 0)
+}
+
+/// As [`tile_of`], for a tile in a world copy other than the first.
+///
+/// # Why the wrap has to travel
+///
+/// A cover walks three world copies on each side, so at low zooms the same `z/x/y` appears
+/// several times and only the wrap tells them apart. Writing zero for all of them made two
+/// copies of one tile indistinguishable on the wire — a consumer given two `ViewUse` records
+/// for `0/0/0` cannot know they are different ground, and anything keyed on the tile collapses
+/// them into one.
+///
+/// It stayed invisible because geometry ids were sequential: two copies got different ids from
+/// the counter regardless, so nothing downstream had to tell them apart. Keying an id on the
+/// tile is what made them collide, and the wire has carried a `wrap` field for exactly this
+/// since rev 1.
+#[must_use]
+pub fn wrapped_tile_of(z: u8, x: u32, y: u32, wrap: i32) -> TileId {
+    #[allow(clippy::cast_possible_truncation)]
     TileId {
         x,
         y,
         z,
         overscaled_z: z,
-        wrap: 0,
+        wrap: wrap as i16,
     }
 }
 
