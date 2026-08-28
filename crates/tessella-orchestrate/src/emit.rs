@@ -141,11 +141,14 @@ impl SlabArena {
     /// alike they are. With the fixed size a layer's forty-two tiles landed in forty-two slabs
     /// and every tile was its own draw.
     ///
-    /// So the split is the caller's: [`seal`](Self::seal) closes a slab, and DR-16 says what the
-    /// caller should close it on — "consolidated buffer per (view, layer)". Between seals this
-    /// grows, and the only limit it keeps is the one the ABI imposes: a `SlabRef` addresses its
-    /// slab with a `u32`, so an allocation that would push the end past that opens a new slab
-    /// whatever the caller intended.
+    /// So the split is the caller's: [`seal`](Self::seal) closes a slab, and the caller closes
+    /// it on a layer — DR-21. Between seals this grows, and the only limit it keeps is the one
+    /// the ABI imposes: a `SlabRef` addresses its slab with a `u32`, so an allocation that would
+    /// push the end past that opens a new slab whatever the caller intended.
+    ///
+    /// DR-16's "consolidated buffer per (view, layer)" is about *uniform* transport and was
+    /// quoted here for a decision it was not making. The vertex-side rule is DR-21's, and it
+    /// reaches the same layer boundary by a different argument: batching, not uniform indexing.
     pub fn alloc(&mut self, bytes: &[u8]) -> SlabRef {
         if bytes.is_empty() {
             return SlabRef {

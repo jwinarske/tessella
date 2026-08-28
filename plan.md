@@ -285,9 +285,14 @@ per view (primary display tight interval; cluster/inset views lazy).
 traffic keys by (viewId, layerIndex) — `uboIndex` assignment is per view's draw order, exactly
 as rev 1's DrawOrderEntry note says (fill_layer_tweaker.cpp:245 reassigns per pass).
 
-Consumer effect: one Filament VertexBuffer/IndexBuffer per shared geometry; one renderable in
-multiple `Scene`s; one `View` per map via the existing view slots. VRAM and upload bandwidth
-scale with unique tiles, not views.
+Consumer effect: one renderable in multiple `Scene`s; one `View` per map via the existing view
+slots. VRAM and upload bandwidth scale with unique tiles, not views.
+
+This said "one Filament VertexBuffer/IndexBuffer per shared geometry", and DR-21 changes it: a
+buffer is a *slab* and a geometry is a sub-range of one, because one draw call reads one vertex
+buffer and a layer's tiles have to share one to batch. The refcount-and-release model above is
+untouched — only the granularity of the buffer moves, and `GeometryRemove` still means what it
+said.
 
 ### 5.4 Scheduling
 
@@ -2656,6 +2661,44 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
   pixel type on the wire to be visible across the seam, so either way the decision is an ABI one
   rather than a decoder one, and it wants a measurement first: raster tile decode on RK3566,
   against the frame budget §13.3 already has a harness for.
+- **DR-21 Geometry retention is generational slabs: a buffer holds many geometries, and a
+  geometry is a sub-range of one.** §5.3 says "one Filament VertexBuffer/IndexBuffer per shared
+  geometry", and the batching work needs the opposite — one draw call reads one vertex buffer,
+  so a layer's tiles must share a buffer to collapse 588 draws into 12. Both cannot hold, and
+  this is which one gives.
+  A slab is the buffer and a geometry is a sub-range of it. Geometry appends to the layer's
+  currently open slab; slabs are refcounted, which `Arc<Slab>` already is; when a slab's live
+  fraction falls below a threshold its survivors are re-emitted into the current one and it is
+  freed. So a layer's live geometry sits in one or two slabs at a time, and a draw is one or two
+  multi-draws rather than one.
+  **The three that were weighed.** *Re-emit a layer whole when its cover changes* keeps batching
+  perfect and frees promptly, and is the simplest thing a consumer can be asked — "replace this
+  buffer". It re-uploads the layer's entire cover to change one tile: measured, 20.8 MB to
+  replace roughly half a megabyte, and cover changes are constant under nav. *Per-tile slabs*
+  honour §5.3 exactly and free promptly, and cost the batching win — a draw would have to bind
+  several vertex buffers, which Vulkan permits and Unity's `BatchRendererGroup` and UE5's
+  `FPrimitiveSceneProxy` do not express. It is also the most buffer churn of the three, which
+  §11.5 already names as one of the four seam costs. *Generational slabs* is the third and is
+  what this record chooses.
+  **The consumers decided it.** Every engine in view penalises many short-lived buffers and
+  rewards few long-lived ones: Unity's BRG is built on exactly that shape, UE5's RHI wants to own
+  its buffers and fights churn, Filament's are driver objects. All of them can update a
+  sub-range — `BufferObject::setBuffer`, `GraphicsBuffer.SetData`, `RenderingDevice::buffer_update`,
+  RHI lock-with-range — so a large buffer partly rewritten is a shape every one of them takes.
+  And the obligation this puts on a mirror is the ABI as already designed: hold buffers, bind
+  sub-ranges, free on `GeometryRemove`. Nothing new is asked, which matters most for UE5, the
+  hardest of the five.
+  mbgl reached the same shape for images without saying so: a process-wide `DynamicTextureAtlas`
+  with refcounted slots and repacking, which the pattern capture showed directly — every tile
+  binds the same texture and only the position map is per tile.
+  **What it costs.** §5.3's per-geometry buffer language becomes per-slab, with a geometry as a
+  sub-range. That is a correction of the same kind as `GeometryId`'s: the refcount-and-release
+  model §5.3 describes survives intact, and only the granularity of the buffer changes.
+  **When to revisit.** If a consumer appears that cannot bind a sub-range, per-tile slabs become
+  the only option and batching has to be paid for another way. If cover changes turn out to be
+  rare in practice — a mostly-static view rather than nav — the whole-layer re-emit is simpler
+  and its bandwidth argument evaporates. And if compaction's threshold proves hard to tune, that
+  is evidence for the whole-layer re-emit rather than against retention.
 
 ## 15. Risk register
 
