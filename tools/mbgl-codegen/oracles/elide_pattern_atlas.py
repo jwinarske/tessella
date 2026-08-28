@@ -44,6 +44,8 @@ PATTERN_SLOTS = {
     ("layer:3", "slot=3"),
     # The extrusion layer's, which carries rectangles like a fill's and moves like one.
     ("layer:5", "slot=4"),
+    # And the data-driven line layer's, which is a line's slot 3.
+    ("layer:6", "slot=3"),
 }
 
 
@@ -79,15 +81,29 @@ def elide(path: str) -> int:
             continue
 
         # A data-driven pattern's rectangles travel per *vertex* as well as in a uniform, and
-        # they follow the packing exactly as the uniforms do: ids 4 and 5 are
-        # `idFillPatternFrom/ToVertexAttribute`, and their buffer's hash moves when the atlas
-        # does. Everything else about the descriptor — the binding, the type, the stride, the
-        # length — is a property of the shader and stays.
+        # they follow the packing exactly as the uniforms do. Ids 4 and 5 are a fill's
+        # `idFillPatternFrom/ToVertexAttribute`; 9 and 10 are a line's, which sit at different
+        # slots because the line shader has already spent its low bindings. Everything else about
+        # the descriptor — the binding, the type, the stride, the length — is a property of the
+        # shader and stays.
+        #
+        # The line pair was missed when the data-driven line layer was added, and the golden
+        # committed with a hash that varies between *processes*: three captures in one session
+        # agreed, and a session later the value had moved. A committed dump that disagrees with
+        # its own regeneration is the thing this whole script exists to prevent.
+        #
         # Indented, unlike every other line this touches, so the comparison is against the
         # trimmed text and the rewrite keeps the indentation the dump gave it.
         body = stripped.lstrip()
-        if body.startswith("attr ") and (" id=4 " in body or " id=5 " in body):
-            out.append(re.sub(r"src=(\d+):[0-9a-f]+", rf"src=\1:{MARK}", stripped) + "\n")
+        if body.startswith("attr ") and any(
+            f" id={which} " in body for which in (4, 5, 9, 10)
+        ):
+            # Both hashes, unlike the symbol case where only one attribute of the three follows
+            # the atlas. Here the attribute *is* the atlas rectangles, so its own bytes move
+            # exactly as the buffer's do and keeping `fld=` would keep the nondeterminism under
+            # a different name.
+            line = re.sub(r"src=(\d+):[0-9a-f]+", rf"src=\1:{MARK}", stripped)
+            out.append(re.sub(r"fld=[0-9a-f]+", f"fld={MARK}", line) + "\n")
             changed += 1
             continue
 

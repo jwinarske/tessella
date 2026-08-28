@@ -27,6 +27,15 @@ MARK = "---------------- (atlas order varies)"
 # they stay in the golden.
 INTERLEAVED = ("id=0 ", "id=1 ", "id=2 ")
 
+# ...but only the *shared* hash has to go. `fld=` is a hash of each attribute's own bytes, and
+# only attribute 1 carries the texture coordinates the atlas order decides -- so 0 and 2 keep
+# theirs, and the dump can tell two labels apart that differ in glyph geometry.
+#
+# That was not possible before the probe emitted `fld=`: eliding the shared hash took the two
+# deterministic attributes with it, and a capture of a label with per-section scaling was
+# byte-identical to one without. Measured, not assumed, and it is why the field exists.
+TEXTURE = "id=1 "
+
 
 def elide(text: str) -> tuple[str, int]:
     out, count = [], 0
@@ -39,6 +48,8 @@ def elide(text: str) -> tuple[str, int]:
         ):
             line, n = re.subn(r"src=(\d+):[0-9a-f]{16}", rf"src=\1:{MARK}", line)
             count += n
+            if TEXTURE in line:
+                line = re.sub(r"fld=[0-9a-f]{16}", f"fld={MARK}", line)
         elif line.startswith("texture 512x512"):
             line, n = re.subn(r"hash=[0-9a-f]{16}", f"hash={MARK}", line)
             count += n

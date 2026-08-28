@@ -1,37 +1,37 @@
 tessella-capture-dump 1
 drawables 8
 drawable L00000.S00000.t13_00004092_00002723_o13_w+000.sh0003.pk0000.v00000004#00 pass=3 vtype=9 flags=0011 idx=6:165c900af12806ce segs=1
-  attr L00000.S00000.t13_00004092_00002723_o13_w+000.sh0003.pk0000.v00000004#00 id=0 bind=0 dt=9 ddt=27 off=0 voff=0 stride=0 src=4:f440796d3f5a4da5
+  attr L00000.S00000.t13_00004092_00002723_o13_w+000.sh0003.pk0000.v00000004#00 id=0 bind=0 dt=9 ddt=27 off=0 voff=0 stride=0 src=4:f440796d3f5a4da5 fld=f440796d3f5a4da5
   seg L00000.S00000.t13_00004092_00002723_o13_w+000.sh0003.pk0000.v00000004#00 v=0 i=0 vlen=4 ilen=6
 drawable L00000.S00000.t13_00004092_00002724_o13_w+000.sh0003.pk0000.v00000004#00 pass=3 vtype=9 flags=0011 idx=6:165c900af12806ce segs=1
-  attr L00000.S00000.t13_00004092_00002724_o13_w+000.sh0003.pk0000.v00000004#00 id=0 bind=0 dt=9 ddt=27 off=0 voff=0 stride=0 src=4:f440796d3f5a4da5
+  attr L00000.S00000.t13_00004092_00002724_o13_w+000.sh0003.pk0000.v00000004#00 id=0 bind=0 dt=9 ddt=27 off=0 voff=0 stride=0 src=4:f440796d3f5a4da5 fld=f440796d3f5a4da5
   seg L00000.S00000.t13_00004092_00002724_o13_w+000.sh0003.pk0000.v00000004#00 v=0 i=0 vlen=4 ilen=6
 drawable L00000.S00000.t13_00004093_00002723_o13_w+000.sh0003.pk0000.v00000004#00 pass=3 vtype=9 flags=0011 idx=6:165c900af12806ce segs=1
-  attr L00000.S00000.t13_00004093_00002723_o13_w+000.sh0003.pk0000.v00000004#00 id=0 bind=0 dt=9 ddt=27 off=0 voff=0 stride=0 src=4:f440796d3f5a4da5
+  attr L00000.S00000.t13_00004093_00002723_o13_w+000.sh0003.pk0000.v00000004#00 id=0 bind=0 dt=9 ddt=27 off=0 voff=0 stride=0 src=4:f440796d3f5a4da5 fld=f440796d3f5a4da5
   seg L00000.S00000.t13_00004093_00002723_o13_w+000.sh0003.pk0000.v00000004#00 v=0 i=0 vlen=4 ilen=6
 drawable L00000.S00000.t13_00004093_00002724_o13_w+000.sh0003.pk0000.v00000004#00 pass=3 vtype=9 flags=0011 idx=6:165c900af12806ce segs=1
-  attr L00000.S00000.t13_00004093_00002724_o13_w+000.sh0003.pk0000.v00000004#00 id=0 bind=0 dt=9 ddt=27 off=0 voff=0 stride=0 src=4:f440796d3f5a4da5
+  attr L00000.S00000.t13_00004093_00002724_o13_w+000.sh0003.pk0000.v00000004#00 id=0 bind=0 dt=9 ddt=27 off=0 voff=0 stride=0 src=4:f440796d3f5a4da5 fld=f440796d3f5a4da5
   seg L00000.S00000.t13_00004093_00002724_o13_w+000.sh0003.pk0000.v00000004#00 v=0 i=0 vlen=4 ilen=6
 drawable L00000.S00000.t13_00004094_00002723_o13_w+000.sh0003.pk0000.v00000004#00 pass=3 vtype=9 flags=0011 idx=6:165c900af12806ce segs=1
-  attr L00000.S00000.t13_00004094_00002723_o13_w+000.sh0003.pk0000.v00000004#00 id=0 bind=0 dt=9 ddt=27 off=0 voff=0 stride=0 src=4:f440796d3f5a4da5
+  attr L00000.S00000.t13_00004094_00002723_o13_w+000.sh0003.pk0000.v00000004#00 id=0 bind=0 dt=9 ddt=27 off=0 voff=0 stride=0 src=4:f440796d3f5a4da5 fld=f440796d3f5a4da5
   seg L00000.S00000.t13_00004094_00002723_o13_w+000.sh0003.pk0000.v00000004#00 v=0 i=0 vlen=4 ilen=6
 drawable L00000.S00000.t13_00004094_00002724_o13_w+000.sh0003.pk0000.v00000004#00 pass=3 vtype=9 flags=0011 idx=6:165c900af12806ce segs=1
-  attr L00000.S00000.t13_00004094_00002724_o13_w+000.sh0003.pk0000.v00000004#00 id=0 bind=0 dt=9 ddt=27 off=0 voff=0 stride=0 src=4:f440796d3f5a4da5
+  attr L00000.S00000.t13_00004094_00002724_o13_w+000.sh0003.pk0000.v00000004#00 id=0 bind=0 dt=9 ddt=27 off=0 voff=0 stride=0 src=4:f440796d3f5a4da5 fld=f440796d3f5a4da5
   seg L00000.S00000.t13_00004094_00002724_o13_w+000.sh0003.pk0000.v00000004#00 v=0 i=0 vlen=4 ilen=6
 drawable L00001.S00000.t13_00004093_00002723_o13_w+000.sh0033.pk0001.v00000020#00 pass=2 vtype=11 flags=0011 idx=30:87ff736fa38c7b3e segs=1
-  attr L00001.S00000.t13_00004093_00002723_o13_w+000.sh0033.pk0001.v00000020#00 id=0 bind=0 dt=11 ddt=11 off=0 voff=0 stride=24 src=20:---------------- (atlas order varies)
-  attr L00001.S00000.t13_00004093_00002723_o13_w+000.sh0033.pk0001.v00000020#00 id=1 bind=1 dt=15 ddt=15 off=8 voff=0 stride=24 src=20:---------------- (atlas order varies)
-  attr L00001.S00000.t13_00004093_00002723_o13_w+000.sh0033.pk0001.v00000020#00 id=2 bind=2 dt=11 ddt=11 off=16 voff=0 stride=24 src=20:---------------- (atlas order varies)
-  attr L00001.S00000.t13_00004093_00002723_o13_w+000.sh0033.pk0001.v00000020#00 id=3 bind=3 dt=27 ddt=27 off=0 voff=0 stride=12 src=20:7729a96e11bfa7a5
-  attr L00001.S00000.t13_00004093_00002723_o13_w+000.sh0033.pk0001.v00000020#00 id=4 bind=4 dt=25 ddt=25 off=0 voff=0 stride=4 src=20:f14b84b8290b8965
+  attr L00001.S00000.t13_00004093_00002723_o13_w+000.sh0033.pk0001.v00000020#00 id=0 bind=0 dt=11 ddt=11 off=0 voff=0 stride=24 src=20:---------------- (atlas order varies) fld=871e6fd4a219819d
+  attr L00001.S00000.t13_00004093_00002723_o13_w+000.sh0033.pk0001.v00000020#00 id=1 bind=1 dt=15 ddt=15 off=8 voff=0 stride=24 src=20:---------------- (atlas order varies) fld=---------------- (atlas order varies)
+  attr L00001.S00000.t13_00004093_00002723_o13_w+000.sh0033.pk0001.v00000020#00 id=2 bind=2 dt=11 ddt=11 off=16 voff=0 stride=24 src=20:---------------- (atlas order varies) fld=81b169c331cabfa5
+  attr L00001.S00000.t13_00004093_00002723_o13_w+000.sh0033.pk0001.v00000020#00 id=3 bind=3 dt=27 ddt=27 off=0 voff=0 stride=12 src=20:7729a96e11bfa7a5 fld=7729a96e11bfa7a5
+  attr L00001.S00000.t13_00004093_00002723_o13_w+000.sh0033.pk0001.v00000020#00 id=4 bind=4 dt=25 ddt=25 off=0 voff=0 stride=4 src=20:f14b84b8290b8965 fld=f14b84b8290b8965
   seg L00001.S00000.t13_00004093_00002723_o13_w+000.sh0033.pk0001.v00000020#00 v=0 i=0 vlen=20 ilen=30
   tex L00001.S00000.t13_00004093_00002723_o13_w+000.sh0033.pk0001.v00000020#00 slot=0 tex=24
 drawable L00001.S00000.t13_00004093_00002724_o13_w+000.sh0033.pk0001.v00000048#00 pass=2 vtype=11 flags=0011 idx=72:8a5b67d2662651b5 segs=1
-  attr L00001.S00000.t13_00004093_00002724_o13_w+000.sh0033.pk0001.v00000048#00 id=0 bind=0 dt=11 ddt=11 off=0 voff=0 stride=24 src=48:---------------- (atlas order varies)
-  attr L00001.S00000.t13_00004093_00002724_o13_w+000.sh0033.pk0001.v00000048#00 id=1 bind=1 dt=15 ddt=15 off=8 voff=0 stride=24 src=48:---------------- (atlas order varies)
-  attr L00001.S00000.t13_00004093_00002724_o13_w+000.sh0033.pk0001.v00000048#00 id=2 bind=2 dt=11 ddt=11 off=16 voff=0 stride=24 src=48:---------------- (atlas order varies)
-  attr L00001.S00000.t13_00004093_00002724_o13_w+000.sh0033.pk0001.v00000048#00 id=3 bind=3 dt=27 ddt=27 off=0 voff=0 stride=12 src=48:5e1e7e15abe6d4ad
-  attr L00001.S00000.t13_00004093_00002724_o13_w+000.sh0033.pk0001.v00000048#00 id=4 bind=4 dt=25 ddt=25 off=0 voff=0 stride=4 src=48:ab0c262759a1d225
+  attr L00001.S00000.t13_00004093_00002724_o13_w+000.sh0033.pk0001.v00000048#00 id=0 bind=0 dt=11 ddt=11 off=0 voff=0 stride=24 src=48:---------------- (atlas order varies) fld=90f6435d77553979
+  attr L00001.S00000.t13_00004093_00002724_o13_w+000.sh0033.pk0001.v00000048#00 id=1 bind=1 dt=15 ddt=15 off=8 voff=0 stride=24 src=48:---------------- (atlas order varies) fld=---------------- (atlas order varies)
+  attr L00001.S00000.t13_00004093_00002724_o13_w+000.sh0033.pk0001.v00000048#00 id=2 bind=2 dt=11 ddt=11 off=16 voff=0 stride=24 src=48:---------------- (atlas order varies) fld=c86ec345c0ee8125
+  attr L00001.S00000.t13_00004093_00002724_o13_w+000.sh0033.pk0001.v00000048#00 id=3 bind=3 dt=27 ddt=27 off=0 voff=0 stride=12 src=48:5e1e7e15abe6d4ad fld=5e1e7e15abe6d4ad
+  attr L00001.S00000.t13_00004093_00002724_o13_w+000.sh0033.pk0001.v00000048#00 id=4 bind=4 dt=25 ddt=25 off=0 voff=0 stride=4 src=48:ab0c262759a1d225 fld=ab0c262759a1d225
   seg L00001.S00000.t13_00004093_00002724_o13_w+000.sh0033.pk0001.v00000048#00 v=0 i=0 vlen=48 ilen=72
   tex L00001.S00000.t13_00004093_00002724_o13_w+000.sh0033.pk0001.v00000048#00 slot=0 tex=24
 ubos 6

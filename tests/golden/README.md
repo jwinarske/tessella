@@ -203,6 +203,23 @@ sources of variance already found are described in that commit. `5f9d3f77caac` a
 `--zoom` flag; a capture without it is byte-identical to one from before, which was checked
 against `hermetic_style.dump` rather than assumed.
 
+## `src=` and `fld=`
+
+Each attribute line carries two hashes. `src=` is over the whole buffer the attribute reads from
+and `fld=` over that attribute's own bytes within it — the `size` bytes at its offset in every
+stride-length vertex.
+
+They differ only for interleaved attributes, and that is the point. A symbol's glyph vertex
+buffer is read by three attributes and only one of them carries texture coordinates; because the
+atlas packing is not deterministic the shared hash has to be elided, which used to take the two
+deterministic attributes with it. Measured: a capture of a label with per-section scaling and one
+without were *byte-identical* in everything the dump compared, so the oracle could not see a
+difference the map shows plainly. With `fld=`, attributes 0 and 2 keep a hash that is the same on
+every run — checked over five — and only attribute 1 is elided.
+
+Where an attribute has the whole vertex to itself the two hashes are equal, which is most of
+them.
+
 ## Reading the actual values
 
 `--dump-vertices` prints coordinates rather than hashes, decoding the `Short2` position
