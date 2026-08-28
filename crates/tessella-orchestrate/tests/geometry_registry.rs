@@ -10,7 +10,7 @@
 //! Everything here is about the case that breaks: a cover that *changes* while overlapping. A
 //! registry keyed on anything positional passes a test that only pans by a whole cover.
 
-use tessella_capture_abi::envelope::TileId;
+use tessella_capture_abi::envelope::{TileId, ViewId};
 use tessella_orchestrate::registry::{DrawableKey, GeometryRegistry};
 
 fn key(x: u32, layer: i32, sub: i32) -> DrawableKey {
@@ -32,11 +32,11 @@ fn key(x: u32, layer: i32, sub: i32) -> DrawableKey {
 fn a_tile_that_stays_keeps_its_id() {
     let mut registry = GeometryRegistry::new();
 
-    registry.begin_frame();
+    registry.begin_frame(ViewId(0));
     let first: Vec<_> = [1, 2, 3].map(|x| registry.id_for(key(x, 0, 1))).to_vec();
 
     // Pan by one: tile 1 leaves, tile 4 arrives, tiles 2 and 3 stay.
-    registry.begin_frame();
+    registry.begin_frame(ViewId(0));
     let second: Vec<_> = [2, 3, 4].map(|x| registry.id_for(key(x, 0, 1))).to_vec();
 
     assert_eq!(
@@ -54,7 +54,7 @@ fn a_tile_that_stays_keeps_its_id() {
 #[test]
 fn sub_layers_are_separate_drawables() {
     let mut registry = GeometryRegistry::new();
-    registry.begin_frame();
+    registry.begin_frame(ViewId(0));
     let triangles = registry.id_for(key(1, 0, 1));
     let outline = registry.id_for(key(1, 0, 2));
     assert_ne!(triangles, outline);
@@ -69,11 +69,11 @@ fn sub_layers_are_separate_drawables() {
 #[test]
 fn what_a_frame_stops_using_is_reported_before_it_is_dropped() {
     let mut registry = GeometryRegistry::new();
-    registry.begin_frame();
+    registry.begin_frame(ViewId(0));
     let leaving = registry.id_for(key(1, 0, 1));
     registry.id_for(key(2, 0, 1));
 
-    registry.begin_frame();
+    registry.begin_frame(ViewId(0));
     registry.id_for(key(2, 0, 1));
 
     let retired = registry.retired();
@@ -93,18 +93,18 @@ fn what_a_frame_stops_using_is_reported_before_it_is_dropped() {
 #[test]
 fn an_id_is_never_reused() {
     let mut registry = GeometryRegistry::new();
-    registry.begin_frame();
+    registry.begin_frame(ViewId(0));
     let first = registry.id_for(key(1, 0, 1));
-    registry.begin_frame();
+    registry.begin_frame(ViewId(0));
     registry.retire();
     assert!(registry.is_empty());
 
-    registry.begin_frame();
+    registry.begin_frame(ViewId(0));
     let second = registry.id_for(key(9, 0, 1));
     assert_ne!(first, second, "a retired id is not handed out again");
 
     // Not even to the very drawable that had it.
-    registry.begin_frame();
+    registry.begin_frame(ViewId(0));
     let again = registry.id_for(key(1, 0, 1));
     assert_ne!(first, again, "the key came back, the id did not");
 }
@@ -113,7 +113,7 @@ fn an_id_is_never_reused() {
 #[test]
 fn a_viewport_drawable_has_a_key_too() {
     let mut registry = GeometryRegistry::new();
-    registry.begin_frame();
+    registry.begin_frame(ViewId(0));
     let background = registry.id_for(DrawableKey {
         tile: None,
         layer_index: 0,
@@ -122,7 +122,7 @@ fn a_viewport_drawable_has_a_key_too() {
     let tiled = registry.id_for(key(1, 0, 0));
     assert_ne!(background, tiled);
 
-    registry.begin_frame();
+    registry.begin_frame(ViewId(0));
     assert_eq!(
         registry.id_for(DrawableKey {
             tile: None,
@@ -140,11 +140,107 @@ fn a_new_drawable_is_distinguishable_from_a_known_one() {
     let mut registry = GeometryRegistry::new();
     let first = key(1, 0, 1);
 
-    registry.begin_frame();
+    registry.begin_frame(ViewId(0));
     assert!(registry.is_new(&first));
     registry.id_for(first);
     assert!(!registry.is_new(&first), "asking for it makes it known");
 
-    registry.begin_frame();
+    registry.begin_frame(ViewId(0));
     assert!(!registry.is_new(&first), "and it stays known across frames");
+}
+
+/// Two views over one style share geometry and do not share uses.
+///
+/// §5.3's reason for a process-scoped geometry id is that "several views reference one vertex
+/// buffer instead of each building their own". A registry that forgot which view was asking
+/// would have each view's frame retire the other's geometry — measured before this existed:
+/// every frame re-announced all eight drawables and removed all eight, which is worse than not
+/// being incremental at all.
+mod views {
+    use super::key;
+    use tessella_capture_abi::envelope::ViewId;
+    use tessella_orchestrate::registry::GeometryRegistry;
+
+    /// A second view picking up a tile the first draws needs a use, not an announcement.
+    #[test]
+    fn a_shared_drawable_is_announced_once_and_bound_twice() {
+        let mut registry = GeometryRegistry::new();
+        let shared = key(1, 0, 1);
+
+        registry.begin_frame(ViewId(0));
+        assert!(registry.is_new(&shared), "nobody has it");
+        assert!(registry.is_unused_by(&shared));
+        let id = registry.id_for(shared);
+        registry.retire();
+
+        registry.begin_frame(ViewId(1));
+        assert!(!registry.is_new(&shared), "the geometry is already sent");
+        assert!(
+            registry.is_unused_by(&shared),
+            "but this view is not bound to it"
+        );
+        assert_eq!(registry.id_for(shared), id, "and it is the same geometry");
+        registry.retire();
+
+        assert_eq!(registry.len(), 1, "one geometry, two users");
+    }
+
+    /// One view dropping a tile another still draws releases the use and removes nothing.
+    #[test]
+    fn a_drawable_survives_one_view_dropping_it() {
+        let mut registry = GeometryRegistry::new();
+        let shared = key(1, 0, 1);
+
+        registry.begin_frame(ViewId(0));
+        registry.id_for(shared);
+        registry.retire();
+        registry.begin_frame(ViewId(1));
+        registry.id_for(shared);
+        registry.retire();
+
+        // View 0 pans away from it.
+        registry.begin_frame(ViewId(0));
+        assert_eq!(registry.released().len(), 1, "view 0 stops using it");
+        assert!(
+            registry.retired().is_empty(),
+            "view 1 still draws it, so nothing is removed"
+        );
+        registry.retire();
+        assert_eq!(registry.len(), 1, "the geometry stays");
+
+        // And now view 1 does too.
+        registry.begin_frame(ViewId(1));
+        assert_eq!(registry.released().len(), 1);
+        assert_eq!(registry.retired().len(), 1, "the last view released it");
+        registry.retire();
+        assert!(registry.is_empty());
+    }
+
+    /// A view's frame says nothing about another view's drawables.
+    ///
+    /// The failure this replaces: `retired` reported everything the *current* frame had not
+    /// asked for, so two views with different covers each removed the other's geometry every
+    /// frame.
+    #[test]
+    fn one_views_frame_does_not_retire_anothers() {
+        let mut registry = GeometryRegistry::new();
+
+        registry.begin_frame(ViewId(0));
+        registry.id_for(key(1, 0, 1));
+        registry.id_for(key(2, 0, 1));
+        registry.retire();
+
+        // A different cover entirely.
+        registry.begin_frame(ViewId(1));
+        registry.id_for(key(8, 0, 1));
+        registry.id_for(key(9, 0, 1));
+        assert!(
+            registry.released().is_empty(),
+            "view 1 never used view 0's tiles, so it releases none of them"
+        );
+        assert!(registry.retired().is_empty());
+        registry.retire();
+
+        assert_eq!(registry.len(), 4, "both covers are live");
+    }
 }

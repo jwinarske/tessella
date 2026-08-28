@@ -321,11 +321,11 @@ pub fn emit(
     emit_into(producer, arena, frame, None)
 }
 
-/// As [`emit`], sending only what the consumer does not already have.
+/// As [`emit()`], sending only what the consumer does not already have.
 ///
 /// # What changes
 ///
-/// [`emit`] announces every geometry every time, which is why `GeometryId`'s documentation says
+/// [`emit()`] announces every geometry every time, which is why `GeometryId`'s documentation says
 /// an emission replaces the previous set entire and an id is not a cache key. Given a registry,
 /// an id belongs to a drawable instead — the tile, the layer, the order within it — so a tile
 /// that survives a pan keeps its id, its geometry is announced once, and only what arrived is
@@ -337,7 +337,7 @@ pub fn emit(
 ///
 /// # Errors
 ///
-/// As [`emit`]. A frame that fails retires nothing and retains nothing — the registry is only
+/// As [`emit()`]. A frame that fails retires nothing and retains nothing — the registry is only
 /// swept on success, so a retry sees the state the failed attempt started from.
 pub fn emit_incremental(
     producer: &mut Producer,
@@ -358,7 +358,7 @@ fn emit_into(
     let mark = arena.mark();
     let mut session = registry;
     if let Some(registry) = session.as_deref_mut() {
-        registry.begin_frame();
+        registry.begin_frame(frame.view_id);
     }
     match emit_group(producer, arena, frame, session.as_deref_mut()) {
         Ok(emitted) => {
@@ -471,6 +471,8 @@ fn emit_group(
     // Which drawables this frame is announcing for the first time, and what each id names.
     // Empty without a registry, which is what makes the unregistered path emit everything.
     let mut fresh: BTreeSet<DrawableKey> = BTreeSet::new();
+    // Drawables this view is not yet bound to, which is a wider set than `fresh`.
+    let mut unbound: BTreeSet<DrawableKey> = BTreeSet::new();
     let mut keyed: BTreeMap<u64, DrawableKey> = BTreeMap::new();
     let mut registry = registry;
 
@@ -504,8 +506,15 @@ fn emit_group(
                     layer_index: binding.layer_index,
                     sub_layer_index: binding.sub_layer_index,
                 };
+                // Two questions, and §5.3 makes them different: whether any view has the
+                // geometry, which gates the announcement, and whether *this* view uses it,
+                // which gates the binding. A second view picking up a tile the first already
+                // draws needs a `ViewUse` and no `GeometryAdd`.
                 if registry.is_new(&key) {
                     fresh.insert(key);
+                }
+                if registry.is_unused_by(&key) {
+                    unbound.insert(key);
                 }
                 binding.geometry = registry.id_for(key);
                 keyed.insert(binding.geometry.0, key);
@@ -679,7 +688,7 @@ fn emit_group(
             layer_index: binding.layer_index,
             sub_layer_index: binding.sub_layer_index,
         };
-        if registry.is_some() && !fresh.contains(&key) {
+        if registry.is_some() && !unbound.contains(&key) {
             emitted.drawables += 1;
             continue;
         }
@@ -691,10 +700,16 @@ fn emit_group(
 
     // What left the cover: released, removed, and its bytes handed back.
     if let Some(registry) = registry {
-        for (key, geometry) in registry.retired() {
+        // This view stops using them: one `ViewRelease` each, whoever else still draws them.
+        for (_, geometry) in registry.released() {
             session
                 .release_geometry(producer, view_id, geometry)
                 .map_err(FrameError::from)?;
+        }
+        // And the bytes go only for those no view holds afterwards — §5.3's "removed when the
+        // last view releases". A tile leaving one view's cover while another still draws it
+        // keeps its geometry and loses only that view's use.
+        for (key, _) in registry.retired() {
             for reference in registry.refs_of(&key) {
                 arena.release(*reference);
             }

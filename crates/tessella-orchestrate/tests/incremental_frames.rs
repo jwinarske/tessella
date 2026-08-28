@@ -76,6 +76,15 @@ fn emit_frame(
     arena: &mut SlabArena,
     registry: &mut GeometryRegistry,
 ) -> (frame::Emitted, BTreeMap<String, usize>) {
+    emit_frame_for(scene, ViewId(0), arena, registry)
+}
+
+fn emit_frame_for(
+    scene: &Scene,
+    view_id: ViewId,
+    arena: &mut SlabArena,
+    registry: &mut GeometryRegistry,
+) -> (frame::Emitted, BTreeMap<String, usize>) {
     let mut ring = Ring::new(1 << 22);
     let (producer, consumer) = ring.split();
     let emitted = frame::emit_incremental(
@@ -84,7 +93,7 @@ fn emit_frame(
         &Frame {
             style: &scene.style,
             view: &scene.view,
-            view_id: ViewId(0),
+            view_id,
             tiles: &scene.tiles,
             buckets: &scene.buckets,
             light: &Light::default(),
@@ -245,4 +254,151 @@ fn a_failed_frame_retires_nothing_and_announces_nothing() {
         known,
         "a failed frame retired nothing, so the retry sees what the first frame left"
     );
+}
+
+/// Two views over one style: geometry announced once, uses per view.
+///
+/// The failure this replaces was measured before the registry knew about views: two views with
+/// different covers each re-announced all eight drawables and removed all eight, *every frame*
+/// — worse than not being incremental at all, because it emitted the removals too.
+#[test]
+fn two_views_share_geometry_and_do_not_thrash() {
+    let here = scene(0.0);
+    let there = scene(120.0);
+    assert!(
+        here.tiles.iter().all(|tile| !there.tiles.contains(tile)),
+        "the covers must not overlap, or the test proves less"
+    );
+
+    let mut arena = SlabArena::new();
+    let mut registry = GeometryRegistry::new();
+
+    let (first, _) = emit_frame_for(&here, ViewId(0), &mut arena, &mut registry);
+    let (second, _) = emit_frame_for(&there, ViewId(1), &mut arena, &mut registry);
+    assert!(
+        first.geometries > 0 && second.geometries > 0,
+        "both are new"
+    );
+    assert_eq!(second.removed, 0, "view 1 removed none of view 0's");
+
+    // Steady state: neither view's frame disturbs the other's.
+    for _ in 0..2 {
+        let (a, _) = emit_frame_for(&here, ViewId(0), &mut arena, &mut registry);
+        let (b, _) = emit_frame_for(&there, ViewId(1), &mut arena, &mut registry);
+        assert_eq!((a.geometries, a.removed), (0, 0), "view 0 settled");
+        assert_eq!((b.geometries, b.removed), (0, 0), "view 1 settled");
+    }
+}
+
+/// A tile both views draw is announced once and survives one of them dropping it.
+#[test]
+fn a_shared_tile_outlives_one_views_pan() {
+    let shared = scene(0.0);
+    let elsewhere = scene(120.0);
+
+    let mut arena = SlabArena::new();
+    let mut registry = GeometryRegistry::new();
+
+    let (first, _) = emit_frame_for(&shared, ViewId(0), &mut arena, &mut registry);
+    let (second, kinds) = emit_frame_for(&shared, ViewId(1), &mut arena, &mut registry);
+
+    assert_eq!(
+        second.geometries, 0,
+        "the second view needs no geometry: view 0 already sent it"
+    );
+    assert_eq!(
+        kinds.get("ViewUse").copied().unwrap_or(0),
+        first.drawables,
+        "but it needs a use for every drawable"
+    );
+
+    // View 0 pans away entirely; view 1 still draws the tiles.
+    let (third, _) = emit_frame_for(&elsewhere, ViewId(0), &mut arena, &mut registry);
+    assert!(third.geometries > 0, "its new cover is new");
+    assert_eq!(
+        third.removed, 0,
+        "and nothing is removed, because view 1 still holds the old cover"
+    );
+
+    // Now view 1 pans away too, and the geometry finally goes.
+    let (fourth, _) = emit_frame_for(&elsewhere, ViewId(1), &mut arena, &mut registry);
+    assert!(fourth.removed > 0, "the last view released it");
+}
+
+/// Four views, which §13 requires and the ABI caps at eight.
+///
+/// Not a generalisation of the two-view case for its own sake: `TSL_MAX_VIEWS` is eight and the
+/// product needs four, so the case that has to hold is four sharing one style and one registry.
+/// The accounting is a set of users per drawable, so nothing about it is arity-specific — but
+/// "nothing about it is arity-specific" is exactly the claim a test should make rather than a
+/// comment.
+#[test]
+fn four_views_share_one_geometry() {
+    let shared = scene(0.0);
+    let elsewhere = scene(120.0);
+
+    let mut arena = SlabArena::new();
+    let mut registry = GeometryRegistry::new();
+
+    // All four draw the same cover. The first announces it; the rest bind to it.
+    let (first, _) = emit_frame_for(&shared, ViewId(0), &mut arena, &mut registry);
+    assert!(first.geometries > 0);
+    for view in 1..4 {
+        let (later, kinds) = emit_frame_for(&shared, ViewId(view), &mut arena, &mut registry);
+        assert_eq!(
+            later.geometries, 0,
+            "view {view} needs no geometry: it is already sent"
+        );
+        assert_eq!(
+            kinds.get("ViewUse").copied().unwrap_or(0),
+            first.drawables,
+            "view {view} binds every drawable"
+        );
+        assert_eq!(later.removed, 0, "and removes none of anyone else's");
+    }
+
+    // Three of the four pan away. The geometry survives every one of them.
+    for view in 0..3 {
+        let (panned, _) = emit_frame_for(&elsewhere, ViewId(view), &mut arena, &mut registry);
+        assert_eq!(
+            panned.removed,
+            0,
+            "view {view} let go, but {} views still draw it",
+            3 - view
+        );
+    }
+
+    // The fourth is the last, and only then do the bytes go.
+    let (last, _) = emit_frame_for(&elsewhere, ViewId(3), &mut arena, &mut registry);
+    assert!(
+        last.removed > 0,
+        "the last view released it, so it is removed"
+    );
+}
+
+/// Every view settles, and none of the four disturbs the others.
+#[test]
+fn four_views_settle_independently() {
+    let scenes = [scene(0.0), scene(60.0), scene(120.0), scene(180.0)];
+    let mut arena = SlabArena::new();
+    let mut registry = GeometryRegistry::new();
+
+    for (view, scene) in scenes.iter().enumerate() {
+        #[allow(clippy::cast_possible_truncation)]
+        emit_frame_for(scene, ViewId(view as u32), &mut arena, &mut registry);
+    }
+
+    // Two more rounds: nothing should move.
+    for _ in 0..2 {
+        for (view, scene) in scenes.iter().enumerate() {
+            #[allow(clippy::cast_possible_truncation)]
+            let (emitted, _) =
+                emit_frame_for(scene, ViewId(view as u32), &mut arena, &mut registry);
+            assert_eq!(
+                (emitted.geometries, emitted.removed),
+                (0, 0),
+                "view {view} should be settled"
+            );
+        }
+    }
 }

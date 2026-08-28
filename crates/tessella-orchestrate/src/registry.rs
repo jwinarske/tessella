@@ -31,7 +31,7 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
-use tessella_capture_abi::envelope::{GeometryId, SlabRef, TileId};
+use tessella_capture_abi::envelope::{GeometryId, SlabRef, TileId, ViewId};
 
 /// What names one drawable across frames.
 ///
@@ -62,6 +62,12 @@ struct Entry {
     /// knows nothing about which drawable they belong to, which is the split that keeps it
     /// usable by a caller with a different lifecycle.
     refs: alloc::vec::Vec<SlabRef>,
+    /// Which views are using it.
+    ///
+    /// §5.3's "removed when the last view releases", made countable. Geometry is shared and a
+    /// use is not: two views over one style hold the same buffers and each has its own draw
+    /// list, so a tile leaving one view's cover releases that view and removes nothing.
+    users: BTreeSet<u32>,
 }
 
 /// Hands out geometry ids and remembers which drawable each belongs to.
@@ -74,8 +80,11 @@ struct Entry {
 #[derive(Debug, Default)]
 pub struct GeometryRegistry {
     live: BTreeMap<DrawableKey, Entry>,
-    /// Keys seen since [`Self::begin_frame`], so the rest can be reported as gone.
+    /// Keys the view of the current frame has asked for, so the rest of *its* uses can be
+    /// reported as released.
     seen: BTreeSet<DrawableKey>,
+    /// The view the current frame is for.
+    view: u32,
     /// Keys this frame allocated, so a frame that fails can give them back.
     added: BTreeSet<DrawableKey>,
     /// What `next` was when the frame began, for the same reason.
@@ -91,9 +100,10 @@ impl GeometryRegistry {
     }
 
     /// Starts a frame, forgetting which drawables the last one used.
-    pub fn begin_frame(&mut self) {
+    pub fn begin_frame(&mut self, view: ViewId) {
         self.seen.clear();
         self.added.clear();
+        self.view = view.0;
         self.next_at_frame_start = self.next;
     }
 
@@ -103,7 +113,9 @@ impl GeometryRegistry {
     /// [`Self::retired`].
     pub fn id_for(&mut self, key: DrawableKey) -> GeometryId {
         self.seen.insert(key);
-        if let Some(existing) = self.live.get(&key) {
+        let view = self.view;
+        if let Some(existing) = self.live.get_mut(&key) {
+            existing.users.insert(view);
             return existing.id;
         }
         let id = GeometryId(self.next);
@@ -114,6 +126,7 @@ impl GeometryRegistry {
             Entry {
                 id,
                 refs: alloc::vec::Vec::new(),
+                users: BTreeSet::from([view]),
             },
         );
         id
@@ -129,14 +142,25 @@ impl GeometryRegistry {
         }
     }
 
-    /// Whether this drawable was already known before the current frame asked for it.
+    /// Whether no view holds this drawable yet, so its geometry has to be announced.
     ///
-    /// This is what lets an emitter send `GeometryAdd` only for what is new. It answers about
-    /// the *registry*, not about the wire: a caller that asked and then failed to emit has told
-    /// the registry a thing it did not do, which is why `frame::emit` rewinds on failure.
+    /// Distinct from [`Self::is_unused_by`], and the distinction is §5.3's: geometry is shared
+    /// and a use is per view. A drawable a second view picks up needs a `ViewUse` and *not* a
+    /// `GeometryAdd`, because the first view already had the bytes sent. Collapsing the two
+    /// re-announces every geometry every time a second view draws it.
     #[must_use]
     pub fn is_new(&self, key: &DrawableKey) -> bool {
         !self.live.contains_key(key)
+    }
+
+    /// Whether the current frame's view is not already using this drawable.
+    ///
+    /// This is what gates a `ViewUse`.
+    #[must_use]
+    pub fn is_unused_by(&self, key: &DrawableKey) -> bool {
+        self.live
+            .get(key)
+            .is_none_or(|entry| !entry.users.contains(&self.view))
     }
 
     /// The drawables the current frame did not ask for, and their ids.
@@ -145,10 +169,26 @@ impl GeometryRegistry {
     /// [`Self::retire`] drops them. Splitting the two is what makes the failure case tractable:
     /// a frame that could not be written must not have retired anything.
     #[must_use]
+    pub fn released(&self) -> Vec<(DrawableKey, GeometryId)> {
+        self.live
+            .iter()
+            .filter(|(key, entry)| entry.users.contains(&self.view) && !self.seen.contains(*key))
+            .map(|(key, entry)| (*key, entry.id))
+            .collect()
+    }
+
+    /// The drawables no view will hold once [`Self::retire`] applies this frame's releases.
+    ///
+    /// §5.3's "removed when the last view releases": a drawable one view drops but another still
+    /// draws keeps its geometry, and only its use goes.
+    #[must_use]
     pub fn retired(&self) -> Vec<(DrawableKey, GeometryId)> {
         self.live
             .iter()
-            .filter(|(key, _)| !self.seen.contains(*key))
+            .filter(|(key, entry)| {
+                let releasing = entry.users.contains(&self.view) && !self.seen.contains(*key);
+                releasing && entry.users.len() == 1
+            })
             .map(|(key, entry)| (*key, entry.id))
             .collect()
     }
@@ -159,9 +199,15 @@ impl GeometryRegistry {
         self.live.get(key).map_or(&[], |entry| &entry.refs)
     }
 
-    /// Drops everything [`Self::retired`] reported.
+    /// Applies this frame's releases, dropping whatever no view holds afterwards.
     pub fn retire(&mut self) {
-        self.live.retain(|key, _| self.seen.contains(key));
+        let view = self.view;
+        for (key, entry) in &mut self.live {
+            if !self.seen.contains(key) {
+                entry.users.remove(&view);
+            }
+        }
+        self.live.retain(|_, entry| !entry.users.is_empty());
     }
 
     /// Undoes everything the current frame allocated.
