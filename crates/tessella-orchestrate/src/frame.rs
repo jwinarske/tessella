@@ -157,6 +157,33 @@ pub struct Patterns<'a> {
 }
 
 impl Patterns<'_> {
+    /// The mix a pattern is at, and how each of its two images is scaled.
+    ///
+    /// No clock is threaded through: `crossfade` is given mbgl's "no time" sentinel, which
+    /// leaves the time term complete and the mix driven by the zoom's fractional part alone.
+    /// That is what the oracle's capture carries — a fade of one — because the probe evaluates
+    /// outside a frame and passes the same sentinel. Animating a fade over its duration needs a
+    /// clock the producer does not have and the caller does.
+    #[must_use]
+    pub fn crossfade(&self, zoom: f64) -> tessella_style::crossfade::Crossfade {
+        tessella_style::crossfade::crossfade(zoom, &self.seeded(zoom), None, 0)
+    }
+
+    /// The history, seeded at `zoom` if it has never been updated.
+    ///
+    /// A default [`ZoomHistory`] has `last_integer_zoom` of zero, so every positive zoom looks
+    /// like the camera zoomed in from the bottom of the world — a caller that forgot to update
+    /// it gets `from_scale` of two where the level being left is the one above, and a pattern
+    /// drawn at the wrong size with nothing reporting it. Seeding on read gives what mbgl's
+    /// first `update` gives, which is the answer for a camera that has not moved yet.
+    fn seeded(&self, zoom: f64) -> ZoomHistory {
+        let mut history = self.history;
+        if history.first {
+            history.update(zoom, None);
+        }
+        history
+    }
+
     /// The two rectangles a layer's pattern is between at `zoom`, if both are packed.
     ///
     /// `None` when the layer has no pattern, when its expression names nothing, or when a name
@@ -172,7 +199,7 @@ impl Patterns<'_> {
         use tessella_style::crossfade::{PatternSource as _, faded};
 
         let source = paint.get(property)?;
-        let pair = faded(|z| source.image_at(z), zoom, &self.history);
+        let pair = faded(|z| source.image_at(z), zoom, &self.seeded(zoom));
         ubo::pattern_placement(
             self.positions.get(pair.from?.as_str()),
             self.positions.get(pair.to?.as_str()),
@@ -578,6 +605,13 @@ fn encode(
         }
         Content::Line(line) => {
             let (vertex_layout, key) = bind(LINE_FAMILY, BuiltIn::LineShader);
+            let atlas = patterns
+                .filter(|patterns| {
+                    patterns
+                        .placement(&bucket.paint, "line-pattern", zoom)
+                        .is_some()
+                })
+                .map(|patterns| patterns.texture);
             Some(emit::encode_line(
                 arena,
                 geometry,
@@ -585,6 +619,7 @@ fn encode(
                 &vertex_layout,
                 bucket.binder.data(),
                 key,
+                atlas,
             ))
         }
         Content::Circle(circle) => {
@@ -812,10 +847,37 @@ fn write_layer_state(
                 &buffer,
             )?;
 
-            let tile_props = ubo::pack_tile_props_buffer(
-                line.len(),
-                ubo_layouts::LINE_TILE_PROPS_UNION_UBO.stride,
-            );
+            // A line's pattern block is wider than a fill's — it carries the scale and the
+            // fade — so it is packed by its own function, not by the fill's with a different
+            // stride. The union's stride is the line's sixty-four either way.
+            let tile_props = match patterns.and_then(|patterns| {
+                Some((
+                    patterns,
+                    patterns.placement(&paint, "line-pattern", view.zoom)?,
+                ))
+            }) {
+                Some((patterns, placement)) => {
+                    let entry = ubo::LinePatternPlacement {
+                        placement,
+                        pixel_ratio: 1.0,
+                        // Tile units per pixel at the tile's own level, inverted. Every tile of
+                        // a cover is at the same level, so one value serves the layer.
+                        #[allow(clippy::cast_possible_truncation)]
+                        units_per_pixel: tiles.first().map_or(1.0, |tile| {
+                            1.0 / tessella_tile::camera::pixels_to_tile_units(
+                                tile.z,
+                                f64::from(tile.z),
+                            ) as f32
+                        }),
+                        crossfade: patterns.crossfade(view.zoom),
+                    };
+                    ubo::pack_line_pattern_tile_props(&alloc::vec![entry; line.len()])
+                }
+                None => ubo::pack_tile_props_buffer(
+                    line.len(),
+                    ubo_layouts::LINE_TILE_PROPS_UNION_UBO.stride,
+                ),
+            };
             ubo::write(
                 producer,
                 view_id,

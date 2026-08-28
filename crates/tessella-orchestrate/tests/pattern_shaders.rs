@@ -287,3 +287,29 @@ fn the_atlas_is_uploaded_and_the_placements_are_written() {
     );
     assert_eq!([word(32), word(36)], [512.0, 512.0], "the atlas size");
 }
+
+/// A history nobody updated behaves as a camera that has not moved, not as one at zoom zero.
+///
+/// A default `ZoomHistory` has `last_integer_zoom` of zero, so `z > last_integer_zoom` is true
+/// at every positive zoom and the crossfade reports the camera zooming *in* from the bottom of
+/// the world. That gives `from_scale` of two where it should be a half — a pattern drawn at four
+/// times the intended size, with nothing reporting it. Seeding on read gives what mbgl's first
+/// `update` gives.
+#[test]
+fn an_unseeded_history_does_not_look_like_zooming_in() {
+    let positions = atlas();
+    let pixels = vec![0u8; 4];
+    let patterns = Patterns {
+        texture: TextureId(20),
+        size: [1, 1],
+        positions: &positions,
+        pixels: &pixels,
+        history: ZoomHistory::new(),
+    };
+
+    // At an integer zoom the camera has not crossed anything, which is `from_scale` of a half —
+    // the value the oracle's capture carries at zoom thirteen.
+    assert_eq!(patterns.crossfade(13.0).from_scale, 0.5);
+    // Above the integer it has, which is two.
+    assert_eq!(patterns.crossfade(13.5).from_scale, 2.0);
+}

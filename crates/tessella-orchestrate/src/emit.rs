@@ -657,6 +657,10 @@ fn descriptors(
 }
 
 /// Packs the descriptor and segment runs into a payload, and builds the record around them.
+// Eight, and grouping them would mean inventing a struct whose fields are `GeometryAdd`'s own —
+// this *is* that record's constructor, and the argument list is the record. The two callers that
+// wanted grouping got it: `FillDraw` and `Encoding` carry decisions, where these carry values.
+#[allow(clippy::too_many_arguments)]
 fn geometry_add(
     geometry: GeometryId,
     permutation_key: u64,
@@ -665,9 +669,15 @@ fn geometry_add(
     descriptors: &[AttributeDesc],
     segments: &[Segment],
     shader: BuiltIn,
+    atlas: Option<TextureId>,
 ) -> Encoded {
     let mut payload = Vec::new();
     let attrs = push_span(&mut payload, descriptors);
+    // The slot comes from the shader's own table, never from the caller — see `texture_refs`.
+    let textures = push_span(
+        &mut payload,
+        &atlas.map_or_else(Vec::new, |atlas| texture_refs(shader, &[atlas])),
+    );
     let segments = push_span(
         &mut payload,
         &segments
@@ -690,7 +700,7 @@ fn geometry_add(
         attrs,
         instance_attrs: Span::default(),
         segments,
-        texture_refs: Span::default(),
+        texture_refs: textures,
         builtin_shader: shader as i32,
         vertex_type: AttributeDataType::Short2 as u8,
         reason: AddReason::Created as u8,
@@ -719,6 +729,7 @@ pub fn encode_line(
     layout: &VertexLayout,
     attributes: &[u8],
     permutation_key: u64,
+    pattern_atlas: Option<TextureId>,
 ) -> Encoded {
     let mut vertex_bytes = Vec::with_capacity(bucket.vertices.len() * LINE_STRIDE as usize);
     for vertex in &bucket.vertices {
@@ -743,7 +754,12 @@ pub fn encode_line(
         bucket.vertices.len(),
         &descriptors,
         &bucket.segments,
-        BuiltIn::LineShader,
+        if pattern_atlas.is_some() {
+            BuiltIn::LinePatternShader
+        } else {
+            BuiltIn::LineShader
+        },
+        pattern_atlas,
     )
 }
 
@@ -774,6 +790,7 @@ pub fn encode_circle(
         &descriptors,
         &bucket.segments,
         BuiltIn::CircleShader,
+        None,
     )
 }
 
@@ -826,6 +843,7 @@ pub fn encode_extrusion(
         &descriptors,
         &bucket.segments,
         BuiltIn::FillExtrusionShader,
+        None,
     )
 }
 

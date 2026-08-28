@@ -47,7 +47,15 @@ fn encode(kind: &str, extra: &str, family: &[BuiltIn], shader: BuiltIn) -> Encod
     let mut arena = SlabArena::new();
     let data = bucket.binder.data();
     match &bucket.content {
-        Content::Line(b) => encode_line(&mut arena, GeometryId(1), b, &vertex_layout, data, key),
+        Content::Line(b) => encode_line(
+            &mut arena,
+            GeometryId(1),
+            b,
+            &vertex_layout,
+            data,
+            key,
+            None,
+        ),
         Content::Circle(b) => {
             encode_circle(&mut arena, GeometryId(1), b, &vertex_layout, data, key)
         }
