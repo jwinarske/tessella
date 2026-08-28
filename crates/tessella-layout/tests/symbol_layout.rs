@@ -49,6 +49,7 @@ impl Glyphs for Font {
 
 fn label(text: &str, anchor: (f32, f32)) -> Label {
     Label {
+        pending: 0,
         text: text.to_string(),
         anchor,
     }

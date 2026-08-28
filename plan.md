@@ -1447,9 +1447,23 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   drawn as a field is recolourable by `icon-color`; a photographic icon is not, and putting a
   plain image through the SDF shader draws its alpha as a coverage ramp. The flag rides in the
   low bit of the packed size, where the text path already put it.
-  Line-placed icons are not built. They repeat along a line the way a label does and need the
-  anchors `get_anchors` produces; taking the line's first vertex instead would place every icon
-  of a road at one end, which draws and is wrong — so they are skipped rather than approximated.
+  **Line-placed icons draw where they accompany a label.** They repeat along a line the way a
+  label does and need the anchors `get_anchors` produces; taking the line's first vertex instead
+  would place every icon of a road at one end, which draws and is wrong, so they were skipped
+  rather than approximated. What they needed was not the anchors — those existed — but to be
+  built from the *instances* rather than from the pending symbols. A line-placed symbol is one
+  pending and one instance per anchor, and icons were built per pending, so there was nowhere
+  for a shield's second repetition to come from. `LaidOut` names its pending now and icons pair
+  on it, which also removes a latent fault: the pairing was by position into the pending list,
+  which holds only where the two lists are the same length — point placement, the one case that
+  reached it.
+  **What is still short of mbgl**: it computes a feature's anchors once from *both* extents,
+  `getAnchors(…, shapedText.left, shapedText.right, shapedIcon.left, shapedIcon.right, …)`, so a
+  symbol with an icon and no text still gets anchors from the icon. Here the icon is shaped in a
+  second pass that needs the sprite positions the first does not have, so a line-placed symbol
+  with no text produces no instances and no icon — a layer of oneway arrows draws nothing, where
+  a shield with a label draws. Closing it means shaping icons before anchors, which is the
+  ordering mbgl has and this does not.
   The sheet itself then decodes, with `zune-png` behind an off-by-default `png` feature — the
   pattern `cache` and `tls` already use, and for a different reason than `tls` has: `zune-png` is
   pure Rust, so unlike `rustls` it costs the cross lane nothing even enabled. It is a feature for

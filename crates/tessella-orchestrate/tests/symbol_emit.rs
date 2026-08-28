@@ -61,6 +61,7 @@ fn labelled(text: &str) -> (SlabArena, emit::Encoded, usize) {
     let font = Font::new(text);
     let (buffers, _) = build_symbols(
         &[Label {
+        pending: 0,
             text: text.to_string(),
             anchor: (1000.0, 2000.0),
         }],
@@ -95,6 +96,7 @@ fn a_non_sdf_symbol_names_the_icon_shader() {
     let font = Font::new("Alpha");
     let (buffers, _) = build_symbols(
         &[Label {
+        pending: 0,
             text: "Alpha".to_string(),
             anchor: (0.0, 0.0),
         }],
@@ -227,6 +229,7 @@ fn an_empty_layer_encodes_to_nothing() {
     let font = Font::new("");
     let (buffers, _) = build_symbols(
         &[Label {
+        pending: 0,
             text: "Alpha".to_string(),
             anchor: (0.0, 0.0),
         }],

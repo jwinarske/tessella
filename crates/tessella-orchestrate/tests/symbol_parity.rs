@@ -184,6 +184,7 @@ fn build(labels: &[&str], font: &Font) -> SymbolBuffers {
     let entries: Vec<Label> = labels
         .iter()
         .map(|text| Label {
+        pending: 0,
             text: (*text).to_string(),
             anchor: (0.0, 0.0),
         })
@@ -341,6 +342,7 @@ fn the_position_buffer_matches_the_oracle() {
         let entries: Vec<Label> = labels
             .iter()
             .map(|(text, anchor)| Label {
+        pending: 0,
                 text: (*text).to_string(),
                 anchor: *anchor,
             })

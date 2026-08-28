@@ -605,34 +605,32 @@ impl SymbolLayout {
     pub fn lay_out_icons(
         &self,
         positions: &tessella_glyph::sprite::Positions,
-        text: &[LaidOut],
+        instances: &[LaidOut],
     ) -> (SymbolBuffers, Vec<LaidOut>) {
-        let labels: Vec<IconLabel> = self
-            .pending
+        // Driven by the *instances* rather than by the pending symbols, which is what makes a
+        // line-placed icon expressible at all. A point-placed symbol is one pending and one
+        // instance; a line-placed one is one pending and an instance per anchor, so a road named
+        // three times along its length wants three icons and not one at its first vertex.
+        //
+        // Pairing on `LaidOut::pending` rather than on position, for the same reason. The old
+        // pairing was by index into `self.pending`, which holds only where the two lists are the
+        // same length — the point case, which is the only one that reached here.
+        let labels: Vec<IconLabel> = instances
             .iter()
-            .enumerate()
-            .filter_map(|(index, pending)| {
+            .filter_map(|laid| {
+                let pending = self.pending.get(laid.pending)?;
                 let image = pending.icon.clone()?;
-                let anchor = match pending.anchoring {
-                    Anchoring::Point(anchor) => anchor,
-                    // A line-placed icon repeats along the line the way a label does, which
-                    // needs the anchors `get_anchors` produces rather than a point. Not built:
-                    // it would place every icon of a road at its first vertex, which draws and
-                    // is wrong.
-                    Anchoring::Line(_) => return None,
-                };
-                // The label this icon is drawn around, if it has one. `lay_out` answers one
-                // entry per pending, so the index is the same on both sides — which is the
-                // whole reason it does.
-                let shaped = text
-                    .get(index)
-                    .and_then(|laid| (laid.glyphs > 0).then_some(laid.extent));
-
                 Some(IconLabel {
+                    pending: laid.pending,
                     image,
-                    anchor,
+                    // The instance's own anchor. For a point symbol that is the feature's; for
+                    // a line-placed one it is where `get_anchors` put this repetition.
+                    anchor: laid.anchor,
                     options: pending.icon_options,
-                    text: shaped,
+                    // The label this icon is drawn around, if it has one. An entry that shaped
+                    // no glyphs is a placeholder for an icon-only symbol, and `icon-text-fit`
+                    // has nothing to fit to.
+                    text: (laid.glyphs > 0).then_some(laid.extent),
                 })
             })
             .collect();
@@ -701,17 +699,32 @@ impl SymbolLayout {
                 .position(|pending| pending.fonts != head.fonts || pending.symbol != head.symbol)
                 .map_or(self.pending.len(), |offset| start + offset);
             let run = &self.pending[start..end];
+            let start_of_run = start;
             start = end;
 
             // Where this run starts in the output, so the empties can be interleaved back into
             // their own positions afterwards.
             let glyphs = fonts.stack(&head.fonts);
             let (built, entries) = if self.placement.along_line() {
+                // Only the text-bearing ones, which is where line placement is still short of
+                // mbgl. It computes a feature's anchors once from *both* extents —
+                // `getAnchors(..., shapedText.left, shapedText.right, shapedIcon.left,
+                // shapedIcon.right, ...)` — so a symbol with an icon and no text still gets
+                // anchors, from the icon. Here the icon is shaped in a second pass that needs
+                // the sprite positions this one does not have, so a line-placed symbol with no
+                // text produces no instances and therefore no icon.
+                //
+                // What that costs: a `symbol-placement: line` layer whose features carry only an
+                // `icon-image` — oneway arrows are the usual one — draws nothing. A shield with
+                // a label draws, which is the case below. Closing it means shaping icons before
+                // anchors, which is the ordering mbgl has and this does not.
                 let labels: Vec<LineLabel> = run
                     .iter()
-                    .filter(|pending| !pending.text.is_empty())
-                    .filter_map(|pending| match &pending.anchoring {
+                    .enumerate()
+                    .filter(|(_, pending)| !pending.text.is_empty())
+                    .filter_map(|(offset, pending)| match &pending.anchoring {
                         Anchoring::Line(line) => Some(LineLabel {
+                            pending: start_of_run + offset,
                             text: pending.text.to_string(),
                             line: line.clone(),
                         }),
@@ -726,9 +739,11 @@ impl SymbolLayout {
             } else {
                 let labels: Vec<Label> = run
                     .iter()
-                    .filter(|pending| !pending.text.is_empty())
-                    .filter_map(|pending| match pending.anchoring {
+                    .enumerate()
+                    .filter(|(_, pending)| !pending.text.is_empty())
+                    .filter_map(|(offset, pending)| match pending.anchoring {
                         Anchoring::Point(anchor) => Some(Label {
+                            pending: start_of_run + offset,
                             text: pending.text.to_string(),
                             anchor,
                         }),
@@ -757,9 +772,10 @@ impl SymbolLayout {
                 // `lay_out_icons` finds an icon's label by index, and a list that skipped
                 // entries would silently pair every icon after the first text-less symbol with
                 // the wrong one.
-                for pending in run {
+                for (offset, pending) in run.iter().enumerate() {
                     if pending.text.is_empty() {
                         laid.push(LaidOut {
+                            pending: start_of_run + offset,
                             anchor: match pending.anchoring {
                                 Anchoring::Point(anchor) => anchor,
                                 Anchoring::Line(_) => (0.0, 0.0),

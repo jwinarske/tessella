@@ -608,7 +608,9 @@ fn icons_lay_out_against_the_sprite_index() {
     let asked = layout.icons();
     assert!(asked.len() > 2, "{asked:?} is too few to prove a miss");
 
-    let (buffers, laid) = layout.lay_out_icons(&sprites, &[]);
+    let (fonts, _) = fonts_for(layout);
+    let (_, instances) = layout.lay_out(&fonts);
+    let (buffers, laid) = layout.lay_out_icons(&sprites, &instances);
     assert!(!laid.is_empty(), "nothing was laid out");
     assert_eq!(buffers.vertices.len(), laid.len() * 4, "one quad an icon");
 
@@ -695,8 +697,10 @@ fn the_sprite_decides_whether_it_is_a_field() {
         buffers.vertices[0].data[2] & 1 == 1
     };
 
-    let (as_field, _) = layout.lay_out_icons(&field, &[]);
-    let (as_plain, _) = layout.lay_out_icons(&plain, &[]);
+    let (fonts, _) = fonts_for(layout);
+    let (_, instances) = layout.lay_out(&fonts);
+    let (as_field, _) = layout.lay_out_icons(&field, &instances);
+    let (as_plain, _) = layout.lay_out_icons(&plain, &instances);
     assert!(is_sdf(&as_field), "an sdf sprite was drawn as an image");
     assert!(!is_sdf(&as_plain), "an image was drawn as a field");
 }
@@ -888,7 +892,9 @@ fn an_icon_with_no_label_is_not_stretched() {
     .into_iter()
     .collect();
 
-    let (_, laid) = layout.lay_out_icons(&sprites, &[]);
+    let (fonts, _) = fonts_for(layout);
+    let (_, instances) = layout.lay_out(&fonts);
+    let (_, laid) = layout.lay_out_icons(&sprites, &instances);
     assert!(!laid.is_empty());
     for entry in &laid {
         assert_eq!(
@@ -1073,5 +1079,83 @@ fn the_gamma_scale_corrects_only_a_flat_label() {
     assert!(
         symbol_gamma_scale(&steeper, Alignment::Map) < flat,
         "the correction did not follow the pitch"
+    );
+}
+
+/// A line-placed icon repeats along the line, as its label does.
+///
+/// # What this was
+///
+/// `lay_out_icons` returned `None` for a line-anchored symbol, under a comment saying that
+/// placing it at the feature's first vertex "draws and is wrong". It was right about that and
+/// the alternative it chose was to draw nothing, so a `symbol-placement: line` layer with an
+/// `icon-image` — a road shield, a oneway arrow — drew its labels and none of its icons.
+///
+/// # Why it needed the instance list rather than the pending list
+///
+/// Because a line-placed symbol is one *pending* and one instance per anchor. Icons were built
+/// from the pending list, which has one entry per feature, so there was nowhere for the second
+/// repetition of a shield to come from. They are built from the instances now, and each
+/// instance already knows the anchor `get_anchors` gave it.
+#[test]
+fn a_line_placed_icon_repeats_with_its_label() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "shields", "type": "symbol", "source": "v",
+                        "source-layer": "road",
+                        "layout": {"text-field": "{type}", "text-font": ["TestFont"],
+                                   "text-size": 14, "symbol-placement": "line",
+                                   "symbol-spacing": 250,
+                                   "icon-image": "primary"}}]}"#,
+    )
+    .expect("a style");
+
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+    let (fonts, _) = fonts_for(layout);
+    let (_, instances) = layout.lay_out(&fonts);
+    let sprites = positions(&[("primary", false)]);
+
+    assert!(
+        instances.len() > layout.pending.len(),
+        "the point of the test is a feature that repeats: {} instances of {} features",
+        instances.len(),
+        layout.pending.len()
+    );
+
+    let (buffers, laid) = layout.lay_out_icons(&sprites, &instances);
+    assert!(!laid.is_empty(), "a line-placed icon drew nothing");
+    assert_eq!(buffers.vertices.len(), laid.len() * 4, "one quad an icon");
+
+    // One icon per instance whose feature asked for one, at that instance's own anchor — not
+    // one per feature, and not all at the same place.
+    let wanted = instances
+        .iter()
+        .filter(|instance| {
+            layout
+                .pending
+                .get(instance.pending)
+                .is_some_and(|pending| pending.icon.is_some())
+        })
+        .count();
+    assert_eq!(laid.len(), wanted, "one icon per instance that asked for one");
+
+    let anchors: std::collections::BTreeSet<(u32, u32)> = laid
+        .iter()
+        .map(|icon| (icon.anchor.0.to_bits(), icon.anchor.1.to_bits()))
+        .collect();
+    assert!(
+        anchors.len() > 1,
+        "every icon landed on the same point, which is the bug the stub was avoiding"
+    );
+
+    // And each sits on its label's anchor rather than near it.
+    let label_anchors: std::collections::BTreeSet<(u32, u32)> = instances
+        .iter()
+        .map(|instance| (instance.anchor.0.to_bits(), instance.anchor.1.to_bits()))
+        .collect();
+    assert!(
+        anchors.is_subset(&label_anchors),
+        "an icon is drawn at the instance it belongs to"
     );
 }

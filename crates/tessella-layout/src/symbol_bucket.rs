@@ -283,6 +283,8 @@ pub use tessella_glyph::Glyphs;
 /// A label to lay out: what it says and where it is anchored, in tile coordinates.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Label {
+    /// Which of the layout's pending symbols this is, stamped into every instance it produces.
+    pub pending: usize,
     /// The text, already resolved from `text-field`.
     pub text: alloc::string::String,
     /// Its anchor, in tile units.
@@ -319,6 +321,14 @@ impl Default for SymbolOptions {
 /// One laid-out label: its geometry, and the box placement will compete with.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LaidOut {
+    /// Which of the layout's pending symbols this instance came from.
+    ///
+    /// Not the index of this entry, and the two differ exactly where it matters: a line-placed
+    /// label is one pending symbol and *one instance per anchor*, so a road named twice along
+    /// its length is one feature and several entries. Anything pairing a symbol's halves — an
+    /// icon with its label — has to pair on this rather than on position, which held only
+    /// because point placement is the case where the two agree.
+    pub pending: usize,
     /// Where it is anchored, in tile units.
     pub anchor: (f32, f32),
     /// The extent it occupies around that anchor, in pixels: top, bottom, left, right.
@@ -433,6 +443,7 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
         }
 
         out.push(LaidOut {
+            pending: label.pending,
             anchor: label.anchor,
             extent: (shaping.top, shaping.bottom, shaping.left, shaping.right),
             glyphs: buffers.glyphs() - before,
@@ -448,6 +459,8 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
 /// A label that follows a line rather than sitting at a point.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LineLabel {
+    /// Which of the layout's pending symbols this is, stamped into every instance it produces.
+    pub pending: usize,
     /// The text, already resolved from `text-field`.
     pub text: alloc::string::String,
     /// The line it follows, in tile units.
@@ -606,6 +619,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                 );
             }
             out.push(LaidOut {
+                pending: label.pending,
                 anchor: anchor.point,
                 extent: (shaping.top, shaping.bottom, shaping.left, shaping.right),
                 glyphs: buffers.glyphs() - before,
@@ -622,6 +636,8 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
 /// One icon to place: which sprite, and where.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IconLabel {
+    /// Which of the layout's pending symbols this is, stamped into every instance it produces.
+    pub pending: usize,
     /// The sprite name the layer's `icon-image` resolved to.
     pub image: alloc::string::String,
     /// Where it is anchored, in tile units.
@@ -773,6 +789,7 @@ pub fn build_icons(
         .then(|| position.content_margins());
 
         out.push(LaidOut {
+            pending: label.pending,
             anchor: label.anchor,
             extent: (placed.top, placed.bottom, placed.left, placed.right),
             glyphs: buffers.glyphs() - before,

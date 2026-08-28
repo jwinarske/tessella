@@ -200,6 +200,7 @@ fn draw_a_frame() {
     let labels: Vec<Label> = names
         .iter()
         .map(|(text, anchor)| Label {
+        pending: 0,
             text: text.clone(),
             anchor: *anchor,
         })
@@ -427,6 +428,7 @@ fn draw_line_labels() {
             }
             #[allow(clippy::cast_precision_loss)]
             labels.push(LineLabel {
+        pending: 0,
                 text: text.to_string(),
                 line: ring
                     .iter()
