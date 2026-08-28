@@ -402,3 +402,124 @@ fn four_views_settle_independently() {
         }
     }
 }
+
+/// Every view-keyed record in a view's frame names that view, and no other.
+///
+/// # What independence has to mean
+///
+/// Geometry is deliberately shared — that is §5.3's whole reason, and the tests above hold it.
+/// Everything else must not be. A `ViewUse`, a `ViewRelease`, a `UboUpdate`, a `StencilTiles`
+/// and an `OrderUpdate` are all keyed by view, and a frame for one view that emitted a record
+/// naming another would put one view's matrices or draw order into the other's — a fault that
+/// renders, because both views are drawing the same style and the wrong answer looks plausible.
+///
+/// Four views on four covers, which is §13's arrangement and the product's requirement.
+#[test]
+fn a_frame_touches_only_its_own_view() {
+    use tessella_capture_abi::EnvelopeKind;
+    use tessella_capture_abi::envelope::{
+        OrderUpdate, StencilTiles, UboUpdate, ViewRelease, ViewUse, WireRecord as _,
+    };
+
+    let scenes = [scene(0.0), scene(60.0), scene(120.0), scene(180.0)];
+    let mut arena = SlabArena::new();
+    let mut registry = GeometryRegistry::new();
+
+    // Two rounds, so the second exercises the settled path as well as the first emission — a
+    // release names a view too, and only a frame after something moved emits one.
+    for round in 0..2 {
+        for (index, scene) in scenes.iter().enumerate() {
+            #[allow(clippy::cast_possible_truncation)]
+            let view_id = ViewId(index as u32);
+
+            let mut ring = Ring::new(1 << 22);
+            let (producer, consumer) = ring.split();
+            frame::emit_incremental(
+                producer,
+                &mut arena,
+                &Frame {
+                    style: &scene.style,
+                    view: &scene.view,
+                    view_id,
+                    tiles: &scene.tiles,
+                    buckets: &scene.buckets,
+                    light: &Light::default(),
+                    fonts: None,
+                    patterns: None,
+                },
+                &mut registry,
+            )
+            .expect("emits");
+
+            let mut checked = 0;
+            while let Some(record) = consumer.peek() {
+                let named = match record.kind {
+                    EnvelopeKind::ViewUse => {
+                        ViewUse::from_bytes(record.record).map(|use_| use_.view)
+                    }
+                    EnvelopeKind::ViewRelease => {
+                        ViewRelease::from_bytes(record.record).map(|release| release.view)
+                    }
+                    EnvelopeKind::UboUpdate => {
+                        UboUpdate::from_bytes(record.record).map(|update| update.view)
+                    }
+                    EnvelopeKind::StencilTiles => {
+                        StencilTiles::from_bytes(record.record).map(|tiles| tiles.view)
+                    }
+                    EnvelopeKind::OrderUpdate => {
+                        OrderUpdate::from_bytes(record.record).map(|order| order.view)
+                    }
+                    _ => None,
+                };
+                if let Some(named) = named {
+                    assert_eq!(
+                        named, view_id,
+                        "round {round}: a frame for {view_id:?} emitted a {:?} naming {named:?}",
+                        record.kind
+                    );
+                    checked += 1;
+                }
+                let consumed = record.consumed();
+                consumer.advance(consumed);
+            }
+            assert!(
+                checked > 0,
+                "round {round}, {view_id:?}: no view-keyed record to check"
+            );
+        }
+    }
+}
+
+/// One view's camera moving emits nothing for the others.
+///
+/// A camera change is the most frequent damage there is — every frame of a pan — and it is
+/// per view by construction. This is what says a shared registry did not accidentally couple
+/// them: the other three views' frames are not run at all between the moves, so anything the
+/// moving view wrote for them would still be on their next frame's ring.
+#[test]
+fn a_camera_move_in_one_view_does_not_disturb_the_others() {
+    let scenes = [scene(0.0), scene(60.0), scene(120.0), scene(180.0)];
+    let mut arena = SlabArena::new();
+    let mut registry = GeometryRegistry::new();
+    for (index, scene) in scenes.iter().enumerate() {
+        #[allow(clippy::cast_possible_truncation)]
+        emit_frame_for(scene, ViewId(index as u32), &mut arena, &mut registry);
+    }
+
+    // View 0 pans right through the other three covers, one frame each.
+    for longitude in [60.0, 120.0, 180.0] {
+        let moved = scene(longitude);
+        emit_frame_for(&moved, ViewId(0), &mut arena, &mut registry);
+    }
+
+    // The other three are untouched: nothing to announce, nothing removed.
+    for (index, scene) in scenes.iter().enumerate().skip(1) {
+        #[allow(clippy::cast_possible_truncation)]
+        let (emitted, _) = emit_frame_for(scene, ViewId(index as u32), &mut arena, &mut registry);
+        assert_eq!(
+            (emitted.geometries, emitted.removed),
+            (0, 0),
+            "view {index} moved nothing and should emit nothing"
+        );
+    }
+}
