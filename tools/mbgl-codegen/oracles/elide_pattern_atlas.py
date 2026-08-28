@@ -32,6 +32,11 @@ MARK = "---------------- (atlas order varies)"
 # The pattern-position buffers, per layer. A fill's slot 4 and a line's slot 3 are the ones
 # carrying the atlas rectangles; every other slot of the same layers was byte-identical across
 # the captures and stays in the golden.
+#
+# The rule is what was *observed* to move, not what could. The background's slot 5 and the
+# data-driven layer's slot 4 carry rectangles too and held still across every capture taken, so
+# they stay in the golden — eliding a comparison that holds gives away a check for nothing. If a
+# later capture shows either moving, it belongs here and the reason is the same one.
 PATTERN_SLOTS = {
     ("layer:1", "slot=4"),
     ("layer:2", "slot=4"),

@@ -79,6 +79,10 @@ across the capture zoom so `from` and `to` name *different* sprites, and a `line
 It settles several things that reading mbgl's source did not:
 
 - Each layer's shader: background 4, fill 13 with its outline 14, line 27.
+- **A data-driven pattern keeps those same shaders and adds two vertex attributes**, ids 4 and 5
+  — `idFillPatternFromVertexAttribute` and `idFillPatternToVertexAttribute`. So the composite
+  binder differs from the constant one in what it puts in the vertex buffer, not in what it
+  draws with, which is not what reading the two binder classes suggests.
 - **A stepped pattern binds no vertex attribute either.** Only `id=0`, the position, appears on
   any of the thirty-six drawables. A cross-faded binder goes composite only when the expression
   is *data-driven*; a zoom step is a camera function, so it stays constant and both rectangles
@@ -113,6 +117,19 @@ What remains pins all thirty-six drawables, the shaders, the texture slot each b
 attribute descriptor and segment, the index buffers, the painter order and the camera. What it
 cannot pin is where in the atlas a pattern landed — which wants the same fix as the symbol case,
 a deterministic packing on mbgl's side.
+
+### The layer this capture deliberately does not have
+
+A `fill-extrusion-pattern` was in it and was taken out. Its drawables are not reproducible: a
+translucent extrusion emits two per tile, and which of them is `#00` and which `#01` swaps
+between runs — twenty lines of five hundred and thirteen, all of them that layer's. Nothing else
+in the capture moved.
+
+That is a different problem from the atlas's. The README already records that order *within* a
+draw group is canonicalized away, because it carries no meaning; this is the drawable's own
+identity, and canonicalizing an identity is not the same act. So the layer is left out rather
+than elided, and `sh0018`/`sh0019` — the extrusion pattern shaders, both of which the capture
+showed present — want their own investigation before they get a golden.
 
 ### Why there are three hermetic ones
 

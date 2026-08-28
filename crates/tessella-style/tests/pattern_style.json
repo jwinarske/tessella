@@ -173,6 +173,28 @@
         "line-pattern": "grass_pattern",
         "line-width": 6
       }
+    },
+    {
+      "id": "fill-pattern-data-driven",
+      "type": "fill",
+      "source": "probe",
+      "filter": [
+        "==",
+        "$type",
+        "Polygon"
+      ],
+      "paint": {
+        "fill-pattern": [
+          "match",
+          [
+            "get",
+            "kind"
+          ],
+          "a",
+          "sand_noise",
+          "hospital_striped"
+        ]
+      }
     }
   ]
 }
