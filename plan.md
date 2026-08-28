@@ -3040,6 +3040,36 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
   reserved mode bit and dormant splitting allowance make the fallback addable without a
   flag day.
 
+### 13.4 Globe, and what of it reaches this side
+
+The globe is drawn by bending Mercator geometry per vertex in the consumer's material, so the
+producer emits the ordinary flat placement and knows nothing about it. That is true of
+*placement*. Tile **selection** is a separate question, and `globe_cover` measures it rather than
+arguing it: a flat cull can ask for tiles a sphere has curved out of sight, and each one is a
+fetch, a decode, a bucket build and a subdivision spent behind the planet.
+
+Two things come out, and the second is the one that matters.
+
+**The horizon costs little.** Tiles behind the sphere are 33–50% of the cover between z1 and
+z2.5 and *nothing* outside it: zero by z3, where a tile spans a few degrees and there is no
+horizon left to cut, and zero across the whole of §13.3's z8–z16 sweep. In absolute terms it is
+four to six of the cheapest tiles on the map. Not worth a spherical cull in the producer.
+
+**World copies are wrong rather than wasteful.** A Mercator plane repeats horizontally, so a
+low-zoom cover legitimately holds the same tile at several `wrap` values and the map draws each.
+A sphere has no copies: every wrap of a tile bends to the *same* patch. At z0 four of five cover
+tiles are copies and at z1 four of eight — so a globe view drawing a flat cover draws those
+patches twice, z-fighting on the surface and paying subdivision twice at the zooms where
+subdivision is dearest (a z1 tile splits to ninety segments an edge).
+
+So the producer's part in the globe is one policy and not an algorithm: **a globe view asks for
+one world copy**, which is a per-view parameter beside its cover and its camera rather than a
+change to how covering works. The horizon is the consumer's to skip, one dot product per tile
+before it subdivides, which removes the draw as well.
+
+Four views change none of this. They want the same tiles at these zooms and the shared store
+builds them once — so the waste is four to six tiles for the cluster, not per view.
+
 ## 16. Open questions (rev 0.4 targets)
 
 - ~~PMTiles in tessella-storage~~ closed: `tessella-storage/pmtiles` reads a v3 archive in
