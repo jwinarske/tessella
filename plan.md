@@ -882,8 +882,28 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   was tried against the suite and passes **five of twelve** — the seven that fail need DUCET,
   where `a` sorts before `A` and codepoint order says the reverse. Shipping the approximation
   would be a comparison that looks right and is wrong for the same reason a linear stand-in for
-  `cubic-bezier` would be, so it is not shipped. What it needs is the collation table, and that
-  is a generator against `allkeys.txt` rather than a judgement call.
+  `cubic-bezier` would be, so it was not shipped.
+  **The table is generated now** — `tools/unicode-codegen/collation.py` over `allkeys.txt`, in
+  DR-6's discipline — behind an off-by-default `collator` feature, as `image`, `cache` and `tls`
+  are: some two hundred kilobytes of weights that a style never writing `["collator", …]` should
+  not carry (DR-12). Pure data, so it costs the cross lane nothing. Run-compressed to 7,730 runs
+  and 3,998 multi-element entries, since consecutive codepoints usually have consecutive
+  primaries.
+  Two things the suite settled that reading the spec did not. `diacritic-sensitive: false` is not
+  "ignore the secondary level": `accent-lt-en` wants `a < ä` to be **false**, and ignoring the
+  secondary leaves `ä` one element longer than `a` with a tertiary on it, so it comes out
+  greater. The accent has to be *removed* — elements with no primary weight dropped — which is
+  what mbgl achieves from the other end, stripping accents from the input with nunicode's
+  `unaccent` because it has no level control. And `resolved-locale` must answer the empty string
+  rather than the locale asked for: `accent-equals-de` branches on that answer, comparing `ü`
+  with `ue` where a German tailoring exists and checking the input directly where none does, so
+  an implementation that overstates what it resolved takes a branch it cannot honour.
+  Han is the other half of being right rather than plausible. The ideographs are not in
+  `allkeys.txt` at all — they are given an order by construction, UTS #10 §10.1.3 — so without
+  the implicit-weight formula every Chinese label would compare equal to every other. Not built:
+  the 964 contractions, sequences collating as one unit such as Danish `aa`, which need a
+  longest-match scan rather than a lookup per character. The generated table carries the number
+  so the omission is countable.
 
   The SDF glyph range format reads, as `tessella-glyph/pbf`: `{fontstack}/{first}-{last}.pbf`,
   256 codepoints a file, metrics and a distance field with the ecosystem's three-pixel border.
