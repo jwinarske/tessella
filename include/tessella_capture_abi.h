@@ -89,6 +89,25 @@ typedef enum tsl_texture_pixel_type {
     TSL_TEXTURE_PIXEL_TYPE_LUMINANCE = 4,
 } tsl_texture_pixel_type;
 
+/*
+ * How many bytes one pixel of a format occupies.
+ *
+ * Every channel is one byte on this stream: mbgl's channel storage size is per channel
+ * data type, and nothing here sends anything but unsigned bytes. So a whole-texture
+ * upload -- rect_count of zero -- carries width * height * this many bytes, and a
+ * rectangle's rows are w * this many bytes apart.
+ */
+static inline uint32_t tsl_texture_pixel_size(int format) {
+    switch (format) {
+    case TSL_TEXTURE_PIXEL_TYPE_RGBA: return 4;
+    case TSL_TEXTURE_PIXEL_TYPE_ALPHA: return 1;
+    case TSL_TEXTURE_PIXEL_TYPE_STENCIL: return 1;
+    case TSL_TEXTURE_PIXEL_TYPE_DEPTH: return 1;
+    case TSL_TEXTURE_PIXEL_TYPE_LUMINANCE: return 1;
+    default: return 0;
+    }
+}
+
 /* The type of a vertex attribute. */
 typedef enum tsl_attribute_data_type {
     TSL_ATTRIBUTE_DATA_TYPE_BYTE = 0,

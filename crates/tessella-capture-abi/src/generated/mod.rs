@@ -5,6 +5,7 @@
 
 pub mod mbgl_enums;
 pub mod shader_attributes;
+pub mod texture_channels;
 pub mod texture_slots;
 pub mod ubo_layouts;
 pub mod ubo_slots;

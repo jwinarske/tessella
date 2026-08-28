@@ -951,6 +951,51 @@ fn generate() -> String {
         "Pixel format of a texture.",
         &TexturePixelType::ALL.map(|t| (screaming(&format!("{t:?}")), t as i64)),
     );
+    // How large a pixel of each format is, which the enum alone does not say. A producer never
+    // needs it — every caller sizes its own pixel slice — and a consumer cannot do without it:
+    // a whole-texture upload's byte count means nothing until you know the channel count, and a
+    // sub-rectangle upload cannot be strided without it either. Written out rather than left to
+    // the reader, because the alternative is every consumer hard-coding a mapping that mbgl
+    // could change under them.
+    writeln!(w, "/*").unwrap();
+    writeln!(w, " * How many bytes one pixel of a format occupies.").unwrap();
+    writeln!(w, " *").unwrap();
+    writeln!(
+        w,
+        " * Every channel is one byte on this stream: mbgl's channel storage size is per channel"
+    )
+    .unwrap();
+    writeln!(
+        w,
+        " * data type, and nothing here sends anything but unsigned bytes. So a whole-texture"
+    )
+    .unwrap();
+    writeln!(
+        w,
+        " * upload -- rect_count of zero -- carries width * height * this many bytes, and a"
+    )
+    .unwrap();
+    writeln!(w, " * rectangle's rows are w * this many bytes apart.").unwrap();
+    writeln!(w, " */").unwrap();
+    writeln!(
+        w,
+        "static inline uint32_t tsl_texture_pixel_size(int format) {{"
+    )
+    .unwrap();
+    writeln!(w, "    switch (format) {{").unwrap();
+    for kind in TexturePixelType::ALL {
+        writeln!(
+            w,
+            "    case TSL_TEXTURE_PIXEL_TYPE_{}: return {};",
+            screaming(&format!("{kind:?}")),
+            kind.channels()
+        )
+        .unwrap();
+    }
+    writeln!(w, "    default: return 0;").unwrap();
+    writeln!(w, "    }}").unwrap();
+    writeln!(w, "}}").unwrap();
+    writeln!(w).unwrap();
     emit_enum(
         w,
         "attribute_data_type",

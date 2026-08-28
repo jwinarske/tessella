@@ -25,10 +25,12 @@
 use std::io::Write as _;
 use std::process::Command;
 
-use tessella_capture_abi::envelope::ViewId;
+use tessella_capture_abi::envelope::{Extent, Rect16, TextureId, ViewId};
+use tessella_capture_abi::generated::mbgl_enums::TexturePixelType;
 use tessella_capture_abi::ring::{self, region_size};
 use tessella_orchestrate::SlabArena;
 use tessella_orchestrate::frame::{self, Frame};
+use tessella_orchestrate::texture;
 use tessella_orchestrate::tile::{TileId, build_mvt_tile, build_sourceless};
 use tessella_source::mvt::Tile;
 use tessella_style::Style;
@@ -106,6 +108,47 @@ fn emit_frame() -> (Vec<u8>, Vec<u8>, frame::Emitted) {
         },
     )
     .expect("the frame emits");
+
+    // A texture with a *rect list*, which the frame itself never produces here: the only
+    // textures a styleless frame uploads are mbgl's two bootstraps, and both are whole-texture
+    // uploads. The rect path is the one with a rule the header has to carry — rows strided by
+    // `w * bytes-per-pixel`, and the pixel bytes accounting for exactly the rectangles named —
+    // so leaving it unexercised would leave the interesting half of the record unproven.
+    //
+    // Two rectangles in opposite corners rather than one, because that is the case the list
+    // exists for: a union over them uploads the whole atlas (§6.4).
+    let damage = [
+        Rect16 {
+            x: 0,
+            y: 0,
+            w: 4,
+            h: 2,
+        },
+        Rect16 {
+            x: 60,
+            y: 60,
+            w: 2,
+            h: 3,
+        },
+    ];
+    let format = TexturePixelType::Alpha;
+    let bytes: usize = damage
+        .iter()
+        .map(|rect| usize::from(rect.w) * usize::from(rect.h) * format.channels() as usize)
+        .sum();
+    let upload = texture::regions(
+        TextureId(64),
+        Extent {
+            width: 64,
+            height: 64,
+        },
+        format,
+        &damage,
+        &vec![0xA5; bytes],
+    )
+    .expect("two rectangles are within the cap");
+    texture::write(&mut producer, &upload).expect("the upload writes");
+
     arena.seal();
 
     let bytes = region
@@ -233,6 +276,66 @@ fn c_reads_the_frame() {
         counts.get("dangling_uses").copied(),
         Some(0),
         "a drawable names geometry that was never added: {counts:?}"
+    );
+}
+
+/// The two records whose payloads are shaped unlike anything else's, read from C.
+///
+/// A texture's damage is a *fixed array with a count beside it*, and a stencil list is a span
+/// whose count is in elements rather than in bytes. Both are places the header can be
+/// insufficient by omission rather than by error: the struct is right and the rule for reading
+/// it is written only in a Rust doc comment, which a C consumer never sees.
+///
+/// The failure each rule prevents is stated as an assertion rather than described. A consumer
+/// reading the whole rectangle array takes whatever the tail of it holds as damage, and uploads
+/// past the end of the surface — so every rectangle is checked to fall inside the texture it
+/// damages. A consumer validating a stencil span as `offset + count` against `payload_len`
+/// accepts a list running fifteen sixteenths past the end of the payload, because a
+/// `tsl_stencil_tile` is sixty-eight bytes and not one.
+///
+/// These are the records a Fluorite mirror needs and the earlier consumer never touched: it
+/// walked five of the twelve kinds, and the two it was furthest from proving were the two whose
+/// payload rules are not expressible in a struct.
+#[test]
+fn c_reads_the_textures_and_the_stencil_tiles() {
+    let dir = std::env::temp_dir().join(format!("tessella-c-payloads-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a working directory");
+    let (ring, slabs, _) = emit_frame();
+    let counts = run(&dir, &ring, &slabs);
+    std::fs::remove_dir_all(&dir).ok();
+
+    assert!(
+        counts.get("textures").copied().unwrap_or(0) > 0,
+        "the fixture emits no texture at all, so nothing here was exercised: {counts:?}"
+    );
+    assert!(
+        counts.get("whole_texture_uploads").copied().unwrap_or(0) > 0,
+        "the frame's textures are mbgl's two bootstraps, which are whole-texture uploads: \
+         {counts:?}"
+    );
+    assert!(
+        counts.get("texture_rects").copied().unwrap_or(0) >= 2,
+        "the two-rectangle upload was not walked, so the strided path is unproven: {counts:?}"
+    );
+    assert_eq!(
+        counts.get("texture_bad").copied(),
+        Some(0),
+        "a texture upload's byte count did not match the area it claims to cover, or a damage \
+         rectangle fell outside the texture it damages: {counts:?}"
+    );
+
+    assert!(
+        counts.get("stencils").copied().unwrap_or(0) > 0,
+        "the fixture emits no stencil record, so nothing here was exercised: {counts:?}"
+    );
+    assert!(
+        counts.get("stencil_tiles").copied().unwrap_or(0) > 0,
+        "a stencil record naming no tiles masks nothing: {counts:?}"
+    );
+    assert_eq!(
+        counts.get("stencil_bad").copied(),
+        Some(0),
+        "a stencil tile's matrix never came from a camera: {counts:?}"
     );
 }
 

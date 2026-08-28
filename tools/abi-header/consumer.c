@@ -214,6 +214,14 @@ int main(int argc, char **argv) {
      * (view, layer) and indexes it by the order entry's ubo_index, so a consumer that could
      * read geometry and not these could register a scene and draw none of it. */
     uint64_t ubos = 0, ubo_bytes = 0, ubo_frame_wide = 0, ubo_truncated = 0;
+    /* Textures and stencil tiles, which carry the two payload shapes nothing else here does: a
+     * fixed array with a separate count, and a span whose count is in elements rather than in
+     * bytes. Both are places a header is insufficient by omission rather than by error -- the
+     * struct is right and the rule for reading it is not written down -- so a consumer that
+     * walks them is what proves the header enough for a real mirror. */
+    uint64_t textures = 0, texture_rects = 0, texture_bytes = 0, texture_bad = 0;
+    uint64_t whole_texture_uploads = 0;
+    uint64_t stencils = 0, stencil_tiles = 0, stencil_bad = 0;
     /* Every geometry id declared, so a use naming one that was not can be reported. The ABI
      * says a consumer "looks an id up and finds whichever kind of thing it added", and that a
      * use of an id it never met is a protocol fault. A consumer that counted uses without
@@ -385,6 +393,94 @@ int main(int argc, char **argv) {
             cameras++;
             break;
         }
+        case TSL_ENVELOPE_KIND_TEXTURE_UPDATE: {
+            tsl_texture_update texture;
+            if (record.record_len < sizeof texture) {
+                break;
+            }
+            memcpy(&texture, fixed, sizeof texture);
+            textures++;
+            /* The rectangles are a fixed array with a count beside it, not a span, and the
+             * count is the only thing that says how much of the array means anything. Reading
+             * the whole array would take whatever the tail of it happens to hold as damage. */
+            if (texture.rect_count > TSL_TEXTURE_RECT_CAP) {
+                texture_bad++;
+                break;
+            }
+            texture_rects += texture.rect_count;
+            if ((uint64_t)texture.pixels.offset + texture.pixels.count > record.payload_len) {
+                texture_bad++;
+                break;
+            }
+            texture_bytes += texture.pixels.count;
+
+            /* How many bytes the pixels *should* be, which is the check that needs the header to
+             * say more than the format's name. A count that does not match the area is an
+             * upload that will run off the end of the surface or leave part of it stale, and
+             * nothing else in the record contradicts it. */
+            uint32_t pixel = tsl_texture_pixel_size(texture.format);
+            if (pixel == 0) {
+                texture_bad++;
+                break;
+            }
+            if (texture.rect_count == 0) {
+                /* A whole-texture upload. The header says rect_count of zero means this, and a
+                 * consumer that took it as "no damage" would upload nothing and sample a blank
+                 * atlas -- which is a map with no labels and no error anywhere. */
+                whole_texture_uploads++;
+                uint64_t want = (uint64_t)texture.size.width * texture.size.height * pixel;
+                if (want != texture.pixels.count) {
+                    texture_bad++;
+                }
+                break;
+            }
+            /* Every rectangle has to fall inside the texture it damages, and together they have
+             * to account for the bytes. A rect that does not fit is an upload past the end of
+             * the surface, which is the shape of failure a wrong offset produces here: the array
+             * is read from the wrong place and the coordinates come back as neighbouring
+             * fields. */
+            uint64_t want = 0;
+            for (unsigned r = 0; r < texture.rect_count; r++) {
+                uint32_t right = (uint32_t)texture.rects[r].x + texture.rects[r].w;
+                uint32_t bottom = (uint32_t)texture.rects[r].y + texture.rects[r].h;
+                if (right > texture.size.width || bottom > texture.size.height) {
+                    texture_bad++;
+                }
+                want += (uint64_t)texture.rects[r].w * texture.rects[r].h * pixel;
+            }
+            if (want != texture.pixels.count) {
+                texture_bad++;
+            }
+            break;
+        }
+        case TSL_ENVELOPE_KIND_STENCIL_TILES: {
+            tsl_stencil_tiles stencil;
+            if (record.record_len < sizeof stencil) {
+                break;
+            }
+            memcpy(&stencil, fixed, sizeof stencil);
+            stencils++;
+            /* A span of structs rather than of bytes, which is the case a header gets wrong by
+             * omission: the offset is in bytes and the count is in *elements*, so a consumer
+             * that validated `offset + count` would accept a list running fifteen sixteenths
+             * past the end of the payload. */
+            uint64_t span_bytes = (uint64_t)stencil.tiles.count * sizeof(tsl_stencil_tile);
+            if ((uint64_t)stencil.tiles.offset + span_bytes > record.payload_len) {
+                stencil_bad++;
+                break;
+            }
+            stencil_tiles += stencil.tiles.count;
+            for (uint32_t t = 0; t < stencil.tiles.count; t++) {
+                tsl_stencil_tile entry;
+                memcpy(&entry, payload + stencil.tiles.offset + t * sizeof entry, sizeof entry);
+                /* A tile matrix that is entirely zero never came from a camera. */
+                if (entry.matrix[0] == 0.0f && entry.matrix[5] == 0.0f
+                    && entry.matrix[15] == 0.0f) {
+                    stencil_bad++;
+                }
+            }
+            break;
+        }
         case TSL_ENVELOPE_KIND_ORDER_UPDATE: {
             tsl_order_update update;
             if (record.record_len < sizeof update) {
@@ -453,6 +549,14 @@ int main(int argc, char **argv) {
     printf("camera_light_milli %lld\n", (long long)(first_intensity * 1000.0));
     printf("camera_epoch %llu\n", (unsigned long long)first_epoch);
     printf("camera_cutoff %llu\n", (unsigned long long)first_cutoff);
+    printf("textures %llu\n", (unsigned long long)textures);
+    printf("texture_rects %llu\n", (unsigned long long)texture_rects);
+    printf("texture_bytes %llu\n", (unsigned long long)texture_bytes);
+    printf("texture_bad %llu\n", (unsigned long long)texture_bad);
+    printf("whole_texture_uploads %llu\n", (unsigned long long)whole_texture_uploads);
+    printf("stencils %llu\n", (unsigned long long)stencils);
+    printf("stencil_tiles %llu\n", (unsigned long long)stencil_tiles);
+    printf("stencil_bad %llu\n", (unsigned long long)stencil_bad);
     printf("dangling_uses %llu\n", (unsigned long long)dangling);
     free(declared);
     return (unresolved == 0 && ubo_truncated == 0 && camera_bad == 0) ? 0 : 1;

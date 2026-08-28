@@ -115,6 +115,9 @@ const BLOCK_OUTPUT: &str = "crates/tessella-glyph/src/generated/blocks.rs";
 /// Where the vertical-orientation tables land.
 const VERTICAL_OUTPUT: &str = "crates/tessella-glyph/src/generated/vertical.rs";
 
+/// Where the pixel-format channel counts land.
+const CHANNEL_OUTPUT: &str = "crates/tessella-capture-abi/src/generated/texture_channels.rs";
+
 /// One parsed C++ enumerator.
 struct Enumerator {
     name: String,
@@ -198,6 +201,14 @@ fn main() -> ExitCode {
         }
     };
 
+    let channels = match generate_channel_counts(&mbgl).map(|text| rustfmt(&text)) {
+        Ok(text) => text,
+        Err(err) => {
+            eprintln!("{err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     let blocks = match generate_unicode_blocks(&mbgl).map(|text| rustfmt(&text)) {
         Ok(text) => text,
         Err(err) => {
@@ -224,6 +235,7 @@ fn main() -> ExitCode {
     let operator_out = workspace.join(OPERATOR_OUTPUT);
     let block_out = workspace.join(BLOCK_OUTPUT);
     let vertical_out = workspace.join(VERTICAL_OUTPUT);
+    let channel_out = workspace.join(CHANNEL_OUTPUT);
     if check {
         let mut stale = false;
         for (path, name, want) in [
@@ -234,6 +246,7 @@ fn main() -> ExitCode {
             (&slot_out, SLOT_OUTPUT, &slots),
             (&operator_out, OPERATOR_OUTPUT, &operators),
             (&block_out, BLOCK_OUTPUT, &blocks),
+            (&channel_out, CHANNEL_OUTPUT, &channels),
         ] {
             let current = std::fs::read_to_string(path).unwrap_or_default();
             if current == *want {
@@ -283,6 +296,7 @@ fn main() -> ExitCode {
         (&slot_out, SLOT_OUTPUT, &slots),
         (&operator_out, OPERATOR_OUTPUT, &operators),
         (&block_out, BLOCK_OUTPUT, &blocks),
+        (&channel_out, CHANNEL_OUTPUT, &channels),
     ] {
         if let Err(err) = std::fs::write(path, text) {
             eprintln!("writing {}: {err}", path.display());
@@ -2719,4 +2733,85 @@ fn generate_vertical_orientation(mbgl: &Path) -> Result<Option<String>, String> 
     }
     out.push_str("];\n");
     Ok(Some(out))
+}
+
+/// Where mbgl decides how many channels a pixel format has.
+const CHANNEL_SOURCE: &str = "src/mbgl/gl/resource_pool.cpp";
+
+/// Generates `TexturePixelType::channels`, from mbgl's own switch.
+///
+/// The enum names the formats and says nothing about how large a pixel of each is, which is
+/// enough for a Rust producer — every caller sizes its own pixel slice — and not enough for a
+/// consumer. A `TextureUpdate` with `rect_count` zero is a whole-texture upload, and the only
+/// way to know whether its byte count matches its extent is to know the channel count. A C
+/// consumer with just the header had to hard-code that mapping, which is the drift this
+/// generator exists to prevent: mbgl adding a format would leave the table right and the
+/// consumer's guess wrong, silently, on one texture kind.
+///
+/// Parsed from `Texture2DDesc::channelCount`, where the fall-through cases are the point: four
+/// formats share the `return 1` and reading only the labelled one would give three of them a
+/// channel count of zero.
+fn generate_channel_counts(mbgl: &Path) -> Result<String, String> {
+    let path = mbgl.join(CHANNEL_SOURCE);
+    let text = std::fs::read_to_string(&path)
+        .map_err(|err| format!("reading {}: {err}", path.display()))?;
+    let body = text
+        .split_once("size_t Texture2DDesc::channelCount() const {")
+        .map(|(_, rest)| rest)
+        .and_then(|rest| rest.split_once("\n}"))
+        .map(|(body, _)| body)
+        .ok_or_else(|| format!("{}: no channelCount body", path.display()))?;
+
+    // Cases accumulate until a `return`, which is what makes the fall-through readable.
+    let mut counts: Vec<(String, u32)> = Vec::new();
+    let mut pending: Vec<String> = Vec::new();
+    for line in body.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("case gfx::TexturePixelType::") {
+            if let Some(name) = rest.strip_suffix(':') {
+                pending.push(name.to_string());
+            }
+        } else if let Some(rest) = line.strip_prefix("return ") {
+            let Some(value) = rest.strip_suffix(';').and_then(|v| v.parse::<u32>().ok()) else {
+                continue;
+            };
+            for name in pending.drain(..) {
+                counts.push((name, value));
+            }
+        }
+    }
+    if counts.is_empty() {
+        return Err(format!(
+            "{}: channelCount parsed to nothing — has it changed shape?",
+            path.display()
+        ));
+    }
+
+    let revision = tree_revision(mbgl);
+    let mut out = String::new();
+    out.push_str("//! How many channels a texture pixel format carries, generated from\n");
+    out.push_str("//! maplibre-native.\n//!\n");
+    out.push_str(&format!("//! Source revision: {revision}\n//!\n"));
+    out.push_str("//! From `Texture2DDesc::channelCount`. The enum alone says which formats\n");
+    out.push_str("//! exist and not how large a pixel of each is, which is enough for a\n");
+    out.push_str("//! producer — every caller sizes its own slice — and not enough for a\n");
+    out.push_str("//! consumer: a whole-texture upload's byte count can only be checked\n");
+    out.push_str("//! against its extent by something that knows this.\n//!\n");
+    out.push_str("//! Generated by `cargo run -p mbgl-codegen`. Do not edit.\n\n");
+    out.push_str("use crate::generated::mbgl_enums::TexturePixelType;\n\n");
+    out.push_str("impl TexturePixelType {\n");
+    out.push_str("    /// How many channels one pixel of this format carries.\n");
+    out.push_str("    ///\n");
+    out.push_str("    /// Every channel is one byte on this stream: mbgl's\n");
+    out.push_str("    /// `channelStorageSize` is per *channel data type*, and nothing here\n");
+    out.push_str("    /// sends anything but unsigned bytes.\n");
+    out.push_str("    #[must_use]\n");
+    out.push_str("    pub const fn channels(self) -> u32 {\n");
+    out.push_str("        match self {\n");
+    for (name, value) in &counts {
+        // The enum generator keeps mbgl's own spelling, `RGBA` included, so this must too.
+        out.push_str(&format!("            Self::{name} => {value},\n"));
+    }
+    out.push_str("        }\n    }\n}\n");
+    Ok(out)
 }
