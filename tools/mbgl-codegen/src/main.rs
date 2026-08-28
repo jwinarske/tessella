@@ -2161,11 +2161,38 @@ fn generate_ubo_slots(mbgl: &Path) -> Result<String, String> {
     Ok(out)
 }
 
-/// Keeps the `MLN_RENDER_BACKEND_VULKAN` branch of every conditional and drops the rest.
+/// Macros these headers gate on that are *true* when the backend is Vulkan.
 ///
-/// Deliberately narrow: it understands only the backend conditionals these two headers use, and
+/// `MLN_USE_FILL_EXTRUSION_INSTANCING` is spelled `(MLN_RENDER_BACKEND_METAL ||
+/// MLN_RENDER_BACKEND_VULKAN)` in `layer_ubo.hpp`, so under DR-16 it holds — and a gate that
+/// asked only whether a condition *mentions* Vulkan answered no and took the `#else`.
+///
+/// That was wrong twice over, which is why this list exists rather than a wider string match.
+/// It put `idFillExtrusionNormal2DVertexAttribute` in the table where the Vulkan build has
+/// `idFillExtrusionOutlinePosAttribute` — the two are the alternatives of one `#if`, so the
+/// table named an attribute that does not exist and omitted the one that does. And it dropped
+/// `idFillExtrusionInstanced`, which feeds `fillExtrusionDrawableSSBOCount`, which feeds
+/// `drawableUBOStartId` — so a slot the consumer binds by could have been off for every layer,
+/// not just this one.
+const VULKAN_TRUE: [&str; 2] = [
+    "MLN_RENDER_BACKEND_VULKAN",
+    "MLN_USE_FILL_EXTRUSION_INSTANCING",
+];
+
+/// Whether a preprocessor condition holds for the Vulkan build.
+fn holds_for_vulkan(condition: &str) -> bool {
+    VULKAN_TRUE
+        .iter()
+        .any(|macro_name| condition.contains(macro_name))
+}
+
+/// Keeps the Vulkan branch of every conditional and drops the rest.
+///
+/// Deliberately narrow: it understands only the conditionals these headers actually use, and
 /// treats anything else as unconditional. A general preprocessor would be the wrong tool — the
 /// point is not to compile C++ but to answer one question the same way the Vulkan build does.
+/// What it must not do is answer *no* to a macro it has not been told about, which is how the
+/// fill-extrusion attributes came to be wrong; [`VULKAN_TRUE`] is that list.
 fn select_vulkan(text: &str) -> String {
     let mut out = String::new();
     // `None` outside any conditional; `Some(true)` inside a branch that is taken.
@@ -2173,12 +2200,12 @@ fn select_vulkan(text: &str) -> String {
     for line in text.lines() {
         let trimmed = line.trim();
         if let Some(condition) = trimmed.strip_prefix("#if ") {
-            stack.push(condition.contains("MLN_RENDER_BACKEND_VULKAN"));
+            stack.push(holds_for_vulkan(condition));
             continue;
         }
         if let Some(condition) = trimmed.strip_prefix("#elif ") {
             if let Some(last) = stack.last_mut() {
-                *last = condition.contains("MLN_RENDER_BACKEND_VULKAN");
+                *last = holds_for_vulkan(condition);
             }
             continue;
         }

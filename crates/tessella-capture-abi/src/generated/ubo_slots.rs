@@ -125,76 +125,78 @@ pub const ID_SYMBOL_EVALUATED_PROPS_UBO: u32 = 5;
 pub const SYMBOL_LAYER_UBO_COUNT: u32 = 6;
 /// `drawableSSBOStartId`
 pub const DRAWABLE_SSBO_START_ID: u32 = 7;
+/// `idFillExtrusionInstanced`
+pub const ID_FILL_EXTRUSION_INSTANCED: u32 = 7;
 /// `fillExtrusionDrawableSSBOCount`
-pub const FILL_EXTRUSION_DRAWABLE_SSBO_COUNT: u32 = 0;
+pub const FILL_EXTRUSION_DRAWABLE_SSBO_COUNT: u32 = 8;
 /// `drawableUBOStartId`
-pub const DRAWABLE_UBO_START_ID: u32 = 7;
+pub const DRAWABLE_UBO_START_ID: u32 = 8;
 /// `backgroundUBOCount`
-pub const BACKGROUND_UBO_COUNT: u32 = 7;
+pub const BACKGROUND_UBO_COUNT: u32 = 8;
 /// `circleUBOCount`
-pub const CIRCLE_UBO_COUNT: u32 = 7;
+pub const CIRCLE_UBO_COUNT: u32 = 8;
 /// `idCollisionDrawableUBO`
-pub const ID_COLLISION_DRAWABLE_UBO: u32 = 7;
+pub const ID_COLLISION_DRAWABLE_UBO: u32 = 8;
 /// `idCollisionTilePropsUBO`
-pub const ID_COLLISION_TILE_PROPS_UBO: u32 = 8;
+pub const ID_COLLISION_TILE_PROPS_UBO: u32 = 9;
 /// `collisionUBOCount`
-pub const COLLISION_UBO_COUNT: u32 = 9;
+pub const COLLISION_UBO_COUNT: u32 = 10;
 /// `idClippingMaskUBO`
-pub const ID_CLIPPING_MASK_UBO: u32 = 7;
+pub const ID_CLIPPING_MASK_UBO: u32 = 8;
 /// `clippingMaskUBOCount`
-pub const CLIPPING_MASK_UBO_COUNT: u32 = 8;
+pub const CLIPPING_MASK_UBO_COUNT: u32 = 9;
 /// `colorReliefUBOCount`
-pub const COLOR_RELIEF_UBO_COUNT: u32 = 7;
+pub const COLOR_RELIEF_UBO_COUNT: u32 = 8;
 /// `idCustomGeometryDrawableUBO`
-pub const ID_CUSTOM_GEOMETRY_DRAWABLE_UBO: u32 = 7;
+pub const ID_CUSTOM_GEOMETRY_DRAWABLE_UBO: u32 = 8;
 /// `customGeometryUBOCount`
-pub const CUSTOM_GEOMETRY_UBO_COUNT: u32 = 8;
+pub const CUSTOM_GEOMETRY_UBO_COUNT: u32 = 9;
 /// `idCustomSymbolDrawableUBO`
-pub const ID_CUSTOM_SYMBOL_DRAWABLE_UBO: u32 = 7;
+pub const ID_CUSTOM_SYMBOL_DRAWABLE_UBO: u32 = 8;
 /// `customSymbolUBOCount`
-pub const CUSTOM_SYMBOL_UBO_COUNT: u32 = 8;
+pub const CUSTOM_SYMBOL_UBO_COUNT: u32 = 9;
 /// `idDebugUBO`
-pub const ID_DEBUG_UBO: u32 = 7;
+pub const ID_DEBUG_UBO: u32 = 8;
 /// `debugUBOCount`
-pub const DEBUG_UBO_COUNT: u32 = 8;
+pub const DEBUG_UBO_COUNT: u32 = 9;
 /// `fillUBOCount`
-pub const FILL_UBO_COUNT: u32 = 7;
+pub const FILL_UBO_COUNT: u32 = 8;
 /// `fillExtrusionUBOCount`
-pub const FILL_EXTRUSION_UBO_COUNT: u32 = 7;
+pub const FILL_EXTRUSION_UBO_COUNT: u32 = 8;
 /// `heatmapUBOCount`
-pub const HEATMAP_UBO_COUNT: u32 = 7;
+pub const HEATMAP_UBO_COUNT: u32 = 8;
 /// `idHillshadePrepareDrawableUBO`
-pub const ID_HILLSHADE_PREPARE_DRAWABLE_UBO: u32 = 7;
+pub const ID_HILLSHADE_PREPARE_DRAWABLE_UBO: u32 = 8;
 /// `idHillshadePrepareTilePropsUBO`
-pub const ID_HILLSHADE_PREPARE_TILE_PROPS_UBO: u32 = 8;
+pub const ID_HILLSHADE_PREPARE_TILE_PROPS_UBO: u32 = 9;
 /// `hillshadePrepareUBOCount`
-pub const HILLSHADE_PREPARE_UBO_COUNT: u32 = 9;
+pub const HILLSHADE_PREPARE_UBO_COUNT: u32 = 10;
 /// `hillshadeUBOCount`
-pub const HILLSHADE_UBO_COUNT: u32 = 7;
+pub const HILLSHADE_UBO_COUNT: u32 = 8;
 /// `lineUBOCount`
-pub const LINE_UBO_COUNT: u32 = 7;
+pub const LINE_UBO_COUNT: u32 = 8;
 /// `idLocationIndicatorDrawableUBO`
-pub const ID_LOCATION_INDICATOR_DRAWABLE_UBO: u32 = 7;
+pub const ID_LOCATION_INDICATOR_DRAWABLE_UBO: u32 = 8;
 /// `locationIndicatorUBOCount`
-pub const LOCATION_INDICATOR_UBO_COUNT: u32 = 8;
+pub const LOCATION_INDICATOR_UBO_COUNT: u32 = 9;
 /// `rasterUBOCount`
-pub const RASTER_UBO_COUNT: u32 = 7;
+pub const RASTER_UBO_COUNT: u32 = 8;
 /// `symbolUBOCount`
-pub const SYMBOL_UBO_COUNT: u32 = 7;
+pub const SYMBOL_UBO_COUNT: u32 = 8;
 /// `idWideVectorUniformsUBO`
-pub const ID_WIDE_VECTOR_UNIFORMS_UBO: u32 = 7;
+pub const ID_WIDE_VECTOR_UNIFORMS_UBO: u32 = 8;
 /// `idWideVectorUniformWideVecUBO`
-pub const ID_WIDE_VECTOR_UNIFORM_WIDE_VEC_UBO: u32 = 8;
+pub const ID_WIDE_VECTOR_UNIFORM_WIDE_VEC_UBO: u32 = 9;
 /// `wideVectorUBOCount`
-pub const WIDE_VECTOR_UBO_COUNT: u32 = 9;
+pub const WIDE_VECTOR_UBO_COUNT: u32 = 10;
 /// `maxUBOCountPerShader`
-pub const MAX_UBO_COUNT_PER_SHADER: u32 = 9;
+pub const MAX_UBO_COUNT_PER_SHADER: u32 = 10;
 /// `maxSSBOCountPerLayer`
 pub const MAX_SSBO_COUNT_PER_LAYER: u32 = 3;
 /// `maxUBOCountPerLayer`
 pub const MAX_UBO_COUNT_PER_LAYER: u32 = 2;
 /// `maxSSBOCountPerDrawable`
-pub const MAX_SSBO_COUNT_PER_DRAWABLE: u32 = 0;
+pub const MAX_SSBO_COUNT_PER_DRAWABLE: u32 = 1;
 /// `maxUBOCountPerDrawable`
 pub const MAX_UBO_COUNT_PER_DRAWABLE: u32 = 2;
 /// `idBackgroundImageTexture`
@@ -339,8 +341,8 @@ pub const FILL_VERTEX_ATTRIBUTE_COUNT: u32 = 6;
 pub const ID_FILL_EXTRUSION_POS_VERTEX_ATTRIBUTE: u32 = 0;
 /// `idFillExtrusionDecimalsEdAttribute`
 pub const ID_FILL_EXTRUSION_DECIMALS_ED_ATTRIBUTE: u32 = 1;
-/// `idFillExtrusionNormal2DVertexAttribute`
-pub const ID_FILL_EXTRUSION_NORMAL2_D_VERTEX_ATTRIBUTE: u32 = 2;
+/// `idFillExtrusionOutlinePosAttribute`
+pub const ID_FILL_EXTRUSION_OUTLINE_POS_ATTRIBUTE: u32 = 2;
 /// `idFillExtrusionBaseVertexAttribute`
 pub const ID_FILL_EXTRUSION_BASE_VERTEX_ATTRIBUTE: u32 = 3;
 /// `idFillExtrusionColorVertexAttribute`
@@ -453,7 +455,7 @@ pub const WIDE_VECTOR_INSTANCE_ATTRIBUTE_COUNT: u32 = 4;
 pub const MAX_VERTEX_ATTRIBUTE_COUNT_PER_SHADER: u32 = 11;
 
 /// Every evaluated symbol, for a lookup that does not hard-code which exist.
-pub const SLOTS: [(&str, u32); 221] = [
+pub const SLOTS: [(&str, u32); 222] = [
     ("idGlobalPaintParamsUBO", 0),
     ("idGlobalPlatformParamsUBO", 1),
     ("globalUBOCount", 2),
@@ -512,41 +514,42 @@ pub const SLOTS: [(&str, u32); 221] = [
     ("idSymbolEvaluatedPropsUBO", 5),
     ("symbolLayerUBOCount", 6),
     ("drawableSSBOStartId", 7),
-    ("fillExtrusionDrawableSSBOCount", 0),
-    ("drawableUBOStartId", 7),
-    ("backgroundUBOCount", 7),
-    ("circleUBOCount", 7),
-    ("idCollisionDrawableUBO", 7),
-    ("idCollisionTilePropsUBO", 8),
-    ("collisionUBOCount", 9),
-    ("idClippingMaskUBO", 7),
-    ("clippingMaskUBOCount", 8),
-    ("colorReliefUBOCount", 7),
-    ("idCustomGeometryDrawableUBO", 7),
-    ("customGeometryUBOCount", 8),
-    ("idCustomSymbolDrawableUBO", 7),
-    ("customSymbolUBOCount", 8),
-    ("idDebugUBO", 7),
-    ("debugUBOCount", 8),
-    ("fillUBOCount", 7),
-    ("fillExtrusionUBOCount", 7),
-    ("heatmapUBOCount", 7),
-    ("idHillshadePrepareDrawableUBO", 7),
-    ("idHillshadePrepareTilePropsUBO", 8),
-    ("hillshadePrepareUBOCount", 9),
-    ("hillshadeUBOCount", 7),
-    ("lineUBOCount", 7),
-    ("idLocationIndicatorDrawableUBO", 7),
-    ("locationIndicatorUBOCount", 8),
-    ("rasterUBOCount", 7),
-    ("symbolUBOCount", 7),
-    ("idWideVectorUniformsUBO", 7),
-    ("idWideVectorUniformWideVecUBO", 8),
-    ("wideVectorUBOCount", 9),
-    ("maxUBOCountPerShader", 9),
+    ("idFillExtrusionInstanced", 7),
+    ("fillExtrusionDrawableSSBOCount", 8),
+    ("drawableUBOStartId", 8),
+    ("backgroundUBOCount", 8),
+    ("circleUBOCount", 8),
+    ("idCollisionDrawableUBO", 8),
+    ("idCollisionTilePropsUBO", 9),
+    ("collisionUBOCount", 10),
+    ("idClippingMaskUBO", 8),
+    ("clippingMaskUBOCount", 9),
+    ("colorReliefUBOCount", 8),
+    ("idCustomGeometryDrawableUBO", 8),
+    ("customGeometryUBOCount", 9),
+    ("idCustomSymbolDrawableUBO", 8),
+    ("customSymbolUBOCount", 9),
+    ("idDebugUBO", 8),
+    ("debugUBOCount", 9),
+    ("fillUBOCount", 8),
+    ("fillExtrusionUBOCount", 8),
+    ("heatmapUBOCount", 8),
+    ("idHillshadePrepareDrawableUBO", 8),
+    ("idHillshadePrepareTilePropsUBO", 9),
+    ("hillshadePrepareUBOCount", 10),
+    ("hillshadeUBOCount", 8),
+    ("lineUBOCount", 8),
+    ("idLocationIndicatorDrawableUBO", 8),
+    ("locationIndicatorUBOCount", 9),
+    ("rasterUBOCount", 8),
+    ("symbolUBOCount", 8),
+    ("idWideVectorUniformsUBO", 8),
+    ("idWideVectorUniformWideVecUBO", 9),
+    ("wideVectorUBOCount", 10),
+    ("maxUBOCountPerShader", 10),
     ("maxSSBOCountPerLayer", 3),
     ("maxUBOCountPerLayer", 2),
-    ("maxSSBOCountPerDrawable", 0),
+    ("maxSSBOCountPerDrawable", 1),
     ("maxUBOCountPerDrawable", 2),
     ("idBackgroundImageTexture", 0),
     ("backgroundTextureCount", 1),
@@ -619,7 +622,7 @@ pub const SLOTS: [(&str, u32); 221] = [
     ("fillVertexAttributeCount", 6),
     ("idFillExtrusionPosVertexAttribute", 0),
     ("idFillExtrusionDecimalsEdAttribute", 1),
-    ("idFillExtrusionNormal2DVertexAttribute", 2),
+    ("idFillExtrusionOutlinePosAttribute", 2),
     ("idFillExtrusionBaseVertexAttribute", 3),
     ("idFillExtrusionColorVertexAttribute", 4),
     ("idFillExtrusionHeightVertexAttribute", 5),
