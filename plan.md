@@ -1020,9 +1020,11 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   extent varied by anchor would make placement's collision box depend on where the label
   happened to be anchored. Checked against `Shaping.ZWSP`'s four bounding boxes, which between
   them pin the line count, the line height, the widest line and the anchor's effect on all of
-  it. Vertical writing, images in text and per-section scaling are not implemented: each changes
-  a line's height as well as its width, and none has an oracle here until R3 brings the sprite
-  atlas. Three more tests were vacuous for want of a case — every one used zero spacing and no
+  it. Vertical writing, images in text and per-section scaling were listed here as unimplemented,
+  with no oracle until R3 brought the sprite atlas. Both halves of that were wrong: R3 brought the
+  atlas and nothing changed, and what stood in the way was the elision of the glyph vertex buffer.
+  All three are built now — R2 above records what the probe change that unblocked them also
+  caught. Three more tests were vacuous for want of a case — every one used zero spacing and no
   leading whitespace — so the trailing-spacing rule, the final advance in justification and the
   line trim all survived deletion until inputs that separate them were added.
   The atlas under all of it is a port of `mapbox::ShelfPack`, which is what mbgl's dynamic
