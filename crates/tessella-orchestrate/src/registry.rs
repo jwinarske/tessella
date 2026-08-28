@@ -271,6 +271,8 @@ pub struct Session {
 struct ViewMemory {
     order: crate::order::DrawOrder,
     camera: Option<crate::damage::CameraKey>,
+    /// Whether the view has been declared and the constant textures sent.
+    declared: bool,
 }
 
 impl Session {
@@ -336,6 +338,24 @@ impl Session {
     /// Records the camera a frame has just sent.
     pub fn record_camera(&mut self, view: ViewId, camera: crate::damage::CameraKey) {
         self.views.entry(view.0).or_default().camera = Some(camera);
+    }
+
+    /// Whether this view still needs its declaration and the constant textures.
+    ///
+    /// A query rather than a mark, and [`Self::record_declared`] is the other half — for the
+    /// reason the camera is split the same way: a frame that fails must not have recorded a
+    /// declaration it never sent, or the consumer is left with a `ViewUse` naming a view it was
+    /// never told about, which DR-18 calls a protocol fault.
+    #[must_use]
+    pub fn needs_declaring(&self, view: ViewId) -> bool {
+        self.views
+            .get(&view.0)
+            .is_none_or(|memory| !memory.declared)
+    }
+
+    /// Records that a frame has declared this view.
+    pub fn record_declared(&mut self, view: ViewId) {
+        self.views.entry(view.0).or_default().declared = true;
     }
 
     /// Forgets a view entirely, for one that has been undeclared.

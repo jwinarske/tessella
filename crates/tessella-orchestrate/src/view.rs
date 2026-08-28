@@ -156,6 +156,30 @@ impl ViewSession {
         self.declared.is_empty()
     }
 
+    /// As [`Self::declare`], writing the record only when `write` is true.
+    ///
+    /// The view is marked declared either way. A stream that has told the consumer about this
+    /// view once need not repeat it — DR-18 re-emits a declaration when the *configuration*
+    /// changes, not every frame — but this session still has to know the view is legitimate, or
+    /// the very next `use_geometry` is refused as undeclared.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::declare`].
+    pub fn declare_if(
+        &mut self,
+        producer: &mut Producer,
+        view: ViewId,
+        mode: CameraMode,
+        write: bool,
+    ) -> Result<(), ViewError> {
+        if write {
+            return self.declare(producer, view, mode);
+        }
+        self.declared.insert(view.0);
+        Ok(())
+    }
+
     /// Declares a view and its camera mode.
     ///
     /// Re-declaring is how a mode changes, so it is not an error — but it is the only way, and

@@ -361,10 +361,22 @@ fn emit_into(
     let camera_moved = session
         .as_deref()
         .is_none_or(|session| session.camera_differs(frame.view_id, &key));
+    // A view is declared once and its constant textures sent once. DR-18 re-emits a declaration
+    // only when the configuration changes, and the placeholders never change at all.
+    let declare = session
+        .as_deref()
+        .is_none_or(|session| session.needs_declaring(frame.view_id));
     if let Some(session) = session.as_deref_mut() {
         session.registry().begin_frame(frame.view_id);
     }
-    match emit_group(producer, arena, frame, session.as_deref_mut(), camera_moved) {
+    match emit_group(
+        producer,
+        arena,
+        frame,
+        session.as_deref_mut(),
+        camera_moved,
+        declare,
+    ) {
         Ok(emitted) => {
             // Only now: a frame that could not be written must leave the registry as it found
             // it, so the retry announces the same geometry rather than assuming the consumer
@@ -372,6 +384,7 @@ fn emit_into(
             if let Some(session) = session {
                 session.registry().retire();
                 session.record_camera(frame.view_id, key);
+                session.record_declared(frame.view_id);
             }
             producer.commit();
             Ok(emitted)
@@ -398,6 +411,7 @@ fn emit_group(
     frame: &Frame<'_>,
     stream: Option<&mut Session>,
     camera_moved: bool,
+    declare: bool,
 ) -> Result<Emitted, FrameError> {
     let Frame {
         style,
@@ -412,13 +426,16 @@ fn emit_group(
 
     let mut session = ViewSession::new();
     session
-        .declare(producer, view_id, CameraMode::Producer)
+        .declare_if(producer, view_id, CameraMode::Producer, declare)
         .map_err(FrameError::from)?;
 
     // Frame-wide state the shaders read whatever the style says. The placeholders matter: a
     // shader samples its texture slots unconditionally, so a drawable whose layer binds none
     // still reads whatever was last at that slot.
     for upload in texture::placeholders() {
+        if !declare {
+            break;
+        }
         texture::write(producer, &upload)?;
     }
     // The glyph atlas, before any drawable names it. A symbol geometry carries a texture
@@ -451,14 +468,17 @@ fn emit_group(
         texture::write(producer, &upload)?;
     }
 
-    let global = ubo::GlobalPaintParams::for_view(view, [64.0, 64.0], 1.0).pack();
-    ubo::write(
-        producer,
-        view_id,
-        ubo::FRAME_WIDE,
-        ubo_slots::ID_GLOBAL_PAINT_PARAMS_UBO,
-        &global,
-    )?;
+    // Derived from the viewport, so it moves when the camera does and not otherwise.
+    if camera_moved || declare {
+        let global = ubo::GlobalPaintParams::for_view(view, [64.0, 64.0], 1.0).pack();
+        ubo::write(
+            producer,
+            view_id,
+            ubo::FRAME_WIDE,
+            ubo_slots::ID_GLOBAL_PAINT_PARAMS_UBO,
+            &global,
+        )?;
+    }
 
     // Held across frames when there is a stream, so an order identical to the last one it sent
     // recognises itself and stays off the ring. `DrawOrder` has always suppressed that; building
@@ -571,6 +591,13 @@ fn emit_group(
             bound.push(binding);
         }
     }
+
+    // Every layer's matrices and clip masks follow the camera and the cover, and a frame that
+    // moved neither has already established that both are where they were. `scene_changed` is
+    // the cover half: a drawable arriving, one this view had not bound, or one leaving.
+    let scene_changed = registry.as_deref().is_none_or(|registry| {
+        !fresh.is_empty() || !unbound.is_empty() || !registry.released().is_empty()
+    });
 
     // The geometry, packed in the order it will be drawn.
     //
@@ -740,8 +767,10 @@ fn emit_group(
         }
     }
 
-    for (layer_index, bindings) in &by_layer {
-        write_layer_state(producer, frame, *layer_index, bindings, tiles)?;
+    if camera_moved || scene_changed || declare {
+        for (layer_index, bindings) in &by_layer {
+            write_layer_state(producer, frame, *layer_index, bindings, tiles)?;
+        }
     }
 
     // The order, then the camera naming its epoch — never the other way round.

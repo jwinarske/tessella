@@ -461,8 +461,9 @@ fn a_frame_touches_only_its_own_view() {
     let mut arena = SlabArena::new();
     let mut registry = Session::new();
 
-    // Two rounds, so the second exercises the settled path as well as the first emission — a
-    // release names a view too, and only a frame after something moved emits one.
+    // Two rounds. The first is the emission; the second is the settled path, which now emits
+    // *nothing* for a parked view — so it checks the stronger property that silence is silence,
+    // rather than that the records it would have written name the right view.
     for round in 0..2 {
         for (index, scene) in scenes.iter().enumerate() {
             #[allow(clippy::cast_possible_truncation)]
@@ -518,10 +519,17 @@ fn a_frame_touches_only_its_own_view() {
                 let consumed = record.consumed();
                 consumer.advance(consumed);
             }
-            assert!(
-                checked > 0,
-                "round {round}, {view_id:?}: no view-keyed record to check"
-            );
+            if round == 0 {
+                assert!(
+                    checked > 0,
+                    "the first frame has view-keyed records to check"
+                );
+            } else {
+                assert_eq!(
+                    checked, 0,
+                    "a settled view writes no view-keyed record at all"
+                );
+            }
         }
     }
 }
