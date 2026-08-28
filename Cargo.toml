@@ -6,7 +6,9 @@ members = ["crates/*", "tools/*"]
 # Codegen scripts rather than crates. `tools/*` globs members, and a directory of Python under it
 # is not one — the mbgl oracles live inside `tools/mbgl-codegen` and so are covered by its
 # manifest, while this reads the Unicode Character Database and belongs to no crate.
-exclude = ["tools/unicode-codegen"]
+# `fuzz` is its own workspace: libFuzzer needs nightly and DR-17 pins this one to the stable the
+# target's Yocto release carries.
+exclude = ["tools/unicode-codegen", "fuzz"]
 
 [workspace.package]
 version = "0.0.0"

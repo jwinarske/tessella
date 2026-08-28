@@ -7,9 +7,11 @@
 //! mutation happens here, deterministically, in a test that goes with every commit. It is a
 //! weaker search than coverage-guided fuzzing and it runs a thousand times more often, which for
 //! the failures this is about — a panic on a truncated length, an index past the end of a
-//! buffer, a count believed without checking — is the better trade. A `fuzz/` directory for
-//! depth remains worth adding; it is not a substitute for this and this is not a substitute for
-//! it.
+//! buffer, a count believed without checking — is the better trade.
+//!
+//! `fuzz/` now holds the other half, in its own workspace on nightly for the reason above. It is
+//! not a substitute for this and this is not a substitute for it: that one searches and this one
+//! runs.
 //!
 //! # What a failure means
 //!

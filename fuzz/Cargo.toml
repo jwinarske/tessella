@@ -1,0 +1,43 @@
+[package]
+name = "tessella-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Outside the workspace on purpose. `libfuzzer-sys` needs a nightly compiler and DR-17 pins the
+# workspace to the stable the target's Yocto release carries, so building this with the rest
+# would make every `cargo build` need a toolchain the device's does not have.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tessella-capture-abi = { path = "../crates/tessella-capture-abi" }
+tessella-source = { path = "../crates/tessella-source" }
+tessella-style = { path = "../crates/tessella-style" }
+
+[[bin]]
+name = "mvt_tile"
+path = "fuzz_targets/mvt_tile.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "style_json"
+path = "fuzz_targets/style_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "capture_ring"
+path = "fuzz_targets/capture_ring.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = true

@@ -1,0 +1,5 @@
+# libFuzzer needs nightly. The workspace above is pinned to the target's stable, and this
+# directory is outside it for that reason — see `fuzz/Cargo.toml`.
+[toolchain]
+channel = "nightly"
+components = ["rust-src"]

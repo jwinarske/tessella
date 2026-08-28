@@ -154,3 +154,31 @@ jobs:
           key: stable
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --workspace --all-features
+
+  fuzz:
+    # A smoke run, not a campaign. Coverage-guided fuzzing pays off over hours and CI has
+    # minutes, so what this buys is that the targets still build and still return on a short
+    # burst — which is the failure that actually happens, a target that stopped compiling after
+    # a signature changed and nobody noticed because nobody runs it. `malformed_input.rs` is the
+    # deterministic half and runs with every commit; this is the half that searches.
+    name: fuzz smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      # libFuzzer needs nightly, which is why `fuzz/` is its own workspace: DR-17 pins the main
+      # one to the stable the target's Yocto release carries.
+      - run: rustup toolchain install nightly --profile minimal --component rust-src
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: fuzz
+          workspaces: fuzz
+      - run: cargo +nightly install cargo-fuzz --locked
+      - name: build every target
+        working-directory: fuzz
+        run: cargo +nightly fuzz build
+      - name: run each briefly
+        working-directory: fuzz
+        run: |
+          for target in mvt_tile style_json capture_ring; do
+            cargo +nightly fuzz run "$target" -- -runs=100000 -max_total_time=60
+          done

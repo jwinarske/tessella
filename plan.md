@@ -1695,8 +1695,23 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   the target's Yocto release carries, so a fuzz target CI cannot run is a fuzz target nobody
   runs. The mutation happens in a test instead — deterministic, seeded by a constant, and going
   with every commit. A weaker search that runs a thousand times more often, which for the
-  failures this is about is the better trade. A `fuzz/` directory for depth is still worth
-  adding; neither substitutes for the other.
+  failures this is about is the better trade.
+  **`fuzz/` now holds the other half**, in its own workspace with its own nightly toolchain so
+  that nothing in an ordinary build reaches it. Three targets, and the third earns its place
+  differently from the other two: a vector tile and a style document go deeper into parsers the
+  harness already covers, where `capture_ring` is new ground — the bytes are the one input
+  another *process* writes, and every number the consumer walks is one it reads rather than one
+  it computed.
+  Its first version handed `attach` raw fuzz bytes and got four new coverage units in two hundred
+  thousand runs: every input failed the ABI-revision check at the front door, so the walk under
+  test never ran. What is interesting is not that `attach` rejects garbage, which a unit test
+  asserts once, but what the walk does with records — so the control block is well formed by
+  construction and the fuzzer owns the data region. Fifty-eight units on the same budget, and the
+  walk is capped so that a record consuming nothing reports as a named failure rather than as a
+  timeout.
+  CI runs each target for a minute, which is a smoke test rather than a campaign. What it buys is
+  that the targets still build and still return — the failure that actually happens to a fuzz
+  target nobody runs.
   The contract is *return, either way*. `forbid(unsafe_code)` holds across all ten crates, so a
   malformed input cannot corrupt memory; what it can do is panic — which on a worker takes down a
   tile build, and which a hostile origin can then trigger at will — or allocate from a number it
