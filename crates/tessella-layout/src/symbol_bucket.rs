@@ -387,8 +387,8 @@ pub struct LaidOut {
     /// `text-writing-mode` lists `vertical` and some character in the label has an upright
     /// orientation of its own. Both shapings go into the same buffer, horizontal first, and
     /// placement draws one of them: it tries the horizontal box and falls back to the vertical,
-    /// so it needs to know where one ends and the other begins.
-    pub vertical: Option<usize>,
+    /// so it needs to know where one ends and the other begins, and what box the other reserves.
+    pub vertical: Option<Vertical>,
     /// Which vertices of the shared buffer are this label's.
     ///
     /// A layer's labels share one buffer, so per-frame state — the opacity a fade produced, the
@@ -608,7 +608,10 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
                 &quads::glyph_quads(&shaped, placed, &horizontal),
                 options.size,
             );
-            Some(vertices)
+            Some(Vertical {
+                at: vertices,
+                extent: (shaped.top, shaped.bottom, shaped.left, shaped.right),
+            })
         } else {
             None
         };
@@ -626,6 +629,19 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
     }
 
     (buffers, out)
+}
+
+/// A label's second shaping, set the other way.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Vertical {
+    /// Where its vertices start in the shared buffer. The horizontal half is everything before.
+    pub at: usize,
+    /// The extent it occupies around the anchor, in pixels: top, bottom, left, right.
+    ///
+    /// A different shape from the horizontal one, and that is the point of keeping both: a
+    /// column is tall and narrow where a row is wide and short, so a label that will not fit
+    /// across may still fit down. Placement tests this box only when the other one collides.
+    pub extent: (f32, f32, f32, f32),
 }
 
 /// A label that follows a line rather than sitting at a point.
@@ -787,7 +803,10 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                     text_size: options.symbol.size,
                 },
             );
-            Some(quads::glyph_quads(&shaped, placed, &quad_options))
+            Some((
+                quads::glyph_quads(&shaped, placed, &quad_options),
+                (shaped.top, shaped.bottom, shaped.left, shaped.right),
+            ))
         } else {
             None
         };
@@ -811,7 +830,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                     1.0,
                 );
             }
-            let vertical = turned.as_ref().map(|turned| {
+            let vertical = turned.as_ref().map(|(turned, extent)| {
                 let at = buffers.vertices.len();
                 for quad in turned {
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -830,7 +849,10 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                         1.0,
                     );
                 }
-                at
+                Vertical {
+                    at,
+                    extent: *extent,
+                }
             });
             out.push(LaidOut {
                 pending: label.pending,

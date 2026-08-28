@@ -105,6 +105,13 @@ impl Default for FrameOptions {
 #[derive(Debug, Default)]
 pub struct ViewSymbols {
     fades: Fades,
+    /// Which orientation each label last drew in, by cross-tile id.
+    ///
+    /// mbgl's `placedOrientations`, and it is remembered rather than recomputed because the
+    /// alternative flickers: a label that fails to place this frame is fading out in the
+    /// orientation it was drawn in, and re-deciding while it fades would turn it on its side on
+    /// the way. So a frame that places nothing for a label leaves its entry alone.
+    orientations: alloc::collections::BTreeMap<u32, bool>,
 }
 
 impl ViewSymbols {
@@ -186,15 +193,50 @@ impl ViewSymbols {
                     .map(Shape::Box)
                 });
 
+                // The same construction against the other shaping's box, offered only when
+                // there is one. mbgl builds a second collision feature for exactly this.
+                let vertical_text = label.laid_out.vertical.and_then(|vertical| {
+                    let (top, bottom, left, right) = vertical.extent;
+                    let extent = Extent {
+                        top,
+                        bottom,
+                        left,
+                        right,
+                    };
+                    if label.line.is_empty() {
+                        collision_box(extent, anchor, 1.0, options.padding, 0.0).map(Shape::Box)
+                    } else {
+                        let line: Vec<(f32, f32)> =
+                            label.line.iter().map(|point| project(*point)).collect();
+                        collision_circles(
+                            extent,
+                            &line,
+                            anchor,
+                            label.laid_out.segment,
+                            1.0,
+                            options.padding,
+                            options.overscaling,
+                        )
+                        .map(Shape::Circles)
+                    }
+                });
+
                 Candidate {
                     cross_tile_id: label.cross_tile_id,
                     text,
+                    vertical_text,
                     icon,
                 }
             })
             .collect();
 
         let placed = place(&candidates, &options.rules, &mut grid);
+        for entry in &placed {
+            if entry.text {
+                self.orientations
+                    .insert(entry.cross_tile_id, entry.vertical);
+            }
+        }
         self.fades.step(
             options.increment,
             placed
@@ -242,8 +284,26 @@ impl ViewSymbols {
             if range.end > buffers.opacity.len() {
                 continue;
             }
-            for slot in &mut buffers.opacity[range] {
-                *slot = packed;
+
+            // A label shaped both ways has both in this range, and only one of them is drawn.
+            // The other is set transparent rather than left out of the buffer, because the
+            // choice is per view and the buffer is shared: two views of one tile can be drawing
+            // different orientations of the same label in the same frame.
+            let split = label.laid_out.vertical.map(|vertical| {
+                let vertical_wins = self
+                    .orientations
+                    .get(&label.cross_tile_id)
+                    .copied()
+                    .unwrap_or(false);
+                (vertical.at.clamp(range.start, range.end), vertical_wins)
+            });
+            let hidden = opacity_vertex(false, 0.0);
+            for (at, slot) in buffers.opacity[range.clone()].iter_mut().enumerate() {
+                let at = range.start + at;
+                *slot = match split {
+                    Some((boundary, vertical_wins)) if (at >= boundary) != vertical_wins => hidden,
+                    _ => packed,
+                };
             }
         }
     }

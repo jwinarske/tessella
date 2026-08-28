@@ -55,6 +55,13 @@ pub struct Candidate {
     pub cross_tile_id: u32,
     /// The shape the text reserves, if it has text.
     pub text: Option<Shape>,
+    /// The shape it would reserve set *vertically*, if it can be.
+    ///
+    /// mbgl's second collision feature. A label that permits vertical writing is shaped both
+    /// ways and both boxes are kept, because the two are different shapes — a column is tall
+    /// and narrow where the row is wide and short — and a label that will not fit across may
+    /// still fit down. Which one is drawn is decided here and nowhere earlier.
+    pub vertical_text: Option<Shape>,
     /// The shape the icon reserves, if it has one.
     pub icon: Option<Shape>,
 }
@@ -156,6 +163,11 @@ pub struct Placed {
     pub text: bool,
     /// Whether the icon is drawn.
     pub icon: bool,
+    /// Whether the text that is drawn is the vertical shaping rather than the horizontal one.
+    ///
+    /// mbgl's `placedOrientation`. Always false when there is only one shaping, which is every
+    /// label the style did not ask to set vertically.
+    pub vertical: bool,
 }
 
 impl Placed {
@@ -182,6 +194,13 @@ pub fn place(candidates: &[Candidate], rules: &Rules, grid: &mut GridIndex<u32>)
             None => false,
             Some(shape) => rules.text_allow_overlap || !shape.collides(grid),
         };
+        // Horizontal first, and vertical only if it did not fit. mbgl's order, and it is a
+        // preference rather than a tie-break: a label that fits both ways is drawn across.
+        let mut vertical = false;
+        if !place_text && let Some(shape) = &candidate.vertical_text {
+            place_text = rules.text_allow_overlap || !shape.collides(grid);
+            vertical = place_text;
+        }
         let mut place_icon = match &candidate.icon {
             None => false,
             Some(shape) => rules.icon_allow_overlap || !shape.collides(grid),
@@ -204,9 +223,15 @@ pub fn place(candidates: &[Candidate], rules: &Rules, grid: &mut GridIndex<u32>)
         }
 
         // Only what was placed goes in, and only if it is meant to block.
+        // Whichever orientation won is the one that blocks, since it is the one drawn.
+        let drawn = if vertical {
+            candidate.vertical_text.as_ref()
+        } else {
+            candidate.text.as_ref()
+        };
         if place_text
             && !rules.text_ignore_placement
-            && let Some(shape) = &candidate.text
+            && let Some(shape) = drawn
         {
             shape.insert(grid, candidate.cross_tile_id);
         }
@@ -221,6 +246,7 @@ pub fn place(candidates: &[Candidate], rules: &Rules, grid: &mut GridIndex<u32>)
             cross_tile_id: candidate.cross_tile_id,
             text: place_text,
             icon: place_icon,
+            vertical: place_text && vertical,
         });
     }
 

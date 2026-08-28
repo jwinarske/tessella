@@ -30,6 +30,7 @@ fn text_only(id: u32, anchor: (f32, f32)) -> Candidate {
     Candidate {
         cross_tile_id: id,
         text: Some(Shape::Box(label(anchor))),
+        vertical_text: None,
         icon: None,
     }
 }
@@ -67,12 +68,14 @@ fn the_first_of_two_overlapping_labels_wins() {
             Placed {
                 cross_tile_id: 1,
                 text: true,
-                icon: false
+                icon: false,
+                vertical: false,
             },
             Placed {
                 cross_tile_id: 2,
                 text: false,
-                icon: false
+                icon: false,
+                vertical: false,
             },
         ]
     );
@@ -262,6 +265,7 @@ fn the_two_halves_combine_by_the_optional_rules() {
         let candidate = Candidate {
             cross_tile_id: 1,
             text: Some(Shape::Box(label((100.0, 100.0)))),
+            vertical_text: None,
             icon: Some(Shape::Box(label((300.0, 100.0)))),
         };
         let rules = Rules {
@@ -301,6 +305,7 @@ fn an_icon_only_symbol_places_without_text() {
     let candidate = Candidate {
         cross_tile_id: 1,
         text: None,
+        vertical_text: None,
         icon: Some(Shape::Box(label((100.0, 100.0)))),
     };
     let placed = place(&[candidate], &Rules::default(), &mut grid());
@@ -314,6 +319,7 @@ fn a_symbol_with_no_boxes_reserves_nothing() {
     let empty = Candidate {
         cross_tile_id: 1,
         text: None,
+        vertical_text: None,
         icon: None,
     };
     let mut grid = grid();
@@ -321,4 +327,78 @@ fn a_symbol_with_no_boxes_reserves_nothing() {
 
     assert!(!placed[0].any());
     assert!(grid.is_empty(), "nothing was reserved");
+}
+
+/// A label that fits across is drawn across, even when it would also fit down.
+///
+/// Horizontal is a preference and not a tie-break: mbgl tries it first and only reaches the
+/// vertical shaping when the first one collides. A rule that took whichever fit better would
+/// turn labels on their side as the camera moved and nothing else changed.
+#[test]
+fn horizontal_wins_when_both_fit() {
+    let candidates = [Candidate {
+        cross_tile_id: 1,
+        text: Some(Shape::Box(label((100.0, 100.0)))),
+        vertical_text: Some(Shape::Box(label((100.0, 100.0)))),
+        icon: None,
+    }];
+
+    let placed = place(&candidates, &Rules::default(), &mut grid());
+    assert!(placed[0].text);
+    assert!(!placed[0].vertical, "it fit across, so it is set across");
+}
+
+/// A label that does not fit across is tried down before it is given up on.
+#[test]
+fn vertical_is_tried_when_horizontal_collides() {
+    let mut grid = grid();
+
+    // Something already at the anchor, so the horizontal box has nowhere to go.
+    let blocker = [Candidate {
+        cross_tile_id: 9,
+        text: Some(Shape::Box(label((100.0, 100.0)))),
+        vertical_text: None,
+        icon: None,
+    }];
+    place(&blocker, &Rules::default(), &mut grid);
+
+    // The same label again, whose vertical shaping sits clear of the blocker — a real
+    // difference, since a column is tall and narrow where the row is wide and short.
+    let candidates = [Candidate {
+        cross_tile_id: 1,
+        text: Some(Shape::Box(label((100.0, 100.0)))),
+        vertical_text: Some(Shape::Box(label((600.0, 600.0)))),
+        icon: None,
+    }];
+
+    let placed = place(&candidates, &Rules::default(), &mut grid);
+    assert!(placed[0].text, "the vertical shaping had room");
+    assert!(placed[0].vertical, "and it is the one drawn");
+}
+
+/// A label with nowhere to go either way is not placed, and claims no orientation.
+#[test]
+fn neither_orientation_fits() {
+    let mut grid = grid();
+    let blocker = [Candidate {
+        cross_tile_id: 9,
+        text: Some(Shape::Box(label((100.0, 100.0)))),
+        vertical_text: None,
+        icon: None,
+    }];
+    place(&blocker, &Rules::default(), &mut grid);
+
+    let candidates = [Candidate {
+        cross_tile_id: 1,
+        text: Some(Shape::Box(label((100.0, 100.0)))),
+        vertical_text: Some(Shape::Box(label((100.0, 100.0)))),
+        icon: None,
+    }];
+
+    let placed = place(&candidates, &Rules::default(), &mut grid);
+    assert!(!placed[0].text);
+    assert!(
+        !placed[0].vertical,
+        "an unplaced label is not drawn in either orientation"
+    );
 }

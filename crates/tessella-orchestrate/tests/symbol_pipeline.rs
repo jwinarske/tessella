@@ -298,6 +298,7 @@ fn a_tile_of_labels_places_and_settles() {
         .map(|(symbol, placed)| Candidate {
             cross_tile_id: symbol.cross_tile_id,
             text: Some(Shape::Box(*placed)),
+            vertical_text: None,
             icon: None,
         })
         .collect();
