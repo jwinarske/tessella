@@ -33,14 +33,17 @@ MARK = "---------------- (atlas order varies)"
 # carrying the atlas rectangles; every other slot of the same layers was byte-identical across
 # the captures and stays in the golden.
 #
-# The rule is what was *observed* to move, not what could. The background's slot 5 and the
-# data-driven layer's slot 4 carry rectangles too and held still across every capture taken, so
-# they stay in the golden — eliding a comparison that holds gives away a check for nothing. If a
-# later capture shows either moving, it belongs here and the reason is the same one.
+# The rule is what was *observed* to move, not what could. The background's slot 5 carries
+# rectangles too and has held still across every capture taken, so it stays — eliding a
+# comparison that holds gives away a check for nothing. The data-driven layer's per-vertex
+# buffers were in that category until a capture showed them moving, which is what the rule is
+# for: they are elided now and the background is not, on evidence rather than on symmetry.
 PATTERN_SLOTS = {
     ("layer:1", "slot=4"),
     ("layer:2", "slot=4"),
     ("layer:3", "slot=3"),
+    # The extrusion layer's, which carries rectangles like a fill's and moves like one.
+    ("layer:5", "slot=4"),
 }
 
 
@@ -72,6 +75,19 @@ def elide(path: str) -> int:
         # in format. They say nothing about the pattern, so they are dropped rather than
         # elided -- eliding would leave a line whose presence still varied.
         if stripped.startswith("texture 1x1 "):
+            changed += 1
+            continue
+
+        # A data-driven pattern's rectangles travel per *vertex* as well as in a uniform, and
+        # they follow the packing exactly as the uniforms do: ids 4 and 5 are
+        # `idFillPatternFrom/ToVertexAttribute`, and their buffer's hash moves when the atlas
+        # does. Everything else about the descriptor — the binding, the type, the stride, the
+        # length — is a property of the shader and stays.
+        # Indented, unlike every other line this touches, so the comparison is against the
+        # trimmed text and the rewrite keeps the indentation the dump gave it.
+        body = stripped.lstrip()
+        if body.startswith("attr ") and (" id=4 " in body or " id=5 " in body):
+            out.append(re.sub(r"src=(\d+):[0-9a-f]+", rf"src=\1:{MARK}", stripped) + "\n")
             changed += 1
             continue
 

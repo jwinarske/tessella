@@ -195,6 +195,21 @@
           "hospital_striped"
         ]
       }
+    },
+    {
+      "id": "fill-extrusion-pattern",
+      "type": "fill-extrusion",
+      "source": "probe",
+      "filter": [
+        "==",
+        "$type",
+        "Polygon"
+      ],
+      "paint": {
+        "fill-extrusion-pattern": "grass_pattern",
+        "fill-extrusion-height": 20,
+        "fill-extrusion-opacity": 0.8
+      }
     }
   ]
 }

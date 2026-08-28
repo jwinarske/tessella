@@ -108,8 +108,10 @@ names where an image was packed, so a different packing is a different rectangle
 sprite. The *size* does not move: `sand_noise` is fifty by fifty in every capture, only its
 origin travels. The texture count moves too, because some runs emit an extra 1x1 placeholder.
 
-`tools/mbgl-codegen/oracles/elide_pattern_atlas.py` elides the three pattern buffers and the
-atlas hash, and drops the placeholders. It keeps each buffer's `size=`, which is a property of
+`tools/mbgl-codegen/oracles/elide_pattern_atlas.py` elides the pattern buffers and the atlas
+hash, and drops the placeholders. It also elides the data-driven layer's per-vertex rectangle
+buffers, ids 4 and 5 — those follow the packing exactly as the uniforms do, and everything else
+about their descriptors is a property of the shader and stays. It keeps each buffer's `size=`, which is a property of
 the shader's block rather than of the packing, so a wrong block size still fails. Run it after
 capturing or the file will not match.
 
@@ -118,18 +120,26 @@ attribute descriptor and segment, the index buffers, the painter order and the c
 cannot pin is where in the atlas a pattern landed — which wants the same fix as the symbol case,
 a deterministic packing on mbgl's side.
 
-### The layer this capture deliberately does not have
+### The drawable index is not an identity
 
-A `fill-extrusion-pattern` was in it and was taken out. Its drawables are not reproducible: a
-translucent extrusion emits two per tile, and which of them is `#00` and which `#01` swaps
-between runs — twenty lines of five hundred and thirteen, all of them that layer's. Nothing else
-in the capture moved.
+A `fill-extrusion-pattern` layer nearly did not make it into this capture. A translucent
+extrusion emits *four* drawables per tile — two shaders, `sh0018` and `sh0019`, by two
+render-state sets — and which of them is `#00` swaps between runs.
 
-That is a different problem from the atlas's. The README already records that order *within* a
-draw group is canonicalized away, because it carries no meaning; this is the drawable's own
-identity, and canonicalizing an identity is not the same act. So the layer is left out rather
-than elided, and `sh0018`/`sh0019` — the extrusion pattern shaders, both of which the capture
-showed present — want their own investigation before they get a golden.
+Looking at one capture is what settled what to do. Within a single dump the pairing is already
+inconsistent: `sh0018` carries flags `1111` at `#00` while `sh0019` carries them at `#01`. So the
+number is not naming anything about the drawable. It is a position in an arbitrary iteration —
+precisely what this file already says of `uboIndex`, "what it points at is compared; which slot
+it happens to occupy is not" — and it takes the same treatment.
+
+`canonicalize_drawable_index.py` renumbers within each group by what distinguishes its members
+(pass, flags, vertex type, index buffer) and rewrites every line naming an identity, so `attr`,
+`seg`, `tex` and `draw` follow their drawable. It sorts the blocks too, because mbgl lists them
+in visit order and the same set arrives in a different sequence. Painter order is untouched: that
+is the `draw` lines, and they are compared exactly.
+
+Eliding would have thrown the drawables away. Renumbering keeps every one and discards only the
+order they were visited in, which is the difference worth the script.
 
 ### Why there are three hermetic ones
 
@@ -165,6 +175,8 @@ python3 <tessella>/tools/mbgl-codegen/oracles/elide_symbol_atlas.py \
 # The pattern capture needs the same substitution, and its own elision.
 sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/pattern_style.json > /tmp/pattern.json
 ./mbgl-capture-probe file:///tmp/pattern.json --dump=<tessella>/tests/golden/pattern_style.dump
+python3 <tessella>/tools/mbgl-codegen/oracles/canonicalize_drawable_index.py \
+    <tessella>/tests/golden/pattern_style.dump
 python3 <tessella>/tools/mbgl-codegen/oracles/elide_pattern_atlas.py \
     <tessella>/tests/golden/pattern_style.dump
 
