@@ -218,6 +218,96 @@ pub const DEBUG_SHADER: [ShaderAttribute; 1] = [ShaderAttribute {
     name: "idDebugPosVertexAttribute",
 }];
 
+/// Attributes declared by `FillExtrusionInstancedShader`.
+pub const FILL_EXTRUSION_INSTANCED_SHADER: [ShaderAttribute; 1] = [ShaderAttribute {
+    binding: 0,
+    declared: AttributeDataType::Short2,
+    attr_id: 0,
+    name: "idFillExtrusionPosVertexAttribute",
+}];
+
+/// Per-instance attributes declared by `FillExtrusionInstancedShader`.
+pub const FILL_EXTRUSION_INSTANCED_SHADER_INSTANCE: [ShaderAttribute; 5] = [
+    ShaderAttribute {
+        binding: 1,
+        declared: AttributeDataType::Short2,
+        attr_id: 2,
+        name: "idFillExtrusionOutlinePosAttribute",
+    },
+    ShaderAttribute {
+        binding: 2,
+        declared: AttributeDataType::UShort2,
+        attr_id: 1,
+        name: "idFillExtrusionDecimalsEdAttribute",
+    },
+    ShaderAttribute {
+        binding: 3,
+        declared: AttributeDataType::Float4,
+        attr_id: 4,
+        name: "idFillExtrusionColorVertexAttribute",
+    },
+    ShaderAttribute {
+        binding: 4,
+        declared: AttributeDataType::Float,
+        attr_id: 3,
+        name: "idFillExtrusionBaseVertexAttribute",
+    },
+    ShaderAttribute {
+        binding: 5,
+        declared: AttributeDataType::Float,
+        attr_id: 5,
+        name: "idFillExtrusionHeightVertexAttribute",
+    },
+];
+
+/// Attributes declared by `FillExtrusionPatternInstancedShader`.
+pub const FILL_EXTRUSION_PATTERN_INSTANCED_SHADER: [ShaderAttribute; 1] = [ShaderAttribute {
+    binding: 0,
+    declared: AttributeDataType::Short2,
+    attr_id: 0,
+    name: "idFillExtrusionPosVertexAttribute",
+}];
+
+/// Per-instance attributes declared by `FillExtrusionPatternInstancedShader`.
+pub const FILL_EXTRUSION_PATTERN_INSTANCED_SHADER_INSTANCE: [ShaderAttribute; 6] = [
+    ShaderAttribute {
+        binding: 1,
+        declared: AttributeDataType::Short2,
+        attr_id: 2,
+        name: "idFillExtrusionOutlinePosAttribute",
+    },
+    ShaderAttribute {
+        binding: 2,
+        declared: AttributeDataType::UShort2,
+        attr_id: 1,
+        name: "idFillExtrusionDecimalsEdAttribute",
+    },
+    ShaderAttribute {
+        binding: 3,
+        declared: AttributeDataType::Float,
+        attr_id: 3,
+        name: "idFillExtrusionBaseVertexAttribute",
+    },
+    ShaderAttribute {
+        binding: 4,
+        declared: AttributeDataType::Float,
+        attr_id: 5,
+        name: "idFillExtrusionHeightVertexAttribute",
+    },
+    ShaderAttribute {
+        binding: 5,
+        declared: AttributeDataType::UShort4,
+        attr_id: 6,
+        name: "idFillExtrusionPatternFromVertexAttribute",
+    },
+    ShaderAttribute {
+        binding: 6,
+        declared: AttributeDataType::UShort4,
+        attr_id: 7,
+        name: "idFillExtrusionPatternToVertexAttribute",
+    },
+];
+
 /// Attributes declared by `FillExtrusionPatternShader`.
 pub const FILL_EXTRUSION_PATTERN_SHADER: [ShaderAttribute; 6] = [
     ShaderAttribute {
@@ -339,6 +429,22 @@ pub const FILL_OUTLINE_SHADER: [ShaderAttribute; 3] = [
         declared: AttributeDataType::Float2,
         attr_id: 2,
         name: "idFillOpacityVertexAttribute",
+    },
+];
+
+/// Attributes declared by `FillOutlineTriangulatedShader`.
+pub const FILL_OUTLINE_TRIANGULATED_SHADER: [ShaderAttribute; 2] = [
+    ShaderAttribute {
+        binding: 0,
+        declared: AttributeDataType::Short2,
+        attr_id: 0,
+        name: "idLinePosNormalVertexAttribute",
+    },
+    ShaderAttribute {
+        binding: 1,
+        declared: AttributeDataType::UByte4,
+        attr_id: 1,
+        name: "idLineDataVertexAttribute",
     },
 ];
 
@@ -676,6 +782,22 @@ pub const LOCATION_INDICATOR_SHADER: [ShaderAttribute; 1] = [ShaderAttribute {
     name: "idLocationIndicatorPosVertexAttribute",
 }];
 
+/// Attributes declared by `LocationIndicatorTexturedShader`.
+pub const LOCATION_INDICATOR_TEXTURED_SHADER: [ShaderAttribute; 2] = [
+    ShaderAttribute {
+        binding: 0,
+        declared: AttributeDataType::Float2,
+        attr_id: 0,
+        name: "idLocationIndicatorPosVertexAttribute",
+    },
+    ShaderAttribute {
+        binding: 1,
+        declared: AttributeDataType::Float2,
+        attr_id: 1,
+        name: "idLocationIndicatorTexVertexAttribute",
+    },
+];
+
 /// Attributes declared by `RasterShader`.
 pub const RASTER_SHADER: [ShaderAttribute; 2] = [
     ShaderAttribute {
@@ -876,6 +998,34 @@ pub const WIDE_VECTOR_SHADER: [ShaderAttribute; 3] = [
     },
 ];
 
+/// Per-instance attributes declared by `WideVectorShader`.
+pub const WIDE_VECTOR_SHADER_INSTANCE: [ShaderAttribute; 4] = [
+    ShaderAttribute {
+        binding: 3,
+        declared: AttributeDataType::Float3,
+        attr_id: 0,
+        name: "idWideVectorInstanceCenter",
+    },
+    ShaderAttribute {
+        binding: 4,
+        declared: AttributeDataType::Float4,
+        attr_id: 1,
+        name: "idWideVectorInstanceColor",
+    },
+    ShaderAttribute {
+        binding: 5,
+        declared: AttributeDataType::Int,
+        attr_id: 2,
+        name: "idWideVectorInstancePrevious",
+    },
+    ShaderAttribute {
+        binding: 6,
+        declared: AttributeDataType::Int,
+        attr_id: 3,
+        name: "idWideVectorInstanceNext",
+    },
+];
+
 /// The attributes a shader declares, or an empty slice for one with no table.
 ///
 /// An empty table is not the same as a shader that binds nothing: it means this
@@ -894,10 +1044,13 @@ pub fn attributes(shader: BuiltIn) -> &'static [ShaderAttribute] {
         BuiltIn::CustomGeometryShader => &CUSTOM_GEOMETRY_SHADER,
         BuiltIn::CustomSymbolIconShader => &CUSTOM_SYMBOL_ICON_SHADER,
         BuiltIn::DebugShader => &DEBUG_SHADER,
+        BuiltIn::FillExtrusionInstancedShader => &FILL_EXTRUSION_INSTANCED_SHADER,
+        BuiltIn::FillExtrusionPatternInstancedShader => &FILL_EXTRUSION_PATTERN_INSTANCED_SHADER,
         BuiltIn::FillExtrusionPatternShader => &FILL_EXTRUSION_PATTERN_SHADER,
         BuiltIn::FillExtrusionShader => &FILL_EXTRUSION_SHADER,
         BuiltIn::FillOutlinePatternShader => &FILL_OUTLINE_PATTERN_SHADER,
         BuiltIn::FillOutlineShader => &FILL_OUTLINE_SHADER,
+        BuiltIn::FillOutlineTriangulatedShader => &FILL_OUTLINE_TRIANGULATED_SHADER,
         BuiltIn::FillPatternShader => &FILL_PATTERN_SHADER,
         BuiltIn::FillShader => &FILL_SHADER,
         BuiltIn::HeatmapShader => &HEATMAP_SHADER,
@@ -909,11 +1062,30 @@ pub fn attributes(shader: BuiltIn) -> &'static [ShaderAttribute] {
         BuiltIn::LineSDFShader => &LINE_SDFSHADER,
         BuiltIn::LineShader => &LINE_SHADER,
         BuiltIn::LocationIndicatorShader => &LOCATION_INDICATOR_SHADER,
+        BuiltIn::LocationIndicatorTexturedShader => &LOCATION_INDICATOR_TEXTURED_SHADER,
         BuiltIn::RasterShader => &RASTER_SHADER,
         BuiltIn::SymbolIconShader => &SYMBOL_ICON_SHADER,
         BuiltIn::SymbolSDFShader => &SYMBOL_SDFSHADER,
         BuiltIn::SymbolTextAndIconShader => &SYMBOL_TEXT_AND_ICON_SHADER,
         BuiltIn::WideVectorShader => &WIDE_VECTOR_SHADER,
+        _ => &[],
+    }
+}
+
+/// The attributes a shader declares *per instance*, or an empty slice for one that
+/// draws no instances.
+///
+/// Empty is the ordinary answer here, unlike [`attributes`]: most shaders are not
+/// instanced at all. A shader that has one draws a small template — a fill
+/// extrusion's walls are four vertices — once per element of these.
+#[must_use]
+pub fn instance_attributes(shader: BuiltIn) -> &'static [ShaderAttribute] {
+    match shader {
+        BuiltIn::FillExtrusionInstancedShader => &FILL_EXTRUSION_INSTANCED_SHADER_INSTANCE,
+        BuiltIn::FillExtrusionPatternInstancedShader => {
+            &FILL_EXTRUSION_PATTERN_INSTANCED_SHADER_INSTANCE
+        }
+        BuiltIn::WideVectorShader => &WIDE_VECTOR_SHADER_INSTANCE,
         _ => &[],
     }
 }

@@ -717,11 +717,17 @@ fn generate_shader_attributes(mbgl: &Path) -> Result<String, String> {
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
 
-    for (shader, attributes) in &shaders {
-        writeln!(out, "/// Attributes declared by `{shader}`.").unwrap();
+    for (shader, instanced, attributes) in &shaders {
+        let suffix = if *instanced { "_INSTANCE" } else { "" };
+        let rate = if *instanced {
+            "Per-instance attributes"
+        } else {
+            "Attributes"
+        };
+        writeln!(out, "/// {rate} declared by `{shader}`.").unwrap();
         writeln!(
             out,
-            "pub const {}: [ShaderAttribute; {}] = [",
+            "pub const {}{suffix}: [ShaderAttribute; {}] = [",
             screaming(shader),
             attributes.len()
         )
@@ -763,8 +769,56 @@ fn generate_shader_attributes(mbgl: &Path) -> Result<String, String> {
     )
     .unwrap();
     writeln!(out, "    match shader {{").unwrap();
-    for (shader, _) in &shaders {
+    for (shader, instanced, _) in &shaders {
+        if *instanced {
+            continue;
+        }
         writeln!(out, "        BuiltIn::{shader} => &{},", screaming(shader)).unwrap();
+    }
+    writeln!(out, "        _ => &[],").unwrap();
+    writeln!(out, "    }}").unwrap();
+    writeln!(out, "}}").unwrap();
+    writeln!(out).unwrap();
+
+    writeln!(
+        out,
+        "/// The attributes a shader declares *per instance*, or an empty slice for one that"
+    )
+    .unwrap();
+    writeln!(out, "/// draws no instances.").unwrap();
+    writeln!(out, "///").unwrap();
+    writeln!(
+        out,
+        "/// Empty is the ordinary answer here, unlike [`attributes`]: most shaders are not"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// instanced at all. A shader that has one draws a small template — a fill"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// extrusion's walls are four vertices — once per element of these."
+    )
+    .unwrap();
+    writeln!(out, "#[must_use]").unwrap();
+    writeln!(
+        out,
+        "pub fn instance_attributes(shader: BuiltIn) -> &'static [ShaderAttribute] {{"
+    )
+    .unwrap();
+    writeln!(out, "    match shader {{").unwrap();
+    for (shader, instanced, _) in &shaders {
+        if !*instanced {
+            continue;
+        }
+        writeln!(
+            out,
+            "        BuiltIn::{shader} => &{}_INSTANCE,",
+            screaming(shader)
+        )
+        .unwrap();
     }
     writeln!(out, "        _ => &[],").unwrap();
     writeln!(out, "    }}").unwrap();
@@ -1149,7 +1203,8 @@ fn parse_shader_textures(text: &str) -> Vec<TextureTable> {
 }
 
 /// One shader's attributes: binding slot, declared type name, attribute id name.
-type ShaderTable = (String, Vec<(i32, String, String)>);
+/// A shader's name, whether the table is its per-instance one, and its attributes.
+type ShaderTable = (String, bool, Vec<(i32, String, String)>);
 
 /// Maps attribute id names to their values.
 ///
@@ -1208,11 +1263,23 @@ fn parse_attribute_ids(header: &str) -> BTreeMap<String, u32> {
 /// Extracts `(shader, [(binding, declared type, id name)])` from a shader source file.
 fn parse_shader_attributes(text: &str) -> Vec<ShaderTable> {
     // `using XSource = ShaderSource<BuiltIn::Name, ...>;` binds an alias to a shader.
+    //
+    // Joined across lines first, because clang-format wraps the long ones after the `=` and a
+    // per-line match silently skips every alias it wrapped. That is not a hypothetical: it is
+    // why the instanced fill-extrusion shaders were absent from this table entirely, and why
+    // nothing could look up the bindings for a wall. A parser that misses a declaration reports
+    // a smaller table rather than an error, which is the failure mode worth designing against.
+    let joined = text.replace("=\n", "=");
     let mut aliases: BTreeMap<String, String> = BTreeMap::new();
-    for line in text.lines() {
+    for line in joined.lines() {
         let line = line.trim();
+        // Split on the `=` and match the two halves separately, rather than on one string with
+        // the spacing baked in: the wrapped form keeps its indentation after the join, so
+        // `"= ShaderSource<"` matches the unwrapped declarations and silently misses every
+        // wrapped one.
         if let Some(rest) = line.strip_prefix("using ")
-            && let Some((alias, tail)) = rest.split_once(" = ShaderSource<BuiltIn::")
+            && let Some((alias, tail)) = rest.split_once('=')
+            && let Some((_, tail)) = tail.split_once("ShaderSource<BuiltIn::")
             && let Some((shader, _)) = tail.split_once(',')
         {
             aliases.insert(alias.trim().to_string(), shader.trim().to_string());
@@ -1223,14 +1290,27 @@ fn parse_shader_attributes(text: &str) -> Vec<ShaderTable> {
     let mut current: Option<ShaderTable> = None;
     for line in text.lines() {
         let line = line.trim();
-        if line.contains("::attributes = {")
-            && let Some(alias) = line.split("> ").nth(1).and_then(|s| s.split("::").next())
-            && let Some(shader) = aliases.get(alias.trim())
+        // Two tables per shader, and the instanced ones have both: `attributes` is the
+        // per-vertex template and `instanceAttributes` is what varies per instance. mbgl draws a
+        // fill extrusion's walls as four template vertices with the building's own outline
+        // supplied per instance, so a build that read only the first table could bind the quad
+        // and nothing to put it on.
+        for (marker, instanced) in [("::attributes = {", false), ("::instanceAttributes = {", true)]
         {
-            current = Some((shader.clone(), Vec::new()));
+            if line.contains(marker)
+                && let Some(alias) = line.split("> ").nth(1).and_then(|s| s.split("::").next())
+                && let Some(shader) = aliases.get(alias.trim())
+            {
+                current = Some((shader.clone(), instanced, Vec::new()));
+                break;
+            }
+        }
+        if current.as_ref().is_some_and(|table| table.2.is_empty())
+            && (line.contains("::attributes = {") || line.contains("::instanceAttributes = {"))
+        {
             continue;
         }
-        if let Some((_, attributes)) = current.as_mut() {
+        if let Some((_, _, attributes)) = current.as_mut() {
             if line.starts_with("};") {
                 if let Some(entry) = current.take() {
                     out.push(entry);
