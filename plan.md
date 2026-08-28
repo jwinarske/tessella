@@ -703,7 +703,16 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   path** is done as far as it goes before symbols: sources resolve in parallel, and the trace
   says style parse and paint resolution together are under two per cent of a cold start, so the
   compiled-style cache would save a fraction of a fiftieth. What remains of §12.5 is the
-  speculative sprite and glyph fetch, which has nothing to fetch until R2.
+  speculative **sprite** fetch, which now happens: it goes in beside the source manifests, which
+  is §12.5's "issued the moment sources parse". It is the one of that section's three fetches
+  that can genuinely go that early, because a sprite is addressed by the style alone and nothing
+  it needs is in a manifest. Tiles cannot — the manifest carries their templates — and that
+  asymmetry is the reason to issue the sprite early rather than to have a uniform rule.
+  A sheet that does not answer costs the icons and not the map: every other layer draws and
+  `Boot::sprites` is `None`, which is also what a style with no sprite gives, with the trace
+  telling the two apart. The **glyph** half is still open and differs in kind — the stacks are in
+  the style but the ranges depend on what the tiles say, so fetching any is a guess at which, and
+  a guess wants R-10's warmed-but-unused counter beside it rather than a bare fetch.
   A region's area is a box or a shape. The shape path is a port of mbgl's `util::TileCover`
   scanline, checked against mbgl's own expectations — the exact 424-tile multipolygon, the
   punched hole at 8/136/87, the six-tile San Francisco outline — and against

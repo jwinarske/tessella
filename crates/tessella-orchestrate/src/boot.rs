@@ -26,10 +26,17 @@
 //! builder's signature today. Recorded rather than fixed, with the number, so the decision can
 //! be made on it rather than on the shape of the code.
 //!
-//! Also absent: the compiled-style cache keyed by style etag that §12.5 wants for warm start,
-//! and the sprite and glyph fetches a symbol layer would need. Issuing tile fetches before the
-//! manifest arrives is not possible — the manifest carries the templates — so the round trip
-//! it costs is irreducible without a cache.
+//! The sprite is fetched beside the source manifests, which is §12.5's "issued the moment
+//! sources parse". It is the one of that section's three speculative fetches that can genuinely
+//! go that early: a sprite is addressed by the style alone, so nothing it needs is in a manifest.
+//! Tiles cannot — the manifest carries their templates — so the round trip they cost is
+//! irreducible without a cache, and that asymmetry is why the sprite is worth issuing early
+//! rather than there being a uniform rule.
+//!
+//! Still absent: the compiled-style cache keyed by style etag that §12.5 wants for warm start,
+//! and the glyph ranges. Glyphs differ from sprites in being a *prediction* — the stacks are in
+//! the style but the ranges depend on what the tiles say, so fetching any is a guess at which,
+//! and a guess wants R-10's warmed-but-unused counter beside it rather than a bare fetch.
 //!
 //! # First tile, not first frame
 //!
@@ -91,6 +98,13 @@ pub struct BootTrace {
     pub first_bucket: Duration,
     /// Every tile of the cover was built.
     pub complete: Duration,
+    /// The sprite sheet arrived, for a style that names one.
+    ///
+    /// `None` when the style names none *or* when the fetch failed, which
+    /// [`Boot::sprites`] tells apart. Issued beside the source manifests rather than after
+    /// them: a sprite is addressed by the style alone, so nothing it needs is in a manifest and
+    /// waiting for one puts a round trip on the critical path for nothing (§12.5).
+    pub sprite_fetched: Option<Duration>,
 }
 
 /// One tile of one source, built.
@@ -127,6 +141,16 @@ pub struct Boot {
     pub rejected_layers: Vec<RejectedLayer>,
     /// Stage timings.
     pub trace: BootTrace,
+    /// The sprite sheet, when the style names one and it arrived.
+    ///
+    /// Behind the `image` feature, which is what a sheet needs to decode: without it a style's
+    /// sprite is not fetched at all rather than fetched and dropped.
+    ///
+    /// `None` for a style with no `sprite`, and also for one whose sprite did not answer — a
+    /// missing sheet costs the icons and not the map, so it is reported here rather than failing
+    /// the start. Which of the two it was is in [`BootTrace::sprite_fetched`].
+    #[cfg(feature = "image")]
+    pub sprites: Option<tessella_glyph::sprite::Sprites>,
     /// Tile bodies handled, in bytes.
     ///
     /// *Handled*, not fetched. A cache hit returns a response indistinguishable from a fetched
@@ -454,6 +478,38 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
     let resolved: Arc<Mutex<Vec<(String, Resolved)>>> = Arc::new(Mutex::new(Vec::new()));
     let failure: Arc<Mutex<Option<BootError>>> = Arc::new(Mutex::new(None));
     let batch = pool.batch(priority);
+
+    // The sprite goes in beside the manifests, not after them. §12.5 asks for the speculative
+    // fetches to be "issued the moment sources parse", and a sprite is the one that can be:
+    // it is addressed by the style alone, so nothing it needs is in a manifest and waiting for
+    // one would put a round trip on the critical path for nothing. Tiles cannot be issued that
+    // early — the manifest carries their templates — which is the asymmetry that makes this
+    // worth doing rather than an optimisation of the same shape everywhere.
+    #[cfg(feature = "image")]
+    let sprites: Arc<Mutex<Option<(tessella_glyph::sprite::Sprites, Duration)>>> =
+        Arc::new(Mutex::new(None));
+    #[cfg(feature = "image")]
+    if let Some(base) = style.sprite.clone() {
+        let files = Arc::clone(files);
+        let sprites = Arc::clone(&sprites);
+        batch.submit(move || {
+            // One device pixel per logical pixel. A caller drawing on a retina panel wants the
+            // `@2x` sheet, which is a view property this call does not carry — recorded rather
+            // than guessed, since guessing two would fetch four times the bytes on the majority
+            // of panels that are not.
+            let mut sheet = tessella_glyph::sprite::Sprites::new(base, 1.0);
+            // A sprite that does not answer costs the icons and not the map. Every other layer
+            // draws, and `Boot::sprites` is `None` — which is the same answer a style with no
+            // sprite gives, and the trace is what tells the two apart.
+            if sheet.fetch(files.inner()).is_ok() {
+                *sprites
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                    Some((sheet, started.elapsed()));
+            }
+        });
+    }
+
     for name in wanted {
         let Some(source) = style.source(name).cloned() else {
             continue;
@@ -511,6 +567,19 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
             jobs: panicked.jobs,
         });
     }
+
+    // After the wait, not before it. The sprite job is in this batch, so taking its result
+    // first reads the slot while the job that fills it is still running — which answers `None`
+    // for a sheet that arrives a microsecond later, and answers it *sometimes*, which is worse.
+    #[cfg(feature = "image")]
+    let sprite_outcome = sprites
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take();
+    // Without a decoder there is no sheet to have fetched, and the trace says so by saying
+    // nothing — the same answer a style with no sprite gives.
+    #[cfg(not(feature = "image"))]
+    let sprite_outcome: Option<((), Duration)> = None;
     if let Some(error) = failure
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -646,7 +715,10 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
                 first_fetch: cover_computed,
                 first_bucket: cover_computed,
                 complete: started.elapsed(),
+                sprite_fetched: sprite_outcome.as_ref().map(|(_, at)| *at),
             },
+            #[cfg(feature = "image")]
+            sprites: sprite_outcome.map(|(sheet, _)| sheet),
             bytes: 0,
         });
     }
@@ -875,7 +947,10 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
                 .unwrap_or_else(std::sync::PoisonError::into_inner))
             .unwrap_or(cover_computed),
             complete,
+            sprite_fetched: sprite_outcome.as_ref().map(|(_, at)| *at),
         },
+        #[cfg(feature = "image")]
+        sprites: sprite_outcome.map(|(sheet, _)| sheet),
         bytes: bytes.load(Ordering::Relaxed),
     })
 }
