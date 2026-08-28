@@ -2085,7 +2085,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   process-isolation spike (§3.5) ✅, riscv64 soak.
   Two things elsewhere in this document are assigned to this phase and were not on this line,
   which is how a phase comes to look nearly finished while work is still pointed at it. §12.8's
-  **pacing counters** land in R4. And §13.2's **acknowledged-renderable**: `TileState::renderable`
+  **pacing counters** ✅. And §13.2's **acknowledged-renderable**: `TileState::renderable`
   still means *built*, and making it mean acknowledged needs this phase's reverse-channel epoch.
   The substitution algorithm does not change — what changes is what counts as a tile that can
   stand in for another, and until then a crossing can retire an ancestor against a tile the
@@ -2474,7 +2474,37 @@ what keeps the single-orchestrator multi-view tick cheap at input rate.
 Wakeup pattern matters as much as throughput on DVFS-governed parts. One deadline wheel for
 all timers (§5.5); produce at the consumption rate the reverse channel reports, not at loop
 speed; parked extends to the scheduler — a parked view holds no timers except cache expiry.
-Sustained-idle-then-burst beats constant medium load. Pacing counters land in R4.
+Sustained-idle-then-burst beats constant medium load.
+
+**Pacing counters landed in R4** (`tessella-orchestrate::pacing`). Nothing in the producer
+drives frames — §3.2 puts the tick on the consumer's side — so what is here is the answer to
+*should this tick produce a frame*, and counters of what pattern of answers came out. The caller
+keeps the loop.
+
+The consumption rate needed no new field anywhere. It is the ring's `tail`, which the consumer
+publishes and `Producer::consumed_through` reads: emit when there is something to send and the
+consumer has drained what it was already sent. A consumer that stalled forever would otherwise
+stall the map forever, so it is bounded — a change held past the latency budget goes anyway and
+the ring's own backpressure takes over, which at least fails loudly where a held change is a map
+that is quietly wrong. The bound is what separates pacing from blocking: a slow consumer makes
+the map update less often, not stop.
+
+The counters are of *wakeups* rather than bytes, which is the half §9.3 does not cover. §10's
+parked identity says nothing left the producer; a parked view that sends nothing and still
+builds a frame to discover it has spent the power anyway. And the burst shape is made checkable
+rather than aspirational: what a governor punishes is a producer busy a little of every tick, so
+the question is whether the emissions clumped, and a run of one is a dribble however many of
+them there are. Both cases are tested at sixty ticks — the same sixty frames of work, once as
+two runs of thirty and once every other tick.
+
+Tested against a real ring as well as as a state machine, because a policy reading the wrong
+number is still a policy: sixty ticks of a moving camera against a consumer that drains every
+sixteenth, with the pacer and without. Unpaced fills the ring and is refused twenty times;
+paced is refused none and never holds more than the frame it just sent.
+
+**Not built**: the deadline wheel, and with it "a parked view holds no timers except cache
+expiry" — there are no timers in this tree to hold. The counter for that is owed when the
+scheduler is.
 
 ### 12.9 Binary size (DR-12)
 

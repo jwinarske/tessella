@@ -51,6 +51,7 @@ pub mod frame;
 #[cfg(all(feature = "std", feature = "offline"))]
 pub mod offline;
 pub mod order;
+pub mod pacing;
 #[cfg(feature = "std")]
 pub mod pool;
 pub mod project;
