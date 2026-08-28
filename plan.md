@@ -1345,6 +1345,17 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   packing order, which is mbgl's to make deterministic.
 - **R3** — *in progress.* Sprites and icons, raster, patterns/dynamic textures (rect-list
   damage), fill-extrusion.
+  Cross-faded pattern binders were built for fills and only for fills, which read as working: a
+  data-driven `line-pattern` parsed, resolved, chose the pattern shader and bound the atlas, and
+  then bound no per-vertex rectangles at all, so every feature in the layer drew whatever the
+  uniform pair happened to say. Right at an integer zoom and wrong between them, right for one
+  feature and wrong for the rest. It now binds them, and where they go came from the oracle
+  rather than from reading the binder classes: ids nine and ten at bindings *seven and eight*,
+  where a fill puts the same two streams at ids four and five, bindings one and two — the line
+  shader has already spent its low bindings on colour, blur, opacity, gapwidth, offset and
+  width. That needed a new capture, so `pattern_style.json` gained a data-driven line layer and
+  a second line feature beside it, one line being unable to tell a per-vertex stream from a
+  uniform that happened to be right.
   The sprite index lands first, as `tessella-glyph/sprite`: mbgl's `SpriteParser`. A style names
   one sprite *base* and the origin serves two resources for it, the suffix going before the
   extension rather than after the URL — `sprite@2x.json`, not `sprite.json@2x` — and a query

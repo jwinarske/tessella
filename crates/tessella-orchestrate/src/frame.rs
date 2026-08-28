@@ -1108,10 +1108,16 @@ fn encode(
                 arena,
                 geometry,
                 line,
-                &vertex_layout,
-                bucket.binder.data(),
-                key,
-                atlas,
+                &emit::LineDraw {
+                    layout: &vertex_layout,
+                    attributes: bucket.binder.data(),
+                    permutation_key: key,
+                    pattern_atlas: atlas,
+                    // Only where the atlas resolved: a pattern the sprite sheet does not hold
+                    // draws as a plain line, and rectangles for a pattern nothing will bind are
+                    // bytes on the wire that no shader reads.
+                    pattern_vertices: atlas.and(Some(&bucket.pattern_vertices)),
+                },
             ))
         }
         Content::Circle(circle) => {

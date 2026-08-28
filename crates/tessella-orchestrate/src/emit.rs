@@ -945,6 +945,8 @@ const PATTERN_FROM_ATTRIBUTE: u32 = ubo_slots::ID_FILL_PATTERN_FROM_VERTEX_ATTRI
 /// As above, for the image being faded to.
 const PATTERN_TO_ATTRIBUTE: u32 = ubo_slots::ID_FILL_PATTERN_TO_VERTEX_ATTRIBUTE;
 /// Four `u16` per vertex.
+const LINE_PATTERN_FROM_ATTRIBUTE: u32 = ubo_slots::ID_LINE_PATTERN_FROM_VERTEX_ATTRIBUTE;
+const LINE_PATTERN_TO_ATTRIBUTE: u32 = ubo_slots::ID_LINE_PATTERN_TO_VERTEX_ATTRIBUTE;
 const PATTERN_STRIDE: u32 = 8;
 
 /// The buffers a fill's two drawables share.
@@ -1012,6 +1014,52 @@ impl<'a> FillDraw<'a> {
 /// Pass `shared: None` for the triangles, which allocates; pass what that returned for the
 /// outline, which reuses it. Encoding the outline from scratch would put a second copy of every
 /// vertex in the arena for a buffer the oracle shares.
+/// Writes a data-driven pattern's two rectangle streams.
+///
+/// # Why the slots are a parameter
+///
+/// Because the oracle says they differ per shader, which reading the binder classes does not
+/// suggest. A fill puts them at ids four and five, bindings one and two; a line puts the same two
+/// streams at ids nine and ten, bindings *seven and eight*, because the line shader has already
+/// spent its low bindings on colour, blur, opacity, gapwidth, offset and width. Everything else
+/// about them — `UShort4`, stride eight, one pair per vertex — is the same.
+fn push_pattern_attributes(
+    descriptors: &mut Vec<AttributeDesc>,
+    arena: &mut SlabArena,
+    vertices: &PatternVertices,
+    slots: [(u32, i32); 2],
+) {
+    for ((attr_id, binding), values) in slots.into_iter().zip([&vertices.from, &vertices.to]) {
+        let mut bytes = Vec::with_capacity(values.len() * PATTERN_STRIDE as usize);
+        for rect in values {
+            for value in rect {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        descriptors.push(AttributeDesc {
+            attr_id,
+            binding,
+            source: arena.alloc(&bytes),
+            offset: 0,
+            vertex_offset: 0,
+            stride: PATTERN_STRIDE,
+            data_type: AttributeDataType::UShort4 as u8,
+            declared_data_type: AttributeDataType::UShort4 as u8,
+            _pad: [0; 2],
+        });
+    }
+}
+
+/// Encodes a fill bucket into a geometry envelope, allocating its bytes into `arena`.
+///
+/// The envelope carries no view: it is process-scoped and refcounted, and a `ViewUse` binds it
+/// into a view's draw order (§5.3).
+///
+/// `layout`, `attributes` and `permutation_key` all come from the binder. Every data-driven
+/// attribute references the *same* interleaved buffer at a different offset, which is what the
+/// oracle does — its three data-driven descriptors share one source hash and differ only in
+/// `off`. The permutation key says which of the shader's declared attributes this variant
+/// actually supplies; see [`crate::binder::permutation_key`] for why it is a mask.
 pub fn encode_fill(
     arena: &mut SlabArena,
     geometry: GeometryId,
@@ -1080,28 +1128,15 @@ pub fn encode_fill(
     // a read past the end for every vertex after the gap — mbgl fills the shortfall with zeroes
     // for that reason, and a caller that has not is better refused than trusted.
     if let Some(vertices) = pattern_vertices.filter(|v| v.covers(bucket.vertices.len())) {
-        for (attr_id, binding, values) in [
-            (PATTERN_FROM_ATTRIBUTE, 1, &vertices.from),
-            (PATTERN_TO_ATTRIBUTE, 2, &vertices.to),
-        ] {
-            let mut bytes = Vec::with_capacity(values.len() * PATTERN_STRIDE as usize);
-            for rect in values {
-                for value in rect {
-                    bytes.extend_from_slice(&value.to_le_bytes());
-                }
-            }
-            descriptors.push(AttributeDesc {
-                attr_id,
-                binding,
-                source: arena.alloc(&bytes),
-                offset: 0,
-                vertex_offset: 0,
-                stride: PATTERN_STRIDE,
-                data_type: AttributeDataType::UShort4 as u8,
-                declared_data_type: AttributeDataType::UShort4 as u8,
-                _pad: [0; 2],
-            });
-        }
+        push_pattern_attributes(
+            &mut descriptors,
+            arena,
+            vertices,
+            [
+                (PATTERN_FROM_ATTRIBUTE, 1),
+                (PATTERN_TO_ATTRIBUTE, 2),
+            ],
+        );
     }
 
     for attribute in &layout.attributes {
@@ -1292,6 +1327,25 @@ fn geometry_add(
     Encoded { record, payload }
 }
 
+/// What a line drawable is encoded from, beside its bucket.
+///
+/// Bundled for the reason [`FillDraw`] is: a pattern added a sixth thing to carry, and six
+/// positional arguments of which two are `Option` is a call whose arguments can be swapped
+/// without the compiler noticing.
+#[derive(Debug, Clone, Copy)]
+pub struct LineDraw<'a> {
+    /// The binder's layout for this variant.
+    pub layout: &'a VertexLayout,
+    /// The interleaved data-driven buffer.
+    pub attributes: &'a [u8],
+    /// Which of the shader's declared attributes this variant supplies.
+    pub permutation_key: u64,
+    /// The pattern atlas, when the layer resolved one.
+    pub pattern_atlas: Option<TextureId>,
+    /// Per-vertex pattern rectangles, when the pattern is data-driven.
+    pub pattern_vertices: Option<&'a PatternVertices>,
+}
+
 /// Encodes a line layer's geometry.
 ///
 /// Two fixed attributes rather than one, and the second is what makes a line a line. A
@@ -1308,11 +1362,15 @@ pub fn encode_line(
     arena: &mut SlabArena,
     geometry: GeometryId,
     bucket: &LineBucket,
-    layout: &VertexLayout,
-    attributes: &[u8],
-    permutation_key: u64,
-    pattern_atlas: Option<TextureId>,
+    draw: &LineDraw<'_>,
 ) -> Encoded {
+    let &LineDraw {
+        layout,
+        attributes,
+        permutation_key,
+        pattern_atlas,
+        pattern_vertices,
+    } = draw;
     let mut vertex_bytes = Vec::with_capacity(bucket.vertices.len() * LINE_STRIDE as usize);
     for vertex in &bucket.vertices {
         vertex_bytes.extend_from_slice(&vertex.pos_normal[0].to_le_bytes());
@@ -1328,7 +1386,20 @@ pub fn encode_line(
         (POSITION_ATTRIBUTE, 0, 0, AttributeDataType::Short2),
         (LINE_DATA_ATTRIBUTE, 1, 4, AttributeDataType::UByte4),
     ];
-    let descriptors = descriptors(&fixed, vertices, LINE_STRIDE, layout, interleaved);
+    let mut descriptors = descriptors(&fixed, vertices, LINE_STRIDE, layout, interleaved);
+    // As a fill's, and refused on the same terms: a short buffer is not a partial pattern but a
+    // read past the end for every vertex after the gap.
+    if let Some(vertices) = pattern_vertices.filter(|v| v.covers(bucket.vertices.len())) {
+        push_pattern_attributes(
+            &mut descriptors,
+            arena,
+            vertices,
+            [
+                (LINE_PATTERN_FROM_ATTRIBUTE, 7),
+                (LINE_PATTERN_TO_ATTRIBUTE, 8),
+            ],
+        );
+    }
     geometry_add(
         geometry,
         permutation_key,

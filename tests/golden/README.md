@@ -83,6 +83,14 @@ It settles several things that reading mbgl's source did not:
   — `idFillPatternFromVertexAttribute` and `idFillPatternToVertexAttribute`. So the composite
   binder differs from the constant one in what it puts in the vertex buffer, not in what it
   draws with, which is not what reading the two binder classes suggests.
+- **And the slots differ per shader.** A data-driven `line-pattern` binds the same two streams at
+  ids **9 and 10**, bindings **7 and 8**, beside the line's own position and normal at 0 and 1 —
+  where a fill puts them at ids 4 and 5, bindings 1 and 2. The line shader has already spent its
+  low bindings on colour, blur, opacity, gapwidth, offset and width. Everything else is
+  identical: `UShort4`, stride eight, one pair per vertex. Nothing about reading the binder
+  classes suggests the slots move, and the `line-pattern-data-driven` layer is here to say so.
+  It carries a second line feature beside the first, because one line cannot tell a per-vertex
+  stream from a uniform that happened to be right.
 - **A stepped pattern binds no vertex attribute either.** Only `id=0`, the position, appears on
   any of the thirty-six drawables. A cross-faded binder goes composite only when the expression
   is *data-driven*; a zoom step is a camera function, so it stays constant and both rectangles

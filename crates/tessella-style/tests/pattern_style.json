@@ -107,6 +107,29 @@
               "kind": "b"
             },
             "geometry": {
+              "type": "LineString",
+              "coordinates": [
+                [
+                  -0.13,
+                  51.5
+                ],
+                [
+                  -0.09,
+                  51.52
+                ],
+                [
+                  -0.06,
+                  51.5
+                ]
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {
+              "kind": "b"
+            },
+            "geometry": {
               "type": "Point",
               "coordinates": [
                 -0.09,
@@ -209,6 +232,31 @@
         "fill-extrusion-pattern": "grass_pattern",
         "fill-extrusion-height": 20,
         "fill-extrusion-opacity": 0.8
+      }
+    },
+    {
+      "id": "line-pattern-data-driven",
+      "type": "line",
+      "source": "probe",
+      "filter": [
+        "==",
+        [
+          "geometry-type"
+        ],
+        "LineString"
+      ],
+      "paint": {
+        "line-pattern": [
+          "match",
+          [
+            "get",
+            "kind"
+          ],
+          "a",
+          "sand_noise",
+          "hospital_striped"
+        ],
+        "line-width": 8
       }
     }
   ]

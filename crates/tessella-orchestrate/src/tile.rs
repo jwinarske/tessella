@@ -488,6 +488,12 @@ pub fn build_tile_with_patterns(
                 let mut bucket = LineBucket::default();
                 let project =
                     |p: &[f64; 2]| projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
+                // The same two lists the fill arm keeps, and for the same reason: a data-driven
+                // `line-pattern` needs to know which vertices belong to which feature, and the
+                // boundary is already being computed here for the binder — it was simply not
+                // being kept.
+                let mut kept: Vec<&GeoJsonFeature> = Vec::new();
+                let mut ends: Vec<usize> = Vec::new();
                 for feature in features {
                     if !filter.matches(feature, Some(bucket_zoom)) {
                         continue;
@@ -537,7 +543,26 @@ pub fn build_tile_with_patterns(
                             layer: layer.id.clone(),
                             source,
                         })?;
+                    kept.push(feature);
+                    ends.push(bucket.vertices.len());
                 }
+                // A `line-pattern` that varies with the feature, exactly as a `fill-pattern`
+                // does. The oracle settles what it binds: ids nine and ten at bindings seven and
+                // eight, beside the line's own position and normal — the same two rectangles a
+                // fill puts at ids four and five, at different slots because the line shader has
+                // already spent its low bindings on colour, blur, opacity, gapwidth, offset and
+                // width.
+                let borrowed_features: Vec<&dyn tessella_style::expression::Feature> = kept
+                    .iter()
+                    .map(|feature| *feature as &dyn tessella_style::expression::Feature)
+                    .collect();
+                pattern_vertices = resolve_pattern_vertices(
+                    patterns,
+                    layer,
+                    bucket_zoom,
+                    &borrowed_features,
+                    &ends,
+                );
                 Content::Line(bucket)
             }
             LayerKind::Circle => {
