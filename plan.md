@@ -850,6 +850,11 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   hashes, attributes 0 and 2 keep a value that is the same across five consecutive captures and
   only attribute 1 is elided — and a scaled label now differs from a flat one in attribute 0,
   which is what these three features change. They are buildable against the oracle now.
+  It bought something that was not the point of it, which is worth recording separately. The
+  glyph vertex buffer is what the symbol pipeline *builds*, where every other buffer the parity
+  test compares is one it derives — and it had never been compared, because the elision took it
+  whole. It is compared now, and it matches byte for byte: the glyph positions and label anchors
+  of both tiles of the symbol capture. The encoding was right; nothing had said so.
   **Was held behind a capture, and is not any longer**: the pitched paths, which stood here in
   three different states because the probe was unrotated and there was no capture to check any of
   them against — R0's second qualification reappearing rather than a new one. A line label's

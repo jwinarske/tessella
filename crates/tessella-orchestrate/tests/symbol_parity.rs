@@ -52,6 +52,14 @@ struct Golden {
     position_hash: u64,
     /// The per-frame opacity buffer's hash.
     opacity_hash: u64,
+    /// Attribute 0's own bytes, hashed — the glyph's tile position and its label anchor.
+    ///
+    /// Newly comparable. Three attributes share the glyph vertex buffer and only attribute 1
+    /// carries texture coordinates, but the shared hash had to be elided because the atlas
+    /// packing is not deterministic — which took this one with it. The probe emits a per-field
+    /// hash now, so what the buffer says about geometry can be checked where what it says about
+    /// the atlas still cannot.
+    layout_hash: u64,
     pass: u32,
     /// Attribute layout: (id, data type, offset, stride).
     attributes: Vec<(u32, u32, u32, u32)>,
@@ -95,6 +103,7 @@ fn golden_symbols() -> Vec<Golden> {
                 index_hash: u64::from_str_radix(hash, 16).expect("a hash"),
                 position_hash: 0,
                 opacity_hash: 0,
+                layout_hash: 0,
                 pass: field(line, "pass=")
                     .expect("a pass")
                     .parse()
@@ -115,6 +124,14 @@ fn golden_symbols() -> Vec<Golden> {
                 number("off="),
                 number("stride="),
             ));
+            // Attribute 0's own bytes: the glyph position and the label anchor, which do not
+            // depend on where the atlas put anything.
+            if number("id=") == 0
+                && let Some(hash) = field(line, "fld=")
+                && let Ok(hash) = u64::from_str_radix(&hash, 16)
+            {
+                entry.layout_hash = hash;
+            }
             // Attributes 3 and 4 are the per-frame buffers, which the golden does not elide.
             if let Some(source) = field(line, "src=")
                 && let Some((_, hash)) = source.split_once(':')
@@ -1316,4 +1333,63 @@ mod symbol_drawable_ubo {
             [-1.0, 1.0, 1.0]
         );
     }
+}
+
+/// The glyph vertex buffer's geometry half is byte-identical to the oracle's.
+///
+/// # What this could not check before
+///
+/// Three attributes share one buffer and only the middle one carries texture coordinates. The
+/// dump hashed the buffer, so eliding the atlas-dependent part meant eliding all of it — and the
+/// two attributes that describe *geometry* went unchecked, on a capture whose whole purpose is
+/// checking geometry. Every other test here compares a buffer the symbol pipeline derives; this
+/// compares the one it builds.
+///
+/// The probe emits a per-attribute hash now, so attribute 0 — each glyph's tile position and its
+/// label's anchor — is comparable. Its bytes are the first eight of every twenty-four.
+#[test]
+fn the_glyph_layout_buffer_matches_the_oracle() {
+    let anchors = [
+        ("Alpha", -0.13_f64, 51.515_f64),
+        ("Bravo", -0.09, 51.495),
+        ("Charlie", -0.11, 51.505),
+    ];
+    let mut by_tile: BTreeMap<(u32, u32), TileLabels<'_>> = BTreeMap::new();
+    for (name, longitude, latitude) in anchors {
+        let (tile, anchor) = project(longitude, latitude, 13);
+        by_tile.entry(tile).or_default().push((name, anchor));
+    }
+
+    let font = Font::new();
+    let mut compared = 0;
+    for symbol in golden_symbols() {
+        let labels = by_tile.get(&symbol.tile).expect("a tile the golden names");
+        let entries: Vec<Label> = labels
+            .iter()
+            .map(|(text, anchor)| Label {
+                pending: 0,
+                text: (*text).to_string(),
+                anchor: *anchor,
+            })
+            .collect();
+        let buffers = build_symbols(&entries, &font, &SymbolOptions::default()).0;
+
+        // The attribute's own bytes, gathered as the probe gathers them: `pos_offset` is the
+        // first eight of every twenty-four.
+        let mut field = Vec::with_capacity(buffers.vertices.len() * 8);
+        for vertex in &buffers.vertices {
+            for value in vertex.pos_offset {
+                field.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+
+        assert_eq!(
+            fnv1a(&field),
+            symbol.layout_hash,
+            "tile {:?}: the glyph positions and anchors differ from the oracle's",
+            symbol.tile
+        );
+        compared += 1;
+    }
+    assert_eq!(compared, 2, "both tiles were compared");
 }
