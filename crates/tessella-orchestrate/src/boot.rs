@@ -283,6 +283,35 @@ enum Resolved {
     Tiles(TileSet, SourceKind),
     /// A GeoJSON document, already read into features.
     Document(alloc::sync::Arc<Vec<GeoJsonFeature>>),
+    /// A GeoJSON document the source asked to be clustered, indexed once for every zoom.
+    ///
+    /// Built here rather than per tile because that is what it is for: the levels are built
+    /// deepest-first from the whole document, and every tile of every zoom is then a range
+    /// query. Building one per tile would cluster the world once per tile of the cover.
+    Clustered(alloc::sync::Arc<tessella_source::cluster::Clustered>),
+}
+
+/// The clustering a GeoJSON source asks for, or `None` if it asks for none.
+///
+/// `cluster` is the switch; the other two are the knobs, and the spec's defaults are
+/// supercluster's own. `clusterMaxZoom` defaults to one below the source's maximum rather than
+/// to supercluster's sixteen, which is what the style spec says and what makes the deepest zoom
+/// show individual points.
+fn clustering_for(
+    source: &tessella_style::document::GeojsonSource,
+) -> Option<tessella_source::cluster::Options> {
+    if source.cluster != Some(true) {
+        return None;
+    }
+    let defaults = tessella_source::cluster::Options::default();
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Some(tessella_source::cluster::Options {
+        radius: source.cluster_radius.unwrap_or(defaults.radius),
+        max_zoom: source
+            .cluster_max_zoom
+            .map_or(defaults.max_zoom, |zoom| zoom as u8),
+        ..defaults
+    })
 }
 
 /// One tile's work, resolved before any of it is done.
@@ -452,13 +481,19 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
                 // One fetch for the whole document, or none at all if it is inline. The tiling
                 // is this side's, so there is nothing per-tile to ask for afterwards.
                 Source::Geojson(source) => {
+                    let clustering = clustering_for(source);
                     tessella_storage::geojson::resolve(source, files.inner())
                         .map_err(|error| error.to_string())
                         .and_then(|document| {
                             tessella_source::geojson::read(&document)
                                 .map_err(|error| error.to_string())
                         })
-                        .map(|features| Resolved::Document(alloc::sync::Arc::new(features)))
+                        .map(|features| match clustering {
+                            Some(options) => Resolved::Clustered(alloc::sync::Arc::new(
+                                tessella_source::cluster::Clustered::new(features, options),
+                            )),
+                            None => Resolved::Document(alloc::sync::Arc::new(features)),
+                        })
                 }
                 _ => return,
             };
@@ -486,6 +521,8 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
 
     let mut sets: Vec<(String, TileSet, SourceKind)> = Vec::new();
     let mut documents: Vec<(String, alloc::sync::Arc<Vec<GeoJsonFeature>>)> = Vec::new();
+    let mut clustered: Vec<(String, alloc::sync::Arc<tessella_source::cluster::Clustered>)> =
+        Vec::new();
     {
         let mut held = resolved
             .lock()
@@ -498,6 +535,7 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
             match outcome {
                 Resolved::Tiles(set, kind) => sets.push((name, set, kind)),
                 Resolved::Document(features) => documents.push((name, features)),
+                Resolved::Clustered(index) => clustered.push((name, index)),
             }
         }
     }
@@ -570,6 +608,25 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
                 tile: id,
                 work: Work::Geojson {
                     features: alloc::sync::Arc::clone(features),
+                },
+            });
+        }
+    }
+
+    // A clustered source is cut from the index rather than from the document, and the features
+    // a tile gets are the clusters at *its* zoom — which is the whole of clustering as far as
+    // everything downstream is concerned. They are ordinary points with ordinary properties from
+    // there on, so a style draws them with the same circle and symbol layers it draws anything
+    // with, and `point_count` is a property like any other.
+    for (name, index) in &clustered {
+        for tile in &cover {
+            let id = TileId::new(tile.z, tile.x, tile.y);
+            jobs.push(Job {
+                source: name.clone(),
+                key: tessella_tile::store::TileKey::new(name.as_str(), id.z, id.x, id.y, style_rev),
+                tile: id,
+                work: Work::Geojson {
+                    features: alloc::sync::Arc::new(index.tile_features(id.z, id.x, id.y)),
                 },
             });
         }

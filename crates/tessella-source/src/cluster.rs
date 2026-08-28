@@ -310,6 +310,51 @@ impl Clustered {
             .collect()
     }
 
+    /// The points a tile draws, as GeoJSON rather than in tile units.
+    ///
+    /// The same set [`Self::tile`] answers with, handed back in longitude and latitude so it can
+    /// go through the ordinary GeoJSON tiling — projected and clipped once, by the code that
+    /// does that for every other source, rather than rounded to tile units here and again there.
+    /// A single point comes back as the feature it always was, properties and id intact; a
+    /// cluster as an invented one at its weighted centre.
+    ///
+    /// One difference from mbgl worth naming: supercluster's own `getTile` buffers by the
+    /// cluster radius, and this hands that buffered set to a tiler that clips to *its* buffer.
+    /// The set is the same; which of the points just outside the tile survive is decided by the
+    /// tiling rule every other source obeys rather than by a second one here.
+    #[must_use]
+    pub fn tile_features(&self, z: u8, x: u32, y: u32) -> Vec<GeoJsonFeature> {
+        let Some(level) = self.levels.get(&self.limit_zoom(z)) else {
+            return Vec::new();
+        };
+        let z2 = libm::pow(2.0, f64::from(z));
+        let r = self.options.radius / self.options.extent;
+        let (x, y) = (f64::from(x), f64::from(y));
+
+        let mut ids = Vec::new();
+        let top = (y - r) / z2;
+        let bottom = (y + 1.0 + r) / z2;
+        level
+            .tree
+            .range((x - r) / z2, top, (x + 1.0 + r) / z2, bottom, &mut |id| {
+                ids.push(id);
+            });
+        if x == 0.0 {
+            level
+                .tree
+                .range(1.0 - r / z2, top, 1.0, bottom, &mut |id| ids.push(id));
+        }
+        if (x - (z2 - 1.0)).abs() < f64::EPSILON {
+            level
+                .tree
+                .range(0.0, top, r / z2, bottom, &mut |id| ids.push(id));
+        }
+
+        ids.into_iter()
+            .map(|id| self.to_feature(&level.clusters[id as usize]))
+            .collect()
+    }
+
     /// The clusters and points one cluster splits into at the next level down.
     ///
     /// # Errors

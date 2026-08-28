@@ -1958,7 +1958,17 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   ninety-six points in the world tile, a named cluster's four children in the index's own order,
   five expansion zooms, and ten leaves from an offset of five. What is not built is
   `clusterProperties`, the map/reduce pair that accumulates arbitrary fields into a cluster; the
-  style layer does not parse it either, so a hook would have no caller. The round trip is asserted as well
+  style layer does not parse it either, so a hook would have no caller.
+  It is wired at source resolution rather than per tile, which is what the index is for: the
+  levels are built deepest-first from the whole document once, and every tile of every zoom is a
+  range query into them. Building one per tile would cluster the world once per tile of the
+  cover. A tile's features are then the clusters at *its* zoom, handed over as ordinary points in
+  longitude and latitude — so they project and clip through the same tiler every other source
+  uses, and `point_count` is a property a style draws with like any other. One difference from
+  mbgl in that: supercluster's own `getTile` buffers by the cluster radius and returns tile
+  units, where this takes the same set and lets the tiler clip to its own buffer, so which points
+  just outside a tile survive is decided by the rule every other source obeys rather than by a
+  second one. The round trip is asserted as well
   as the read: an offline region records the style it pinned, so a rename that reads correctly
   and writes `tile_size` produces a document nothing else can read back.
   The builder is a third one rather than an arm of the other two. The existing pair take features
