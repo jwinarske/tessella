@@ -792,7 +792,10 @@ fn emit_group(
             for reference in &refs {
                 arena.retain(*reference);
             }
-            registry.record_refs(key, refs);
+            // Where the announcement landed, for §13.2's acknowledgement. Inside an open group
+            // `head` is where the record really is rather than what has been published, which is
+            // the position the consumer's own counter will eventually pass.
+            registry.record_refs(key, refs, producer.head());
         }
     }
 

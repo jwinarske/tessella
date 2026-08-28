@@ -34,6 +34,15 @@ use tessella_tile::renderables::{DataTileId, Necessity, Pyramid, RenderTileId, T
 /// frames, which is where a hole would appear.
 const LATENCY: u64 = 6;
 
+/// How many frames pass between a tile's buckets being built and the consumer having uploaded
+/// them.
+///
+/// §13.2's acknowledgement, modelled. mbgl retains an ancestor until its descendants are
+/// *built*, and the gap between built and uploaded is where its single-frame holes come from —
+/// a gap this harness did not have, so it could not have caught one. Two frames rather than one
+/// because a consumer that misses a vsync is the ordinary case, not the pathological one.
+const UPLOAD: u64 = 2;
+
 /// A pyramid where a required tile arrives `LATENCY` frames after it is first asked for.
 #[derive(Default)]
 struct Fleet {
@@ -50,8 +59,26 @@ struct Fleet {
 impl Fleet {
     fn state(&self, id: DataTileId) -> Option<TileState> {
         self.ready_at.get(&id).map(|&at| TileState {
-            renderable: at <= self.now,
-            loaded: at <= self.now,
+            // Acknowledged, not built. This is the producer's `is_acknowledged` in miniature:
+            // the tile's geometry was announced when it was built, and the consumer says how far
+            // it has uploaded through. Written as `built` — `at <= self.now` — this harness
+            // draws tiles whose bytes are not on the GPU, and the frame where it does is exactly
+            // the hole §13.2 is about.
+            renderable: at.saturating_add(UPLOAD) <= self.now,
+            // And `loaded` moves with it, which is the part that is not obvious.
+            //
+            // mbgl reads `loaded` as *done waiting on this tile*: an ancestor is worth a network
+            // request precisely when the tile below has finished and still cannot be drawn, on
+            // the reasoning that nothing better is coming. A tile that is built but not yet
+            // uploaded has not finished in that sense — it becomes renderable shortly, without
+            // anyone fetching anything — so calling it loaded makes the ascent spend a
+            // `Required` request on an ancestor no view covers, once per upload gap, at every
+            // crossing. This harness caught exactly that.
+            //
+            // So `loaded` means uploaded-or-failed rather than built-or-failed. Nothing here
+            // fails, which is why the two lines agree; a tile the origin answered 404 for would
+            // be loaded and never renderable, which is the distinction the field exists for.
+            loaded: at.saturating_add(UPLOAD) <= self.now,
             tried_cache: true,
         })
     }
@@ -205,7 +232,7 @@ fn once_covered_the_sweep_never_blanks() {
     let run = run(&sweep::sweep_zooms(33));
     let settled = run.settled.expect("the sweep must cover at some point");
     assert!(
-        settled < LATENCY as usize + 2,
+        settled < (LATENCY + UPLOAD) as usize + 2,
         "took {settled} frames to draw a complete frame at all"
     );
 

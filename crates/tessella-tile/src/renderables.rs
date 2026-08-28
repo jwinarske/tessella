@@ -38,8 +38,11 @@
 //! where mbgl holds until *built* — the gap between building a bucket and the consumer having
 //! uploaded it is exactly where mbgl's single-frame holes come from. That divergence lives
 //! entirely in what [`TileState::renderable`] means, which is the caller's to define, so the
-//! algorithm here is mbgl's unmodified and is checked against mbgl's own expectations. Making
-//! `renderable` mean acknowledged needs the reverse-channel epoch, which is R4.
+//! algorithm here is mbgl's unmodified and is checked against mbgl's own expectations.
+//!
+//! R4 made that definition available: `tessella-orchestrate`'s `GeometryRegistry::is_acknowledged`
+//! answers it from the reverse channel's acked position. The algorithm did not change, but
+//! [`TileState::loaded`] has to move with it, and the reason is written there.
 
 use std::collections::BTreeSet;
 
@@ -204,13 +207,28 @@ pub enum Necessity {
 pub struct TileState {
     /// Its buckets can be drawn now.
     ///
-    /// §13.2 wants this to mean consumer-acknowledged rather than merely built; it is the
-    /// caller's to define, and the difference does not change the algorithm.
+    /// §13.2 asks that this mean consumer-*acknowledged* rather than merely built, and it is the
+    /// caller's to define: `tessella-orchestrate`'s `GeometryRegistry::is_acknowledged` answers
+    /// it from the position the consumer publishes on the reverse channel. mbgl retains an
+    /// ancestor until its descendants are built, and the gap between built and uploaded is where
+    /// its single-frame holes come from.
     pub renderable: bool,
-    /// Loading has finished, successfully or not.
+    /// Nothing more is coming that would make this tile renderable.
     ///
     /// Distinct from `renderable`: a tile the origin answered 404 for is loaded and will never
     /// be renderable, and the ascent must not keep waiting on it.
+    ///
+    /// # It has to move with `renderable`
+    ///
+    /// The obvious reading is "loading has finished", and under `renderable = built` the two are
+    /// the same moment so the difference never shows. Under `renderable = acknowledged` they are
+    /// not: a tile whose buckets are built but not yet uploaded has finished *loading* and is
+    /// still going to become drawable without anyone fetching anything.
+    ///
+    /// Calling that loaded tells the ascent below that the tile is finished and cannot be drawn,
+    /// which is its cue to spend a `Necessity::Required` request on an ancestor — one per upload
+    /// gap, at every crossing, for tiles no view covers. So a caller that defines `renderable` as
+    /// acknowledged must define this as acknowledged-or-failed, not built-or-failed.
     pub loaded: bool,
     /// The cache has already been consulted for it.
     pub tried_cache: bool,

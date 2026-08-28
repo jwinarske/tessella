@@ -2085,11 +2085,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   process-isolation spike (§3.5) ✅, riscv64 soak.
   Two things elsewhere in this document are assigned to this phase and were not on this line,
   which is how a phase comes to look nearly finished while work is still pointed at it. §12.8's
-  **pacing counters** ✅. And §13.2's **acknowledged-renderable**: `TileState::renderable`
-  still means *built*, and making it mean acknowledged needs this phase's reverse-channel epoch.
-  The substitution algorithm does not change — what changes is what counts as a tile that can
-  stand in for another, and until then a crossing can retire an ancestor against a tile the
-  consumer has not drawn.
+  **pacing counters** ✅. And §13.2's **acknowledged-renderable** ✅.
   The item §3.5's spike pointed at §11.3 — the slab region packed after the frame that names it —
   is closed there: `SlabArena::in_region` allocates out of the shared region, and the isolation
   test now resolves every handle from the other process rather than sequencing around it.
@@ -2593,10 +2589,24 @@ is the realistic worst case, not a contrived one).
   models a pending tile, mid-crossing being mostly pending. Checked against
   all eighteen of mbgl's own expectations, whole action logs rather than final state — what the
   algorithm declines to ask for (the ancestry a sibling already walked, the request it does not
-  spend on a substitute) is as much of the contract as what it draws. The acknowledged part of
-  the bullet is *not* yet done: `TileState::renderable` still means built, which is the caller's
-  to define and does not change the algorithm, and making it mean acknowledged needs the
-  reverse-channel epoch of R4.
+  spend on a substitute) is as much of the contract as what it draws.
+  **The acknowledged part landed in R4.** The producer wrote the records and knows where each one
+  ended, the consumer publishes how far it has uploaded through, and the comparison is the whole
+  of it: `GeometryRegistry::is_acknowledged` takes the furthest position a tile's drawables were
+  announced at and asks whether the reverse channel has passed it. No new field on either side —
+  the acked position has been there since DR-10. Re-announcing moves it forward, which is right:
+  a displaced drawable's bytes are in a different slab and have to be uploaded again.
+  The algorithm did not change, as this said it would not. What did is `TileState::loaded`, and
+  that was not foreseen here. mbgl reads `loaded` as *done waiting on this tile*: an ancestor is
+  worth a `Required` request precisely when the tile below has finished and still cannot be
+  drawn. Under `renderable = built` the two moments coincide and the distinction never shows.
+  Under `renderable = acknowledged` a tile that is built but not yet uploaded has finished
+  loading and is still about to become drawable without anyone fetching anything — so calling it
+  loaded makes the ascent spend a request on an ancestor no view covers, once per upload gap, at
+  every crossing. A caller that defines `renderable` as acknowledged must define `loaded` as
+  acknowledged-or-failed. The §13.3 sweep found it: modelling a two-frame upload gap turned the
+  "only ideal tiles are fetched" assertion red before the completeness one, which is a better
+  order to find it in than on a board.
 - **Bounded, prioritized burst.** Decode/layout center-out within visible cover, foreground
   view class first; the tick geometry budget (§11.2) amortizes buffer creation across 2–3
   frames while ancestors still cover. Symbols cross-fade through placement; fades count as

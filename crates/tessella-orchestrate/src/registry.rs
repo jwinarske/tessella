@@ -68,6 +68,16 @@ struct Entry {
     /// use is not: two views over one style hold the same buffers and each has its own draw
     /// list, so a tile leaving one view's cover releases that view and removes nothing.
     users: BTreeSet<u32>,
+    /// Ring position just past the `GeometryAdd` that announced it.
+    ///
+    /// §13.2's acknowledgement, made answerable. The consumer publishes how far it has uploaded
+    /// through [`ReverseChannel::acked_geometry`](tessella_capture_abi::reverse::ReverseChannel::acked_geometry),
+    /// and a drawable whose announcement sits at or before that has bytes on the GPU rather than
+    /// merely bytes on the wire.
+    ///
+    /// Re-announcing moves it forward, which is right: a displaced drawable's bytes are in a
+    /// different slab and the consumer has to upload them again.
+    announced_at: u64,
 }
 
 /// Hands out geometry ids and remembers which drawable each belongs to.
@@ -129,6 +139,10 @@ impl GeometryRegistry {
                 id,
                 refs: alloc::vec::Vec::new(),
                 users: BTreeSet::from([view]),
+                // Nothing has been written yet; `record_refs` fills it in when the announcement
+                // lands. Until then the drawable is not acknowledged, which is correct: an id
+                // handed out in the binding pass names nothing the consumer has seen.
+                announced_at: u64::MAX,
             },
         );
         id
@@ -138,10 +152,43 @@ impl GeometryRegistry {
     ///
     /// Called only for a drawable that was new: one already known was not re-encoded, and its
     /// references are the ones recorded when it was.
-    pub fn record_refs(&mut self, key: DrawableKey, refs: alloc::vec::Vec<SlabRef>) {
+    pub fn record_refs(&mut self, key: DrawableKey, refs: alloc::vec::Vec<SlabRef>, at: u64) {
         if let Some(entry) = self.live.get_mut(&key) {
             entry.refs = refs;
+            entry.announced_at = at;
         }
+    }
+
+    /// How far the stream must be consumed before this tile's geometry is on the GPU.
+    ///
+    /// The furthest of its drawables' announcements: a tile is not drawable because most of it
+    /// arrived. `None` for a tile this registry knows nothing about.
+    ///
+    /// # Why the producer can answer this at all
+    ///
+    /// Because it wrote the records and knows where each one landed. The consumer publishes one
+    /// number — how far it has uploaded through — and the comparison is the whole of §13.2's
+    /// acknowledgement. mbgl has no equivalent: it retains an ancestor until its descendants are
+    /// *built*, and the gap between built and uploaded is exactly where its single-frame holes
+    /// come from.
+    #[must_use]
+    pub fn announced_through(&self, tile: TileId) -> Option<u64> {
+        self.live
+            .iter()
+            .filter(|(key, _)| key.tile == Some(tile))
+            .map(|(_, entry)| entry.announced_at)
+            .max()
+    }
+
+    /// Whether every drawable of this tile has been uploaded by the consumer.
+    ///
+    /// `through` is the reverse channel's acknowledged ring position. A tile nothing has
+    /// announced is not acknowledged — there is nothing on the GPU to draw, which is the answer
+    /// the substitution wants.
+    #[must_use]
+    pub fn is_acknowledged(&self, tile: TileId, through: u64) -> bool {
+        self.announced_through(tile)
+            .is_some_and(|announced| through >= announced)
     }
 
     /// Whether no view holds this drawable yet, so its geometry has to be announced.
@@ -375,8 +422,13 @@ impl Session {
         Self::default()
     }
 
-    /// The shared geometry registry.
+    /// The shared geometry registry, to read.
     #[must_use]
+    pub fn geometry(&self) -> &GeometryRegistry {
+        &self.registry
+    }
+
+    /// The shared geometry registry.
     pub fn registry(&mut self) -> &mut GeometryRegistry {
         &mut self.registry
     }
