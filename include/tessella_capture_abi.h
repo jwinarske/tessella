@@ -421,15 +421,22 @@ TSL_ASSERT(offsetof(tsl_texture_ref, slot) == 8, "tsl_texture_ref.slot moved");
 TSL_ASSERT(offsetof(tsl_texture_ref, _pad) == 12, "tsl_texture_ref._pad moved");
 
 /*
- * Process-scoped, refcounted geometry.
+ * Geometry, for the emission that carries it.
  *
  * Carries no view: one of these plus N tsl_view_use records replaces N copies of the whole
  * thing, which is why upload bandwidth scales with unique tiles rather than with view count.
  *
+ * The id is dense from zero in every emission and is NOT stable across them. After a pan the
+ * cover shifts and the ids are handed out in cover order, so the same id names a different tile.
+ * A consumer that cached on it and skipped an upload it thought it already had would draw one
+ * tile's geometry under another's matrix. The contract is coarser than tsl_view_release and
+ * tsl_geometry_remove suggest: an emission of geometry replaces the previous set entire, and
+ * nothing is released because nothing is retained.
+ *
  * Mirrors `GeometryAdd`.
  */
 typedef struct tsl_geometry_add {
-    /* Process-wide geometry id. */
+    /* Id within this emission. Not stable across emissions -- see above. */
     uint64_t geometry;
     /* Distinguishes shader-family variants. */
     uint64_t permutation_key;

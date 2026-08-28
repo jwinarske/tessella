@@ -32,10 +32,26 @@ use crate::{AttributeDataType, BuiltIn, CameraMode, RenderPass, TexturePixelType
 #[repr(transparent)]
 pub struct ViewId(pub u32);
 
-/// Identifies a piece of process-scoped, refcounted geometry (§5.3).
+/// Identifies a piece of geometry within the emission that declared it.
 ///
-/// Unlike rev 1's drawable id, this is unique process-wide rather than per-map, which is what
-/// lets several views reference one vertex buffer instead of each building their own.
+/// Unlike rev 1's drawable id it is not per-map, which is what lets several views reference one
+/// vertex buffer instead of each building their own — an id is the same id in every `ViewUse`
+/// of the frame that announced it.
+///
+/// # It is not stable across emissions, and a consumer must not cache by it
+///
+/// §5.3 describes these as process-scoped and refcounted, and the ABI was written to that: it
+/// is what `ViewRelease` and `GeometryRemove` are for. The producer does not implement it yet.
+/// Ids are dense from zero in every emission, so the *same* id names a different tile after a
+/// pan — the cover shifts, the ids are handed out in cover order, and geometry 0 that was one
+/// tile is now another. A consumer that keyed a cache on the id and skipped an upload it
+/// thought it had would draw one tile's geometry under another's matrix.
+///
+/// So the contract the producer actually offers is coarser and has to be stated: **an emission
+/// of geometry replaces the previous set entire.** Nothing is released because nothing is
+/// retained. What makes the documented model true is stable ids per (tile, bucket) and a
+/// `GeometryRemove` on eviction, which is real work rather than a rewording — and until it is
+/// done, saying "process-wide" here would be the ABI describing a producer that does not exist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct GeometryId(pub u64);
@@ -381,7 +397,7 @@ pub struct TextureRef {
     pub _pad: u32,
 }
 
-/// Announces process-scoped, refcounted geometry (§5.3).
+/// Announces a piece of geometry, for the emission that carries it.
 ///
 /// Carries no view, no layer, and no tile: those are per-view facts and live on [`ViewUse`].
 /// One of these plus N `ViewUse` records is what replaces rev 1's N copies of `DrawableAdd`,
@@ -389,7 +405,7 @@ pub struct TextureRef {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(C)]
 pub struct GeometryAdd {
-    /// Process-wide geometry id.
+    /// The geometry's id within this emission. See [`GeometryId`] for what that does not mean.
     pub geometry: GeometryId,
     /// Distinguishes the data-driven-attribute variants of one shader family.
     pub permutation_key: u64,

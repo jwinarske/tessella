@@ -318,12 +318,23 @@ fn structs() -> Vec<Struct> {
         c_struct!(
             GeometryAdd,
             "geometry_add",
-            "Process-scoped, refcounted geometry.\n\n\
+            "Geometry, for the emission that carries it.\n\n\
              Carries no view: one of these plus N tsl_view_use records replaces N copies of the \
              whole thing, which is why upload bandwidth scales with unique tiles rather than \
-             with view count.",
+             with view count.\n\n\
+             The id is dense from zero in every emission and is NOT stable across them. After a \
+             pan the cover shifts and the ids are handed out in cover order, so the same id \
+             names a different tile. A consumer that cached on it and skipped an upload it \
+             thought it already had would draw one tile's geometry under another's matrix. The \
+             contract is coarser than tsl_view_release and tsl_geometry_remove suggest: an \
+             emission of geometry replaces the previous set entire, and nothing is released \
+             because nothing is retained.",
             [
-                (geometry, "uint64_t geometry", "Process-wide geometry id."),
+                (
+                    geometry,
+                    "uint64_t geometry",
+                    "Id within this emission. Not stable across emissions -- see above."
+                ),
                 (
                     permutation_key,
                     "uint64_t permutation_key",
