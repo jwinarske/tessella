@@ -54,6 +54,12 @@ pub struct FillExtrusionBucket {
     pub indices: Vec<u16>,
     /// Draw segments.
     pub segments: Vec<Segment>,
+    /// Whether the layer declares a `fill-extrusion-pattern`.
+    ///
+    /// mbgl's `hasPattern`, and it is *unevaluated*: what matters is that the style asks for a
+    /// pattern, not that the atlas had one. Together with [`Self::opaque`] it decides whether
+    /// there is a depth pass — see [`Self::needs_depth_pass`].
+    pub patterned: bool,
     /// Whether the layer's opacity is one, which decides how many passes it takes.
     ///
     /// mbgl's `opaque = evaluated.get<FillExtrusionOpacity>() >= 1`, and it reaches the bucket
@@ -111,6 +117,23 @@ fn edge_length(a: Position, b: Position) -> u32 {
     }
 }
 
+impl FillExtrusionBucket {
+    /// Whether this needs a depth-only pass in front of its colour pass.
+    ///
+    /// mbgl's `doDepthPass = (!opaque || hasPattern)`. Both halves matter and only the first was
+    /// implemented: an *opaque* extrusion with a pattern still gets one, because a pattern is
+    /// sampled per fragment and can be transparent wherever the sprite is, so the surface is not
+    /// opaque whatever the opacity says.
+    ///
+    /// It decides two things that were being decided separately — how many drawables the layer
+    /// becomes, and whether the colour pass is stencilled, since mbgl writes
+    /// `colorBuilder->setEnableStencil(doDepthPass)`.
+    #[must_use]
+    pub const fn needs_depth_pass(&self) -> bool {
+        !self.opaque || self.patterned
+    }
+}
+
 /// Builds a bucket from one feature's rings.
 #[must_use]
 pub fn build(rings: &[Ring]) -> FillExtrusionBucket {
@@ -128,9 +151,11 @@ pub fn build(rings: &[Ring]) -> FillExtrusionBucket {
 pub fn build_features_tracked(
     features: &[&[Ring]],
     opaque: bool,
+    patterned: bool,
 ) -> (FillExtrusionBucket, Vec<usize>) {
     let mut bucket = FillExtrusionBucket {
         opaque,
+        patterned,
         ..FillExtrusionBucket::default()
     };
     let mut ends = Vec::with_capacity(features.len());

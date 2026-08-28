@@ -160,7 +160,7 @@ impl LayerBucket {
             // An extrusion is two when it is translucent: a depth-only pass and a colour pass.
             // Without the first, every wall alpha-blends against the walls behind it. An opaque
             // one needs only the second, which is mbgl's `doDepthPass = (!opaque || hasPattern)`.
-            Content::Fill3d(ref bucket) => usize::from(!bucket.opaque) + 1,
+            Content::Fill3d(ref bucket) => usize::from(bucket.needs_depth_pass()) + 1,
             // And a symbol layer, whose labels share one buffer per tile — the golden's
             // twelve-glyph drawable is two labels, not two drawables.
             Content::Symbol(_) => 1,
@@ -700,7 +700,10 @@ fn build_fill_content(
         // it decides is the drawable count, which a zoom-varying opacity would change between
         // frames either way.
         let opaque = crate::ubo::uniform_opacity(paint, "fill-extrusion-opacity") >= 1.0;
-        let (bucket, ends) = fill_extrusion::build_features_tracked(rings, opaque);
+        // mbgl's `hasPattern`, and unevaluated: what matters is that the style asks for a
+        // pattern, not that the atlas had one.
+        let patterned = layer.paint.contains_key("fill-extrusion-pattern");
+        let (bucket, ends) = fill_extrusion::build_features_tracked(rings, opaque, patterned);
         return (Content::Fill3d(bucket), ends);
     }
     let (bucket, ends) = fill::build_features_tracked(rings);

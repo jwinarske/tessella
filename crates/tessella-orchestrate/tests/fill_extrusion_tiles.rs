@@ -75,16 +75,29 @@ fn a_translucent_extrusion_takes_two_passes() {
     );
 }
 
-/// Both passes are 3D, and only the second writes colour.
+/// Both passes are 3D, and only the second writes colour — and the stencil follows the first.
 ///
 /// `IS_3D` has been in the ABI since R0 and nothing set it until now: an extrusion is the first
 /// geometry in this build that leaves the map plane.
+///
+/// # What this used to assert
+///
+/// That neither pass is stencilled, on the reasoning that a building's walls legitimately
+/// overhang the tile that owns its footprint and clipping them to the tile square would slice
+/// every building on a boundary in half. The reasoning is sound; the fact was wrong. mbgl writes
+/// `colorBuilder->setEnableStencil(doDepthPass)`, the pattern capture's colour-pass drawable
+/// carries `flags=1111` — is3D, stencil, depth, colour — and the extrusion layer appears in the
+/// capture's stencil section with a mask per tile.
+///
+/// The two are reconciled by the condition. With no depth pass nothing has written this layer's
+/// stencil, so testing against it would do exactly the slicing the old comment described. With
+/// one, the prepass has laid down what the colour pass tests against.
 #[test]
-fn the_two_passes_differ_only_in_writing_colour() {
+fn the_two_passes_differ_in_colour_and_in_stencil() {
     use tessella_orchestrate::view;
 
     let depth = view::extrusion_depth_flags();
-    let color = view::extrusion_color_flags();
+    let color = view::extrusion_color_flags(true);
 
     assert!(depth.contains(DrawFlags::IS_3D));
     assert!(color.contains(DrawFlags::IS_3D));
@@ -97,11 +110,46 @@ fn the_two_passes_differ_only_in_writing_colour() {
     );
     assert!(color.contains(DrawFlags::ENABLE_COLOR));
 
-    // Neither is stencilled. mbgl sets no stencil mode on either extrusion builder — a
-    // building's walls legitimately overhang the tile that owns its footprint, and clipping
-    // them to the tile square would slice every building on a tile boundary in half.
-    assert!(!depth.contains(DrawFlags::ENABLE_STENCIL));
-    assert!(!color.contains(DrawFlags::ENABLE_STENCIL));
+    assert!(
+        !depth.contains(DrawFlags::ENABLE_STENCIL),
+        "the prepass writes the stencil rather than testing it"
+    );
+    assert!(
+        color.contains(DrawFlags::ENABLE_STENCIL),
+        "and the colour pass tests it: `flags=1111` in the capture"
+    );
+
+    // Without a prepass there is nothing to test against.
+    assert!(!view::extrusion_color_flags(false).contains(DrawFlags::ENABLE_STENCIL));
+}
+
+/// A pattern earns a depth pass whatever the opacity says.
+///
+/// mbgl's `doDepthPass = (!opaque || hasPattern)`. Both halves were quoted in this build's
+/// comments and only the first was implemented, so an opaque patterned extrusion emitted one
+/// drawable where the capture has two — and, through the condition above, an unstencilled one.
+/// A pattern is sampled per fragment and can be transparent wherever the sprite is, so the
+/// surface is not opaque however opaque the layer's opacity is.
+#[test]
+fn an_opaque_patterned_extrusion_still_gets_a_depth_pass() {
+    use tessella_layout::fill_extrusion::FillExtrusionBucket;
+
+    let plain = |opaque, patterned| FillExtrusionBucket {
+        opaque,
+        patterned,
+        ..FillExtrusionBucket::default()
+    };
+
+    assert!(plain(false, false).needs_depth_pass(), "translucent");
+    assert!(plain(false, true).needs_depth_pass(), "translucent, patterned");
+    assert!(
+        plain(true, true).needs_depth_pass(),
+        "opaque and patterned: the half that was missing"
+    );
+    assert!(
+        !plain(true, false).needs_depth_pass(),
+        "and an opaque unpatterned extrusion needs only its colour pass"
+    );
 }
 
 /// The props buffer lands each value at mbgl's own offset.

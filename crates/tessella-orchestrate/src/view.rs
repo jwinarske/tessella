@@ -97,9 +97,28 @@ pub fn extrusion_depth_flags() -> DrawFlags {
 }
 
 /// The colour pass of a fill extrusion.
+///
+/// # The stencil follows the depth pass
+///
+/// mbgl writes `colorBuilder->setEnableStencil(doDepthPass)`, and this used to set no stencil at
+/// all — with a comment asserting that mbgl "sets no stencil mode on either extrusion builder"
+/// because a building's walls legitimately overhang the tile that owns its footprint. That
+/// reasoning is sound and the fact was wrong: the capture's colour-pass drawable carries
+/// `flags=1111`, and the layer appears in the stencil section with a mask per tile.
+///
+/// Why it is conditional rather than always on: without a depth pass there is nothing that has
+/// already written the tile's stencil for this layer, so testing against it would clip the
+/// walls to the tile square and slice every building on a boundary in half — which is what the
+/// old comment was describing. With one, the prepass has laid down what the colour pass tests
+/// against, and skipping the test double-draws wherever two tiles overlap.
 #[must_use]
-pub fn extrusion_color_flags() -> DrawFlags {
-    DrawFlags::IS_3D | DrawFlags::ENABLE_DEPTH | DrawFlags::ENABLE_COLOR
+pub fn extrusion_color_flags(depth_pass: bool) -> DrawFlags {
+    let base = DrawFlags::IS_3D | DrawFlags::ENABLE_DEPTH | DrawFlags::ENABLE_COLOR;
+    if depth_pass {
+        base | DrawFlags::ENABLE_STENCIL
+    } else {
+        base
+    }
 }
 
 /// The pass a fill draws in.

@@ -441,10 +441,11 @@ pub fn bindings_for(
             // dropping it to zero would reorder it against a translucent extrusion in the same
             // layer group.
             Content::Fill3d(ref extrusion) => {
-                if !extrusion.opaque {
+                let depth_pass = extrusion.needs_depth_pass();
+                if depth_pass {
                     emit(0, view::fill_pass(), view::extrusion_depth_flags());
                 }
-                emit(1, view::fill_pass(), view::extrusion_color_flags());
+                emit(1, view::fill_pass(), view::extrusion_color_flags(depth_pass));
             }
             // Sublayer 0 and stencilled, which is what `symbol_style.dump` shows: its symbol
             // drawable carries the same flags as the fill above it. Symbols overhang tile edges,
