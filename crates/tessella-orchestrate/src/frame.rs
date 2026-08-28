@@ -42,7 +42,7 @@ use crate::binder::{
 use crate::camera::CameraBlock;
 use crate::emit::SlabArena;
 use crate::order::{self, DrawOrder};
-use crate::registry::{DrawableKey, GeometryRegistry};
+use crate::registry::{DrawableKey, Session};
 use crate::tile::{Content, LayerBucket, TileId};
 use crate::ubo::{self, DrawableEntry};
 use crate::view::{GeometryBinding, ViewSession};
@@ -343,30 +343,35 @@ pub fn emit_incremental(
     producer: &mut Producer,
     arena: &mut SlabArena,
     frame: &Frame<'_>,
-    registry: &mut GeometryRegistry,
+    session: &mut Session,
 ) -> Result<Emitted, FrameError> {
-    emit_into(producer, arena, frame, Some(registry))
+    emit_into(producer, arena, frame, Some(session))
 }
 
 fn emit_into(
     producer: &mut Producer,
     arena: &mut SlabArena,
     frame: &Frame<'_>,
-    registry: Option<&mut GeometryRegistry>,
+    session: Option<&mut Session>,
 ) -> Result<Emitted, FrameError> {
     producer.begin();
     let mark = arena.mark();
-    let mut session = registry;
-    if let Some(registry) = session.as_deref_mut() {
-        registry.begin_frame(frame.view_id);
+    let mut session = session;
+    let key = camera_key(frame.view);
+    let camera_moved = session
+        .as_deref()
+        .is_none_or(|session| session.camera_differs(frame.view_id, &key));
+    if let Some(session) = session.as_deref_mut() {
+        session.registry().begin_frame(frame.view_id);
     }
-    match emit_group(producer, arena, frame, session.as_deref_mut()) {
+    match emit_group(producer, arena, frame, session.as_deref_mut(), camera_moved) {
         Ok(emitted) => {
             // Only now: a frame that could not be written must leave the registry as it found
             // it, so the retry announces the same geometry rather than assuming the consumer
             // has what the failed attempt never sent.
-            if let Some(registry) = session {
-                registry.retire();
+            if let Some(session) = session {
+                session.registry().retire();
+                session.record_camera(frame.view_id, key);
             }
             producer.commit();
             Ok(emitted)
@@ -379,8 +384,8 @@ fn emit_into(
             // And the registry, which handed out ids during the binding pass before anything
             // was written. All three roll back together or the retry is working from a state
             // the consumer never saw.
-            if let Some(registry) = session {
-                registry.rollback();
+            if let Some(session) = session {
+                session.registry().rollback();
             }
             Err(error)
         }
@@ -391,7 +396,8 @@ fn emit_group(
     producer: &mut Producer,
     arena: &mut SlabArena,
     frame: &Frame<'_>,
-    registry: Option<&mut GeometryRegistry>,
+    stream: Option<&mut Session>,
+    camera_moved: bool,
 ) -> Result<Emitted, FrameError> {
     let Frame {
         style,
@@ -454,8 +460,26 @@ fn emit_group(
         &global,
     )?;
 
+    // Held across frames when there is a stream, so an order identical to the last one it sent
+    // recognises itself and stays off the ring. `DrawOrder` has always suppressed that; building
+    // a fresh one every frame threw the memory away before it could.
     #[allow(clippy::cast_possible_truncation)]
-    let mut draw_order = DrawOrder::new(style.layers.len() as u32);
+    let layer_count = style.layers.len() as u32;
+    // `session` below is the view session that writes `ViewDeclare` and `ViewUse`; this is the
+    // stream's memory across frames.
+    let mut owned_order;
+    // Both at once: a frame needs the registry and the order for its whole length, and they are
+    // different fields of the same stream.
+    let (mut registry, draw_order): (Option<&mut _>, &mut DrawOrder) = match stream {
+        Some(stream) => {
+            let (registry, order) = stream.split(view_id, layer_count);
+            (Some(registry), order)
+        }
+        None => {
+            owned_order = DrawOrder::new(layer_count);
+            (None, &mut owned_order)
+        }
+    };
     let mut next_id = 0;
     let mut by_layer: BTreeMap<i32, Vec<GeometryBinding>> = BTreeMap::new();
     let mut emitted = Emitted::default();
@@ -474,7 +498,6 @@ fn emit_group(
     // Drawables this view is not yet bound to, which is a wider set than `fresh`.
     let mut unbound: BTreeSet<DrawableKey> = BTreeSet::new();
     let mut keyed: BTreeMap<u64, DrawableKey> = BTreeMap::new();
-    let mut registry = registry;
 
     for (index, (tile, tile_buckets)) in buckets.iter().enumerate() {
         // A raster tile's picture goes up before any drawable names it, for the reason the glyph
@@ -724,6 +747,18 @@ fn emit_group(
     // The order, then the camera naming its epoch — never the other way round.
     let order = draw_order.emit(producer, view_id)?;
     emitted.epoch = order.epoch;
+
+    // A camera that has not moved is not sent. The order is gated by `DrawOrder` itself and
+    // always was; this is the other half, and together they are what makes a parked view
+    // silent — §10's exit criterion, and DR-8's rule about camera-rate traffic.
+    //
+    // Except when the order changed: the camera names an epoch, and a consumer holding a camera
+    // that names an order it no longer has cannot draw. So a new order forces a camera whatever
+    // the camera did.
+    if !camera_moved && !order.changed {
+        return Ok(emitted);
+    }
+
     CameraBlock::new(view, light, order.epoch, 0, draw_order.opaque_cutoff())
         .map_err(|error| FrameError::Camera(alloc::format!("{error}")))?
         .for_view(view_id)
@@ -752,6 +787,17 @@ fn symbol_stacks(buckets: &[(TileId, Vec<LayerBucket>)]) -> Vec<Vec<alloc::strin
         }
     }
     stacks
+}
+
+/// The camera fields damage is decided on.
+fn camera_key(view: &ViewTransform) -> crate::damage::CameraKey {
+    crate::damage::CameraKey {
+        center_zoom0: tessella_tile::camera::center_zoom0(view),
+        zoom: view.zoom,
+        bearing: view.bearing,
+        pitch: view.pitch,
+        pixels_per_meter: tessella_tile::camera::pixels_per_meter(view),
+    }
 }
 
 /// What every bucket's encoding reads from the frame around it.

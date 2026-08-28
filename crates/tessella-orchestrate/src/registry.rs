@@ -241,3 +241,105 @@ impl GeometryRegistry {
         self.live.is_empty()
     }
 }
+
+/// Everything a stream remembers between frames.
+///
+/// # Why one type
+///
+/// Two lifetimes meet here and they are not the same. Geometry is shared across views — §5.3's
+/// reason for a process-scoped id — so the registry is one. Draw order and the camera are per
+/// view, and a view that has not moved should say nothing at all. Keeping them in separate
+/// values left the caller to pair them up correctly for every view, every frame, which is a
+/// thing to get wrong once and never notice: the symptom is traffic, not a wrong picture.
+///
+/// # What a parked view emits
+///
+/// Nothing. `DrawOrder` already suppresses an order identical to the last one it sent, and
+/// always did — but the emitter built a fresh one every frame, so its memory was thrown away
+/// before it could be used and every frame looked like a change. Holding it here is what makes
+/// the suppression real. The camera is gated the same way, on the key `damage` already defines.
+#[derive(Debug, Default)]
+pub struct Session {
+    /// Geometry, shared by every view.
+    registry: GeometryRegistry,
+    /// Per-view memory: what order was last sent, and where the camera was.
+    views: BTreeMap<u32, ViewMemory>,
+}
+
+/// What one view remembers.
+#[derive(Debug, Default)]
+struct ViewMemory {
+    order: crate::order::DrawOrder,
+    camera: Option<crate::damage::CameraKey>,
+}
+
+impl Session {
+    /// A session that has emitted nothing.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The shared geometry registry.
+    #[must_use]
+    pub fn registry(&mut self) -> &mut GeometryRegistry {
+        &mut self.registry
+    }
+
+    /// The registry and this view's draw order at once.
+    ///
+    /// One call because a frame needs both for its whole length and they are different fields:
+    /// handing them out separately means two overlapping borrows of the session, which the
+    /// caller can only resolve by cloning something it should not.
+    pub fn split(
+        &mut self,
+        view: ViewId,
+        layer_count: u32,
+    ) -> (&mut GeometryRegistry, &mut crate::order::DrawOrder) {
+        let memory = self.views.entry(view.0).or_default();
+        if memory.order.layer_count() != layer_count {
+            memory.order = crate::order::DrawOrder::new(layer_count);
+        }
+        memory.order.clear();
+        (&mut self.registry, &mut memory.order)
+    }
+
+    /// The draw order this view last sent, ready to be rebuilt against.
+    ///
+    /// Cleared of its bindings and keeping its emitted list, which is what lets an unchanged
+    /// frame recognise itself. `DrawOrder::clear` documents that asymmetry.
+    pub fn order_for(&mut self, view: ViewId, layer_count: u32) -> &mut crate::order::DrawOrder {
+        let memory = self.views.entry(view.0).or_default();
+        if memory.order.layer_count() != layer_count {
+            memory.order = crate::order::DrawOrder::new(layer_count);
+        }
+        memory.order.clear();
+        &mut memory.order
+    }
+
+    /// Whether this view's camera differs from the one it last *sent*.
+    ///
+    /// True for a view that has sent none, because a consumer with no camera cannot draw.
+    ///
+    /// A query, with [`Self::record_camera`] separate, for the reason the registry separates
+    /// reporting from retiring: a frame that fails must not have recorded a camera it never
+    /// sent, or the next frame sees no change and stays silent about a camera the consumer
+    /// does not have.
+    #[must_use]
+    pub fn camera_differs(&self, view: ViewId, camera: &crate::damage::CameraKey) -> bool {
+        self.views
+            .get(&view.0)
+            .and_then(|memory| memory.camera.as_ref())
+            .is_none_or(|last| !last.same_as(camera))
+    }
+
+    /// Records the camera a frame has just sent.
+    pub fn record_camera(&mut self, view: ViewId, camera: crate::damage::CameraKey) {
+        self.views.entry(view.0).or_default().camera = Some(camera);
+    }
+
+    /// Forgets a view entirely, for one that has been undeclared.
+    pub fn forget(&mut self, view: ViewId) {
+        self.views.remove(&view.0);
+    }
+}

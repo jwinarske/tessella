@@ -20,7 +20,7 @@ use tessella_capture_abi::envelope::ViewId;
 use tessella_capture_abi::ring::{self, Ring, region_size};
 use tessella_orchestrate::SlabArena;
 use tessella_orchestrate::frame::{self, Frame, FrameError};
-use tessella_orchestrate::registry::GeometryRegistry;
+use tessella_orchestrate::registry::Session;
 use tessella_orchestrate::tile::{LayerBucket, TileId, build_mvt_tile, build_sourceless};
 use tessella_source::mvt::Tile;
 use tessella_style::Style;
@@ -74,7 +74,7 @@ fn scene(longitude: f64) -> Scene {
 fn emit_frame(
     scene: &Scene,
     arena: &mut SlabArena,
-    registry: &mut GeometryRegistry,
+    registry: &mut Session,
 ) -> (frame::Emitted, BTreeMap<String, usize>) {
     emit_frame_for(scene, ViewId(0), arena, registry)
 }
@@ -83,7 +83,7 @@ fn emit_frame_for(
     scene: &Scene,
     view_id: ViewId,
     arena: &mut SlabArena,
-    registry: &mut GeometryRegistry,
+    registry: &mut Session,
 ) -> (frame::Emitted, BTreeMap<String, usize>) {
     let mut ring = Ring::new(1 << 22);
     let (producer, consumer) = ring.split();
@@ -118,7 +118,7 @@ fn emit_frame_for(
 fn an_unchanged_cover_announces_nothing() {
     let scene = scene(0.0);
     let mut arena = SlabArena::new();
-    let mut registry = GeometryRegistry::new();
+    let mut registry = Session::new();
 
     let (first, first_kinds) = emit_frame(&scene, &mut arena, &mut registry);
     assert!(first.geometries > 0, "the first frame announces everything");
@@ -141,9 +141,45 @@ fn an_unchanged_cover_announces_nothing() {
     );
     assert_eq!(second.removed, 0, "and nothing left");
 
-    // The order and the camera still go every frame: they are what a consumer draws from.
-    assert_eq!(second_kinds.get("OrderUpdate").copied(), Some(1));
-    assert_eq!(second_kinds.get("CameraUpdate").copied(), Some(1));
+    // And a parked view is silent altogether. `DrawOrder` suppresses an order identical to the
+    // one it last sent, and the camera is gated on the key `damage` defines — §10's exit
+    // criterion is that a parked view emits nothing, and this is that measured on the ring
+    // rather than on what the producer believes it wrote.
+    assert_eq!(
+        second_kinds.get("OrderUpdate").copied(),
+        None,
+        "the order did not change: {second_kinds:?}"
+    );
+    assert_eq!(
+        second_kinds.get("CameraUpdate").copied(),
+        None,
+        "nor did the camera: {second_kinds:?}"
+    );
+    // Not yet silent altogether, and the remainder is named rather than left to be discovered:
+    // `ViewDeclare`, the placeholder `TextureUpdate`s, the per-layer `UboUpdate`s and
+    // `StencilTiles` still go every frame. Each is gateable and none is gated — the declaration
+    // and the placeholders on the view's first frame (DR-18 re-emits a declaration only when the
+    // configuration changes), the uniforms and the stencil on the camera and the cover, which
+    // are exactly the two things this frame already knows did not move.
+    for kind in [
+        "GeometryAdd",
+        "ViewUse",
+        "ViewRelease",
+        "OrderUpdate",
+        "CameraUpdate",
+    ] {
+        assert_eq!(
+            second_kinds.get(kind).copied().unwrap_or(0),
+            0,
+            "{kind} should be silent on a parked view: {second_kinds:?}"
+        );
+    }
+    let parked: usize = second_kinds.values().sum();
+    let busy: usize = first_kinds.values().sum();
+    assert!(
+        parked * 3 <= busy,
+        "a parked frame is a fraction of a full one: {parked} of {busy}"
+    );
     assert_eq!(
         second.drawables, first.drawables,
         "the same scene is drawn either way"
@@ -158,7 +194,7 @@ fn a_pan_sends_only_the_difference() {
     assert_ne!(here.tiles, there.tiles, "the cover has to change");
 
     let mut arena = SlabArena::new();
-    let mut registry = GeometryRegistry::new();
+    let mut registry = Session::new();
     let (first, _) = emit_frame(&here, &mut arena, &mut registry);
     let (second, kinds) = emit_frame(&there, &mut arena, &mut registry);
 
@@ -188,7 +224,7 @@ fn a_tile_that_stays_is_announced_once() {
     let there = scene(20.0);
 
     let mut arena = SlabArena::new();
-    let mut registry = GeometryRegistry::new();
+    let mut registry = Session::new();
     emit_frame(&here, &mut arena, &mut registry);
     let (second, _) = emit_frame(&there, &mut arena, &mut registry);
     let (third, _) = emit_frame(&there, &mut arena, &mut registry);
@@ -209,7 +245,7 @@ fn a_failed_frame_retires_nothing_and_announces_nothing() {
     let there = scene(60.0);
 
     let mut arena = SlabArena::new();
-    let mut registry = GeometryRegistry::new();
+    let mut registry = Session::new();
     let mut big = Ring::new(1 << 22);
     let (producer, _consumer) = big.split();
     let light = Light::default();
@@ -232,7 +268,7 @@ fn a_failed_frame_retires_nothing_and_announces_nothing() {
         &mut registry,
     )
     .expect("first");
-    let known = registry.len();
+    let known = registry.registry().len();
 
     // A ring too small for the pan's new geometry. Smaller than it would need to be for a full
     // emission, which is itself the feature working: the pan sends four geometries where the
@@ -250,7 +286,7 @@ fn a_failed_frame_retires_nothing_and_announces_nothing() {
     assert!(matches!(result, Err(FrameError::Full)), "{result:?}");
 
     assert_eq!(
-        registry.len(),
+        registry.registry().len(),
         known,
         "a failed frame retired nothing, so the retry sees what the first frame left"
     );
@@ -271,7 +307,7 @@ fn two_views_share_geometry_and_do_not_thrash() {
     );
 
     let mut arena = SlabArena::new();
-    let mut registry = GeometryRegistry::new();
+    let mut registry = Session::new();
 
     let (first, _) = emit_frame_for(&here, ViewId(0), &mut arena, &mut registry);
     let (second, _) = emit_frame_for(&there, ViewId(1), &mut arena, &mut registry);
@@ -297,7 +333,7 @@ fn a_shared_tile_outlives_one_views_pan() {
     let elsewhere = scene(120.0);
 
     let mut arena = SlabArena::new();
-    let mut registry = GeometryRegistry::new();
+    let mut registry = Session::new();
 
     let (first, _) = emit_frame_for(&shared, ViewId(0), &mut arena, &mut registry);
     let (second, kinds) = emit_frame_for(&shared, ViewId(1), &mut arena, &mut registry);
@@ -338,7 +374,7 @@ fn four_views_share_one_geometry() {
     let elsewhere = scene(120.0);
 
     let mut arena = SlabArena::new();
-    let mut registry = GeometryRegistry::new();
+    let mut registry = Session::new();
 
     // All four draw the same cover. The first announces it; the rest bind to it.
     let (first, _) = emit_frame_for(&shared, ViewId(0), &mut arena, &mut registry);
@@ -381,7 +417,7 @@ fn four_views_share_one_geometry() {
 fn four_views_settle_independently() {
     let scenes = [scene(0.0), scene(60.0), scene(120.0), scene(180.0)];
     let mut arena = SlabArena::new();
-    let mut registry = GeometryRegistry::new();
+    let mut registry = Session::new();
 
     for (view, scene) in scenes.iter().enumerate() {
         #[allow(clippy::cast_possible_truncation)]
@@ -423,7 +459,7 @@ fn a_frame_touches_only_its_own_view() {
 
     let scenes = [scene(0.0), scene(60.0), scene(120.0), scene(180.0)];
     let mut arena = SlabArena::new();
-    let mut registry = GeometryRegistry::new();
+    let mut registry = Session::new();
 
     // Two rounds, so the second exercises the settled path as well as the first emission — a
     // release names a view too, and only a frame after something moved emits one.
@@ -500,7 +536,7 @@ fn a_frame_touches_only_its_own_view() {
 fn a_camera_move_in_one_view_does_not_disturb_the_others() {
     let scenes = [scene(0.0), scene(60.0), scene(120.0), scene(180.0)];
     let mut arena = SlabArena::new();
-    let mut registry = GeometryRegistry::new();
+    let mut registry = Session::new();
     for (index, scene) in scenes.iter().enumerate() {
         #[allow(clippy::cast_possible_truncation)]
         emit_frame_for(scene, ViewId(index as u32), &mut arena, &mut registry);

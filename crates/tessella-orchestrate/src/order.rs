@@ -184,6 +184,16 @@ impl DrawOrder {
         self.entries.clear();
     }
 
+    /// The style's layer count, which the depth slot is measured against.
+    ///
+    /// Exposed so a caller holding an order across frames can tell a style change from a camera
+    /// one: a different layer count means every depth slot moved, and rebuilding is the only
+    /// answer.
+    #[must_use]
+    pub fn layer_count(&self) -> u32 {
+        self.layer_count
+    }
+
     /// How many drawables are in the order.
     #[must_use]
     pub fn len(&self) -> usize {
