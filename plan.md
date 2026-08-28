@@ -833,8 +833,21 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   did not name them either while the R2 narrative above already said "until R3 brings the sprite
   atlas" — the plan disagreed with itself, and R3's scope now says so explicitly. What waits on
   it is named where it is missed: vertical writing, images in text and per-section scaling all
-  change a line's *height* as well as its width, and none of them has an oracle without the
-  sprite atlas.
+  change a line's *height* as well as its width.
+  **They have no oracle, and not for the reason this used to give.** It said "without the sprite
+  atlas". R3 brought the atlas and they still have none, because what a scaled section changes is
+  the *glyph vertex buffer*, and that buffer is elided from every symbol capture — mbgl packs its
+  glyph atlas in the order glyphs arrive and that order is not deterministic, which is the same
+  elision R2's exit qualification names.
+  Measured rather than assumed. A capture of `["format", "Big", {"font-scale": 2}, "small",
+  {"font-scale": 0.5}]` and one of the same label at scale one produce *byte-identical* comparable
+  data: same vertex count, same index buffer hash, same both per-frame buffers. Two maps that
+  differ visibly, and the capture cannot tell them apart at all.
+  What would change that is the probe, which is this project's rather than mbgl's: a dump of the
+  shaped *extent* — the line heights and advances `shapeLines` computes — is comparable where the
+  packed vertices are not, and is the number these three features actually decide. Building them
+  against the capture as it stands would be building them unverified, which is how the four
+  defects R3 found got in.
   **Was held behind a capture, and is not any longer**: the pitched paths, which stood here in
   three different states because the probe was unrotated and there was no capture to check any of
   them against — R0's second qualification reappearing rather than a new one. A line label's

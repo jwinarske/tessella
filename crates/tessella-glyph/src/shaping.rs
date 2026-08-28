@@ -544,8 +544,24 @@ pub fn reorder(line: &[Char]) -> std::borrow::Cow<'_, [Char]> {
 ///
 /// A transcription of mbgl's `shapeLines` for horizontal text in one font stack. Vertical
 /// writing, images in text and per-section scaling are not implemented; each of those changes
-/// the line's height as well as its width, and none has an oracle until R3 brings the sprite
-/// atlas.
+/// the line's height as well as its width.
+///
+/// # Why the capture cannot check them, which is not the reason first given
+///
+/// This used to say they had no oracle "until R3 brings the sprite atlas". R3 brought it and
+/// they still have none, for a different reason: what a scaled section changes is the *glyph
+/// vertex buffer*, and that buffer is elided from every symbol capture because mbgl packs its
+/// glyph atlas in the order glyphs arrive and that order is not deterministic.
+///
+/// Measured rather than assumed. A capture of `["format", "Big", {"font-scale": 2}, "small",
+/// {"font-scale": 0.5}]` and one of the same label at scale one produce *byte-identical*
+/// comparable data — same vertex count, same index buffer hash, same both per-frame buffers.
+/// The two maps differ visibly and the capture cannot tell them apart at all.
+///
+/// So implementing this against the oracle is not possible as the oracle stands. What would
+/// change that is the probe, which is ours: a dump of the shaped extent — the line heights and
+/// advances `shapeLines` computes — would be comparable where the packed vertices are not, and
+/// is the number these features actually decide.
 #[must_use]
 pub fn shape(text: &[Char], options: &Options) -> Shaping {
     let justify = options.justify.factor();
