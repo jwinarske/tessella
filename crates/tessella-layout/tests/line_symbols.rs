@@ -363,9 +363,12 @@ fn a_line_label_never_wraps() {
     assert!(!laid.is_empty(), "the label should place somewhere");
     for entry in &laid {
         let (top, bottom, _, _) = entry.extent;
+        // One line is `text-line-height` ems tall, not one — the spec's default is 1.2, and the
+        // shaper is given the resolved height rather than `ONE_EM`.
+        let one_line = SymbolOptions::default().line_height_ems * ONE_EM;
         assert!(
-            (bottom - top - ONE_EM).abs() < 1.0,
-            "the label is {} tall, which is more than one line",
+            (bottom - top - one_line).abs() < 1.0,
+            "the label is {} tall, which is more than one line at {one_line}",
             bottom - top
         );
     }

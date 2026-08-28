@@ -153,39 +153,33 @@ fn one_section_at_one_is_what_it_always_was() {
 /// dependencies, fetch the same font off the same disk, lay out — and hashes the glyph positions
 /// the way the probe hashes them.
 ///
-/// # Why it is ignored, and what is known
+/// # What it caught
 ///
-/// It does not pass, and what it reports is worth more than a green tick: the probe was taught
-/// to decode this attribute so the difference could be read rather than hashed, and it is
-/// specific.
+/// It failed first, and what it reported was worth more than a green tick: the probe was taught
+/// to decode this attribute so the difference could be read rather than hashed, and it named two
+/// defects that had nothing to do with per-section scaling.
 ///
 /// ```text
 /// mbgl:  (342,6318,-1688,-666) (342,6318,-408,-666) (342,6318,-1688,934) …
-/// mine:  (342,6317,-1688,-512) (342,6317,-408,-512) (342,6317,-1688,1088) …
+/// then:  (342,6317,-1688,-512) (342,6317,-408,-512) (342,6317,-1688,1088) …
 /// ```
 ///
-/// **Every x offset matches, exactly** — all thirty-two of them, across both sections. So the
-/// advances, their per-section scaling, the letter spacing that is *not* scaled with them, and
-/// the horizontal alignment are all right, and the quads are the right width: the big glyphs
-/// span 1600 units in both and the small ones 336.
+/// Every x offset matched, exactly — all thirty-two, across both sections. So the advances,
+/// their per-section scaling, the letter spacing that is *not* scaled with them, and the
+/// horizontal alignment were already right.
 ///
-/// Two things differ, and they look independent.
+/// The anchor was a unit low, and in the *unscaled* case too — the capture answers 6318 for both
+/// styles. A fill or a line reaches the tile through `to_tile_ring`, which rounds because that is
+/// what geojson-vt does before mbgl sees a coordinate; the symbol path took the raw float, and
+/// the symbol vertex packs its anchor by truncating, so 6317.68 was drawn at 6317. Nothing saw
+/// it because the passing layout test projects with its own helper instead of building a tile.
 ///
-/// Every y offset is out by a constant 154 — 4.8125 pixels — with the spans unchanged, so it is
-/// a shift of the whole block rather than a per-glyph error. That points at `align`'s vertical
-/// shift, which takes a different branch once a line has grown: `shiftY = -blockHeight *
-/// verticalAlign - yOffset` instead of the whole-lines formula. The branch is transcribed and
-/// the inputs to it are what want checking.
-///
-/// And the anchor's y differs by one unit — where **mbgl's own anchor moves between the two
-/// styles**. Building the unscaled label through the same path gives `(342, 6317)`, which agrees
-/// with the capture that `the_glyph_layout_buffer_matches_the_oracle` passes against; mbgl
-/// answers 6318 for the same feature at the same point once the label is scaled. So the anchor
-/// is not independent of the shaping there, and finding out why is the first thing to do rather
-/// than the last, because a fix to the offsets that assumed a fixed anchor would be tuned to the
-/// wrong number.
+/// The y offsets were out by a constant 154 — 4.8125 pixels, which is exactly `1.2 em - 1 em`.
+/// The shaper was handed `ONE_EM` as its line height, ignoring `text-line-height`. A single line
+/// hides it: the alignment branch a one-line label takes does not use the block height at all,
+/// and both heights give a zero shift. Grow one line and the other branch runs, and every line
+/// of every multi-line label was 4.8 pixels too close to the one above it.
 #[test]
-#[ignore = "reports a real difference; see the module note for the numbers"]
 fn the_shaped_label_matches_the_capture() {
     use std::collections::BTreeMap;
 

@@ -348,25 +348,28 @@ pub fn build_tile_with_patterns(
                     // A label is clipped by whether its *anchor* is on the tile, not by cutting
                     // its geometry: half a road name is not a label, and a point label has no
                     // geometry to cut. So the rings go in whole and placement decides.
+                    //
+                    // Rounded to tile units, as every other geometry kind here is. A fill or a
+                    // line goes through `to_tile_ring`, which rounds because that is what
+                    // geojson-vt does to a tile's coordinates before mbgl ever sees them; this
+                    // path did not, and the symbol vertex packs its anchor by *truncating*. So a
+                    // label whose anchor fell at 6317.68 was drawn at 6317 where the capture has
+                    // 6318 — every point label up to a tile unit out, in a way no test could see
+                    // until the probe emitted a per-attribute hash and the parity test stopped
+                    // using its own projection.
                     #[allow(clippy::cast_possible_truncation)]
+                    let to_tile_units = |p: &[f64; 2]| {
+                        let at = project(p);
+                        (at[0].round() as f32, at[1].round() as f32)
+                    };
                     let rings: Vec<Vec<(f32, f32)>> = match &feature.geometry {
                         Geometry::Point(points) => points
                             .iter()
-                            .map(|point| {
-                                let projected = project(point);
-                                alloc::vec![(projected[0] as f32, projected[1] as f32)]
-                            })
+                            .map(|point| alloc::vec![to_tile_units(point)])
                             .collect(),
                         Geometry::LineString(lines) => lines
                             .iter()
-                            .map(|line| {
-                                line.iter()
-                                    .map(|point| {
-                                        let projected = project(point);
-                                        (projected[0] as f32, projected[1] as f32)
-                                    })
-                                    .collect()
-                            })
+                            .map(|line| line.iter().map(&to_tile_units).collect())
                             .collect(),
                         // A polygon labels at its rings, which is what mbgl does when a symbol
                         // layer reads an area source: the outline is what a line-placed label
@@ -374,14 +377,7 @@ pub fn build_tile_with_patterns(
                         Geometry::Polygon(polygons) => polygons
                             .iter()
                             .flatten()
-                            .map(|ring| {
-                                ring.iter()
-                                    .map(|point| {
-                                        let projected = project(point);
-                                        (projected[0] as f32, projected[1] as f32)
-                                    })
-                                    .collect()
-                            })
+                            .map(|ring| ring.iter().map(&to_tile_units).collect())
                             .collect(),
                     };
 

@@ -150,6 +150,7 @@ fn text_options(layer: &Layer, zoom: f64, feature: Option<&dyn Feature>) -> Symb
         size: number("text-size").unwrap_or(16.0),
         max_width_ems: number("text-max-width").unwrap_or(10.0),
         letter_spacing: number("text-letter-spacing").unwrap_or(0.0),
+        line_height_ems: number("text-line-height").unwrap_or(1.2),
         ..SymbolOptions::default()
     }
 }

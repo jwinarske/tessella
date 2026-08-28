@@ -302,6 +302,14 @@ pub struct SymbolOptions {
     pub max_width_ems: f32,
     /// `text-letter-spacing`, in pixels.
     pub letter_spacing: f32,
+    /// `text-line-height`, in ems.
+    ///
+    /// The spec's default is 1.2, and this used to be one — `ONE_EM` was passed to the shaper
+    /// directly, so every line of a multi-line label sat 4.8 pixels too close to the one above
+    /// it. Invisible on a single line, because the alignment branch a one-line label takes does
+    /// not use the height at all, and nothing compared a multi-line label through the production
+    /// path until a section grew a line and made the other branch run.
+    pub line_height_ems: f32,
     /// Where the label sits relative to its anchor.
     pub anchor: tessella_glyph::shaping::Anchor,
     /// How its lines align.
@@ -314,6 +322,7 @@ impl Default for SymbolOptions {
             size: 16.0,
             max_width_ems: 10.0,
             letter_spacing: 0.0,
+            line_height_ems: 1.2,
             anchor: tessella_glyph::shaping::Anchor::Center,
             justify: tessella_glyph::shaping::Justify::Center,
         }
@@ -416,7 +425,7 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
             &chars,
             &ShapeOptions {
                 max_width: options.max_width_ems * ONE_EM,
-                line_height: ONE_EM,
+                line_height: options.line_height_ems * ONE_EM,
                 anchor: options.anchor,
                 justify: options.justify,
                 spacing: options.letter_spacing,
@@ -550,7 +559,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                 // text would have to follow it too. mbgl sets the width to zero for the same
                 // reason.
                 max_width: 0.0,
-                line_height: ONE_EM,
+                line_height: options.symbol.line_height_ems * ONE_EM,
                 anchor: options.symbol.anchor,
                 justify: options.symbol.justify,
                 spacing: options.symbol.letter_spacing,
