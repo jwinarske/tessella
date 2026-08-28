@@ -751,7 +751,9 @@ fn emit_group(
                 ) else {
                     continue;
                 };
-                packed_bytes.entry((tile_index, bucket_index)).or_insert(fresh)
+                packed_bytes
+                    .entry((tile_index, bucket_index))
+                    .or_insert(fresh)
             }
         };
         // Which of the bucket's records this drawable draws. Out of range is a disagreement
@@ -988,7 +990,8 @@ fn teardown_group(
         emitted.removed += 1;
     }
 
-    view.undeclare(producer, view_id).map_err(FrameError::from)?;
+    view.undeclare(producer, view_id)
+        .map_err(FrameError::from)?;
     Ok(emitted)
 }
 
@@ -1223,22 +1226,25 @@ fn encode_parts(
     // an extrusion's walls stand on the roof's outline.
     if let Some(shared) = fill_shared {
         let (vertex_layout, key) = bind(FILL_FAMILY, BuiltIn::FillOutlineShader);
-        parts.push(emit::encode_fill(
-            arena,
-            PLACEHOLDER,
-            match &bucket.content {
-                Content::Fill(fill) => fill,
-                _ => return Some(parts),
-            },
-            &emit::FillDraw {
-                layout: &vertex_layout,
-                attributes: bucket.binder.data(),
-                permutation_key: key,
-                shared: Some(shared),
-                pattern_atlas: fill_atlas,
-                pattern_vertices: None,
-            },
-        ).0);
+        parts.push(
+            emit::encode_fill(
+                arena,
+                PLACEHOLDER,
+                match &bucket.content {
+                    Content::Fill(fill) => fill,
+                    _ => return Some(parts),
+                },
+                &emit::FillDraw {
+                    layout: &vertex_layout,
+                    attributes: bucket.binder.data(),
+                    permutation_key: key,
+                    shared: Some(shared),
+                    pattern_atlas: fill_atlas,
+                    pattern_vertices: None,
+                },
+            )
+            .0,
+        );
     }
     if let Some(shared) = extrusion_shared {
         let (_, key) = bind(FILL_EXTRUSION_FAMILY, BuiltIn::FillExtrusionInstancedShader);

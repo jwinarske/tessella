@@ -58,8 +58,11 @@ fn lay_out(entries: &[(&str, (f32, f32))]) -> (SymbolBuffers, Vec<FrameLabel<'st
     let labels: Vec<Label> = entries
         .iter()
         .map(|(text, anchor)| Label {
-        pending: 0,
-        sections: vec![tessella_layout::symbol::Section { text: (*text).to_string(), scale: 1.0 }],
+            pending: 0,
+            sections: vec![tessella_layout::symbol::Section {
+                text: (*text).to_string(),
+                scale: 1.0,
+            }],
             text: (*text).to_string(),
             anchor: *anchor,
         })
@@ -374,9 +377,12 @@ fn a_line_label_reserves_its_road_and_not_its_box() {
     let font = Font::new("Diagonal Road Beside");
     let (_, laid) = build_line_symbols(
         &[LineLabel {
-        pending: 0,
-        sections: vec![tessella_layout::symbol::Section { text: "Diagonal Road".to_string(), scale: 1.0 }],
-        icon: (0.0, 0.0),
+            pending: 0,
+            sections: vec![tessella_layout::symbol::Section {
+                text: "Diagonal Road".to_string(),
+                scale: 1.0,
+            }],
+            icon: (0.0, 0.0),
             text: "Diagonal Road".to_string(),
             line: road.clone(),
         }],
@@ -392,8 +398,11 @@ fn a_line_label_reserves_its_road_and_not_its_box() {
     // bounding box would cover.
     let (_, beside) = build_symbols(
         &[Label {
-        pending: 0,
-        sections: vec![tessella_layout::symbol::Section { text: "Beside".to_string(), scale: 1.0 }],
+            pending: 0,
+            sections: vec![tessella_layout::symbol::Section {
+                text: "Beside".to_string(),
+                scale: 1.0,
+            }],
             text: "Beside".to_string(),
             anchor: (2880.0, 1600.0),
         }],
@@ -486,7 +495,7 @@ mod two_halves {
         let icons: Vec<IconLabel> = [(1000.0f32, 1000.0f32), (1010.0, 1000.0)]
             .into_iter()
             .map(|anchor| IconLabel {
-        pending: 0,
+                pending: 0,
                 image: "marker".to_string(),
                 anchor,
                 options: IconOptions::default(),

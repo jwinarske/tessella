@@ -887,7 +887,10 @@ fn parse_collator(value: &Value, scope: &[String]) -> Result<super::CollatorSpec
         .ok_or(ParseError::NotACollator)?;
 
     let member = |name: &str| -> Result<Option<Expr>, ParseError> {
-        options.get(name).map(|value| parse_in(value, scope)).transpose()
+        options
+            .get(name)
+            .map(|value| parse_in(value, scope))
+            .transpose()
     };
     Ok(super::CollatorSpec {
         case_sensitive: member("case-sensitive")?,

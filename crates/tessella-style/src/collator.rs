@@ -102,7 +102,11 @@ impl Collator {
         // Primary and secondary always; the tertiary only where case counts. With accents
         // already removed from the key, comparing the secondary of what is left costs nothing
         // and keeps the levels in the order UTS #10 puts them.
-        let levels: &[usize] = if self.case_sensitive { &[0, 1, 2] } else { &[0, 1] };
+        let levels: &[usize] = if self.case_sensitive {
+            &[0, 1, 2]
+        } else {
+            &[0, 1]
+        };
         for &level in levels {
             let ordering = compare_level(&left, &right, level);
             if ordering != Ordering::Equal {

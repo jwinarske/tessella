@@ -171,8 +171,9 @@ fn normalise(ids: &[u32], raw: &[u32]) -> Vec<Cpu> {
             capacity: match largest {
                 0 => 1024,
                 largest if largest <= 1024 => value,
-                largest => u32::try_from(u64::from(value) * 1024 / u64::from(largest))
-                    .unwrap_or(1024),
+                largest => {
+                    u32::try_from(u64::from(value) * 1024 / u64::from(largest)).unwrap_or(1024)
+                }
             },
         })
         .collect()
@@ -266,7 +267,10 @@ impl Affinity {
                 if tiers.len() < 2 {
                     return Vec::new();
                 }
-                tiers.last().map(|tier| tier.cpus.clone()).unwrap_or_default()
+                tiers
+                    .last()
+                    .map(|tier| tier.cpus.clone())
+                    .unwrap_or_default()
             }
         }
     }

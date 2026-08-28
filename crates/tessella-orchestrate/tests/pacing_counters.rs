@@ -44,7 +44,10 @@ fn a_parked_view_does_not_wake_up_to_do_nothing() {
 
     let pacing = *pacer.pacing();
     assert_eq!(pacing.wakeups, 120);
-    assert_eq!(pacing.emitted, 0, "two seconds of a still map built no frame");
+    assert_eq!(
+        pacing.emitted, 0,
+        "two seconds of a still map built no frame"
+    );
     assert_eq!(pacing.parked, 120);
     assert_eq!(
         pacing.longest_idle_run, 120,
@@ -74,7 +77,11 @@ fn production_follows_consumption_rather_than_the_loop() {
             Tick::Skip(Idle::Draining)
         );
     }
-    assert_eq!(pacer.pacing().emitted, 10, "nothing was produced into the stall");
+    assert_eq!(
+        pacer.pacing().emitted,
+        10,
+        "nothing was produced into the stall"
+    );
 }
 
 /// A stalled consumer makes the map update less often, not stop.
@@ -112,7 +119,10 @@ fn a_quiet_tick_does_not_restart_the_clock() {
 
     assert_eq!(pacer.tick(&busy(0, 4096)), Tick::Skip(Idle::Draining));
     for tick in 1..8 {
-        assert_eq!(pacer.tick(&quiet(tick * 1_000_000)), Tick::Skip(Idle::Parked));
+        assert_eq!(
+            pacer.tick(&quiet(tick * 1_000_000)),
+            Tick::Skip(Idle::Parked)
+        );
     }
     assert_eq!(
         pacer.tick(&busy(budget, 4096)),

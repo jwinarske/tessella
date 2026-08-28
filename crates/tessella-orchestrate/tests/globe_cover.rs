@@ -144,14 +144,18 @@ fn measure_what_a_globe_hides() {
             share * 100.0
         );
     }
-    println!("\nworst share a globe would not draw: {:.0}%\n", worst * 100.0);
+    println!(
+        "\nworst share a globe would not draw: {:.0}%\n",
+        worst * 100.0
+    );
 
     // The one thing worth asserting: the model degenerates. By the zooms the existing sweep
     // runs over, a tile spans a fraction of a degree and there is nothing for a horizon to cut.
     for base in &views {
         let (hidden, total) = behind_the_horizon(&at_zoom(base, sweep::SWEEP_LOW));
         assert_eq!(
-            hidden, 0,
+            hidden,
+            0,
             "at z{}, {hidden} of {total} tiles were called hidden — the globe is flat there and \
              a model that culls anything is wrong about the horizon, not about the cover",
             sweep::SWEEP_LOW

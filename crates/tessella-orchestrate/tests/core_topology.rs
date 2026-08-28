@@ -45,10 +45,7 @@ fn read(files: &[(String, String)]) -> impl FnMut(&str) -> Option<String> + '_ {
 /// RK3566: four A55s in one cluster. The part that started this.
 #[test]
 fn a_uniform_part_asks_for_no_pinning() {
-    let files = capacities(
-        "0-3",
-        &[(0, "1024"), (1, "1024"), (2, "1024"), (3, "1024")],
-    );
+    let files = capacities("0-3", &[(0, "1024"), (1, "1024"), (2, "1024"), (3, "1024")]);
     let topology = Topology::from_sysfs(read(&files)).expect("the cpu list reads");
 
     assert_eq!(topology.cpus().len(), 4);
@@ -130,7 +127,12 @@ fn three_tiers_reserve_only_the_top() {
 #[test]
 fn frequency_stands_in_where_capacity_is_absent() {
     let mut files = alloc_files("0-3");
-    for (id, khz) in [(0, "5000000"), (1, "5000000"), (2, "3800000"), (3, "3800000")] {
+    for (id, khz) in [
+        (0, "5000000"),
+        (1, "5000000"),
+        (2, "3800000"),
+        (3, "3800000"),
+    ] {
         files.push((
             format!("/sys/devices/system/cpu/cpu{id}/cpufreq/cpuinfo_max_freq"),
             khz.to_owned(),
@@ -140,7 +142,10 @@ fn frequency_stands_in_where_capacity_is_absent() {
 
     let tiers = topology.tiers();
     assert_eq!(tiers.len(), 2, "P and E cores are told apart");
-    assert_eq!(tiers[1].capacity, 1024, "the largest is normalised to the top");
+    assert_eq!(
+        tiers[1].capacity, 1024,
+        "the largest is normalised to the top"
+    );
     assert_eq!(tiers[1].cpus, vec![0, 1]);
     assert_eq!(
         Affinity::SpareTheLargest.decode_cpus(&topology),
@@ -222,7 +227,10 @@ fn cpu_lists_parse_the_way_the_kernel_writes_them() {
     assert_eq!(parse_cpu_list("0-1,4-7"), vec![0, 1, 4, 5, 6, 7]);
     assert_eq!(parse_cpu_list("3"), vec![3]);
     assert!(parse_cpu_list("").is_empty());
-    assert!(parse_cpu_list("nonsense").is_empty(), "refused, not guessed");
+    assert!(
+        parse_cpu_list("nonsense").is_empty(),
+        "refused, not guessed"
+    );
 }
 
 /// The paths, against the machine running the test.

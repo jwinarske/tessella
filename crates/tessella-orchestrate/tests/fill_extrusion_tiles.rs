@@ -142,7 +142,10 @@ fn an_opaque_patterned_extrusion_still_gets_a_depth_pass() {
     };
 
     assert!(plain(false, false).needs_depth_pass(), "translucent");
-    assert!(plain(false, true).needs_depth_pass(), "translucent, patterned");
+    assert!(
+        plain(false, true).needs_depth_pass(),
+        "translucent, patterned"
+    );
     assert!(
         plain(true, true).needs_depth_pass(),
         "opaque and patterned: the half that was missing"

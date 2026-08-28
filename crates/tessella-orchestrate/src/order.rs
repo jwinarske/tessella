@@ -455,8 +455,16 @@ pub fn bindings_for(
                     emit(0, view::fill_pass(), view::extrusion_depth_flags());
                     emit(1, view::fill_pass(), view::extrusion_depth_flags());
                 }
-                emit(2, view::fill_pass(), view::extrusion_color_flags(depth_pass));
-                emit(3, view::fill_pass(), view::extrusion_color_flags(depth_pass));
+                emit(
+                    2,
+                    view::fill_pass(),
+                    view::extrusion_color_flags(depth_pass),
+                );
+                emit(
+                    3,
+                    view::fill_pass(),
+                    view::extrusion_color_flags(depth_pass),
+                );
             }
             // Sublayer 0 and stencilled, which is what `symbol_style.dump` shows: its symbol
             // drawable carries the same flags as the fill above it. Symbols overhang tile edges,

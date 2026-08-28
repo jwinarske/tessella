@@ -20,8 +20,8 @@
 use tessella_capture_abi::envelope::{GeometryId, TextureId};
 use tessella_capture_abi::{AttributeDataType, BuiltIn};
 use tessella_layout::fill_extrusion::{self, FillExtrusionBucket};
-use tessella_orchestrate::emit::{SlabArena, encode_extrusion, encode_extrusion_walls};
 use tessella_orchestrate::binder::VertexLayout;
+use tessella_orchestrate::emit::{SlabArena, encode_extrusion, encode_extrusion_walls};
 
 /// A square footprint, which is one building.
 fn bucket() -> FillExtrusionBucket {
@@ -36,15 +36,7 @@ fn encode(atlas: Option<TextureId>) -> (SlabArena, tessella_orchestrate::Encoded
     let mut arena = SlabArena::new();
     let bucket = bucket();
     let layout = VertexLayout::default();
-    let (_, shared) = encode_extrusion(
-        &mut arena,
-        GeometryId(1),
-        &bucket,
-        &layout,
-        &[],
-        0,
-        atlas,
-    );
+    let (_, shared) = encode_extrusion(&mut arena, GeometryId(1), &bucket, &layout, &[], 0, atlas);
     let walls = encode_extrusion_walls(&mut arena, GeometryId(2), shared, 0, atlas);
     (arena, walls)
 }
@@ -71,7 +63,11 @@ fn the_walls_are_one_quad_however_many_buildings_there_are() {
 fn the_template_carries_only_its_corner() {
     let (_, walls) = encode(None);
     let attributes = walls.attributes();
-    assert_eq!(attributes.len(), 1, "one per-vertex attribute: {attributes:?}");
+    assert_eq!(
+        attributes.len(),
+        1,
+        "one per-vertex attribute: {attributes:?}"
+    );
     let corner = &attributes[0];
     assert_eq!(corner.attr_id, 0);
     assert_eq!(corner.binding, 0);
@@ -89,19 +85,16 @@ fn the_instances_are_the_roofs_outline() {
     let mut arena = SlabArena::new();
     let bucket = bucket();
     let layout = VertexLayout::default();
-    let (roof, shared) = encode_extrusion(
-        &mut arena,
-        GeometryId(1),
-        &bucket,
-        &layout,
-        &[],
-        0,
-        None,
-    );
+    let (roof, shared) =
+        encode_extrusion(&mut arena, GeometryId(1), &bucket, &layout, &[], 0, None);
     let walls = encode_extrusion_walls(&mut arena, GeometryId(2), shared, 0, None);
 
     let instances = walls.instance_attributes();
-    assert_eq!(instances.len(), 2, "outline position and decimals: {instances:?}");
+    assert_eq!(
+        instances.len(),
+        2,
+        "outline position and decimals: {instances:?}"
+    );
 
     let by_id: std::collections::BTreeMap<u32, _> =
         instances.iter().map(|a| (a.attr_id, a)).collect();
@@ -250,7 +243,11 @@ mod through_a_frame {
             .get(&(BuiltIn::FillExtrusionInstancedShader as i32))
             .map_or(0, Vec::len);
 
-        assert!(roofs > 0, "no roof reached the wire: {:?}", by_shader.keys());
+        assert!(
+            roofs > 0,
+            "no roof reached the wire: {:?}",
+            by_shader.keys()
+        );
         assert_eq!(
             walls, roofs,
             "one wall drawable per roof, which is what the capture shows on every tile"

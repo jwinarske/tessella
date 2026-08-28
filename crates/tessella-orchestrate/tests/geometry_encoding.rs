@@ -15,8 +15,8 @@ use tessella_capture_abi::{AttributeDataType, BuiltIn, declared_for};
 use tessella_orchestrate::binder::{
     CIRCLE_FAMILY, FILL_EXTRUSION_FAMILY, LINE_FAMILY, attribute_ids, layout, permutation_key,
 };
-use tessella_orchestrate::tile::{Content, TileId, build_mvt_tile};
 use tessella_orchestrate::emit::LineDraw;
+use tessella_orchestrate::tile::{Content, TileId, build_mvt_tile};
 use tessella_orchestrate::{Encoded, SlabArena, encode_circle, encode_extrusion, encode_line};
 use tessella_source::mvt::Tile;
 use tessella_style::Style;
@@ -65,7 +65,16 @@ fn encode(kind: &str, extra: &str, family: &[BuiltIn], shader: BuiltIn) -> Encod
         }
         Content::Fill3d(b) => {
             // The roof; its walls are a second drawable over the same buffer.
-            encode_extrusion(&mut arena, GeometryId(1), b, &vertex_layout, data, key, None).0
+            encode_extrusion(
+                &mut arena,
+                GeometryId(1),
+                b,
+                &vertex_layout,
+                data,
+                key,
+                None,
+            )
+            .0
         }
         other => panic!("unexpected content: {other:?}"),
     }

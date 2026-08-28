@@ -102,8 +102,9 @@ fn a_styles_sprite_arrives_with_its_tiles() {
 /// A style with no sprite fetches none, and says so the same way.
 #[test]
 fn a_style_without_a_sprite_asks_for_nothing() {
-    let server =
-        tile_server::Server::start(tile_server::Routes::new().tiles(FIXTURE.to_vec(), Some((0, 14))))
+    let server = tile_server::Server::start(
+        tile_server::Routes::new().tiles(FIXTURE.to_vec(), Some((0, 14))),
+    )
     .expect("the server starts");
     let files = Arc::new(Coalescing::new(HttpFileSource::default()));
 

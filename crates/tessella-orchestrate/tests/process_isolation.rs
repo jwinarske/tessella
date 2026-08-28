@@ -283,10 +283,8 @@ fn a_consumer_in_another_process_reads_a_live_stream() {
 
     // SAFETY: `slabs` holds the mapping and outlives the arena built over it, and nothing else
     // in this process writes those bytes.
-    let mut arena = SlabArena::in_region(
-        unsafe { Mapping::new(slabs.base, SLAB_REGION) },
-        SLAB_SLOTS,
-    );
+    let mut arena =
+        SlabArena::in_region(unsafe { Mapping::new(slabs.base, SLAB_REGION) }, SLAB_SLOTS);
     let mut session = Session::new();
     let mut geometries = 0;
     let mut uses = 0;

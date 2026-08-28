@@ -30,12 +30,12 @@ use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use tessella_capture_abi::mapping::Mapping;
 use tessella_capture_abi::envelope::{
     AddReason, AttributeDesc, GeometryAdd, GeometryId, GeometryRemove, MeshAdd, MeshFormat,
     Segment as AbiSegment, SlabEntry, SlabRef, SlabRegion, Span, TextureId, TextureRef, WireRecord,
 };
 use tessella_capture_abi::generated::{shader_attributes, texture_slots, ubo_slots};
+use tessella_capture_abi::mapping::Mapping;
 use tessella_capture_abi::ring::{Full, Producer};
 use tessella_capture_abi::{AttributeDataType, BuiltIn, EnvelopeKind};
 use tessella_layout::circle::CircleBucket;
@@ -269,7 +269,10 @@ impl SlabArena {
     #[must_use]
     pub fn in_region(mut region: Mapping, slots: usize) -> Self {
         let start = region_data_start(slots);
-        assert!(region.len() >= start, "the region cannot hold its own table");
+        assert!(
+            region.len() >= start,
+            "the region cannot hold its own table"
+        );
         let bytes = region.bytes_mut();
         bytes[..start].fill(0);
         #[allow(clippy::cast_possible_truncation)]
@@ -393,10 +396,9 @@ impl SlabArena {
         }
 
         // Pad first, so the *reference* is aligned rather than merely the slab.
-        let padding = self
-            .open
-            .as_ref()
-            .map_or(0, |slab| slab.len().next_multiple_of(SLAB_ALIGN) - slab.len());
+        let padding = self.open.as_ref().map_or(0, |slab| {
+            slab.len().next_multiple_of(SLAB_ALIGN) - slab.len()
+        });
 
         let needs_new = match &self.open {
             None => true,
@@ -466,7 +468,11 @@ impl SlabArena {
                 #[allow(clippy::cast_possible_truncation)]
                 let offset = (*length + padding) as u32;
                 *length += wanted;
-                debug_assert_eq!(*start + *length, *cursor, "the open slab is the region's top");
+                debug_assert_eq!(
+                    *start + *length,
+                    *cursor,
+                    "the open slab is the region's top"
+                );
                 #[allow(clippy::cast_possible_truncation)]
                 SlabRef {
                     slab: *id,
@@ -1145,10 +1151,7 @@ pub fn encode_fill(
             &mut descriptors,
             arena,
             vertices,
-            [
-                (PATTERN_FROM_ATTRIBUTE, 1),
-                (PATTERN_TO_ATTRIBUTE, 2),
-            ],
+            [(PATTERN_FROM_ATTRIBUTE, 1), (PATTERN_TO_ATTRIBUTE, 2)],
         );
     }
 

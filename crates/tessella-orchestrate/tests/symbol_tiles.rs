@@ -1138,7 +1138,11 @@ fn a_line_placed_icon_repeats_with_its_label() {
                 .is_some_and(|pending| pending.icon.is_some())
         })
         .count();
-    assert_eq!(laid.len(), wanted, "one icon per instance that asked for one");
+    assert_eq!(
+        laid.len(),
+        wanted,
+        "one icon per instance that asked for one"
+    );
 
     let anchors: std::collections::BTreeSet<(u32, u32)> = laid
         .iter()

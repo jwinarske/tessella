@@ -103,7 +103,9 @@ impl Level {
                 // asking for a point and getting nothing.
                 continue;
             };
-            let Some(point) = points.first() else { continue };
+            let Some(point) = points.first() else {
+                continue;
+            };
             #[allow(clippy::cast_possible_truncation)]
             clusters.push(Cluster {
                 pos: project(point[0], point[1]),
@@ -266,16 +268,18 @@ impl Clustered {
         let mut found = Vec::new();
         let top = (y - r) / z2;
         let bottom = (y + 1.0 + r) / z2;
-        level.tree.range((x - r) / z2, top, (x + 1.0 + r) / z2, bottom, &mut |id| {
-            found.push((id, x));
-        });
+        level
+            .tree
+            .range((x - r) / z2, top, (x + 1.0 + r) / z2, bottom, &mut |id| {
+                found.push((id, x));
+            });
 
         // A tile at either edge of the world also draws what wraps into it from the other side,
         // shifted by a world width so the tile-local coordinates come out on the near side.
         if x == 0.0 {
-            level
-                .tree
-                .range(1.0 - r / z2, top, 1.0, bottom, &mut |id| found.push((id, z2)));
+            level.tree.range(1.0 - r / z2, top, 1.0, bottom, &mut |id| {
+                found.push((id, z2))
+            });
         }
         if (x - (z2 - 1.0)).abs() < f64::EPSILON {
             level
@@ -548,7 +552,9 @@ fn project(lng: f64, lat: f64) -> (f64, f64) {
 fn unproject(pos: (f64, f64)) -> [f64; 2] {
     let lng = (pos.0 - 0.5) * 360.0;
     let lat = 360.0
-        * libm::atan(libm::exp((180.0 - pos.1 * 360.0) * core::f64::consts::PI / 180.0))
+        * libm::atan(libm::exp(
+            (180.0 - pos.1 * 360.0) * core::f64::consts::PI / 180.0,
+        ))
         / core::f64::consts::PI
         - 90.0;
     [lng, lat]

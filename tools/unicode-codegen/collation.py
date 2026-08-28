@@ -25,6 +25,7 @@ Usage: collation.py <directory holding allkeys.txt> [output path]
 """
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -153,6 +154,34 @@ def emit(runs, singles, implicit, contractions, version):
     return "\n".join(out)
 
 
+def formatted(text):
+    """Runs the generated source through rustfmt, as `tools/mbgl-codegen` does.
+
+    CI runs `cargo fmt --check` over the committed output, so a generator that emits
+    almost-formatted code dirties the tree on every regeneration: `cargo fmt` rewrites the file,
+    the next run of this script writes it back, and the diff never settles. Matching rustfmt's
+    heuristics by hand is a losing game, so the real thing is used.
+
+    A missing or failing rustfmt is not fatal — the table is still correct, and `cargo fmt` will
+    tidy it.
+    """
+    try:
+        done = subprocess.run(
+            ["rustfmt", "--edition", "2024", "--emit", "stdout", "--quiet"],
+            input=text,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        print("note: rustfmt not found; emitting unformatted", file=sys.stderr)
+        return text
+    if done.returncode != 0:
+        print("note: rustfmt failed; emitting unformatted", file=sys.stderr)
+        return text
+    return done.stdout
+
+
 def main():
     if not 2 <= len(sys.argv) <= 3:
         sys.exit(f"usage: {sys.argv[0]} <directory holding allkeys.txt> [output]")
@@ -174,7 +203,7 @@ def main():
         if len(sys.argv) == 3
         else Path("crates/tessella-style/src/generated/collation.rs")
     )
-    destination.write_text(text, encoding="utf-8")
+    destination.write_text(formatted(text), encoding="utf-8")
     print(
         f"wrote {destination}: {len(runs)} runs, {len(singles)} multi-element entries, "
         f"{contractions} contractions skipped"

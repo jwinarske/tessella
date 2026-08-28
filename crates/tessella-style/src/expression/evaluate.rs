@@ -549,9 +549,9 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
             }))
         }
         #[cfg(feature = "collator")]
-        Expr::ResolvedLocale(collator) => Ok(Value::String(
-            String::from(build_collator(collator, context)?.resolved_locale()),
-        )),
+        Expr::ResolvedLocale(collator) => Ok(Value::String(String::from(
+            build_collator(collator, context)?.resolved_locale(),
+        ))),
         Expr::Not(inner) => Ok(Value::Bool(!truthy(&evaluate(inner, context)?))),
         Expr::All(args) => {
             for arg in args {

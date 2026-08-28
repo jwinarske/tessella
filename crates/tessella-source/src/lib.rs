@@ -19,13 +19,13 @@
 
 extern crate alloc;
 
-pub mod cluster;
-pub mod kdbush;
 pub mod clip;
+pub mod cluster;
 pub mod geojson;
 #[cfg(feature = "gltf")]
 pub mod gltf;
 pub mod image;
+pub mod kdbush;
 #[cfg(feature = "gltf")]
 pub mod meshopt;
 pub mod mvt;

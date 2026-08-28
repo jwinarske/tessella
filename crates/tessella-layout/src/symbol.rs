@@ -220,7 +220,10 @@ pub fn label(layer: &Layer, zoom: f64, feature: &dyn Feature) -> Option<Label> {
                 Value::String(text) => replace_tokens(&text, feature),
                 Value::Object(ref members) if members.contains_key("sections") => {
                     sections = read_sections(members.get("sections"), feature);
-                    sections.iter().map(|section| section.text.as_str()).collect()
+                    sections
+                        .iter()
+                        .map(|section| section.text.as_str())
+                        .collect()
                 }
                 other => stringify(&other),
             }

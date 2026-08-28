@@ -109,7 +109,9 @@ fn a_clustered_source_hands_a_tile_its_clusters() {
 fn a_cluster_is_a_point_like_any_other_downstream() {
     let features = features();
     let index = Clustered::new(features, Options::default());
-    let style = style_with(r#"{"type": "geojson", "cluster": true, "data": {"type":"FeatureCollection","features":[]}}"#);
+    let style = style_with(
+        r#"{"type": "geojson", "cluster": true, "data": {"type":"FeatureCollection","features":[]}}"#,
+    );
 
     let tile = TileId::new(0, 0, 0);
     let buckets = build_tile(

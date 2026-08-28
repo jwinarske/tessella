@@ -590,8 +590,10 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
 
     let mut sets: Vec<(String, TileSet, SourceKind)> = Vec::new();
     let mut documents: Vec<(String, alloc::sync::Arc<Vec<GeoJsonFeature>>)> = Vec::new();
-    let mut clustered: Vec<(String, alloc::sync::Arc<tessella_source::cluster::Clustered>)> =
-        Vec::new();
+    let mut clustered: Vec<(
+        String,
+        alloc::sync::Arc<tessella_source::cluster::Clustered>,
+    )> = Vec::new();
     {
         let mut held = resolved
             .lock()

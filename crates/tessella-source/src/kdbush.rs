@@ -66,11 +66,27 @@ impl KdBush {
     }
 
     /// Visits every point inside the rectangle, in tree order.
-    pub fn range(&self, min_x: f64, min_y: f64, max_x: f64, max_y: f64, visit: &mut dyn FnMut(u32)) {
+    pub fn range(
+        &self,
+        min_x: f64,
+        min_y: f64,
+        max_x: f64,
+        max_y: f64,
+        visit: &mut dyn FnMut(u32),
+    ) {
         if self.points.is_empty() {
             return;
         }
-        self.range_in(min_x, min_y, max_x, max_y, visit, 0, self.points.len() - 1, 0);
+        self.range_in(
+            min_x,
+            min_y,
+            max_x,
+            max_y,
+            visit,
+            0,
+            self.points.len() - 1,
+            0,
+        );
     }
 
     /// Visits every point within `r` of `(qx, qy)`, in tree order.
@@ -110,10 +126,28 @@ impl KdBush {
         }
 
         if if axis == 0 { min_x <= x } else { min_y <= y } {
-            self.range_in(min_x, min_y, max_x, max_y, visit, left, middle - 1, (axis + 1) % 2);
+            self.range_in(
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+                visit,
+                left,
+                middle - 1,
+                (axis + 1) % 2,
+            );
         }
         if if axis == 0 { max_x >= x } else { max_y >= y } {
-            self.range_in(min_x, min_y, max_x, max_y, visit, middle + 1, right, (axis + 1) % 2);
+            self.range_in(
+                min_x,
+                min_y,
+                max_x,
+                max_y,
+                visit,
+                middle + 1,
+                right,
+                (axis + 1) % 2,
+            );
         }
     }
 

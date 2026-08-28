@@ -1295,8 +1295,10 @@ fn parse_shader_attributes(text: &str) -> Vec<ShaderTable> {
         // fill extrusion's walls as four template vertices with the building's own outline
         // supplied per instance, so a build that read only the first table could bind the quad
         // and nothing to put it on.
-        for (marker, instanced) in [("::attributes = {", false), ("::instanceAttributes = {", true)]
-        {
+        for (marker, instanced) in [
+            ("::attributes = {", false),
+            ("::instanceAttributes = {", true),
+        ] {
             if line.contains(marker)
                 && let Some(alias) = line.split("> ").nth(1).and_then(|s| s.split("::").next())
                 && let Some(shader) = aliases.get(alias.trim())

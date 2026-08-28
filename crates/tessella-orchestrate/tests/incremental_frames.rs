@@ -823,7 +823,11 @@ mod teardown {
             0,
             "but removes nothing: view 1 still draws it"
         );
-        assert_eq!(session.registry().len(), held, "the geometry stays for view 1");
+        assert_eq!(
+            session.registry().len(),
+            held,
+            "the geometry stays for view 1"
+        );
         assert!(arena.sweep().is_empty(), "and so do its bytes");
 
         // View 1 is undisturbed: it still has everything, so it announces nothing.
@@ -1059,7 +1063,11 @@ mod under_fault {
         let (producer, _consumer) = ring.split();
         frame::teardown_view(producer, &mut arena, &mut session, ViewId(0))
             .expect_err("fills the ring");
-        assert_eq!(session.registry().len(), held, "the view still holds it all");
+        assert_eq!(
+            session.registry().len(),
+            held,
+            "the view still holds it all"
+        );
         assert!(arena.sweep().is_empty(), "and the bytes are still there");
         accounting_agrees(&arena, &mut session);
 

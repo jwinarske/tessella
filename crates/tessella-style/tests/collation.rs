@@ -26,7 +26,11 @@ fn strict() -> Collator {
 fn the_levels_separate_the_pairs_codepoint_order_confuses() {
     let collator = strict();
 
-    assert_eq!(collator.compare("a", "b"), Ordering::Less, "primary: letters");
+    assert_eq!(
+        collator.compare("a", "b"),
+        Ordering::Less,
+        "primary: letters"
+    );
     assert_eq!(
         collator.compare("a", "ä"),
         Ordering::Less,
@@ -78,16 +82,26 @@ fn each_switch_drops_exactly_its_own_level() {
 #[test]
 fn the_suites_own_cases_come_out_as_it_says() {
     let base = Collator::default();
-    assert!(base.compare("a", "ä") != Ordering::Greater, "base-gt: a > ä is false");
-    assert!(base.compare("a", "A") != Ordering::Greater, "base-gt: a > A is false");
-    assert!(base.compare("b", "ä") == Ordering::Greater, "base-gt: b > ä is true");
+    assert!(
+        base.compare("a", "ä") != Ordering::Greater,
+        "base-gt: a > ä is false"
+    );
+    assert!(
+        base.compare("a", "A") != Ordering::Greater,
+        "base-gt: a > A is false"
+    );
+    assert!(
+        base.compare("b", "ä") == Ordering::Greater,
+        "base-gt: b > ä is true"
+    );
 
     let case_insensitive_accent_sensitive = Collator {
         case_sensitive: false,
         diacritic_sensitive: true,
         locale: None,
     };
-    let lteq = |a: &str, b: &str| case_insensitive_accent_sensitive.compare(a, b) != Ordering::Greater;
+    let lteq =
+        |a: &str, b: &str| case_insensitive_accent_sensitive.compare(a, b) != Ordering::Greater;
     assert!(!lteq("ä", "a"), "case-lteq: ä <= a is false");
     assert!(lteq("A", "a"), "case-lteq: A <= a is true");
     assert!(lteq("a", "a"), "case-lteq: a <= a is true");
@@ -109,7 +123,11 @@ fn the_suites_own_cases_come_out_as_it_says() {
 #[test]
 fn ideographs_order_by_construction() {
     let collator = strict();
-    assert_eq!(collator.compare("一", "丁"), Ordering::Less, "U+4E00 before U+4E01");
+    assert_eq!(
+        collator.compare("一", "丁"),
+        Ordering::Less,
+        "U+4E00 before U+4E01"
+    );
     assert_ne!(
         collator.compare("中", "国"),
         Ordering::Equal,
@@ -125,7 +143,10 @@ fn a_decomposed_letter_compares_as_the_letter() {
     let base = Collator::default();
     let strict = strict();
     // `a` + COMBINING DIAERESIS against the precomposed `ä`.
-    assert!(base.equals("a\u{0308}", "a"), "the accent is ignored at the base level");
+    assert!(
+        base.equals("a\u{0308}", "a"),
+        "the accent is ignored at the base level"
+    );
     assert_eq!(
         strict.compare("a\u{0308}", "ä"),
         Ordering::Equal,

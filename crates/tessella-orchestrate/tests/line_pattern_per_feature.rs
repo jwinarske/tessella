@@ -25,16 +25,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use tessella_capture_abi::BuiltIn;
 use tessella_capture_abi::envelope::{GeometryId, TextureId};
+use tessella_capture_abi::generated::shader_attributes::declared_for;
 use tessella_glyph::atlas::Rect;
 use tessella_glyph::sprite::IconPosition;
+use tessella_orchestrate::Content;
+use tessella_orchestrate::binder::{LINE_FAMILY, attribute_ids, layout, permutation_key};
 use tessella_orchestrate::emit::{LineDraw, SlabArena, encode_line};
 use tessella_orchestrate::frame::Patterns;
 use tessella_orchestrate::tile::{TileId, build_tile_with_patterns};
-use tessella_capture_abi::BuiltIn;
-use tessella_capture_abi::generated::shader_attributes::declared_for;
-use tessella_orchestrate::binder::{LINE_FAMILY, attribute_ids, layout, permutation_key};
-use tessella_orchestrate::Content;
 use tessella_source::geojson::{GeoJsonFeature, Geometry};
 use tessella_source::tiling::TilingOptions;
 use tessella_style::crossfade::ZoomHistory;
@@ -206,8 +206,14 @@ fn the_streams_land_where_the_oracle_puts_them() {
         let attribute = found
             .get(&id)
             .unwrap_or_else(|| panic!("no attribute {id}: the capture binds it"));
-        assert_eq!(attribute.binding, binding, "attribute {id} at the wrong slot");
-        assert_eq!(attribute.data_type, USHORT4, "attribute {id} is not UShort4");
+        assert_eq!(
+            attribute.binding, binding,
+            "attribute {id} at the wrong slot"
+        );
+        assert_eq!(
+            attribute.data_type, USHORT4,
+            "attribute {id} is not UShort4"
+        );
         assert_eq!(attribute.stride, 8, "attribute {id} at the wrong stride");
         assert_eq!(attribute.offset, 0);
         assert_eq!(attribute.vertex_offset, 0);
@@ -248,4 +254,3 @@ fn an_unresolved_pattern_binds_nothing() {
         "rectangles for a pattern nothing will bind are bytes no shader reads"
     );
 }
-
