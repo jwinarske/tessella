@@ -399,3 +399,126 @@ mod background {
         assert_ne!(line, background);
     }
 }
+
+/// A data-driven pattern's per-vertex rectangles.
+mod data_driven {
+    use tessella_capture_abi::envelope::{AttributeDesc, GeometryId, Span, WireRecord as _};
+    use tessella_orchestrate::emit::{FillDraw, PatternVertices};
+    use tessella_orchestrate::{SlabArena, encode_fill};
+    use tessella_style::LayerKind;
+
+    fn bucket() -> tessella_layout::fill::FillBucket {
+        // A square: five vertices, the last repeating the first.
+        tessella_layout::fill::build(&[vec![[0, 0], [0, 16], [16, 16], [16, 0], [0, 0]]])
+    }
+
+    fn descriptors(encoded: &tessella_orchestrate::Encoded) -> Vec<AttributeDesc> {
+        let span: Span = encoded.record.attrs;
+        (0..span.count as usize)
+            .filter_map(|index| {
+                encoded
+                    .payload
+                    .get(span.offset as usize + index * size_of::<AttributeDesc>()..)
+                    .and_then(AttributeDesc::from_bytes)
+            })
+            .collect()
+    }
+
+    /// The capture's shape: ids 4 and 5, bindings 1 and 2, `UShort4` at a stride of eight.
+    ///
+    /// `L00004`'s drawables carry `id=4 bind=1 dt=15 ddt=15 off=0 stride=8` and the same at
+    /// id 5 — and `dt=15` is `UShort4`, which is a `tlbr` exactly. The constant layer beside it
+    /// carries neither, which is what says these are the composite binder's addition rather
+    /// than something every pattern writes.
+    #[test]
+    fn a_data_driven_pattern_adds_two_attributes() {
+        let bucket = bucket();
+        let rect = [57u16, 10, 107, 60];
+        let vertices = PatternVertices {
+            from: vec![rect; bucket.vertices.len()],
+            to: vec![rect; bucket.vertices.len()],
+        };
+
+        let mut arena = SlabArena::new();
+        let layout = tessella_orchestrate::binder::VertexLayout::default();
+        let (encoded, _) = encode_fill(
+            &mut arena,
+            GeometryId(1),
+            &bucket,
+            &FillDraw::new(&layout, &[], 0, None, None).with_pattern_vertices(&vertices),
+        );
+
+        let attrs = descriptors(&encoded);
+        let pattern: Vec<&AttributeDesc> = attrs
+            .iter()
+            .filter(|attr| attr.attr_id == 4 || attr.attr_id == 5)
+            .collect();
+        assert_eq!(pattern.len(), 2, "two pattern attributes: {attrs:?}");
+
+        for (attr, binding) in pattern.iter().zip([1, 2]) {
+            assert_eq!(attr.binding, binding, "binding for id {}", attr.attr_id);
+            assert_eq!(attr.stride, 8, "four u16 per vertex");
+            assert_eq!(attr.offset, 0, "each in a buffer of its own");
+            // UShort4 is 15, which is what the capture's `dt=15` is.
+            assert_eq!(attr.data_type, 15);
+            assert_eq!(attr.declared_data_type, 15);
+            assert_eq!(
+                attr.source.length as usize,
+                bucket.vertices.len() * 8,
+                "one rectangle per vertex"
+            );
+        }
+        let _ = LayerKind::Fill;
+    }
+
+    /// A constant pattern adds neither, which is what the capture shows beside it.
+    #[test]
+    fn a_constant_pattern_adds_no_attributes() {
+        let bucket = bucket();
+        let mut arena = SlabArena::new();
+        let layout = tessella_orchestrate::binder::VertexLayout::default();
+        let (encoded, _) = encode_fill(
+            &mut arena,
+            GeometryId(1),
+            &bucket,
+            &FillDraw::new(&layout, &[], 0, None, None),
+        );
+        assert!(
+            descriptors(&encoded)
+                .iter()
+                .all(|attr| attr.attr_id != 4 && attr.attr_id != 5),
+            "a constant pattern writes no per-vertex rectangles"
+        );
+    }
+
+    /// Rectangles that do not cover every vertex are refused rather than written short.
+    ///
+    /// mbgl fills a feature whose pattern did not resolve with `{0, 0, 0, 0}` rather than
+    /// leaving the buffer short, and says why: it cannot know at draw time whether every feature
+    /// resolved. A short buffer is a read past its end for every vertex after the gap, which is
+    /// worse than a layer that draws without its pattern.
+    #[test]
+    fn a_short_buffer_is_refused() {
+        let bucket = bucket();
+        let vertices = PatternVertices {
+            from: vec![[1, 2, 3, 4]; bucket.vertices.len() - 1],
+            to: vec![[1, 2, 3, 4]; bucket.vertices.len()],
+        };
+        assert!(!vertices.covers(bucket.vertices.len()));
+
+        let mut arena = SlabArena::new();
+        let layout = tessella_orchestrate::binder::VertexLayout::default();
+        let (encoded, _) = encode_fill(
+            &mut arena,
+            GeometryId(1),
+            &bucket,
+            &FillDraw::new(&layout, &[], 0, None, None).with_pattern_vertices(&vertices),
+        );
+        assert!(
+            descriptors(&encoded)
+                .iter()
+                .all(|attr| attr.attr_id != 4 && attr.attr_id != 5),
+            "a short buffer must not reach the wire"
+        );
+    }
+}

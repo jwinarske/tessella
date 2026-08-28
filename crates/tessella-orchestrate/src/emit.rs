@@ -33,7 +33,7 @@ use tessella_capture_abi::envelope::{
     AddReason, AttributeDesc, GeometryAdd, GeometryId, GeometryRemove, MeshAdd, MeshFormat,
     Segment as AbiSegment, SlabEntry, SlabRef, SlabRegion, Span, TextureId, TextureRef, WireRecord,
 };
-use tessella_capture_abi::generated::texture_slots;
+use tessella_capture_abi::generated::{texture_slots, ubo_slots};
 use tessella_capture_abi::ring::{Full, Producer};
 use tessella_capture_abi::{AttributeDataType, BuiltIn, EnvelopeKind};
 use tessella_layout::circle::CircleBucket;
@@ -409,6 +409,51 @@ pub enum FillPart {
     Outline,
 }
 
+/// A data-driven pattern's per-vertex rectangles.
+///
+/// # What the composite binder adds, and what it does not
+///
+/// A pattern that varies with the *feature* cannot travel as a uniform, because each feature
+/// names its own sprite. mbgl's `CompositeCrossFadedPaintPropertyBinder` writes one `tlbr` per
+/// vertex — and the capture says what that costs: the same shaders as a constant pattern,
+/// `sh0013` and `sh0014`, plus two attributes. Ids 4 and 5, bindings 1 and 2, `UShort4` at a
+/// stride of eight. Not a different pipeline, which is what reading the two binder classes
+/// suggests.
+///
+/// `to` is the image at the current zoom and `from` the one at the level being left, exactly as
+/// [`Faded`](tessella_style::crossfade::Faded) has it everywhere else. mbgl keeps three vectors
+/// — the level below, the current, and the level above — and picks which is `from` by the
+/// direction the camera last moved; the pair here is that choice already made.
+///
+/// # A feature with no pattern gets zeroes, not nothing
+///
+/// mbgl writes `{0, 0, 0, 0}` for a feature whose pattern did not resolve, with the reason in a
+/// comment: the buffers must be populated "to avoid crashes when we try to draw the layer
+/// because we don't know at draw time if all features were evaluated to valid pattern
+/// dependencies". A short buffer is a read past its end for every vertex after the gap.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PatternVertices {
+    /// The `from` rectangle for each vertex, in vertex order.
+    pub from: Vec<[u16; 4]>,
+    /// The `to` rectangle for each vertex.
+    pub to: Vec<[u16; 4]>,
+}
+
+impl PatternVertices {
+    /// Whether every vertex has a pair, which is what the shader reads.
+    #[must_use]
+    pub fn covers(&self, vertices: usize) -> bool {
+        self.from.len() == vertices && self.to.len() == vertices
+    }
+}
+
+/// Attribute ids the pattern rectangles bind to, from the generated slot table.
+const PATTERN_FROM_ATTRIBUTE: u32 = ubo_slots::ID_FILL_PATTERN_FROM_VERTEX_ATTRIBUTE;
+/// As above, for the image being faded to.
+const PATTERN_TO_ATTRIBUTE: u32 = ubo_slots::ID_FILL_PATTERN_TO_VERTEX_ATTRIBUTE;
+/// Four `u16` per vertex.
+const PATTERN_STRIDE: u32 = 8;
+
 /// The buffers a fill's two drawables share.
 ///
 /// Returned by the triangles and handed back for the outline, so the vertices and the
@@ -437,6 +482,8 @@ pub struct FillDraw<'a> {
     pub shared: Option<FillShared>,
     /// The sprite atlas, when the layer carries a pattern.
     pub pattern_atlas: Option<TextureId>,
+    /// Per-vertex rectangles, when the pattern varies with the feature.
+    pub pattern_vertices: Option<&'a PatternVertices>,
 }
 
 impl<'a> FillDraw<'a> {
@@ -455,7 +502,15 @@ impl<'a> FillDraw<'a> {
             permutation_key,
             shared,
             pattern_atlas,
+            pattern_vertices: None,
         }
+    }
+
+    /// The same, with a data-driven pattern's per-vertex rectangles.
+    #[must_use]
+    pub fn with_pattern_vertices(mut self, vertices: &'a PatternVertices) -> Self {
+        self.pattern_vertices = Some(vertices);
+        self
     }
 }
 
@@ -476,6 +531,7 @@ pub fn encode_fill(
         permutation_key,
         shared,
         pattern_atlas,
+        pattern_vertices,
     } = draw;
     let part = if shared.is_some() {
         FillPart::Outline
@@ -522,6 +578,39 @@ pub fn encode_fill(
     };
 
     let mut descriptors = alloc::vec![position];
+
+    // A data-driven pattern's two rectangles per vertex, in buffers of their own rather than
+    // interleaved with the other data-driven properties: they are `UShort4` where the rest are
+    // floats, and the capture gives each its own source at a stride of eight.
+    //
+    // Written only when they cover every vertex. A short buffer is not a partial pattern, it is
+    // a read past the end for every vertex after the gap — mbgl fills the shortfall with zeroes
+    // for that reason, and a caller that has not is better refused than trusted.
+    if let Some(vertices) = pattern_vertices.filter(|v| v.covers(bucket.vertices.len())) {
+        for (attr_id, binding, values) in [
+            (PATTERN_FROM_ATTRIBUTE, 1, &vertices.from),
+            (PATTERN_TO_ATTRIBUTE, 2, &vertices.to),
+        ] {
+            let mut bytes = Vec::with_capacity(values.len() * PATTERN_STRIDE as usize);
+            for rect in values {
+                for value in rect {
+                    bytes.extend_from_slice(&value.to_le_bytes());
+                }
+            }
+            descriptors.push(AttributeDesc {
+                attr_id,
+                binding,
+                source: arena.alloc(&bytes),
+                offset: 0,
+                vertex_offset: 0,
+                stride: PATTERN_STRIDE,
+                data_type: AttributeDataType::UShort4 as u8,
+                declared_data_type: AttributeDataType::UShort4 as u8,
+                _pad: [0; 2],
+            });
+        }
+    }
+
     for attribute in &layout.attributes {
         descriptors.push(AttributeDesc {
             attr_id: attribute.attr_id,
