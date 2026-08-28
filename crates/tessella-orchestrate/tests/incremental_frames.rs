@@ -567,3 +567,62 @@ fn a_camera_move_in_one_view_does_not_disturb_the_others() {
         );
     }
 }
+
+/// Parked bytes, counted from the ring rather than from the record kinds.
+///
+/// # Why bytes and not records
+///
+/// §10's exit criterion is "parked bytes are zero", and `parked_is_silent` already makes the
+/// point that counting what the producer *believes* it wrote proves nothing — the two numbers
+/// differ exactly when something emits without meaning to. The tests above count record kinds,
+/// which is a weaker claim: a zero-length record is still a record, and a record is still bytes.
+///
+/// # What this measures, and what it does not
+///
+/// Parked is zero and a camera that moves is not. On a 1920×1080 view over three layers a cold
+/// frame is about twenty-nine kilobytes and a camera nudge of one ten-thousandth of a degree is
+/// about twelve — the matrices, re-sent for every layer and every tile because the camera moved
+/// at all. Nothing about that is tuned: the gate is per frame, and every tile's matrix genuinely
+/// does change when the camera does, so finer granularity would not help. What would is DR-9's
+/// consumer-camera mode, where the consumer owns the projection and the producer sends no
+/// matrices — and that is a mode, not an optimisation.
+#[test]
+fn a_parked_view_writes_no_bytes_at_all() {
+    use tessella_capture_abi::ring::{self, region_size};
+
+    let scene = scene(0.0);
+    const CAPACITY: usize = 1 << 22;
+    let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
+    // SAFETY: sized by `region_size`, eight-aligned as a `Vec<u64>`, outlives both halves, and
+    // nothing else touches it.
+    let (mut producer, _consumer) =
+        unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
+
+    let mut arena = SlabArena::new();
+    let mut session = Session::new();
+    let light = Light::default();
+    let frame = Frame {
+        style: &scene.style,
+        view: &scene.view,
+        view_id: ViewId(0),
+        tiles: &scene.tiles,
+        buckets: &scene.buckets,
+        light: &light,
+        fonts: None,
+        patterns: None,
+    };
+
+    frame::emit_incremental(&mut producer, &mut arena, &frame, &mut session).expect("cold");
+    let after_cold = producer.head();
+    assert!(after_cold > 0, "the cold frame wrote something");
+
+    // Five more frames of the same scene: not one byte.
+    for round in 0..5 {
+        frame::emit_incremental(&mut producer, &mut arena, &frame, &mut session).expect("parked");
+        assert_eq!(
+            producer.head(),
+            after_cold,
+            "round {round} put bytes on the ring for a view that did not move"
+        );
+    }
+}
