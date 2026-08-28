@@ -133,7 +133,60 @@ pub enum CoverError {
 ///
 /// [`CoverError::Pitched`] when the view has pitch.
 pub fn cover(view: &ViewTransform) -> Result<Vec<TileCoord>, CoverError> {
-    cover_at(view, view.tile_zoom())
+    cover_with(view, WorldCopies::Repeated)
+}
+
+/// How many copies of the world a view draws.
+///
+/// A parameter of the request rather than of the camera, because it is a property of the
+/// *surface* the tiles are drawn on and the camera does not know what that is. §13.4.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorldCopies {
+    /// The Mercator plane, which repeats horizontally.
+    ///
+    /// A viewport straddling the antimeridian sees the same tile in two copies, and draws both —
+    /// that is the map being right rather than redundant.
+    #[default]
+    Repeated,
+    /// A sphere, which has one of everything.
+    ///
+    /// Every wrap of a tile bends to the same patch, so a globe view drawing a repeated cover
+    /// draws those patches twice: z-fighting on the surface, and paying subdivision twice at the
+    /// zooms where subdivision is dearest — a z1 tile splits to ninety segments an edge. At z0
+    /// four of five cover tiles are copies and at z1 four of eight, so this is most of the cover
+    /// and not an edge case.
+    One,
+}
+
+/// The cover of a view drawing a given number of world copies.
+///
+/// This is the producer's whole part in the globe (§13.4), and the horizon is deliberately not
+/// here. Tiles a sphere has curved out of sight are four to six of the cheapest on the map
+/// between z1 and z2.5 and *none* outside it — zero by z3, and zero across the whole of §13.3's
+/// z8–z16 sweep — which does not pay for a spherical cull in the producer. It is one dot product
+/// per tile in the consumer, before it subdivides, which removes the draw as well. `globe_cover`
+/// measured both rather than arguing them.
+///
+/// # Errors
+///
+/// As [`cover`].
+pub fn cover_with(view: &ViewTransform, copies: WorldCopies) -> Result<Vec<TileCoord>, CoverError> {
+    let tiles = cover_at(view, view.tile_zoom())?;
+    Ok(match copies {
+        WorldCopies::Repeated => tiles,
+        // Folded onto the near copy rather than filtered to it: a tile visible *only* at
+        // `wrap: -1` is still a patch of the sphere, and dropping it would leave a hole where
+        // filtering to `wrap == 0` would.
+        WorldCopies::One => {
+            let mut folded: Vec<TileCoord> = tiles
+                .into_iter()
+                .map(|tile| TileCoord { wrap: 0, ..tile })
+                .collect();
+            folded.sort_unstable();
+            folded.dedup();
+            folded
+        }
+    })
 }
 
 /// The cover of a pitched view, by walking the tile quadtree against the view frustum.

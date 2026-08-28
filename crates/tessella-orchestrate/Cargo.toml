@@ -60,5 +60,9 @@ name = "four_view_sweep"
 harness = false
 
 [[bench]]
+name = "globe_sweep"
+harness = false
+
+[[bench]]
 name = "expression_cost"
 harness = false

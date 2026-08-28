@@ -3102,11 +3102,22 @@ subdivision is dearest (a z1 tile splits to ninety segments an edge).
 
 So the producer's part in the globe is one policy and not an algorithm: **a globe view asks for
 one world copy**, which is a per-view parameter beside its cover and its camera rather than a
-change to how covering works. The horizon is the consumer's to skip, one dot product per tile
+change to how covering works. That is `cover::WorldCopies`, a parameter of the *request* — the
+surface the tiles are drawn on is not something the camera knows. It folds the cover onto the
+near copy rather than filtering to it, which is the difference between the policy working and
+leaving a hole: a view centred on the antimeridian sees patches whose only entry has a non-zero
+wrap, and filtering would drop exactly those. The horizon is the consumer's to skip, one dot product per tile
 before it subdivides, which removes the draw as well.
 
 Four views change none of this. They want the same tiles at these zooms and the shared store
 builds them once — so the waste is four to six tiles for the cluster, not per view.
+
+`benches/globe_sweep` is the measurement, and it sweeps z0–z8 rather than §13.3's z8–z16 for a
+reason worth stating: above z3 a globe and a plane ask for *identical* tiles, so the acceptance
+sweep measures the globe by measuring nothing about it. Over the low sweep the policy removes 6%
+of tile requests, which is the wrong number to quote on its own — the copies are not spread over
+the sweep, they are concentrated in the frames below z2 where they are two thirds of the cover.
+The worst frame is z0, where eight of twelve requests are copies.
 
 ## 16. Open questions (rev 0.4 targets)
 
