@@ -97,6 +97,11 @@ pub struct Emitted {
     pub drawables: usize,
     /// Drawables released and removed because they left the cover.
     pub removed: usize,
+    /// Drawables let go so their slab could be emptied, to be announced again next frame.
+    ///
+    /// Not a loss: they are still drawn this frame, from the geometry the consumer already has.
+    /// What moves is where their bytes will live once they are re-announced.
+    pub displaced: usize,
     /// The order epoch the camera names.
     pub epoch: OrderEpoch,
 }
@@ -107,6 +112,7 @@ impl Default for Emitted {
             geometries: 0,
             drawables: 0,
             removed: 0,
+            displaced: 0,
             epoch: OrderEpoch(0),
         }
     }
@@ -773,6 +779,24 @@ fn emit_group(
             }
             emitted.removed += 1;
         }
+
+        // DR-21's compaction. A slab whose live fraction has fallen far enough is mostly holding
+        // bytes nobody wants, and the way to empty it is to re-announce its survivors: they land
+        // in the current slab and the old one sweeps. Displacing is what makes that happen — the
+        // drawable is forgotten here and announced afresh on the next frame that draws it.
+        //
+        // After the retirements, so a slab this frame just emptied is swept rather than
+        // compacted, and its survivors are not moved for nothing.
+        for (key, geometry) in registry.displaceable(arena, COMPACTION_THRESHOLD) {
+            session
+                .release_geometry(producer, view_id, geometry)
+                .map_err(FrameError::from)?;
+            for reference in registry.refs_of(&key) {
+                arena.release(*reference);
+            }
+            registry.displace(&key);
+            emitted.displaced += 1;
+        }
     }
 
     if camera_moved || scene_changed || declare {
@@ -825,6 +849,16 @@ fn symbol_stacks(buckets: &[(TileId, Vec<LayerBucket>)]) -> Vec<Vec<alloc::strin
     }
     stacks
 }
+
+/// How empty a slab has to be before its survivors are moved out of it.
+///
+/// A quarter: below that, three of every four bytes the slab occupies are holding nothing, and
+/// re-announcing what is left costs one upload of a small fraction of it. Above it, moving is
+/// the more expensive of the two.
+///
+/// Not tuned against a workload — DR-21 records that the trade wants measuring, and a threshold
+/// that proves hard to pick is evidence for the whole-layer re-emit the record weighed against.
+const COMPACTION_THRESHOLD: f64 = 0.25;
 
 /// The camera fields damage is decided on.
 fn camera_key(view: &ViewTransform) -> crate::damage::CameraKey {

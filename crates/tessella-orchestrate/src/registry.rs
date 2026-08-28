@@ -229,6 +229,59 @@ impl GeometryRegistry {
         self.next = self.next_at_frame_start;
     }
 
+    /// Drawables to displace so their slabs can be freed, from those this view alone holds.
+    ///
+    /// DR-21's compaction: a slab whose live fraction has fallen far enough is worth emptying,
+    /// because the bytes it still holds are a fraction of the bytes it occupies. Emptying it
+    /// means re-announcing its survivors — they land in the current slab, and the old one sweeps.
+    ///
+    /// # Only what this view alone holds
+    ///
+    /// Displacing a drawable means telling every view that uses it, and a `ViewRelease` names one
+    /// view: a frame for view A cannot release view B's use. So a drawable two views draw is left
+    /// where it is, however poorly packed its slab. That is a real limit rather than a temporary
+    /// one — coordinating a displacement across views needs a caller that runs all of them, which
+    /// is §5.4's orchestrator and not a frame.
+    ///
+    /// In the common case it costs nothing: views sharing a cover share their slabs' fate, and
+    /// views with different covers hold different slabs.
+    ///
+    /// # Why a threshold rather than a count
+    ///
+    /// What matters is the ratio of bytes held to bytes occupied. A slab with one live geometry
+    /// out of two hundred is worth emptying; one with one out of two is not, and neither is
+    /// decided by how many drawables are in it.
+    #[must_use]
+    pub fn displaceable(
+        &self,
+        arena: &crate::emit::SlabArena,
+        threshold: f64,
+    ) -> Vec<(DrawableKey, GeometryId)> {
+        let view = self.view;
+        self.live
+            .iter()
+            .filter(|(_, entry)| entry.users.len() == 1 && entry.users.contains(&view))
+            .filter(|(_, entry)| {
+                entry.refs.iter().any(|reference| {
+                    arena
+                        .live_fraction(reference.slab)
+                        .is_some_and(|fraction| fraction > 0.0 && fraction < threshold)
+                })
+            })
+            .map(|(key, entry)| (*key, entry.id))
+            .collect()
+    }
+
+    /// Drops a displaced drawable, so the next frame announces it afresh.
+    ///
+    /// The caller emits its release and removal first: this is the bookkeeping, and doing it
+    /// before the records were written would leave a consumer holding geometry nothing will ever
+    /// mention again.
+    pub fn displace(&mut self, key: &DrawableKey) {
+        self.live.remove(key);
+        self.seen.remove(key);
+    }
+
     /// How many drawables are known.
     #[must_use]
     pub fn len(&self) -> usize {

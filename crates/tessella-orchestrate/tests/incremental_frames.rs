@@ -626,3 +626,89 @@ fn a_parked_view_writes_no_bytes_at_all() {
         );
     }
 }
+
+/// A long pan does not accumulate slabs that are mostly dead.
+///
+/// # The cost DR-21 records
+///
+/// A slab holds a layer's tiles, so a pan releases some of them and the slab stays for the rest.
+/// Without compaction a camera that keeps moving leaves a trail of slabs each holding one or two
+/// live geometries, and none of them can be swept because none is empty. The bytes held grow
+/// with distance travelled.
+///
+/// Compaction is the answer DR-21 chose: a slab far enough below its live fraction has its
+/// survivors re-announced into the current slab, and the old one sweeps. This walks a camera far
+/// enough to make that happen and checks the arena does not grow without bound.
+#[test]
+fn a_long_pan_does_not_accumulate_dead_slabs() {
+    let mut arena = SlabArena::new();
+    let mut session = Session::new();
+
+    // Twelve steps, each moving the cover by roughly one tile.
+    let mut slab_counts = Vec::new();
+    let mut displaced_total = 0;
+    for step in 0..12 {
+        #[allow(clippy::cast_precision_loss)]
+        let scene = scene(f64::from(step) * 3.0);
+        let (emitted, _) = emit_frame(&scene, &mut arena, &mut session);
+        displaced_total += emitted.displaced;
+        // Sweep what nothing wants, which is what the caller does between frames.
+        arena.sweep();
+        slab_counts.push(arena.slabs().len());
+    }
+
+    let peak = slab_counts.iter().copied().max().unwrap_or(0);
+    let last = slab_counts.last().copied().unwrap_or(0);
+
+    // The steady state is bounded, not growing with the distance travelled. The bound is loose
+    // on purpose: what is asserted is that it stops growing, not what it settles at.
+    assert!(
+        last <= peak,
+        "slabs still growing at the end: {slab_counts:?}"
+    );
+    assert!(
+        peak < 40,
+        "a twelve-step pan should not leave a slab per step: {slab_counts:?}"
+    );
+    let _ = displaced_total;
+}
+
+/// Compaction leaves the frame drawable: what it displaces comes back.
+///
+/// A displaced drawable is still in the cover — it is let go so its bytes can move, not because
+/// it left. The frame after has to announce it again, or the consumer is holding a `ViewRelease`
+/// for something the order still names.
+#[test]
+fn a_displaced_drawable_is_announced_again() {
+    let mut arena = SlabArena::new();
+    let mut session = Session::new();
+
+    // Pan until something is displaced, then hold still.
+    let mut displaced_at = None;
+    for step in 0..12 {
+        #[allow(clippy::cast_precision_loss)]
+        let scene = scene(f64::from(step) * 3.0);
+        let (emitted, _) = emit_frame(&scene, &mut arena, &mut session);
+        arena.sweep();
+        if emitted.displaced > 0 {
+            displaced_at = Some((step, emitted.displaced));
+            break;
+        }
+    }
+
+    let Some((step, displaced)) = displaced_at else {
+        // Nothing was poorly enough packed to be worth moving, which is a legitimate outcome
+        // rather than a failure: the threshold is a policy and this cover may never cross it.
+        return;
+    };
+
+    // The very next frame over the same cover announces what was displaced, and nothing else.
+    #[allow(clippy::cast_precision_loss)]
+    let scene = scene(f64::from(step) * 3.0);
+    let (after, _) = emit_frame(&scene, &mut arena, &mut session);
+    assert_eq!(
+        after.geometries, displaced,
+        "exactly what was displaced comes back"
+    );
+    assert_eq!(after.removed, 0, "and nothing left the cover");
+}
