@@ -26,6 +26,7 @@
 //! prevent — so a layer whose paint is data-driven emits its geometry and its position
 //! attribute, and its per-feature attributes wait for the tables.
 
+use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
@@ -118,6 +119,13 @@ pub struct SlabArena {
     sealed: Vec<Arc<Slab>>,
     open: Option<Slab>,
     next_id: u32,
+    /// Bytes still referenced, per sealed slab.
+    ///
+    /// A slab is freed when this reaches zero, and compacted when it falls far enough below the
+    /// slab's length — DR-21. Counted rather than inferred from the `Arc`: a strong count says
+    /// whether *anyone* holds the slab, not how much of it is still wanted, and the second is
+    /// what decides whether re-emitting the survivors is worth the upload.
+    live: BTreeMap<u32, usize>,
 }
 
 impl SlabArena {
@@ -237,6 +245,67 @@ impl SlabArena {
     #[must_use]
     pub fn slab(&self, id: u32) -> Option<&Arc<Slab>> {
         self.sealed.iter().find(|slab| slab.id == id)
+    }
+
+    /// Marks a reference's bytes as still wanted.
+    ///
+    /// Every allocation is dead until something retains it. That is the right default: a frame
+    /// that allocated and then failed has retained nothing, and the bytes go on the next sweep
+    /// without the failure path having to say so.
+    pub fn retain(&mut self, reference: SlabRef) {
+        if reference.length == 0 {
+            return;
+        }
+        *self.live.entry(reference.slab).or_insert(0) += reference.length as usize;
+    }
+
+    /// Marks a reference's bytes as no longer wanted.
+    ///
+    /// Saturating rather than panicking on an unmatched release: a double release is a producer
+    /// bug, and the useful failure is the slab living longer than it should — visible in
+    /// [`Self::live_fraction`] — rather than an abort in a frame loop.
+    pub fn release(&mut self, reference: SlabRef) {
+        if let Some(live) = self.live.get_mut(&reference.slab) {
+            *live = live.saturating_sub(reference.length as usize);
+        }
+    }
+
+    /// How much of a sealed slab is still wanted, from zero to one.
+    ///
+    /// `None` for a slab this arena does not hold. A slab with no live bytes reports zero and is
+    /// what [`Self::sweep`] takes; one below the compaction threshold is worth re-emitting the
+    /// survivors of, which is a decision for the caller rather than for the arena — it knows
+    /// which geometries are in a slab and the arena does not.
+    #[must_use]
+    pub fn live_fraction(&self, id: u32) -> Option<f64> {
+        let slab = self.slab(id)?;
+        let total = slab.bytes.len();
+        if total == 0 {
+            return Some(0.0);
+        }
+        #[allow(clippy::cast_precision_loss)]
+        Some(self.live.get(&id).copied().unwrap_or(0) as f64 / total as f64)
+    }
+
+    /// Drops every sealed slab nothing wants, returning their ids.
+    ///
+    /// Returned so a caller can tell a consumer the bytes are gone. The arena cannot: it holds
+    /// bytes and knows nothing about geometry ids, which is the split that keeps it usable by a
+    /// caller with a different lifecycle.
+    pub fn sweep(&mut self) -> Vec<u32> {
+        let mut freed = Vec::new();
+        self.sealed.retain(|slab| {
+            let wanted = self.live.get(&slab.id).copied().unwrap_or(0);
+            if wanted == 0 {
+                freed.push(slab.id);
+                return false;
+            }
+            true
+        });
+        for id in &freed {
+            self.live.remove(id);
+        }
+        freed
     }
 
     /// Packs every sealed slab into one region a consumer can map.

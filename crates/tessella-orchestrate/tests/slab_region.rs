@@ -192,3 +192,126 @@ fn an_empty_arena_packs_a_valid_region() {
         .is_none()
     );
 }
+
+/// Retention: which bytes a slab still owes, and when it can go.
+///
+/// DR-21 makes a slab the buffer and a geometry a sub-range of it, so a slab outlives any one
+/// geometry and is freed when nothing wants any part of it. The arena counts bytes rather than
+/// references, because the number that decides whether to compact is how much of the slab is
+/// still wanted — a strong count says only whether *anyone* holds it.
+mod retention {
+    use tessella_orchestrate::SlabArena;
+
+    /// Nothing is retained by default, so an unclaimed slab is swept.
+    ///
+    /// The right default, and not merely a convenient one: a frame that allocated and then
+    /// failed to write has retained nothing, and its bytes go on the next sweep without the
+    /// failure path having to say anything.
+    #[test]
+    fn an_unclaimed_slab_is_swept() {
+        let mut arena = SlabArena::new();
+        arena.alloc(&[1, 2, 3, 4]);
+        arena.seal();
+        assert_eq!(arena.slabs().len(), 1);
+
+        let freed = arena.sweep();
+        assert_eq!(freed.len(), 1, "nothing wanted it");
+        assert!(arena.slabs().is_empty());
+    }
+
+    /// A retained slab survives, and goes once released.
+    #[test]
+    fn a_retained_slab_survives_until_released() {
+        let mut arena = SlabArena::new();
+        let reference = arena.alloc(&[1, 2, 3, 4]);
+        arena.seal();
+        arena.retain(reference);
+
+        assert!(arena.sweep().is_empty(), "something wants it");
+        assert_eq!(arena.slabs().len(), 1);
+
+        arena.release(reference);
+        assert_eq!(arena.sweep(), vec![reference.slab]);
+        assert!(arena.slabs().is_empty());
+    }
+
+    /// A slab holding several geometries lives until the last of them goes.
+    ///
+    /// This is the case DR-21 is about. A layer's tiles share a slab, so a pan releases some of
+    /// them and the slab stays for the rest — which is why the live *fraction* exists, and why
+    /// freeing on the first release would be wrong.
+    #[test]
+    fn a_slab_outlives_any_one_geometry() {
+        let mut arena = SlabArena::new();
+        let first = arena.alloc(&[0; 40]);
+        let second = arena.alloc(&[0; 40]);
+        let third = arena.alloc(&[0; 40]);
+        arena.seal();
+        for reference in [first, second, third] {
+            arena.retain(reference);
+        }
+        assert_eq!(first.slab, third.slab, "one slab holds all three");
+
+        arena.release(first);
+        assert!(arena.sweep().is_empty(), "two are still wanted");
+        arena.release(second);
+        assert!(arena.sweep().is_empty(), "one is");
+        arena.release(third);
+        assert_eq!(arena.sweep().len(), 1, "and now none");
+    }
+
+    /// The live fraction is what a compaction decision reads.
+    #[test]
+    fn the_live_fraction_falls_as_geometries_go() {
+        let mut arena = SlabArena::new();
+        let references: Vec<_> = (0..4).map(|_| arena.alloc(&[0; 40])).collect();
+        arena.seal();
+        let slab = references[0].slab;
+        for reference in &references {
+            arena.retain(*reference);
+        }
+
+        let fraction = arena.live_fraction(slab).expect("a sealed slab");
+        assert!(
+            (fraction - 1.0).abs() < 1e-9,
+            "everything is wanted: {fraction}"
+        );
+
+        arena.release(references[0]);
+        arena.release(references[1]);
+        let fraction = arena.live_fraction(slab).expect("still held");
+        assert!((fraction - 0.5).abs() < 1e-9, "half of it is: {fraction}");
+
+        assert_eq!(arena.live_fraction(9999), None, "a slab it does not hold");
+    }
+
+    /// A double release does not make a slab outlive its bytes by going negative.
+    ///
+    /// Saturating rather than panicking: a double release is a producer bug, and the useful
+    /// failure is a slab living too long — visible in the fraction — rather than an abort in a
+    /// frame loop.
+    #[test]
+    fn a_double_release_saturates() {
+        let mut arena = SlabArena::new();
+        let reference = arena.alloc(&[0; 16]);
+        arena.seal();
+        arena.retain(reference);
+        arena.release(reference);
+        arena.release(reference);
+        assert_eq!(arena.live_fraction(reference.slab), Some(0.0));
+        assert_eq!(arena.sweep().len(), 1);
+    }
+
+    /// An empty allocation retains nothing, so it cannot pin a slab.
+    #[test]
+    fn an_empty_reference_pins_nothing() {
+        let mut arena = SlabArena::new();
+        let real = arena.alloc(&[0; 16]);
+        let empty = arena.alloc(&[]);
+        arena.seal();
+        arena.retain(empty);
+        assert_eq!(arena.sweep().len(), 1, "the empty one wanted nothing");
+
+        let _ = real;
+    }
+}
