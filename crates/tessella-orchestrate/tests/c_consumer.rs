@@ -25,10 +25,11 @@
 use std::io::Write as _;
 use std::process::Command;
 
-use tessella_capture_abi::envelope::{Extent, Rect16, TextureId, ViewId};
+use tessella_capture_abi::envelope::{Extent, GeometryId, Rect16, TextureId, ViewId};
 use tessella_capture_abi::generated::mbgl_enums::TexturePixelType;
 use tessella_capture_abi::ring::{self, region_size};
 use tessella_orchestrate::SlabArena;
+use tessella_orchestrate::emit;
 use tessella_orchestrate::frame::{self, Frame};
 use tessella_orchestrate::texture;
 use tessella_orchestrate::tile::{TileId, build_mvt_tile, build_sourceless};
@@ -148,6 +149,15 @@ fn emit_frame() -> (Vec<u8>, Vec<u8>, frame::Emitted) {
     )
     .expect("two rectangles are within the cap");
     texture::write(&mut producer, &upload).expect("the upload writes");
+
+    // A mesh, a retirement and a teardown, none of which a settled first frame produces. Each is
+    // a record a mirror must act on and none of them draws anything, so a fixture without them
+    // would leave the walks compiled and never run — the failure mode this whole test exists to
+    // avoid, one level up.
+    let mesh = GeometryId(4096);
+    let encoded = emit::encode_mesh(&mut arena, mesh, b"glTF\x02\x00\x00\x00");
+    emit::write_mesh(&mut producer, &encoded).expect("the mesh writes");
+    emit::remove(&mut producer, mesh).expect("the retirement writes");
 
     arena.seal();
 
@@ -336,6 +346,64 @@ fn c_reads_the_textures_and_the_stencil_tiles() {
         counts.get("stencil_bad").copied(),
         Some(0),
         "a stencil tile's matrix never came from a camera: {counts:?}"
+    );
+}
+
+/// The lifecycle records, which a mirror must act on and a counter would not notice.
+///
+/// A `ViewDeclare` opens a scene and a `ViewUndeclare` tears it down; a `GeometryRemove` frees
+/// GPU resources and a `ViewRelease` drops one view's claim on geometry another view may still
+/// hold. None of them draws anything, which is why walking them is easy to leave out and
+/// expensive to have left out: the symptom of ignoring a retirement is a leak, and the symptom
+/// of ignoring a declaration is one view's drawables in another view's scene.
+///
+/// The consumer struck each id from its declared set as it was retired, so this also proves
+/// every retirement names something that was added — the dangling-use fault seen from the other
+/// end, and the one a consumer notices late because it frees nothing and then leaks whatever
+/// really was added.
+#[test]
+fn c_reads_the_lifecycle_records() {
+    let dir = std::env::temp_dir().join(format!("tessella-c-lifecycle-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a working directory");
+    let (ring, slabs, _) = emit_frame();
+    let counts = run(&dir, &ring, &slabs);
+    std::fs::remove_dir_all(&dir).ok();
+
+    assert!(
+        counts.get("declares").copied().unwrap_or(0) > 0,
+        "a frame declares the view its records belong to: {counts:?}"
+    );
+    assert_eq!(
+        counts.get("view_bad").copied(),
+        Some(0),
+        "a view id outside the range the ABI reserves: {counts:?}"
+    );
+    assert_eq!(
+        counts.get("remove_unknown").copied(),
+        Some(0),
+        "a retirement named geometry that was never added: {counts:?}"
+    );
+    assert_eq!(
+        counts.get("mesh_unknown_format").copied(),
+        Some(0),
+        "a mesh arrived in a format the header does not name, which a consumer must skip: \
+         {counts:?}"
+    );
+
+    // The frame under test is a single settled view, so it retires nothing and undeclares
+    // nothing. Asserted rather than left unsaid: if these ever become non-zero here the frame
+    // has changed shape, and the counters above stop meaning what they say.
+    assert!(
+        counts.get("meshes").copied().unwrap_or(0) > 0,
+        "the mesh walk never ran: {counts:?}"
+    );
+    assert!(
+        counts.get("mesh_bytes").copied().unwrap_or(0) > 0,
+        "the mesh's slab reference resolved to nothing: {counts:?}"
+    );
+    assert!(
+        counts.get("removes").copied().unwrap_or(0) > 0,
+        "the retirement walk never ran: {counts:?}"
     );
 }
 

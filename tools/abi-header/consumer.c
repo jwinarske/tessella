@@ -104,6 +104,26 @@ static buffer read_file(const char *path) {
  * The bounds check is not defensive clutter: a handle the table does not cover has no meaning,
  * and refusing it is what turns a producer fault into a diagnosis rather than a wild read.
  */
+/* Records an id in the declared set.
+ *
+ * Both `tsl_geometry_add` and `tsl_mesh_add` land here, and that is the ABI's rule rather than a
+ * convenience: the header says a mesh's id "is in the same space as tsl_geometry_add's, so
+ * tsl_view_use, tsl_view_release and tsl_geometry_remove bind, release and drop a mesh exactly
+ * as they do geometry". A consumer keeping two tables resolves a use of a mesh against neither. */
+static int declare_id(uint64_t **ids, size_t *count, size_t *cap, uint64_t id) {
+    if (*count == *cap) {
+        size_t grown = *cap ? *cap * 2 : 64;
+        uint64_t *bigger = (uint64_t *)realloc(*ids, grown * sizeof(uint64_t));
+        if (!bigger) {
+            return 0;
+        }
+        *ids = bigger;
+        *cap = grown;
+    }
+    (*ids)[(*count)++] = id;
+    return 1;
+}
+
 static const uint8_t *resolve(buffer region, tsl_slab_ref ref, uint64_t *length_out) {
     tsl_slab_region header;
     if (region.len < sizeof header) {
@@ -222,6 +242,12 @@ int main(int argc, char **argv) {
     uint64_t textures = 0, texture_rects = 0, texture_bytes = 0, texture_bad = 0;
     uint64_t whole_texture_uploads = 0;
     uint64_t stencils = 0, stencil_tiles = 0, stencil_bad = 0;
+    /* The rest of the twelve kinds. A mirror has to act on every one of these -- a retirement
+     * frees GPU resources, a view declaration opens a scene -- and a consumer that walked only
+     * the records it found interesting would leak, or draw one view's geometry into another. */
+    uint64_t removes = 0, remove_unknown = 0, releases = 0;
+    uint64_t declares = 0, undeclares = 0, view_bad = 0;
+    uint64_t meshes = 0, mesh_bytes = 0, mesh_unknown_format = 0;
     /* Every geometry id declared, so a use naming one that was not can be reported. The ABI
      * says a consumer "looks an id up and finds whichever kind of thing it added", and that a
      * use of an id it never met is a protocol fault. A consumer that counted uses without
@@ -297,17 +323,10 @@ int main(int argc, char **argv) {
             }
             memcpy(&add, fixed, sizeof add);
             geometries++;
-            if (declared_count == declared_cap) {
-                size_t grown = declared_cap ? declared_cap * 2 : 64;
-                uint64_t *bigger = (uint64_t *)realloc(declared, grown * sizeof(uint64_t));
-                if (!bigger) {
-                    fprintf(stderr, "consumer: out of memory\n");
-                    return 2;
-                }
-                declared = bigger;
-                declared_cap = grown;
+            if (!declare_id(&declared, &declared_count, &declared_cap, add.geometry)) {
+                fprintf(stderr, "consumer: out of memory\n");
+                return 2;
             }
-            declared[declared_count++] = add.geometry;
             vertices += add.vertex_count;
 
             for (uint32_t i = 0; i < add.attrs.count; i++) {
@@ -346,6 +365,94 @@ int main(int argc, char **argv) {
             }
             if (!found) {
                 dangling++;
+            }
+            break;
+        }
+        case TSL_ENVELOPE_KIND_GEOMETRY_REMOVE: {
+            tsl_geometry_remove gone;
+            if (record.record_len < sizeof gone) {
+                break;
+            }
+            memcpy(&gone, fixed, sizeof gone);
+            removes++;
+            /* A retirement of something that was never declared is the same protocol fault a
+             * dangling use is, seen from the other end -- and it is the one a consumer notices
+             * *late*, because it frees nothing and then leaks the geometry that really was
+             * added. Found by the same linear scan, and the entry is struck so a second remove
+             * of one id is caught too. */
+            int known = 0;
+            for (size_t i = 0; i < declared_count; i++) {
+                if (declared[i] == gone.geometry) {
+                    declared[i] = declared[declared_count - 1];
+                    declared_count--;
+                    known = 1;
+                    break;
+                }
+            }
+            if (!known) {
+                remove_unknown++;
+            }
+            break;
+        }
+        case TSL_ENVELOPE_KIND_VIEW_RELEASE: {
+            tsl_view_release release;
+            if (record.record_len < sizeof release) {
+                break;
+            }
+            memcpy(&release, fixed, sizeof release);
+            releases++;
+            break;
+        }
+        case TSL_ENVELOPE_KIND_VIEW_DECLARE: {
+            tsl_view_declare declare;
+            if (record.record_len < sizeof declare) {
+                break;
+            }
+            memcpy(&declare, fixed, sizeof declare);
+            declares++;
+            /* The view a frame's records belong to. A consumer that ignored this would put
+             * every view's drawables in one scene, which is the failure the whole per-view
+             * split exists to prevent. */
+            if (declare.view >= TSL_MAX_VIEWS) {
+                view_bad++;
+            }
+            break;
+        }
+        case TSL_ENVELOPE_KIND_VIEW_UNDECLARE: {
+            tsl_view_undeclare undeclare;
+            if (record.record_len < sizeof undeclare) {
+                break;
+            }
+            memcpy(&undeclare, fixed, sizeof undeclare);
+            undeclares++;
+            break;
+        }
+        case TSL_ENVELOPE_KIND_MESH_ADD: {
+            tsl_mesh_add mesh;
+            if (record.record_len < sizeof mesh) {
+                break;
+            }
+            memcpy(&mesh, fixed, sizeof mesh);
+            meshes++;
+            /* A mesh is bytes in a slab and a format saying what they are. The header is
+             * explicit that a consumer meeting a format it does not know must *skip* the mesh
+             * rather than guess at the bytes, so that is what this does -- and counts, because
+             * silently skipping every mesh is how a consumer draws an empty map and reports
+             * success. */
+            if (mesh.format != TSL_MESH_FORMAT_GLB) {
+                mesh_unknown_format++;
+                break;
+            }
+            uint64_t bytes = 0;
+            if (!resolve(slabs, mesh.bytes, &bytes)) {
+                unresolved++;
+                break;
+            }
+            mesh_bytes += bytes;
+            /* Same table as geometry, per the header's own sentence. */
+            if (!declare_id(&declared, &declared_count, &declared_cap, mesh.mesh)) {
+                fprintf(stderr, "consumer: out of memory\n");
+                return 2;
             }
             break;
         }
@@ -557,6 +664,15 @@ int main(int argc, char **argv) {
     printf("stencils %llu\n", (unsigned long long)stencils);
     printf("stencil_tiles %llu\n", (unsigned long long)stencil_tiles);
     printf("stencil_bad %llu\n", (unsigned long long)stencil_bad);
+    printf("removes %llu\n", (unsigned long long)removes);
+    printf("remove_unknown %llu\n", (unsigned long long)remove_unknown);
+    printf("releases %llu\n", (unsigned long long)releases);
+    printf("declares %llu\n", (unsigned long long)declares);
+    printf("undeclares %llu\n", (unsigned long long)undeclares);
+    printf("view_bad %llu\n", (unsigned long long)view_bad);
+    printf("meshes %llu\n", (unsigned long long)meshes);
+    printf("mesh_bytes %llu\n", (unsigned long long)mesh_bytes);
+    printf("mesh_unknown_format %llu\n", (unsigned long long)mesh_unknown_format);
     printf("dangling_uses %llu\n", (unsigned long long)dangling);
     free(declared);
     return (unresolved == 0 && ubo_truncated == 0 && camera_bad == 0) ? 0 : 1;

@@ -30,6 +30,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use tessella_capture_abi::envelope::*;
+use tessella_capture_abi::generated::{ubo_layouts, ubo_slots};
 use tessella_capture_abi::reverse::{
     FLAG_PUBLISHED, FLAG_VISIBLE, MAX_VIEWS, ReverseChannel, ViewSlot,
 };
@@ -897,6 +898,20 @@ fn generate() -> String {
     writeln!(w, "#endif").unwrap();
     writeln!(w).unwrap();
 
+    // A uniform block's alignment is larger than any of its fields', so it has to be stated.
+    writeln!(w, "#if defined(__cplusplus)").unwrap();
+    writeln!(w, "#define TSL_ALIGNAS(n) alignas(n)").unwrap();
+    writeln!(
+        w,
+        "#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L"
+    )
+    .unwrap();
+    writeln!(w, "#define TSL_ALIGNAS(n) _Alignas(n)").unwrap();
+    writeln!(w, "#else").unwrap();
+    writeln!(w, "#define TSL_ALIGNAS(n)").unwrap();
+    writeln!(w, "#endif").unwrap();
+    writeln!(w).unwrap();
+
     writeln!(w, "#define TSL_ABI_REV {ABI_REV}u").unwrap();
     writeln!(w, "#define TSL_RECORD_ALIGN {RECORD_ALIGN}u").unwrap();
     writeln!(w, "#define TSL_RECORD_FLAG_SKIP {RECORD_FLAG_SKIP}u").unwrap();
@@ -996,6 +1011,10 @@ fn generate() -> String {
     writeln!(w, "    }}").unwrap();
     writeln!(w, "}}").unwrap();
     writeln!(w).unwrap();
+
+    emit_ubo_slots(w);
+    emit_ubo_layouts(w);
+
     emit_enum(
         w,
         "attribute_data_type",
@@ -1160,6 +1179,149 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
         }
     }
     lines
+}
+
+/// Emits the uniform-buffer slot ids.
+///
+/// `#define` rather than an enum because the values *overlap*: `idBackgroundDrawableUBO` and
+/// `idDrawableReservedVertexOnlyUBO` are both 2, since each layer family numbers its own blocks
+/// from the same base. An enum would compile and would read as though they were alternatives.
+fn emit_ubo_slots(w: &mut String) {
+    writeln!(w, "/*").unwrap();
+    writeln!(w, " * Uniform buffer slot ids.").unwrap();
+    writeln!(w, " *").unwrap();
+    for line in wrap(
+        "A tsl_ubo_update names the slot it writes and nothing else says what that slot is. \
+         These are the names mbgl gives them, evaluated for the Vulkan backend (DR-16): the \
+         header declares a chain of anonymous enums that take their values from each other and \
+         every step is gated on the render backend, so they are computed rather than read.",
+        94,
+    ) {
+        if line.is_empty() {
+            writeln!(w, " *").unwrap();
+        } else {
+            writeln!(w, " * {line}").unwrap();
+        }
+    }
+    writeln!(w, " *").unwrap();
+    for line in wrap(
+        "Values overlap by design -- each layer family numbers its own blocks from the same \
+         base -- so a slot means nothing without the shader it belongs to.",
+        94,
+    ) {
+        writeln!(w, " * {line}").unwrap();
+    }
+    writeln!(w, " */").unwrap();
+    for (name, value) in ubo_slots::SLOTS {
+        writeln!(w, "#define TSL_UBO_{} {value}u", screaming(name)).unwrap();
+    }
+    writeln!(w).unwrap();
+}
+
+/// The C declarator for one uniform-block field.
+fn ubo_declarator(field: &ubo_layouts::UboField) -> String {
+    use ubo_layouts::UboFieldKind as Kind;
+    let name = field.name;
+    match field.kind {
+        Kind::F32 => format!("float {name}"),
+        Kind::I32 => format!("int32_t {name}"),
+        Kind::U32 => format!("uint32_t {name}"),
+        Kind::Vec2 => format!("float {name}[2]"),
+        Kind::Vec3 => format!("float {name}[3]"),
+        Kind::Vec4 | Kind::Color => format!("float {name}[4]"),
+        Kind::Mat4 => format!("float {name}[16]"),
+    }
+}
+
+/// Emits a C struct for every uniform block, with its offsets asserted.
+///
+/// The mirror reads these. A consumer that only forwarded the bytes would still need the size to
+/// know how many to forward, and every consumer that does anything with a uniform -- picks the
+/// matrix out of a consolidated buffer, reads a layer's evaluated colour -- needs the offsets.
+/// Emitting them is what lets a mirror stop including mbgl's shader headers, which is the point
+/// of having one flat header at all.
+///
+/// The fields are contiguous: the generator that produced these accepted a block only when every
+/// declared offset matched the running total, so there are no gaps to pad. The one padding a
+/// block can need is at the *end*, and the declared alignment produces it.
+fn emit_ubo_layouts(w: &mut String) {
+    writeln!(w, "/*").unwrap();
+    writeln!(w, " * Uniform block layouts.").unwrap();
+    writeln!(w, " *").unwrap();
+    for line in wrap(
+        "One struct per block mbgl declares, with every field's offset and the whole size \
+         asserted against what the producer packed. The size here is the *stride*: what \
+         separates consecutive blocks in a consolidated buffer, which is sizeof and not the \
+         field extent when a block's fields end mid-alignment.",
+        94,
+    ) {
+        if line.is_empty() {
+            writeln!(w, " *").unwrap();
+        } else {
+            writeln!(w, " * {line}").unwrap();
+        }
+    }
+    writeln!(w, " */").unwrap();
+    writeln!(w).unwrap();
+
+    for layout in ubo_layouts::LAYOUTS {
+        let c_name = format!("tsl_{}", screaming(layout.name).to_lowercase());
+        writeln!(w, "/* `{}` from `{}`. */", layout.name, layout.header).unwrap();
+        writeln!(w, "typedef struct {c_name} {{").unwrap();
+        for (index, field) in layout.fields.iter().enumerate() {
+            // The alignment goes on the first member, which is how a struct's own alignment is
+            // raised in both C and C++ without a compiler extension.
+            let declarator = ubo_declarator(field);
+            if index == 0 && layout.align > 4 {
+                writeln!(w, "    TSL_ALIGNAS({}) {declarator};", layout.align).unwrap();
+            } else {
+                writeln!(w, "    {declarator};").unwrap();
+            }
+        }
+        writeln!(w, "}} {c_name};").unwrap();
+        writeln!(w).unwrap();
+        writeln!(
+            w,
+            "TSL_ASSERT(sizeof({c_name}) == {}, \"{c_name} size differs from the block mbgl \
+             declares\");",
+            layout.stride
+        )
+        .unwrap();
+        writeln!(
+            w,
+            "TSL_ASSERT(TSL_ALIGNOF({c_name}) == {}, \"{c_name} alignment differs\");",
+            layout.align
+        )
+        .unwrap();
+        for field in layout.fields {
+            writeln!(
+                w,
+                "TSL_ASSERT(offsetof({c_name}, {}) == {}, \"{c_name}.{} moved\");",
+                field.name, field.offset, field.name
+            )
+            .unwrap();
+        }
+        writeln!(w).unwrap();
+    }
+
+    // Blocks the layout generator declined to vouch for. Named rather than omitted, for the
+    // reason it gives: a block missing because it could not be parsed and one missing because
+    // mbgl does not have it are different situations for a consumer that needs it.
+    writeln!(w, "/*").unwrap();
+    writeln!(w, " * Blocks mbgl declares that are deliberately not here:").unwrap();
+    for (name, header, reason) in ubo_layouts::UNPARSED {
+        writeln!(w, " *   {name} ({header}): {reason}.").unwrap();
+    }
+    writeln!(w, " *").unwrap();
+    for line in wrap(
+        "A consumer needing one of these should find out from this list rather than from a \
+         wrong layout.",
+        94,
+    ) {
+        writeln!(w, " * {line}").unwrap();
+    }
+    writeln!(w, " */").unwrap();
+    writeln!(w).unwrap();
 }
 
 #[cfg(test)]

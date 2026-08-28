@@ -31,6 +31,14 @@ extern "C" {
 #define TSL_ALIGNOF(type) _Alignof(type)
 #endif
 
+#if defined(__cplusplus)
+#define TSL_ALIGNAS(n) alignas(n)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define TSL_ALIGNAS(n) _Alignas(n)
+#else
+#define TSL_ALIGNAS(n)
+#endif
+
 #define TSL_ABI_REV 2u
 #define TSL_RECORD_ALIGN 16u
 #define TSL_RECORD_FLAG_SKIP 1u
@@ -107,6 +115,1230 @@ static inline uint32_t tsl_texture_pixel_size(int format) {
     default: return 0;
     }
 }
+
+/*
+ * Uniform buffer slot ids.
+ *
+ * A tsl_ubo_update names the slot it writes and nothing else says what that slot is. These are
+ * the names mbgl gives them, evaluated for the Vulkan backend (DR-16): the header declares a
+ * chain of anonymous enums that take their values from each other and every step is gated on the
+ * render backend, so they are computed rather than read.
+ *
+ * Values overlap by design -- each layer family numbers its own blocks from the same base -- so
+ * a slot means nothing without the shader it belongs to.
+ */
+#define TSL_UBO_ID_GLOBAL_PAINT_PARAMS_UBO 0u
+#define TSL_UBO_ID_GLOBAL_PLATFORM_PARAMS_UBO 1u
+#define TSL_UBO_GLOBAL_UBOCOUNT 2u
+#define TSL_UBO_LAYER_SSBOSTART_ID 2u
+#define TSL_UBO_ID_DRAWABLE_RESERVED_VERTEX_ONLY_UBO 2u
+#define TSL_UBO_ID_DRAWABLE_RESERVED_FRAGMENT_ONLY_UBO 3u
+#define TSL_UBO_DRAWABLE_RESERVED_UBOCOUNT 4u
+#define TSL_UBO_ID_BACKGROUND_DRAWABLE_UBO 2u
+#define TSL_UBO_BACKGROUND_LAYER_SSBOCOUNT 4u
+#define TSL_UBO_ID_CIRCLE_DRAWABLE_UBO 2u
+#define TSL_UBO_CIRCLE_LAYER_SSBOCOUNT 4u
+#define TSL_UBO_ID_COLOR_RELIEF_DRAWABLE_UBO 2u
+#define TSL_UBO_ID_COLOR_RELIEF_TILE_PROPS_UBO 4u
+#define TSL_UBO_COLOR_RELIEF_LAYER_SSBOCOUNT 5u
+#define TSL_UBO_ID_FILL_DRAWABLE_UBO 2u
+#define TSL_UBO_ID_FILL_TILE_PROPS_UBO 4u
+#define TSL_UBO_FILL_LAYER_SSBOCOUNT 5u
+#define TSL_UBO_ID_FILL_EXTRUSION_DRAWABLE_UBO 2u
+#define TSL_UBO_ID_FILL_EXTRUSION_TILE_PROPS_UBO 4u
+#define TSL_UBO_FILL_EXTRUSION_LAYER_SSBOCOUNT 5u
+#define TSL_UBO_ID_HEATMAP_DRAWABLE_UBO 2u
+#define TSL_UBO_HEATMAP_LAYER_SSBOCOUNT 4u
+#define TSL_UBO_ID_HILLSHADE_DRAWABLE_UBO 2u
+#define TSL_UBO_ID_HILLSHADE_TILE_PROPS_UBO 3u
+#define TSL_UBO_HILLSHADE_LAYER_SSBOCOUNT 4u
+#define TSL_UBO_ID_LINE_DRAWABLE_UBO 2u
+#define TSL_UBO_ID_LINE_TILE_PROPS_UBO 3u
+#define TSL_UBO_LINE_LAYER_SSBOCOUNT 4u
+#define TSL_UBO_ID_RASTER_DRAWABLE_UBO 2u
+#define TSL_UBO_RASTER_LAYER_SSBOCOUNT 4u
+#define TSL_UBO_ID_SYMBOL_DRAWABLE_UBO 2u
+#define TSL_UBO_ID_SYMBOL_TILE_PROPS_UBO 3u
+#define TSL_UBO_SYMBOL_LAYER_SSBOCOUNT 4u
+#define TSL_UBO_LAYER_UBOSTART_ID 5u
+#define TSL_UBO_ID_BACKGROUND_PROPS_UBO 5u
+#define TSL_UBO_BACKGROUND_LAYER_UBOCOUNT 6u
+#define TSL_UBO_ID_CIRCLE_EVALUATED_PROPS_UBO 5u
+#define TSL_UBO_CIRCLE_LAYER_UBOCOUNT 6u
+#define TSL_UBO_ID_COLOR_RELIEF_EVALUATED_PROPS_UBO 5u
+#define TSL_UBO_COLOR_RELIEF_LAYER_UBOCOUNT 6u
+#define TSL_UBO_ID_FILL_EVALUATED_PROPS_UBO 5u
+#define TSL_UBO_FILL_LAYER_UBOCOUNT 6u
+#define TSL_UBO_ID_FILL_EXTRUSION_PROPS_UBO 5u
+#define TSL_UBO_FILL_EXTRUSION_LAYER_UBOCOUNT 6u
+#define TSL_UBO_ID_HEATMAP_EVALUATED_PROPS_UBO 5u
+#define TSL_UBO_HEATMAP_LAYER_UBOCOUNT 6u
+#define TSL_UBO_ID_HEATMAP_TEXTURE_PROPS_UBO 5u
+#define TSL_UBO_HEATMAP_TEXTURE_UBOCOUNT 6u
+#define TSL_UBO_ID_HILLSHADE_EVALUATED_PROPS_UBO 5u
+#define TSL_UBO_HILLSHADE_LAYER_UBOCOUNT 6u
+#define TSL_UBO_ID_LINE_EVALUATED_PROPS_UBO 5u
+#define TSL_UBO_ID_LINE_EXPRESSION_UBO 6u
+#define TSL_UBO_LINE_LAYER_UBOCOUNT 7u
+#define TSL_UBO_ID_RASTER_EVALUATED_PROPS_UBO 5u
+#define TSL_UBO_RASTER_LAYER_UBOCOUNT 6u
+#define TSL_UBO_ID_SYMBOL_EVALUATED_PROPS_UBO 5u
+#define TSL_UBO_SYMBOL_LAYER_UBOCOUNT 6u
+#define TSL_UBO_DRAWABLE_SSBOSTART_ID 7u
+#define TSL_UBO_FILL_EXTRUSION_DRAWABLE_SSBOCOUNT 0u
+#define TSL_UBO_DRAWABLE_UBOSTART_ID 7u
+#define TSL_UBO_BACKGROUND_UBOCOUNT 7u
+#define TSL_UBO_CIRCLE_UBOCOUNT 7u
+#define TSL_UBO_ID_COLLISION_DRAWABLE_UBO 7u
+#define TSL_UBO_ID_COLLISION_TILE_PROPS_UBO 8u
+#define TSL_UBO_COLLISION_UBOCOUNT 9u
+#define TSL_UBO_ID_CLIPPING_MASK_UBO 7u
+#define TSL_UBO_CLIPPING_MASK_UBOCOUNT 8u
+#define TSL_UBO_COLOR_RELIEF_UBOCOUNT 7u
+#define TSL_UBO_ID_CUSTOM_GEOMETRY_DRAWABLE_UBO 7u
+#define TSL_UBO_CUSTOM_GEOMETRY_UBOCOUNT 8u
+#define TSL_UBO_ID_CUSTOM_SYMBOL_DRAWABLE_UBO 7u
+#define TSL_UBO_CUSTOM_SYMBOL_UBOCOUNT 8u
+#define TSL_UBO_ID_DEBUG_UBO 7u
+#define TSL_UBO_DEBUG_UBOCOUNT 8u
+#define TSL_UBO_FILL_UBOCOUNT 7u
+#define TSL_UBO_FILL_EXTRUSION_UBOCOUNT 7u
+#define TSL_UBO_HEATMAP_UBOCOUNT 7u
+#define TSL_UBO_ID_HILLSHADE_PREPARE_DRAWABLE_UBO 7u
+#define TSL_UBO_ID_HILLSHADE_PREPARE_TILE_PROPS_UBO 8u
+#define TSL_UBO_HILLSHADE_PREPARE_UBOCOUNT 9u
+#define TSL_UBO_HILLSHADE_UBOCOUNT 7u
+#define TSL_UBO_LINE_UBOCOUNT 7u
+#define TSL_UBO_ID_LOCATION_INDICATOR_DRAWABLE_UBO 7u
+#define TSL_UBO_LOCATION_INDICATOR_UBOCOUNT 8u
+#define TSL_UBO_RASTER_UBOCOUNT 7u
+#define TSL_UBO_SYMBOL_UBOCOUNT 7u
+#define TSL_UBO_ID_WIDE_VECTOR_UNIFORMS_UBO 7u
+#define TSL_UBO_ID_WIDE_VECTOR_UNIFORM_WIDE_VEC_UBO 8u
+#define TSL_UBO_WIDE_VECTOR_UBOCOUNT 9u
+#define TSL_UBO_MAX_UBOCOUNT_PER_SHADER 9u
+#define TSL_UBO_MAX_SSBOCOUNT_PER_LAYER 3u
+#define TSL_UBO_MAX_UBOCOUNT_PER_LAYER 2u
+#define TSL_UBO_MAX_SSBOCOUNT_PER_DRAWABLE 0u
+#define TSL_UBO_MAX_UBOCOUNT_PER_DRAWABLE 2u
+#define TSL_UBO_ID_BACKGROUND_IMAGE_TEXTURE 0u
+#define TSL_UBO_BACKGROUND_TEXTURE_COUNT 1u
+#define TSL_UBO_CIRCLE_TEXTURE_COUNT 0u
+#define TSL_UBO_CLIPPING_MASK_TEXTURE_COUNT 0u
+#define TSL_UBO_COLLISION_TEXTURE_COUNT 0u
+#define TSL_UBO_ID_CUSTOM_GEOMETRY_TEXTURE 0u
+#define TSL_UBO_CUSTOM_GEOMETRY_TEXTURE_COUNT 1u
+#define TSL_UBO_ID_CUSTOM_SYMBOL_IMAGE_TEXTURE 0u
+#define TSL_UBO_CUSTOM_SYMBOL_TEXTURE_COUNT 1u
+#define TSL_UBO_ID_DEBUG_OVERLAY_TEXTURE 0u
+#define TSL_UBO_DEBUG_TEXTURE_COUNT 1u
+#define TSL_UBO_ID_FILL_IMAGE_TEXTURE 0u
+#define TSL_UBO_FILL_TEXTURE_COUNT 1u
+#define TSL_UBO_ID_FILL_EXTRUSION_IMAGE_TEXTURE 0u
+#define TSL_UBO_FILL_EXTRUSION_TEXTURE_COUNT 1u
+#define TSL_UBO_ID_HEATMAP_IMAGE_TEXTURE 0u
+#define TSL_UBO_ID_HEATMAP_COLOR_RAMP_TEXTURE 1u
+#define TSL_UBO_HEATMAP_TEXTURE_COUNT 2u
+#define TSL_UBO_ID_HILLSHADE_IMAGE_TEXTURE 0u
+#define TSL_UBO_HILLSHADE_TEXTURE_COUNT 1u
+#define TSL_UBO_ID_COLOR_RELIEF_IMAGE_TEXTURE 0u
+#define TSL_UBO_ID_COLOR_RELIEF_ELEVATION_STOPS_TEXTURE 1u
+#define TSL_UBO_ID_COLOR_RELIEF_COLOR_STOPS_TEXTURE 2u
+#define TSL_UBO_COLOR_RELIEF_TEXTURE_COUNT 3u
+#define TSL_UBO_ID_LOCATION_INDICATOR_TEXTURE 0u
+#define TSL_UBO_LOCATION_INDICATOR_TEXTURE_COUNT 1u
+#define TSL_UBO_ID_LINE_IMAGE_TEXTURE 0u
+#define TSL_UBO_LINE_TEXTURE_COUNT 1u
+#define TSL_UBO_ID_RASTER_IMAGE0_TEXTURE 0u
+#define TSL_UBO_ID_RASTER_IMAGE1_TEXTURE 1u
+#define TSL_UBO_RASTER_TEXTURE_COUNT 2u
+#define TSL_UBO_ID_SYMBOL_IMAGE_TEXTURE 0u
+#define TSL_UBO_ID_SYMBOL_IMAGE_ICON_TEXTURE 1u
+#define TSL_UBO_SYMBOL_TEXTURE_COUNT 2u
+#define TSL_UBO_MAX_TEXTURE_COUNT_PER_SHADER 3u
+#define TSL_UBO_ID_BACKGROUND_POS_VERTEX_ATTRIBUTE 0u
+#define TSL_UBO_BACKGROUND_VERTEX_ATTRIBUTE_COUNT 1u
+#define TSL_UBO_ID_CIRCLE_POS_VERTEX_ATTRIBUTE 0u
+#define TSL_UBO_ID_CIRCLE_COLOR_VERTEX_ATTRIBUTE 1u
+#define TSL_UBO_ID_CIRCLE_RADIUS_VERTEX_ATTRIBUTE 2u
+#define TSL_UBO_ID_CIRCLE_BLUR_VERTEX_ATTRIBUTE 3u
+#define TSL_UBO_ID_CIRCLE_OPACITY_VERTEX_ATTRIBUTE 4u
+#define TSL_UBO_ID_CIRCLE_STROKE_COLOR_VERTEX_ATTRIBUTE 5u
+#define TSL_UBO_ID_CIRCLE_STROKE_WIDTH_VERTEX_ATTRIBUTE 6u
+#define TSL_UBO_ID_CIRCLE_STROKE_OPACITY_VERTEX_ATTRIBUTE 7u
+#define TSL_UBO_CIRCLE_VERTEX_ATTRIBUTE_COUNT 8u
+#define TSL_UBO_ID_CLIPPING_MASK_POS_VERTEX_ATTRIBUTE 0u
+#define TSL_UBO_CLIPPING_MASK_VERTEX_ATTRIBUTE_COUNT 1u
+#define TSL_UBO_ID_COLLISION_POS_VERTEX_ATTRIBUTE 0u
+#define TSL_UBO_ID_COLLISION_ANCHOR_POS_VERTEX_ATTRIBUTE 1u
+#define TSL_UBO_ID_COLLISION_EXTRUDE_VERTEX_ATTRIBUTE 2u
+#define TSL_UBO_ID_COLLISION_PLACED_VERTEX_ATTRIBUTE 3u
+#define TSL_UBO_ID_COLLISION_SHIFT_VERTEX_ATTRIBUTE 4u
+#define TSL_UBO_COLLISION_VERTEX_ATTRIBUTE_COUNT 5u
+#define TSL_UBO_ID_CUSTOM_GEOMETRY_POS_VERTEX_ATTRIBUTE 0u
+#define TSL_UBO_ID_CUSTOM_GEOMETRY_TEX_VERTEX_ATTRIBUTE 1u
+#define TSL_UBO_CUSTOM_GEOMETRY_VERTEX_ATTRIBUTE_COUNT 2u
+#define TSL_UBO_ID_CUSTOM_SYMBOL_POS_VERTEX_ATTRIBUTE 0u
+#define TSL_UBO_ID_CUSTOM_SYMBOL_TEX_VERTEX_ATTRIBUTE 1u
+#define TSL_UBO_CUSTOM_SYMBOL_VERTEX_ATTRIBUTE_COUNT 2u
+#define TSL_UBO_ID_DEBUG_POS_VERTEX_ATTRIBUTE 0u
+#define TSL_UBO_DEBUG_VERTEX_ATTRIBUTE_COUNT 1u
+#define TSL_UBO_ID_FILL_POS_VERTEX_ATTRIBUTE 0u
+#define TSL_UBO_ID_FILL_COLOR_VERTEX_ATTRIBUTE 1u
+#define TSL_UBO_ID_FILL_OPACITY_VERTEX_ATTRIBUTE 2u
+#define TSL_UBO_ID_FILL_OUTLINE_COLOR_VERTEX_ATTRIBUTE 3u
+#define TSL_UBO_ID_FILL_PATTERN_FROM_VERTEX_ATTRIBUTE 4u
+#define TSL_UBO_ID_FILL_PATTERN_TO_VERTEX_ATTRIBUTE 5u
+#define TSL_UBO_FILL_VERTEX_ATTRIBUTE_COUNT 6u
+#define TSL_UBO_ID_FILL_EXTRUSION_POS_VERTEX_ATTRIBUTE 0u
+#define TSL_UBO_ID_FILL_EXTRUSION_DECIMALS_ED_ATTRIBUTE 1u
+#define TSL_UBO_ID_FILL_EXTRUSION_NORMAL2_DVERTEX_ATTRIBUTE 2u
+#define TSL_UBO_ID_FILL_EXTRUSION_BASE_VERTEX_ATTRIBUTE 3u
+#define TSL_UBO_ID_FILL_EXTRUSION_COLOR_VERTEX_ATTRIBUTE 4u
+#define TSL_UBO_ID_FILL_EXTRUSION_HEIGHT_VERTEX_ATTRIBUTE 5u
+#define TSL_UBO_ID_FILL_EXTRUSION_PATTERN_FROM_VERTEX_ATTRIBUTE 6u
+#define TSL_UBO_ID_FILL_EXTRUSION_PATTERN_TO_VERTEX_ATTRIBUTE 7u
+#define TSL_UBO_FILL_EXTRUSION_VERTEX_ATTRIBUTE_COUNT 8u
+#define TSL_UBO_ID_HEATMAP_POS_VERTEX_ATTRIBUTE 0u
+#define TSL_UBO_ID_HEATMAP_WEIGHT_VERTEX_ATTRIBUTE 1u
+#define TSL_UBO_ID_HEATMAP_RADIUS_VERTEX_ATTRIBUTE 2u
+#define TSL_UBO_HEATMAP_VERTEX_ATTRIBUTE_COUNT 3u
+#define TSL_UBO_ID_HILLSHADE_POS_VERTEX_ATTRIBUTE 0u
+#define TSL_UBO_ID_HILLSHADE_TEXTURE_POS_VERTEX_ATTRIBUTE 1u
+#define TSL_UBO_HILLSHADE_VERTEX_ATTRIBUTE_COUNT 2u
+#define TSL_UBO_ID_COLOR_RELIEF_POS_VERTEX_ATTRIBUTE 0u
+#define TSL_UBO_ID_COLOR_RELIEF_TEXTURE_POS_VERTEX_ATTRIBUTE 1u
+#define TSL_UBO_COLOR_RELIEF_VERTEX_ATTRIBUTE_COUNT 2u
+#define TSL_UBO_ID_LINE_POS_NORMAL_VERTEX_ATTRIBUTE 0u
+#define TSL_UBO_ID_LINE_DATA_VERTEX_ATTRIBUTE 1u
+#define TSL_UBO_ID_LINE_COLOR_VERTEX_ATTRIBUTE 2u
+#define TSL_UBO_ID_LINE_BLUR_VERTEX_ATTRIBUTE 3u
+#define TSL_UBO_ID_LINE_OPACITY_VERTEX_ATTRIBUTE 4u
+#define TSL_UBO_ID_LINE_GAP_WIDTH_VERTEX_ATTRIBUTE 5u
+#define TSL_UBO_ID_LINE_OFFSET_VERTEX_ATTRIBUTE 6u
+#define TSL_UBO_ID_LINE_WIDTH_VERTEX_ATTRIBUTE 7u
+#define TSL_UBO_ID_LINE_FLOOR_WIDTH_VERTEX_ATTRIBUTE 8u
+#define TSL_UBO_ID_LINE_PATTERN_FROM_VERTEX_ATTRIBUTE 9u
+#define TSL_UBO_ID_LINE_PATTERN_TO_VERTEX_ATTRIBUTE 10u
+#define TSL_UBO_LINE_VERTEX_ATTRIBUTE_COUNT 11u
+#define TSL_UBO_ID_LOCATION_INDICATOR_POS_VERTEX_ATTRIBUTE 0u
+#define TSL_UBO_ID_LOCATION_INDICATOR_TEX_VERTEX_ATTRIBUTE 1u
+#define TSL_UBO_LOCATION_INDICATOR_VERTEX_ATTRIBUTE_COUNT 2u
+#define TSL_UBO_ID_RASTER_POS_VERTEX_ATTRIBUTE 0u
+#define TSL_UBO_ID_RASTER_TEXTURE_POS_VERTEX_ATTRIBUTE 1u
+#define TSL_UBO_RASTER_VERTEX_ATTRIBUTE_COUNT 2u
+#define TSL_UBO_ID_SYMBOL_POS_OFFSET_VERTEX_ATTRIBUTE 0u
+#define TSL_UBO_ID_SYMBOL_DATA_VERTEX_ATTRIBUTE 1u
+#define TSL_UBO_ID_SYMBOL_PIXEL_OFFSET_VERTEX_ATTRIBUTE 2u
+#define TSL_UBO_ID_SYMBOL_PROJECTED_POS_VERTEX_ATTRIBUTE 3u
+#define TSL_UBO_ID_SYMBOL_FADE_OPACITY_VERTEX_ATTRIBUTE 4u
+#define TSL_UBO_ID_SYMBOL_OPACITY_VERTEX_ATTRIBUTE 5u
+#define TSL_UBO_ID_SYMBOL_COLOR_VERTEX_ATTRIBUTE 6u
+#define TSL_UBO_ID_SYMBOL_HALO_COLOR_VERTEX_ATTRIBUTE 7u
+#define TSL_UBO_ID_SYMBOL_HALO_WIDTH_VERTEX_ATTRIBUTE 8u
+#define TSL_UBO_ID_SYMBOL_HALO_BLUR_VERTEX_ATTRIBUTE 9u
+#define TSL_UBO_SYMBOL_VERTEX_ATTRIBUTE_COUNT 10u
+#define TSL_UBO_ID_WIDE_VECTOR_SCREEN_POS 0u
+#define TSL_UBO_ID_WIDE_VECTOR_COLOR 1u
+#define TSL_UBO_ID_WIDE_VECTOR_INDEX 2u
+#define TSL_UBO_WIDE_VECTOR_ATTRIBUTE_COUNT 3u
+#define TSL_UBO_ID_WIDE_VECTOR_INSTANCE_CENTER 0u
+#define TSL_UBO_ID_WIDE_VECTOR_INSTANCE_COLOR 1u
+#define TSL_UBO_ID_WIDE_VECTOR_INSTANCE_PREVIOUS 2u
+#define TSL_UBO_ID_WIDE_VECTOR_INSTANCE_NEXT 3u
+#define TSL_UBO_WIDE_VECTOR_INSTANCE_ATTRIBUTE_COUNT 4u
+#define TSL_UBO_MAX_VERTEX_ATTRIBUTE_COUNT_PER_SHADER 11u
+
+/*
+ * Uniform block layouts.
+ *
+ * One struct per block mbgl declares, with every field's offset and the whole size asserted
+ * against what the producer packed. The size here is the *stride*: what separates consecutive
+ * blocks in a consolidated buffer, which is sizeof and not the field extent when a block's
+ * fields end mid-alignment.
+ */
+
+/* `BackgroundDrawableUBO` from `background_layer_ubo.hpp`. */
+typedef struct tsl_background_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+} tsl_background_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_background_drawable_ubo) == 64, "tsl_background_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_background_drawable_ubo) == 16, "tsl_background_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_background_drawable_ubo, matrix) == 0, "tsl_background_drawable_ubo.matrix moved");
+
+/* `BackgroundPatternDrawableUBO` from `background_layer_ubo.hpp`. */
+typedef struct tsl_background_pattern_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float pixel_coord_upper[2];
+    float pixel_coord_lower[2];
+    float tile_units_to_pixels;
+    float pad1;
+    float pad2;
+    float pad3;
+} tsl_background_pattern_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_background_pattern_drawable_ubo) == 96, "tsl_background_pattern_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_background_pattern_drawable_ubo) == 16, "tsl_background_pattern_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_background_pattern_drawable_ubo, matrix) == 0, "tsl_background_pattern_drawable_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_background_pattern_drawable_ubo, pixel_coord_upper) == 64, "tsl_background_pattern_drawable_ubo.pixel_coord_upper moved");
+TSL_ASSERT(offsetof(tsl_background_pattern_drawable_ubo, pixel_coord_lower) == 72, "tsl_background_pattern_drawable_ubo.pixel_coord_lower moved");
+TSL_ASSERT(offsetof(tsl_background_pattern_drawable_ubo, tile_units_to_pixels) == 80, "tsl_background_pattern_drawable_ubo.tile_units_to_pixels moved");
+TSL_ASSERT(offsetof(tsl_background_pattern_drawable_ubo, pad1) == 84, "tsl_background_pattern_drawable_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_background_pattern_drawable_ubo, pad2) == 88, "tsl_background_pattern_drawable_ubo.pad2 moved");
+TSL_ASSERT(offsetof(tsl_background_pattern_drawable_ubo, pad3) == 92, "tsl_background_pattern_drawable_ubo.pad3 moved");
+
+/* `BackgroundPatternPropsUBO` from `background_layer_ubo.hpp`. */
+typedef struct tsl_background_pattern_props_ubo {
+    TSL_ALIGNAS(16) float pattern_tl_a[2];
+    float pattern_br_a[2];
+    float pattern_tl_b[2];
+    float pattern_br_b[2];
+    float pattern_size_a[2];
+    float pattern_size_b[2];
+    float scale_a;
+    float scale_b;
+    float mix;
+    float opacity;
+} tsl_background_pattern_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_background_pattern_props_ubo) == 64, "tsl_background_pattern_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_background_pattern_props_ubo) == 16, "tsl_background_pattern_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_background_pattern_props_ubo, pattern_tl_a) == 0, "tsl_background_pattern_props_ubo.pattern_tl_a moved");
+TSL_ASSERT(offsetof(tsl_background_pattern_props_ubo, pattern_br_a) == 8, "tsl_background_pattern_props_ubo.pattern_br_a moved");
+TSL_ASSERT(offsetof(tsl_background_pattern_props_ubo, pattern_tl_b) == 16, "tsl_background_pattern_props_ubo.pattern_tl_b moved");
+TSL_ASSERT(offsetof(tsl_background_pattern_props_ubo, pattern_br_b) == 24, "tsl_background_pattern_props_ubo.pattern_br_b moved");
+TSL_ASSERT(offsetof(tsl_background_pattern_props_ubo, pattern_size_a) == 32, "tsl_background_pattern_props_ubo.pattern_size_a moved");
+TSL_ASSERT(offsetof(tsl_background_pattern_props_ubo, pattern_size_b) == 40, "tsl_background_pattern_props_ubo.pattern_size_b moved");
+TSL_ASSERT(offsetof(tsl_background_pattern_props_ubo, scale_a) == 48, "tsl_background_pattern_props_ubo.scale_a moved");
+TSL_ASSERT(offsetof(tsl_background_pattern_props_ubo, scale_b) == 52, "tsl_background_pattern_props_ubo.scale_b moved");
+TSL_ASSERT(offsetof(tsl_background_pattern_props_ubo, mix) == 56, "tsl_background_pattern_props_ubo.mix moved");
+TSL_ASSERT(offsetof(tsl_background_pattern_props_ubo, opacity) == 60, "tsl_background_pattern_props_ubo.opacity moved");
+
+/* `BackgroundPropsUBO` from `background_layer_ubo.hpp`. */
+typedef struct tsl_background_props_ubo {
+    TSL_ALIGNAS(16) float color[4];
+    float opacity;
+    float pad1;
+    float pad2;
+    float pad3;
+} tsl_background_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_background_props_ubo) == 32, "tsl_background_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_background_props_ubo) == 16, "tsl_background_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_background_props_ubo, color) == 0, "tsl_background_props_ubo.color moved");
+TSL_ASSERT(offsetof(tsl_background_props_ubo, opacity) == 16, "tsl_background_props_ubo.opacity moved");
+TSL_ASSERT(offsetof(tsl_background_props_ubo, pad1) == 20, "tsl_background_props_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_background_props_ubo, pad2) == 24, "tsl_background_props_ubo.pad2 moved");
+TSL_ASSERT(offsetof(tsl_background_props_ubo, pad3) == 28, "tsl_background_props_ubo.pad3 moved");
+
+/* `CircleDrawableUBO` from `circle_layer_ubo.hpp`. */
+typedef struct tsl_circle_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float extrude_scale[2];
+    float color_t;
+    float radius_t;
+    float blur_t;
+    float opacity_t;
+    float stroke_color_t;
+    float stroke_width_t;
+    float stroke_opacity_t;
+    float pad1;
+    float pad2;
+    float pad3;
+} tsl_circle_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_circle_drawable_ubo) == 112, "tsl_circle_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_circle_drawable_ubo) == 16, "tsl_circle_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_circle_drawable_ubo, matrix) == 0, "tsl_circle_drawable_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_circle_drawable_ubo, extrude_scale) == 64, "tsl_circle_drawable_ubo.extrude_scale moved");
+TSL_ASSERT(offsetof(tsl_circle_drawable_ubo, color_t) == 72, "tsl_circle_drawable_ubo.color_t moved");
+TSL_ASSERT(offsetof(tsl_circle_drawable_ubo, radius_t) == 76, "tsl_circle_drawable_ubo.radius_t moved");
+TSL_ASSERT(offsetof(tsl_circle_drawable_ubo, blur_t) == 80, "tsl_circle_drawable_ubo.blur_t moved");
+TSL_ASSERT(offsetof(tsl_circle_drawable_ubo, opacity_t) == 84, "tsl_circle_drawable_ubo.opacity_t moved");
+TSL_ASSERT(offsetof(tsl_circle_drawable_ubo, stroke_color_t) == 88, "tsl_circle_drawable_ubo.stroke_color_t moved");
+TSL_ASSERT(offsetof(tsl_circle_drawable_ubo, stroke_width_t) == 92, "tsl_circle_drawable_ubo.stroke_width_t moved");
+TSL_ASSERT(offsetof(tsl_circle_drawable_ubo, stroke_opacity_t) == 96, "tsl_circle_drawable_ubo.stroke_opacity_t moved");
+TSL_ASSERT(offsetof(tsl_circle_drawable_ubo, pad1) == 100, "tsl_circle_drawable_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_circle_drawable_ubo, pad2) == 104, "tsl_circle_drawable_ubo.pad2 moved");
+TSL_ASSERT(offsetof(tsl_circle_drawable_ubo, pad3) == 108, "tsl_circle_drawable_ubo.pad3 moved");
+
+/* `CircleEvaluatedPropsUBO` from `circle_layer_ubo.hpp`. */
+typedef struct tsl_circle_evaluated_props_ubo {
+    TSL_ALIGNAS(16) float color[4];
+    float stroke_color[4];
+    float radius;
+    float blur;
+    float opacity;
+    float stroke_width;
+    float stroke_opacity;
+    int32_t scale_with_map;
+    int32_t pitch_with_map;
+    float pad1;
+} tsl_circle_evaluated_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_circle_evaluated_props_ubo) == 64, "tsl_circle_evaluated_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_circle_evaluated_props_ubo) == 16, "tsl_circle_evaluated_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_circle_evaluated_props_ubo, color) == 0, "tsl_circle_evaluated_props_ubo.color moved");
+TSL_ASSERT(offsetof(tsl_circle_evaluated_props_ubo, stroke_color) == 16, "tsl_circle_evaluated_props_ubo.stroke_color moved");
+TSL_ASSERT(offsetof(tsl_circle_evaluated_props_ubo, radius) == 32, "tsl_circle_evaluated_props_ubo.radius moved");
+TSL_ASSERT(offsetof(tsl_circle_evaluated_props_ubo, blur) == 36, "tsl_circle_evaluated_props_ubo.blur moved");
+TSL_ASSERT(offsetof(tsl_circle_evaluated_props_ubo, opacity) == 40, "tsl_circle_evaluated_props_ubo.opacity moved");
+TSL_ASSERT(offsetof(tsl_circle_evaluated_props_ubo, stroke_width) == 44, "tsl_circle_evaluated_props_ubo.stroke_width moved");
+TSL_ASSERT(offsetof(tsl_circle_evaluated_props_ubo, stroke_opacity) == 48, "tsl_circle_evaluated_props_ubo.stroke_opacity moved");
+TSL_ASSERT(offsetof(tsl_circle_evaluated_props_ubo, scale_with_map) == 52, "tsl_circle_evaluated_props_ubo.scale_with_map moved");
+TSL_ASSERT(offsetof(tsl_circle_evaluated_props_ubo, pitch_with_map) == 56, "tsl_circle_evaluated_props_ubo.pitch_with_map moved");
+TSL_ASSERT(offsetof(tsl_circle_evaluated_props_ubo, pad1) == 60, "tsl_circle_evaluated_props_ubo.pad1 moved");
+
+/* `CollisionDrawableUBO` from `collision_layer_ubo.hpp`. */
+typedef struct tsl_collision_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+} tsl_collision_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_collision_drawable_ubo) == 64, "tsl_collision_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_collision_drawable_ubo) == 16, "tsl_collision_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_collision_drawable_ubo, matrix) == 0, "tsl_collision_drawable_ubo.matrix moved");
+
+/* `CollisionTilePropsUBO` from `collision_layer_ubo.hpp`. */
+typedef struct tsl_collision_tile_props_ubo {
+    TSL_ALIGNAS(16) float extrude_scale[2];
+    float overscale_factor;
+    float pad1;
+} tsl_collision_tile_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_collision_tile_props_ubo) == 16, "tsl_collision_tile_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_collision_tile_props_ubo) == 16, "tsl_collision_tile_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_collision_tile_props_ubo, extrude_scale) == 0, "tsl_collision_tile_props_ubo.extrude_scale moved");
+TSL_ASSERT(offsetof(tsl_collision_tile_props_ubo, overscale_factor) == 8, "tsl_collision_tile_props_ubo.overscale_factor moved");
+TSL_ASSERT(offsetof(tsl_collision_tile_props_ubo, pad1) == 12, "tsl_collision_tile_props_ubo.pad1 moved");
+
+/* `ColorReliefDrawableUBO` from `color_relief_layer_ubo.hpp`. */
+typedef struct tsl_color_relief_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+} tsl_color_relief_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_color_relief_drawable_ubo) == 64, "tsl_color_relief_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_color_relief_drawable_ubo) == 16, "tsl_color_relief_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_color_relief_drawable_ubo, matrix) == 0, "tsl_color_relief_drawable_ubo.matrix moved");
+
+/* `ColorReliefEvaluatedPropsUBO` from `color_relief_layer_ubo.hpp`. */
+typedef struct tsl_color_relief_evaluated_props_ubo {
+    TSL_ALIGNAS(16) float opacity;
+    float pad_eval0;
+    float pad_eval1;
+    float pad_eval2;
+} tsl_color_relief_evaluated_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_color_relief_evaluated_props_ubo) == 16, "tsl_color_relief_evaluated_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_color_relief_evaluated_props_ubo) == 16, "tsl_color_relief_evaluated_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_color_relief_evaluated_props_ubo, opacity) == 0, "tsl_color_relief_evaluated_props_ubo.opacity moved");
+TSL_ASSERT(offsetof(tsl_color_relief_evaluated_props_ubo, pad_eval0) == 4, "tsl_color_relief_evaluated_props_ubo.pad_eval0 moved");
+TSL_ASSERT(offsetof(tsl_color_relief_evaluated_props_ubo, pad_eval1) == 8, "tsl_color_relief_evaluated_props_ubo.pad_eval1 moved");
+TSL_ASSERT(offsetof(tsl_color_relief_evaluated_props_ubo, pad_eval2) == 12, "tsl_color_relief_evaluated_props_ubo.pad_eval2 moved");
+
+/* `ColorReliefTilePropsUBO` from `color_relief_layer_ubo.hpp`. */
+typedef struct tsl_color_relief_tile_props_ubo {
+    TSL_ALIGNAS(16) float unpack[4];
+    float dimension[2];
+    int32_t color_ramp_size;
+    float pad_tile0;
+} tsl_color_relief_tile_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_color_relief_tile_props_ubo) == 32, "tsl_color_relief_tile_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_color_relief_tile_props_ubo) == 16, "tsl_color_relief_tile_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_color_relief_tile_props_ubo, unpack) == 0, "tsl_color_relief_tile_props_ubo.unpack moved");
+TSL_ASSERT(offsetof(tsl_color_relief_tile_props_ubo, dimension) == 16, "tsl_color_relief_tile_props_ubo.dimension moved");
+TSL_ASSERT(offsetof(tsl_color_relief_tile_props_ubo, color_ramp_size) == 24, "tsl_color_relief_tile_props_ubo.color_ramp_size moved");
+TSL_ASSERT(offsetof(tsl_color_relief_tile_props_ubo, pad_tile0) == 28, "tsl_color_relief_tile_props_ubo.pad_tile0 moved");
+
+/* `CustomGeometryDrawableUBO` from `custom_geometry_ubo.hpp`. */
+typedef struct tsl_custom_geometry_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float color[4];
+} tsl_custom_geometry_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_custom_geometry_drawable_ubo) == 80, "tsl_custom_geometry_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_custom_geometry_drawable_ubo) == 16, "tsl_custom_geometry_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_custom_geometry_drawable_ubo, matrix) == 0, "tsl_custom_geometry_drawable_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_custom_geometry_drawable_ubo, color) == 64, "tsl_custom_geometry_drawable_ubo.color moved");
+
+/* `CustomSymbolIconDrawableUBO` from `custom_drawable_layer_ubo.hpp`. */
+typedef struct tsl_custom_symbol_icon_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float extrude_scale[2];
+    float anchor[2];
+    float angle_degrees;
+    uint32_t scale_with_map;
+    uint32_t pitch_with_map;
+    float camera_to_center_distance;
+    float aspect_ratio;
+    float pad1;
+    float pad2;
+    float pad3;
+} tsl_custom_symbol_icon_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_custom_symbol_icon_drawable_ubo) == 112, "tsl_custom_symbol_icon_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_custom_symbol_icon_drawable_ubo) == 16, "tsl_custom_symbol_icon_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_custom_symbol_icon_drawable_ubo, matrix) == 0, "tsl_custom_symbol_icon_drawable_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_custom_symbol_icon_drawable_ubo, extrude_scale) == 64, "tsl_custom_symbol_icon_drawable_ubo.extrude_scale moved");
+TSL_ASSERT(offsetof(tsl_custom_symbol_icon_drawable_ubo, anchor) == 72, "tsl_custom_symbol_icon_drawable_ubo.anchor moved");
+TSL_ASSERT(offsetof(tsl_custom_symbol_icon_drawable_ubo, angle_degrees) == 80, "tsl_custom_symbol_icon_drawable_ubo.angle_degrees moved");
+TSL_ASSERT(offsetof(tsl_custom_symbol_icon_drawable_ubo, scale_with_map) == 84, "tsl_custom_symbol_icon_drawable_ubo.scale_with_map moved");
+TSL_ASSERT(offsetof(tsl_custom_symbol_icon_drawable_ubo, pitch_with_map) == 88, "tsl_custom_symbol_icon_drawable_ubo.pitch_with_map moved");
+TSL_ASSERT(offsetof(tsl_custom_symbol_icon_drawable_ubo, camera_to_center_distance) == 92, "tsl_custom_symbol_icon_drawable_ubo.camera_to_center_distance moved");
+TSL_ASSERT(offsetof(tsl_custom_symbol_icon_drawable_ubo, aspect_ratio) == 96, "tsl_custom_symbol_icon_drawable_ubo.aspect_ratio moved");
+TSL_ASSERT(offsetof(tsl_custom_symbol_icon_drawable_ubo, pad1) == 100, "tsl_custom_symbol_icon_drawable_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_custom_symbol_icon_drawable_ubo, pad2) == 104, "tsl_custom_symbol_icon_drawable_ubo.pad2 moved");
+TSL_ASSERT(offsetof(tsl_custom_symbol_icon_drawable_ubo, pad3) == 108, "tsl_custom_symbol_icon_drawable_ubo.pad3 moved");
+
+/* `DebugUBO` from `debug_layer_ubo.hpp`. */
+typedef struct tsl_debug_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float color[4];
+    float overlay_scale;
+    float pad1;
+    float pad2;
+    float pad3;
+} tsl_debug_ubo;
+
+TSL_ASSERT(sizeof(tsl_debug_ubo) == 96, "tsl_debug_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_debug_ubo) == 16, "tsl_debug_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_debug_ubo, matrix) == 0, "tsl_debug_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_debug_ubo, color) == 64, "tsl_debug_ubo.color moved");
+TSL_ASSERT(offsetof(tsl_debug_ubo, overlay_scale) == 80, "tsl_debug_ubo.overlay_scale moved");
+TSL_ASSERT(offsetof(tsl_debug_ubo, pad1) == 84, "tsl_debug_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_debug_ubo, pad2) == 88, "tsl_debug_ubo.pad2 moved");
+TSL_ASSERT(offsetof(tsl_debug_ubo, pad3) == 92, "tsl_debug_ubo.pad3 moved");
+
+/* `FillDrawableUBO` from `fill_layer_ubo.hpp`. */
+typedef struct tsl_fill_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float color_t;
+    float opacity_t;
+    float pad1;
+    float pad2;
+} tsl_fill_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_fill_drawable_ubo) == 80, "tsl_fill_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_fill_drawable_ubo) == 16, "tsl_fill_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_fill_drawable_ubo, matrix) == 0, "tsl_fill_drawable_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_fill_drawable_ubo, color_t) == 64, "tsl_fill_drawable_ubo.color_t moved");
+TSL_ASSERT(offsetof(tsl_fill_drawable_ubo, opacity_t) == 68, "tsl_fill_drawable_ubo.opacity_t moved");
+TSL_ASSERT(offsetof(tsl_fill_drawable_ubo, pad1) == 72, "tsl_fill_drawable_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_fill_drawable_ubo, pad2) == 76, "tsl_fill_drawable_ubo.pad2 moved");
+
+/* `FillEvaluatedPropsUBO` from `fill_layer_ubo.hpp`. */
+typedef struct tsl_fill_evaluated_props_ubo {
+    TSL_ALIGNAS(16) float color[4];
+    float outline_color[4];
+    float opacity;
+    float fade;
+    float from_scale;
+    float to_scale;
+} tsl_fill_evaluated_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_fill_evaluated_props_ubo) == 48, "tsl_fill_evaluated_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_fill_evaluated_props_ubo) == 16, "tsl_fill_evaluated_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_fill_evaluated_props_ubo, color) == 0, "tsl_fill_evaluated_props_ubo.color moved");
+TSL_ASSERT(offsetof(tsl_fill_evaluated_props_ubo, outline_color) == 16, "tsl_fill_evaluated_props_ubo.outline_color moved");
+TSL_ASSERT(offsetof(tsl_fill_evaluated_props_ubo, opacity) == 32, "tsl_fill_evaluated_props_ubo.opacity moved");
+TSL_ASSERT(offsetof(tsl_fill_evaluated_props_ubo, fade) == 36, "tsl_fill_evaluated_props_ubo.fade moved");
+TSL_ASSERT(offsetof(tsl_fill_evaluated_props_ubo, from_scale) == 40, "tsl_fill_evaluated_props_ubo.from_scale moved");
+TSL_ASSERT(offsetof(tsl_fill_evaluated_props_ubo, to_scale) == 44, "tsl_fill_evaluated_props_ubo.to_scale moved");
+
+/* `FillExtrusionDrawableUBO` from `fill_extrusion_layer_ubo.hpp`. */
+typedef struct tsl_fill_extrusion_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float pixel_coord_upper[2];
+    float pixel_coord_lower[2];
+    float height_factor;
+    float tile_ratio;
+    float base_t;
+    float height_t;
+    float color_t;
+    float pattern_from_t;
+    float pattern_to_t;
+    float pad1;
+} tsl_fill_extrusion_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_fill_extrusion_drawable_ubo) == 112, "tsl_fill_extrusion_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_fill_extrusion_drawable_ubo) == 16, "tsl_fill_extrusion_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_drawable_ubo, matrix) == 0, "tsl_fill_extrusion_drawable_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_drawable_ubo, pixel_coord_upper) == 64, "tsl_fill_extrusion_drawable_ubo.pixel_coord_upper moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_drawable_ubo, pixel_coord_lower) == 72, "tsl_fill_extrusion_drawable_ubo.pixel_coord_lower moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_drawable_ubo, height_factor) == 80, "tsl_fill_extrusion_drawable_ubo.height_factor moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_drawable_ubo, tile_ratio) == 84, "tsl_fill_extrusion_drawable_ubo.tile_ratio moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_drawable_ubo, base_t) == 88, "tsl_fill_extrusion_drawable_ubo.base_t moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_drawable_ubo, height_t) == 92, "tsl_fill_extrusion_drawable_ubo.height_t moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_drawable_ubo, color_t) == 96, "tsl_fill_extrusion_drawable_ubo.color_t moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_drawable_ubo, pattern_from_t) == 100, "tsl_fill_extrusion_drawable_ubo.pattern_from_t moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_drawable_ubo, pattern_to_t) == 104, "tsl_fill_extrusion_drawable_ubo.pattern_to_t moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_drawable_ubo, pad1) == 108, "tsl_fill_extrusion_drawable_ubo.pad1 moved");
+
+/* `FillExtrusionPropsUBO` from `fill_extrusion_layer_ubo.hpp`. */
+typedef struct tsl_fill_extrusion_props_ubo {
+    TSL_ALIGNAS(16) float color[4];
+    float light_color[3];
+    float pad1;
+    float light_position[3];
+    float base;
+    float height;
+    float light_intensity;
+    float vertical_gradient;
+    float opacity;
+    float fade;
+    float from_scale;
+    float to_scale;
+    float pad2;
+} tsl_fill_extrusion_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_fill_extrusion_props_ubo) == 80, "tsl_fill_extrusion_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_fill_extrusion_props_ubo) == 16, "tsl_fill_extrusion_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_props_ubo, color) == 0, "tsl_fill_extrusion_props_ubo.color moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_props_ubo, light_color) == 16, "tsl_fill_extrusion_props_ubo.light_color moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_props_ubo, pad1) == 28, "tsl_fill_extrusion_props_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_props_ubo, light_position) == 32, "tsl_fill_extrusion_props_ubo.light_position moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_props_ubo, base) == 44, "tsl_fill_extrusion_props_ubo.base moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_props_ubo, height) == 48, "tsl_fill_extrusion_props_ubo.height moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_props_ubo, light_intensity) == 52, "tsl_fill_extrusion_props_ubo.light_intensity moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_props_ubo, vertical_gradient) == 56, "tsl_fill_extrusion_props_ubo.vertical_gradient moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_props_ubo, opacity) == 60, "tsl_fill_extrusion_props_ubo.opacity moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_props_ubo, fade) == 64, "tsl_fill_extrusion_props_ubo.fade moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_props_ubo, from_scale) == 68, "tsl_fill_extrusion_props_ubo.from_scale moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_props_ubo, to_scale) == 72, "tsl_fill_extrusion_props_ubo.to_scale moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_props_ubo, pad2) == 76, "tsl_fill_extrusion_props_ubo.pad2 moved");
+
+/* `FillExtrusionTilePropsUBO` from `fill_extrusion_layer_ubo.hpp`. */
+typedef struct tsl_fill_extrusion_tile_props_ubo {
+    TSL_ALIGNAS(16) float pattern_from[4];
+    float pattern_to[4];
+    float texsize[2];
+    float pad1;
+    float pad2;
+} tsl_fill_extrusion_tile_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_fill_extrusion_tile_props_ubo) == 48, "tsl_fill_extrusion_tile_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_fill_extrusion_tile_props_ubo) == 16, "tsl_fill_extrusion_tile_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_tile_props_ubo, pattern_from) == 0, "tsl_fill_extrusion_tile_props_ubo.pattern_from moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_tile_props_ubo, pattern_to) == 16, "tsl_fill_extrusion_tile_props_ubo.pattern_to moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_tile_props_ubo, texsize) == 32, "tsl_fill_extrusion_tile_props_ubo.texsize moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_tile_props_ubo, pad1) == 40, "tsl_fill_extrusion_tile_props_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_fill_extrusion_tile_props_ubo, pad2) == 44, "tsl_fill_extrusion_tile_props_ubo.pad2 moved");
+
+/* `FillOutlineDrawableUBO` from `fill_layer_ubo.hpp`. */
+typedef struct tsl_fill_outline_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float outline_color_t;
+    float opacity_t;
+    float pad1;
+    float pad2;
+} tsl_fill_outline_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_fill_outline_drawable_ubo) == 80, "tsl_fill_outline_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_fill_outline_drawable_ubo) == 16, "tsl_fill_outline_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_fill_outline_drawable_ubo, matrix) == 0, "tsl_fill_outline_drawable_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_fill_outline_drawable_ubo, outline_color_t) == 64, "tsl_fill_outline_drawable_ubo.outline_color_t moved");
+TSL_ASSERT(offsetof(tsl_fill_outline_drawable_ubo, opacity_t) == 68, "tsl_fill_outline_drawable_ubo.opacity_t moved");
+TSL_ASSERT(offsetof(tsl_fill_outline_drawable_ubo, pad1) == 72, "tsl_fill_outline_drawable_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_fill_outline_drawable_ubo, pad2) == 76, "tsl_fill_outline_drawable_ubo.pad2 moved");
+
+/* `FillOutlinePatternDrawableUBO` from `fill_layer_ubo.hpp`. */
+typedef struct tsl_fill_outline_pattern_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float pixel_coord_upper[2];
+    float pixel_coord_lower[2];
+    float tile_ratio;
+    float pattern_from_t;
+    float pattern_to_t;
+    float opacity_t;
+} tsl_fill_outline_pattern_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_fill_outline_pattern_drawable_ubo) == 96, "tsl_fill_outline_pattern_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_fill_outline_pattern_drawable_ubo) == 16, "tsl_fill_outline_pattern_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_fill_outline_pattern_drawable_ubo, matrix) == 0, "tsl_fill_outline_pattern_drawable_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_fill_outline_pattern_drawable_ubo, pixel_coord_upper) == 64, "tsl_fill_outline_pattern_drawable_ubo.pixel_coord_upper moved");
+TSL_ASSERT(offsetof(tsl_fill_outline_pattern_drawable_ubo, pixel_coord_lower) == 72, "tsl_fill_outline_pattern_drawable_ubo.pixel_coord_lower moved");
+TSL_ASSERT(offsetof(tsl_fill_outline_pattern_drawable_ubo, tile_ratio) == 80, "tsl_fill_outline_pattern_drawable_ubo.tile_ratio moved");
+TSL_ASSERT(offsetof(tsl_fill_outline_pattern_drawable_ubo, pattern_from_t) == 84, "tsl_fill_outline_pattern_drawable_ubo.pattern_from_t moved");
+TSL_ASSERT(offsetof(tsl_fill_outline_pattern_drawable_ubo, pattern_to_t) == 88, "tsl_fill_outline_pattern_drawable_ubo.pattern_to_t moved");
+TSL_ASSERT(offsetof(tsl_fill_outline_pattern_drawable_ubo, opacity_t) == 92, "tsl_fill_outline_pattern_drawable_ubo.opacity_t moved");
+
+/* `FillOutlinePatternTilePropsUBO` from `fill_layer_ubo.hpp`. */
+typedef struct tsl_fill_outline_pattern_tile_props_ubo {
+    TSL_ALIGNAS(16) float pattern_from[4];
+    float pattern_to[4];
+    float texsize[2];
+    float pad1;
+    float pad2;
+} tsl_fill_outline_pattern_tile_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_fill_outline_pattern_tile_props_ubo) == 48, "tsl_fill_outline_pattern_tile_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_fill_outline_pattern_tile_props_ubo) == 16, "tsl_fill_outline_pattern_tile_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_fill_outline_pattern_tile_props_ubo, pattern_from) == 0, "tsl_fill_outline_pattern_tile_props_ubo.pattern_from moved");
+TSL_ASSERT(offsetof(tsl_fill_outline_pattern_tile_props_ubo, pattern_to) == 16, "tsl_fill_outline_pattern_tile_props_ubo.pattern_to moved");
+TSL_ASSERT(offsetof(tsl_fill_outline_pattern_tile_props_ubo, texsize) == 32, "tsl_fill_outline_pattern_tile_props_ubo.texsize moved");
+TSL_ASSERT(offsetof(tsl_fill_outline_pattern_tile_props_ubo, pad1) == 40, "tsl_fill_outline_pattern_tile_props_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_fill_outline_pattern_tile_props_ubo, pad2) == 44, "tsl_fill_outline_pattern_tile_props_ubo.pad2 moved");
+
+/* `FillOutlineTriangulatedDrawableUBO` from `fill_layer_ubo.hpp`. */
+typedef struct tsl_fill_outline_triangulated_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float ratio;
+    float pad1;
+    float pad2;
+    float pad3;
+} tsl_fill_outline_triangulated_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_fill_outline_triangulated_drawable_ubo) == 80, "tsl_fill_outline_triangulated_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_fill_outline_triangulated_drawable_ubo) == 16, "tsl_fill_outline_triangulated_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_fill_outline_triangulated_drawable_ubo, matrix) == 0, "tsl_fill_outline_triangulated_drawable_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_fill_outline_triangulated_drawable_ubo, ratio) == 64, "tsl_fill_outline_triangulated_drawable_ubo.ratio moved");
+TSL_ASSERT(offsetof(tsl_fill_outline_triangulated_drawable_ubo, pad1) == 68, "tsl_fill_outline_triangulated_drawable_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_fill_outline_triangulated_drawable_ubo, pad2) == 72, "tsl_fill_outline_triangulated_drawable_ubo.pad2 moved");
+TSL_ASSERT(offsetof(tsl_fill_outline_triangulated_drawable_ubo, pad3) == 76, "tsl_fill_outline_triangulated_drawable_ubo.pad3 moved");
+
+/* `FillPatternDrawableUBO` from `fill_layer_ubo.hpp`. */
+typedef struct tsl_fill_pattern_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float pixel_coord_upper[2];
+    float pixel_coord_lower[2];
+    float tile_ratio;
+    float pattern_from_t;
+    float pattern_to_t;
+    float opacity_t;
+} tsl_fill_pattern_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_fill_pattern_drawable_ubo) == 96, "tsl_fill_pattern_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_fill_pattern_drawable_ubo) == 16, "tsl_fill_pattern_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_fill_pattern_drawable_ubo, matrix) == 0, "tsl_fill_pattern_drawable_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_fill_pattern_drawable_ubo, pixel_coord_upper) == 64, "tsl_fill_pattern_drawable_ubo.pixel_coord_upper moved");
+TSL_ASSERT(offsetof(tsl_fill_pattern_drawable_ubo, pixel_coord_lower) == 72, "tsl_fill_pattern_drawable_ubo.pixel_coord_lower moved");
+TSL_ASSERT(offsetof(tsl_fill_pattern_drawable_ubo, tile_ratio) == 80, "tsl_fill_pattern_drawable_ubo.tile_ratio moved");
+TSL_ASSERT(offsetof(tsl_fill_pattern_drawable_ubo, pattern_from_t) == 84, "tsl_fill_pattern_drawable_ubo.pattern_from_t moved");
+TSL_ASSERT(offsetof(tsl_fill_pattern_drawable_ubo, pattern_to_t) == 88, "tsl_fill_pattern_drawable_ubo.pattern_to_t moved");
+TSL_ASSERT(offsetof(tsl_fill_pattern_drawable_ubo, opacity_t) == 92, "tsl_fill_pattern_drawable_ubo.opacity_t moved");
+
+/* `FillPatternTilePropsUBO` from `fill_layer_ubo.hpp`. */
+typedef struct tsl_fill_pattern_tile_props_ubo {
+    TSL_ALIGNAS(16) float pattern_from[4];
+    float pattern_to[4];
+    float texsize[2];
+    float pad1;
+    float pad2;
+} tsl_fill_pattern_tile_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_fill_pattern_tile_props_ubo) == 48, "tsl_fill_pattern_tile_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_fill_pattern_tile_props_ubo) == 16, "tsl_fill_pattern_tile_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_fill_pattern_tile_props_ubo, pattern_from) == 0, "tsl_fill_pattern_tile_props_ubo.pattern_from moved");
+TSL_ASSERT(offsetof(tsl_fill_pattern_tile_props_ubo, pattern_to) == 16, "tsl_fill_pattern_tile_props_ubo.pattern_to moved");
+TSL_ASSERT(offsetof(tsl_fill_pattern_tile_props_ubo, texsize) == 32, "tsl_fill_pattern_tile_props_ubo.texsize moved");
+TSL_ASSERT(offsetof(tsl_fill_pattern_tile_props_ubo, pad1) == 40, "tsl_fill_pattern_tile_props_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_fill_pattern_tile_props_ubo, pad2) == 44, "tsl_fill_pattern_tile_props_ubo.pad2 moved");
+
+/* `GlobalPaintParamsUBO` from `layer_ubo.hpp`. */
+typedef struct tsl_global_paint_params_ubo {
+    TSL_ALIGNAS(16) float pattern_atlas_texsize[2];
+    float units_to_pixels[2];
+    float world_size[2];
+    float camera_to_center_distance;
+    float symbol_fade_change;
+    float aspect_ratio;
+    float pixel_ratio;
+    float map_zoom;
+    float pad1;
+} tsl_global_paint_params_ubo;
+
+TSL_ASSERT(sizeof(tsl_global_paint_params_ubo) == 48, "tsl_global_paint_params_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_global_paint_params_ubo) == 16, "tsl_global_paint_params_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_global_paint_params_ubo, pattern_atlas_texsize) == 0, "tsl_global_paint_params_ubo.pattern_atlas_texsize moved");
+TSL_ASSERT(offsetof(tsl_global_paint_params_ubo, units_to_pixels) == 8, "tsl_global_paint_params_ubo.units_to_pixels moved");
+TSL_ASSERT(offsetof(tsl_global_paint_params_ubo, world_size) == 16, "tsl_global_paint_params_ubo.world_size moved");
+TSL_ASSERT(offsetof(tsl_global_paint_params_ubo, camera_to_center_distance) == 24, "tsl_global_paint_params_ubo.camera_to_center_distance moved");
+TSL_ASSERT(offsetof(tsl_global_paint_params_ubo, symbol_fade_change) == 28, "tsl_global_paint_params_ubo.symbol_fade_change moved");
+TSL_ASSERT(offsetof(tsl_global_paint_params_ubo, aspect_ratio) == 32, "tsl_global_paint_params_ubo.aspect_ratio moved");
+TSL_ASSERT(offsetof(tsl_global_paint_params_ubo, pixel_ratio) == 36, "tsl_global_paint_params_ubo.pixel_ratio moved");
+TSL_ASSERT(offsetof(tsl_global_paint_params_ubo, map_zoom) == 40, "tsl_global_paint_params_ubo.map_zoom moved");
+TSL_ASSERT(offsetof(tsl_global_paint_params_ubo, pad1) == 44, "tsl_global_paint_params_ubo.pad1 moved");
+
+/* `GlobalPlatformParamsUBO` from `layer_ubo.hpp`. */
+typedef struct tsl_global_platform_params_ubo {
+    TSL_ALIGNAS(16) float surfaceRotation[4];
+} tsl_global_platform_params_ubo;
+
+TSL_ASSERT(sizeof(tsl_global_platform_params_ubo) == 16, "tsl_global_platform_params_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_global_platform_params_ubo) == 16, "tsl_global_platform_params_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_global_platform_params_ubo, surfaceRotation) == 0, "tsl_global_platform_params_ubo.surfaceRotation moved");
+
+/* `HeatmapDrawableUBO` from `heatmap_layer_ubo.hpp`. */
+typedef struct tsl_heatmap_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float extrude_scale;
+    float weight_t;
+    float radius_t;
+    float pad1;
+} tsl_heatmap_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_heatmap_drawable_ubo) == 80, "tsl_heatmap_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_heatmap_drawable_ubo) == 16, "tsl_heatmap_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_heatmap_drawable_ubo, matrix) == 0, "tsl_heatmap_drawable_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_heatmap_drawable_ubo, extrude_scale) == 64, "tsl_heatmap_drawable_ubo.extrude_scale moved");
+TSL_ASSERT(offsetof(tsl_heatmap_drawable_ubo, weight_t) == 68, "tsl_heatmap_drawable_ubo.weight_t moved");
+TSL_ASSERT(offsetof(tsl_heatmap_drawable_ubo, radius_t) == 72, "tsl_heatmap_drawable_ubo.radius_t moved");
+TSL_ASSERT(offsetof(tsl_heatmap_drawable_ubo, pad1) == 76, "tsl_heatmap_drawable_ubo.pad1 moved");
+
+/* `HeatmapEvaluatedPropsUBO` from `heatmap_layer_ubo.hpp`. */
+typedef struct tsl_heatmap_evaluated_props_ubo {
+    TSL_ALIGNAS(16) float weight;
+    float radius;
+    float intensity;
+    float padding;
+} tsl_heatmap_evaluated_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_heatmap_evaluated_props_ubo) == 16, "tsl_heatmap_evaluated_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_heatmap_evaluated_props_ubo) == 16, "tsl_heatmap_evaluated_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_heatmap_evaluated_props_ubo, weight) == 0, "tsl_heatmap_evaluated_props_ubo.weight moved");
+TSL_ASSERT(offsetof(tsl_heatmap_evaluated_props_ubo, radius) == 4, "tsl_heatmap_evaluated_props_ubo.radius moved");
+TSL_ASSERT(offsetof(tsl_heatmap_evaluated_props_ubo, intensity) == 8, "tsl_heatmap_evaluated_props_ubo.intensity moved");
+TSL_ASSERT(offsetof(tsl_heatmap_evaluated_props_ubo, padding) == 12, "tsl_heatmap_evaluated_props_ubo.padding moved");
+
+/* `HeatmapTexturePropsUBO` from `heatmap_texture_layer_ubo.hpp`. */
+typedef struct tsl_heatmap_texture_props_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float opacity;
+    float pad1;
+    float pad2;
+    float pad3;
+} tsl_heatmap_texture_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_heatmap_texture_props_ubo) == 80, "tsl_heatmap_texture_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_heatmap_texture_props_ubo) == 16, "tsl_heatmap_texture_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_heatmap_texture_props_ubo, matrix) == 0, "tsl_heatmap_texture_props_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_heatmap_texture_props_ubo, opacity) == 64, "tsl_heatmap_texture_props_ubo.opacity moved");
+TSL_ASSERT(offsetof(tsl_heatmap_texture_props_ubo, pad1) == 68, "tsl_heatmap_texture_props_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_heatmap_texture_props_ubo, pad2) == 72, "tsl_heatmap_texture_props_ubo.pad2 moved");
+TSL_ASSERT(offsetof(tsl_heatmap_texture_props_ubo, pad3) == 76, "tsl_heatmap_texture_props_ubo.pad3 moved");
+
+/* `HillshadeDrawableUBO` from `hillshade_layer_ubo.hpp`. */
+typedef struct tsl_hillshade_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+} tsl_hillshade_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_hillshade_drawable_ubo) == 64, "tsl_hillshade_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_hillshade_drawable_ubo) == 16, "tsl_hillshade_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_hillshade_drawable_ubo, matrix) == 0, "tsl_hillshade_drawable_ubo.matrix moved");
+
+/* `HillshadeEvaluatedPropsUBO` from `hillshade_layer_ubo.hpp`. */
+typedef struct tsl_hillshade_evaluated_props_ubo {
+    TSL_ALIGNAS(16) float accent[4];
+    float altitudes[4];
+    float azimuths[4];
+    float shadows[16];
+    float highlights[16];
+} tsl_hillshade_evaluated_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_hillshade_evaluated_props_ubo) == 176, "tsl_hillshade_evaluated_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_hillshade_evaluated_props_ubo) == 16, "tsl_hillshade_evaluated_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_hillshade_evaluated_props_ubo, accent) == 0, "tsl_hillshade_evaluated_props_ubo.accent moved");
+TSL_ASSERT(offsetof(tsl_hillshade_evaluated_props_ubo, altitudes) == 16, "tsl_hillshade_evaluated_props_ubo.altitudes moved");
+TSL_ASSERT(offsetof(tsl_hillshade_evaluated_props_ubo, azimuths) == 32, "tsl_hillshade_evaluated_props_ubo.azimuths moved");
+TSL_ASSERT(offsetof(tsl_hillshade_evaluated_props_ubo, shadows) == 48, "tsl_hillshade_evaluated_props_ubo.shadows moved");
+TSL_ASSERT(offsetof(tsl_hillshade_evaluated_props_ubo, highlights) == 112, "tsl_hillshade_evaluated_props_ubo.highlights moved");
+
+/* `HillshadePrepareDrawableUBO` from `hillshade_prepare_layer_ubo.hpp`. */
+typedef struct tsl_hillshade_prepare_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+} tsl_hillshade_prepare_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_hillshade_prepare_drawable_ubo) == 64, "tsl_hillshade_prepare_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_hillshade_prepare_drawable_ubo) == 16, "tsl_hillshade_prepare_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_hillshade_prepare_drawable_ubo, matrix) == 0, "tsl_hillshade_prepare_drawable_ubo.matrix moved");
+
+/* `HillshadePrepareTilePropsUBO` from `hillshade_prepare_layer_ubo.hpp`. */
+typedef struct tsl_hillshade_prepare_tile_props_ubo {
+    TSL_ALIGNAS(16) float unpack[4];
+    float dimension[2];
+    float zoom;
+    float maxzoom;
+} tsl_hillshade_prepare_tile_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_hillshade_prepare_tile_props_ubo) == 32, "tsl_hillshade_prepare_tile_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_hillshade_prepare_tile_props_ubo) == 16, "tsl_hillshade_prepare_tile_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_hillshade_prepare_tile_props_ubo, unpack) == 0, "tsl_hillshade_prepare_tile_props_ubo.unpack moved");
+TSL_ASSERT(offsetof(tsl_hillshade_prepare_tile_props_ubo, dimension) == 16, "tsl_hillshade_prepare_tile_props_ubo.dimension moved");
+TSL_ASSERT(offsetof(tsl_hillshade_prepare_tile_props_ubo, zoom) == 24, "tsl_hillshade_prepare_tile_props_ubo.zoom moved");
+TSL_ASSERT(offsetof(tsl_hillshade_prepare_tile_props_ubo, maxzoom) == 28, "tsl_hillshade_prepare_tile_props_ubo.maxzoom moved");
+
+/* `HillshadeTilePropsUBO` from `hillshade_layer_ubo.hpp`. */
+typedef struct tsl_hillshade_tile_props_ubo {
+    TSL_ALIGNAS(16) float latrange[2];
+    float exaggeration;
+    int32_t method;
+    int32_t num_lights;
+    float pad0;
+    float pad1;
+    float pad2;
+} tsl_hillshade_tile_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_hillshade_tile_props_ubo) == 32, "tsl_hillshade_tile_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_hillshade_tile_props_ubo) == 16, "tsl_hillshade_tile_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_hillshade_tile_props_ubo, latrange) == 0, "tsl_hillshade_tile_props_ubo.latrange moved");
+TSL_ASSERT(offsetof(tsl_hillshade_tile_props_ubo, exaggeration) == 8, "tsl_hillshade_tile_props_ubo.exaggeration moved");
+TSL_ASSERT(offsetof(tsl_hillshade_tile_props_ubo, method) == 12, "tsl_hillshade_tile_props_ubo.method moved");
+TSL_ASSERT(offsetof(tsl_hillshade_tile_props_ubo, num_lights) == 16, "tsl_hillshade_tile_props_ubo.num_lights moved");
+TSL_ASSERT(offsetof(tsl_hillshade_tile_props_ubo, pad0) == 20, "tsl_hillshade_tile_props_ubo.pad0 moved");
+TSL_ASSERT(offsetof(tsl_hillshade_tile_props_ubo, pad1) == 24, "tsl_hillshade_tile_props_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_hillshade_tile_props_ubo, pad2) == 28, "tsl_hillshade_tile_props_ubo.pad2 moved");
+
+/* `LineDrawableUBO` from `line_layer_ubo.hpp`. */
+typedef struct tsl_line_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float ratio;
+    float color_t;
+    float blur_t;
+    float opacity_t;
+    float gapwidth_t;
+    float offset_t;
+    float width_t;
+    float pad1;
+} tsl_line_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_line_drawable_ubo) == 96, "tsl_line_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_line_drawable_ubo) == 16, "tsl_line_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_line_drawable_ubo, matrix) == 0, "tsl_line_drawable_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_line_drawable_ubo, ratio) == 64, "tsl_line_drawable_ubo.ratio moved");
+TSL_ASSERT(offsetof(tsl_line_drawable_ubo, color_t) == 68, "tsl_line_drawable_ubo.color_t moved");
+TSL_ASSERT(offsetof(tsl_line_drawable_ubo, blur_t) == 72, "tsl_line_drawable_ubo.blur_t moved");
+TSL_ASSERT(offsetof(tsl_line_drawable_ubo, opacity_t) == 76, "tsl_line_drawable_ubo.opacity_t moved");
+TSL_ASSERT(offsetof(tsl_line_drawable_ubo, gapwidth_t) == 80, "tsl_line_drawable_ubo.gapwidth_t moved");
+TSL_ASSERT(offsetof(tsl_line_drawable_ubo, offset_t) == 84, "tsl_line_drawable_ubo.offset_t moved");
+TSL_ASSERT(offsetof(tsl_line_drawable_ubo, width_t) == 88, "tsl_line_drawable_ubo.width_t moved");
+TSL_ASSERT(offsetof(tsl_line_drawable_ubo, pad1) == 92, "tsl_line_drawable_ubo.pad1 moved");
+
+/* `LineGradientDrawableUBO` from `line_layer_ubo.hpp`. */
+typedef struct tsl_line_gradient_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float ratio;
+    float blur_t;
+    float opacity_t;
+    float gapwidth_t;
+    float offset_t;
+    float width_t;
+    float pad1;
+    float pad2;
+} tsl_line_gradient_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_line_gradient_drawable_ubo) == 96, "tsl_line_gradient_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_line_gradient_drawable_ubo) == 16, "tsl_line_gradient_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_line_gradient_drawable_ubo, matrix) == 0, "tsl_line_gradient_drawable_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_line_gradient_drawable_ubo, ratio) == 64, "tsl_line_gradient_drawable_ubo.ratio moved");
+TSL_ASSERT(offsetof(tsl_line_gradient_drawable_ubo, blur_t) == 68, "tsl_line_gradient_drawable_ubo.blur_t moved");
+TSL_ASSERT(offsetof(tsl_line_gradient_drawable_ubo, opacity_t) == 72, "tsl_line_gradient_drawable_ubo.opacity_t moved");
+TSL_ASSERT(offsetof(tsl_line_gradient_drawable_ubo, gapwidth_t) == 76, "tsl_line_gradient_drawable_ubo.gapwidth_t moved");
+TSL_ASSERT(offsetof(tsl_line_gradient_drawable_ubo, offset_t) == 80, "tsl_line_gradient_drawable_ubo.offset_t moved");
+TSL_ASSERT(offsetof(tsl_line_gradient_drawable_ubo, width_t) == 84, "tsl_line_gradient_drawable_ubo.width_t moved");
+TSL_ASSERT(offsetof(tsl_line_gradient_drawable_ubo, pad1) == 88, "tsl_line_gradient_drawable_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_line_gradient_drawable_ubo, pad2) == 92, "tsl_line_gradient_drawable_ubo.pad2 moved");
+
+/* `LinePatternDrawableUBO` from `line_layer_ubo.hpp`. */
+typedef struct tsl_line_pattern_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float ratio;
+    float blur_t;
+    float opacity_t;
+    float gapwidth_t;
+    float offset_t;
+    float width_t;
+    float pattern_from_t;
+    float pattern_to_t;
+} tsl_line_pattern_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_line_pattern_drawable_ubo) == 96, "tsl_line_pattern_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_line_pattern_drawable_ubo) == 16, "tsl_line_pattern_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_line_pattern_drawable_ubo, matrix) == 0, "tsl_line_pattern_drawable_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_line_pattern_drawable_ubo, ratio) == 64, "tsl_line_pattern_drawable_ubo.ratio moved");
+TSL_ASSERT(offsetof(tsl_line_pattern_drawable_ubo, blur_t) == 68, "tsl_line_pattern_drawable_ubo.blur_t moved");
+TSL_ASSERT(offsetof(tsl_line_pattern_drawable_ubo, opacity_t) == 72, "tsl_line_pattern_drawable_ubo.opacity_t moved");
+TSL_ASSERT(offsetof(tsl_line_pattern_drawable_ubo, gapwidth_t) == 76, "tsl_line_pattern_drawable_ubo.gapwidth_t moved");
+TSL_ASSERT(offsetof(tsl_line_pattern_drawable_ubo, offset_t) == 80, "tsl_line_pattern_drawable_ubo.offset_t moved");
+TSL_ASSERT(offsetof(tsl_line_pattern_drawable_ubo, width_t) == 84, "tsl_line_pattern_drawable_ubo.width_t moved");
+TSL_ASSERT(offsetof(tsl_line_pattern_drawable_ubo, pattern_from_t) == 88, "tsl_line_pattern_drawable_ubo.pattern_from_t moved");
+TSL_ASSERT(offsetof(tsl_line_pattern_drawable_ubo, pattern_to_t) == 92, "tsl_line_pattern_drawable_ubo.pattern_to_t moved");
+
+/* `LinePatternTilePropsUBO` from `line_layer_ubo.hpp`. */
+typedef struct tsl_line_pattern_tile_props_ubo {
+    TSL_ALIGNAS(16) float pattern_from[4];
+    float pattern_to[4];
+    float scale[4];
+    float texsize[2];
+    float fade;
+    float pad1;
+} tsl_line_pattern_tile_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_line_pattern_tile_props_ubo) == 64, "tsl_line_pattern_tile_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_line_pattern_tile_props_ubo) == 16, "tsl_line_pattern_tile_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_line_pattern_tile_props_ubo, pattern_from) == 0, "tsl_line_pattern_tile_props_ubo.pattern_from moved");
+TSL_ASSERT(offsetof(tsl_line_pattern_tile_props_ubo, pattern_to) == 16, "tsl_line_pattern_tile_props_ubo.pattern_to moved");
+TSL_ASSERT(offsetof(tsl_line_pattern_tile_props_ubo, scale) == 32, "tsl_line_pattern_tile_props_ubo.scale moved");
+TSL_ASSERT(offsetof(tsl_line_pattern_tile_props_ubo, texsize) == 48, "tsl_line_pattern_tile_props_ubo.texsize moved");
+TSL_ASSERT(offsetof(tsl_line_pattern_tile_props_ubo, fade) == 56, "tsl_line_pattern_tile_props_ubo.fade moved");
+TSL_ASSERT(offsetof(tsl_line_pattern_tile_props_ubo, pad1) == 60, "tsl_line_pattern_tile_props_ubo.pad1 moved");
+
+/* `LineSDFDrawableUBO` from `line_layer_ubo.hpp`. */
+typedef struct tsl_line_sdfdrawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float patternscale_a[2];
+    float patternscale_b[2];
+    float tex_y_a;
+    float tex_y_b;
+    float ratio;
+    float color_t;
+    float blur_t;
+    float opacity_t;
+    float gapwidth_t;
+    float offset_t;
+    float width_t;
+    float floorwidth_t;
+    float pad1;
+    float pad2;
+} tsl_line_sdfdrawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_line_sdfdrawable_ubo) == 128, "tsl_line_sdfdrawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_line_sdfdrawable_ubo) == 16, "tsl_line_sdfdrawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_line_sdfdrawable_ubo, matrix) == 0, "tsl_line_sdfdrawable_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_line_sdfdrawable_ubo, patternscale_a) == 64, "tsl_line_sdfdrawable_ubo.patternscale_a moved");
+TSL_ASSERT(offsetof(tsl_line_sdfdrawable_ubo, patternscale_b) == 72, "tsl_line_sdfdrawable_ubo.patternscale_b moved");
+TSL_ASSERT(offsetof(tsl_line_sdfdrawable_ubo, tex_y_a) == 80, "tsl_line_sdfdrawable_ubo.tex_y_a moved");
+TSL_ASSERT(offsetof(tsl_line_sdfdrawable_ubo, tex_y_b) == 84, "tsl_line_sdfdrawable_ubo.tex_y_b moved");
+TSL_ASSERT(offsetof(tsl_line_sdfdrawable_ubo, ratio) == 88, "tsl_line_sdfdrawable_ubo.ratio moved");
+TSL_ASSERT(offsetof(tsl_line_sdfdrawable_ubo, color_t) == 92, "tsl_line_sdfdrawable_ubo.color_t moved");
+TSL_ASSERT(offsetof(tsl_line_sdfdrawable_ubo, blur_t) == 96, "tsl_line_sdfdrawable_ubo.blur_t moved");
+TSL_ASSERT(offsetof(tsl_line_sdfdrawable_ubo, opacity_t) == 100, "tsl_line_sdfdrawable_ubo.opacity_t moved");
+TSL_ASSERT(offsetof(tsl_line_sdfdrawable_ubo, gapwidth_t) == 104, "tsl_line_sdfdrawable_ubo.gapwidth_t moved");
+TSL_ASSERT(offsetof(tsl_line_sdfdrawable_ubo, offset_t) == 108, "tsl_line_sdfdrawable_ubo.offset_t moved");
+TSL_ASSERT(offsetof(tsl_line_sdfdrawable_ubo, width_t) == 112, "tsl_line_sdfdrawable_ubo.width_t moved");
+TSL_ASSERT(offsetof(tsl_line_sdfdrawable_ubo, floorwidth_t) == 116, "tsl_line_sdfdrawable_ubo.floorwidth_t moved");
+TSL_ASSERT(offsetof(tsl_line_sdfdrawable_ubo, pad1) == 120, "tsl_line_sdfdrawable_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_line_sdfdrawable_ubo, pad2) == 124, "tsl_line_sdfdrawable_ubo.pad2 moved");
+
+/* `LineSDFTilePropsUBO` from `line_layer_ubo.hpp`. */
+typedef struct tsl_line_sdftile_props_ubo {
+    TSL_ALIGNAS(16) float sdfgamma;
+    float mix;
+    float pad1;
+    float pad2;
+} tsl_line_sdftile_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_line_sdftile_props_ubo) == 16, "tsl_line_sdftile_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_line_sdftile_props_ubo) == 16, "tsl_line_sdftile_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_line_sdftile_props_ubo, sdfgamma) == 0, "tsl_line_sdftile_props_ubo.sdfgamma moved");
+TSL_ASSERT(offsetof(tsl_line_sdftile_props_ubo, mix) == 4, "tsl_line_sdftile_props_ubo.mix moved");
+TSL_ASSERT(offsetof(tsl_line_sdftile_props_ubo, pad1) == 8, "tsl_line_sdftile_props_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_line_sdftile_props_ubo, pad2) == 12, "tsl_line_sdftile_props_ubo.pad2 moved");
+
+/* `LocationIndicatorDrawableUBO` from `location_indicator_ubo.hpp`. */
+typedef struct tsl_location_indicator_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float color[4];
+} tsl_location_indicator_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_location_indicator_drawable_ubo) == 80, "tsl_location_indicator_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_location_indicator_drawable_ubo) == 16, "tsl_location_indicator_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_location_indicator_drawable_ubo, matrix) == 0, "tsl_location_indicator_drawable_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_location_indicator_drawable_ubo, color) == 64, "tsl_location_indicator_drawable_ubo.color moved");
+
+/* `RasterDrawableUBO` from `raster_layer_ubo.hpp`. */
+typedef struct tsl_raster_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+} tsl_raster_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_raster_drawable_ubo) == 64, "tsl_raster_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_raster_drawable_ubo) == 16, "tsl_raster_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_raster_drawable_ubo, matrix) == 0, "tsl_raster_drawable_ubo.matrix moved");
+
+/* `RasterEvaluatedPropsUBO` from `raster_layer_ubo.hpp`. */
+typedef struct tsl_raster_evaluated_props_ubo {
+    TSL_ALIGNAS(16) float spin_weights[4];
+    float tl_parent[2];
+    float scale_parent;
+    float buffer_scale;
+    float fade_t;
+    float opacity;
+    float brightness_low;
+    float brightness_high;
+    float saturation_factor;
+    float contrast_factor;
+    float pad1;
+    float pad2;
+} tsl_raster_evaluated_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_raster_evaluated_props_ubo) == 64, "tsl_raster_evaluated_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_raster_evaluated_props_ubo) == 16, "tsl_raster_evaluated_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_raster_evaluated_props_ubo, spin_weights) == 0, "tsl_raster_evaluated_props_ubo.spin_weights moved");
+TSL_ASSERT(offsetof(tsl_raster_evaluated_props_ubo, tl_parent) == 16, "tsl_raster_evaluated_props_ubo.tl_parent moved");
+TSL_ASSERT(offsetof(tsl_raster_evaluated_props_ubo, scale_parent) == 24, "tsl_raster_evaluated_props_ubo.scale_parent moved");
+TSL_ASSERT(offsetof(tsl_raster_evaluated_props_ubo, buffer_scale) == 28, "tsl_raster_evaluated_props_ubo.buffer_scale moved");
+TSL_ASSERT(offsetof(tsl_raster_evaluated_props_ubo, fade_t) == 32, "tsl_raster_evaluated_props_ubo.fade_t moved");
+TSL_ASSERT(offsetof(tsl_raster_evaluated_props_ubo, opacity) == 36, "tsl_raster_evaluated_props_ubo.opacity moved");
+TSL_ASSERT(offsetof(tsl_raster_evaluated_props_ubo, brightness_low) == 40, "tsl_raster_evaluated_props_ubo.brightness_low moved");
+TSL_ASSERT(offsetof(tsl_raster_evaluated_props_ubo, brightness_high) == 44, "tsl_raster_evaluated_props_ubo.brightness_high moved");
+TSL_ASSERT(offsetof(tsl_raster_evaluated_props_ubo, saturation_factor) == 48, "tsl_raster_evaluated_props_ubo.saturation_factor moved");
+TSL_ASSERT(offsetof(tsl_raster_evaluated_props_ubo, contrast_factor) == 52, "tsl_raster_evaluated_props_ubo.contrast_factor moved");
+TSL_ASSERT(offsetof(tsl_raster_evaluated_props_ubo, pad1) == 56, "tsl_raster_evaluated_props_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_raster_evaluated_props_ubo, pad2) == 60, "tsl_raster_evaluated_props_ubo.pad2 moved");
+
+/* `SymbolDrawableUBO` from `symbol_layer_ubo.hpp`. */
+typedef struct tsl_symbol_drawable_ubo {
+    TSL_ALIGNAS(16) float matrix[16];
+    float label_plane_matrix[16];
+    float coord_matrix[16];
+    float texsize[2];
+    float texsize_icon[2];
+    int32_t is_text_prop;
+    int32_t rotate_symbol;
+    int32_t pitch_with_map;
+    int32_t is_size_zoom_constant;
+    int32_t is_size_feature_constant;
+    int32_t is_offset;
+    float size_t;
+    float size;
+    float fill_color_t;
+    float halo_color_t;
+    float opacity_t;
+    float halo_width_t;
+    float halo_blur_t;
+} tsl_symbol_drawable_ubo;
+
+TSL_ASSERT(sizeof(tsl_symbol_drawable_ubo) == 272, "tsl_symbol_drawable_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_symbol_drawable_ubo) == 16, "tsl_symbol_drawable_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_symbol_drawable_ubo, matrix) == 0, "tsl_symbol_drawable_ubo.matrix moved");
+TSL_ASSERT(offsetof(tsl_symbol_drawable_ubo, label_plane_matrix) == 64, "tsl_symbol_drawable_ubo.label_plane_matrix moved");
+TSL_ASSERT(offsetof(tsl_symbol_drawable_ubo, coord_matrix) == 128, "tsl_symbol_drawable_ubo.coord_matrix moved");
+TSL_ASSERT(offsetof(tsl_symbol_drawable_ubo, texsize) == 192, "tsl_symbol_drawable_ubo.texsize moved");
+TSL_ASSERT(offsetof(tsl_symbol_drawable_ubo, texsize_icon) == 200, "tsl_symbol_drawable_ubo.texsize_icon moved");
+TSL_ASSERT(offsetof(tsl_symbol_drawable_ubo, is_text_prop) == 208, "tsl_symbol_drawable_ubo.is_text_prop moved");
+TSL_ASSERT(offsetof(tsl_symbol_drawable_ubo, rotate_symbol) == 212, "tsl_symbol_drawable_ubo.rotate_symbol moved");
+TSL_ASSERT(offsetof(tsl_symbol_drawable_ubo, pitch_with_map) == 216, "tsl_symbol_drawable_ubo.pitch_with_map moved");
+TSL_ASSERT(offsetof(tsl_symbol_drawable_ubo, is_size_zoom_constant) == 220, "tsl_symbol_drawable_ubo.is_size_zoom_constant moved");
+TSL_ASSERT(offsetof(tsl_symbol_drawable_ubo, is_size_feature_constant) == 224, "tsl_symbol_drawable_ubo.is_size_feature_constant moved");
+TSL_ASSERT(offsetof(tsl_symbol_drawable_ubo, is_offset) == 228, "tsl_symbol_drawable_ubo.is_offset moved");
+TSL_ASSERT(offsetof(tsl_symbol_drawable_ubo, size_t) == 232, "tsl_symbol_drawable_ubo.size_t moved");
+TSL_ASSERT(offsetof(tsl_symbol_drawable_ubo, size) == 236, "tsl_symbol_drawable_ubo.size moved");
+TSL_ASSERT(offsetof(tsl_symbol_drawable_ubo, fill_color_t) == 240, "tsl_symbol_drawable_ubo.fill_color_t moved");
+TSL_ASSERT(offsetof(tsl_symbol_drawable_ubo, halo_color_t) == 244, "tsl_symbol_drawable_ubo.halo_color_t moved");
+TSL_ASSERT(offsetof(tsl_symbol_drawable_ubo, opacity_t) == 248, "tsl_symbol_drawable_ubo.opacity_t moved");
+TSL_ASSERT(offsetof(tsl_symbol_drawable_ubo, halo_width_t) == 252, "tsl_symbol_drawable_ubo.halo_width_t moved");
+TSL_ASSERT(offsetof(tsl_symbol_drawable_ubo, halo_blur_t) == 256, "tsl_symbol_drawable_ubo.halo_blur_t moved");
+
+/* `SymbolEvaluatedPropsUBO` from `symbol_layer_ubo.hpp`. */
+typedef struct tsl_symbol_evaluated_props_ubo {
+    TSL_ALIGNAS(16) float text_fill_color[4];
+    float text_halo_color[4];
+    float text_opacity;
+    float text_halo_width;
+    float text_halo_blur;
+    float pad1;
+    float icon_fill_color[4];
+    float icon_halo_color[4];
+    float icon_opacity;
+    float icon_halo_width;
+    float icon_halo_blur;
+    float pad2;
+} tsl_symbol_evaluated_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_symbol_evaluated_props_ubo) == 96, "tsl_symbol_evaluated_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_symbol_evaluated_props_ubo) == 16, "tsl_symbol_evaluated_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_symbol_evaluated_props_ubo, text_fill_color) == 0, "tsl_symbol_evaluated_props_ubo.text_fill_color moved");
+TSL_ASSERT(offsetof(tsl_symbol_evaluated_props_ubo, text_halo_color) == 16, "tsl_symbol_evaluated_props_ubo.text_halo_color moved");
+TSL_ASSERT(offsetof(tsl_symbol_evaluated_props_ubo, text_opacity) == 32, "tsl_symbol_evaluated_props_ubo.text_opacity moved");
+TSL_ASSERT(offsetof(tsl_symbol_evaluated_props_ubo, text_halo_width) == 36, "tsl_symbol_evaluated_props_ubo.text_halo_width moved");
+TSL_ASSERT(offsetof(tsl_symbol_evaluated_props_ubo, text_halo_blur) == 40, "tsl_symbol_evaluated_props_ubo.text_halo_blur moved");
+TSL_ASSERT(offsetof(tsl_symbol_evaluated_props_ubo, pad1) == 44, "tsl_symbol_evaluated_props_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_symbol_evaluated_props_ubo, icon_fill_color) == 48, "tsl_symbol_evaluated_props_ubo.icon_fill_color moved");
+TSL_ASSERT(offsetof(tsl_symbol_evaluated_props_ubo, icon_halo_color) == 64, "tsl_symbol_evaluated_props_ubo.icon_halo_color moved");
+TSL_ASSERT(offsetof(tsl_symbol_evaluated_props_ubo, icon_opacity) == 80, "tsl_symbol_evaluated_props_ubo.icon_opacity moved");
+TSL_ASSERT(offsetof(tsl_symbol_evaluated_props_ubo, icon_halo_width) == 84, "tsl_symbol_evaluated_props_ubo.icon_halo_width moved");
+TSL_ASSERT(offsetof(tsl_symbol_evaluated_props_ubo, icon_halo_blur) == 88, "tsl_symbol_evaluated_props_ubo.icon_halo_blur moved");
+TSL_ASSERT(offsetof(tsl_symbol_evaluated_props_ubo, pad2) == 92, "tsl_symbol_evaluated_props_ubo.pad2 moved");
+
+/* `SymbolTilePropsUBO` from `symbol_layer_ubo.hpp`. */
+typedef struct tsl_symbol_tile_props_ubo {
+    TSL_ALIGNAS(16) int32_t is_text;
+    int32_t is_halo;
+    float gamma_scale;
+    float pad1;
+} tsl_symbol_tile_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_symbol_tile_props_ubo) == 16, "tsl_symbol_tile_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_symbol_tile_props_ubo) == 16, "tsl_symbol_tile_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_symbol_tile_props_ubo, is_text) == 0, "tsl_symbol_tile_props_ubo.is_text moved");
+TSL_ASSERT(offsetof(tsl_symbol_tile_props_ubo, is_halo) == 4, "tsl_symbol_tile_props_ubo.is_halo moved");
+TSL_ASSERT(offsetof(tsl_symbol_tile_props_ubo, gamma_scale) == 8, "tsl_symbol_tile_props_ubo.gamma_scale moved");
+TSL_ASSERT(offsetof(tsl_symbol_tile_props_ubo, pad1) == 12, "tsl_symbol_tile_props_ubo.pad1 moved");
+
+/* `WideVectorUniformWideVecUBO` from `widevector_ubo.hpp`. */
+typedef struct tsl_wide_vector_uniform_wide_vec_ubo {
+    TSL_ALIGNAS(16) float color[4];
+    float w2;
+    float offset;
+    float edge;
+    float texRepeat;
+    float texOffset[2];
+    float miterLimit;
+    int32_t join;
+    int32_t cap;
+    int32_t hasExp;
+    float interClipLimit;
+    float pad1;
+} tsl_wide_vector_uniform_wide_vec_ubo;
+
+TSL_ASSERT(sizeof(tsl_wide_vector_uniform_wide_vec_ubo) == 64, "tsl_wide_vector_uniform_wide_vec_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_wide_vector_uniform_wide_vec_ubo) == 16, "tsl_wide_vector_uniform_wide_vec_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniform_wide_vec_ubo, color) == 0, "tsl_wide_vector_uniform_wide_vec_ubo.color moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniform_wide_vec_ubo, w2) == 16, "tsl_wide_vector_uniform_wide_vec_ubo.w2 moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniform_wide_vec_ubo, offset) == 20, "tsl_wide_vector_uniform_wide_vec_ubo.offset moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniform_wide_vec_ubo, edge) == 24, "tsl_wide_vector_uniform_wide_vec_ubo.edge moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniform_wide_vec_ubo, texRepeat) == 28, "tsl_wide_vector_uniform_wide_vec_ubo.texRepeat moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniform_wide_vec_ubo, texOffset) == 32, "tsl_wide_vector_uniform_wide_vec_ubo.texOffset moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniform_wide_vec_ubo, miterLimit) == 40, "tsl_wide_vector_uniform_wide_vec_ubo.miterLimit moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniform_wide_vec_ubo, join) == 44, "tsl_wide_vector_uniform_wide_vec_ubo.join moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniform_wide_vec_ubo, cap) == 48, "tsl_wide_vector_uniform_wide_vec_ubo.cap moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniform_wide_vec_ubo, hasExp) == 52, "tsl_wide_vector_uniform_wide_vec_ubo.hasExp moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniform_wide_vec_ubo, interClipLimit) == 56, "tsl_wide_vector_uniform_wide_vec_ubo.interClipLimit moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniform_wide_vec_ubo, pad1) == 60, "tsl_wide_vector_uniform_wide_vec_ubo.pad1 moved");
+
+/* `WideVectorUniformsUBO` from `widevector_ubo.hpp`. */
+typedef struct tsl_wide_vector_uniforms_ubo {
+    TSL_ALIGNAS(16) float mvpMatrix[16];
+    float mvpMatrixDiff[16];
+    float mvMatrix[16];
+    float mvMatrixDiff[16];
+    float pMatrix[16];
+    float pMatrixDiff[16];
+    float frameSize[2];
+    float pad1;
+    float pad2;
+} tsl_wide_vector_uniforms_ubo;
+
+TSL_ASSERT(sizeof(tsl_wide_vector_uniforms_ubo) == 400, "tsl_wide_vector_uniforms_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_wide_vector_uniforms_ubo) == 16, "tsl_wide_vector_uniforms_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniforms_ubo, mvpMatrix) == 0, "tsl_wide_vector_uniforms_ubo.mvpMatrix moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniforms_ubo, mvpMatrixDiff) == 64, "tsl_wide_vector_uniforms_ubo.mvpMatrixDiff moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniforms_ubo, mvMatrix) == 128, "tsl_wide_vector_uniforms_ubo.mvMatrix moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniforms_ubo, mvMatrixDiff) == 192, "tsl_wide_vector_uniforms_ubo.mvMatrixDiff moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniforms_ubo, pMatrix) == 256, "tsl_wide_vector_uniforms_ubo.pMatrix moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniforms_ubo, pMatrixDiff) == 320, "tsl_wide_vector_uniforms_ubo.pMatrixDiff moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniforms_ubo, frameSize) == 384, "tsl_wide_vector_uniforms_ubo.frameSize moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniforms_ubo, pad1) == 392, "tsl_wide_vector_uniforms_ubo.pad1 moved");
+TSL_ASSERT(offsetof(tsl_wide_vector_uniforms_ubo, pad2) == 396, "tsl_wide_vector_uniforms_ubo.pad2 moved");
+
+/*
+ * Blocks mbgl declares that are deliberately not here:
+ *   LineEvaluatedPropsUBO (line_layer_ubo.hpp): unmodelled type `LineExpressionMask`.
+ *   LineExpressionUBO (line_layer_ubo.hpp): no closing size comment.
+ *
+ * A consumer needing one of these should find out from this list rather than from a wrong
+ * layout.
+ */
 
 /* The type of a vertex attribute. */
 typedef enum tsl_attribute_data_type {
