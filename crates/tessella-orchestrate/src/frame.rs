@@ -333,7 +333,7 @@ pub fn emit(
 ///
 /// The registry and the arena both have to outlive the frame, and that is the point: the arena
 /// keeps a retained geometry's bytes, and `GeometryRemove` is what says they can go. Passing a
-/// fresh one of either each frame reduces this to [`emit`] with more steps.
+/// fresh one of either each frame reduces this to [`emit()`] with more steps.
 ///
 /// # Errors
 ///
