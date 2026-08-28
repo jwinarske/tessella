@@ -83,10 +83,8 @@ const SLAB_ALIGN: usize = 8;
 /// See [`SlabArena::mark`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SlabMark {
-    /// Sealed slabs at the mark.
-    sealed: usize,
-    /// Next id at the mark, so a rewind reissues the same ids rather than skipping them.
-    next_id: u32,
+    /// Slots in existence at the mark.
+    slots: usize,
     /// Whether a slab was open at the mark.
     open: bool,
 }
@@ -116,9 +114,30 @@ impl Slab {
 /// contiguous.
 #[derive(Debug, Default)]
 pub struct SlabArena {
-    sealed: Vec<Arc<Slab>>,
+    /// Sealed slabs, indexed by the handle a `SlabRef` carries.
+    ///
+    /// A handle is a *slot*, not a position. The two were the same thing until something was
+    /// freed, and then every handle above the hole named the slab after the one it meant — the
+    /// packed region's table is indexed by the handle, which is the only rule a consumer across
+    /// a mapping has, so a pan that swept one layer's slab made the next layer's geometry
+    /// resolve as some other layer's. Unreachable until retention began freeing slabs.
+    slots: Vec<Option<Arc<Slab>>>,
+    /// Slots a sweep emptied, to be handed out again.
+    ///
+    /// Reused rather than retired because the handle indexes a table: monotonic ids would grow
+    /// the table for the life of the process — ten slabs a frame at sixty frames a second is a
+    /// megabyte of table an hour, holding almost nothing.
+    ///
+    /// Safe under the retention discipline, which is what makes this a slot allocator rather
+    /// than a hazard: a slab is swept only when no geometry references it, and a geometry is
+    /// removed on the wire before its last reference is released.
+    free: Vec<u32>,
+    /// Slots taken off [`Self::free`] since the last [`mark`](Self::mark).
+    ///
+    /// So a frame that fails can put them back. Kept rather than recomputed because the pops
+    /// are destructive and nothing else records which slots were empty when the frame began.
+    recycled: Vec<u32>,
     open: Option<Slab>,
-    next_id: u32,
     /// Bytes still referenced, per sealed slab.
     ///
     /// A slab is freed when this reaches zero, and compacted when it falls far enough below the
@@ -133,6 +152,18 @@ impl SlabArena {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A slot for a new slab: a swept one if there is one, otherwise a fresh one.
+    fn take_slot(&mut self) -> u32 {
+        if let Some(id) = self.free.pop() {
+            self.recycled.push(id);
+            return id;
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let id = self.slots.len() as u32;
+        self.slots.push(None);
+        id
     }
 
     /// Copies `bytes` into the open slab and returns a reference to them.
@@ -181,10 +212,9 @@ impl SlabArena {
         if needs_new {
             self.seal();
             self.open = Some(Slab {
-                id: self.next_id,
+                id: self.take_slot(),
                 bytes: Vec::with_capacity(SLAB_BYTES.max(bytes.len())),
             });
-            self.next_id += 1;
         }
 
         let slab = self.open.as_mut().expect("just opened");
@@ -207,10 +237,11 @@ impl SlabArena {
     /// mapping every frame thereafter — a leak that grows by a whole cover each time the ring
     /// is full, which is exactly when there is least room to spare.
     #[must_use]
-    pub fn mark(&self) -> SlabMark {
+    pub fn mark(&mut self) -> SlabMark {
+        // The frame starts owing nothing: whatever the last one recycled, it kept.
+        self.recycled.clear();
         SlabMark {
-            sealed: self.sealed.len(),
-            next_id: self.next_id,
+            slots: self.slots.len(),
             open: self.open.is_some(),
         }
     }
@@ -221,14 +252,23 @@ impl SlabArena {
     /// belongs to the frame being rolled back. Handing back a partly-filled slab would leave
     /// the next frame appending to another frame's bytes.
     pub fn rewind(&mut self, mark: SlabMark) {
-        self.sealed.truncate(mark.sealed);
-        // What the discarded slabs had retained goes with them. The counter rewinds too, so the
-        // next frame's first slab takes the id the failed frame's did: leaving its live count
-        // behind would credit a fresh, empty slab with the bytes a rolled-back frame retained,
-        // and a slab that starts life owing bytes nothing holds never sweeps and never reports
-        // a live fraction anyone can act on.
-        self.live.retain(|id, _| *id < mark.next_id);
-        self.next_id = mark.next_id;
+        // Slots the frame invented go away; slots it reused go back on the free list. Both have
+        // to happen, and only the second needs remembering — a reused slot was empty before the
+        // frame and nothing else records that.
+        for id in core::mem::take(&mut self.recycled) {
+            self.slots[id as usize] = None;
+            self.live.remove(&id);
+            self.free.push(id);
+        }
+        // By slot rather than by the slab in it: a frame that failed before its last layer
+        // closed leaves that slab *open*, so its slot is empty while its retains are not — and
+        // a live count left behind credits whatever takes the slot next with bytes nothing
+        // holds, so it never sweeps and never reports a fraction worth acting on.
+        for (offset, _) in self.slots.drain(mark.slots..).enumerate() {
+            #[allow(clippy::cast_possible_truncation)]
+            let id = (mark.slots + offset) as u32;
+            self.live.remove(&id);
+        }
         if !mark.open {
             self.open = None;
         }
@@ -237,20 +277,24 @@ impl SlabArena {
     /// Seals the open slab, making it immutable and shareable.
     pub fn seal(&mut self) {
         if let Some(slab) = self.open.take() {
-            self.sealed.push(Arc::new(slab));
+            let id = slab.id as usize;
+            self.slots[id] = Some(Arc::new(slab));
         }
     }
 
-    /// Every sealed slab.
-    #[must_use]
-    pub fn slabs(&self) -> &[Arc<Slab>] {
-        &self.sealed
+    /// Every sealed slab, in slot order.
+    pub fn slabs(&self) -> impl Iterator<Item = &Arc<Slab>> {
+        self.slots.iter().filter_map(Option::as_ref)
     }
 
-    /// A sealed slab by id.
+    /// A sealed slab by handle.
+    ///
+    /// The handle indexes, rather than being searched for: that is what the packed region's
+    /// table does, and the two have to agree or a consumer across a mapping resolves a handle to
+    /// a different slab's bytes than this side does.
     #[must_use]
     pub fn slab(&self, id: u32) -> Option<&Arc<Slab>> {
-        self.sealed.iter().find(|slab| slab.id == id)
+        self.slots.get(id as usize)?.as_ref()
     }
 
     /// Marks a reference's bytes as still wanted.
@@ -310,16 +354,19 @@ impl SlabArena {
     /// caller with a different lifecycle.
     pub fn sweep(&mut self) -> Vec<u32> {
         let mut freed = Vec::new();
-        self.sealed.retain(|slab| {
-            let wanted = self.live.get(&slab.id).copied().unwrap_or(0);
-            if wanted == 0 {
+        for slot in &mut self.slots {
+            let Some(slab) = slot else { continue };
+            if self.live.get(&slab.id).copied().unwrap_or(0) == 0 {
                 freed.push(slab.id);
-                return false;
+                *slot = None;
             }
-            true
-        });
+        }
         for id in &freed {
             self.live.remove(id);
+            // The slot goes back into circulation. Its entry in a packed region becomes empty
+            // rather than disappearing, so a handle nobody should still be holding refuses
+            // instead of resolving to whatever takes the slot next.
+            self.free.push(*id);
         }
         freed
     }
@@ -348,11 +395,21 @@ impl SlabArena {
     #[must_use]
     pub fn pack(&self) -> Vec<u8> {
         let header = core::mem::size_of::<SlabRegion>();
-        let table = core::mem::size_of::<SlabEntry>() * self.sealed.len();
+        let table = core::mem::size_of::<SlabEntry>() * self.slots.len();
 
-        let mut entries = Vec::with_capacity(self.sealed.len());
+        // One entry per *slot*, empty ones included, because the handle indexes the table. A
+        // table of only the occupied slots is the same thing right up until a sweep leaves a
+        // hole, and then every handle past it names its neighbour's bytes.
+        let mut entries = Vec::with_capacity(self.slots.len());
         let mut offset = (header + table).next_multiple_of(8);
-        for slab in &self.sealed {
+        for slot in &self.slots {
+            let Some(slab) = slot else {
+                entries.push(SlabEntry {
+                    offset: 0,
+                    length: 0,
+                });
+                continue;
+            };
             entries.push(SlabEntry {
                 offset: offset as u64,
                 length: slab.bytes.len() as u64,
@@ -363,7 +420,7 @@ impl SlabArena {
         #[allow(clippy::cast_possible_truncation)]
         let region = SlabRegion {
             abi_rev: tessella_capture_abi::ABI_REV,
-            count: self.sealed.len() as u32,
+            count: self.slots.len() as u32,
             total_len: offset as u64,
         };
 
@@ -372,7 +429,8 @@ impl SlabArena {
         for entry in &entries {
             out.extend_from_slice(entry.as_bytes());
         }
-        for (slab, entry) in self.sealed.iter().zip(&entries) {
+        for (slot, entry) in self.slots.iter().zip(&entries) {
+            let Some(slab) = slot else { continue };
             out.resize(entry.offset as usize, 0);
             out.extend_from_slice(&slab.bytes);
         }
@@ -1612,7 +1670,7 @@ mod tests {
         arena.seal();
 
         assert_eq!(
-            arena.slabs().len(),
+            arena.slabs().count(),
             1,
             "one slab, because seal was called once"
         );

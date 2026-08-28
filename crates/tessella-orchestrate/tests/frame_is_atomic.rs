@@ -128,9 +128,9 @@ fn a_frame_that_will_not_fit_leaves_nothing_behind() {
     // And the arena kept nothing either: the records that would have named these slabs were
     // discarded, so keeping them would leak a cover's geometry per failed frame.
     assert!(
-        arena.slabs().is_empty(),
+        arena.slabs().next().is_none(),
         "a failed frame left {} slabs in the arena",
-        arena.slabs().len()
+        arena.slabs().count()
     );
 }
 
@@ -193,9 +193,9 @@ fn the_retry_after_a_full_ring_is_a_whole_frame() {
 
     // Slab ids restart where the failed attempt began, so the retry's references resolve against
     // a table with no gap in it.
-    assert!(!arena.slabs().is_empty(), "the retry allocated");
+    assert!(arena.slabs().next().is_some(), "the retry allocated");
     assert_eq!(
-        arena.slabs().first().map(|slab| slab.id),
+        arena.slabs().next().map(|slab| slab.id),
         Some(0),
         "the rewind reissued ids from the mark rather than skipping past the failed attempt"
     );

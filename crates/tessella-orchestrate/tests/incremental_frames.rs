@@ -660,7 +660,7 @@ fn a_long_pan_does_not_accumulate_dead_slabs() {
         displaced_total += emitted.displaced;
         // Sweep what nothing wants, which is what the caller does between frames.
         arena.sweep();
-        slab_counts.push(arena.slabs().len());
+        slab_counts.push(arena.slabs().count());
     }
 
     let peak = slab_counts.iter().copied().max().unwrap_or(0);
@@ -1040,9 +1040,9 @@ mod under_fault {
         frame::teardown_view(producer, &mut arena, &mut session, ViewId(0)).expect("tears down");
         arena.sweep();
         assert!(
-            arena.slabs().is_empty(),
+            arena.slabs().next().is_none(),
             "every slab went: {} left holding bytes nothing wants",
-            arena.slabs().len()
+            arena.slabs().count()
         );
     }
 

@@ -212,11 +212,11 @@ mod retention {
         let mut arena = SlabArena::new();
         arena.alloc(&[1, 2, 3, 4]);
         arena.seal();
-        assert_eq!(arena.slabs().len(), 1);
+        assert_eq!(arena.slabs().count(), 1);
 
         let freed = arena.sweep();
         assert_eq!(freed.len(), 1, "nothing wanted it");
-        assert!(arena.slabs().is_empty());
+        assert!(arena.slabs().next().is_none());
     }
 
     /// A retained slab survives, and goes once released.
@@ -228,11 +228,11 @@ mod retention {
         arena.retain(reference);
 
         assert!(arena.sweep().is_empty(), "something wants it");
-        assert_eq!(arena.slabs().len(), 1);
+        assert_eq!(arena.slabs().count(), 1);
 
         arena.release(reference);
         assert_eq!(arena.sweep(), vec![reference.slab]);
-        assert!(arena.slabs().is_empty());
+        assert!(arena.slabs().next().is_none());
     }
 
     /// A slab holding several geometries lives until the last of them goes.
@@ -313,5 +313,54 @@ mod retention {
         assert_eq!(arena.sweep().len(), 1, "the empty one wanted nothing");
 
         let _ = real;
+    }
+}
+
+/// A handle means the same thing after a sweep as before one.
+///
+/// # The divergence
+///
+/// `SlabRef::slab` is a slab's id: `SlabArena::slab` looks it up by id, `retain` and `release`
+/// key their accounting on it, and the C consumer indexes the region's table with it — the
+/// header says the handle indexes the table, and that is the only rule a consumer across a
+/// mapping has.
+///
+/// The table was written in the order the arena held its slabs, which is the same thing only
+/// until a slab is freed. After that every id above the hole is one position too high, and a
+/// handle resolves to a *different slab's bytes* — not to nothing, which would be a diagnosis,
+/// but to plausible geometry belonging to another layer.
+///
+/// Unreachable until this phase, because nothing swept: retention landed with DR-21 and the
+/// frame emitter only began releasing slabs when a drawable left the cover.
+#[test]
+fn a_handle_survives_a_sweep() {
+    let mut arena = SlabArena::new();
+
+    // Three slabs, of which the first is unwanted.
+    let first = arena.alloc(&[0xAA; 32]);
+    arena.seal();
+    let second = arena.alloc(&[0xBB; 32]);
+    arena.seal();
+    let third = arena.alloc(&[0xCC; 32]);
+    arena.seal();
+    arena.retain(second);
+    arena.retain(third);
+
+    assert_eq!(arena.sweep(), vec![first.slab], "the unwanted one goes");
+
+    let region = arena.pack();
+    for (reference, expected) in [(second, 0xBB), (third, 0xCC)] {
+        let bytes = resolve(&region, reference).expect("the handle resolves");
+        assert_eq!(
+            bytes,
+            arena.resolve(reference).expect("and in process too"),
+            "handle {} resolves to different bytes across the mapping",
+            reference.slab
+        );
+        assert!(
+            bytes.iter().all(|byte| *byte == expected),
+            "handle {} came back as another slab's bytes",
+            reference.slab
+        );
     }
 }
