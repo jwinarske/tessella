@@ -834,7 +834,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   atlas" — the plan disagreed with itself, and R3's scope now says so explicitly. What waits on
   it is named where it is missed: vertical writing, images in text and per-section scaling all
   change a line's *height* as well as its width.
-  **They have no oracle, and not for the reason this used to give.** It said "without the sprite
+  **They had no oracle, and not for the reason first recorded — and now they have one.** It said "without the sprite
   atlas". R3 brought the atlas and they still have none, because what a scaled section changes is
   the *glyph vertex buffer*, and that buffer is elided from every symbol capture — mbgl packs its
   glyph atlas in the order glyphs arrive and that order is not deterministic, which is the same
@@ -843,11 +843,13 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   {"font-scale": 0.5}]` and one of the same label at scale one produce *byte-identical* comparable
   data: same vertex count, same index buffer hash, same both per-frame buffers. Two maps that
   differ visibly, and the capture cannot tell them apart at all.
-  What would change that is the probe, which is this project's rather than mbgl's: a dump of the
-  shaped *extent* — the line heights and advances `shapeLines` computes — is comparable where the
-  packed vertices are not, and is the number these three features actually decide. Building them
-  against the capture as it stands would be building them unverified, which is how the four
-  defects R3 found got in.
+  The probe is this project's rather than mbgl's, and the fix was there. It now emits `fld=`
+  beside `src=`: a hash over each attribute's *own* bytes rather than over the buffer it shares.
+  Three attributes read a symbol's glyph vertex buffer and only one carries texture coordinates,
+  so eliding the shared hash was taking two deterministic attributes with it. With the field
+  hashes, attributes 0 and 2 keep a value that is the same across five consecutive captures and
+  only attribute 1 is elided — and a scaled label now differs from a flat one in attribute 0,
+  which is what these three features change. They are buildable against the oracle now.
   **Was held behind a capture, and is not any longer**: the pitched paths, which stood here in
   three different states because the probe was unrotated and there was no capture to check any of
   them against — R0's second qualification reappearing rather than a new one. A line label's

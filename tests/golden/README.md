@@ -195,13 +195,15 @@ python3 <tessella>/tools/mbgl-codegen/oracles/elide_pattern_atlas.py \
     --zoom=13.5 --dump=<tessella>/tests/golden/composite_style_z13_5.dump
 ```
 
-Produced by `mbgl-capture-probe` at maplibre-native `5f9d3f77caac`, on the
+Produced by `mbgl-capture-probe` at maplibre-native `ecdaf2588a0b`, on the
 `capture-backend-phase0` branch whose base commit `b237943` plan.md pins. Byte-identical
 across six consecutive runs; if a regeneration produces a diff on unrelated lines, that is a
 determinism regression in the probe rather than a change in the frontend, and the four
 sources of variance already found are described in that commit. `5f9d3f77caac` added the
 `--zoom` flag; a capture without it is byte-identical to one from before, which was checked
-against `hermetic_style.dump` rather than assumed.
+against `hermetic_style.dump` rather than assumed. `ecdaf2588a0b` added `fld=`, which changes
+every attribute line and nothing else — checked by stripping the new field from a fresh capture
+and diffing against the dump it replaced.
 
 ## `src=` and `fld=`
 
