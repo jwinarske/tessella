@@ -176,7 +176,16 @@ mod tests {
         for shader in TABLED {
             assert!(texture_count(shader).is_some(), "{shader:?}");
         }
-        assert_eq!(TABLED.len(), 29, "the vulkan shader sources declare 29");
+        // Thirty-four, and the number is the point rather than the shape of the table. It was
+        // twenty-nine, and the five it was short of were not shaders mbgl lacks — they were
+        // shaders the generator's parse walked past. Two spellings it did not read: a texture
+        // table small enough to close on its own declaration line, and a `using` wrapped after
+        // the `=`. Both produce a table that looks complete, because a shader absent from it is
+        // indistinguishable from one nobody asked about until a producer asks.
+        //
+        // `BackgroundPatternShader` is how it surfaced: choosing it panicked with "no generated
+        // texture table", two layers from the parse that lost it.
+        assert_eq!(TABLED.len(), 34, "the vulkan shader sources declare 34");
     }
 
     /// Binding slots within a shader are distinct and dense from zero.

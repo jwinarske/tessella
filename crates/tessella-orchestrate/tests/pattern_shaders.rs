@@ -95,15 +95,16 @@ fn emit_with(sprites: Option<&Patterns<'_>>) -> (BTreeMap<i32, usize>, u32) {
 
 fn atlas() -> BTreeMap<String, IconPosition> {
     let mut positions = BTreeMap::new();
-    // The fifty-by-fifty rectangle the capture's constant fill layer decoded to.
+    // What the atlas reports for the fifty-by-fifty sprite the capture's constant fill layer
+    // used: the sprite plus a pixel each side, which `atlas_rect` insets back off.
     positions.insert(
         "sand_noise".to_owned(),
         IconPosition {
             padded_rect: Rect {
                 x: 56,
                 y: 9,
-                width: 50,
-                height: 50,
+                width: 52,
+                height: 52,
             },
             pixel_ratio: 1.0,
             sdf: false,
@@ -275,15 +276,21 @@ fn the_atlas_is_uploaded_and_the_placements_are_written() {
     assert!(!slot4.is_empty(), "nothing was written to slot 4");
     assert_eq!(slot4.len() % 48, 0, "whole blocks of the pattern layout");
 
-    // The rectangle the atlas placed sand_noise at: [56, 9, 106, 59], twice, then the size.
+    // The sprite's own bounds, inset from the rectangle the atlas reports: a fifty-pixel sprite
+    // reported at (56, 9) over fifty-two becomes [57, 10, 107, 60].
     let word = |at: usize| f32::from_le_bytes(slot4[at..at + 4].try_into().expect("four bytes"));
     assert_eq!(
         [word(0), word(4), word(8), word(12)],
-        [56.0, 9.0, 106.0, 59.0]
+        [57.0, 10.0, 107.0, 60.0]
     );
     assert_eq!(
         [word(16), word(20), word(24), word(28)],
-        [56.0, 9.0, 106.0, 59.0]
+        [57.0, 10.0, 107.0, 60.0]
+    );
+    assert_eq!(
+        [word(8) - word(0), word(12) - word(4)],
+        [50.0, 50.0],
+        "fifty pixels wide, which is the sprite"
     );
     assert_eq!([word(32), word(36)], [512.0, 512.0], "the atlas size");
 }

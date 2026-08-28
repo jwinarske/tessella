@@ -527,7 +527,7 @@ pub fn uniform_opacity(
     uniform_number(paint, name, 0.0)
 }
 
-fn uniform_number(
+pub(crate) fn uniform_number(
     paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
     name: &str,
     zoom: f64,
@@ -1185,29 +1185,33 @@ pub struct PatternPlacement {
 
 /// The atlas rectangle a sprite occupies, as the shader reads it.
 ///
-/// # Two conventions named the same thing
+/// mbgl's `ImagePosition::tlbr()`: the reported rectangle inset by one on every side, so a
+/// sampler reading between these corners never touches the border.
 ///
-/// mbgl's `ImagePosition::paddedRect` is the *whole slot*, padding included, and its `tlbr()`
-/// insets by the padding to get the sprite's own bounds. This build's [`IconPosition`] has
-/// already done that inset: its `padded_rect` is the sprite's bounds, despite the name it
-/// shares. So the conversion here adds nothing and insets nothing — it is `[x, y, x + w, y + h]`
-/// — where applying mbgl's arithmetic to it a second time would shrink every pattern by two
-/// pixels in each direction and sample a border of its neighbours.
+/// # The padding is two and one of it is reported
 ///
-/// Checked against the capture: `hospital_striped` is three by three in the sheet, sits in a
-/// five-by-five slot at origin one, and the oracle writes `[2, 2, 5, 5]`. Its bounds are
-/// therefore `x = 2, y = 2, w = 3, h = 3`, and `[x, y, x + w, y + h]` is that rectangle.
+/// [`atlas::PADDING`] is two — one so linear filtering cannot pull a neighbour's pixels in, and
+/// one handed back inside the reported rectangle so a distance field has something to read at
+/// the glyph's own edge. So a sprite of width `W` occupies a slot of `W + 4` and
+/// [`IconPosition::padded_rect`] reports `W + 2`: the sprite plus a pixel each side, which is
+/// the same convention as mbgl's `paddedRect` and takes the same inset.
+///
+/// Getting this backwards is not visible in a count. `grass_pattern` is fifty by fifty, so its
+/// reported rectangle is fifty-two; passing that through unchanged names a fifty-two pixel
+/// pattern and samples a one-pixel border of whatever was packed beside it, on every tile.
 ///
 /// [`IconPosition`]: tessella_glyph::sprite::IconPosition
+/// [`IconPosition::padded_rect`]: tessella_glyph::sprite::IconPosition::padded_rect
+/// [`atlas::PADDING`]: tessella_glyph::atlas::PADDING
 #[must_use]
 pub fn atlas_rect(position: &tessella_glyph::sprite::IconPosition) -> [u16; 4] {
     let rect = position.padded_rect;
     #[allow(clippy::cast_possible_truncation)]
     [
-        rect.x as u16,
-        rect.y as u16,
-        (rect.x + rect.width) as u16,
-        (rect.y + rect.height) as u16,
+        (rect.x + 1) as u16,
+        (rect.y + 1) as u16,
+        (rect.x + rect.width).saturating_sub(1) as u16,
+        (rect.y + rect.height).saturating_sub(1) as u16,
     ]
 }
 

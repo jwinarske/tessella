@@ -184,6 +184,32 @@ impl Patterns<'_> {
         history
     }
 
+    /// A background's block, which needs the images' display sizes as well as their rectangles.
+    ///
+    /// Separate from [`Self::placement`] because a background is the only kind whose block
+    /// carries `pattern_size`, and getting it needs the positions themselves rather than the
+    /// rectangles derived from them.
+    #[must_use]
+    pub fn background_placement(
+        &self,
+        paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+        zoom: f64,
+        opacity: f32,
+    ) -> Option<ubo::BackgroundPatternPlacement> {
+        use tessella_style::crossfade::{PatternSource as _, faded};
+
+        let source = paint.get("background-pattern")?;
+        let pair = faded(|z| source.image_at(z), zoom, &self.seeded(zoom));
+        let from = self.positions.get(pair.from?.as_str())?;
+        let to = self.positions.get(pair.to?.as_str())?;
+        Some(ubo::BackgroundPatternPlacement {
+            placement: ubo::pattern_placement(Some(from), Some(to), self.size)?,
+            display: [ubo::display_size(from), ubo::display_size(to)],
+            crossfade: self.crossfade(zoom),
+            opacity,
+        })
+    }
+
     /// The two rectangles a layer's pattern is between at `zoom`, if both are packed.
     ///
     /// `None` when the layer has no pattern, when its expression names nothing, or when a name
@@ -775,7 +801,17 @@ fn write_layer_state(
             // ever written: the property boundary coerces a colour-typed property to a colour,
             // so the value is already `Value::Color` — and the fallback that catches is black,
             // which is a background nobody chose and one that looks deliberate.
-            let props = ubo::background_props_from_paint(&paint, view.zoom);
+            // A background with a pattern writes a different block at the same slot: sixty-four
+            // bytes of corners, display sizes and the crossfade where a plain one writes
+            // thirty-two of colour and opacity. The two are told apart by their size, which is
+            // why this slot is not a union the way a fill's is.
+            let opacity = ubo::uniform_number(&paint, "background-opacity", view.zoom);
+            let props = match patterns
+                .and_then(|patterns| patterns.background_placement(&paint, view.zoom, opacity))
+            {
+                Some(placement) => ubo::pack_background_pattern_props(&placement),
+                None => ubo::background_props_from_paint(&paint, view.zoom),
+            };
             ubo::write(
                 producer,
                 view_id,

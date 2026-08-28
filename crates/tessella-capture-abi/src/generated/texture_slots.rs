@@ -24,6 +24,13 @@ pub struct ShaderTexture {
     pub name: &'static str,
 }
 
+/// Textures sampled by `BackgroundPatternShader`.
+pub const BACKGROUND_PATTERN_SHADER_TEXTURES: [ShaderTexture; 1] = [ShaderTexture {
+    binding: 0,
+    texture_id: 0,
+    name: "idBackgroundImageTexture",
+}];
+
 /// Textures sampled by `BackgroundShader`.
 pub const BACKGROUND_SHADER_TEXTURES: [ShaderTexture; 0] = [];
 
@@ -79,6 +86,16 @@ pub const DEBUG_SHADER_TEXTURES: [ShaderTexture; 1] = [ShaderTexture {
     name: "idDebugOverlayTexture",
 }];
 
+/// Textures sampled by `FillExtrusionInstancedShader`.
+pub const FILL_EXTRUSION_INSTANCED_SHADER_TEXTURES: [ShaderTexture; 0] = [];
+
+/// Textures sampled by `FillExtrusionPatternInstancedShader`.
+pub const FILL_EXTRUSION_PATTERN_INSTANCED_SHADER_TEXTURES: [ShaderTexture; 1] = [ShaderTexture {
+    binding: 0,
+    texture_id: 0,
+    name: "idFillExtrusionImageTexture",
+}];
+
 /// Textures sampled by `FillExtrusionPatternShader`.
 pub const FILL_EXTRUSION_PATTERN_SHADER_TEXTURES: [ShaderTexture; 1] = [ShaderTexture {
     binding: 0,
@@ -98,6 +115,9 @@ pub const FILL_OUTLINE_PATTERN_SHADER_TEXTURES: [ShaderTexture; 1] = [ShaderText
 
 /// Textures sampled by `FillOutlineShader`.
 pub const FILL_OUTLINE_SHADER_TEXTURES: [ShaderTexture; 0] = [];
+
+/// Textures sampled by `FillOutlineTriangulatedShader`.
+pub const FILL_OUTLINE_TRIANGULATED_SHADER_TEXTURES: [ShaderTexture; 0] = [];
 
 /// Textures sampled by `FillPatternShader`.
 pub const FILL_PATTERN_SHADER_TEXTURES: [ShaderTexture; 1] = [ShaderTexture {
@@ -167,6 +187,13 @@ pub const LINE_SHADER_TEXTURES: [ShaderTexture; 0] = [];
 /// Textures sampled by `LocationIndicatorShader`.
 pub const LOCATION_INDICATOR_SHADER_TEXTURES: [ShaderTexture; 0] = [];
 
+/// Textures sampled by `LocationIndicatorTexturedShader`.
+pub const LOCATION_INDICATOR_TEXTURED_SHADER_TEXTURES: [ShaderTexture; 1] = [ShaderTexture {
+    binding: 0,
+    texture_id: 0,
+    name: "idLocationIndicatorTexture",
+}];
+
 /// Textures sampled by `RasterShader`.
 pub const RASTER_SHADER_TEXTURES: [ShaderTexture; 2] = [
     ShaderTexture {
@@ -221,6 +248,7 @@ pub const WIDE_VECTOR_SHADER_TEXTURES: [ShaderTexture; 0] = [];
 #[must_use]
 pub fn textures(shader: BuiltIn) -> &'static [ShaderTexture] {
     match shader {
+        BuiltIn::BackgroundPatternShader => &BACKGROUND_PATTERN_SHADER_TEXTURES,
         BuiltIn::BackgroundShader => &BACKGROUND_SHADER_TEXTURES,
         BuiltIn::CircleShader => &CIRCLE_SHADER_TEXTURES,
         BuiltIn::ClippingMaskProgram => &CLIPPING_MASK_PROGRAM_TEXTURES,
@@ -230,10 +258,15 @@ pub fn textures(shader: BuiltIn) -> &'static [ShaderTexture] {
         BuiltIn::CustomGeometryShader => &CUSTOM_GEOMETRY_SHADER_TEXTURES,
         BuiltIn::CustomSymbolIconShader => &CUSTOM_SYMBOL_ICON_SHADER_TEXTURES,
         BuiltIn::DebugShader => &DEBUG_SHADER_TEXTURES,
+        BuiltIn::FillExtrusionInstancedShader => &FILL_EXTRUSION_INSTANCED_SHADER_TEXTURES,
+        BuiltIn::FillExtrusionPatternInstancedShader => {
+            &FILL_EXTRUSION_PATTERN_INSTANCED_SHADER_TEXTURES
+        }
         BuiltIn::FillExtrusionPatternShader => &FILL_EXTRUSION_PATTERN_SHADER_TEXTURES,
         BuiltIn::FillExtrusionShader => &FILL_EXTRUSION_SHADER_TEXTURES,
         BuiltIn::FillOutlinePatternShader => &FILL_OUTLINE_PATTERN_SHADER_TEXTURES,
         BuiltIn::FillOutlineShader => &FILL_OUTLINE_SHADER_TEXTURES,
+        BuiltIn::FillOutlineTriangulatedShader => &FILL_OUTLINE_TRIANGULATED_SHADER_TEXTURES,
         BuiltIn::FillPatternShader => &FILL_PATTERN_SHADER_TEXTURES,
         BuiltIn::FillShader => &FILL_SHADER_TEXTURES,
         BuiltIn::HeatmapShader => &HEATMAP_SHADER_TEXTURES,
@@ -245,6 +278,7 @@ pub fn textures(shader: BuiltIn) -> &'static [ShaderTexture] {
         BuiltIn::LineSDFShader => &LINE_SDFSHADER_TEXTURES,
         BuiltIn::LineShader => &LINE_SHADER_TEXTURES,
         BuiltIn::LocationIndicatorShader => &LOCATION_INDICATOR_SHADER_TEXTURES,
+        BuiltIn::LocationIndicatorTexturedShader => &LOCATION_INDICATOR_TEXTURED_SHADER_TEXTURES,
         BuiltIn::RasterShader => &RASTER_SHADER_TEXTURES,
         BuiltIn::SymbolIconShader => &SYMBOL_ICON_SHADER_TEXTURES,
         BuiltIn::SymbolSDFShader => &SYMBOL_SDFSHADER_TEXTURES,
@@ -262,6 +296,7 @@ pub fn textures(shader: BuiltIn) -> &'static [ShaderTexture] {
 #[must_use]
 pub fn texture_count(shader: BuiltIn) -> Option<usize> {
     match shader {
+        BuiltIn::BackgroundPatternShader => Some(1),
         BuiltIn::BackgroundShader => Some(0),
         BuiltIn::CircleShader => Some(0),
         BuiltIn::ClippingMaskProgram => Some(0),
@@ -271,10 +306,13 @@ pub fn texture_count(shader: BuiltIn) -> Option<usize> {
         BuiltIn::CustomGeometryShader => Some(1),
         BuiltIn::CustomSymbolIconShader => Some(1),
         BuiltIn::DebugShader => Some(1),
+        BuiltIn::FillExtrusionInstancedShader => Some(0),
+        BuiltIn::FillExtrusionPatternInstancedShader => Some(1),
         BuiltIn::FillExtrusionPatternShader => Some(1),
         BuiltIn::FillExtrusionShader => Some(0),
         BuiltIn::FillOutlinePatternShader => Some(1),
         BuiltIn::FillOutlineShader => Some(0),
+        BuiltIn::FillOutlineTriangulatedShader => Some(0),
         BuiltIn::FillPatternShader => Some(1),
         BuiltIn::FillShader => Some(0),
         BuiltIn::HeatmapShader => Some(0),
@@ -286,6 +324,7 @@ pub fn texture_count(shader: BuiltIn) -> Option<usize> {
         BuiltIn::LineSDFShader => Some(1),
         BuiltIn::LineShader => Some(0),
         BuiltIn::LocationIndicatorShader => Some(0),
+        BuiltIn::LocationIndicatorTexturedShader => Some(1),
         BuiltIn::RasterShader => Some(2),
         BuiltIn::SymbolIconShader => Some(1),
         BuiltIn::SymbolSDFShader => Some(1),
@@ -296,7 +335,8 @@ pub fn texture_count(shader: BuiltIn) -> Option<usize> {
 }
 
 /// Every shader with a table, for exhaustive checks.
-pub const TABLED: [BuiltIn; 29] = [
+pub const TABLED: [BuiltIn; 34] = [
+    BuiltIn::BackgroundPatternShader,
     BuiltIn::BackgroundShader,
     BuiltIn::CircleShader,
     BuiltIn::ClippingMaskProgram,
@@ -306,10 +346,13 @@ pub const TABLED: [BuiltIn; 29] = [
     BuiltIn::CustomGeometryShader,
     BuiltIn::CustomSymbolIconShader,
     BuiltIn::DebugShader,
+    BuiltIn::FillExtrusionInstancedShader,
+    BuiltIn::FillExtrusionPatternInstancedShader,
     BuiltIn::FillExtrusionPatternShader,
     BuiltIn::FillExtrusionShader,
     BuiltIn::FillOutlinePatternShader,
     BuiltIn::FillOutlineShader,
+    BuiltIn::FillOutlineTriangulatedShader,
     BuiltIn::FillPatternShader,
     BuiltIn::FillShader,
     BuiltIn::HeatmapShader,
@@ -321,6 +364,7 @@ pub const TABLED: [BuiltIn; 29] = [
     BuiltIn::LineSDFShader,
     BuiltIn::LineShader,
     BuiltIn::LocationIndicatorShader,
+    BuiltIn::LocationIndicatorTexturedShader,
     BuiltIn::RasterShader,
     BuiltIn::SymbolIconShader,
     BuiltIn::SymbolSDFShader,

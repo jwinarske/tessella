@@ -1043,9 +1043,56 @@ type TextureTable = (String, Vec<(u32, String)>);
 /// samplers as `std::array<TextureInfo, 0> XSource::textures = {};` — one line, no block — and a
 /// parser that only looked for an opening brace would leave those shaders absent from the table
 /// rather than present with nothing in them. The two mean different things.
+/// Joins a line ending in `=` to the one after it.
+///
+/// C++ wraps a declaration that will not fit, and every rule here reads one line at a time. The
+/// alternative is each rule handling the wrap, which is the same fix written several times and
+/// forgotten once.
+fn join_continuations(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut pending = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if pending {
+            out.push(' ');
+        } else if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(trimmed);
+        pending = trimmed.ends_with('=');
+    }
+    out
+}
+
+/// Every `TextureInfo{binding, id}` on one line.
+///
+/// A line may carry none, one, or a whole table's worth: mbgl writes a `std::vector` over
+/// several lines and a small `std::array` on one, and the entries are spelled the same in both.
+fn texture_entries(line: &str) -> Vec<(u32, String)> {
+    let mut out = Vec::new();
+    for piece in line.split("TextureInfo{").skip(1) {
+        let Some((body, _)) = piece.split_once('}') else {
+            continue;
+        };
+        let parts: Vec<&str> = body.split(',').map(str::trim).collect();
+        if parts.len() == 2
+            && let Ok(binding) = parts[0].parse::<u32>()
+        {
+            out.push((binding, parts[1].to_string()));
+        }
+    }
+    out
+}
+
 fn parse_shader_textures(text: &str) -> Vec<TextureTable> {
     let mut aliases: BTreeMap<String, String> = BTreeMap::new();
-    for line in text.lines() {
+    // A declaration too long for a line is wrapped after the `=`, and a line-oriented parse sees
+    // neither half as an alias. That cost `FillOutlineTriangulatedShader` and
+    // `FillExtrusionInstancedShader` their entries — both declare an empty texture table, so
+    // the table recorded them as absent rather than as sampling nothing, and the two are not the
+    // same claim. Joining the continuation first is cheaper than teaching every rule about it.
+    let joined = join_continuations(text);
+    for line in joined.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("using ")
             && let Some((alias, tail)) = rest.split_once(" = ShaderSource<BuiltIn::")
@@ -1062,19 +1109,30 @@ fn parse_shader_textures(text: &str) -> Vec<TextureTable> {
 
     let mut out = Vec::new();
     let mut current: Option<TextureTable> = None;
-    for line in text.lines() {
+    for line in joined.lines() {
         let line = line.trim();
         if line.contains("::textures = {") {
+            let Some(shader) = shader_of(line) else {
+                continue;
+            };
             // `= {};` on one line is an empty table, not the start of a block.
-            if line.ends_with("{};")
-                && let Some(shader) = shader_of(line)
-            {
+            if line.ends_with("{};") {
                 out.push((shader, Vec::new()));
                 continue;
             }
-            if let Some(shader) = shader_of(line) {
-                current = Some((shader, Vec::new()));
+            // A table small enough to fit on its declaration closes there too, and mbgl writes
+            // both forms: a `std::vector` spread over lines, and a `std::array<TextureInfo, 1>`
+            // whose single entry sits beside the `=`. Treating the second as a block opening
+            // finds no entries before the next `};` and records the shader as sampling nothing
+            // — which is worse than missing it, because a shader that samples nothing is a
+            // legitimate answer and nothing looks wrong. It cost `BackgroundPatternShader` and
+            // `FillOutlineTriangulatedShader` their tables, and a producer choosing either hit
+            // the "no generated texture table" panic with the fault two layers away.
+            if line.ends_with("};") {
+                out.push((shader, texture_entries(line)));
+                continue;
             }
+            current = Some((shader, Vec::new()));
             continue;
         }
         if let Some((_, textures)) = current.as_mut() {
@@ -1084,15 +1142,7 @@ fn parse_shader_textures(text: &str) -> Vec<TextureTable> {
                 }
                 continue;
             }
-            if let Some(rest) = line.strip_prefix("TextureInfo{") {
-                let body = rest.trim_end_matches("},").trim_end_matches('}');
-                let parts: Vec<&str> = body.split(',').map(str::trim).collect();
-                if parts.len() == 2
-                    && let Ok(binding) = parts[0].parse::<u32>()
-                {
-                    textures.push((binding, parts[1].to_string()));
-                }
-            }
+            textures.extend(texture_entries(line));
         }
     }
     out

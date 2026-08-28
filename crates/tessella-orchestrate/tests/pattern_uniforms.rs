@@ -134,24 +134,48 @@ mod rects {
         }
     }
 
-    /// The capture's own numbers, reached from this build's rectangle convention.
+    /// The rectangle is the sprite's own bounds, reached by insetting the reported one.
     ///
-    /// `hospital_striped` is three by three in the sheet and the oracle writes `[2, 2, 5, 5]`.
-    /// mbgl gets there from a five-by-five slot at origin one, insetting by the padding; this
-    /// build's `IconPosition` has already inset, so its rectangle is the sprite's own bounds and
-    /// the conversion adds nothing. Insetting again gives `[3, 3, 4, 4]` — a pattern two pixels
-    /// short in each direction, which renders, wrongly.
+    /// This test used to build an `IconPosition` whose rectangle *was* the sprite and assert the
+    /// conversion passed it through — which proved only that the fixture and the conversion
+    /// agreed, and they agreed on the wrong answer.
+    ///
+    /// The invariant, from `IconAtlas::add`: `atlas::PADDING` is two, so a sprite of width `W`
+    /// occupies a slot of `W + 2 * PADDING` and the reported rectangle is the slot inset by one
+    /// — `W + PADDING`, the sprite plus a pixel each side. The fixture is built from that
+    /// constant here rather than from a number I chose, so a change to the padding fails the
+    /// test rather than silently moving what it asserts.
     #[test]
-    fn a_rectangle_is_the_sprite_bounds_not_the_slot() {
-        assert_eq!(atlas_rect(&position(2, 2, 3, 3)), [2, 2, 5, 5]);
-        // And the fifty-by-fifty case the constant fill layer decoded to.
-        assert_eq!(atlas_rect(&position(56, 9, 50, 50)), [56, 9, 106, 59]);
+    fn a_rectangle_is_the_sprite_not_its_border() {
+        use tessella_glyph::atlas::PADDING;
+
+        const SIDE: u32 = 50;
+        // What the atlas reports for a fifty-pixel sprite packed at the origin.
+        let placed = position(1, 1, SIDE + PADDING, SIDE + PADDING);
+
+        let rect = atlas_rect(&placed);
+        assert_eq!(
+            [rect[2] - rect[0], rect[3] - rect[1]],
+            [SIDE as u16, SIDE as u16],
+            "the rectangle is the sprite's size, not the reported rectangle's"
+        );
+        assert_eq!(rect, [2, 2, 52, 52], "inset by one on every side");
+
+        // The display size reaches the same number by the other route, subtracting the pixel of
+        // padding the rectangle reports where this insets it. They have to agree, and a
+        // convention error moves one and not the other.
+        let (width, height) = placed.display_size();
+        assert_eq!(
+            [width as u16, height as u16],
+            [rect[2] - rect[0], rect[3] - rect[1]],
+            "display size and rectangle size disagree"
+        );
     }
 
     /// A pattern that does not vary carries one rectangle twice.
     #[test]
     fn a_constant_pattern_places_one_image_twice() {
-        let sand = position(56, 9, 50, 50);
+        let sand = position(56, 9, 52, 52);
         let placed = pattern_placement(Some(&sand), Some(&sand), [512, 512]).expect("placed");
         assert_eq!(placed.from, placed.to);
         assert_eq!(placed.texsize, [512, 512]);
