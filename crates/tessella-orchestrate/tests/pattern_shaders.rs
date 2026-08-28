@@ -320,3 +320,123 @@ fn an_unseeded_history_does_not_look_like_zooming_in() {
     // Above the integer it has, which is two.
     assert_eq!(patterns.crossfade(13.5).from_scale, 2.0);
 }
+
+/// An extrusion with a pattern takes shader 18 and writes the fill's block at slot 4.
+///
+/// `FillExtrusionTilePropsUBO` is `FillPatternTilePropsUBO`'s fields exactly — two rectangles,
+/// an atlas size, two pads, forty-eight bytes — so it takes the same packer. The capture's
+/// `ubo layer:5 slot=4` is 1152 bytes, which is twenty-four drawables of it.
+///
+/// The oracle emits `sh0018` *and* `sh0019` per tile, at five vertices and four: its instanced
+/// extrusion draws the roof and the walls as separate drawables. This build emits one, so it
+/// takes the pattern variant of the one it emits. Splitting them is a question about the
+/// extrusion's geometry that predates patterns and wants its own change.
+#[test]
+fn an_extrusion_pattern_binds_its_own_shader() {
+    use tessella_capture_abi::envelope::UboUpdate;
+
+    let positions = atlas();
+    let pixels = vec![0u8; 512 * 512 * 4];
+    let patterns = Patterns {
+        texture: TextureId(20),
+        size: [512, 512],
+        positions: &positions,
+        pixels: &pixels,
+        history: ZoomHistory::new(),
+    };
+
+    let style = Style::parse(
+        r#"{"version": 8, "sources": {"s": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "e", "type": "fill-extrusion", "source": "s",
+                        "source-layer": "water",
+                        "paint": {"fill-extrusion-pattern": "sand_noise",
+                                  "fill-extrusion-height": 20,
+                                  "fill-extrusion-opacity": 0.8}}]}"#,
+    )
+    .expect("parses");
+    let view = camera::settled(&ViewTransform {
+        longitude: 0.0,
+        latitude: 0.0,
+        zoom: 2.0,
+        width: 512.0,
+        height: 512.0,
+        bearing: 0.0,
+        pitch: 0.0,
+    });
+    let tiles = cover::cover(&view).expect("covers");
+    let decoded = Tile::decode(REAL_TILE).expect("decodes");
+    let mut buckets = Vec::new();
+    for tile in &tiles {
+        let id = TileId::new(tile.z, tile.x, tile.y);
+        let mut built = build_mvt_tile(&style, "s", id, &decoded).expect("builds");
+        built.extend(build_sourceless(&style, id).expect("background"));
+        built.sort_by_key(|bucket| bucket.layer_index);
+        buckets.push((id, built));
+    }
+
+    let mut arena = SlabArena::new();
+    let mut ring = Ring::new(1 << 24);
+    let (producer, consumer) = ring.split();
+    frame::emit(
+        producer,
+        &mut arena,
+        &Frame {
+            style: &style,
+            view: &view,
+            view_id: ViewId(0),
+            tiles: &tiles,
+            buckets: &buckets,
+            light: &Light::default(),
+            fonts: None,
+            patterns: Some(&patterns),
+        },
+    )
+    .expect("emits");
+
+    let mut shaders = BTreeMap::new();
+    let mut slot4 = Vec::new();
+    while let Some(record) = consumer.peek() {
+        match record.kind {
+            EnvelopeKind::GeometryAdd => {
+                if let Some(add) = GeometryAdd::from_bytes(record.record) {
+                    *shaders.entry(add.builtin_shader).or_insert(0) += 1;
+                }
+            }
+            EnvelopeKind::UboUpdate => {
+                if let Some(update) = UboUpdate::from_bytes(record.record)
+                    && update.slot == 4
+                    && update.layer_index >= 0
+                {
+                    let start = update.data.offset as usize;
+                    let end = start + update.data.count as usize;
+                    if let Some(bytes) = record.payload.get(start..end) {
+                        slot4 = bytes.to_vec();
+                    }
+                }
+            }
+            _ => {}
+        }
+        let consumed = record.consumed();
+        consumer.advance(consumed);
+    }
+
+    // 18 is FillExtrusionPatternShader; 16 is the plain one it replaces.
+    assert!(
+        shaders.contains_key(&18),
+        "no extrusion pattern shader: {shaders:?}"
+    );
+    assert!(
+        !shaders.contains_key(&16),
+        "a plain extrusion survived: {shaders:?}"
+    );
+
+    assert!(!slot4.is_empty(), "no tile props were written");
+    assert_eq!(slot4.len() % 48, 0, "whole blocks of the fill's layout");
+    let word = |at: usize| f32::from_le_bytes(slot4[at..at + 4].try_into().expect("four bytes"));
+    assert_eq!(
+        [word(8) - word(0), word(12) - word(4)],
+        [50.0, 50.0],
+        "the sprite's own size"
+    );
+    assert_eq!([word(32), word(36)], [512.0, 512.0], "the atlas size");
+}

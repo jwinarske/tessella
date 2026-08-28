@@ -712,6 +712,13 @@ fn encode(
         }
         Content::Fill3d(extrusion) => {
             let (vertex_layout, key) = bind(FILL_EXTRUSION_FAMILY, BuiltIn::FillExtrusionShader);
+            let atlas = patterns
+                .filter(|patterns| {
+                    patterns
+                        .placement(&bucket.paint, "fill-extrusion-pattern", zoom)
+                        .is_some()
+                })
+                .map(|patterns| patterns.texture);
             Some(emit::encode_extrusion(
                 arena,
                 geometry,
@@ -719,6 +726,7 @@ fn encode(
                 &vertex_layout,
                 bucket.binder.data(),
                 key,
+                atlas,
             ))
         }
         Content::Symbol(layout) => {
@@ -1037,6 +1045,13 @@ fn write_layer_state(
             //
             // Both passes: a translucent extrusion takes a depth pass in front of its colour
             // pass, and both read the same buffer.
+            // `FillExtrusionTilePropsUBO` is `FillPatternTilePropsUBO`'s fields exactly —
+            // two rectangles, an atlas size, two pads, forty-eight bytes — so it takes the same
+            // packer rather than one of its own.
+            let extrusion_pattern = patterns.and_then(|patterns| {
+                patterns.placement(&paint, "fill-extrusion-pattern", view.zoom)
+            });
+
             let interpolations = ubo::extrusion_interpolations(&paint, view.zoom, view.zoom);
             let entry = |sub_layer_index: i32| -> Vec<ubo::ExtrusionDrawableEntry> {
                 matrices(sub_layer_index)
@@ -1068,6 +1083,22 @@ fn write_layer_state(
                 ubo_slots::ID_FILL_EXTRUSION_DRAWABLE_UBO,
                 &buffer,
             )?;
+
+            // Only when the layer has a pattern. A fill and a line write a zero-filled block
+            // whatever their paint, because their slot is a union and the stride is the same
+            // either way; an extrusion without a pattern has written nothing here, and adding a
+            // buffer to a case the goldens already pin is a change to make deliberately rather
+            // than in passing.
+            if let Some(placement) = extrusion_pattern {
+                let tile_props = ubo::pack_pattern_tile_props(&alloc::vec![placement; all.len()]);
+                ubo::write(
+                    producer,
+                    view_id,
+                    layer_index,
+                    ubo_slots::ID_FILL_EXTRUSION_TILE_PROPS_UBO,
+                    &tile_props,
+                )?;
+            }
 
             let props = ubo::fill_extrusion_props_from_paint(&paint, view.zoom, frame.light);
             ubo::write(

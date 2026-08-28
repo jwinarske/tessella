@@ -970,6 +970,7 @@ pub fn encode_extrusion(
     layout: &VertexLayout,
     attributes: &[u8],
     permutation_key: u64,
+    pattern_atlas: Option<TextureId>,
 ) -> Encoded {
     let mut vertex_bytes = Vec::with_capacity(bucket.vertices.len() * EXTRUSION_STRIDE as usize);
     for vertex in &bucket.vertices {
@@ -1000,8 +1001,17 @@ pub fn encode_extrusion(
         bucket.vertices.len(),
         &descriptors,
         &bucket.segments,
-        BuiltIn::FillExtrusionShader,
-        None,
+        // The pattern variant of whichever branch this build emits. The oracle's capture shows
+        // *both* 18 and 19 per tile, at four and five vertices — mbgl's instanced extrusion
+        // draws the roof and the walls as separate drawables. This build emits one, so it takes
+        // the pattern variant of the one it emits; splitting the roof from the walls is a
+        // question about the extrusion's geometry that predates patterns.
+        if pattern_atlas.is_some() {
+            BuiltIn::FillExtrusionPatternShader
+        } else {
+            BuiltIn::FillExtrusionShader
+        },
+        pattern_atlas,
     )
 }
 

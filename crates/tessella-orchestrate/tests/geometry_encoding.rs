@@ -59,9 +59,15 @@ fn encode(kind: &str, extra: &str, family: &[BuiltIn], shader: BuiltIn) -> Encod
         Content::Circle(b) => {
             encode_circle(&mut arena, GeometryId(1), b, &vertex_layout, data, key)
         }
-        Content::Fill3d(b) => {
-            encode_extrusion(&mut arena, GeometryId(1), b, &vertex_layout, data, key)
-        }
+        Content::Fill3d(b) => encode_extrusion(
+            &mut arena,
+            GeometryId(1),
+            b,
+            &vertex_layout,
+            data,
+            key,
+            None,
+        ),
         other => panic!("unexpected content: {other:?}"),
     }
 }
