@@ -1129,6 +1129,7 @@ dependencies = [
  "geo-types",
  "geojson",
  "image-webp",
+ "libm",
  "serde_json",
  "tessella-storage",
  "tessella-style",

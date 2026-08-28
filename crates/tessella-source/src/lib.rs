@@ -17,6 +17,7 @@
 
 extern crate alloc;
 
+pub mod kdbush;
 pub mod clip;
 pub mod geojson;
 #[cfg(feature = "gltf")]

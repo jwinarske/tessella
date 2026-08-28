@@ -12,6 +12,7 @@ publish = false
 
 [dependencies]
 geo-types.workspace = true
+libm.workspace = true
 geojson.workspace = true
 thiserror.workspace = true
 tessella-storage.workspace = true
