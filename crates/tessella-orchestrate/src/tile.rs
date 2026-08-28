@@ -157,10 +157,12 @@ impl LayerBucket {
             Content::Circle(_) => 1,
             // And a raster tile, whose quads share one drawable however many the mask made.
             Content::Raster(_) => 1,
-            // An extrusion is two when it is translucent: a depth-only pass and a colour pass.
-            // Without the first, every wall alpha-blends against the walls behind it. An opaque
-            // one needs only the second, which is mbgl's `doDepthPass = (!opaque || hasPattern)`.
-            Content::Fill3d(ref bucket) => usize::from(bucket.needs_depth_pass()) + 1,
+            // An extrusion is two geometries — the roof and the walls raised over it — each
+            // drawn once per pass. The depth pass is what stops every wall alpha-blending
+            // against the walls behind it, and mbgl's `doDepthPass = (!opaque || hasPattern)`
+            // decides whether there is one, so an opaque unpatterned extrusion is two drawables
+            // and everything else is four.
+            Content::Fill3d(ref bucket) => 2 * (usize::from(bucket.needs_depth_pass()) + 1),
             // And a symbol layer, whose labels share one buffer per tile — the golden's
             // twelve-glyph drawable is two labels, not two drawables.
             Content::Symbol(_) => 1,

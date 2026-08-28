@@ -549,7 +549,7 @@ fn emit_group(
     let mut bound: Vec<GeometryBinding> = Vec::new();
     // One entry per bucket that reached the arena, so a bucket's second drawable reuses the
     // bytes rather than copying them.
-    let mut packed_bytes: BTreeMap<(usize, usize), (emit::Encoded, Option<emit::FillShared>)> =
+    let mut packed_bytes: BTreeMap<(usize, usize), alloc::vec::Vec<emit::Encoded>> =
         BTreeMap::new();
     // Which drawables this frame is announcing for the first time, and what each id names.
     // Empty without a registry, which is what makes the unregistered path emit everything.
@@ -718,9 +718,14 @@ fn emit_group(
         // A fill is the exception, and the oracle is what says so: its two drawables take
         // *different* shaders over different index buffers — `FillShader` on earcut's triangles
         // and `FillOutlineShader` on a line loop. So the record cannot be reused, only the
-        // buffers under it, which is what `FillShared` carries. Copying the record for a fill
-        // is what made the outline draw the interior a second time and `fill-outline-color`
-        // render nothing at all.
+        // buffers under it. Copying the record for a fill is what made the outline draw the
+        // interior a second time and `fill-outline-color` render nothing at all.
+        //
+        // An extrusion is the same exception and then the first case again, which is why this
+        // caches a *list*. It has two records — the roof and the instanced walls — and each is
+        // used by two drawables, the depth pass and the colour pass. So the part is chosen by
+        // sub-layer and the record for it copied, rather than there being a "first" record and
+        // a "second" one.
         // Geometry the consumer already has is not re-encoded. This test has to come before the
         // encoding, not after it: `encode` writes into the arena, so deciding late meant a
         // second view drawing a tile the first already holds packed a whole second copy of its
@@ -731,49 +736,33 @@ fn emit_group(
             continue;
         }
 
-        let encoded = match packed_bytes.get(&(tile_index, bucket_index)) {
-            Some((_, Some(shared))) => {
-                let shared = *shared;
-                let Some((outline, _)) = encode(
-                    arena,
-                    bucket,
-                    entry.geometry,
-                    &Encoding {
-                        fonts,
-                        patterns,
-                        raster_texture,
-                        zoom: view.zoom,
-                    },
-                    Some(shared),
-                ) else {
-                    continue;
-                };
-                outline
-            }
-            Some((first, None)) => {
-                let mut copy: emit::Encoded = first.clone();
-                copy.record.geometry = entry.geometry;
-                copy
-            }
+        let records = match packed_bytes.get(&(tile_index, bucket_index)) {
+            Some(records) => records,
             None => {
-                let Some(fresh) = encode(
+                let Some(fresh) = encode_parts(
                     arena,
                     bucket,
-                    entry.geometry,
                     &Encoding {
                         fonts,
                         patterns,
                         raster_texture,
                         zoom: view.zoom,
                     },
-                    None,
                 ) else {
                     continue;
                 };
-                packed_bytes.insert((tile_index, bucket_index), fresh.clone());
-                fresh.0
+                packed_bytes.entry((tile_index, bucket_index)).or_insert(fresh)
             }
         };
+        // Which of the bucket's records this drawable draws. Out of range is a disagreement
+        // between `drawable_count` and the encoder about how many a bucket makes, and drawing
+        // the wrong part would be worse than drawing none.
+        let Some(record) = records.get(part_of(&bucket.content, entry.sub_layer_index)) else {
+            continue;
+        };
+        let mut encoded = record.clone();
+        encoded.record.geometry = entry.geometry;
+
         // And a *drawable* the consumer already has is not announced again, even where its
         // bucket had to be encoded for a sibling's sake. `fresh` is empty without a registry, so
         // the unregistered path announces everything, which is what `GeometryId` documents.
@@ -1046,13 +1035,41 @@ struct Encoding<'a> {
 /// on the grounds that a viewport-filling quad is the consumer's to synthesize, and the
 /// consequence was a `ViewUse` naming an id no `GeometryAdd` declared. The oracle sends the quad
 /// too — four vertices and six indices, static across every capture.
-fn encode(
+/// Which of a bucket's records a drawable draws.
+///
+/// The sub-layer says it, because the sub-layer is what `DrawOrder` assigns and it is already
+/// what separates the drawables. A fill's are one and two — its triangles and its outline. An
+/// extrusion's are zero to three, roof and walls in the depth pass then roof and walls in the
+/// colour pass, so the part alternates and the pass does not change which record is drawn.
+fn part_of(content: &Content, sub_layer_index: i32) -> usize {
+    let sub = usize::try_from(sub_layer_index).unwrap_or(0);
+    match content {
+        Content::Fill(_) => sub.saturating_sub(1),
+        Content::Fill3d(_) => sub % 2,
+        _ => 0,
+    }
+}
+
+/// The id every part is encoded with, before the caller stamps each drawable's own.
+const PLACEHOLDER: tessella_capture_abi::envelope::GeometryId =
+    tessella_capture_abi::envelope::GeometryId(0);
+
+/// Every distinct geometry record a bucket produces, in part order.
+///
+/// One for most kinds. Two for a fill — earcut's triangles and the outline's line loop, which
+/// take different shaders over different index buffers — and two for an extrusion: the roof and
+/// the walls raised over it. A drawable then names the part it draws rather than the encoder
+/// being called once per drawable, which is what stopped a translucent extrusion copying its
+/// vertices, indices and interleaved attributes twice.
+///
+/// The ids are placeholders. A record is cloned per drawable and stamped with that drawable's
+/// own id, because `ViewRelease` is keyed by (geometry, view) and sharing one id across two
+/// drawables would drop both with nothing in the stream saying so.
+fn encode_parts(
     arena: &mut SlabArena,
     bucket: &LayerBucket,
-    geometry: tessella_capture_abi::envelope::GeometryId,
     context: &Encoding<'_>,
-    shared: Option<emit::FillShared>,
-) -> Option<(emit::Encoded, Option<emit::FillShared>)> {
+) -> Option<alloc::vec::Vec<emit::Encoded>> {
     let &Encoding {
         fonts,
         patterns,
@@ -1068,8 +1085,11 @@ fn encode(
         (vertex_layout, key)
     };
 
-    // Set by the fill arm, which is the only kind whose two drawables share buffers.
+    // Set by the arms whose second part is built from the first's buffers.
     let mut fill_shared = None;
+    let mut fill_atlas = None;
+    let mut extrusion_shared = None;
+    let mut extrusion_atlas = None;
     let encoded = match &bucket.content {
         Content::Fill(fill) => {
             let (vertex_layout, key) = bind(FILL_FAMILY, BuiltIn::FillShader);
@@ -1082,9 +1102,10 @@ fn encode(
                         .is_some()
                 })
                 .map(|patterns| patterns.texture);
-            let (encoded, buffers) = emit::encode_fill(arena, geometry, fill, &{
+            fill_atlas = atlas;
+            let (encoded, buffers) = emit::encode_fill(arena, PLACEHOLDER, fill, &{
                 let draw =
-                    emit::FillDraw::new(&vertex_layout, bucket.binder.data(), key, shared, atlas);
+                    emit::FillDraw::new(&vertex_layout, bucket.binder.data(), key, None, atlas);
                 // A data-driven pattern's rectangles, when the bucket build resolved any.
                 if bucket.pattern_vertices.covers(fill.vertices.len()) {
                     draw.with_pattern_vertices(&bucket.pattern_vertices)
@@ -1106,7 +1127,7 @@ fn encode(
                 .map(|patterns| patterns.texture);
             Some(emit::encode_line(
                 arena,
-                geometry,
+                PLACEHOLDER,
                 line,
                 &emit::LineDraw {
                     layout: &vertex_layout,
@@ -1124,7 +1145,7 @@ fn encode(
             let (vertex_layout, key) = bind(CIRCLE_FAMILY, BuiltIn::CircleShader);
             Some(emit::encode_circle(
                 arena,
-                geometry,
+                PLACEHOLDER,
                 circle,
                 &vertex_layout,
                 bucket.binder.data(),
@@ -1145,15 +1166,17 @@ fn encode(
             // extrusion needs two *different* records — the roof and the instanced walls — each
             // used by both passes. That is the next change; the encoder for the walls exists and
             // is checked against the capture.
-            let (roof, _buffers) = emit::encode_extrusion(
+            extrusion_atlas = atlas;
+            let (roof, buffers) = emit::encode_extrusion(
                 arena,
-                geometry,
+                PLACEHOLDER,
                 extrusion,
                 &vertex_layout,
                 bucket.binder.data(),
                 key,
                 atlas,
             );
+            extrusion_shared = Some(buffers);
             Some(roof)
         }
         Content::Symbol(layout) => {
@@ -1171,7 +1194,7 @@ fn encode(
             // each vertex's size field, so this only decides which shader is named.
             Some(emit::encode_symbol(
                 arena,
-                geometry,
+                PLACEHOLDER,
                 &buffers,
                 key,
                 true,
@@ -1180,7 +1203,7 @@ fn encode(
         }
         Content::Raster(raster) => Some(emit::encode_raster(
             arena,
-            geometry,
+            PLACEHOLDER,
             &raster.bucket,
             raster_texture,
         )),
@@ -1192,10 +1215,42 @@ fn encode(
                         .is_some()
                 })
                 .map(|patterns| patterns.texture);
-            Some(emit::encode_background(arena, geometry, atlas))
+            Some(emit::encode_background(arena, PLACEHOLDER, atlas))
         }
     }?;
-    Some((encoded, fill_shared))
+    let mut parts = alloc::vec![encoded];
+    // The second part, where there is one. A fill's outline is built from the first's buffers;
+    // an extrusion's walls stand on the roof's outline.
+    if let Some(shared) = fill_shared {
+        let (vertex_layout, key) = bind(FILL_FAMILY, BuiltIn::FillOutlineShader);
+        parts.push(emit::encode_fill(
+            arena,
+            PLACEHOLDER,
+            match &bucket.content {
+                Content::Fill(fill) => fill,
+                _ => return Some(parts),
+            },
+            &emit::FillDraw {
+                layout: &vertex_layout,
+                attributes: bucket.binder.data(),
+                permutation_key: key,
+                shared: Some(shared),
+                pattern_atlas: fill_atlas,
+                pattern_vertices: None,
+            },
+        ).0);
+    }
+    if let Some(shared) = extrusion_shared {
+        let (_, key) = bind(FILL_EXTRUSION_FAMILY, BuiltIn::FillExtrusionInstancedShader);
+        parts.push(emit::encode_extrusion_walls(
+            arena,
+            PLACEHOLDER,
+            shared,
+            key,
+            extrusion_atlas,
+        ));
+    }
+    Some(parts)
 }
 
 /// Writes one layer's clip masks and uniform blocks.

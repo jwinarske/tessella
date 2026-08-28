@@ -441,11 +441,22 @@ pub fn bindings_for(
             // dropping it to zero would reorder it against a translucent extrusion in the same
             // layer group.
             Content::Fill3d(ref extrusion) => {
+                // Four drawables, which is what the capture shows on every tile: the roof and
+                // the instanced walls, each drawn in the depth pass and again in the colour
+                // pass. mbgl orders them by draw priority — every depth builder before every
+                // colour one — and within that by the order the builders were made, roof then
+                // walls. The sub-layer carries both, since it is what this side orders by.
+                //
+                // The indices are fixed rather than packed: an opaque extrusion emits only two
+                // and they are still 2 and 3, so it does not reorder against a translucent one
+                // in the same layer group.
                 let depth_pass = extrusion.needs_depth_pass();
                 if depth_pass {
                     emit(0, view::fill_pass(), view::extrusion_depth_flags());
+                    emit(1, view::fill_pass(), view::extrusion_depth_flags());
                 }
-                emit(1, view::fill_pass(), view::extrusion_color_flags(depth_pass));
+                emit(2, view::fill_pass(), view::extrusion_color_flags(depth_pass));
+                emit(3, view::fill_pass(), view::extrusion_color_flags(depth_pass));
             }
             // Sublayer 0 and stencilled, which is what `symbol_style.dump` shows: its symbol
             // drawable carries the same flags as the fill above it. Symbols overhang tile edges,

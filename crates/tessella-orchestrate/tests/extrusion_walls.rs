@@ -151,3 +151,136 @@ fn a_patterned_extrusion_takes_the_instanced_pattern_shader() {
         "shader 19 in the capture, beside the roof's 18"
     );
 }
+
+/// And they reach the wire, through a real frame.
+///
+/// The encoder being right is half of it; the other half is that the drawable dispatch asks for
+/// the wall record at all. It caches one list of records per bucket and picks by sub-layer,
+/// where it used to cache a single record and copy it — which was correct for an extrusion with
+/// one geometry and silently wrong the moment it had two.
+mod through_a_frame {
+    use std::collections::BTreeMap;
+
+    use tessella_capture_abi::EnvelopeKind;
+    use tessella_capture_abi::envelope::{GeometryAdd, ViewId, WireRecord as _};
+    use tessella_capture_abi::ring::Ring;
+    use tessella_orchestrate::SlabArena;
+    use tessella_orchestrate::frame::{self, Frame};
+    use tessella_orchestrate::tile::{TileId, build_mvt_tile};
+    use tessella_source::mvt::Tile;
+    use tessella_style::Style;
+    use tessella_style::light::Light;
+    use tessella_tile::camera;
+    use tessella_tile::cover::{self, ViewTransform};
+
+    const REAL_TILE: &[u8] = include_bytes!("../../../tests/mvt-fixtures/real-world-0-0-0.mvt");
+
+    const STYLE: &str = r##"{
+      "version": 8,
+      "sources": {"src": {"type": "vector", "tiles": []}},
+      "layers": [
+        {"id": "blocks", "type": "fill-extrusion", "source": "src", "source-layer": "water",
+         "paint": {"fill-extrusion-height": 20, "fill-extrusion-opacity": 0.8}}
+      ]
+    }"##;
+
+    /// Emits one frame and returns the geometry records, by shader.
+    fn shaders() -> BTreeMap<i32, Vec<GeometryAdd>> {
+        let style = Style::parse(STYLE).expect("the style parses");
+        let view = camera::settled(&ViewTransform {
+            longitude: 0.0,
+            latitude: 0.0,
+            zoom: 3.0,
+            width: 512.0,
+            height: 512.0,
+            bearing: 0.0,
+            pitch: 45.0,
+        });
+        let tiles = cover::cover(&view).expect("covers");
+        let decoded = Tile::decode(REAL_TILE).expect("the fixture decodes");
+        let mut buckets = Vec::new();
+        for tile in &tiles {
+            let id = TileId::new(tile.z, tile.x, tile.y);
+            let built = build_mvt_tile(&style, "src", id, &decoded).expect("the tile builds");
+            buckets.push((id, built));
+        }
+
+        let mut ring = Ring::new(1 << 24);
+        let (producer, consumer) = ring.split();
+        let mut arena = SlabArena::new();
+        frame::emit(
+            producer,
+            &mut arena,
+            &Frame {
+                style: &style,
+                view: &view,
+                view_id: ViewId(0),
+                tiles: &tiles,
+                buckets: &buckets,
+                light: &Light::default(),
+                fonts: None,
+                patterns: None,
+            },
+        )
+        .expect("the frame emits");
+
+        let mut out: BTreeMap<i32, Vec<GeometryAdd>> = BTreeMap::new();
+        while let Some(record) = consumer.peek() {
+            if record.kind == EnvelopeKind::GeometryAdd
+                && let Some(add) = GeometryAdd::from_bytes(record.record)
+            {
+                out.entry(add.builtin_shader).or_default().push(add);
+            }
+            let consumed = record.consumed();
+            consumer.advance(consumed);
+        }
+        out
+    }
+
+    /// A frame with an extrusion layer carries both shaders, not just the roof's.
+    #[test]
+    fn a_frame_carries_the_walls_as_well_as_the_roof() {
+        use tessella_capture_abi::BuiltIn;
+
+        let by_shader = shaders();
+        let roofs = by_shader
+            .get(&(BuiltIn::FillExtrusionShader as i32))
+            .map_or(0, Vec::len);
+        let walls = by_shader
+            .get(&(BuiltIn::FillExtrusionInstancedShader as i32))
+            .map_or(0, Vec::len);
+
+        assert!(roofs > 0, "no roof reached the wire: {:?}", by_shader.keys());
+        assert_eq!(
+            walls, roofs,
+            "one wall drawable per roof, which is what the capture shows on every tile"
+        );
+    }
+
+    /// The wall records are the instanced ones, and the roof records are not.
+    #[test]
+    fn only_the_walls_carry_instance_attributes() {
+        use tessella_capture_abi::BuiltIn;
+
+        let by_shader = shaders();
+        for record in by_shader
+            .get(&(BuiltIn::FillExtrusionInstancedShader as i32))
+            .expect("walls")
+        {
+            assert_eq!(
+                record.instance_attrs.count, 2,
+                "the outline position and the packed decimals"
+            );
+            assert_eq!(record.vertex_count, 4, "a unit quad");
+        }
+        for record in by_shader
+            .get(&(BuiltIn::FillExtrusionShader as i32))
+            .expect("roofs")
+        {
+            assert_eq!(
+                record.instance_attrs.count, 0,
+                "the roof is drawn once, not once per anything"
+            );
+        }
+    }
+}

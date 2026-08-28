@@ -43,22 +43,23 @@ fn an_extrusion_layer_builds_from_polygons() {
     assert!(!extrusion.segments.is_empty());
 }
 
-/// A translucent extrusion is two drawables; an opaque one is a single pass.
+/// Two geometries, each drawn once per pass.
 ///
-/// mbgl's `doDepthPass = (!opaque || hasPattern)`, with `opaque` meaning an opacity of one.
-/// Without the depth pass, every wall alpha-blends against the walls behind it — a city made of
-/// glass rather than of buildings — so the count is not an optimisation but the difference
-/// between two pictures.
+/// The roof and the walls raised over it, in the depth pass and again in the colour pass — four
+/// drawables, which is what the capture shows on every tile of an extrusion layer. Whether there
+/// is a depth pass is mbgl's `doDepthPass = (!opaque || hasPattern)`; without it every wall
+/// alpha-blends against the walls behind it, a city made of glass rather than of buildings, so
+/// the count is not an optimisation but the difference between two pictures.
 #[test]
-fn a_translucent_extrusion_takes_two_passes() {
+fn an_extrusion_is_two_geometries_in_one_pass_or_two() {
     let tile = Tile::decode(REAL_TILE).expect("the fixture decodes");
 
     let opaque =
         build_mvt_tile(&style_with(""), "src", TileId::new(0, 0, 0), &tile).expect("builds");
     assert_eq!(
         opaque[0].drawable_count(),
-        1,
-        "an opaque extrusion is one pass"
+        2,
+        "an opaque unpatterned extrusion is its roof and its walls, once each"
     );
 
     let translucent = build_mvt_tile(
@@ -70,8 +71,8 @@ fn a_translucent_extrusion_takes_two_passes() {
     .expect("builds");
     assert_eq!(
         translucent[0].drawable_count(),
-        2,
-        "a translucent extrusion needs a depth pass in front of its colour pass"
+        4,
+        "and a translucent one draws both again in the depth pass in front of the colour one"
     );
 }
 
