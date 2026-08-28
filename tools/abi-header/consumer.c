@@ -141,6 +141,13 @@ int main(int argc, char **argv) {
      * (view, layer) and indexes it by the order entry's ubo_index, so a consumer that could
      * read geometry and not these could register a scene and draw none of it. */
     uint64_t ubos = 0, ubo_bytes = 0, ubo_frame_wide = 0, ubo_truncated = 0;
+    /* Every geometry id declared, so a use naming one that was not can be reported. The ABI
+     * says a consumer "looks an id up and finds whichever kind of thing it added", and that a
+     * use of an id it never met is a protocol fault. A consumer that counted uses without
+     * resolving them would never notice -- which is what this one did until it was asked to. */
+    uint64_t *declared = NULL;
+    size_t declared_count = 0, declared_cap = 0;
+    uint64_t dangling = 0;
     uint64_t cameras = 0, camera_bad = 0;
     /* Carried out so the producer's own numbers can be checked against them. */
     double first_proj0 = 0.0, first_pitch = -1.0, first_intensity = -1.0;
@@ -194,6 +201,17 @@ int main(int argc, char **argv) {
             }
             memcpy(&add, fixed, sizeof add);
             geometries++;
+            if (declared_count == declared_cap) {
+                size_t grown = declared_cap ? declared_cap * 2 : 64;
+                uint64_t *bigger = (uint64_t *)realloc(declared, grown * sizeof(uint64_t));
+                if (!bigger) {
+                    fprintf(stderr, "consumer: out of memory\n");
+                    return 2;
+                }
+                declared = bigger;
+                declared_cap = grown;
+            }
+            declared[declared_count++] = add.geometry;
             vertices += add.vertex_count;
 
             for (uint32_t i = 0; i < add.attrs.count; i++) {
@@ -214,9 +232,27 @@ int main(int argc, char **argv) {
             }
             break;
         }
-        case TSL_ENVELOPE_KIND_VIEW_USE:
+        case TSL_ENVELOPE_KIND_VIEW_USE: {
             drawables++;
+            tsl_view_use use;
+            if (record.record_len < sizeof use) {
+                break;
+            }
+            memcpy(&use, fixed, sizeof use);
+            /* Linear: a frame declares tens of geometries, and the records arrive in protocol
+             * order so every add precedes every use of it. */
+            int found = 0;
+            for (size_t i = 0; i < declared_count; i++) {
+                if (declared[i] == use.geometry) {
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) {
+                dangling++;
+            }
             break;
+        }
         case TSL_ENVELOPE_KIND_UBO_UPDATE: {
             tsl_ubo_update update;
             if (record.record_len < sizeof update) {
@@ -299,5 +335,7 @@ int main(int argc, char **argv) {
     printf("camera_light_milli %lld\n", (long long)(first_intensity * 1000.0));
     printf("camera_epoch %llu\n", (unsigned long long)first_epoch);
     printf("camera_cutoff %llu\n", (unsigned long long)first_cutoff);
+    printf("dangling_uses %llu\n", (unsigned long long)dangling);
+    free(declared);
     return (unresolved == 0 && ubo_truncated == 0 && camera_bad == 0) ? 0 : 1;
 }

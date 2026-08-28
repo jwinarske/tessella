@@ -538,10 +538,6 @@ fn symbol_stacks(buckets: &[(TileId, Vec<LayerBucket>)]) -> Vec<Vec<alloc::strin
     stacks
 }
 
-/// Encodes one bucket for the wire, or `None` for a kind that carries no vertex buffer.
-///
-/// A background is the one that legitimately carries none: it fills the viewport, so its quad is
-/// something the consumer synthesizes rather than something the producer sends (§2.2).
 /// What every bucket's encoding reads from the frame around it.
 ///
 /// Grouped rather than passed one by one: they are all "what this frame has fetched and where
@@ -558,6 +554,12 @@ struct Encoding<'a> {
     zoom: f64,
 }
 
+/// Encodes one bucket for the wire.
+///
+/// Every kind carries a vertex buffer now, the background included: it used to be the exception,
+/// on the grounds that a viewport-filling quad is the consumer's to synthesize, and the
+/// consequence was a `ViewUse` naming an id no `GeometryAdd` declared. The oracle sends the quad
+/// too — four vertices and six indices, static across every capture.
 fn encode(
     arena: &mut SlabArena,
     bucket: &LayerBucket,
@@ -672,8 +674,16 @@ fn encode(
             &raster.bucket,
             raster_texture,
         )),
-        // A background's quad is the consumer's to synthesize.
-        _ => None,
+        Content::Background => {
+            let atlas = patterns
+                .filter(|patterns| {
+                    patterns
+                        .placement(&bucket.paint, "background-pattern", zoom)
+                        .is_some()
+                })
+                .map(|patterns| patterns.texture);
+            Some(emit::encode_background(arena, geometry, atlas))
+        }
     }?;
     Some((encoded, fill_shared))
 }

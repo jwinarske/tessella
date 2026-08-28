@@ -220,6 +220,20 @@ fn c_reads_the_frame() {
         counts.get("order_entries").copied().unwrap_or(0) >= emitted.drawables as u64,
         "the order has an entry per drawable at least: {counts:?}"
     );
+
+    // Every use names something that was added. The ABI's model is that a consumer looks an id
+    // up and finds whichever kind of thing declared it; an id nothing declared is a use with no
+    // answer, and the record itself calls that a protocol fault.
+    //
+    // The background is why this is asserted rather than assumed. It takes ids from the shared
+    // space and emits a `ViewUse` for each, and §2.2 has the consumer synthesize its quad rather
+    // than the producer send one -- so four uses named four ids no `GeometryAdd` ever declared,
+    // and the earlier version of this consumer counted them without noticing.
+    assert_eq!(
+        counts.get("dangling_uses").copied(),
+        Some(0),
+        "a drawable names geometry that was never added: {counts:?}"
+    );
 }
 
 /// The uniform buffers and the camera, read from C and checked against the producer.

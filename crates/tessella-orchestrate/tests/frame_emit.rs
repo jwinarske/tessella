@@ -172,13 +172,17 @@ fn the_order_precedes_the_camera_naming_it() {
 /// A fill is the case that makes this worth asserting: its triangles and its outline are two
 /// drawables over one bucket, and `bindings_for` gives each its own geometry id. Announcing the
 /// bucket once would leave the second use naming an id the consumer never received.
+///
+/// The background used to be subtracted here — it took an id and emitted a use while the
+/// producer sent no geometry for it, and this test carried that exception in its own message.
+/// It sends the quad now, as the oracle does, so the count is exact and the exception is gone.
 #[test]
 fn every_drawable_has_a_geometry_of_its_own() {
     let (_, emitted, tiles) = emit_frame();
+    let _ = tiles;
     assert_eq!(
-        emitted.geometries + tiles,
-        emitted.drawables,
-        "one geometry per drawable, less one synthesized background quad per tile"
+        emitted.geometries, emitted.drawables,
+        "one geometry per drawable, background included"
     );
 }
 

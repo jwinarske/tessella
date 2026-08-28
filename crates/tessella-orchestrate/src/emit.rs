@@ -763,6 +763,75 @@ pub fn encode_line(
     )
 }
 
+/// Encodes a background's quad.
+///
+/// # Why the producer sends this rather than the consumer inventing it
+///
+/// It used to not. A background took an id from the shared geometry space and emitted a
+/// `ViewUse` for it, and nothing ever declared it — the comment said the quad was "something the
+/// consumer synthesizes rather than something the producer sends". That leaves a use naming an
+/// id no add ever declared, which the ABI calls a protocol fault in as many words: a consumer
+/// "looks an id up and finds whichever kind of thing it added", and for a background it found
+/// nothing. On a ten-tile cover that was ten dangling uses of sixty drawables.
+///
+/// The oracle does not synthesize it either. Its background drawables carry four vertices and
+/// six indices, and both goldens share the buffers' hashes because the quad is static:
+/// `RenderStaticData::tileVertices` and `quadTriangleIndices`, transcribed here.
+///
+/// Sending it is also what makes a `background-pattern` expressible. A pattern needs a shader
+/// and a texture named, and the envelope names both on a `GeometryAdd` — a drawable that does
+/// not exist has nowhere to carry either.
+pub fn encode_background(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    pattern_atlas: Option<TextureId>,
+) -> Encoded {
+    /// The tile extent, which is the quad's far corner.
+    const EXTENT: i16 = 8192;
+    // mbgl's static tile quad, in tile units: the corners in the order its indices expect.
+    const QUAD: [[i16; 2]; 4] = [[0, 0], [EXTENT, 0], [0, EXTENT], [EXTENT, EXTENT]];
+    const INDICES: [u16; 6] = [0, 1, 2, 1, 2, 3];
+
+    let vertices = arena.alloc(&as_bytes_i16(&QUAD));
+    let indexes = arena.alloc(&as_bytes_u16(&INDICES));
+
+    let position = AttributeDesc {
+        attr_id: POSITION_ATTRIBUTE,
+        binding: 0,
+        source: vertices,
+        offset: 0,
+        vertex_offset: 0,
+        // Zero, as the oracle's descriptor carries: the shader reads the whole vertex and there
+        // is nothing interleaved beside it.
+        stride: 0,
+        data_type: AttributeDataType::Short2 as u8,
+        declared_data_type: AttributeDataType::Short2 as u8,
+        _pad: [0; 2],
+    };
+
+    let segment = Segment {
+        vertex_offset: 0,
+        index_offset: 0,
+        vertex_length: QUAD.len() as u32,
+        index_length: INDICES.len() as u32,
+    };
+
+    geometry_add(
+        geometry,
+        0,
+        indexes,
+        QUAD.len(),
+        &[position],
+        &[segment],
+        if pattern_atlas.is_some() {
+            BuiltIn::BackgroundPatternShader
+        } else {
+            BuiltIn::BackgroundShader
+        },
+        pattern_atlas,
+    )
+}
+
 /// Encodes a circle layer's geometry.
 ///
 /// The same vertex as a fill's — two shorts — and for the same reason a line's is not: a circle
