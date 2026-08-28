@@ -169,3 +169,113 @@ mod rects {
         assert!(pattern_placement(None, None, [512, 512]).is_none());
     }
 }
+
+/// A line pattern's block, against the capture's decoded values.
+mod line {
+    use tessella_orchestrate::ubo::{
+        LinePatternPlacement, PatternPlacement, pack_line_pattern_tile_props,
+    };
+    use tessella_style::crossfade::Crossfade;
+
+    /// The capture's `ubo layer:3 slot=3`, field for field.
+    ///
+    /// Six drawables at sixty-four bytes is the 384 the oracle wrote. Its blocks decoded to a
+    /// rectangle of `[2, 9, 52, 59]`, a scale of `[1, 0.0625, 0.5, 1]` and a texsize-plus-fade
+    /// of `[512, 512, 1, 0]`.
+    ///
+    /// `0.0625` is one sixteenth, and sixteen is `pixels_to_tile_units(1)` at a tile drawn at
+    /// its own level: the extent, 8192, over the tile size, 512. Getting that term wrong scales
+    /// every pattern by a power of two and still renders.
+    ///
+    /// `[0.5, 1.0]` is the crossfade zooming *out*, which is what an integer camera zoom gives:
+    /// `z > last_integer_zoom` is false at exactly thirteen.
+    #[test]
+    fn a_line_block_matches_the_capture() {
+        let entry = LinePatternPlacement {
+            placement: PatternPlacement {
+                from: [2, 9, 52, 59],
+                to: [2, 9, 52, 59],
+                texsize: [512, 512],
+            },
+            pixel_ratio: 1.0,
+            units_per_pixel: 1.0 / 16.0,
+            crossfade: Crossfade {
+                from_scale: 0.5,
+                to_scale: 1.0,
+                t: 1.0,
+            },
+        };
+        let packed = pack_line_pattern_tile_props(&[entry]);
+        assert_eq!(packed.len(), 64, "a line's block is sixty-four bytes");
+
+        let word =
+            |at: usize| f32::from_le_bytes(packed[at..at + 4].try_into().expect("four bytes"));
+        assert_eq!(
+            [word(0), word(4), word(8), word(12)],
+            [2.0, 9.0, 52.0, 59.0]
+        );
+        assert_eq!(
+            [word(16), word(20), word(24), word(28)],
+            [2.0, 9.0, 52.0, 59.0]
+        );
+        assert_eq!(
+            [word(32), word(36), word(40), word(44)],
+            [1.0, 0.0625, 0.5, 1.0],
+            "scale is pixel ratio, units per pixel, then the crossfade's two"
+        );
+        assert_eq!([word(48), word(52)], [512.0, 512.0], "texsize");
+        assert_eq!(word(56), 1.0, "fade is the crossfade's t");
+        assert_eq!(word(60), 0.0, "pad1");
+    }
+
+    /// Six drawables give the 384 bytes the capture carries.
+    #[test]
+    fn the_buffer_is_one_block_per_drawable() {
+        let entry = LinePatternPlacement {
+            placement: PatternPlacement {
+                from: [1, 2, 3, 4],
+                to: [1, 2, 3, 4],
+                texsize: [512, 512],
+            },
+            pixel_ratio: 1.0,
+            units_per_pixel: 0.0625,
+            crossfade: Crossfade {
+                from_scale: 0.5,
+                to_scale: 1.0,
+                t: 1.0,
+            },
+        };
+        assert_eq!(pack_line_pattern_tile_props(&[entry; 6]).len(), 384);
+    }
+
+    /// A line's block is wider than a fill's, and that is the whole difference.
+    ///
+    /// Sixty-four against forty-eight: a `scale` vector and a `fade`. Packing a line's placement
+    /// with a fill's packer would write blocks a quarter short and every drawable after the
+    /// first would read the previous one's tail.
+    #[test]
+    fn a_line_block_is_wider_than_a_fill_block() {
+        use tessella_orchestrate::ubo::pack_pattern_tile_props;
+
+        let placement = PatternPlacement {
+            from: [1, 2, 3, 4],
+            to: [1, 2, 3, 4],
+            texsize: [512, 512],
+        };
+        assert_eq!(pack_pattern_tile_props(&[placement]).len(), 48);
+        assert_eq!(
+            pack_line_pattern_tile_props(&[LinePatternPlacement {
+                placement,
+                pixel_ratio: 1.0,
+                units_per_pixel: 0.0625,
+                crossfade: Crossfade {
+                    from_scale: 0.5,
+                    to_scale: 1.0,
+                    t: 1.0
+                },
+            }])
+            .len(),
+            64
+        );
+    }
+}

@@ -1233,6 +1233,64 @@ pub fn pattern_placement(
     })
 }
 
+/// A line pattern's block, which carries more than a fill's.
+///
+/// `LinePatternTilePropsUBO` is sixty-four bytes to a fill's forty-eight, and the difference is
+/// the two fields a line needs and a fill does not: a `scale` vector and the fade itself.
+///
+/// # Where each part comes from
+///
+/// `scale` is `[pixel_ratio, 1 / pixels_to_tile_units(1, intZoom), from_scale, to_scale]`. The
+/// second is how many tile units a pixel is worth at this tile's own level, inverted — a
+/// pattern is authored in pixels and drawn in tile units, and without it the pattern's size
+/// tracks the zoom instead of the ground. The last two are the crossfade's, and they are what
+/// keeps a pattern the same size on the ground while the image under it changes: the level
+/// being left is drawn at twice or half the size of the one being entered.
+///
+/// `fade` is the crossfade's `t` — the first place in this stream where the mix reaches a
+/// shader at all. A fill's block has nowhere to put it, which is why a fill's pattern cannot
+/// visibly fade and a line's can.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LinePatternPlacement {
+    /// Where the two images sit, and how big the atlas is.
+    pub placement: PatternPlacement,
+    /// The device pixel ratio.
+    pub pixel_ratio: f32,
+    /// Tile units per pixel at this tile's own level, inverted.
+    pub units_per_pixel: f32,
+    /// The crossfade.
+    pub crossfade: tessella_style::crossfade::Crossfade,
+}
+
+/// Packs `LinePatternTilePropsUBO`, one entry per drawable.
+#[must_use]
+pub fn pack_line_pattern_tile_props(entries: &[LinePatternPlacement]) -> Vec<u8> {
+    const STRIDE: usize = 64;
+    let mut out = Vec::with_capacity(entries.len() * STRIDE);
+    for entry in entries {
+        for rect in [entry.placement.from, entry.placement.to] {
+            for value in rect {
+                out.extend_from_slice(&f32::from(value).to_le_bytes());
+            }
+        }
+        for value in [
+            entry.pixel_ratio,
+            entry.units_per_pixel,
+            entry.crossfade.from_scale,
+            entry.crossfade.to_scale,
+        ] {
+            out.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in entry.placement.texsize {
+            out.extend_from_slice(&f32::from(value).to_le_bytes());
+        }
+        out.extend_from_slice(&entry.crossfade.t.to_le_bytes());
+        out.extend_from_slice(&0f32.to_le_bytes());
+    }
+    debug_assert_eq!(out.len(), entries.len() * STRIDE);
+    out
+}
+
 /// Packs `FillPatternTilePropsUBO`, one entry per drawable.
 ///
 /// The rectangles are written as `f32` although they are whole pixels: the shader declares
