@@ -146,18 +146,118 @@ fn one_section_at_one_is_what_it_always_was() {
     );
 }
 
-/// The hash the capture carries, for the test that will compare against it.
+/// The whole thing, through the builder, against the capture.
 ///
-/// Not compared yet. Reaching it needs the tile builder to run this style end to end, which
-/// wants the sprite-less symbol path the other parity tests take; what is asserted here is that
-/// the capture *has* a value to compare with, so the next step has a target rather than a hole.
+/// The rules above are checked from the arithmetic; this checks the result. It runs the same
+/// style the probe ran through the production path — parse, build the tile, collect the glyph
+/// dependencies, fetch the same font off the same disk, lay out — and hashes the glyph positions
+/// the way the probe hashes them.
+///
+/// # Why it is ignored, and what is known
+///
+/// It does not pass, and what it reports is worth more than a green tick: the probe was taught
+/// to decode this attribute so the difference could be read rather than hashed, and it is
+/// specific.
+///
+/// ```text
+/// mbgl:  (342,6318,-1688,-666) (342,6318,-408,-666) (342,6318,-1688,934) …
+/// mine:  (342,6317,-1688,-512) (342,6317,-408,-512) (342,6317,-1688,1088) …
+/// ```
+///
+/// **Every x offset matches, exactly** — all thirty-two of them, across both sections. So the
+/// advances, their per-section scaling, the letter spacing that is *not* scaled with them, and
+/// the horizontal alignment are all right, and the quads are the right width: the big glyphs
+/// span 1600 units in both and the small ones 336.
+///
+/// Two things differ, and they look independent.
+///
+/// Every y offset is out by a constant 154 — 4.8125 pixels — with the spans unchanged, so it is
+/// a shift of the whole block rather than a per-glyph error. That points at `align`'s vertical
+/// shift, which takes a different branch once a line has grown: `shiftY = -blockHeight *
+/// verticalAlign - yOffset` instead of the whole-lines formula. The branch is transcribed and
+/// the inputs to it are what want checking.
+///
+/// And the anchor's y differs by one unit — where **mbgl's own anchor moves between the two
+/// styles**. Building the unscaled label through the same path gives `(342, 6317)`, which agrees
+/// with the capture that `the_glyph_layout_buffer_matches_the_oracle` passes against; mbgl
+/// answers 6318 for the same feature at the same point once the label is scaled. So the anchor
+/// is not independent of the shaping there, and finding out why is the first thing to do rather
+/// than the last, because a fix to the offsets that assumed a fixed anchor would be tuned to the
+/// wrong number.
 #[test]
-fn the_capture_carries_a_layout_hash() {
-    let (_, hash) = golden();
-    assert_ne!(hash, 0, "the layout attribute was not elided");
-    assert_ne!(
-        fnv1a(&[]),
+#[ignore = "reports a real difference; see the module note for the numbers"]
+fn the_shaped_label_matches_the_capture() {
+    use std::collections::BTreeMap;
+
+    use tessella_glyph::fonts::{Dependencies, Fonts};
+    use tessella_orchestrate::tile::{Content, TileId, build_tile};
+    use tessella_source::geojson;
+    use tessella_source::tiling::TilingOptions;
+    use tessella_storage::source::{FetchError, FileSource, Response};
+    use tessella_style::Style;
+
+    /// Serves the `file://` URLs the style's `glyphs` template builds, off the disk the capture
+    /// read the same font from.
+    struct Disk;
+    impl FileSource for Disk {
+        fn fetch(&self, url: &str) -> Result<Response, FetchError> {
+            let path = url.strip_prefix("file://").unwrap_or(url);
+            Ok(Response {
+                status: 200,
+                body: std::fs::read(path).unwrap_or_default(),
+                ..Response::default()
+            })
+        }
+    }
+
+    let raw = include_str!("../../tessella-style/tests/scaled_style.json");
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let style: Style =
+        serde_json::from_str(&raw.replace("TESSELLA", root)).expect("the style parses");
+    let Some(tessella_style::Source::Geojson(source)) = style.source("probe") else {
+        panic!("one geojson source")
+    };
+    let features = geojson::read(&source.data).expect("features read");
+
+    // The tile the capture put the label in.
+    let buckets = build_tile(
+        &style,
+        "probe",
+        TileId::new(13, 4093, 2723),
+        &features,
+        TilingOptions::default(),
+    )
+    .expect("the tile builds");
+    let layout = buckets
+        .iter()
+        .find_map(|bucket| match &bucket.content {
+            Content::Symbol(layout) => Some(layout.clone()),
+            _ => None,
+        })
+        .expect("a symbol layer");
+
+    let mut fonts = Fonts::new(style.glyphs.clone().expect("a glyph URL"));
+    let mut merged: Dependencies = BTreeMap::new();
+    for (stack, codepoints) in layout.dependencies() {
+        merged.entry(stack).or_default().extend(codepoints);
+    }
+    fonts.fetch(&merged, &Disk).expect("the font reads");
+
+    let (buffers, _) = layout.lay_out(&fonts, None);
+    let (vertices, hash) = golden();
+    assert_eq!(buffers.vertices.len(), vertices, "glyph count");
+
+    // The attribute's own bytes, as the probe gathers them: `pos_offset` is the first eight of
+    // every twenty-four.
+    let mut field = Vec::with_capacity(buffers.vertices.len() * 8);
+    for vertex in &buffers.vertices {
+        for value in vertex.pos_offset {
+            field.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    assert_eq!(
+        fnv1a(&field),
         hash,
-        "and it is a hash of something rather than of nothing"
+        "the scaled label's glyph positions differ from the capture's"
     );
 }

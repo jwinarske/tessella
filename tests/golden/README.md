@@ -242,8 +242,10 @@ them.
 
 ## Reading the actual values
 
-`--dump-vertices` prints coordinates rather than hashes, decoding the `Short2` position
-attribute into int16 pairs. It is deliberately not part of the dump — a hash is what keeps the
+`--dump-vertices` prints coordinates rather than hashes, decoding the signed-short attributes
+into int16 tuples: `Short2` is a flat layer's position and `Short4` a symbol's anchor and corner
+offset, the latter read at its own offset and stride because the symbol attributes share a
+buffer. It is deliberately not part of the dump — a hash is what keeps the
 golden file bounded and diffable — but it is how the tile-coordinate pipeline gets built
 against measured values instead of guesses. It is what established that the hermetic style's
 fill geometry clips to `-2048..10240` at extent 8192, and that rings keep their closing
