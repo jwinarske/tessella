@@ -35,7 +35,7 @@ use tessella_capture_abi::envelope::{
     AddReason, AttributeDesc, GeometryAdd, GeometryId, GeometryRemove, MeshAdd, MeshFormat,
     Segment as AbiSegment, SlabEntry, SlabRef, SlabRegion, Span, TextureId, TextureRef, WireRecord,
 };
-use tessella_capture_abi::generated::{texture_slots, ubo_slots};
+use tessella_capture_abi::generated::{shader_attributes, texture_slots, ubo_slots};
 use tessella_capture_abi::ring::{Full, Producer};
 use tessella_capture_abi::{AttributeDataType, BuiltIn, EnvelopeKind};
 use tessella_layout::circle::CircleBucket;
@@ -822,6 +822,19 @@ impl Encoded {
             .collect()
     }
 
+    /// The per-instance attributes, decoded.
+    ///
+    /// Empty for everything that is not instanced, which is everything but a fill extrusion's
+    /// walls.
+    #[must_use]
+    pub fn instance_attributes(&self) -> Vec<AttributeDesc> {
+        let size = core::mem::size_of::<AttributeDesc>();
+        let start = self.record.instance_attrs.offset as usize;
+        (0..self.record.instance_attrs.count as usize)
+            .filter_map(|index| AttributeDesc::from_bytes(&self.payload[start + index * size..]))
+            .collect()
+    }
+
     /// The segments, decoded.
     #[must_use]
     pub fn segments(&self) -> Vec<AbiSegment> {
@@ -1288,8 +1301,39 @@ fn geometry_add(
     shader: BuiltIn,
     atlas: Option<TextureId>,
 ) -> Encoded {
+    geometry_add_instanced(
+        geometry,
+        permutation_key,
+        indexes,
+        vertex_count,
+        descriptors,
+        &[],
+        segments,
+        shader,
+        atlas,
+    )
+}
+
+/// As [`geometry_add`], with attributes that advance once per instance rather than per vertex.
+///
+/// The span has been in `GeometryAdd` since R0 and nothing filled it until the extrusion walls:
+/// a shader that draws a small template many times reads its per-vertex attributes from the
+/// template and everything else from here.
+#[allow(clippy::too_many_arguments)]
+fn geometry_add_instanced(
+    geometry: GeometryId,
+    permutation_key: u64,
+    indexes: SlabRef,
+    vertex_count: usize,
+    descriptors: &[AttributeDesc],
+    instances: &[AttributeDesc],
+    segments: &[Segment],
+    shader: BuiltIn,
+    atlas: Option<TextureId>,
+) -> Encoded {
     let mut payload = Vec::new();
     let attrs = push_span(&mut payload, descriptors);
+    let instance_attrs = push_span(&mut payload, instances);
     // The slot comes from the shader's own table, never from the caller — see `texture_refs`.
     let textures = push_span(
         &mut payload,
@@ -1315,7 +1359,7 @@ fn geometry_add(
         indexes,
         vertex_count: vertex_count as u32,
         attrs,
-        instance_attrs: Span::default(),
+        instance_attrs,
         segments,
         texture_refs: textures,
         builtin_shader: shader as i32,
@@ -1535,7 +1579,7 @@ pub fn encode_extrusion(
     attributes: &[u8],
     permutation_key: u64,
     pattern_atlas: Option<TextureId>,
-) -> Encoded {
+) -> (Encoded, ExtrusionShared) {
     let mut vertex_bytes = Vec::with_capacity(bucket.vertices.len() * EXTRUSION_STRIDE as usize);
     for vertex in &bucket.vertices {
         vertex_bytes.extend_from_slice(&vertex.position[0].to_le_bytes());
@@ -1558,23 +1602,142 @@ pub fn encode_extrusion(
         ),
     ];
     let descriptors = descriptors(&fixed, vertices, EXTRUSION_STRIDE, layout, interleaved);
-    geometry_add(
+    let shared = ExtrusionShared { outline: vertices };
+    let roof = geometry_add(
         geometry,
         permutation_key,
         indexes,
         bucket.vertices.len(),
         &descriptors,
         &bucket.segments,
-        // The pattern variant of whichever branch this build emits. The oracle's capture shows
-        // *both* 18 and 19 per tile, at four and five vertices — mbgl's instanced extrusion
-        // draws the roof and the walls as separate drawables. This build emits one, so it takes
-        // the pattern variant of the one it emits; splitting the roof from the walls is a
-        // question about the extrusion's geometry that predates patterns.
+        // The roof and outline. The walls are a second drawable over the same buffer — see
+        // [`encode_extrusion_walls`], which the capture shows beside this one on every tile.
         if pattern_atlas.is_some() {
             BuiltIn::FillExtrusionPatternShader
         } else {
             BuiltIn::FillExtrusionShader
         },
+        pattern_atlas,
+    );
+    (roof, shared)
+}
+
+/// The buffer an extrusion's walls stand on.
+///
+/// The roof's vertices, which the wall drawable reads *per instance* rather than per vertex:
+/// one building outline point raises one wall quad. Held rather than re-derived because the two
+/// drawables must name the same bytes — encoding them twice would double the upload for
+/// geometry the consumer already has.
+#[derive(Debug, Clone, Copy)]
+pub struct ExtrusionShared {
+    /// The extrusion's own vertex buffer.
+    pub outline: SlabRef,
+}
+
+/// The wall template: a unit quad, four vertices of `Short2`.
+///
+/// mbgl's `RenderStaticData::fillExtrusionVertices`, in its order. The shader raises each corner
+/// to the height the instance names, so the geometry of every wall in the world is these four
+/// numbers — which is the whole point of drawing them instanced.
+const WALL_TEMPLATE: [[i16; 2]; 4] = [[1, 0], [1, 1], [0, 0], [0, 1]];
+
+/// Its indices: mbgl's `quadTriangleIndices`.
+const WALL_INDICES: [u16; 6] = [0, 1, 2, 1, 2, 3];
+
+/// Bytes between consecutive template vertices.
+const WALL_STRIDE: u32 = 4;
+
+/// Encodes a fill extrusion's walls, as instances over the roof's outline.
+///
+/// # Why this is a second drawable rather than more vertices
+///
+/// Because mbgl draws it that way, and the capture shows both: `sh0018` at five vertices and
+/// `sh0019` at four, on every tile of the extrusion layer. A wall is a quad raised on one edge
+/// of the footprint, so a build that put walls in the vertex buffer would write four vertices
+/// per outline point per tile. Instanced, the four are written once for the whole map and the
+/// outline the consumer already has for the roof is what varies.
+///
+/// # What each rate carries
+///
+/// Per vertex: the template corner alone. Per instance: the outline position and the packed
+/// decimals-and-edge-distance, both read out of the *roof's* buffer at the roof's own stride —
+/// the same bytes, walked one vertex at a time instead of one corner at a time. The generated
+/// table is what says which binding each takes, and it disagrees with the non-instanced shader's
+/// numbering: `idFillExtrusionOutlinePosAttribute` is attribute 2 at binding 1 where the roof's
+/// attribute 2 is its normal.
+pub fn encode_extrusion_walls(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    shared: ExtrusionShared,
+    permutation_key: u64,
+    pattern_atlas: Option<TextureId>,
+) -> Encoded {
+    let shader = if pattern_atlas.is_some() {
+        BuiltIn::FillExtrusionPatternInstancedShader
+    } else {
+        BuiltIn::FillExtrusionInstancedShader
+    };
+
+    let vertices = arena.alloc(&as_bytes_i16(&WALL_TEMPLATE));
+    let indexes = arena.alloc(&as_bytes_u16(&WALL_INDICES));
+
+    let template = [AttributeDesc {
+        attr_id: POSITION_ATTRIBUTE,
+        binding: 0,
+        source: vertices,
+        offset: 0,
+        vertex_offset: 0,
+        stride: WALL_STRIDE,
+        data_type: AttributeDataType::Short2 as u8,
+        declared_data_type: AttributeDataType::Short2 as u8,
+        _pad: [0; 2],
+    }];
+
+    // Read off the generated table rather than written here: the bindings are mbgl's, they are
+    // not the roof's, and a transcription is a number that can drift from the shader it names.
+    let mut instances = Vec::new();
+    for attribute in shader_attributes::instance_attributes(shader) {
+        let (offset, data_type) = match attribute.name {
+            "idFillExtrusionOutlinePosAttribute" => (0, AttributeDataType::Short2),
+            "idFillExtrusionDecimalsEdAttribute" => (4, AttributeDataType::UShort2),
+            // The data-driven ones — colour, base, height, the pattern rectangles — come from
+            // the binder's interleaved buffer, which this does not have. A constant-paint
+            // extrusion supplies none of them, which is the case the capture covers; supplying
+            // some and not others would be worse than supplying none, because the shader would
+            // read a buffer that is there for half its instances.
+            _ => continue,
+        };
+        instances.push(AttributeDesc {
+            attr_id: attribute.attr_id,
+            binding: attribute.binding,
+            source: shared.outline,
+            offset,
+            vertex_offset: 0,
+            stride: EXTRUSION_STRIDE,
+            data_type: data_type as u8,
+            declared_data_type: attribute.declared as u8,
+            _pad: [0; 2],
+        });
+    }
+
+    // One segment over the whole template. The instance count is not on the wire and does not
+    // need to be: it is the outline buffer's length over its stride, which the consumer has.
+    let segment = Segment {
+        vertex_offset: 0,
+        index_offset: 0,
+        vertex_length: WALL_TEMPLATE.len() as u32,
+        index_length: WALL_INDICES.len() as u32,
+    };
+
+    geometry_add_instanced(
+        geometry,
+        permutation_key,
+        indexes,
+        WALL_TEMPLATE.len(),
+        &template,
+        &instances,
+        core::slice::from_ref(&segment),
+        shader,
         pattern_atlas,
     )
 }

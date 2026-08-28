@@ -1140,7 +1140,12 @@ fn encode(
                         .is_some()
                 })
                 .map(|patterns| patterns.texture);
-            Some(emit::encode_extrusion(
+            // The walls stand on these, and are not emitted yet: the drawable dispatch here
+            // encodes one record per bucket and copies it for the second pass, where an
+            // extrusion needs two *different* records — the roof and the instanced walls — each
+            // used by both passes. That is the next change; the encoder for the walls exists and
+            // is checked against the capture.
+            let (roof, _buffers) = emit::encode_extrusion(
                 arena,
                 geometry,
                 extrusion,
@@ -1148,7 +1153,8 @@ fn encode(
                 bucket.binder.data(),
                 key,
                 atlas,
-            ))
+            );
+            Some(roof)
         }
         Content::Symbol(layout) => {
             // Shaping is where a symbol layer's geometry comes from, and it cannot happen

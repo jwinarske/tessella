@@ -63,15 +63,10 @@ fn encode(kind: &str, extra: &str, family: &[BuiltIn], shader: BuiltIn) -> Encod
         Content::Circle(b) => {
             encode_circle(&mut arena, GeometryId(1), b, &vertex_layout, data, key)
         }
-        Content::Fill3d(b) => encode_extrusion(
-            &mut arena,
-            GeometryId(1),
-            b,
-            &vertex_layout,
-            data,
-            key,
-            None,
-        ),
+        Content::Fill3d(b) => {
+            // The roof; its walls are a second drawable over the same buffer.
+            encode_extrusion(&mut arena, GeometryId(1), b, &vertex_layout, data, key, None).0
+        }
         other => panic!("unexpected content: {other:?}"),
     }
 }
