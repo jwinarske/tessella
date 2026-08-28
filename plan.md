@@ -1948,7 +1948,17 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   because most source keys are single words needing no rename — so the key fell into `extra` and
   the field was `None` for every style ever written. Not a parse error, and indistinguishable
   from a style that stated nothing. `clusterRadius` and `clusterMaxZoom` were the same and are
-  fixed with it, inert only because clustering is not built. The round trip is asserted as well
+  fixed with it.
+  **Clustering itself is built**: `supercluster.hpp` and the `kdbush.hpp` it stands on,
+  transcribed and checked against supercluster's own expectations over maplibre-native's
+  `places.json`. A transcription rather than any clustering, because the grouping is a property
+  of the whole construction and not of the radius — the index's visit order decides which cluster
+  absorbs a point, so two implementations that both group within a radius draw different maps.
+  The expectations reach through all of it: thirty-nine features standing for a hundred and
+  ninety-six points in the world tile, a named cluster's four children in the index's own order,
+  five expansion zooms, and ten leaves from an offset of five. What is not built is
+  `clusterProperties`, the map/reduce pair that accumulates arbitrary fields into a cluster; the
+  style layer does not parse it either, so a hook would have no caller. The round trip is asserted as well
   as the read: an offline region records the style it pinned, so a rename that reads correctly
   and writes `tile_size` produces a document nothing else can read back.
   The builder is a third one rather than an arm of the other two. The existing pair take features
