@@ -1070,6 +1070,9 @@ version = "0.0.0"
 dependencies = [
  "tessella-capture-abi",
  "tessella-orchestrate",
+ "tessella-storage",
+ "tessella-style",
+ "tessella-tile",
 ]
 
 [[package]]
