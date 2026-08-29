@@ -1,0 +1,20 @@
+[package]
+name = "tessella-ffi"
+description = "C ABI for embedding tessella in a consumer's process."
+edition.workspace = true
+rust-version.workspace = true
+version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+# `staticlib` because a consumer links this into its own shared object: §3.5's
+# "staticlib-in-mirror", where the only process coupling is the ring. `cdylib` for the case that
+# wants a shared object of its own, and `rlib` so the workspace's own tests can call in without
+# going through C.
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+tessella-capture-abi = { path = "../tessella-capture-abi" }
+tessella-orchestrate = { path = "../tessella-orchestrate" }

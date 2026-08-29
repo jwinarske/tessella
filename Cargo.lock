@@ -1065,6 +1065,14 @@ name = "tessella-capture-abi"
 version = "0.0.0"
 
 [[package]]
+name = "tessella-ffi"
+version = "0.0.0"
+dependencies = [
+ "tessella-capture-abi",
+ "tessella-orchestrate",
+]
+
+[[package]]
 name = "tessella-glyph"
 version = "0.0.0"
 dependencies = [
