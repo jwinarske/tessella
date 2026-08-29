@@ -646,7 +646,7 @@ fn a_cold_start_reports_when_it_first_draws() {
     const IN_FLIGHT: usize = 2;
 
     let mut first_drawn = None;
-    let first_legible: Option<u64> = None;
+    let mut first_legible = None;
     let mut requests = 0usize;
     for frame in 0..40u64 {
         tiles.now.set(frame);
@@ -676,17 +676,19 @@ fn a_cold_start_reports_when_it_first_draws() {
         {
             first_drawn = Some(frame);
         }
-        // `Map::uncovered` is deliberately *not* read here yet. The plumbing is in — the
-        // `Pyramid::uncovered` callback, the substitution pass counting it, the accessor — and
-        // it reports zero on a frame where nine ideal tiles have nothing over them at any
-        // resolution, which the same frame's `wanted` list and its own failure to draw both
-        // contradict. Until that disagreement is explained the counter is not a measurement,
-        // and reporting it as one would put a number in §12.10 that means nothing.
-        let _ = &first_legible;
+        // Legible: no ideal tile left with nothing over it at any resolution. §12.10's number,
+        // and the one a prefetch has to move.
+        if first_legible.is_none() && map.uncovered() == 0 {
+            first_legible = Some(frame);
+        }
     }
 
     let at = first_drawn.expect("a cold start must eventually draw something");
-    println!("cold start: first drew at frame {at}, {requests} tiles requested");
+    let legible = first_legible.expect("a cold start must eventually become legible");
+    println!(
+        "cold start: first drew at frame {at}, legible at frame {legible}, \
+         {requests} tiles requested"
+    );
     // Recorded rather than bounded tightly: this is the number an onion exists to move, and a
     // tight assertion here would have to be relaxed to make the improvement, which is the wrong
     // way round. What is asserted is that it draws at all within the run.

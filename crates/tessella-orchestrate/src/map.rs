@@ -293,6 +293,7 @@ impl Map {
             cover.draw(&mut pass, 0..=tessella_tile::cover::MAX_ZOOM);
             self.drawn = pass.drawn;
             self.wanted = pass.wanted;
+            self.uncovered = pass.uncovered;
         }
 
         // Found, not built. A tile the source already holds costs a lookup, and one that has not
