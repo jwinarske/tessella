@@ -577,3 +577,110 @@ fn a_sweep_is_never_blank_through_the_loop() {
         settled_at.expect("it settled")
     );
 }
+
+/// A cold start with bounded fetch concurrency, and the harness an onion will be measured with.
+///
+/// The never-blank sweep seeds the z0 tile, because a real map's lowest level is one request that
+/// covers the world. This seeds nothing: a tile exists only once it has been asked for and the
+/// latency has passed.
+///
+/// # What it measures, and what it does not yet
+///
+/// It reports the frame at which the map first draws *anything*, and that number is not the one
+/// §12.10 wants. First-anything is satisfied by a single tile arriving, so it lands at the fetch
+/// latency whatever the request order is — measured, frame 3 with unlimited concurrency and
+/// frame 3 with two fetches in flight. An onion cannot move a number that is already at the
+/// floor for the wrong reason.
+///
+/// The number that matters is time to first *legible* frame: the viewport fully covered at any
+/// resolution. That is exactly the `covered` flag `update_renderables` computes while walking,
+/// and the substitution pass here discards it. Exposing it is what turns this harness into the
+/// measurement, and it is the next piece rather than this one.
+///
+/// The bounded concurrency is kept because it is the condition an onion trades against: if every
+/// tile a cover names arrives together, asking for a coarse one first buys nothing. The bound is
+/// what makes coarse-first cheaper than ideal-first, and a harness without it would report no
+/// improvement from a prefetch that would help a real map considerably.
+#[test]
+fn a_cold_start_reports_when_it_first_draws() {
+    const LATENCY: u64 = 3;
+
+    struct Cold {
+        ready_at: std::cell::RefCell<std::collections::BTreeMap<TileId, u64>>,
+        now: std::cell::Cell<u64>,
+        buckets: Arc<Vec<LayerBucket>>,
+    }
+    impl Tiles for Cold {
+        fn buckets(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
+            let ready = self.ready_at.borrow();
+            match ready.get(&tile) {
+                Some(&at) if at <= self.now.get() => Some(Arc::clone(&self.buckets)),
+                _ => None,
+            }
+        }
+    }
+
+    let style = Style::parse(STYLE).expect("the style parses");
+    let decoded = Tile::decode(REAL_TILE).expect("the fixture decodes");
+    let built = build_mvt_tile(&style, "src", TileId::new(0, 0, 0), &decoded).expect("builds");
+    let tiles = Cold {
+        ready_at: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+        now: std::cell::Cell::new(0),
+        buckets: Arc::new(built),
+    };
+
+    let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
+    // SAFETY: as above.
+    let (mut producer, _consumer) =
+        unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
+
+    // Deep enough that the ideal level is many tiles and its ancestors are few, which is the
+    // asymmetry an onion trades on.
+    let mut map = Map::new(style, view(9.0), ViewId(0));
+
+    // Two fetches in flight at once. Unlimited concurrency is the assumption that makes a
+    // prefetch look pointless: if every tile a cover names arrives together, asking for a coarse
+    // one first buys nothing. Real fetching is bounded — by sockets, by the origin, by the
+    // radio — and that bound is exactly what an onion trades against, so the fixture has to have
+    // one or the measurement cannot see the thing it is for.
+    const IN_FLIGHT: usize = 2;
+
+    let mut first_drawn = None;
+    let mut requests = 0usize;
+    for frame in 0..40u64 {
+        tiles.now.set(frame);
+        map.mark_dirty();
+        let tick = map.tick(&mut producer, &tiles).expect("a cold tick");
+        {
+            let mut ready = tiles.ready_at.borrow_mut();
+            let outstanding = ready.values().filter(|&&at| at > frame).count();
+            let mut room = IN_FLIGHT.saturating_sub(outstanding);
+            // In the order the map asked for them, which is what makes the request order a
+            // design decision rather than an accident of iteration.
+            for want in map.wanted() {
+                if room == 0 {
+                    break;
+                }
+                let id = TileId::new(want.z, want.x, want.y);
+                if let std::collections::btree_map::Entry::Vacant(slot) = ready.entry(id) {
+                    slot.insert(frame + LATENCY);
+                    requests += 1;
+                    room -= 1;
+                }
+            }
+        }
+        if first_drawn.is_none()
+            && let Tick::Emitted(emitted) = tick
+            && emitted.drawables > 0
+        {
+            first_drawn = Some(frame);
+        }
+    }
+
+    let at = first_drawn.expect("a cold start must eventually draw something");
+    println!("cold start: first drew at frame {at}, {requests} tiles requested");
+    // Recorded rather than bounded tightly: this is the number an onion exists to move, and a
+    // tight assertion here would have to be relaxed to make the improvement, which is the wrong
+    // way round. What is asserted is that it draws at all within the run.
+    assert!(at < 40, "a cold start never drew anything");
+}
