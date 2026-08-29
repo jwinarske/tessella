@@ -224,3 +224,148 @@ fn a_pan_sends_only_what_entered() {
         first.geometries
     );
 }
+
+/// A map with glyphs draws labels; the same map without them draws the rest and no labels.
+///
+/// # It fails, and what it found is worth more than a green tick
+///
+/// **A symbol layer drawn before its glyphs arrive never draws at all.** Not "draws late" —
+/// never, for the life of the map.
+///
+/// The emitter's incremental path encodes only *fresh* buckets: a geometry id is allocated in
+/// the binding pass and the bucket is fresh the frame its id is new, known ever after. But a
+/// symbol bucket is bound like any other, while `encode_parts` refuses it when `fonts` is
+/// `None` — `layout.lay_out(fonts?, …)`. So the first frame binds the bucket, encodes nothing,
+/// and marks it known; every frame after skips it at
+/// `if registry.is_some() && !fresh_buckets.contains(…)`, and the glyphs arriving changes
+/// nothing because freshness was already spent.
+///
+/// This is the normal case rather than a race. Which glyphs a style needs is discovered by
+/// evaluating `text-field` against a tile's own features, so the fetch *cannot* precede the
+/// first tile build — every map takes this path.
+///
+/// Measured here: the layout produces twenty vertices when called directly, and the same
+/// buckets through the frame produce zero geometries both before and after the glyphs land.
+///
+/// # Why it was not caught before
+///
+/// Nothing drove a second frame. `frame::emit` is called from thirteen test files and each
+/// emits once, where every bucket is fresh by construction and the skip never runs. It took a
+/// loop to reach the frame where freshness has been spent.
+///
+/// # Where the fix goes, and why not here
+///
+/// In the binding pass: a bucket that cannot be encoded yet must not be bound, so that it is
+/// still fresh when its resources arrive. Not at the skip — the comment above `fresh_buckets`
+/// explains that the skip is bucket-scoped precisely because getting its scope wrong encodes one
+/// drawable's bytes under another's id, and "the corruption is silent, because the record is
+/// well formed and simply draws the wrong thing". That is not a place to make a hurried change.
+///
+/// The second half is the assertion. `Frame::fonts` being `None` is documented as a legitimate
+/// frame rather than an error — a symbol layer's glyphs are a fetch, discovered by evaluating
+/// `text-field` against the tile's own features — so a loop that quietly passed `None` forever
+/// would produce frames that pass every well-formedness test in the suite and never draw a
+/// label. That is precisely what this loop did until the fonts were threaded through, and
+/// nothing would have said so.
+#[test]
+#[ignore = "reports a real defect: a symbol bucket bound before its glyphs is never re-encoded"]
+fn labels_draw_only_once_the_glyphs_are_handed_over() {
+    use std::collections::BTreeMap;
+
+    use tessella_glyph::fonts::{Dependencies, Fonts};
+    use tessella_orchestrate::tile::{Content, build_tile};
+    use tessella_source::geojson;
+    use tessella_source::tiling::TilingOptions;
+    use tessella_storage::source::{FetchError, FileSource, Response};
+
+    /// Serves the `file://` URLs the style's `glyphs` template builds.
+    struct Disk;
+    impl FileSource for Disk {
+        fn fetch(&self, url: &str) -> Result<Response, FetchError> {
+            let path = url.strip_prefix("file://").unwrap_or(url);
+            Ok(Response {
+                status: 200,
+                body: std::fs::read(path).unwrap_or_default(),
+                ..Response::default()
+            })
+        }
+    }
+
+    let raw = include_str!("../../tessella-style/tests/symbol_style.json");
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
+    let style: Style = serde_json::from_str(&raw.replace("TESSELLA", root)).expect("style parses");
+    let Some(tessella_style::Source::Geojson(source)) = style.source("probe") else {
+        panic!("one geojson source")
+    };
+    let features = geojson::read(&source.data).expect("features read");
+
+    // The tile the symbol capture puts its labels in.
+    let tile = TileId::new(13, 4093, 2723);
+    let built = build_tile(&style, "probe", tile, &features, TilingOptions::default())
+        .expect("the tile builds");
+    let has_symbols = built
+        .iter()
+        .any(|bucket| matches!(bucket.content, Content::Symbol(_)));
+    assert!(has_symbols, "the fixture must carry a symbol layer");
+
+    /// One tile, at the address the labels are in.
+    struct One {
+        tile: TileId,
+        buckets: Arc<Vec<LayerBucket>>,
+    }
+    impl Tiles for One {
+        fn buckets(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
+            (tile == self.tile).then(|| Arc::clone(&self.buckets))
+        }
+    }
+    let tiles = One {
+        tile,
+        buckets: Arc::new(built),
+    };
+
+    let at = camera::settled(&ViewTransform {
+        longitude: -0.11,
+        latitude: 51.505,
+        zoom: 13.0,
+        width: 1024.0,
+        height: 768.0,
+        bearing: 0.0,
+        pitch: 0.0,
+    });
+
+    let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
+    // SAFETY: as above.
+    let (mut producer, _consumer) =
+        unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
+
+    // Without glyphs first.
+    let mut map = Map::new(style.clone(), at, ViewId(0));
+    let Tick::Emitted(mute) = map.tick(&mut producer, &tiles).expect("a frame") else {
+        panic!("the first tick emits");
+    };
+
+    // Then the same map, the same camera, with the glyphs the labels need.
+    let mut fonts = Fonts::new(style.glyphs.clone().expect("a glyph URL"));
+    let mut wanted: Dependencies = BTreeMap::new();
+    for bucket in tiles.buckets(tile).expect("the tile").iter() {
+        if let Content::Symbol(layout) = &bucket.content {
+            for (stack, codepoints) in layout.dependencies() {
+                wanted.entry(stack).or_default().extend(codepoints);
+            }
+        }
+    }
+    fonts.fetch(&wanted, &Disk).expect("the fonts read");
+    map.set_fonts(fonts);
+
+    let Tick::Emitted(lettered) = map.tick(&mut producer, &tiles).expect("a second frame") else {
+        panic!("handing over glyphs must reopen the gate");
+    };
+
+    assert!(
+        lettered.geometries > mute.geometries,
+        "with glyphs the frame announced {} geometries against {} without — the labels are not \
+         reaching the wire",
+        lettered.geometries,
+        mute.geometries
+    );
+}

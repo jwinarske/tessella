@@ -40,15 +40,36 @@ use alloc::vec::Vec;
 
 use tessella_capture_abi::envelope::ViewId;
 use tessella_capture_abi::ring::Producer;
+use tessella_glyph::fonts::Fonts;
+use tessella_glyph::sprite::IconPosition;
 use tessella_style::Style;
+use tessella_style::crossfade::ZoomHistory;
 use tessella_style::light::Light;
 use tessella_tile::cover::{self, TileCoord, ViewTransform};
 
 use crate::SlabArena;
 use crate::damage::DamageTracker;
-use crate::frame::{self, Emitted, Frame, FrameError};
+use crate::frame::{self, Emitted, Frame, FrameError, Patterns};
 use crate::registry::Session;
 use crate::tile::{LayerBucket, TileId};
+
+/// A packed sprite sheet, as the frame needs to see it.
+///
+/// The pieces rather than the store. `tessella_glyph::sprite::Sprites` is behind the `image`
+/// feature because it decodes a PNG, and a frame loop has no business depending on an image
+/// decoder — a caller that already has a packed atlas, from a cache or an offline bundle, should
+/// not have to reconstitute one to hand it over.
+#[derive(Debug, Clone)]
+pub struct SpriteAtlas {
+    /// The texture id the atlas was uploaded as.
+    pub texture: tessella_capture_abi::envelope::TextureId,
+    /// Its dimensions, which the shader turns a rectangle into texture coordinates with.
+    pub size: [u16; 2],
+    /// Where each sprite was packed, by name.
+    pub positions: alloc::collections::BTreeMap<alloc::string::String, IconPosition>,
+    /// The pixels, RGBA. Uploaded before any drawable names the texture.
+    pub pixels: Vec<u8>,
+}
 
 /// What one tick did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +121,21 @@ pub struct Map {
     damage: DamageTracker,
     /// The cover as of the last tick, so a camera that moved can be told what left.
     cover: Vec<TileCoord>,
+    /// Glyphs, once a caller has fetched them.
+    ///
+    /// Owned rather than borrowed because a map outlives any one frame and the glyph set grows
+    /// as new labels come into view — a borrow would tie the map's lifetime to whichever fetch
+    /// happened to be first.
+    fonts: Option<Fonts>,
+    /// The sprite atlas, once a caller has one. Patterns *and* icons: one sheet serves both.
+    sprites: Option<SpriteAtlas>,
+    /// Which way the camera last crossed an integer zoom.
+    ///
+    /// Kept by the map because it is a property of the camera's *path*, not of any frame: a
+    /// pattern's crossfade chooses its `from` image by which direction the zoom was crossed, and
+    /// a frame that recomputed it from the current zoom alone could not tell a zoom-in from a
+    /// zoom-out that landed on the same number.
+    zoom: ZoomHistory,
 }
 
 impl Map {
@@ -115,7 +151,27 @@ impl Map {
             arena: SlabArena::new(),
             damage: DamageTracker::new(),
             cover: Vec::new(),
+            fonts: None,
+            sprites: None,
+            zoom: ZoomHistory::new(),
         }
+    }
+
+    /// Hands the map the glyphs its symbol layers need.
+    ///
+    /// Set rather than fetched here, for the reason `Frame::fonts` gives: which glyphs a style
+    /// wants is discovered by evaluating `text-field` against a tile's own features, so it is a
+    /// round trip the caller has already had to make. A map without them draws no labels, which
+    /// is a legitimate frame rather than an error.
+    pub fn set_fonts(&mut self, fonts: Fonts) {
+        self.fonts = Some(fonts);
+        self.mark_dirty();
+    }
+
+    /// Hands the map the sprite atlas its patterns and icons draw from.
+    pub fn set_sprites(&mut self, sprites: SpriteAtlas) {
+        self.sprites = Some(sprites);
+        self.mark_dirty();
     }
 
     /// Moves the camera.
@@ -197,6 +253,23 @@ impl Map {
             }
         }
 
+        // Updated before the frame reads it, so a pattern crossing an integer zoom this tick
+        // fades from the image it was actually showing rather than from the one it is arriving
+        // at. `update` reports whether a crossing happened, which nothing here needs — the
+        // history itself carries the direction.
+        self.zoom.update(self.view.zoom, None);
+
+        // Borrowed out of the map for the call. `Patterns` holds references, so it cannot be a
+        // field: building it here is what keeps the atlas owned by the map and the frame's view
+        // of it borrowed.
+        let patterns = self.sprites.as_ref().map(|sprites| Patterns {
+            texture: sprites.texture,
+            size: sprites.size,
+            positions: &sprites.positions,
+            pixels: &sprites.pixels,
+            history: self.zoom,
+        });
+
         let emitted = frame::emit_incremental(
             producer,
             &mut self.arena,
@@ -207,8 +280,8 @@ impl Map {
                 tiles: &self.cover,
                 buckets: &buckets,
                 light: &self.light,
-                fonts: None,
-                patterns: None,
+                fonts: self.fonts.as_ref(),
+                patterns: patterns.as_ref(),
             },
             &mut self.session,
         )?;
