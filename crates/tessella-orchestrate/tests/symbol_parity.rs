@@ -1010,6 +1010,7 @@ mod painter_order {
                 order::tile_of(tile.z, tile.x, tile.y),
                 &buckets,
                 &mut next_id,
+                true,
             ) {
                 tile_of_geometry.insert(binding.geometry.0, (tile.x, tile.y));
                 order.bind(binding);

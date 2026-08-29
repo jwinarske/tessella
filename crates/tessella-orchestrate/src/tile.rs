@@ -1234,6 +1234,32 @@ impl Content {
             Self::Fill3d(bucket) => !bucket.segments.is_empty(),
         }
     }
+
+    /// Whether this bucket can be turned into records with the resources a frame holds.
+    ///
+    /// [`Self::has_data`] asks whether the bucket has content at all. This asks whether it can be
+    /// *encoded now*, and a symbol layer is where the two part: it has data as soon as it
+    /// resolved text, and cannot be encoded until the glyphs to shape that text have arrived.
+    ///
+    /// # Why the difference has to be visible here
+    ///
+    /// Because binding is what spends a drawable's one chance to be announced. An id is
+    /// allocated in the binding pass and the bucket is *fresh* only the frame its id is new;
+    /// every frame after, the incremental path skips it as known. So a bucket bound before it
+    /// could be encoded is bound to silence: it announces nothing, is marked known, and is never
+    /// looked at again — the labels arrive and no frame ever carries them.
+    ///
+    /// That is the normal case rather than a race. Which glyphs a style needs is discovered by
+    /// evaluating `text-field` against a tile's own features, so the fetch cannot precede the
+    /// first tile build.
+    ///
+    /// Patterns are deliberately not here. A pattern layer without its sprites draws as a plain
+    /// fill, which is a frame the consumer can use; a symbol layer without its glyphs draws
+    /// nothing at all.
+    #[must_use]
+    pub fn is_encodable(&self, fonts: bool) -> bool {
+        self.has_data() && (fonts || !matches!(self, Self::Symbol(_)))
+    }
 }
 
 impl TileId {

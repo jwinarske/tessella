@@ -125,6 +125,7 @@ fn emit_view(
             order::tile_of(tile.z, tile.x, tile.y),
             &buckets,
             next_id,
+            true,
         ) {
             by_layer
                 .entry(binding.layer_index)

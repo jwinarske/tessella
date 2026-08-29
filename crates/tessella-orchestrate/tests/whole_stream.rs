@@ -100,6 +100,7 @@ fn emit_frame() -> Vec<EnvelopeKind> {
             order::tile_of(tile.z, tile.x, tile.y),
             &buckets,
             &mut next_id,
+            true,
         ) {
             by_layer
                 .entry(binding.layer_index)
@@ -500,6 +501,7 @@ fn a_settled_frame_goes_quiet() {
             order::tile_of(tile.z, tile.x, tile.y),
             &buckets,
             &mut next_id,
+            true,
         ) {
             draw_order.bind(binding);
         }

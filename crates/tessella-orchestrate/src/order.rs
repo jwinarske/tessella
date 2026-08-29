@@ -379,16 +379,25 @@ pub struct Emitted {
 /// Geometry ids come from `next_id`, advanced per drawable. In the real pipeline they come from
 /// the shared geometry registry; here they only have to be distinct and stable.
 #[must_use]
+/// `fonts` says whether this frame holds the glyphs a symbol layer needs. A caller with no
+/// symbol layers may pass either; a caller that has not fetched glyphs must pass `false`, or it
+/// binds a label that can never be drawn — see [`Content::is_encodable`].
+///
+/// [`Content::is_encodable`]: crate::tile::Content::is_encodable
 pub fn bindings_for(
     view: ViewId,
     tile: TileId,
     buckets: &[LayerBucket],
     next_id: &mut u64,
+    fonts: bool,
 ) -> Vec<GeometryBinding> {
     let mut bindings = Vec::new();
     for bucket in buckets {
         // A bucket that drew nothing produces no drawable, the way mbgl's `hasData` gates one.
-        if !bucket.content.has_data() {
+        // Not `has_data`: a bucket that cannot be encoded with what this frame holds must not be
+        // bound either, or it spends its one chance to be announced on a frame that carries
+        // nothing. See `Content::is_encodable`.
+        if !bucket.content.is_encodable(fonts) {
             continue;
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]

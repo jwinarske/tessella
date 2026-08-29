@@ -227,10 +227,10 @@ fn a_pan_sends_only_what_entered() {
 
 /// A map with glyphs draws labels; the same map without them draws the rest and no labels.
 ///
-/// # It fails, and what it found is worth more than a green tick
+/// # What it caught
 ///
-/// **A symbol layer drawn before its glyphs arrive never draws at all.** Not "draws late" —
-/// never, for the life of the map.
+/// It failed first, and what it reported was **a symbol layer drawn before its glyphs arrive
+/// never drawing at all** — not late, never, for the life of the map.
 ///
 /// The emitter's incremental path encodes only *fresh* buckets: a geometry id is allocated in
 /// the binding pass and the bucket is fresh the frame its id is new, known ever after. But a
@@ -253,13 +253,22 @@ fn a_pan_sends_only_what_entered() {
 /// emits once, where every bucket is fresh by construction and the skip never runs. It took a
 /// loop to reach the frame where freshness has been spent.
 ///
-/// # Where the fix goes, and why not here
+/// # The fix
 ///
-/// In the binding pass: a bucket that cannot be encoded yet must not be bound, so that it is
-/// still fresh when its resources arrive. Not at the skip — the comment above `fresh_buckets`
-/// explains that the skip is bucket-scoped precisely because getting its scope wrong encodes one
-/// drawable's bytes under another's id, and "the corruption is silent, because the record is
-/// well formed and simply draws the wrong thing". That is not a place to make a hurried change.
+/// In the binding pass, which is where the chance is spent. `Content::is_encodable` asks whether
+/// a bucket can be turned into records with what the frame *holds*, where `has_data` asks only
+/// whether it has content — and `has_data`'s own comment already drew that line, noting a symbol
+/// layer has data "whether or not the glyphs to shape it with have arrived". A bucket that fails
+/// the new predicate is not bound, so it is still fresh when its glyphs land.
+///
+/// Deliberately not at the skip. The comment above `fresh_buckets` explains that the skip is
+/// bucket-scoped precisely because getting its scope wrong encodes one drawable's bytes under
+/// another's id, and "the corruption is silent, because the record is well formed and simply
+/// draws the wrong thing". Both places that decide which buckets to skip now ask the same
+/// question, which is what keeps `binding_index` paired with the bindings it counts.
+///
+/// Measured after: nothing announced while the glyphs were missing, one geometry once they
+/// arrived.
 ///
 /// The second half is the assertion. `Frame::fonts` being `None` is documented as a legitimate
 /// frame rather than an error — a symbol layer's glyphs are a fetch, discovered by evaluating
@@ -268,7 +277,6 @@ fn a_pan_sends_only_what_entered() {
 /// label. That is precisely what this loop did until the fonts were threaded through, and
 /// nothing would have said so.
 #[test]
-#[ignore = "reports a real defect: a symbol bucket bound before its glyphs is never re-encoded"]
 fn labels_draw_only_once_the_glyphs_are_handed_over() {
     use std::collections::BTreeMap;
 

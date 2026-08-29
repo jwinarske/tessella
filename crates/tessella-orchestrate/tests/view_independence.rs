@@ -82,6 +82,7 @@ fn bindings(views: &[(ViewId, ViewTransform)]) -> BTreeMap<ViewId, Vec<GeometryB
                 order::tile_of(tile.z, tile.x, tile.y),
                 &buckets,
                 &mut next_id,
+                true,
             ));
         }
     }

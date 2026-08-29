@@ -580,7 +580,8 @@ fn emit_group(
         // `z/x/y` appears in several copies and only the wrap tells them apart.
         let wrap = tiles.get(index).map_or(0, |coord| coord.wrap);
         let at = order::wrapped_tile_of(tile.z, tile.x, tile.y, wrap);
-        let mut bindings = order::bindings_for(view_id, at, tile_buckets, &mut next_id);
+        let mut bindings =
+            order::bindings_for(view_id, at, tile_buckets, &mut next_id, fonts.is_some());
 
         // With a registry the id belongs to the drawable rather than to its place in this
         // frame's cover, so `bindings_for`'s sequential numbering is replaced. It still runs:
@@ -613,7 +614,10 @@ fn emit_group(
         // separately rather than one being bound to an id nothing declared.
         let mut binding_index = 0;
         for (bucket_index, bucket) in tile_buckets.iter().enumerate() {
-            if !bucket.content.has_data() {
+            // The same predicate `bindings_for` skipped on, so `binding_index` stays aligned
+            // with the bindings it produced. Two different answers here would pair a bucket's
+            // drawables with another bucket's ids.
+            if !bucket.content.is_encodable(fonts.is_some()) {
                 continue;
             }
             let drawables = bucket.drawable_count();

@@ -140,6 +140,7 @@ fn resolved_order() -> Vec<Slot> {
             order::tile_of(tile.z, tile.x, tile.y),
             &buckets,
             &mut next_id,
+            true,
         ) {
             tile_of_geometry.insert(binding.geometry.0, (tile.x, tile.y));
             order.bind(binding);
@@ -358,6 +359,7 @@ fn probe_bindings() -> Vec<tessella_orchestrate::view::GeometryBinding> {
             order::tile_of(tile.z, tile.x, tile.y),
             &buckets,
             &mut next_id,
+            true,
         ));
     }
     out
