@@ -2920,6 +2920,25 @@ twice. Neither figure depends on what the other side was doing. At sixty frames 
 mbgl view spends 2.4% of a frame budget on its worst crossing and four spend 9.5%; the same four
 here spend 0.2%.
 
+#### Third result: never blank through the loop, and 7.8× reuse
+
+`sweep_never_blank` asserts completeness over `ViewCover`; this asserts it over `Map::tick`, which
+is what a consumer drives, against a fixture where a tile becomes drawable three frames after
+something first asks for it. Forty-eight frames of continuous zoom: **no frame drew nothing**, and
+the map settled the frame after the camera stopped.
+
+Across that sweep it **drew 447 drawables and sent 57 geometries — 7.8× reuse.** That is §9.3's
+traffic-proportional-to-change stated as a ratio, and it is the metric a seam's bandwidth
+follows: a tile that stays in view keeps its geometry id and is drawn again for nothing.
+
+**The first version of this test was wrong in a way worth recording**, because the mistake is
+available to anyone reading the same counters. It called a frame blank when `Emitted::geometries`
+was zero, and reported forty-two blank frames out of forty-eight. `geometries` counts what had to
+be *sent*; `drawables` counts what was *drawn*, announced this frame or not. Forty-two frames of
+correct incremental emission read as forty-two holes. The field's own documentation says the two
+compared are "the whole measure of an incremental emission" — which is exactly right, and is also
+why one of them alone measures nothing.
+
 **And it says the idle result is not merely a gating trick.** If the two were close once the work
 became unavoidable, the 79×–215× would have been a story about when work is skipped rather than
 about what it costs. They are not close. That reading survives the correction above, because the

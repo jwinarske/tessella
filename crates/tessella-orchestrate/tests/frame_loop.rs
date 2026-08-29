@@ -433,3 +433,147 @@ fn a_missing_tile_draws_its_ancestor_and_is_asked_for() {
         "what is wanted should be the tiles the cover asked for, not the one it already has"
     );
 }
+
+/// The loop is never blank across a sweep, with tiles that take time to arrive.
+///
+/// `sweep_never_blank` asserts this over `ViewCover` directly. This asserts it over `Map::tick`,
+/// which is what a consumer actually drives — and the two are not the same claim. `ViewCover`
+/// promises a complete substituted set; the loop has to hand that set to the frame, and it could
+/// drop it in a dozen ways that a `ViewCover` test would never see: filtering the drawn list
+/// against tiles it happens to hold, gating substitution on the wrong signal, or rebuilding it
+/// only when the camera moves and so missing the frame where an ancestor becomes the real tile.
+///
+/// Tiles arriving instantly is the case that cannot catch any of it. A sweep where a tile exists
+/// the moment it is wanted never enters the state that never-blank is about, so the fixture here
+/// makes a tile drawable a fixed number of frames after something first asks for it.
+#[test]
+fn a_sweep_is_never_blank_through_the_loop() {
+    /// How many ticks a tile takes to arrive. Long enough that a crossing is mid-flight for
+    /// several frames, which is where a hole would show.
+    const LATENCY: u64 = 3;
+
+    /// Tiles that arrive late. `buckets` answers only once a tile has been wanted for long
+    /// enough, which is what the map's own `wanted()` list drives.
+    struct Slow {
+        ready_at: std::cell::RefCell<std::collections::BTreeMap<TileId, u64>>,
+        now: std::cell::Cell<u64>,
+        buckets: Arc<Vec<LayerBucket>>,
+    }
+
+    impl Tiles for Slow {
+        fn buckets(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
+            let ready = self.ready_at.borrow();
+            match ready.get(&tile) {
+                Some(&at) if at <= self.now.get() => Some(Arc::clone(&self.buckets)),
+                _ => None,
+            }
+        }
+    }
+
+    let style = Style::parse(STYLE).expect("the style parses");
+    let decoded = Tile::decode(REAL_TILE).expect("the fixture decodes");
+    let built = build_mvt_tile(&style, "src", TileId::new(0, 0, 0), &decoded).expect("builds");
+    let tiles = Slow {
+        ready_at: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+        now: std::cell::Cell::new(0),
+        buckets: Arc::new(built),
+    };
+
+    let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
+    // SAFETY: as above.
+    let (mut producer, _consumer) =
+        unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
+
+    // The z0 tile is there from the start, as a real map's lowest level is: it is one request and
+    // it covers the world, which is what makes an onion possible at all.
+    tiles.ready_at.borrow_mut().insert(TileId::new(0, 0, 0), 0);
+
+    let mut map = Map::new(style, view(4.0), ViewId(0));
+    let mut blank = Vec::new();
+    // What was drawn against what had to be sent, which is the measure of an incremental
+    // emission and the number a seam's bandwidth follows.
+    let (mut sent, mut drawn) = (0usize, 0usize);
+
+    // A sweep, with a tick per frame and fetches served after their latency.
+    for frame in 0..48u64 {
+        tiles.now.set(frame);
+        #[allow(clippy::cast_precision_loss)]
+        let zoom = 4.0 + (frame as f64) * 0.125;
+        map.look_at(camera::settled(&ViewTransform {
+            zoom,
+            ..*map.view()
+        }));
+
+        let tick = map.tick(&mut producer, &tiles).expect("a swept tick");
+
+        // Whatever the frame wanted and did not have becomes available LATENCY frames later,
+        // which is a fetch being issued and answered.
+        {
+            let mut ready = tiles.ready_at.borrow_mut();
+            for want in map.wanted() {
+                ready
+                    .entry(TileId::new(want.z, want.x, want.y))
+                    .or_insert(frame + LATENCY);
+            }
+        }
+
+        // Blank is `drawables`, not `geometries`. `geometries` counts what had to be *sent*,
+        // and a frame that re-draws what the consumer already holds sends nothing — which is
+        // the incremental path working, not a hole. `drawables` is every drawable in the frame,
+        // announced this time or not, and that is what a viewer sees.
+        //
+        // Getting this wrong is what the first version of this test did: it read forty-two
+        // frames of correct incremental emission as forty-two blank frames.
+        if let Tick::Emitted(emitted) = tick {
+            if emitted.drawables == 0 {
+                blank.push(frame);
+            }
+            sent += emitted.geometries;
+            drawn += emitted.drawables;
+        }
+    }
+
+    assert!(
+        blank.is_empty(),
+        "frames drew nothing while their tiles were in flight: {blank:?} — the substitution is \
+         not reaching the frame"
+    );
+    // The camera stops, and the map is given time to catch up. A continuously zooming sweep
+    // always has something outstanding — the cover moves every frame — so convergence is only a
+    // question once it stops moving. A map that never converged would keep asking for tiles it
+    // already had, which is the failure the `wanted` list makes visible.
+    let mut settled_at = None;
+    for frame in 48..80u64 {
+        tiles.now.set(frame);
+        map.mark_dirty();
+        map.tick(&mut producer, &tiles).expect("a settling tick");
+        {
+            let mut ready = tiles.ready_at.borrow_mut();
+            for want in map.wanted() {
+                ready
+                    .entry(TileId::new(want.z, want.x, want.y))
+                    .or_insert(frame + LATENCY);
+            }
+        }
+        if map.wanted().is_empty() {
+            settled_at = Some(frame);
+            break;
+        }
+    }
+    assert!(
+        settled_at.is_some(),
+        "the map never stopped wanting tiles after the camera stopped moving"
+    );
+    // The claim §9.3 makes, as a ratio: a sweep draws far more than it sends, because a tile
+    // that stays in view keeps its geometry and is drawn again for nothing.
+    assert!(
+        drawn > sent * 2,
+        "drew {drawn} and sent {sent}: the emission is not reusing what the consumer holds"
+    );
+    #[allow(clippy::cast_precision_loss)]
+    let reuse = drawn as f64 / sent as f64;
+    println!(
+        "never-blank sweep: {drawn} drawn, {sent} sent ({reuse:.1}x reuse), settled at frame {}",
+        settled_at.expect("it settled")
+    );
+}
