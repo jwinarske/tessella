@@ -2870,12 +2870,16 @@ The sweep is the honest half. Idle cost measures who *skips* better; a z8→z16�
 who does the unavoidable work faster, because the cover really has changed and mbgl's per-frame
 re-derivation is work that had to happen this frame.
 
-| | mbgl | tessella |
-|---|---|---|
-| p50 | 51.85 µs | 4.39 µs |
-| p95 | 110.97 µs | 6.37 µs |
-| p99 | 136.42 µs | 8.77 µs |
-| max | 473.91 µs | 9.02 µs |
+Both sides settled at every step, which is what makes it a comparison: the probe runs its loop
+until the drawable set stops moving before timing a frame, and the tessella harness has every
+tile available throughout.
+
+| | mbgl | tessella | ratio |
+|---|---|---|---|
+| p50 | 45.53 µs | 4.20 µs | 10.8× |
+| p95 | 52.72 µs | 6.21 µs | 8.5× |
+| p99 | 54.77 µs | 8.16 µs | 6.7× |
+| max | 394.05 µs | 8.29 µs | 47.5× |
 
 **The caveat, before the numbers are quoted anywhere — and it was wrong the first time it was
 written here.** The claim recorded was that mbgl's sweep includes producing tiles, since its
@@ -2890,27 +2894,30 @@ assembly and the capture backend's own diffing, none of which `tick` does; `tick
 encoding geometry into slabs, which is the analogue of the second. Neither carries tiling or
 layout, which are on a worker on both sides.
 
-**A second bias runs the other way, and it is the one to be careful of.** A sweep driven by
-`jumpTo` asks for a frame immediately, so mbgl may be rendering before its scheduled tiling has
-landed — drawing less than a settled map would and reporting a *lower* number than a real sweep
-costs. The harness cannot presently tell how often that happens.
+**The second bias was predicted backwards, which is worth recording.** The expectation was that a
+sweep driven by `jumpTo` would time mbgl mid-load — drawing less than a settled map and reporting
+*less* than a real frame costs. Settling before each timed frame was added to remove that, and it
+moved the numbers the other way: p50 from 51.85 to 45.53 µs and p95 from 110.97 to 52.72 µs. A
+mid-load frame is *dearer*, not cheaper, because it is the frame where drawables are being added
+and removed. So the earlier figures were inflated by exactly the thing predicted to deflate them,
+and the settled ones above are what a fair comparison shows.
 
-So the sweep ratio is neither a clean upper nor a clean lower bound: two biases exist and point
-in opposite directions. It is reported because the size of it is worth knowing, not because it
-is settled. What would settle it is both sides over a vector source with the same pre-fetched
-tiles and a settle-per-step, which is the next thing the harness needs.
+What remains uncontrolled is the scope difference already stated — paint properties and draw
+assembly on one side, slab encoding on the other — and it is not resolvable by harness changes,
+because it is a real difference in what each half does. Both sides now exclude tiling, both are
+settled, and both are asked the same question: what does a frame cost when the cover has moved.
 
 **What does survive the caveat is the tail, because it is internal to each side.**
 
 | | worst frame ÷ median |
 |---|---|
-| mbgl | 9.1× |
-| tessella | 2.1× |
+| mbgl | 8.7× |
+| tessella | 2.0× |
 
 That is a statement about predictability rather than about speed, and §13.1 is a promise about
-predictability: mbgl's worst crossing frame costs nine times its median, and tessella's costs
+predictability: mbgl's worst crossing frame costs nearly nine times its median, and tessella's costs
 twice. Neither figure depends on what the other side was doing. At sixty frames a second one
-mbgl view spends 2.8% of a frame budget on its worst crossing and four spend 11%; the same four
+mbgl view spends 2.4% of a frame budget on its worst crossing and four spend 9.5%; the same four
 here spend 0.2%.
 
 **And it says the idle result is not merely a gating trick.** If the two were close once the work
