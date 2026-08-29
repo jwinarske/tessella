@@ -2041,6 +2041,14 @@ fn ubo_field_kind(text: &str) -> Option<(&'static str, u32)> {
         "float" => Some(("F32", 4)),
         "int32_t" | "int" => Some(("I32", 4)),
         "uint32_t" => Some(("U32", 4)),
+        // A `uint32_t`-backed scoped enum used as a bitmask. Modelled as the integer it is:
+        // a consumer reading it wants the bits, and the names are mbgl's own business.
+        //
+        // Named rather than matched by shape because the alternative is guessing: an unmodelled
+        // type is refused, and refusing `LineEvaluatedPropsUBO` for one 4-byte field left the
+        // line layer's colour, width and opacity undescribable — which the Fluorite mirror hit
+        // as soon as it tried to read them.
+        "LineExpressionMask" => Some(("U32", 4)),
         "std::array<float,2>" => Some(("Vec2", 8)),
         "std::array<float,3>" => Some(("Vec3", 12)),
         "std::array<float,4>" => Some(("Vec4", 16)),

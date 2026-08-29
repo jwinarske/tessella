@@ -1468,6 +1468,62 @@ pub const LINE_DRAWABLE_UBO: UboLayout = UboLayout {
     ],
 };
 
+/// `LineEvaluatedPropsUBO` from `include/mbgl/shaders/line_layer_ubo.hpp`.
+pub const LINE_EVALUATED_PROPS_UBO: UboLayout = UboLayout {
+    name: "LineEvaluatedPropsUBO",
+    header: "line_layer_ubo.hpp",
+    align: 16,
+    size: 48,
+    stride: 48,
+    fields: &[
+        UboField {
+            name: "color",
+            offset: 0,
+            kind: UboFieldKind::Color,
+        },
+        UboField {
+            name: "blur",
+            offset: 16,
+            kind: UboFieldKind::F32,
+        },
+        UboField {
+            name: "opacity",
+            offset: 20,
+            kind: UboFieldKind::F32,
+        },
+        UboField {
+            name: "gapwidth",
+            offset: 24,
+            kind: UboFieldKind::F32,
+        },
+        UboField {
+            name: "offset",
+            offset: 28,
+            kind: UboFieldKind::F32,
+        },
+        UboField {
+            name: "width",
+            offset: 32,
+            kind: UboFieldKind::F32,
+        },
+        UboField {
+            name: "floorwidth",
+            offset: 36,
+            kind: UboFieldKind::F32,
+        },
+        UboField {
+            name: "expressionMask",
+            offset: 40,
+            kind: UboFieldKind::U32,
+        },
+        UboField {
+            name: "pad1",
+            offset: 44,
+            kind: UboFieldKind::F32,
+        },
+    ],
+};
+
 /// `LineGradientDrawableUBO` from `include/mbgl/shaders/line_layer_ubo.hpp`.
 pub const LINE_GRADIENT_DRAWABLE_UBO: UboLayout = UboLayout {
     name: "LineGradientDrawableUBO",
@@ -2176,7 +2232,7 @@ pub const WIDE_VECTOR_UNIFORMS_UBO: UboLayout = UboLayout {
 
 /// Every layout, by name, for a lookup that does not
 /// hard-code which blocks exist.
-pub const LAYOUTS: [UboLayout; 49] = [
+pub const LAYOUTS: [UboLayout; 50] = [
     BACKGROUND_DRAWABLE_UBO,
     BACKGROUND_PATTERN_DRAWABLE_UBO,
     BACKGROUND_PATTERN_PROPS_UBO,
@@ -2213,6 +2269,7 @@ pub const LAYOUTS: [UboLayout; 49] = [
     HILLSHADE_PREPARE_TILE_PROPS_UBO,
     HILLSHADE_TILE_PROPS_UBO,
     LINE_DRAWABLE_UBO,
+    LINE_EVALUATED_PROPS_UBO,
     LINE_GRADIENT_DRAWABLE_UBO,
     LINE_PATTERN_DRAWABLE_UBO,
     LINE_PATTERN_TILE_PROPS_UBO,
@@ -2305,15 +2362,8 @@ pub const UNIONS: [UboUnion; 5] = [
 /// omitted: a block that is missing because it could not be parsed and one that is missing
 /// because mbgl does not have it are different situations, and a caller that needs one of these
 /// should find out from this list rather than from a wrong layout.
-pub const UNPARSED: [(&str, &str, &str); 2] = [
-    (
-        "LineEvaluatedPropsUBO",
-        "line_layer_ubo.hpp",
-        "unmodelled type `LineExpressionMask`",
-    ),
-    (
-        "LineExpressionUBO",
-        "line_layer_ubo.hpp",
-        "no closing size comment",
-    ),
-];
+pub const UNPARSED: [(&str, &str, &str); 1] = [(
+    "LineExpressionUBO",
+    "line_layer_ubo.hpp",
+    "no closing size comment",
+)];

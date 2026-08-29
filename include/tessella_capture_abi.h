@@ -1015,6 +1015,31 @@ TSL_ASSERT(offsetof(tsl_line_drawable_ubo, offset_t) == 84, "tsl_line_drawable_u
 TSL_ASSERT(offsetof(tsl_line_drawable_ubo, width_t) == 88, "tsl_line_drawable_ubo.width_t moved");
 TSL_ASSERT(offsetof(tsl_line_drawable_ubo, pad1) == 92, "tsl_line_drawable_ubo.pad1 moved");
 
+/* `LineEvaluatedPropsUBO` from `line_layer_ubo.hpp`. */
+typedef struct tsl_line_evaluated_props_ubo {
+    TSL_ALIGNAS(16) float color[4];
+    float blur;
+    float opacity;
+    float gapwidth;
+    float offset;
+    float width;
+    float floorwidth;
+    uint32_t expressionMask;
+    float pad1;
+} tsl_line_evaluated_props_ubo;
+
+TSL_ASSERT(sizeof(tsl_line_evaluated_props_ubo) == 48, "tsl_line_evaluated_props_ubo size differs from the block mbgl declares");
+TSL_ASSERT(TSL_ALIGNOF(tsl_line_evaluated_props_ubo) == 16, "tsl_line_evaluated_props_ubo alignment differs");
+TSL_ASSERT(offsetof(tsl_line_evaluated_props_ubo, color) == 0, "tsl_line_evaluated_props_ubo.color moved");
+TSL_ASSERT(offsetof(tsl_line_evaluated_props_ubo, blur) == 16, "tsl_line_evaluated_props_ubo.blur moved");
+TSL_ASSERT(offsetof(tsl_line_evaluated_props_ubo, opacity) == 20, "tsl_line_evaluated_props_ubo.opacity moved");
+TSL_ASSERT(offsetof(tsl_line_evaluated_props_ubo, gapwidth) == 24, "tsl_line_evaluated_props_ubo.gapwidth moved");
+TSL_ASSERT(offsetof(tsl_line_evaluated_props_ubo, offset) == 28, "tsl_line_evaluated_props_ubo.offset moved");
+TSL_ASSERT(offsetof(tsl_line_evaluated_props_ubo, width) == 32, "tsl_line_evaluated_props_ubo.width moved");
+TSL_ASSERT(offsetof(tsl_line_evaluated_props_ubo, floorwidth) == 36, "tsl_line_evaluated_props_ubo.floorwidth moved");
+TSL_ASSERT(offsetof(tsl_line_evaluated_props_ubo, expressionMask) == 40, "tsl_line_evaluated_props_ubo.expressionMask moved");
+TSL_ASSERT(offsetof(tsl_line_evaluated_props_ubo, pad1) == 44, "tsl_line_evaluated_props_ubo.pad1 moved");
+
 /* `LineGradientDrawableUBO` from `line_layer_ubo.hpp`. */
 typedef struct tsl_line_gradient_drawable_ubo {
     TSL_ALIGNAS(16) float matrix[16];
@@ -1353,7 +1378,6 @@ TSL_ASSERT(offsetof(tsl_wide_vector_uniforms_ubo, pad2) == 396, "tsl_wide_vector
 
 /*
  * Blocks mbgl declares that are deliberately not here:
- *   LineEvaluatedPropsUBO (line_layer_ubo.hpp): unmodelled type `LineExpressionMask`.
  *   LineExpressionUBO (line_layer_ubo.hpp): no closing size comment.
  *
  * A consumer needing one of these should find out from this list rather than from a wrong
