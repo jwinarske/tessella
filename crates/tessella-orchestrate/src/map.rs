@@ -132,6 +132,8 @@ pub struct Map {
     drawn: Vec<TileCoord>,
     /// Tiles the cover wants that are not built. What a fetch loop would ask for.
     wanted: Vec<TileCoord>,
+    /// Ideal tiles the last frame left as holes — nothing at any resolution over them.
+    uncovered: usize,
     /// Glyphs, once a caller has fetched them.
     ///
     /// Owned rather than borrowed because a map outlives any one frame and the glyph set grows
@@ -164,6 +166,7 @@ impl Map {
             cover: None,
             drawn: Vec::new(),
             wanted: Vec::new(),
+            uncovered: 0,
             fonts: None,
             sprites: None,
             zoom: ZoomHistory::new(),
@@ -220,6 +223,18 @@ impl Map {
         &self.wanted
     }
 
+    /// How much of the last frame was a hole.
+    ///
+    /// Ideal tiles with nothing drawn over them at any resolution. Zero is §12.10's *legible*
+    /// frame, and it is a different question from [`Self::wanted`]: a map can want every tile it
+    /// asked for and still be perfectly legible, drawn entirely from ancestors. The two together
+    /// are what a prefetch is judged on — how fast this reaches zero, and how much was fetched
+    /// to get there.
+    #[must_use]
+    pub const fn uncovered(&self) -> usize {
+        self.uncovered
+    }
+
     /// The style being drawn.
     #[must_use]
     pub const fn style(&self) -> &Style {
@@ -273,6 +288,7 @@ impl Map {
                 tiles,
                 drawn: Vec::new(),
                 wanted: Vec::new(),
+                uncovered: 0,
             };
             cover.draw(&mut pass, 0..=tessella_tile::cover::MAX_ZOOM);
             self.drawn = pass.drawn;
@@ -352,6 +368,8 @@ struct Substitution<'a, T: Tiles + ?Sized> {
     drawn: Vec<TileCoord>,
     /// What the cover wanted and did not have.
     wanted: Vec<TileCoord>,
+    /// Ideal tiles left with nothing over them at any resolution.
+    uncovered: usize,
 }
 
 impl<T: Tiles + ?Sized> Substitution<'_, T> {
@@ -386,6 +404,10 @@ impl<T: Tiles + ?Sized> Pyramid for Substitution<'_, T> {
     }
 
     fn retain(&mut self, _id: DataTileId, _necessity: Necessity) {}
+
+    fn uncovered(&mut self, _ideal: DataTileId) {
+        self.uncovered += 1;
+    }
 
     fn render(&mut self, _render: RenderTileId, data: DataTileId) {
         // The data tile's buckets, at the data tile's own position. A parent standing in for a

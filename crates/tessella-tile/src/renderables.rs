@@ -253,6 +253,23 @@ pub trait Pyramid {
     /// Marks a tile as wanted for this frame, at the given necessity.
     fn retain(&mut self, id: DataTileId, necessity: Necessity);
 
+    /// Reports that an ideal tile ended the walk with nothing drawn over it.
+    ///
+    /// A hole. Neither the tile, nor children covering it, nor any ancestor was renderable, so
+    /// this patch of the viewport has nothing on it — which is what §13.2's never-blank rule
+    /// forbids and what a prefetch exists to prevent.
+    ///
+    /// Reported rather than returned because the walk is a visitor: a caller wanting the count
+    /// keeps one, and a caller that does not pays nothing. Defaulted empty, so an implementation
+    /// that does not care is unchanged.
+    ///
+    /// The complement is what §12.10 calls a legible frame — every ideal tile covered at some
+    /// resolution — and it is the difference between a map that is loading and one that is
+    /// blank.
+    fn uncovered(&mut self, ideal: DataTileId) {
+        let _ = ideal;
+    }
+
     /// Draws `data` in the place `render` names.
     ///
     /// The two ids differ for every substitution, which is the whole point: a parent drawn in
@@ -409,8 +426,9 @@ pub fn update_renderables<P: Pyramid + ?Sized>(
         }
 
         if !found {
-            // Nothing above or below. Anything prefetched that lies inside this tile is better
-            // than blank.
+            // Nothing above or below.
+            pyramid.uncovered(ideal_id);
+            // Anything prefetched that lies inside this tile is better than blank.
             for &(prefetched_id, prefetched_state) in prefetched {
                 if prefetched_state.renderable
                     && prefetched_id.z <= zoom_max
