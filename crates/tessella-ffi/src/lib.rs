@@ -56,19 +56,30 @@ pub enum Status {
 extern crate alloc;
 
 use alloc::sync::Arc;
+use std::collections::BTreeMap;
 use std::ffi::{CStr, c_char};
 use std::time::Duration;
 
+use tessella_capture_abi::envelope::ViewId;
 use tessella_capture_abi::ring::{self, Producer, region_size};
-use tessella_orchestrate::SlabArena;
 use tessella_orchestrate::boot::{self, ColdStart};
 use tessella_orchestrate::cache::TileCache;
+use tessella_orchestrate::map::{Map, SpriteAtlas, Tick, Tiles};
 use tessella_orchestrate::pool::{Pool, Priority};
+use tessella_orchestrate::tile::{LayerBucket, TileId};
 use tessella_storage::http::HttpFileSource;
 use tessella_storage::source::Coalescing;
 use tessella_style::Style;
 use tessella_tile::camera;
 use tessella_tile::cover::ViewTransform;
+
+/// The texture the sprite atlas is uploaded as.
+///
+/// Fixed rather than allocated: there is one sheet per style and the consumer learns of it from
+/// the `TextureUpdate` that carries its pixels, so a number chosen here is a number nothing has
+/// to agree on.
+const SPRITE_TEXTURE: tessella_capture_abi::envelope::TextureId =
+    tessella_capture_abi::envelope::TextureId(1);
 
 /// A live map, opaque to C.
 ///
@@ -124,21 +135,44 @@ pub struct Config {
 /// Boxed and handed to C as its handle. The ring's backing buffer is a `Vec<u64>`, so the
 /// `Producer`'s pointer into it survives this struct being moved — the heap allocation does not
 /// move when the `Vec` does.
-// Held for the tick, which is not written: nothing in `tessella-orchestrate` composes cover ->
-// build -> emit into a running frame loop yet, so there is no warm entry point to call. See the
-// note on `tessella_regions`.
-#[allow(dead_code)]
+/// The tiles a map draws from.
+///
+/// What the boot built, by address. Lookup-only on purpose: `Map::tick` leaves a tile that has
+/// not arrived out of the frame rather than waiting for it, so a source that *built* on miss
+/// would turn the loop's non-blocking contract into a blocking one at the only place a caller
+/// cannot see it.
+#[derive(Default)]
+struct Built {
+    by_tile: BTreeMap<TileId, Arc<Vec<LayerBucket>>>,
+    sourceless: BTreeMap<TileId, Arc<Vec<LayerBucket>>>,
+}
+
+impl Tiles for Built {
+    fn buckets(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
+        self.by_tile.get(&tile).map(Arc::clone)
+    }
+
+    fn sourceless(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
+        self.sourceless.get(&tile).map(Arc::clone)
+    }
+}
+
+/// One map's state.
+///
+/// Boxed and handed to C as its handle. The ring's backing buffer is a `Vec<u64>`, so the
+/// `Producer`'s pointer into it survives this struct being moved — the heap allocation does not
+/// move when the `Vec` does.
 pub struct MapState {
-    style: Style,
-    view: ViewTransform,
+    map: Map,
     /// The ring's backing memory. `u64` so it is eight-aligned, which `ring::init` requires.
     region: Vec<u64>,
     producer: Producer,
-    arena: SlabArena,
-    files: Arc<Coalescing<HttpFileSource>>,
-    cache: Arc<TileCache<boot::BootError>>,
-    /// Slabs packed by the last frame, kept alive until the consumer acknowledges them.
+    built: Built,
+    /// Slabs packed for the consumer to resolve against.
     packed: Vec<u8>,
+    /// Kept so the tiles they built stay valid and a later fetch can reuse them.
+    _files: Arc<Coalescing<HttpFileSource>>,
+    _cache: Arc<TileCache<boot::BootError>>,
 }
 
 /// Runs `body`, turning a panic into a status.
@@ -221,7 +255,7 @@ pub unsafe extern "C" fn tessella_create(
             30,
         ))));
         let cache = Arc::new(TileCache::new(64));
-        let booted = boot::cold_start(&ColdStart {
+        let Ok(booted) = boot::cold_start(&ColdStart {
             style: &style_text,
             view: &view,
             files: Arc::clone(&files),
@@ -229,20 +263,55 @@ pub unsafe extern "C" fn tessella_create(
             pool: Pool::shared(),
             priority: Priority::Foreground,
             style_rev: 1,
-        });
-        if booted.is_err() {
+        }) else {
             return Status::Failed;
+        };
+
+        // What the boot built, kept by address. A tile appears once per source, so a style
+        // overlaying two sources on one address has both merged here — the frame draws a tile's
+        // buckets together whichever source produced them.
+        let mut built = Built::default();
+        for tile in booted.tiles {
+            built
+                .by_tile
+                .entry(tile.tile)
+                .and_modify(|existing| {
+                    let mut merged = existing.as_ref().clone();
+                    merged.extend(tile.buckets.iter().cloned());
+                    *existing = Arc::new(merged);
+                })
+                .or_insert(tile.buckets);
+        }
+        for (tile, buckets) in booted.sourceless {
+            built.sourceless.insert(tile, Arc::new(buckets));
+        }
+
+        let mut map = Map::new(style, view, ViewId(0));
+        // Behind the `image` feature, because a sheet arrives as a PNG. A build without it draws
+        // patterns as plain fills and icons not at all, which is the same frame a style with no
+        // `sprite` produces — a degradation the format is already allowed to have.
+        #[cfg(feature = "image")]
+        if let Some(sprites) = booted.sprites {
+            let (width, height) = sprites.atlas().size();
+            map.set_sprites(SpriteAtlas {
+                texture: SPRITE_TEXTURE,
+                size: [
+                    u16::try_from(width).unwrap_or(u16::MAX),
+                    u16::try_from(height).unwrap_or(u16::MAX),
+                ],
+                positions: sprites.positions().clone(),
+                pixels: sprites.atlas().pixels().to_vec(),
+            });
         }
 
         let state = Box::new(MapState {
-            style,
-            view,
+            map,
             region,
             producer,
-            arena: SlabArena::new(),
-            files,
-            cache,
+            built,
             packed: Vec::new(),
+            _files: files,
+            _cache: cache,
         });
         unsafe { *out = Box::into_raw(state) };
         Status::Ok
@@ -271,15 +340,52 @@ pub unsafe extern "C" fn tessella_set_camera(
         let Some(state) = (unsafe { map.as_mut() }) else {
             return Status::NoSuchMap;
         };
-        state.view = camera::settled(&ViewTransform {
+        state.map.look_at(camera::settled(&ViewTransform {
             longitude,
             latitude,
             zoom,
             bearing,
             pitch,
-            ..state.view
-        });
+            ..*state.map.view()
+        }));
         Status::Ok
+    })
+}
+
+/// Emits a frame, if anything changed.
+///
+/// Returns [`Status::Ok`] whether or not a frame was emitted: a settled map sending nothing is
+/// the ordinary case rather than a condition to report, and a caller polling at display rate
+/// would spend more code distinguishing the two than acting on it. What changed is on the ring;
+/// what did not is the absence of records.
+///
+/// # What it costs when nothing happened
+///
+/// A comparison. The damage gate returns before the cover, the cache, the arena or the ring are
+/// touched, which is what makes calling this every vsync the right thing to do.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_mut() }) else {
+            return Status::NoSuchMap;
+        };
+        match state.map.tick(&mut state.producer, &state.built) {
+            Ok(Tick::Idle) => Status::Ok,
+            Ok(Tick::Emitted(_)) => {
+                // Packed after the frame that names the slabs, which is §11.3's ordering: a
+                // consumer resolving a handle needs the table, and the table is only complete
+                // once the frame has finished allocating against it.
+                state.packed = state.map.arena().pack();
+                Status::Ok
+            }
+            // The consumer is behind. Nothing was emitted and nothing was retired, so draining
+            // and calling again resumes from where this attempt started.
+            Err(_) => Status::RingFull,
+        }
     })
 }
 
