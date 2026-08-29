@@ -2877,12 +2877,28 @@ re-derivation is work that had to happen this frame.
 | p99 | 136.42 µs | 8.77 µs |
 | max | 473.91 µs | 9.02 µs |
 
-**The caveat, before the numbers are quoted anywhere.** These scopes are not comparable. mbgl's
-geojson source calls `geoJSONVT::getTile` as the cover changes, so its sweep includes producing
-tiles; the tessella harness serves pre-built buckets for every address, so it does not. Some
-double-digit part of mbgl's figure is tiling this side never did. The ratio is therefore an upper
-bound on the difference and not a measurement of it, and it stays that way until both sides draw
-a vector source over the same pre-fetched tiles. That is the next thing the harness needs.
+**The caveat, before the numbers are quoted anywhere — and it was wrong the first time it was
+written here.** The claim recorded was that mbgl's sweep includes producing tiles, since its
+geojson source calls `geoJSONVT::getTile` as the cover changes, making the ratio an upper bound.
+Checked afterwards, that is not what happens: `GeoJSONVTData::getTile` takes a `runSynchronously`
+flag, `isUpdateSynchronous()` is false unless a style asks for it, neither the probe's inline
+style nor `symbol_style.json` does, and the asynchronous path goes to
+`Scheduler::GetSequenced()` — a background pool. Tiling is not inside the bracket being timed.
+
+So the scopes differ, but not that way. mbgl's `render()` carries paint-property evaluation, draw
+assembly and the capture backend's own diffing, none of which `tick` does; `tick` carries
+encoding geometry into slabs, which is the analogue of the second. Neither carries tiling or
+layout, which are on a worker on both sides.
+
+**A second bias runs the other way, and it is the one to be careful of.** A sweep driven by
+`jumpTo` asks for a frame immediately, so mbgl may be rendering before its scheduled tiling has
+landed — drawing less than a settled map would and reporting a *lower* number than a real sweep
+costs. The harness cannot presently tell how often that happens.
+
+So the sweep ratio is neither a clean upper nor a clean lower bound: two biases exist and point
+in opposite directions. It is reported because the size of it is worth knowing, not because it
+is settled. What would settle it is both sides over a vector source with the same pre-fetched
+tiles and a settle-per-step, which is the next thing the harness needs.
 
 **What does survive the caveat is the tail, because it is internal to each side.**
 
@@ -2899,7 +2915,9 @@ here spend 0.2%.
 
 **And it says the idle result is not merely a gating trick.** If the two were close once the work
 became unavoidable, the 79×–215× would have been a story about when work is skipped rather than
-about what it costs. They are not close, even with the caveat pointing the other way.
+about what it costs. They are not close. That reading survives the correction above, because the
+correction removed a reason mbgl's number might be inflated and added a reason it might be
+deflated — and the conclusion did not depend on which.
 
 ### 12.9 Binary size (DR-12)
 
