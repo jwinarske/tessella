@@ -45,13 +45,15 @@ use tessella_glyph::sprite::IconPosition;
 use tessella_style::Style;
 use tessella_style::crossfade::ZoomHistory;
 use tessella_style::light::Light;
-use tessella_tile::cover::{self, TileCoord, ViewTransform};
+use tessella_tile::cover::{TileCoord, ViewTransform};
+use tessella_tile::renderables::{DataTileId, Necessity, Pyramid, RenderTileId, TileState};
 
 use crate::SlabArena;
 use crate::damage::DamageTracker;
 use crate::frame::{self, Emitted, Frame, FrameError, Patterns};
 use crate::registry::Session;
 use crate::tile::{LayerBucket, TileId};
+use crate::viewcover::{Update, ViewCover};
 
 /// A packed sprite sheet, as the frame needs to see it.
 ///
@@ -119,8 +121,17 @@ pub struct Map {
     /// Holds a retained geometry's bytes until it is removed.
     arena: SlabArena,
     damage: DamageTracker,
-    /// The cover as of the last tick, so a camera that moved can be told what left.
-    cover: Vec<TileCoord>,
+    /// The per-view cover, with the zoom latch and the entered/left deltas.
+    ///
+    /// Not `cover::cover` per frame. The cover itself is cheap — 0.10 µs for a nine-tile
+    /// viewport — and what it gates is not: retaining and releasing against the shared store,
+    /// rebuilt bindings, and the damage that follows. §12.7.
+    cover: Option<ViewCover>,
+    /// The tiles to draw this frame, after substitution. Kept so a tick that changes nothing
+    /// does not rebuild it.
+    drawn: Vec<TileCoord>,
+    /// Tiles the cover wants that are not built. What a fetch loop would ask for.
+    wanted: Vec<TileCoord>,
     /// Glyphs, once a caller has fetched them.
     ///
     /// Owned rather than borrowed because a map outlives any one frame and the glyph set grows
@@ -150,7 +161,9 @@ impl Map {
             session: Session::new(),
             arena: SlabArena::new(),
             damage: DamageTracker::new(),
-            cover: Vec::new(),
+            cover: None,
+            drawn: Vec::new(),
+            wanted: Vec::new(),
             fonts: None,
             sprites: None,
             zoom: ZoomHistory::new(),
@@ -197,6 +210,16 @@ impl Map {
         self.damage.mark_dirty(self.view_id);
     }
 
+    /// Tiles the cover wants that no source has built.
+    ///
+    /// The fetch list, and the map's whole part in fetching: it says what is missing and does not
+    /// go and get it. What fetches is above this — a map that issued its own requests would need
+    /// to own the network, the cache and the priority, and §5.5 puts all three outside a view.
+    #[must_use]
+    pub fn wanted(&self) -> &[TileCoord] {
+        &self.wanted
+    }
+
     /// The style being drawn.
     #[must_use]
     pub const fn style(&self) -> &Style {
@@ -227,18 +250,41 @@ impl Map {
             return Ok(Tick::Idle);
         }
 
-        // Recomputed only when something changed. A cover is a quadtree walk against a frustum
-        // and it is not free; doing it on a settled map would be the largest thing an idle tick
-        // paid for.
-        if work.camera || self.cover.is_empty() {
-            self.cover = cover::cover(&self.view).unwrap_or_default();
+        // The cover is recomputed every frame and its *change* is what gates the rest. §12.7's
+        // measurement is why round that way: the cover costs 0.10 µs and predicting when it
+        // moves costs more than it saves, while what it gates — substitution, retain, release,
+        // rebuilt bindings — is where the frame's money goes.
+        let moved = match &mut self.cover {
+            Some(cover) => cover.update(&self.view).unwrap_or(Update::Unchanged),
+            None => {
+                self.cover = ViewCover::new(&self.view).ok();
+                Update::Changed
+            }
+        };
+        let Some(cover) = self.cover.as_ref() else {
+            return Ok(Tick::Idle);
+        };
+
+        // Substitution runs when the cover moved *or* when a tile landed: a tile arriving turns a
+        // stand-in ancestor into the real thing at the same cover, which is precisely the case a
+        // cover-only gate would miss and the one that leaves a map permanently blurry.
+        if moved == Update::Changed || work.geometry || self.drawn.is_empty() {
+            let mut pass = Substitution {
+                tiles,
+                drawn: Vec::new(),
+                wanted: Vec::new(),
+            };
+            cover.draw(&mut pass, 0..=tessella_tile::cover::MAX_ZOOM);
+            self.drawn = pass.drawn;
+            self.wanted = pass.wanted;
         }
 
-        // Found, not built. A tile the cache already holds costs a lookup, and one that has not
+        // Found, not built. A tile the source already holds costs a lookup, and one that has not
         // arrived is left out rather than waited for — a map that blocked on the slowest tile
-        // would stall the whole frame for ground nobody has looked at yet.
-        let mut buckets: Vec<(TileId, Vec<LayerBucket>)> = Vec::with_capacity(self.cover.len());
-        for entry in &self.cover {
+        // would stall the whole frame for ground nobody has looked at yet. What fills the hole in
+        // the meantime is the substitution above, not a wait.
+        let mut buckets: Vec<(TileId, Vec<LayerBucket>)> = Vec::with_capacity(self.drawn.len());
+        for entry in &self.drawn {
             let id = TileId::new(entry.z, entry.x, entry.y);
             let mut built: Vec<LayerBucket> = Vec::new();
             if let Some(ready) = tiles.buckets(id) {
@@ -277,7 +323,7 @@ impl Map {
                 style: &self.style,
                 view: &self.view,
                 view_id: self.view_id,
-                tiles: &self.cover,
+                tiles: &self.drawn,
                 buckets: &buckets,
                 light: &self.light,
                 fonts: self.fonts.as_ref(),
@@ -286,5 +332,68 @@ impl Map {
             &mut self.session,
         )?;
         Ok(Tick::Emitted(emitted))
+    }
+}
+
+/// The pass that turns an ideal cover into what can actually be drawn.
+///
+/// mbgl's `updateRenderables` asks four things of a pyramid — does this tile exist, create it,
+/// retain it, draw it — and answers them against a store it owns. Here the store is the caller's
+/// `Tiles`, so the pass is a borrow of it: `get` answers from what is built, `create` records
+/// what is missing rather than starting a fetch, and `render` collects what to draw.
+///
+/// Creating without fetching is the split that matters. §5.5 puts the network, the cache and the
+/// priority outside a view, so a map that issued its own requests would have to own all three.
+/// It reports what it wants instead, and something above it decides what that is worth.
+struct Substitution<'a, T: Tiles + ?Sized> {
+    tiles: &'a T,
+    /// What to draw, in the order the algorithm chose it. Duplicates are possible — one ancestor
+    /// can stand in for several missing children — and are collapsed when it finishes.
+    drawn: Vec<TileCoord>,
+    /// What the cover wanted and did not have.
+    wanted: Vec<TileCoord>,
+}
+
+impl<T: Tiles + ?Sized> Substitution<'_, T> {
+    fn coord(id: DataTileId) -> TileCoord {
+        TileCoord {
+            z: id.z,
+            x: id.x,
+            y: id.y,
+            wrap: i32::from(id.wrap),
+        }
+    }
+}
+
+impl<T: Tiles + ?Sized> Pyramid for Substitution<'_, T> {
+    fn get(&mut self, id: DataTileId) -> Option<TileState> {
+        // Renderable means the buckets are here. §13.2 asks that it eventually mean
+        // consumer-*acknowledged* rather than merely built, which is where mbgl's single-frame
+        // holes come from — it retains an ancestor until its descendants are built, and built is
+        // not uploaded. The registry can answer that; wiring it is the next turn of this screw.
+        self.tiles
+            .buckets(TileId::new(id.z, id.x, id.y))
+            .map(|_| TileState {
+                renderable: true,
+                ..TileState::default()
+            })
+    }
+
+    fn create(&mut self, id: DataTileId) -> Option<TileState> {
+        // Recorded, not fetched. A tile that does not exist yet is a request someone else makes.
+        self.wanted.push(Self::coord(id));
+        Some(TileState::default())
+    }
+
+    fn retain(&mut self, _id: DataTileId, _necessity: Necessity) {}
+
+    fn render(&mut self, _render: RenderTileId, data: DataTileId) {
+        // The data tile's buckets, at the data tile's own position. A parent standing in for a
+        // missing child is drawn where the parent is, covering the child's ground because it
+        // contains it — so what reaches the frame is simply "draw this tile".
+        let coord = Self::coord(data);
+        if !self.drawn.contains(&coord) {
+            self.drawn.push(coord);
+        }
     }
 }

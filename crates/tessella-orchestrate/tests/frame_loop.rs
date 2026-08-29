@@ -377,3 +377,59 @@ fn labels_draw_only_once_the_glyphs_are_handed_over() {
         mute.geometries
     );
 }
+
+/// A cover whose tiles are not built draws an ancestor rather than a hole, and says what it wants.
+///
+/// mbgl's `updateRenderables` and §13.2's never-blank rule. The loop called `cover::cover`
+/// directly before this, so a pan into unbuilt ground drew nothing at all — strictly worse than
+/// mbgl, which shows the blurry parent. `update_renderables` was transcribed and passing all
+/// eighteen of mbgl's own cases the whole time; nothing called it.
+///
+/// The second assertion is the other half. A map that substitutes and never reports what it
+/// substituted *for* would look right and load nothing: the ancestor stands in forever, because
+/// the thing that fetches was never told the child was wanted.
+#[test]
+fn a_missing_tile_draws_its_ancestor_and_is_asked_for() {
+    /// Holds one low-zoom tile and nothing else, so every deeper cover misses.
+    struct OnlyAncestor {
+        at: TileId,
+        buckets: Arc<Vec<LayerBucket>>,
+    }
+    impl Tiles for OnlyAncestor {
+        fn buckets(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
+            (tile == self.at).then(|| Arc::clone(&self.buckets))
+        }
+    }
+
+    let style = Style::parse(STYLE).expect("the style parses");
+    let decoded = Tile::decode(REAL_TILE).expect("the fixture decodes");
+    let built = build_mvt_tile(&style, "src", TileId::new(0, 0, 0), &decoded).expect("builds");
+    let tiles = OnlyAncestor {
+        at: TileId::new(0, 0, 0),
+        buckets: Arc::new(built),
+    };
+
+    let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
+    // SAFETY: as above.
+    let (mut producer, _consumer) =
+        unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
+
+    // A camera deep enough that its ideal cover is nowhere near z0.
+    let mut map = Map::new(style, view(4.0), ViewId(0));
+    let Tick::Emitted(emitted) = map.tick(&mut producer, &tiles).expect("a frame") else {
+        panic!("the first tick emits");
+    };
+
+    assert!(
+        emitted.geometries > 0,
+        "the frame drew nothing: the z0 ancestor should be standing in for every ideal tile"
+    );
+    assert!(
+        !map.wanted().is_empty(),
+        "the map substituted an ancestor and asked for nothing — the real tiles would never load"
+    );
+    assert!(
+        map.wanted().iter().all(|tile| tile.z > 0),
+        "what is wanted should be the tiles the cover asked for, not the one it already has"
+    );
+}

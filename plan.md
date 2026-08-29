@@ -2698,6 +2698,15 @@ Cover + retain recompute gates on crossing a tile boundary or an integer-zoom th
 the velocity-scaled margin from R-8); between crossings cover is provably unchanged. This is
 what keeps the single-orchestrator multi-view tick cheap at input rate.
 
+**Amended by measurement: the gate is on the *result*, not on predicting the crossing.** `cover()`
+is 0.10 µs for a nine-tile z14 viewport, so four views at sixty frames a second spend twenty-four
+microseconds per second computing it — a predictor to avoid that would cost more than it saves
+and add a way to be wrong about what is on screen. So the cover is recomputed every frame and its
+*change* gates everything downstream: retain and release against the shared store, rebuilt
+bindings, and the damage that follows. `viewcover::ViewCover` is that, with `entered()`/`left()`.
+This is also the concrete difference from mbgl, which re-derives the downstream work every frame
+whether or not the cover moved (DR-22).
+
 ### 12.8 Power and pacing
 
 Wakeup pattern matters as much as throughput on DVFS-governed parts. One deadline wheel for
@@ -2734,6 +2743,91 @@ paced is refused none and never holds more than the frame it just sent.
 **Not built**: the deadline wheel, and with it "a parked view holds no timers except cache
 expiry" — there are no timers in this tree to hold. The counter for that is owed when the
 scheduler is.
+
+### 12.10 Beating mbgl, and how that gets decided (DR-22)
+
+The goal is not parity. This has to be measurably faster than maplibre-gl-native and visibly
+better on the same hardware, and where the architecture stands in the way the architecture goes.
+Parity with mbgl is the *oracle's* job — what the stream says — and it is not the bar for what
+the frontend costs to produce it.
+
+What that rules out is optimising by assertion. Every claim below is a number or it is not a
+claim, and the order of work follows from that.
+
+**Step one is to make it work with the fewest changes that can be made.** Not the fastest
+arrangement — the one that draws a correct map soonest, so there is something to measure. An
+architecture chosen before the profile exists is a guess, and this document has three examples of
+guesses that measured wrong: §12.7's boundary predictor (cover is 0.10 µs; the predictor would
+cost more than it saves), the horizon cull (§13.4: four to six of the cheapest tiles on the map),
+and the "AttributesModified storm" the damage model was built to prevent, which turned out to be
+one line of gating rather than a mechanism.
+
+**Step two is instrumentation, and it is the deliverable rather than the preamble.** §9.3's
+counters and §11.6's Perfetto tracks exist to say where time goes; what they have not yet been
+asked is where it goes *compared to mbgl on the same frame*. The probe already runs mbgl headless
+over a style and a camera, which is most of a two-sided measurement: the same sweep through both,
+per-frame, with the counters aligned.
+
+**Step three is re-architecting where the profile says to, with the before and after both
+recorded.** A change that cannot show its improvement did not make one.
+
+#### What mbgl actually does, read rather than assumed
+
+`TilePyramid::update`, per source, per frame. Its only early-out is `!needsRendering` — the
+source has no visible layer at all. If the source is drawn then every frame, unconditionally:
+`tileCover` recomputes the ideal set; `updateRenderables` walks it, allocating a fresh
+`std::unordered_set<OverscaledTileID>` per call, creating missing tiles and falling back to
+children and then parents; a `retain` set is rebuilt and `setNecessity` stamped on every tile;
+anything unretained goes to the cache or is abandoned.
+
+Three things follow, and they are the shape of the opportunity rather than a criticism:
+
+- **It re-derives per frame what changed per crossing.** A still map pays for a cover, a
+  renderables walk, a hash-set allocation and a retain set on every frame and every source.
+  §12.7's arrangement — recompute the cheap thing, gate the expensive things on the cover
+  actually changing — is where the difference is, and `viewcover::ViewCover` already implements
+  it with `entered()`/`left()` deltas.
+- **Necessity is per tile and per frame.** `Required`/`Optional` gates whether a request goes
+  out, which is the right idea expressed as a per-frame stamp over every tile.
+- **Prefetch is a lower-zoom cover, requested whole.** `panTiles` at `zoom - prefetchZoomDelta`,
+  as a second full cover. It puts something on screen sooner and costs the bandwidth of a second
+  set of tiles.
+
+#### What is ours to build, and what is already built and unwired
+
+The parts are further along than the composition. `renderables::update_renderables` is
+transcribed and passes all eighteen of mbgl's own `update_renderables.test.cpp` cases;
+`viewcover::ViewCover` holds the per-view cover with the zoom latch and reports the deltas. Both
+are used only by tests: `map::Map::tick` calls `cover::cover` directly and has no parent/child
+fallback at all, so a pan into new ground would show *holes* where mbgl shows blurry ancestors.
+That is worse than mbgl, it is a wiring gap rather than a design one, and it is step one.
+
+**Prefetch is owed, and as onion layers rather than as a second cover.** mbgl requests one extra
+level whole. What a map wants is progressive refinement: the coarse level standing in for the
+fine one while it loads, each layer replaced as it arrives, with the request order following what
+is visible rather than what is enumerable. That is a different data structure from
+`panTiles` — a per-tile chain of ancestors already held, which `update_renderables` half provides
+by finding them — and it is where "visibly better" is most likely to be won, because the metric a
+user sees is time-to-first-legible-frame rather than frames per second.
+
+#### The metrics that decide it
+
+Both sides, same style, same camera, same machine, reported per frame rather than as an average:
+
+- **Time to first legible frame** — a cold start to a frame with the viewport fully covered at
+  any resolution, which is what the onion layers are for.
+- **Idle cost** — CPU on a settled map. mbgl's floor is a cover, a renderables walk and a retain
+  set per source per frame; ours should be a comparison. This is the one where an order of
+  magnitude is plausible.
+- **Cost of a crossing** — an integer zoom crossing and a tile-boundary crossing, worst frame
+  rather than mean, since §13.1's invariant is about the tail.
+- **Bytes on the wire per frame** — §9.3's traffic-proportional-to-change claim, against mbgl's
+  per-frame re-derivation.
+- **Frames to settle** — how many frames a sweep takes to stop churning.
+
+A delta smaller than the repeat-to-repeat spread is not a result, and the harness has to say so:
+`maplibre_fluorite/test/sweep_bench.sh` already refuses to report a number without saying what
+else the machine was doing, and the two-sided version inherits that.
 
 ### 12.9 Binary size (DR-12)
 
@@ -3034,6 +3128,34 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
   rare in practice — a mostly-static view rather than nav — the whole-layer re-emit is simpler
   and its bandwidth argument evaporates. And if compaction's threshold proves hard to tune, that
   is evidence for the whole-layer re-emit rather than against retention.
+- **DR-22 The bar is measurably faster than mbgl and visibly better, and the order of work is
+  make-it-work, instrument, re-architect.** Parity with mbgl is what the *stream* is held to, and
+  it was never the bar for what the frontend costs to produce it. Where the architecture stands
+  in the way of beating it, the architecture goes — but not before a profile says which part.
+  **Why the order is that way round.** Three architectural guesses in this document measured
+  wrong: §12.7's boundary predictor (cover is 0.10 µs; the predictor costs more than it saves),
+  §13.4's horizon cull (four to six of the cheapest tiles on the map), and the pattern-atlas
+  design that a capture settled in an afternoon. The cost of building the simple thing first and
+  measuring it is one iteration; the cost of choosing an architecture from a guess is finding out
+  after it is load-bearing.
+  **What is being compared.** Both sides, same style, same camera, same machine, per frame rather
+  than averaged: time to first legible frame, idle cost on a settled map, worst-frame cost of an
+  integer-zoom and a tile-boundary crossing, bytes on the wire per frame, and frames to settle.
+  The probe already runs mbgl headless over a style and a camera, which is most of a two-sided
+  harness. A delta smaller than the repeat-to-repeat spread is not a result and the harness has to
+  say so, as `sweep_bench.sh` already does.
+  **Where the difference is expected, and where it is not.** Idle cost is the one where an order
+  of magnitude is plausible, because mbgl re-derives per frame what changes per crossing — a
+  cover, a renderables walk, a hash-set allocation and a retain set, per source, whether or not
+  anything moved. Steady-state throughput is not: the same tiles decode into the same buckets
+  either way, and §12.1's expression work is where that is won or lost. Claiming the first as if
+  it were the second is how a benchmark stops meaning anything.
+  **Prefetch is owed and is not mbgl's.** mbgl requests one extra level whole (`panTiles` at
+  `zoom - prefetchZoomDelta`). What a map wants is progressive refinement — coarse standing in for
+  fine while it loads, each layer replaced as it arrives, requested in the order it becomes
+  visible. That is the onion, it is a different data structure from a second cover, and it is
+  where "visibly better" is most likely to be won: the metric a user perceives is time to a
+  legible frame, not frames per second.
 
 ## 15. Risk register
 
