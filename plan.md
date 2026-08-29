@@ -2829,6 +2829,41 @@ A delta smaller than the repeat-to-repeat spread is not a result, and the harnes
 `maplibre_fluorite/test/sweep_bench.sh` already refuses to report a number without saying what
 else the machine was doing, and the two-sided version inherits that.
 
+#### First measured result: idle cost, 79× to 215×
+
+Both sides asked for a frame with the camera unmoved, after the map has settled. mbgl through
+`mbgl-capture-probe --bench-idle=N`, which calls `Renderer::render` regardless of the probe's own
+dirty flag — the gate being measured is mbgl's, not the harness's. tessella through
+`benches/idle_frame`, which calls `Map::tick` on a settled map.
+
+| | mbgl | tessella | ratio |
+|---|---|---|---|
+| p50 | 11.08 µs | 0.14 µs | 79× |
+| p95 | 11.49 µs | 0.15 µs | 77× |
+| p99 | 14.62 µs | 0.15 µs | 97× |
+| **max** | **47.88 µs** | **0.27 µs** | **177×** |
+
+Two thousand settled frames each, same style, same camera, same machine. The gap is widest at the
+*maximum*, which is the number a frame budget is a promise about (§13.1).
+
+**And mbgl's floor moves with the style while ours does not.** Measured across three: 11.2 µs for
+the symbol style, 28.7 µs for the hermetic one, 30.4 µs for the composite — because the work is
+per source and per layer, and it happens whether or not anything moved. tessella's idle path is a
+camera-key comparison and a dirty-flag test, which is O(1) in the style by construction: the gate
+returns before the cover, the cache, the arena or the ring are touched. So the ratio is 79× on
+the style that flatters mbgl most and 215× on the one that flatters it least.
+
+**What this is not.** The scopes are not identical, and pretending otherwise would make the
+number worthless. `Renderer::render` also evaluates paint properties and assembles draw calls,
+which `tick` leaves to the consumer. What both include is the part being compared: deciding what
+the frame contains. So the honest claim is narrow — this is the cost of *deciding there is
+nothing to do* — and it says nothing about steady-state throughput, where the same tiles decode
+into the same buckets either way and §12.1 is where the difference would come from.
+
+It is still the number that matters most for a cluster: a map that is settled is the common case
+by a wide margin, and four views paying 30 µs each per frame for nothing is 7.2 ms per second of
+CPU spent establishing that nothing happened.
+
 ### 12.9 Binary size (DR-12)
 
 50–60k LOC of generic-heavy Rust monomorphizes. Posture set early: `panic=abort`, fat LTO,

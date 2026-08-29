@@ -60,6 +60,10 @@ name = "four_view_sweep"
 harness = false
 
 [[bench]]
+name = "idle_frame"
+harness = false
+
+[[bench]]
 name = "globe_sweep"
 harness = false
 
