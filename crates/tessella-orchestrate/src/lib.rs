@@ -48,6 +48,7 @@ pub mod counters;
 pub mod damage;
 pub mod emit;
 pub mod frame;
+pub mod map;
 #[cfg(all(feature = "std", feature = "offline"))]
 pub mod offline;
 pub mod order;

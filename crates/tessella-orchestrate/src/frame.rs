@@ -1006,6 +1006,15 @@ fn teardown_group(
 const COMPACTION_THRESHOLD: f64 = 0.25;
 
 /// The camera fields damage is decided on.
+/// The camera reduced to what a change in it would mean.
+///
+/// Public because the frame loop asks the same question before deciding whether to emit at all,
+/// and asking it a second way would let the two disagree about what "moved" means.
+#[must_use]
+pub fn camera_key_of(view: &ViewTransform) -> crate::damage::CameraKey {
+    camera_key(view)
+}
+
 fn camera_key(view: &ViewTransform) -> crate::damage::CameraKey {
     crate::damage::CameraKey {
         center_zoom0: tessella_tile::camera::center_zoom0(view),
