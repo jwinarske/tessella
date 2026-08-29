@@ -2864,6 +2864,43 @@ It is still the number that matters most for a cluster: a map that is settled is
 by a wide margin, and four views paying 30 µs each per frame for nothing is 7.2 ms per second of
 CPU spent establishing that nothing happened.
 
+#### Second result: a zoom crossing, and why its ratio is not yet a clean claim
+
+The sweep is the honest half. Idle cost measures who *skips* better; a z8→z16→z8 sweep measures
+who does the unavoidable work faster, because the cover really has changed and mbgl's per-frame
+re-derivation is work that had to happen this frame.
+
+| | mbgl | tessella |
+|---|---|---|
+| p50 | 51.85 µs | 4.39 µs |
+| p95 | 110.97 µs | 6.37 µs |
+| p99 | 136.42 µs | 8.77 µs |
+| max | 473.91 µs | 9.02 µs |
+
+**The caveat, before the numbers are quoted anywhere.** These scopes are not comparable. mbgl's
+geojson source calls `geoJSONVT::getTile` as the cover changes, so its sweep includes producing
+tiles; the tessella harness serves pre-built buckets for every address, so it does not. Some
+double-digit part of mbgl's figure is tiling this side never did. The ratio is therefore an upper
+bound on the difference and not a measurement of it, and it stays that way until both sides draw
+a vector source over the same pre-fetched tiles. That is the next thing the harness needs.
+
+**What does survive the caveat is the tail, because it is internal to each side.**
+
+| | worst frame ÷ median |
+|---|---|
+| mbgl | 9.1× |
+| tessella | 2.1× |
+
+That is a statement about predictability rather than about speed, and §13.1 is a promise about
+predictability: mbgl's worst crossing frame costs nine times its median, and tessella's costs
+twice. Neither figure depends on what the other side was doing. At sixty frames a second one
+mbgl view spends 2.8% of a frame budget on its worst crossing and four spend 11%; the same four
+here spend 0.2%.
+
+**And it says the idle result is not merely a gating trick.** If the two were close once the work
+became unavoidable, the 79×–215× would have been a story about when work is skipped rather than
+about what it costs. They are not close, even with the caveat pointing the other way.
+
 ### 12.9 Binary size (DR-12)
 
 50–60k LOC of generic-heavy Rust monomorphizes. Posture set early: `panic=abort`, fat LTO,
