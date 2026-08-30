@@ -3003,12 +3003,25 @@ of the map's progress.
 So legibility is **the frame the count stops falling**, not the frame it reaches zero. Measured
 on this style: floor of five, reached at frame 27.
 
-**And the same flaw is in the tessella measurement, hidden by its fixture.** That harness serves
-the same buckets for every address, so every tile has content and zero is genuinely reachable —
-which is why 15→3 read cleanly. The number is right for what it measured and the *metric* does
-not generalise: on a real sparse source the tessella side would report a floor above zero too,
-and a comparison of "frames to zero" between the two would have been comparing two different
-floors. The floor-crossing definition is the one that transfers.
+**Checked on this side, and the floor is zero.** The suspicion was that the tessella figure was
+flattered by a fixture where every tile has content. Run against a sparse source — one tile in
+three with data, the rest loading empty — it reports a floor of **zero, reached at frame two**.
+
+The difference is in what a source is permitted to say. `Tiles::buckets` returning `Some` of an
+empty list is *loaded, and empty*, which is distinct from `None` meaning *not loaded*; the
+substitution pass treats the first as covering its ground, because it does — there is nothing
+there and the map is complete over it. mbgl has no such distinction to draw: a tile with no
+features never reports renderable, so it is indistinguishable from one still in flight, for ever.
+
+| | hole floor | reached |
+|---|---|---|
+| mbgl | 5 | never zero |
+| tessella | 0 | frame 2 |
+
+This is worth more than a row in a table. A permanent floor above zero means no consumer can ask
+"is the map finished" and get an answer, and no measurement of when it became legible can be
+stated absolutely — both must be phrased against a floor rediscovered per style. With a floor of
+zero, "complete" is a question with an answer.
 
 This is the third measurement this session whose first form was wrong, and the second where the
 error would have been invisible without the other side to check it against. Instrumenting the

@@ -789,3 +789,92 @@ fn zooming_in_costs_the_onion_almost_nothing() {
          the claim that it is nearly free on this path does not hold"
     );
 }
+
+/// A source where most tiles are legitimately empty still reaches a floor of no holes.
+///
+/// mbgl does not. Instrumenting its `updateRenderables` with the same hole count showed the
+/// figure settling at five on a style whose data is three points near London — most of a z13
+/// cover being ocean — and staying there for the life of the map. Those are not tiles still
+/// loading; they are tiles with nothing in them, which mbgl never reports as renderable, so they
+/// are indistinguishable from holes for ever.
+///
+/// The difference is in what a source is allowed to say. `Tiles::buckets` returning `Some` of an
+/// empty list is *loaded, and empty* — distinct from `None`, which is *not loaded*. The
+/// substitution pass treats the first as covering its ground, because it does: there is nothing
+/// there and the map is complete over it.
+///
+/// This matters beyond bookkeeping. A permanent floor above zero means no consumer can ever ask
+/// "is the map finished", and no measurement of when it became legible can be stated as an
+/// absolute — both have to be phrased against a floor discovered per style.
+#[test]
+fn empty_tiles_are_covered_rather_than_holes() {
+    const LATENCY: u64 = 2;
+
+    /// Only one tile in nine has any data; the rest load as empty.
+    struct Sparse {
+        ready_at: std::cell::RefCell<std::collections::BTreeMap<TileId, u64>>,
+        now: std::cell::Cell<u64>,
+        buckets: Arc<Vec<LayerBucket>>,
+        empty: Arc<Vec<LayerBucket>>,
+    }
+    impl Tiles for Sparse {
+        fn buckets(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
+            let ready = self.ready_at.borrow();
+            match ready.get(&tile) {
+                Some(&at) if at <= self.now.get() => Some(if (tile.x + tile.y) % 3 == 0 {
+                    Arc::clone(&self.buckets)
+                } else {
+                    // Loaded, and nothing in it. Not the same as absent.
+                    Arc::clone(&self.empty)
+                }),
+                _ => None,
+            }
+        }
+    }
+
+    let style = Style::parse(STYLE).expect("the style parses");
+    let decoded = Tile::decode(REAL_TILE).expect("the fixture decodes");
+    let built = build_mvt_tile(&style, "src", TileId::new(0, 0, 0), &decoded).expect("builds");
+    let tiles = Sparse {
+        ready_at: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+        now: std::cell::Cell::new(0),
+        buckets: Arc::new(built),
+        empty: Arc::new(Vec::new()),
+    };
+
+    let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
+    // SAFETY: as above.
+    let (mut producer, _consumer) =
+        unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
+
+    let mut map = Map::new(style, view(9.0), ViewId(0));
+    let mut floor = usize::MAX;
+    let mut floor_at = 0u64;
+
+    for frame in 0..40u64 {
+        tiles.now.set(frame);
+        map.mark_dirty();
+        map.tick(&mut producer, &tiles).expect("a sparse tick");
+        {
+            let mut ready = tiles.ready_at.borrow_mut();
+            for want in map.wanted() {
+                let id = TileId::new(want.z, want.x, want.y);
+                if let std::collections::btree_map::Entry::Vacant(slot) = ready.entry(id) {
+                    slot.insert(frame + LATENCY);
+                }
+            }
+        }
+        if map.uncovered() < floor {
+            floor = map.uncovered();
+            floor_at = frame;
+        }
+    }
+
+    println!("sparse source: hole floor {floor}, reached at frame {floor_at}");
+    assert_eq!(
+        floor, 0,
+        "a map whose every tile has loaded — most of them empty — still reports {floor} holes. \
+         An empty tile covers its ground; treating it as a hole leaves a floor no consumer can \
+         ever see past, which is the state mbgl is permanently in on the same shape of data"
+    );
+}
