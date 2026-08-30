@@ -3023,6 +3023,29 @@ This is worth more than a row in a table. A permanent floor above zero means no 
 stated absolutely — both must be phrased against a floor rediscovered per style. With a floor of
 zero, "complete" is a question with an answer.
 
+**A cold-start frame count is not comparable between the two, and the reason is structural.**
+mbgl's `Map` exists before its style does: it is constructed, then handed a URL or a document to
+load asynchronously, so a cold run spends its first frames rendering with no layers at all.
+Measured, the style finishes loading at frame 1, 3, 3, 9 and 27 across five runs of the same
+document — it dominates a from-process-start figure and is not stable enough to subtract by
+assumption. A `Map` here takes a parsed `Style` by value and cannot exist without one, so its
+harness starts where mbgl's arrives.
+
+What *is* comparable is the tile work: frames from style-loaded to the hole floor.
+
+| | frames from style-loaded to floor |
+|---|---|
+| mbgl | 2–4 |
+| tessella | 2–3 |
+
+Which is to say: **close.** The onion's 15→3 is tessella measured against itself, and it is a
+real result about request ordering under a bounded queue; it is not a claim about mbgl, whose
+prefetch does the same job by a different route. Quoting a from-start figure — 27 against 3 —
+would have been quoting mbgl's style loader as though it were its tile pipeline.
+
+The difference that does hold on this metric is the floor itself, above: mbgl arrives quickly at
+five holes and stays there, and this arrives at zero.
+
 This is the third measurement this session whose first form was wrong, and the second where the
 error would have been invisible without the other side to check it against. Instrumenting the
 oracle is worth it for that alone, separately from any number it yields.
