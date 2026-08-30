@@ -350,6 +350,11 @@ pub fn update_renderables<P: Pyramid + ?Sized>(
 
         let mut covered = true;
         let mut found = false;
+        // Whether an ancestor drawn for a sibling already covers this tile. Kept apart from
+        // `found` because `found` steers the algorithm and this only answers a question about it:
+        // conflating them would skip mbgl's prefetched fallback for a tile it does not skip it
+        // for, which is a divergence from the oracle to make a counter read better.
+        let mut covered_by_sibling = false;
         let child_z = i32::from(ideal_id.overscaled_z) + 1;
 
         if child_z > i32::from(zoom_max) {
@@ -399,12 +404,17 @@ pub fn update_renderables<P: Pyramid + ?Sized>(
             // A sibling has already been up this chain; whatever it found, this tile would find
             // too.
             if !checked.insert(parent) {
-                // Already walked for a sibling. If that walk drew this ancestor or a coarser
-                // one, this tile is covered by it.
+                // Already walked for a sibling. mbgl breaks here with `parentOrChildTileFound`
+                // still false, and so does this: the control flow is the oracle's.
+                //
+                // But the *coverage* question has a different answer. If the sibling's walk drew
+                // this ancestor or a coarser one, that tile covers this ground too, because it
+                // contains it. `found` stays false so the prefetched fallback below still runs,
+                // as mbgl runs it; `covered_by_sibling` is what the hole count consults.
                 let mut above = Some(parent);
                 while let Some(id) = above {
                     if rendered.contains(&id) {
-                        found = true;
+                        covered_by_sibling = true;
                         break;
                     }
                     above = (id.overscaled_z > zoom_min).then(|| id.scaled_to(id.overscaled_z - 1));
@@ -445,8 +455,11 @@ pub fn update_renderables<P: Pyramid + ?Sized>(
         }
 
         if !found {
-            // Nothing above or below.
-            pyramid.uncovered(ideal_id);
+            // Nothing above or below — unless a sibling's ancestor already covers it, which is
+            // not a hole even though the ascent stopped short of proving it here.
+            if !covered_by_sibling {
+                pyramid.uncovered(ideal_id);
+            }
             // Anything prefetched that lies inside this tile is better than blank.
             for &(prefetched_id, prefetched_state) in prefetched {
                 if prefetched_state.renderable
