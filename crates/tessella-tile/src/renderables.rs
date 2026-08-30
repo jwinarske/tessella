@@ -303,6 +303,14 @@ pub fn update_renderables<P: Pyramid + ?Sized>(
     // so without this a cover of a thousand tiles walks the same ancestry a thousand times —
     // and worse, retains it a thousand times.
     let mut checked: BTreeSet<DataTileId> = BTreeSet::new();
+    // Ancestors this walk has actually drawn. Distinct from `checked`, which records ancestries
+    // *visited*: an ancestry can be visited and cover nothing.
+    //
+    // Needed because the short-circuit below stops a second ideal tile from re-walking an
+    // ancestry a sibling already walked — correct, and it loses the answer. The sibling's walk
+    // may have rendered an ancestor, and that ancestor covers this tile too, since it contains
+    // it. Without this the walk reports such a tile as a hole while it is plainly drawn.
+    let mut rendered: BTreeSet<DataTileId> = BTreeSet::new();
 
     for &ideal_id in ideal {
         assert!(
@@ -391,6 +399,16 @@ pub fn update_renderables<P: Pyramid + ?Sized>(
             // A sibling has already been up this chain; whatever it found, this tile would find
             // too.
             if !checked.insert(parent) {
+                // Already walked for a sibling. If that walk drew this ancestor or a coarser
+                // one, this tile is covered by it.
+                let mut above = Some(parent);
+                while let Some(id) = above {
+                    if rendered.contains(&id) {
+                        found = true;
+                        break;
+                    }
+                    above = (id.overscaled_z > zoom_min).then(|| id.scaled_to(id.overscaled_z - 1));
+                }
                 break;
             }
 
@@ -417,6 +435,7 @@ pub fn update_renderables<P: Pyramid + ?Sized>(
 
                 if parent_state.renderable {
                     pyramid.render(parent.render_id(), parent);
+                    rendered.insert(parent);
                     found = true;
                     break;
                 }

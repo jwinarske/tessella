@@ -430,7 +430,8 @@ fn a_missing_tile_draws_its_ancestor_and_is_asked_for() {
     );
     assert!(
         map.wanted().iter().all(|tile| tile.z > 0),
-        "what is wanted should be the tiles the cover asked for, not the one it already has"
+        "the z0 tile is already held, so nothing should ask for it — the prefetch chain is not \
+         being filtered against what the source has"
     );
 }
 
@@ -637,6 +638,12 @@ fn a_cold_start_reports_when_it_first_draws() {
     // Deep enough that the ideal level is many tiles and its ancestors are few, which is the
     // asymmetry an onion trades on.
     let mut map = Map::new(style, view(9.0), ViewId(0));
+    map.set_prefetch(
+        std::env::var("TESSELLA_PREFETCH")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(4),
+    );
 
     // Two fetches in flight at once. Unlimited concurrency is the assumption that makes a
     // prefetch look pointless: if every tile a cover names arrives together, asking for a coarse

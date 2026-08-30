@@ -134,6 +134,8 @@ pub struct Map {
     wanted: Vec<TileCoord>,
     /// Ideal tiles the last frame left as holes — nothing at any resolution over them.
     uncovered: usize,
+    /// How many ancestor levels to ask for alongside the ideal cover.
+    prefetch: u8,
     /// Glyphs, once a caller has fetched them.
     ///
     /// Owned rather than borrowed because a map outlives any one frame and the glyph set grows
@@ -167,6 +169,7 @@ impl Map {
             drawn: Vec::new(),
             wanted: Vec::new(),
             uncovered: 0,
+            prefetch: DEFAULT_PREFETCH,
             fonts: None,
             sprites: None,
             zoom: ZoomHistory::new(),
@@ -221,6 +224,19 @@ impl Map {
     #[must_use]
     pub fn wanted(&self) -> &[TileCoord] {
         &self.wanted
+    }
+
+    /// How many ancestor levels to fetch alongside the ideal cover.
+    ///
+    /// Zero asks only for what the cover names, which is a map with no prefetch at all.
+    ///
+    /// This is the onion, and it is not mbgl's prefetch. mbgl covers a second time at
+    /// `zoom - prefetchZoomDelta` and requests that whole cover; this asks for the *ancestors of
+    /// the tiles it is missing*, which is a different set and a much smaller one — four siblings
+    /// share a parent, so a cover of nine collapses to one or two per level, and the coarsest
+    /// level is very often a single tile covering the entire viewport.
+    pub const fn set_prefetch(&mut self, levels: u8) {
+        self.prefetch = levels;
     }
 
     /// How much of the last frame was a hole.
@@ -292,8 +308,15 @@ impl Map {
             };
             cover.draw(&mut pass, 0..=tessella_tile::cover::MAX_ZOOM);
             self.drawn = pass.drawn;
-            self.wanted = pass.wanted;
             self.uncovered = pass.uncovered;
+            // Ancestors already held are not wanted. `onion` builds the chain without knowing
+            // what exists — it has the addresses and not the store — so the filter is here,
+            // where the source is. Without it a zoomed-in map re-asks every frame for the coarse
+            // levels it is already drawing from.
+            self.wanted = onion(&pass.wanted, self.prefetch)
+                .into_iter()
+                .filter(|tile| tiles.buckets(TileId::new(tile.z, tile.x, tile.y)).is_none())
+                .collect();
         }
 
         // Found, not built. A tile the source already holds costs a lookup, and one that has not
@@ -350,6 +373,67 @@ impl Map {
         )?;
         Ok(Tick::Emitted(emitted))
     }
+}
+
+/// How many ancestor levels are asked for alongside the ideal cover by default.
+///
+/// Four, which is mbgl's `prefetchZoomDelta`. Matching the number is deliberate: the *set*
+/// differs enough that the depth should not, or a comparison would be measuring how far each
+/// reaches rather than which set it asks for.
+const DEFAULT_PREFETCH: u8 = 4;
+
+/// The ideal misses, with their ancestors, coarsest first.
+///
+/// # Why ancestors of the misses rather than a second cover
+///
+/// A cover at `zoom - 4` is computed from the camera and names every tile at that level the
+/// viewport touches. The ancestors of the *missing* tiles are a subset of that and usually a tiny
+/// one: siblings share a parent, so nine ideal tiles have at most nine ancestors per level and in
+/// practice one or two — and four levels up, very often exactly one, the tile that covers the
+/// whole viewport by itself.
+///
+/// Asking for what is missing also means asking for nothing when nothing is missing: a settled
+/// map prefetches no tiles at all, where a second cover would have to be computed and diffed to
+/// discover the same.
+///
+/// # The order is the point
+///
+/// Coarsest first, because every real fetcher has a bounded queue and the order decides what
+/// occupies it. Ideal-first spends the queue on detail tiles, each covering a ninth of the
+/// screen; coarse-first spends the first slot on the tile that covers all of it. The same
+/// requests and the same bytes — the difference is *when* the map becomes legible.
+fn onion(ideal: &[TileCoord], levels: u8) -> Vec<TileCoord> {
+    if levels == 0 || ideal.is_empty() {
+        return ideal.to_vec();
+    }
+
+    // Deduplicated as they are built: four siblings collapse to one parent, and without this a
+    // cover of a thousand tiles would ask for the same ancestor a thousand times.
+    let mut seen: alloc::collections::BTreeSet<(u8, u32, u32, i32)> = ideal
+        .iter()
+        .map(|tile| (tile.z, tile.x, tile.y, tile.wrap))
+        .collect();
+    let mut out: Vec<TileCoord> = Vec::with_capacity(ideal.len() + usize::from(levels));
+
+    // Coarsest first: `levels` steps up, then `levels - 1`, down to the ideal level itself.
+    for step in (1..=levels).rev() {
+        for tile in ideal {
+            let Some(z) = tile.z.checked_sub(step) else {
+                continue;
+            };
+            let ancestor = TileCoord {
+                z,
+                x: tile.x >> step,
+                y: tile.y >> step,
+                wrap: tile.wrap,
+            };
+            if seen.insert((ancestor.z, ancestor.x, ancestor.y, ancestor.wrap)) {
+                out.push(ancestor);
+            }
+        }
+    }
+    out.extend_from_slice(ideal);
+    out
 }
 
 /// The pass that turns an ideal cover into what can actually be drawn.

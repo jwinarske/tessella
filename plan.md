@@ -2939,6 +2939,46 @@ correct incremental emission read as forty-two holes. The field's own documentat
 compared are "the whole measure of an incremental emission" — which is exactly right, and is also
 why one of them alone measures nothing.
 
+#### Fourth result: the onion, 5× to a legible frame
+
+Time to first *legible* frame — the viewport covered at any resolution — on a cold start with a
+fetch latency of three frames and two fetches in flight.
+
+| | legible at | tiles requested |
+|---|---|---|
+| no prefetch | frame 15 | 9 |
+| onion, four levels | **frame 3** | 19 |
+
+Frame three is the fetch latency, so the onion reaches the floor: the map is legible as soon as
+*anything* can arrive. Nine tiles two at a time is four and a half rounds without it.
+
+**It is not mbgl's prefetch.** mbgl covers a second time at `zoom - prefetchZoomDelta` and
+requests that whole cover. This asks for the ancestors of the tiles it is *missing*, which is a
+subset and usually a tiny one — siblings share a parent, so nine ideal tiles collapse to one or
+two per level, and four levels up very often to the single tile that covers the viewport. Asking
+for what is missing also means asking for nothing when nothing is: a settled map prefetches
+nothing at all, where a second cover must be computed and diffed to discover the same.
+
+**The order is the mechanism, not the depth.** Every real fetcher has a bounded queue, and the
+order decides what occupies it. Ideal-first spends the first slots on detail tiles covering a
+ninth of the screen each; coarsest-first spends the first slot on the tile that covers all of it.
+Same requests, same bytes, different moment of legibility.
+
+**The cost is 2.1× the requests**, and that is the trade rather than a free win. On a cold start
+with nothing cached every ancestor is a real fetch. On a map being zoomed into — which is how a
+user reaches deep zoom — the coarse levels are already held, and the onion asks for nothing.
+
+**The first attempt measured it as 12 frames *worse*, and the metric was at fault.** With the
+onion on, legibility was reported at frame 27 against 15 without. The coverage counter was
+over-reporting holes: `update_renderables` short-circuits when a second ideal tile shares an
+ancestry a sibling already walked, which is correct and loses the answer — the sibling's walk may
+have *rendered* an ancestor, and that ancestor covers this tile too. The walk reported such tiles
+as holes while they were plainly drawn. Recording which ancestors were rendered, and consulting
+that at the short-circuit, is the fix; all eighteen of mbgl's own cases still pass.
+
+Worth stating because the wrong number pointed the wrong way. Had it been believed, the onion
+would have been reverted as a regression on the exact metric it improves fivefold.
+
 **And it says the idle result is not merely a gating trick.** If the two were close once the work
 became unavoidable, the 79×–215× would have been a story about when work is skipped rather than
 about what it costs. They are not close. That reading survives the correction above, because the
