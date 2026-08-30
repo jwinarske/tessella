@@ -3483,6 +3483,39 @@ a subdivision and a draw the consumer no longer makes.
   place, byte-identical to `pmtiles serve` across zoom 0 to 15. It was cheap in Rust, as this
   said. MBTiles is still open, and is a different shape — SQLite rather than a directory format,
   so it lands on the `cache` feature's dependency rather than needing one of its own.
+- **Where a cold start's wait goes: `tessella_create`'s blocking boot, and who fetches.** Two
+  decisions that land together or not at all, because a non-blocking create without a fetch loop
+  is a map that never loads anything past its first cover.
+  The cost being placed: `cold_start` measures 22 ms for a nine-tile cover against a *local*
+  extract, 6.7 ms of that to first geometry. Over a network it is hundreds of milliseconds, and
+  it scales with the cover. Today `tessella_create` blocks the caller for all of it.
+  Noticed by asking what mbgl gains from rendering twenty-seven frames of nothing while its style
+  loads — nothing, but the comparison is not flattering either way: mbgl spins its render loop
+  and stays responsive showing an empty map, and this blocks the caller instead. On a UI thread
+  that is the worse of the two, and it is a defect here rather than a virtue.
+  **What `create` does.** *(1)* Block through the full boot, as now: a returned handle is a map
+  you can draw, and every failure surfaces at one call — against a stall that scales with cover
+  size and latency, neither of which the caller controls. *(2)* Block through the style parse and
+  the source manifests only, tiles arriving through ticks: bounded work, style and origin errors
+  still fail where they are actionable, and the map goes coarse-then-sharp through the
+  substitution path — against one network round trip still on the calling thread, and two-phase
+  failure reporting. *(3)* Parse the style and nothing else: never stalls, every entry point
+  uniformly cheap — against a bad style URL that cannot fail at create, so the consumer holds a
+  handle, sees an empty map, and needs a status channel to learn why. That failure mode is
+  "silently blank", which this document has caught three times already.
+  **Who fetches.** *(a)* The FFI owns a loop over `wanted()` — self-contained, and it puts
+  network and priority policy in the binding layer, which §5.5 places outside a view; the same
+  mistake as putting orchestration there. *(b)* The consumer drives it, taking `wanted()` and
+  handing tiles back — matches §5.5 exactly, and every consumer reimplements it while the C API
+  widens. *(c)* A process-scoped tile source implementing `Tiles`, shared across views, fed
+  `wanted()` — which is what `Coalescing` + `TileCache` + `Pool` already are, and what `boot`
+  constructs and then discards. One fetch for two views over one tile, which is §9.3's flatness;
+  the cost is a source handle distinct from a map handle in the C API.
+  **Leaning: (2) with (c)**, which keeps each layer where this document puts it and gives the
+  onion visible work — the first tick draws the coarse ancestor and later ticks sharpen. The
+  argument against it is its own: (2) still blocks on a round trip, so a hard frame budget on the
+  calling thread makes (3) plus an explicit error-status call the honest choice, and the extra API
+  is what never stalling costs.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for
