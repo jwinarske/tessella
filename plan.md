@@ -2987,6 +2987,33 @@ that at the short-circuit, is the fix; all eighteen of mbgl's own cases still pa
 Worth stating because the wrong number pointed the wrong way. Had it been believed, the onion
 would have been reverted as a regression on the exact metric it improves fivefold.
 
+#### What instrumenting mbgl's side found about the metric itself
+
+Counting holes on mbgl — the same count, in the same place in the same algorithm — reported that
+its map *never becomes legible*: no rendered frame with zero uncovered ideal tiles, on a style
+that plainly draws. Traced per frame, the count starts at twelve on the first drawing frame,
+falls to five, and stays at five forever.
+
+**Five is correct, and the definition was wrong.** A hole is an ideal tile with nothing drawn
+over it, and that conflates two states: *not loaded yet*, and *loaded and legitimately empty*. A
+sparse source has many of the second — this style is three points near London, and most of a z13
+cover is ocean — so the count settles at a floor above zero that is a property of the style, not
+of the map's progress.
+
+So legibility is **the frame the count stops falling**, not the frame it reaches zero. Measured
+on this style: floor of five, reached at frame 27.
+
+**And the same flaw is in the tessella measurement, hidden by its fixture.** That harness serves
+the same buckets for every address, so every tile has content and zero is genuinely reachable —
+which is why 15→3 read cleanly. The number is right for what it measured and the *metric* does
+not generalise: on a real sparse source the tessella side would report a floor above zero too,
+and a comparison of "frames to zero" between the two would have been comparing two different
+floors. The floor-crossing definition is the one that transfers.
+
+This is the third measurement this session whose first form was wrong, and the second where the
+error would have been invisible without the other side to check it against. Instrumenting the
+oracle is worth it for that alone, separately from any number it yields.
+
 **And it says the idle result is not merely a gating trick.** If the two were close once the work
 became unavoidable, the 79×–215× would have been a story about when work is skipped rather than
 about what it costs. They are not close. That reading survives the correction above, because the
