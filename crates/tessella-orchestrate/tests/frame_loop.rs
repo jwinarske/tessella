@@ -701,3 +701,91 @@ fn a_cold_start_reports_when_it_first_draws() {
     // way round. What is asserted is that it draws at all within the run.
     assert!(at < 40, "a cold start never drew anything");
 }
+
+/// Zooming in costs the onion almost nothing, because it already holds the coarse levels.
+///
+/// The cold-start measurement puts the onion's cost at 2.1× the requests, and that is the worst
+/// case: nothing cached, every ancestor a real fetch. §12.10 claims the common case is much
+/// cheaper — a user reaches deep zoom by zooming *in*, and the levels the onion would ask for
+/// are the ones already being drawn from.
+///
+/// That claim was asserted before it was measured, which is why this exists. What it reports is
+/// the total requests over a zoom-in against the ideal cover's own count: if the onion is nearly
+/// free on this path, the two are close.
+#[test]
+fn zooming_in_costs_the_onion_almost_nothing() {
+    const LATENCY: u64 = 2;
+
+    struct Progressive {
+        ready_at: std::cell::RefCell<std::collections::BTreeMap<TileId, u64>>,
+        now: std::cell::Cell<u64>,
+        buckets: Arc<Vec<LayerBucket>>,
+    }
+    impl Tiles for Progressive {
+        fn buckets(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
+            let ready = self.ready_at.borrow();
+            match ready.get(&tile) {
+                Some(&at) if at <= self.now.get() => Some(Arc::clone(&self.buckets)),
+                _ => None,
+            }
+        }
+    }
+
+    /// Runs a zoom-in and reports how many distinct tiles were fetched.
+    fn zoom_in(style: &Style, buckets: Arc<Vec<LayerBucket>>, prefetch: u8) -> usize {
+        let tiles = Progressive {
+            ready_at: std::cell::RefCell::new(std::collections::BTreeMap::new()),
+            now: std::cell::Cell::new(0),
+            buckets,
+        };
+        let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
+        // SAFETY: as above.
+        let (mut producer, _consumer) =
+            unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
+
+        let mut map = Map::new(style.clone(), view(2.0), ViewId(0));
+        map.set_prefetch(prefetch);
+
+        let mut requests = 0usize;
+        // z2 to z10, a quarter level a frame, which is a user zooming in steadily.
+        for frame in 0..80u64 {
+            tiles.now.set(frame);
+            map.mark_dirty();
+            #[allow(clippy::cast_precision_loss)]
+            let zoom = 2.0 + (frame as f64) * 0.1;
+            map.look_at(camera::settled(&ViewTransform {
+                zoom: zoom.min(10.0),
+                ..*map.view()
+            }));
+            map.tick(&mut producer, &tiles).expect("a zooming tick");
+
+            let mut ready = tiles.ready_at.borrow_mut();
+            for want in map.wanted() {
+                let id = TileId::new(want.z, want.x, want.y);
+                if let std::collections::btree_map::Entry::Vacant(slot) = ready.entry(id) {
+                    slot.insert(frame + LATENCY);
+                    requests += 1;
+                }
+            }
+        }
+        requests
+    }
+
+    let style = Style::parse(STYLE).expect("the style parses");
+    let decoded = Tile::decode(REAL_TILE).expect("the fixture decodes");
+    let built =
+        Arc::new(build_mvt_tile(&style, "src", TileId::new(0, 0, 0), &decoded).expect("builds"));
+
+    let plain = zoom_in(&style, Arc::clone(&built), 0);
+    let onion = zoom_in(&style, built, 4);
+
+    #[allow(clippy::cast_precision_loss)]
+    let overhead = onion as f64 / plain as f64;
+    println!("zoom-in: {plain} tiles without the onion, {onion} with ({overhead:.2}x)");
+
+    assert!(
+        overhead < 1.5,
+        "the onion cost {overhead:.2}x the requests on a zoom-in, against 2.1x on a cold start — \
+         the claim that it is nearly free on this path does not hold"
+    );
+}

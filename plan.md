@@ -2964,9 +2964,17 @@ order decides what occupies it. Ideal-first spends the first slots on detail til
 ninth of the screen each; coarsest-first spends the first slot on the tile that covers all of it.
 Same requests, same bytes, different moment of legibility.
 
-**The cost is 2.1× the requests**, and that is the trade rather than a free win. On a cold start
-with nothing cached every ancestor is a real fetch. On a map being zoomed into — which is how a
-user reaches deep zoom — the coarse levels are already held, and the onion asks for nothing.
+**The cost is 2.1× the requests on a cold start**, and that is the trade rather than a free win:
+with nothing cached, every ancestor is a real fetch.
+
+**On the path a user actually takes it is 1.07×.** Measured rather than assumed, because the
+claim was written here before it was checked: a steady zoom from z2 to z10 fetches 69 tiles
+without the onion and 74 with it — five extra tiles across eight levels. The coarse levels a
+deep cover would want are the ones already being drawn from on the way down to it, and the filter
+against the source means they are not asked for twice.
+
+So the worst case is a cold start at depth, which is a deep link or a restored session, and the
+common case is nearly free.
 
 **The first attempt measured it as 12 frames *worse*, and the metric was at fault.** With the
 onion on, legibility was reported at frame 27 against 15 without. The coverage counter was
