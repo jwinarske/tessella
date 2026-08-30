@@ -821,7 +821,7 @@ fn empty_tiles_are_covered_rather_than_holes() {
         fn buckets(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
             let ready = self.ready_at.borrow();
             match ready.get(&tile) {
-                Some(&at) if at <= self.now.get() => Some(if (tile.x + tile.y) % 3 == 0 {
+                Some(&at) if at <= self.now.get() => Some(if (tile.x + tile.y).is_multiple_of(3) {
                     Arc::clone(&self.buckets)
                 } else {
                     // Loaded, and nothing in it. Not the same as absent.
