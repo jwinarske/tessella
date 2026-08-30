@@ -3511,11 +3511,20 @@ a subdivision and a draw the consumer no longer makes.
   `wanted()` — which is what `Coalescing` + `TileCache` + `Pool` already are, and what `boot`
   constructs and then discards. One fetch for two views over one tile, which is §9.3's flatness;
   the cost is a source handle distinct from a map handle in the C API.
-  **Leaning: (2) with (c)**, which keeps each layer where this document puts it and gives the
-  onion visible work — the first tick draws the coarse ancestor and later ticks sharpen. The
-  argument against it is its own: (2) still blocks on a round trip, so a hard frame budget on the
-  calling thread makes (3) plus an explicit error-status call the honest choice, and the extra API
-  is what never stalling costs.
+  **Recommended: (2) with (c).** It keeps each layer where this document puts it — policy
+  process-scoped, orchestration in `map`, the binding thin — and it gives the onion visible work,
+  since the first tick draws the coarse ancestor and later ticks sharpen. It also keeps the
+  failure that matters most, a style that will not load, at the call that can report it.
+  **Recommended against (1)** because the stall it imposes is unbounded in the caller's terms: it
+  grows with the cover and with the network, and a consumer has no way to cap it.
+  **Recommended against (a)** for the reason orchestration was moved out of the FFI earlier in
+  this document — a binding layer that owns policy becomes a second place that policy lives.
+  **The case against the recommendation**, which is real: (2) still blocks on one round trip. If
+  the calling thread has a hard frame budget — a UI thread, or a compositor tick — then (3) with
+  an explicit error-status call is the honest choice, and the extra API surface is simply what
+  never stalling costs. The deciding question is not which is tidier but whether any blocking
+  call is acceptable on the thread that will make it, and that is a property of the consumer
+  rather than of this design. **Fluorite's answer decides it**, and it is not yet asked.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for
