@@ -358,10 +358,10 @@ pub(crate) enum Work {
 }
 
 pub(crate) struct Job {
-    tile: TileId,
-    source: String,
-    work: Work,
-    key: tessella_tile::store::TileKey,
+    pub(crate) tile: TileId,
+    pub(crate) source: String,
+    pub(crate) work: Work,
+    pub(crate) key: tessella_tile::store::TileKey,
 }
 
 impl Job {

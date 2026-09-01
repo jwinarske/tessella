@@ -57,6 +57,7 @@ pub mod pacing;
 pub mod pool;
 pub mod project;
 pub mod registry;
+pub mod source;
 pub mod stencil;
 pub mod sweep;
 pub mod symbols;
