@@ -3679,6 +3679,14 @@ a subdivision and a draw the consumer no longer makes.
   both of the findings above from "it draws nothing" into a sentence naming the layer and the
   property. Silently blank has been caught four times in this document; this is the third place
   the answer was to report rather than to guess.
+- **Nothing draws above a source's maxzoom.** Found rendering liberty, whose `openmaptiles`
+  source stops at 14: z13 draws 727 primitives and z14 draws 510, while z15 and z16 draw *zero* --
+  readiness `Ready`, no failed tiles, no rejected layers, nothing on the wire. Past a source's
+  maxzoom a cover is served by overscaled tiles, and that path produces no drawables at all.
+  It is not a consumer question: the frame carries nothing to draw. This matters more than a
+  missing family, because it is the ordinary case of a user zooming in on a city — every vector
+  basemap has a maxzoom, and the map goes blank one level past it, which is precisely what §13.2's
+  never-blank rule exists to forbid. `TileId::overscaled` and `fetch_zoom` are where to start.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for
