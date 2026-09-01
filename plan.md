@@ -3608,10 +3608,32 @@ a subdivision and a draw the consumer no longer makes.
   fill (11), fill outline (12), line (25). Nothing about that is a ceiling — a real basemap adds
   symbols, patterns and raster — but it does mean the backend can be brought up one family at a
   time against a style that exercises exactly that family, and `host_join` asserts the set by id
-  so a family appearing or disappearing is not a quiet change. What remains genuinely unknown is
-  the *material* side rather than the count: whether the shaders are authored as `.mat` compiled
-  ahead by `matc`, or built at run time through `filamat`, which fluorite links but does not
-  obviously export.
+  so a family appearing or disappearing is not a quiet change. What the count does not settle is how
+  many *materials* that is, because a family is not a material — see the next entry.
+- **Materials vary with the style, and are fixed the moment it parses.** Measured, against a
+  fluorite built from `origin/main` (`ec0a56bd`) rather than a stale artefact. Shader identity
+  on the wire is the pair (family, permutation). The family is static: it follows the layer type
+  and the ABI freezes thirty-five of them. The permutation is not — it is a bitmask over the
+  family's attribute ids saying which paint properties reach the shader as *uniforms* rather
+  than as vertex attributes, so making a property data-driven clears its bit. One fill layer,
+  three styles, three keys: constant `fill-color` gives 62, a data-driven `fill-color` gives 52,
+  and data-driven `fill-color` and `fill-opacity` together give 48.
+  **What that means is better than it sounds.** The key is a function of the layer's paint
+  expressions alone — not of the tile data, not of the camera — so a style's whole permutation
+  set is known when the style parses, before a single tile arrives. It can be enumerated up
+  front.
+  **Precompiling the whole space is out.** The ceiling is 2^(attributes in the family), and the
+  families are LINE 11, SYMBOL 10, FILL_EXTRUSION 8, CIRCLE 8, FILL 6 — about 3700 materials
+  across all of them, which DR-12 rules out on size before anyone asks what `matc` would cost.
+  **So the options are:** *(a)* a per-style bundle compiled ahead with `matc`, which works
+  because the set is knowable at parse time and small in practice — this style needs five;
+  *(b)* run-time compilation through `filamat`, which fluorite links into the process but does
+  not export (`filamat::MaterialBuilder` symbols exported: zero — the same visibility question
+  as the job system); *(c)* one material per family with the data-driven properties behind
+  specialization constants or dynamic branching, trading permutation count for shader cost.
+  Not decided. What is settled is that the Filament side is reachable either way:
+  `Material::Builder::package` is exported, as are 98 `MaterialInstance` methods and 36
+  vertex/index buffer builder methods.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for
