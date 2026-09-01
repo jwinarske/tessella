@@ -346,7 +346,7 @@ fn clustering_for(
 /// into the style — so its work is tessellation and nothing else. The distinction is here
 /// rather than in the worker because it is a property of the *source*, decided once, not
 /// something to re-derive per tile.
-enum Work {
+pub(crate) enum Work {
     /// Fetch, decode, then build.
     Vector { url: String },
     /// Fetch, decode the picture, then build the quad it goes on.
@@ -357,7 +357,7 @@ enum Work {
     },
 }
 
-struct Job {
+pub(crate) struct Job {
     tile: TileId,
     source: String,
     work: Work,
@@ -425,6 +425,121 @@ impl<S: FileSource + 'static> ColdStart<'_, S> {
     pub fn run(&self) -> Result<Boot, BootError> {
         cold_start(self)
     }
+}
+
+/// Turns a resolved style and a list of tiles into the work that builds them.
+///
+/// Pure arithmetic: no network, no cache, nothing that can block. That is what lets a warm map
+/// call this every tick and submit only the difference, rather than reaching for a boot each
+/// time the camera moves.
+///
+/// `cover` is the caller's tile list rather than something derived here, because the two callers
+/// want different ones. A cold start passes the ideal cover; a warm map passes what it is
+/// missing, which the onion has already widened to include the ancestors it would draw in the
+/// meantime. Raster is the exception and keeps its own cover, derived from `view`: a 256-pixel
+/// raster source needs one zoom more than a vector one to fill the same screen, so sharing the
+/// vector list would fetch imagery at half the resolution of the labels drawn over it.
+///
+/// # Errors
+///
+/// [`BootError::Uncovered`] when a raster source's own cover cannot be computed.
+pub(crate) fn plan(
+    sets: &[(String, TileSet, SourceKind)],
+    documents: &[(String, alloc::sync::Arc<Vec<GeoJsonFeature>>)],
+    clustered: &[(
+        String,
+        alloc::sync::Arc<tessella_source::cluster::Clustered>,
+    )],
+    view: &ViewTransform,
+    cover: &[cover::TileCoord],
+    style_rev: u64,
+) -> Result<Vec<Job>, BootError> {
+    let mut raster_covers: alloc::collections::BTreeMap<u8, Vec<cover::TileCoord>> =
+        alloc::collections::BTreeMap::new();
+    for (_, _, kind) in sets {
+        if let SourceKind::Raster { .. } = kind {
+            let z = covering_zoom(*kind, view.zoom);
+            if let alloc::collections::btree_map::Entry::Vacant(slot) = raster_covers.entry(z) {
+                slot.insert(cover::cover_at(view, z).map_err(|_| BootError::Uncovered)?);
+            }
+        }
+    }
+
+    let mut jobs: Vec<Job> = Vec::new();
+    // One job per (tile, source). A tile is not one thing: it is one thing *per source*, the
+    // way mbgl has a render tile per source-tile, and a style that overlays a local extract on
+    // a world basemap wants both at the same address.
+    for (name, set, kind) in sets {
+        let (tiles, work): (&[cover::TileCoord], fn(String) -> Work) = match kind {
+            SourceKind::Vector => (cover, |url| Work::Vector { url }),
+            SourceKind::Raster { .. } => (
+                raster_covers[&covering_zoom(*kind, view.zoom)].as_slice(),
+                |url| Work::Raster { url },
+            ),
+        };
+
+        for tile in tiles {
+            let Some(z) = fetch_zoom(tile.z, set.zooms) else {
+                continue;
+            };
+            let shift = tile.z - z;
+            let (x, y) = (tile.x >> shift, tile.y >> shift);
+            let Some(url) = set.url_for(z, x, y, 1.0) else {
+                continue;
+            };
+            let id = TileId::overscaled(z, x, y, tile.z);
+            jobs.push(Job {
+                source: name.clone(),
+                key: tessella_tile::store::TileKey::overscaled(
+                    name.as_str(),
+                    id.z,
+                    id.x,
+                    id.y,
+                    id.overscaled_z,
+                    style_rev,
+                ),
+                tile: id,
+                work: work(url),
+            });
+        }
+    }
+
+    // A GeoJSON source has no zoom range to clamp against and nothing to fetch: every tile
+    // of the cover is cut from the one document, at the cover's own zoom.
+    for (name, features) in documents {
+        for tile in cover {
+            let id = TileId::new(tile.z, tile.x, tile.y);
+            jobs.push(Job {
+                source: name.clone(),
+                key: tessella_tile::store::TileKey::new(name.as_str(), id.z, id.x, id.y, style_rev),
+                tile: id,
+                work: Work::Geojson {
+                    features: alloc::sync::Arc::clone(features),
+                },
+            });
+        }
+    }
+
+    // A clustered source is cut from the index rather than from the document, and the features
+    // a tile gets are the clusters at *its* zoom — which is the whole of clustering as far as
+    // everything downstream is concerned. They are ordinary points with ordinary properties from
+    // there on, so a style draws them with the same circle and symbol layers it draws anything
+    // with, and `point_count` is a property like any other.
+    for (name, index) in clustered {
+        for tile in cover {
+            let id = TileId::new(tile.z, tile.x, tile.y);
+            jobs.push(Job {
+                source: name.clone(),
+                key: tessella_tile::store::TileKey::new(name.as_str(), id.z, id.x, id.y, style_rev),
+                tile: id,
+                work: Work::Geojson {
+                    features: alloc::sync::Arc::new(index.tile_features(id.z, id.x, id.y)),
+                },
+            });
+        }
+    }
+
+    Ok(jobs)
 }
 
 /// What a style's sources resolve to, and the style they were read from.
@@ -695,90 +810,7 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
     // raster source needs one zoom more than a vector one to fill the same screen, so a single
     // cover would fetch imagery at half the resolution of the labels drawn over it.
     let cover = cover::cover(view).map_err(|_| BootError::Uncovered)?;
-    let mut raster_covers: alloc::collections::BTreeMap<u8, Vec<cover::TileCoord>> =
-        alloc::collections::BTreeMap::new();
-    for (_, _, kind) in &sets {
-        if let SourceKind::Raster { .. } = kind {
-            let z = covering_zoom(*kind, view.zoom);
-            if let alloc::collections::btree_map::Entry::Vacant(slot) = raster_covers.entry(z) {
-                slot.insert(cover::cover_at(view, z).map_err(|_| BootError::Uncovered)?);
-            }
-        }
-    }
-
-    let mut jobs: Vec<Job> = Vec::new();
-    // One job per (tile, source). A tile is not one thing: it is one thing *per source*, the
-    // way mbgl has a render tile per source-tile, and a style that overlays a local extract on
-    // a world basemap wants both at the same address.
-    for (name, set, kind) in &sets {
-        let (tiles, work): (&[cover::TileCoord], fn(String) -> Work) = match kind {
-            SourceKind::Vector => (&cover, |url| Work::Vector { url }),
-            SourceKind::Raster { .. } => (
-                raster_covers[&covering_zoom(*kind, view.zoom)].as_slice(),
-                |url| Work::Raster { url },
-            ),
-        };
-
-        for tile in tiles {
-            let Some(z) = fetch_zoom(tile.z, set.zooms) else {
-                continue;
-            };
-            let shift = tile.z - z;
-            let (x, y) = (tile.x >> shift, tile.y >> shift);
-            let Some(url) = set.url_for(z, x, y, 1.0) else {
-                continue;
-            };
-            let id = TileId::overscaled(z, x, y, tile.z);
-            jobs.push(Job {
-                source: name.clone(),
-                key: tessella_tile::store::TileKey::overscaled(
-                    name.as_str(),
-                    id.z,
-                    id.x,
-                    id.y,
-                    id.overscaled_z,
-                    style_rev,
-                ),
-                tile: id,
-                work: work(url),
-            });
-        }
-    }
-
-    // A GeoJSON source has no zoom range to clamp against and nothing to fetch: every tile
-    // of the cover is cut from the one document, at the cover's own zoom.
-    for (name, features) in &documents {
-        for tile in &cover {
-            let id = TileId::new(tile.z, tile.x, tile.y);
-            jobs.push(Job {
-                source: name.clone(),
-                key: tessella_tile::store::TileKey::new(name.as_str(), id.z, id.x, id.y, style_rev),
-                tile: id,
-                work: Work::Geojson {
-                    features: alloc::sync::Arc::clone(features),
-                },
-            });
-        }
-    }
-
-    // A clustered source is cut from the index rather than from the document, and the features
-    // a tile gets are the clusters at *its* zoom — which is the whole of clustering as far as
-    // everything downstream is concerned. They are ordinary points with ordinary properties from
-    // there on, so a style draws them with the same circle and symbol layers it draws anything
-    // with, and `point_count` is a property like any other.
-    for (name, index) in &clustered {
-        for tile in &cover {
-            let id = TileId::new(tile.z, tile.x, tile.y);
-            jobs.push(Job {
-                source: name.clone(),
-                key: tessella_tile::store::TileKey::new(name.as_str(), id.z, id.x, id.y, style_rev),
-                tile: id,
-                work: Work::Geojson {
-                    features: alloc::sync::Arc::new(index.tile_features(id.z, id.x, id.y)),
-                },
-            });
-        }
-    }
+    let jobs = plan(&sets, &documents, &clustered, view, &cover, style_rev)?;
 
     let cover_computed = started.elapsed();
 
@@ -802,10 +834,6 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
         });
     }
 
-    // Results are placed by index so the output order is the cover's however the work is
-    // scheduled — a trace that reordered its tiles would make two runs incomparable.
-    // `Arc`, because the cache owns the buckets and hands out shares of them: a second view
-    // over the same cover gets the same allocation rather than a copy of it.
     // Results are placed by index so the output order is the cover's however the work is
     // scheduled — a trace that reordered its tiles would make two runs incomparable.
     // `Arc`, because the cache owns the buckets and hands out shares of them: a second view
