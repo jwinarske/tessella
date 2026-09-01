@@ -1069,10 +1069,12 @@ name = "tessella-ffi"
 version = "0.0.0"
 dependencies = [
  "tessella-capture-abi",
+ "tessella-glyph",
  "tessella-orchestrate",
  "tessella-storage",
  "tessella-style",
  "tessella-tile",
+ "tile-server",
 ]
 
 [[package]]

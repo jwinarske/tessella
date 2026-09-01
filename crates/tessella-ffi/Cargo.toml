@@ -17,6 +17,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
 tessella-capture-abi = { path = "../tessella-capture-abi" }
+tessella-glyph = { path = "../tessella-glyph" }
 tessella-orchestrate = { path = "../tessella-orchestrate" }
 
 tessella-storage = { path = "../tessella-storage", features = ["http"] }
@@ -25,10 +26,11 @@ tessella-tile = { path = "../tessella-tile" }
 
 [dev-dependencies]
 tessella-capture-abi = { path = "../tessella-capture-abi" }
+tile-server = { path = "../../tools/tile-server" }
 
 [features]
 # A sprite sheet is a PNG, and decoding one is optional the same way it is in the orchestrator:
 # without it patterns draw as plain fills and icons not at all, which is the frame a style with
 # no `sprite` already produces.
 default = ["image"]
-image = ["tessella-orchestrate/image"]
+image = ["tessella-orchestrate/image", "tessella-glyph/image"]

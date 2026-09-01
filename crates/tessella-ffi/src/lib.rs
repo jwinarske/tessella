@@ -68,7 +68,7 @@ use tessella_orchestrate::map::{Map, SpriteAtlas, Tick, Tiles};
 use tessella_orchestrate::pool::{Pool, Priority};
 use tessella_orchestrate::tile::{LayerBucket, TileId};
 use tessella_storage::http::HttpFileSource;
-use tessella_storage::source::Coalescing;
+use tessella_storage::source::{Coalescing, FetchError};
 use tessella_style::Style;
 use tessella_tile::camera;
 use tessella_tile::cover::ViewTransform;
@@ -135,6 +135,26 @@ pub struct Config {
 /// Boxed and handed to C as its handle. The ring's backing buffer is a `Vec<u64>`, so the
 /// `Producer`'s pointer into it survives this struct being moved — the heap allocation does not
 /// move when the `Vec` does.
+/// A `FileSource` over the coalescing store, for callers that take the trait.
+///
+/// `Coalescing` has a `fetch` of its own and does not implement `FileSource`: it answers with an
+/// `Arc<Response>`, because a response joined by several waiters is one response shared rather
+/// than one each. The trait predates that and wants the value.
+///
+/// Glyphs go through it rather than around it deliberately. Two views wanting the same range is
+/// the case coalescing exists for, and a second file source beside it would fetch the range
+/// twice and cache it in neither.
+struct Coalesced<'a>(&'a Arc<Coalescing<HttpFileSource>>);
+
+impl tessella_storage::source::FileSource for Coalesced<'_> {
+    fn fetch(&self, url: &str) -> Result<tessella_storage::source::Response, FetchError> {
+        // Cloned out of the `Arc` because the trait hands back a value. One clone per glyph
+        // range on the cold path, against fetching the range again for the second view that
+        // wants it.
+        self.0.fetch(url).map(|response| (*response).clone())
+    }
+}
+
 /// The tiles a map draws from.
 ///
 /// What the boot built, by address. Lookup-only on purpose: `Map::tick` leaves a tile that has
@@ -287,6 +307,38 @@ pub unsafe extern "C" fn tessella_create(
         }
 
         let mut map = Map::new(style, view, ViewId(0));
+
+        // Glyphs, which `boot` does not fetch. It cannot: which glyphs a style needs is not a
+        // property of the style but of the *data* — `text-field` evaluated against each tile's
+        // own features — so nothing can be asked for until the tiles are built, which is the
+        // last thing boot does.
+        //
+        // One-shot over the boot cover. A tile arriving later may name a codepoint no tile so far
+        // has used — panning into Athens from Rome — and fetching for it belongs with whatever
+        // fetches the tile. Until that exists, a label outside this set draws nothing rather than
+        // drawing wrongly: `Content::is_encodable` withholds a symbol bucket whose glyphs have
+        // not arrived, so it is not bound and stays fresh for the frame that can draw it.
+        if let Some(url) = map.style().glyphs.clone() {
+            let mut wanted: tessella_glyph::fonts::Dependencies = BTreeMap::new();
+            for buckets in built.by_tile.values() {
+                for bucket in buckets.iter() {
+                    if let tessella_orchestrate::tile::Content::Symbol(layout) = &bucket.content {
+                        for (stack, codepoints) in layout.dependencies() {
+                            wanted.entry(stack).or_default().extend(codepoints);
+                        }
+                    }
+                }
+            }
+            if !wanted.is_empty() {
+                let mut fonts = tessella_glyph::fonts::Fonts::new(url);
+                // A glyph range that will not load costs the labels that need it and not the
+                // map, so a failure here is reported by the absence of those labels rather than
+                // by refusing to create a map that is otherwise fine.
+                if fonts.fetch(&wanted, &Coalesced(&files)).is_ok() {
+                    map.set_fonts(fonts);
+                }
+            }
+        }
         // Behind the `image` feature, because a sheet arrives as a PNG. A build without it draws
         // patterns as plain fills and icons not at all, which is the same frame a style with no
         // `sprite` produces — a degradation the format is already allowed to have.
