@@ -316,12 +316,6 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
             return Status::NoSuchMap;
         };
 
-        // Says what this frame wants before drawing it. The call schedules and returns: what has
-        // not landed is simply absent from the frame, which the loop already draws by
-        // substituting the ancestor it has.
-        let view = *state.map.view();
-        state.source.want(&view, state.map.wanted());
-
         // Glyphs are a hand-off rather than a copy -- `Fonts` is not `Clone` -- so this answers
         // on exactly one tick, the one after the fetch lands.
         if let Some(fonts) = state.source.take_fonts() {
@@ -349,7 +343,7 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
             state.sprites_set = true;
         }
 
-        match state.map.tick(&mut state.producer, &state.source) {
+        let outcome = match state.map.tick(&mut state.producer, &state.source) {
             Ok(Tick::Idle) => Status::Ok,
             Ok(Tick::Emitted(_)) => {
                 // Packed after the frame that names the slabs, which is §11.3's ordering: a
@@ -361,7 +355,19 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
             // The consumer is behind. Nothing was emitted and nothing was retired, so draining
             // and calling again resumes from where this attempt started.
             Err(_) => Status::RingFull,
-        }
+        };
+
+        // Says what to fetch *after* drawing, not before, because `tick` is what recomputes the
+        // list: asking first would schedule the previous frame's wants and put a frame of lag on
+        // every pan. The call schedules and returns -- what has not landed is simply absent from
+        // the next frame, which the loop draws by substituting the ancestor it has.
+        //
+        // Runs even when the ring was full. Nothing was emitted, but what the camera wants did
+        // not depend on that, and a consumer that has fallen behind is the last one that should
+        // also be made to wait for its tiles.
+        let view = *state.map.view();
+        state.source.want(&view, state.map.wanted());
+        outcome
     })
 }
 
