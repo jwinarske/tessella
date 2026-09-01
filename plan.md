@@ -3567,8 +3567,13 @@ a subdivision and a draw the consumer no longer makes.
   **Blocked mechanically today regardless.** `filament::Engine::getJobSystem()` is exported from
   `libfluorite_core_ffi.so` — 2175 symbols, 493 of them `utils::` — but the count of exported
   `utils::JobSystem::` methods is zero. The reference can be obtained and nothing can be called
-  on it: no `createJob`, no `run`, no `runAndWait`, no `adopt`. Reaching it means widening
-  fluorite's version script, which is a change to fluorite rather than to this.
+  on it: no `createJob`, no `run`, no `runAndWait`, no `adopt`. The mechanism is fluorite's
+  `CMAKE_CXX_VISIBILITY_PRESET hidden` plus explicit `FLUORITE_API` marking, not a version script
+  as this first said — so reaching it means marking what should escape, which is a change to
+  fluorite rather than to this. Measured against a prebuilt `libfluorite_core_ffi.so` rather than
+  one built from the checkout in hand; the counts should be retaken against a fresh build before
+  anyone acts on them, and the same question applies to `filamat`, which fluorite links (so a
+  runtime material compiler is in the process) but does not obviously export.
   **What the question is really about is oversubscription, and it is unmeasured.** Four workers
   here plus Filament's `N-1` on a four-core part is about twice the cores, with the OS scheduler
   mediating two pools that cannot see each other. That is a plausible source of frame-pacing
