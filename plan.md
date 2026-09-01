@@ -3524,7 +3524,24 @@ a subdivision and a draw the consumer no longer makes.
   an explicit error-status call is the honest choice, and the extra API surface is simply what
   never stalling costs. The deciding question is not which is tidier but whether any blocking
   call is acceptable on the thread that will make it, and that is a property of the consumer
-  rather than of this design. **Fluorite's answer decides it**, and it is not yet asked.
+  rather than of this design. **Fluorite's answer decides it**, and it is now asked.
+  **Closed: (3) with (c), and an explicit error-status call.** Fluorite's answer is that no
+  blocking call is acceptable. Three things say so, and they agree. Its Dart bindings are
+  `@Native`, which binds the symbol directly with no isolate hop, and `attachMap` is a plain
+  synchronous method rather than a `Future` — so the call runs on the calling isolate, and in
+  Dart `async` would not have changed that, since awaiting does not move work off an isolate.
+  There is no `Isolate.run`, no `compute`, nowhere in `lib/`. And the existing product already
+  refuses this on its own account: `attachMapToFluorite` reads material packages from local disk,
+  registers a tick callback and returns, doing no network at all, while mbgl's style load happens
+  later against a render loop that keeps spinning. `prepare()` says as much in its own comment —
+  it runs on "whichever thread called attachMapToFluorite", so it deliberately does nothing that
+  belongs elsewhere. Blocking the UI isolate on a network round trip freezes the whole
+  application rather than the map, which is a worse failure than the one (3) is charged with.
+  So the extra API surface is paid for: `create` parses the style and nothing else, and the
+  "silently blank" hazard is answered by the status call rather than by a stall. What (2) was
+  protecting — a style error surfacing where it is actionable — is kept by making that status
+  call the thing a consumer must read before it draws, which §11.7 can require of a consumer in
+  a way it cannot require of a thread.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for
