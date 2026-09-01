@@ -3542,6 +3542,40 @@ a subdivision and a draw the consumer no longer makes.
   protecting — a style error surfacing where it is actionable — is kept by making that status
   call the thing a consumer must read before it draws, which §11.7 can require of a consumer in
   a way it cannot require of a thread.
+- **Whether decode should run on Fluorite's job system rather than tessella's own pool.** Asked
+  because the consumer already owns a work-stealing pool and this process would then have one
+  scheduler rather than two. Two answers, because the work splits in two.
+  **Not for fetching, and it is the same mistake as (a) above.** Filament sizes its pool
+  `hardware_concurrency - 1`, halved first where hyper-threading is present and capped at 32 —
+  HT excluded deliberately, "to simplify profiling". Those threads are frame-critical: Filament's
+  own `parallel_for` over renderables, culling and the shadow cascades all draw from them.
+  `pool.rs` already names the hazard from this side, in the paragraph explaining why the count
+  here is four rather than mbgl's three — "a worker here does the fetch too, so a blocked worker
+  is not merely idle — it is holding a slot that has no CPU work to do". Blocking work-stealing
+  render workers on sockets starves the renderer during precisely the frames the map is loading,
+  which is what the onion exists to make good rather than worse.
+  **The right shape for decode, and not yet available for it.** MVT parse, tessellation and glyph
+  raster are bounded, fork/join and non-blocking, which is what a work-stealing dequeue is for.
+  Two things stand in the way. There is nothing to hand over yet: jobs here interleave fetch and
+  decode in one closure — `boot` fetches the sprite sheet and decodes it in the same submission —
+  so the split has to exist before it can be scheduled anywhere. And DR-14 makes impeller-rs the
+  second consumer, which has no job system; a core that requires Filament's cannot serve it.
+  **Blocked mechanically today regardless.** `filament::Engine::getJobSystem()` is exported from
+  `libfluorite_core_ffi.so` — 2175 symbols, 493 of them `utils::` — but the count of exported
+  `utils::JobSystem::` methods is zero. The reference can be obtained and nothing can be called
+  on it: no `createJob`, no `run`, no `runAndWait`, no `adopt`. Reaching it means widening
+  fluorite's version script, which is a change to fluorite rather than to this.
+  **What the question is really about is oversubscription, and it is unmeasured.** Four workers
+  here plus Filament's `N-1` on a four-core part is about twice the cores, with the OS scheduler
+  mediating two pools that cannot see each other. That is a plausible source of frame-pacing
+  jitter and it is exactly the kind of claim this document has been wrong about when it reasoned
+  instead of measuring. DR-22's order applies: make it work, instrument, then re-architect on the
+  numbers.
+  **If it does measure badly, the answer is not to call `getJobSystem()` from here.** It is to let
+  the consumer supply the pool: `Pool` grows a submit trait, `tessella_fluorite` implements it
+  over a C++ shim onto the job system, impeller-rs implements it over whatever it has. That keeps
+  policy process-scoped per §5.5, keeps the binding thin, and satisfies DR-14. It costs nothing
+  to leave open, since `Pool` is already behind an interface at every call site.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for
