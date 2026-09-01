@@ -3679,14 +3679,28 @@ a subdivision and a draw the consumer no longer makes.
   both of the findings above from "it draws nothing" into a sentence naming the layer and the
   property. Silently blank has been caught four times in this document; this is the third place
   the answer was to report rather than to guess.
-- **Nothing draws above a source's maxzoom.** Found rendering liberty, whose `openmaptiles`
-  source stops at 14: z13 draws 727 primitives and z14 draws 510, while z15 and z16 draw *zero* --
-  readiness `Ready`, no failed tiles, no rejected layers, nothing on the wire. Past a source's
-  maxzoom a cover is served by overscaled tiles, and that path produces no drawables at all.
-  It is not a consumer question: the frame carries nothing to draw. This matters more than a
-  missing family, because it is the ordinary case of a user zooming in on a city — every vector
-  basemap has a maxzoom, and the map goes blank one level past it, which is precisely what §13.2's
-  never-blank rule exists to forbid. `TileId::overscaled` and `fetch_zoom` are where to start.
+- **Nothing drew above a source's maxzoom.** *Fixed.* Found rendering liberty, whose
+  `openmaptiles` source stops at 14: z13 drew 727 primitives and z14 drew 510, while z15 and z16
+  drew *zero* — readiness `Ready`, no failed tiles, no rejected layers, nothing on the wire. The
+  ordinary case of a user zooming in on a city, and precisely what §13.2's never-blank rule exists
+  to forbid.
+
+  The cause was two coordinates for one tile. Above a source's maxzoom the cover asks for z16 and
+  the data is `overscaled(14, x>>2, y>>2, 16)`; `TileSource` stored what landed under the *data*
+  tile while the frame loop looked it up by the *cover*. `TileId` compares all four fields, so
+  inside a source's range the two are equal and everything worked, and outside it no lookup could
+  ever match.
+
+  Re-keying the store on the cover was the obvious fix and was wrong: the key is shared across
+  sources, a raster source covers at its own zoom, and re-keying merged buckets that belong apart
+  — it regressed *every* zoom to zero. What works is a second index, cover to data tile, consulted
+  only when the direct lookup misses, which leaves the working path untouched.
+
+  The second half is where it is recorded. Written as tiles land, only one coordinate per tile got
+  an entry — the dedup keeps a single job for a data tile that serves sixteen z16 coordinates, so
+  fifteen of every sixteen stayed empty and the frame came back mostly black. An alias is
+  arithmetic, not a result: it is known when the job is *planned*, and recording it there is what
+  fills the cover. Both halves are regression-tested in `source.rs`.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for

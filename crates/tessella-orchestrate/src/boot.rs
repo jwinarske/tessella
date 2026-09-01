@@ -359,6 +359,14 @@ pub(crate) enum Work {
 
 pub(crate) struct Job {
     pub(crate) tile: TileId,
+    /// The cover coordinate this job was planned for.
+    ///
+    /// Equal to `tile` whenever the source can serve the cover's own zoom. Above a source's
+    /// maxzoom they differ: the cover asks for z15 and the data is a z14 tile standing in, so
+    /// `tile` is `overscaled(14, x>>1, y>>1, 15)` while the frame loop still looks the tile up by
+    /// the coordinate it covered. Carrying both is what lets a built tile be found by the thing
+    /// that asked for it.
+    pub(crate) cover: TileId,
     pub(crate) source: String,
     pub(crate) work: Work,
     pub(crate) key: tessella_tile::store::TileKey,
@@ -616,6 +624,7 @@ pub(crate) fn plan(
             };
             let id = TileId::overscaled(z, x, y, tile.z);
             jobs.push(Job {
+                cover: TileId::new(tile.z, tile.x, tile.y),
                 source: name.clone(),
                 key: tessella_tile::store::TileKey::overscaled(
                     name.as_str(),
@@ -637,6 +646,7 @@ pub(crate) fn plan(
         for tile in cover {
             let id = TileId::new(tile.z, tile.x, tile.y);
             jobs.push(Job {
+                cover: id,
                 source: name.clone(),
                 key: tessella_tile::store::TileKey::new(name.as_str(), id.z, id.x, id.y, style_rev),
                 tile: id,
@@ -656,6 +666,7 @@ pub(crate) fn plan(
         for tile in cover {
             let id = TileId::new(tile.z, tile.x, tile.y);
             jobs.push(Job {
+                cover: id,
                 source: name.clone(),
                 key: tessella_tile::store::TileKey::new(name.as_str(), id.z, id.x, id.y, style_rev),
                 tile: id,

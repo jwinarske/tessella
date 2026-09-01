@@ -65,7 +65,32 @@ pub enum Readiness {
 #[derive(Default)]
 struct Landed {
     by_tile: BTreeMap<TileId, Arc<Vec<LayerBucket>>>,
+    /// Cover coordinate to the data tile serving it, for the coordinates where they differ.
+    ///
+    /// Above a source's maxzoom a cover asks for a zoom the source does not have, and a coarser
+    /// tile stands in: the cover wants z15 and the data is `overscaled(14, x>>1, y>>1, 15)`. The
+    /// frame loop looks a tile up by the coordinate it covered, so without this the lookup misses
+    /// and the map goes blank one zoom past whatever the source offers.
+    ///
+    /// A second index rather than a change of key, because the key is shared across sources -- a
+    /// raster source covers at its own zoom, and re-keying merged buckets that belong apart.
+    alias: BTreeMap<TileId, TileId>,
     sourceless: BTreeMap<TileId, Arc<Vec<LayerBucket>>>,
+}
+
+impl Landed {
+    /// The buckets serving `tile`, whether they were built for it or for a coarser tile
+    /// standing in above the source's maxzoom.
+    fn lookup(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
+        if let Some(buckets) = self.by_tile.get(&tile) {
+            return Some(Arc::clone(buckets));
+        }
+        // Nothing at that coordinate, so ask what is standing in for it.
+        self.alias
+            .get(&tile)
+            .and_then(|data| self.by_tile.get(data))
+            .map(Arc::clone)
+    }
 }
 
 /// The glyphs a style's labels need, once something has asked for them.
@@ -424,6 +449,21 @@ impl<S: FileSource + 'static> TileSource<S> {
         // spent its time contending with the workers it had just started, and the map that was
         // meant to draw them never redrew. The two locks are taken once each, briefly, and
         // nothing is submitted while either is held.
+        // Recorded before the filter, because an alias is arithmetic rather than a result: it is
+        // known the moment the job is planned, and it holds for every cover the data tile serves.
+        // Recording it where the tile lands instead loses all but the first -- one z14 tile stands
+        // in for sixteen z16 coordinates, the dedup below keeps one job for it, and the other
+        // fifteen coordinates never got an entry. That drew one tile of the cover and left the
+        // rest of the frame black.
+        if jobs.iter().any(|job| job.cover != job.tile) {
+            let mut held = self.landed.write().unwrap_or_else(PoisonError::into_inner);
+            for job in &jobs {
+                if job.cover != job.tile {
+                    held.alias.insert(job.cover, job.tile);
+                }
+            }
+        }
+
         let ready: Vec<boot::Job> = {
             let landed = self.landed.read().unwrap_or_else(PoisonError::into_inner);
             let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
@@ -454,6 +494,9 @@ impl<S: FileSource + 'static> TileSource<S> {
                 }
                 if let Ok(buckets) = outcome {
                     let mut held = this.landed.write().unwrap_or_else(PoisonError::into_inner);
+                    // Keyed by the data tile, which is the thing that was built. What the cover
+                    // asked for reaches it through `alias`, so one tile serving many coordinates
+                    // is stored and decoded once.
                     held.by_tile
                         .entry(job.tile)
                         .and_modify(|existing| {
@@ -482,9 +525,7 @@ impl<S: FileSource + 'static> Tiles for Arc<TileSource<S>> {
         self.landed
             .read()
             .unwrap_or_else(PoisonError::into_inner)
-            .by_tile
-            .get(&tile)
-            .map(Arc::clone)
+            .lookup(tile)
     }
 
     fn sourceless(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
@@ -494,5 +535,43 @@ impl<S: FileSource + 'static> Tiles for Arc<TileSource<S>> {
             .sourceless
             .get(&tile)
             .map(Arc::clone)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Above a source's maxzoom the frame loop asks for a coordinate the source cannot serve, and
+    /// a coarser tile stands in. Without the alias every such lookup misses and the map goes blank
+    /// one zoom past whatever the source offers -- which is what it did.
+    #[test]
+    fn a_cover_past_the_maxzoom_finds_the_tile_standing_in_for_it() {
+        let data = TileId::overscaled(14, 8802, 5373, 16);
+        let mut landed = Landed::default();
+        landed.by_tile.insert(data, Arc::new(Vec::new()));
+
+        // The sixteen z16 coordinates this one z14 tile serves all resolve to it, not just the
+        // first: the dedup keeps one job for the tile, so recording aliases as tiles land left
+        // fifteen of every sixteen coordinates empty and drew a mostly black frame.
+        for x in 0..4 {
+            for y in 0..4 {
+                let cover = TileId::new(16, 8802 * 4 + x, 5373 * 4 + y);
+                assert!(landed.lookup(cover).is_none(), "no alias yet");
+                landed.alias.insert(cover, data);
+                assert!(landed.lookup(cover).is_some(), "{cover:?} should find {data:?}");
+            }
+        }
+    }
+
+    /// Within a source's range the two coordinates are the same tile, and the alias must not be
+    /// consulted at all -- a direct hit is the common case and stays one lookup.
+    #[test]
+    fn a_cover_the_source_serves_is_found_directly() {
+        let tile = TileId::new(14, 8802, 5373);
+        let mut landed = Landed::default();
+        landed.by_tile.insert(tile, Arc::new(Vec::new()));
+        assert!(landed.lookup(tile).is_some());
+        assert!(landed.alias.is_empty());
     }
 }
