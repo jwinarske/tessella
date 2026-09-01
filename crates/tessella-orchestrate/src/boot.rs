@@ -427,6 +427,133 @@ impl<S: FileSource + 'static> ColdStart<'_, S> {
     }
 }
 
+/// What a build reports besides its buckets.
+///
+/// Two hooks rather than a trace type, because the warm path has nothing to report to: a tile
+/// built off a `wanted()` list is not part of anyone's cold-start timing, and passing it a
+/// counter it discards is cheaper than a second copy of the build.
+pub(crate) struct BuildProbe<'a> {
+    /// Bodies handled, in bytes, however they arrived. A cache hit counts: that is what makes
+    /// a cache transparent, and whether anything crossed the network is the file source's
+    /// question rather than this one's.
+    pub bytes: &'a AtomicUsize,
+    /// Called the first time a body is actually in hand.
+    pub fetched: &'a dyn Fn(),
+}
+
+/// Fetches, decodes and builds one tile, or returns the buckets a previous build left.
+///
+/// The cache is outermost on purpose: a tile whose buckets are already built costs no fetch and
+/// no decode, and consulting it after fetching would make a warm view pay the network for bytes
+/// it is about to throw away -- which is most of what a second view over the same cover is.
+///
+/// Split out of [`cold_start`] so a tile can be built one at a time. A cold start runs a cover
+/// of these across a batch; a warm map runs one per tile that arrived in its `wanted()` list,
+/// and neither needs to know which the other is doing.
+///
+/// # Errors
+///
+/// [`BootError`] when the body does not arrive, does not decode, or does not build.
+pub(crate) fn build_job<S: FileSource + 'static>(
+    job: &Job,
+    style: &Style,
+    files: &Arc<Coalescing<S>>,
+    cache: &TileCache<BootError>,
+    probe: &BuildProbe<'_>,
+) -> Result<alloc::sync::Arc<Vec<LayerBucket>>, BootError> {
+    cache
+        .get_or_build(
+            &job.key,
+            || match &job.work {
+                Work::Vector { url } => {
+                    let response = files.fetch(url).map_err(|error| BootError::Fetch {
+                        url: url.clone(),
+                        message: error.to_string(),
+                    })?;
+                    (probe.fetched)();
+                    probe
+                        .bytes
+                        .fetch_add(response.body.len(), Ordering::Relaxed);
+
+                    // An absent tile is ordinary, not a failure: a source's
+                    // coverage is not a rectangle and the cover asks for the whole
+                    // viewport. It is cached as an empty tile so the next view does
+                    // not ask again.
+                    if response.is_absent() {
+                        return Ok(Vec::new());
+                    }
+
+                    let decoded =
+                        mvt::Tile::decode(&response.body).map_err(|error| BootError::Decode {
+                            url: url.clone(),
+                            message: error.to_string(),
+                        })?;
+                    build_mvt_tile(style, &job.source, job.tile, &decoded).map_err(|error| {
+                        BootError::Build {
+                            url: url.clone(),
+                            message: error.to_string(),
+                        }
+                    })
+                }
+                Work::Raster { url } => {
+                    let response = files.fetch(url).map_err(|error| BootError::Fetch {
+                        url: url.clone(),
+                        message: error.to_string(),
+                    })?;
+                    (probe.fetched)();
+                    probe
+                        .bytes
+                        .fetch_add(response.body.len(), Ordering::Relaxed);
+
+                    // As for a vector tile: a source's coverage is not a rectangle, and the
+                    // hole an absent imagery tile leaves is a hole rather than a failure.
+                    if response.is_absent() {
+                        return Ok(Vec::new());
+                    }
+
+                    let image =
+                        tessella_source::image::decode(&response.body).map_err(|error| {
+                            BootError::Decode {
+                                url: url.clone(),
+                                message: error.to_string(),
+                            }
+                        })?;
+                    // The whole tile. A cold start's cover is one zoom level, so no tile in
+                    // it is an ancestor of another and every mask is the whole tile — which
+                    // is why no capture ever shows one. A view that substitutes a parent
+                    // while its children load computes the mask over its own renderable set
+                    // and rebuilds the geometry, because the mask belongs to that view's
+                    // moment rather than to the tile.
+                    build_raster_tile(
+                        style,
+                        &job.source,
+                        alloc::sync::Arc::new(image),
+                        &[tessella_tile::mask::WHOLE_TILE],
+                    )
+                    .map_err(|error| BootError::Build {
+                        url: url.clone(),
+                        message: error.to_string(),
+                    })
+                }
+                // Nothing to fetch and nothing to decode: the document arrived
+                // during source resolution, and this cuts a tile out of it.
+                Work::Geojson { features } => build_tile(
+                    style,
+                    &job.source,
+                    job.tile,
+                    features,
+                    TilingOptions::default(),
+                )
+                .map_err(|error| BootError::Build {
+                    url: job.what(),
+                    message: error.to_string(),
+                }),
+            },
+            || BootError::Abandoned { url: job.what() },
+        )
+        .map(|built| built.tile)
+}
+
 /// Turns a resolved style and a list of tiles into the work that builds them.
 ///
 /// Pure arithmetic: no network, no cache, nothing that can block. That is what lets a warm map
@@ -890,94 +1017,18 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
             // no fetch and no decode. Fetching first and consulting the cache after
             // would make a warm view pay the network for bytes it is about to throw
             // away — which is what a second view over the same cover mostly is.
-            let built = cache.get_or_build(
-                &job.key,
-                || match &job.work {
-                    Work::Vector { url } => {
-                        let response = files.fetch(url).map_err(|error| BootError::Fetch {
-                            url: url.clone(),
-                            message: error.to_string(),
-                        })?;
-                        record(&first_fetch);
-                        bytes.fetch_add(response.body.len(), Ordering::Relaxed);
-
-                        // An absent tile is ordinary, not a failure: a source's
-                        // coverage is not a rectangle and the cover asks for the whole
-                        // viewport. It is cached as an empty tile so the next view does
-                        // not ask again.
-                        if response.is_absent() {
-                            return Ok(Vec::new());
-                        }
-
-                        let decoded = mvt::Tile::decode(&response.body).map_err(|error| {
-                            BootError::Decode {
-                                url: url.clone(),
-                                message: error.to_string(),
-                            }
-                        })?;
-                        build_mvt_tile(&style, &job.source, job.tile, &decoded).map_err(|error| {
-                            BootError::Build {
-                                url: url.clone(),
-                                message: error.to_string(),
-                            }
-                        })
-                    }
-                    Work::Raster { url } => {
-                        let response = files.fetch(url).map_err(|error| BootError::Fetch {
-                            url: url.clone(),
-                            message: error.to_string(),
-                        })?;
-                        record(&first_fetch);
-                        bytes.fetch_add(response.body.len(), Ordering::Relaxed);
-
-                        // As for a vector tile: a source's coverage is not a rectangle, and the
-                        // hole an absent imagery tile leaves is a hole rather than a failure.
-                        if response.is_absent() {
-                            return Ok(Vec::new());
-                        }
-
-                        let image =
-                            tessella_source::image::decode(&response.body).map_err(|error| {
-                                BootError::Decode {
-                                    url: url.clone(),
-                                    message: error.to_string(),
-                                }
-                            })?;
-                        // The whole tile. A cold start's cover is one zoom level, so no tile in
-                        // it is an ancestor of another and every mask is the whole tile — which
-                        // is why no capture ever shows one. A view that substitutes a parent
-                        // while its children load computes the mask over its own renderable set
-                        // and rebuilds the geometry, because the mask belongs to that view's
-                        // moment rather than to the tile.
-                        build_raster_tile(
-                            &style,
-                            &job.source,
-                            alloc::sync::Arc::new(image),
-                            &[tessella_tile::mask::WHOLE_TILE],
-                        )
-                        .map_err(|error| BootError::Build {
-                            url: url.clone(),
-                            message: error.to_string(),
-                        })
-                    }
-                    // Nothing to fetch and nothing to decode: the document arrived
-                    // during source resolution, and this cuts a tile out of it.
-                    Work::Geojson { features } => build_tile(
-                        &style,
-                        &job.source,
-                        job.tile,
-                        features,
-                        TilingOptions::default(),
-                    )
-                    .map_err(|error| BootError::Build {
-                        url: job.what(),
-                        message: error.to_string(),
-                    }),
+            let built = build_job(
+                &job,
+                &style,
+                &files,
+                &cache,
+                &BuildProbe {
+                    bytes: &bytes,
+                    fetched: &|| record(&first_fetch),
                 },
-                || BootError::Abandoned { url: job.what() },
             );
             let buckets = match built {
-                Ok(built) => built.tile,
+                Ok(built) => built,
                 Err(error) => {
                     fail(&failure, error);
                     return;
