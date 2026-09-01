@@ -42,7 +42,9 @@ image = ["tessella-glyph/image"]
 webp = ["image", "tessella-glyph/webp"]
 
 [dev-dependencies]
-tessella-storage = { workspace = true, features = ["cache", "http", "pmtiles"] }
+# `tls` among them, so a test can reach a style anyone actually publishes. A dev-dependency, so
+# the cross lane -- which checks the workspace with default features -- is untouched by it.
+tessella-storage = { workspace = true, features = ["cache", "http", "pmtiles", "tls"] }
 tempfile = "3"
 # The process-isolation spike (plan.md 3.5) needs `mmap`, which std has no equivalent of, and a
 # producer that maps a file rather than a `Vec` is the whole point of it. Dev-only, and already

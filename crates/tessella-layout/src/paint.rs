@@ -51,7 +51,9 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use tessella_style::expression::Feature;
-use tessella_style::property::{PropertyKind, PropertySpec, ResolvedProperty, as_color};
+use tessella_style::property::{
+    DefaultValue, PropertyKind, PropertySpec, ResolvedProperty, as_color,
+};
 use tessella_style::{Binding, Value};
 
 /// One data-driven property's place in the interleaved buffer.
@@ -253,9 +255,9 @@ impl PaintBinder {
             if slot.interpolated {
                 let min = at(Some(self.zoom))?;
                 let max = at(Some(self.zoom + 1.0))?;
-                encode(slot, &min, Some(&max), out)?;
+                encode(slot, &min, Some(&max), out, &property.spec.default)?;
             } else {
-                encode(slot, &at(None)?, None, out)?;
+                encode(slot, &at(None)?, None, out, &property.spec.default)?;
             }
         }
 
@@ -279,6 +281,7 @@ fn encode(
     value: &Value,
     upper: Option<&Value>,
     out: &mut [u8],
+    fallback: &DefaultValue,
 ) -> Result<(), BinderError> {
     // Into a fixed buffer rather than a `Vec`: a slot is one float or two, this runs once per
     // slot per feature, and the values are copied straight out again.
@@ -286,18 +289,36 @@ fn encode(
         // The unit width, not the slot's: a composite slot is two of these.
         match slot.width / if slot.interpolated { 2 } else { 1 } {
             8 => {
-                let color = as_color(value).map_err(|_| BinderError::Type {
-                    name: slot.name,
-                    expected: "color",
-                })?;
+                // The property's default when the feature's own value will not coerce, which is
+                // what the oracle does: `PropertyExpression::evaluate` takes the default when the
+                // expression fails *or* when `fromExpressionValue` cannot type the result. A
+                // `["get", ...]` of a property the feature does not carry lands in the second
+                // case, and it is ordinary rather than exceptional -- most features in a real
+                // extract are missing most optional properties.
+                let color = as_color(value)
+                    .ok()
+                    .or(match fallback {
+                        DefaultValue::Color(color) => Some(*color),
+                        _ => None,
+                    })
+                    .ok_or(BinderError::Type {
+                        name: slot.name,
+                        expected: "color",
+                    })?;
                 *into = pack_color(color);
                 Ok(2)
             }
             4 => {
-                let number = value.as_number().ok_or(BinderError::Type {
-                    name: slot.name,
-                    expected: "number",
-                })?;
+                let number = value
+                    .as_number()
+                    .or(match fallback {
+                        DefaultValue::Number(number) => Some(*number),
+                        _ => None,
+                    })
+                    .ok_or(BinderError::Type {
+                        name: slot.name,
+                        expected: "number",
+                    })?;
                 #[allow(clippy::cast_possible_truncation)]
                 {
                     into[0] = number as f32;
@@ -447,16 +468,46 @@ mod tests {
         assert_eq!(f32::from_le_bytes(second), 64.0 * 256.0 + 255.0);
     }
 
-    /// A property that evaluates to the wrong type is refused rather than written as zero.
+    /// A value the slot cannot type takes the property's default, as the oracle does.
+    ///
+    /// `PropertyExpression::evaluate` falls back when the expression fails *or* when
+    /// `fromExpressionValue` cannot type what it returned, and the second case is the ordinary
+    /// one: `["get", "render_min_height"]` over an extract where most buildings do not carry
+    /// that property returns null for most of them. Refusing it loses the feature, and because a
+    /// tile builds as a unit, refusing it lost the whole tile -- which is how OpenFreeMap's
+    /// `liberty` came to draw nothing at all rather than draw its buildings flat.
     #[test]
-    fn a_wrong_typed_value_is_refused() {
+    fn a_wrong_typed_value_takes_the_default() {
         let (specs, resolved) =
             layer(r#"{"fill-opacity": ["match", ["get", "kind"], "a", 0.5, 0.9]}"#);
         let binder = PaintBinder::new(&specs, &resolved, 13.0);
         assert_eq!(binder.stride(), 4);
 
-        // A feature the match cannot resolve falls to the fallback, so force the failure at the
-        // encoder instead: a slot fed a string.
+        let slot = Slot {
+            name: "fill-opacity",
+            offset: 0,
+            width: 4,
+            interpolated: false,
+        };
+        let mut out = [0u8; 4];
+        encode(
+            &slot,
+            &Value::String(String::from("wide")),
+            None,
+            &mut out,
+            &DefaultValue::Number(0.25),
+        )
+        .expect("a string falls back to the numeric default");
+        assert!((f32::from_le_bytes(out) - 0.25).abs() < f32::EPSILON);
+    }
+
+    /// With no default of a usable type there is nothing to fall back to, and it is refused.
+    ///
+    /// The other half of the oracle's rule: the fallback is `defaultValue ? *defaultValue :
+    /// finalDefaultValue`, so a property whose default is `None` has no number to reach for and
+    /// the encoder has nothing to write but a lie.
+    #[test]
+    fn a_wrong_typed_value_with_no_default_is_still_refused() {
         let slot = Slot {
             name: "fill-opacity",
             offset: 0,
@@ -465,7 +516,13 @@ mod tests {
         };
         let mut out = [0u8; 4];
         assert!(matches!(
-            encode(&slot, &Value::String(String::from("wide")), None, &mut out),
+            encode(
+                &slot,
+                &Value::String(String::from("wide")),
+                None,
+                &mut out,
+                &DefaultValue::None,
+            ),
             Err(BinderError::Type { .. })
         ));
     }

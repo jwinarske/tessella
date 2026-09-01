@@ -3634,6 +3634,33 @@ a subdivision and a draw the consumer no longer makes.
   Not decided. What is settled is that the Filament side is reachable either way:
   `Material::Builder::package` is exported, as are 98 `MaterialInstance` methods and 36
   vertex/index buffer builder methods.
+- ~~**One bad layer loses the whole tile.**~~ Closed by matching the oracle: a value the slot
+  cannot type now takes the property's default rather than refusing the feature.
+  `PropertyExpression::evaluate` falls back when the expression fails *or* when
+  `fromExpressionValue` cannot type what it returned, and the second case is the ordinary one --
+  `["get", "render_min_height"]` over an extract where most buildings do not carry that property
+  returns null for most of them. The entry below is what it looked like before that was
+  understood, kept because the *shape* of the hazard is real even though this instance is gone:
+  a build job still fails as a unit, so any future per-feature refusal still costs the tile.
+- **What liberty needs, measured.** With the fallback and the ring fix below, OpenFreeMap's
+  `liberty` draws at Berlin z14: 653 geometries, 1,560,280 vertices, 735 batches over 1,882
+  entries, and **nine shader families** — background (3), fill (11), fill outline (12), fill
+  pattern (13), fill outline pattern (14), fill extrusion (16), fill extrusion instanced (17),
+  line (25), symbol SDF (33). That is the material inventory for a production basemap, against
+  five for a synthetic style and four for demotiles, and it is the number the `matc` bundle has
+  to cover.
+- ~~**A frame that does not fit the ring is never retried.**~~ Fixed. `Map::tick` fails without
+  emitting when the frame will not fit, and the attempt had already *spent* the damage gate, so
+  the next tick saw nothing to redraw and the map went idle for ever holding a frame it never
+  sent. Marking dirty again on the error is the whole of the retry. Found on liberty, whose first
+  frame is 1.5 million vertices and does not fit the 4 MB ring the probe defaults to: it reported
+  a ready map, every tile landed, `wanted` down to zero, and six records on the wire. It now
+  reports `RingFull` every tick instead, which is the honest answer -- the consumer is behind and
+  can be given a larger ring or drained faster, and either way it is told.
+- **Ring sizing is a style property, not a constant.** liberty's first frame needs more than four
+  megabytes; demotiles needs far less. Nothing currently helps a consumer choose, and the failure
+  mode before the fix above was silence. Worth a recommended minimum derived from the cover, or a
+  counter a consumer can watch.
 - **One bad layer loses the whole tile, and real styles have bad layers.** Found by pointing the
   host probe at OpenFreeMap's `liberty` basemap: 13 tiles failed with "layer `building-3d`:
   property `fill-extrusion-base` evaluated to a value that is not a number", and because a build

@@ -383,6 +383,16 @@ impl<S: FileSource + 'static> TileSource<S> {
             coords,
             self.style_rev,
         ) else {
+            // Planning is arithmetic and fails only when a cover cannot be computed -- which a
+            // raster source can do on its own, at its own zoom, without anything being wrong with
+            // the vector one beside it. Dropping it silently loses *every* tile of the frame for
+            // one source's arithmetic, and leaves a map that is ready, has no failing tiles and
+            // draws nothing. Counted with the others so it has to explain itself.
+            let mut held = self.failures.lock().unwrap_or_else(PoisonError::into_inner);
+            held.0 += 1;
+            if held.1.is_none() {
+                held.1 = Some(String::from("planning the cover failed"));
+            }
             return;
         };
 
@@ -408,17 +418,24 @@ impl<S: FileSource + 'static> TileSource<S> {
             }
         }
 
-        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-        for job in jobs {
-            {
-                let held = self.landed.read().unwrap_or_else(PoisonError::into_inner);
-                if held.by_tile.contains_key(&job.tile) {
-                    continue;
-                }
-            }
-            if !inner.inflight.insert(job.key.clone()) {
-                continue;
-            }
+        // Chosen under the locks, submitted outside them. Holding `inner` across the loop meant
+        // holding it across `pool.submit`, while every worker finishing a build needs that same
+        // lock to clear its tile from `inflight` -- so a frame that dispatched thirty-one jobs
+        // spent its time contending with the workers it had just started, and the map that was
+        // meant to draw them never redrew. The two locks are taken once each, briefly, and
+        // nothing is submitted while either is held.
+        let ready: Vec<boot::Job> = {
+            let landed = self.landed.read().unwrap_or_else(PoisonError::into_inner);
+            let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            jobs.into_iter()
+                .filter(|job| {
+                    !landed.by_tile.contains_key(&job.tile)
+                        && inner.inflight.insert(job.key.clone())
+                })
+                .collect()
+        };
+
+        for job in ready {
             let this = Arc::clone(self);
             let sources = Arc::clone(sources);
             self.pool.submit(Priority::Foreground, move || {

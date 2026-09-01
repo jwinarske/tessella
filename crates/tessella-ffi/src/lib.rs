@@ -368,7 +368,17 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
             }
             // The consumer is behind. Nothing was emitted and nothing was retired, so draining
             // and calling again resumes from where this attempt started.
-            Err(_) => Status::RingFull,
+            //
+            // Marked dirty again, which is the whole of the retry. Without it the failed attempt
+            // has *spent* the damage gate: the frame did not fit, nothing was emitted, and the
+            // next tick sees a map with nothing to redraw, so it goes idle for ever holding a
+            // frame it never sent. Found on OpenFreeMap's liberty, whose first frame is 1.5
+            // million vertices and does not fit a four-megabyte ring -- it reported a ready map,
+            // every tile landed, and six records on the wire.
+            Err(_) => {
+                state.map.mark_dirty();
+                Status::RingFull
+            }
         };
 
         // Says what to fetch *after* drawing, not before, because `tick` is what recomputes the
