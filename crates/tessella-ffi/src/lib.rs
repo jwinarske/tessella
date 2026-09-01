@@ -415,6 +415,7 @@ pub unsafe extern "C" fn tessella_status(
             return Status::NullArgument;
         }
         let readiness = state.source.readiness();
+        let (failed, first) = state.source.failures();
         unsafe {
             *out_readiness = match readiness {
                 Readiness::Idle => 0,
@@ -424,7 +425,23 @@ pub unsafe extern "C" fn tessella_status(
             };
         }
 
-        if let (Readiness::Failed(message), false) = (&readiness, reason.is_null())
+        // A ready map with failing tiles is the state nothing else explains: resolved, drawing,
+        // and empty. It is not a failed source -- a tile that will not load is a hole the
+        // ancestor fills -- so the readiness stays `Ready` and the reason says what happened.
+        let described = match &readiness {
+            Readiness::Failed(message) => Some(message.clone()),
+            _ if failed > 0 => first
+                .map(|reason| alloc::format!("{failed} tile(s) failed to build; first: {reason}")),
+            // Ready, nothing failing, and still nothing drawn. The remaining explanation is that
+            // the layers which would have drawn were refused before a tile was ever asked for.
+            _ => {
+                let (rejected, why) = state.source.rejected();
+                why.filter(|_| rejected > 0).map(|reason| {
+                    alloc::format!("{rejected} layer(s) rejected as uncompilable; first: {reason}")
+                })
+            }
+        };
+        if let (Some(message), false) = (described, reason.is_null())
             && reason_cap > 0
         {
             // One byte held back for the terminator, and the copy stops at a character boundary

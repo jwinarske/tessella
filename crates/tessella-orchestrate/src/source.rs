@@ -112,6 +112,14 @@ pub struct TileSource<S> {
     /// queue behind a worker recording that an unrelated tile has landed.
     landed: RwLock<Landed>,
     glyphs: Mutex<Glyphs>,
+    /// Tiles whose build failed, and the first reason one did.
+    ///
+    /// A tile that fails is not a failed *source* -- a 503 on one tile of a cover is a hole, and
+    /// the map draws the ancestor in its place -- so it must not turn `readiness` to `Failed`.
+    /// But dropping it silently leaves the one state nothing can explain: resolved, ready, and
+    /// blank. Counted and named here so that state has an answer, for the same reason
+    /// [`Readiness::Failed`] carries its reason rather than only its fact.
+    failures: Mutex<(u64, Option<String>)>,
     /// Bumped whenever something lands.
     ///
     /// A map draws when its damage gate says something changed, and a tile arriving on a worker
@@ -170,7 +178,41 @@ impl<S: FileSource + 'static> TileSource<S> {
             landed: RwLock::new(Landed::default()),
             glyphs: Mutex::new(Glyphs::default()),
             generation: AtomicU64::new(0),
+            failures: Mutex::new((0, None)),
         })
+    }
+
+    /// Layers the style asked for that this build cannot draw, and why the first one was refused.
+    ///
+    /// Not a failure: a document naming one thing this build does not have still draws every
+    /// layer that does, which is what `reject_uncompilable` is for and what mbgl's parser does
+    /// too. It becomes the explanation only in the case nothing else covers -- a style that
+    /// resolved, is ready, has no failing tiles, and draws nothing, because every layer that
+    /// would have drawn was refused before a tile was ever asked for.
+    ///
+    /// Empty until the style resolves, since that is when the layers are compiled.
+    pub fn rejected(&self) -> (u64, Option<String>) {
+        let held = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        held.sources.as_ref().map_or((0, None), |sources| {
+            (
+                sources.rejected_layers.len() as u64,
+                sources
+                    .rejected_layers
+                    .first()
+                    .map(|layer| alloc::format!("`{}`: {}", layer.id, layer.reason)),
+            )
+        })
+    }
+
+    /// How many tile builds failed, and why the first one did.
+    ///
+    /// The answer to a map that is ready and empty. Zero failures with no geometry means the
+    /// cover asked for nothing; failures means it asked and did not get it.
+    pub fn failures(&self) -> (u64, Option<String>) {
+        self.failures
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
     }
 
     /// How much has landed, as a number that changes when it does.
@@ -386,6 +428,13 @@ impl<S: FileSource + 'static> TileSource<S> {
                 };
                 let outcome =
                     boot::build_job(&job, &sources.style, &this.files, &this.cache, &probe);
+                if let Err(ref error) = outcome {
+                    let mut held = this.failures.lock().unwrap_or_else(PoisonError::into_inner);
+                    held.0 += 1;
+                    if held.1.is_none() {
+                        held.1 = Some(alloc::format!("{error}"));
+                    }
+                }
                 if let Ok(buckets) = outcome {
                     let mut held = this.landed.write().unwrap_or_else(PoisonError::into_inner);
                     held.by_tile

@@ -3634,6 +3634,24 @@ a subdivision and a draw the consumer no longer makes.
   Not decided. What is settled is that the Filament side is reachable either way:
   `Material::Builder::package` is exported, as are 98 `MaterialInstance` methods and 36
   vertex/index buffer builder methods.
+- **One bad layer loses the whole tile, and real styles have bad layers.** Found by pointing the
+  host probe at OpenFreeMap's `liberty` basemap: 13 tiles failed with "layer `building-3d`:
+  property `fill-extrusion-base` evaluated to a value that is not a number", and because a build
+  job fails as a unit the map drew *nothing at all* — not the roads, not the water, not the
+  layers that compiled perfectly. mbgl in the same position draws everything else. This is a
+  robustness gap rather than an expression bug to fix and forget: the expression bug is real and
+  worth fixing, but a style will always eventually contain a layer this build mishandles, and
+  losing the tile for it is the wrong response. The fix is per-layer isolation inside
+  `build_job` — a layer that will not build is dropped the way `reject_uncompilable` drops one
+  that will not compile, and counted. Not done here because it changes what a partly-broken tile
+  emits, which wants deciding rather than assuming.
+- **A ready, empty map now says why.** Three states could produce it and none was reported: a
+  source that would not resolve (already covered by `Readiness::Failed`), tiles that would not
+  build, and layers refused as uncompilable before a tile was ever asked for. The last two are
+  now counted with their first reason and surface through `tessella_status`, which is what turned
+  both of the findings above from "it draws nothing" into a sentence naming the layer and the
+  property. Silently blank has been caught four times in this document; this is the third place
+  the answer was to report rather than to guess.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for

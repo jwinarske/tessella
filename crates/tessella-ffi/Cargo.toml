@@ -34,3 +34,9 @@ tile-server = { path = "../../tools/tile-server" }
 # no `sprite` already produces.
 default = ["image"]
 image = ["tessella-orchestrate/image", "tessella-glyph/image"]
+# HTTPS. Off by default for the reason `tessella-storage` states -- `rustls` brings `ring`, which
+# is C and assembly, and the cross lane checks default features exactly so it needs no cross C
+# toolchain. On by choice, because without it this surface can load no style anyone actually
+# publishes: every style URL in the wild is https, and a consumer meets `TLS required, but
+# transport is unsecured` at the status call rather than a map.
+tls = ["tessella-storage/tls"]
