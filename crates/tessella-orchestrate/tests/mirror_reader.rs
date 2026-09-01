@@ -2,7 +2,7 @@
 //!
 //! # Why this lives here
 //!
-//! The reader is C++ and lives in the `maplibre_fluorite` checkout, because that is where the
+//! The reader is C++ and lives in the `tessella_fluorite` checkout, because that is where the
 //! Filament half is. But it is only worth anything against a stream a *producer* wrote, and the
 //! producer is here. So the test is here and the code under test is over there, the same way
 //! `live_parity`'s tiles live in a server this repository does not contain.
@@ -24,7 +24,7 @@
 //!
 //! # Skipped rather than failed when the checkout is absent
 //!
-//! `TESSELLA_MIRROR_DIR` points at the `maplibre_fluorite` checkout; without it this reports and
+//! `TESSELLA_CONSUMER_DIR` points at the `tessella_fluorite` checkout; without it this reports and
 //! returns. A missing sibling checkout is not a defect in this repository, and a test that
 //! failed for it would be turned off and then stay off.
 
@@ -38,21 +38,20 @@ mod fixture;
 
 /// Where the mirror checkout is, if this machine has one.
 fn mirror_dir() -> Option<PathBuf> {
-    if let Ok(from_env) = std::env::var("TESSELLA_MIRROR_DIR") {
+    if let Ok(from_env) = std::env::var("TESSELLA_CONSUMER_DIR") {
         let at = PathBuf::from(from_env);
         return at.is_dir().then_some(at);
     }
     // The layout on the machine this was developed on. Tried rather than required, so the
     // common case needs no configuration and the uncommon one is one variable.
-    let guess = Path::new(concat!(env!("CARGO_MANIFEST_DIR")))
-        .join("../../../maplibre-frontend/maplibre_fluorite");
+    let guess = Path::new(concat!(env!("CARGO_MANIFEST_DIR"))).join("../../../tessella_fluorite");
     guess.is_dir().then(|| guess.clone())
 }
 
 /// Builds the probe, returning its path.
 fn build_probe(mirror: &Path, dir: &Path) -> Option<PathBuf> {
-    let source = mirror.join("native/test/tessella_reader_probe.cc");
-    let reader = mirror.join("native/src/tessella_reader.cc");
+    let source = mirror.join("native/test/reader_probe.cc");
+    let reader = mirror.join("native/src/reader.cc");
     if !source.is_file() || !reader.is_file() {
         println!("no reader in {}; skipping", mirror.display());
         return None;
@@ -84,7 +83,7 @@ fn build_probe(mirror: &Path, dir: &Path) -> Option<PathBuf> {
 #[test]
 fn the_mirror_reads_a_real_frame() {
     let Some(mirror) = mirror_dir() else {
-        println!("no maplibre_fluorite checkout; set TESSELLA_MIRROR_DIR to run this");
+        println!("no tessella_fluorite checkout; set TESSELLA_CONSUMER_DIR to run this");
         return;
     };
 
