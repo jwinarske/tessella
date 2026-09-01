@@ -3483,7 +3483,11 @@ a subdivision and a draw the consumer no longer makes.
   place, byte-identical to `pmtiles serve` across zoom 0 to 15. It was cheap in Rust, as this
   said. MBTiles is still open, and is a different shape — SQLite rather than a directory format,
   so it lands on the `cache` feature's dependency rather than needing one of its own.
-- **Where a cold start's wait goes: `tessella_create`'s blocking boot, and who fetches.** Two
+- ~~**Where a cold start's wait goes: `tessella_create`'s blocking boot, and who fetches.**~~
+  **Closed and built**, as decided below: `create` parses the style and stops, `tessella_status`
+  reports what a blank map is waiting for, and `orchestrate::source::TileSource` is the
+  process-scoped source that resolves once and builds per tile off `wanted()`. What follows is
+  the reasoning that got there, kept because the recommendation lost to its own counter-case. Two
   decisions that land together or not at all, because a non-blocking create without a fetch loop
   is a map that never loads anything past its first cover.
   The cost being placed: `cold_start` measures 22 ms for a nine-tile cover against a *local*

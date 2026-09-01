@@ -27,7 +27,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, PoisonError, RwLock};
 use std::time::Instant;
 
-use tessella_storage::source::{Coalescing, FileSource};
+use tessella_storage::source::{Coalescing, FetchError, FileSource};
 use tessella_tile::cover::{TileCoord, ViewTransform};
 use tessella_tile::store::TileKey;
 
@@ -68,6 +68,25 @@ struct Landed {
     sourceless: BTreeMap<TileId, Arc<Vec<LayerBucket>>>,
 }
 
+/// The glyphs a style's labels need, once something has asked for them.
+///
+/// One-shot, which is what the boot path did and for the same reason: which glyphs a style needs
+/// is a property of the *data* rather than of the style -- `text-field` evaluated against each
+/// tile's own features -- so nothing can be asked for until tiles have landed. A tile arriving
+/// later may name a codepoint no tile so far has used (panning into Athens from Rome), and until
+/// that is handled a label outside this set draws nothing rather than drawing wrongly:
+/// `Content::is_encodable` withholds a symbol bucket whose glyphs have not arrived, so it stays
+/// fresh for the frame that can draw it.
+#[derive(Default)]
+struct Glyphs {
+    /// Whether a fetch has been submitted. Set before the job runs, so ten ticks over the same
+    /// labels schedule one fetch.
+    scheduled: bool,
+    /// Waiting to be taken by a tick. `Fonts` is not `Clone` and [`crate::map::Map`] owns the one
+    /// it draws from, so this is a hand-off rather than a copy.
+    ready: Option<tessella_glyph::fonts::Fonts>,
+}
+
 /// What a source is doing, behind one lock.
 struct Inner {
     readiness: Readiness,
@@ -92,6 +111,22 @@ pub struct TileSource<S> {
     /// what a frame does: every tick asks for every tile of its cover, and those reads must not
     /// queue behind a worker recording that an unrelated tile has landed.
     landed: RwLock<Landed>,
+    glyphs: Mutex<Glyphs>,
+}
+
+/// A [`FileSource`] over the coalescing store.
+///
+/// `Coalescing` answers with an `Arc<Response>`, because a response joined by several waiters is
+/// one response shared rather than one each; the trait predates that and wants the value. Glyphs
+/// go through it rather than around it because two views wanting the same range is exactly the
+/// case coalescing exists for, and a second file source beside it would fetch the range twice and
+/// cache it in neither.
+struct Coalesced<'a, S>(&'a Arc<Coalescing<S>>);
+
+impl<S: FileSource> FileSource for Coalesced<'_, S> {
+    fn fetch(&self, url: &str) -> Result<tessella_storage::source::Response, FetchError> {
+        self.0.fetch(url).map(|response| (*response).clone())
+    }
 }
 
 /// Where the warm path's byte counter goes.
@@ -126,6 +161,7 @@ impl<S: FileSource + 'static> TileSource<S> {
                 inflight: BTreeSet::new(),
             }),
             landed: RwLock::new(Landed::default()),
+            glyphs: Mutex::new(Glyphs::default()),
         })
     }
 
@@ -165,8 +201,89 @@ impl<S: FileSource + 'static> TileSource<S> {
                 };
                 drop(inner);
                 self.dispatch(&sources, view, coords);
+                self.want_glyphs(&sources);
             }
         }
+    }
+
+    /// What the style resolved to, once it has.
+    ///
+    /// The sprite sheet rides along here rather than through an accessor of its own: it is part of
+    /// what resolution produced, and a consumer that wants it wants the style beside it anyway.
+    pub fn sources(&self) -> Option<Arc<Sources>> {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .sources
+            .clone()
+    }
+
+    /// Takes the glyphs, if a fetch has finished and nothing has taken them yet.
+    ///
+    /// A hand-off rather than a copy, because `Fonts` is not `Clone` and the map owns the one it
+    /// draws from. Answers `None` on every tick but the one after the fetch lands.
+    pub fn take_fonts(&self) -> Option<tessella_glyph::fonts::Fonts> {
+        self.glyphs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .ready
+            .take()
+    }
+
+    /// Schedules the one glyph fetch, if the tiles that have landed need one.
+    ///
+    /// Called from [`Self::want`] rather than from a tile's completion because it needs tiles to
+    /// have landed *and* a caller to be asking: a source nobody is drawing from should not fetch
+    /// fonts for labels nobody will see.
+    fn want_glyphs(self: &Arc<Self>, sources: &Arc<Sources>) {
+        let Some(url) = sources.style.glyphs.clone() else {
+            return;
+        };
+        {
+            let held = self.glyphs.lock().unwrap_or_else(PoisonError::into_inner);
+            if held.scheduled {
+                return;
+            }
+        }
+
+        let mut wanted: tessella_glyph::fonts::Dependencies = BTreeMap::new();
+        {
+            let held = self.landed.read().unwrap_or_else(PoisonError::into_inner);
+            for buckets in held.by_tile.values() {
+                for bucket in buckets.iter() {
+                    if let crate::tile::Content::Symbol(layout) = &bucket.content {
+                        for (stack, codepoints) in layout.dependencies() {
+                            wanted.entry(stack).or_default().extend(codepoints);
+                        }
+                    }
+                }
+            }
+        }
+        if wanted.is_empty() {
+            return;
+        }
+
+        {
+            let mut held = self.glyphs.lock().unwrap_or_else(PoisonError::into_inner);
+            // Re-checked under the lock: two views ticking together both got past the first look.
+            if held.scheduled {
+                return;
+            }
+            held.scheduled = true;
+        }
+
+        let this = Arc::clone(self);
+        self.pool.submit(Priority::Foreground, move || {
+            let mut fonts = tessella_glyph::fonts::Fonts::new(url);
+            // A glyph range that will not load costs the labels that need it and not the map, so
+            // a failure here leaves `ready` empty rather than failing the source.
+            if fonts.fetch(&wanted, &Coalesced(&this.files)).is_ok() {
+                this.glyphs
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .ready = Some(fonts);
+            }
+        });
     }
 
     /// Resolves the style's sources, on a worker.

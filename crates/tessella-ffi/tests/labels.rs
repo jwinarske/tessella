@@ -21,7 +21,7 @@
 
 #![cfg(feature = "image")]
 
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 
 use tessella_ffi::{Config, MapHandle, Regions, Status};
 
@@ -60,23 +60,51 @@ fn a_map_created_through_c_draws_its_labels() {
     let status = unsafe { tessella_ffi::tessella_create(&config, 51.505, -0.11, 13.0, &mut map) };
     assert_eq!(status, Status::Ok, "the map did not create");
 
-    // SAFETY: `map` is live.
+    // Ticked until it settles rather than once, because a map is now progressive: §16 traded a
+    // blocking create for one that parses the style and stops, so the sources resolve, the tiles
+    // land and the glyphs arrive across the frames that follow. A single tick draws the
+    // background and nothing else, which is the correct first frame and not the one under test.
+    //
+    // The loop is what a consumer does anyway -- it calls this every vsync -- so driving it the
+    // same way is the honest shape for the test as well.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    // SAFETY: `map` is live for the whole loop, and destroyed once after it.
     let drawn = unsafe {
-        assert_eq!(tessella_ffi::tessella_tick(map), Status::Ok);
-        let mut regions = Regions {
-            ring: core::ptr::null(),
-            ring_len: 0,
-            slabs: core::ptr::null(),
-            slabs_len: 0,
-        };
+        let mut packed = 0;
+        while std::time::Instant::now() < deadline {
+            assert_eq!(tessella_ffi::tessella_tick(map), Status::Ok);
+            let mut regions = Regions {
+                ring: core::ptr::null(),
+                ring_len: 0,
+                slabs: core::ptr::null(),
+                slabs_len: 0,
+            };
+            assert_eq!(
+                tessella_ffi::tessella_regions(map, &mut regions),
+                Status::Ok
+            );
+            // The symbol drawable's vertices live in a slab, so a frame with labels packs far
+            // more than one without them.
+            packed = packed.max(regions.slabs_len);
+            if packed > 1024 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+
+        // The status call exists so an empty map is diagnosable rather than a mystery, so a
+        // failure here reports what it said instead of only that nothing arrived.
+        let mut readiness = -1i32;
+        let mut reason = [0i8; 256];
         assert_eq!(
-            tessella_ffi::tessella_regions(map, &mut regions),
+            tessella_ffi::tessella_status(map, &mut readiness, reason.as_mut_ptr(), reason.len()),
             Status::Ok
         );
-        // The symbol drawable's vertices live in a slab, so a frame with labels packs far more
-        // than one without them.
-        let packed = regions.slabs_len;
+        let reason = CStr::from_ptr(reason.as_ptr())
+            .to_string_lossy()
+            .into_owned();
         tessella_ffi::tessella_destroy(map);
+        assert_eq!(readiness, 2, "the sources did not resolve: {reason}");
         packed
     };
 

@@ -56,19 +56,17 @@ pub enum Status {
 extern crate alloc;
 
 use alloc::sync::Arc;
-use std::collections::BTreeMap;
 use std::ffi::{CStr, c_char};
 use std::time::Duration;
 
 use tessella_capture_abi::envelope::ViewId;
 use tessella_capture_abi::ring::{self, Producer, region_size};
-use tessella_orchestrate::boot::{self, ColdStart};
 use tessella_orchestrate::cache::TileCache;
-use tessella_orchestrate::map::{Map, SpriteAtlas, Tick, Tiles};
-use tessella_orchestrate::pool::{Pool, Priority};
-use tessella_orchestrate::tile::{LayerBucket, TileId};
+use tessella_orchestrate::map::{Map, SpriteAtlas, Tick};
+use tessella_orchestrate::pool::Pool;
+use tessella_orchestrate::source::{Readiness, TileSource};
 use tessella_storage::http::HttpFileSource;
-use tessella_storage::source::{Coalescing, FetchError};
+use tessella_storage::source::Coalescing;
 use tessella_style::Style;
 use tessella_tile::camera;
 use tessella_tile::cover::ViewTransform;
@@ -133,66 +131,28 @@ pub struct Config {
 /// One map's state.
 ///
 /// Boxed and handed to C as its handle. The ring's backing buffer is a `Vec<u64>`, so the
-/// `Producer`'s pointer into it survives this struct being moved — the heap allocation does not
+/// `Producer`'s pointer into it survives this struct being moved -- the heap allocation does not
 /// move when the `Vec` does.
-/// A `FileSource` over the coalescing store, for callers that take the trait.
 ///
-/// `Coalescing` has a `fetch` of its own and does not implement `FileSource`: it answers with an
-/// `Arc<Response>`, because a response joined by several waiters is one response shared rather
-/// than one each. The trait predates that and wants the value.
-///
-/// Glyphs go through it rather than around it deliberately. Two views wanting the same range is
-/// the case coalescing exists for, and a second file source beside it would fetch the range
-/// twice and cache it in neither.
-struct Coalesced<'a>(&'a Arc<Coalescing<HttpFileSource>>);
-
-impl tessella_storage::source::FileSource for Coalesced<'_> {
-    fn fetch(&self, url: &str) -> Result<tessella_storage::source::Response, FetchError> {
-        // Cloned out of the `Arc` because the trait hands back a value. One clone per glyph
-        // range on the cold path, against fetching the range again for the second view that
-        // wants it.
-        self.0.fetch(url).map(|response| (*response).clone())
-    }
-}
-
-/// The tiles a map draws from.
-///
-/// What the boot built, by address. Lookup-only on purpose: `Map::tick` leaves a tile that has
-/// not arrived out of the frame rather than waiting for it, so a source that *built* on miss
-/// would turn the loop's non-blocking contract into a blocking one at the only place a caller
-/// cannot see it.
-#[derive(Default)]
-struct Built {
-    by_tile: BTreeMap<TileId, Arc<Vec<LayerBucket>>>,
-    sourceless: BTreeMap<TileId, Arc<Vec<LayerBucket>>>,
-}
-
-impl Tiles for Built {
-    fn buckets(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
-        self.by_tile.get(&tile).map(Arc::clone)
-    }
-
-    fn sourceless(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
-        self.sourceless.get(&tile).map(Arc::clone)
-    }
-}
-
-/// One map's state.
-///
-/// Boxed and handed to C as its handle. The ring's backing buffer is a `Vec<u64>`, so the
-/// `Producer`'s pointer into it survives this struct being moved — the heap allocation does not
-/// move when the `Vec` does.
+/// The tiles come from a [`TileSource`], which is where every blocking thing now lives: §16
+/// closed on Fluorite's answer that no blocking call is acceptable on the thread that will make
+/// it, so `create` parses the style and nothing else, and the network starts on the first tick.
 pub struct MapState {
     map: Map,
     /// The ring's backing memory. `u64` so it is eight-aligned, which `ring::init` requires.
     region: Vec<u64>,
     producer: Producer,
-    built: Built,
+    /// Where tiles come from. Shared between views by construction, so a tile two maps want is
+    /// fetched once and built once.
+    source: Arc<TileSource<HttpFileSource>>,
     /// Slabs packed for the consumer to resolve against.
     packed: Vec<u8>,
-    /// Kept so the tiles they built stay valid and a later fetch can reuse them.
-    _files: Arc<Coalescing<HttpFileSource>>,
-    _cache: Arc<TileCache<boot::BootError>>,
+    /// Whether the sprite sheet has been handed to the map.
+    ///
+    /// Once, not every tick: `set_sprites` copies the atlas and marks the map dirty, so repeating
+    /// it would re-upload a texture that has not changed and defeat the damage gate that makes a
+    /// settled map free.
+    sprites_set: bool,
 }
 
 /// Runs `body`, turning a panic into a status.
@@ -222,11 +182,21 @@ unsafe fn borrowed(text: *const c_char) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-/// Creates a map and boots it: parses the style, resolves its sources, covers the camera and
-/// builds the first tiles.
+/// Creates a map. Parses the style, and does nothing else.
 ///
-/// The camera starts where [`set_camera`] would put it; a caller that wants somewhere else calls
-/// that before the first tick rather than paying for a cover it will not draw.
+/// No network, no cover, no tiles: §16 closed on Fluorite's answer that no blocking call is
+/// acceptable on the thread that will make it -- its bindings are `@Native` on the calling
+/// isolate with no hop, so a blocking create freezes the application rather than the map. The
+/// first [`tessella_tick`] is what starts the network.
+///
+/// A style that does not parse still fails here, which is the one failure worth reporting at the
+/// call that can act on it. A style that parses but whose *sources* will not resolve cannot fail
+/// here, because finding that out is the round trip this call exists not to make -- so it is
+/// reported by [`tessella_status`], which is what a consumer reads before it wonders why the map
+/// is empty.
+///
+/// The camera starts where [`tessella_set_camera`] would put it; a caller that wants somewhere
+/// else calls that before the first tick rather than covering a view it will not draw.
 ///
 /// # Safety
 ///
@@ -275,95 +245,15 @@ pub unsafe extern "C" fn tessella_create(
             30,
         ))));
         let cache = Arc::new(TileCache::new(64));
-        let Ok(booted) = boot::cold_start(&ColdStart {
-            style: &style_text,
-            view: &view,
-            files: Arc::clone(&files),
-            cache: Arc::clone(&cache),
-            pool: Pool::shared(),
-            priority: Priority::Foreground,
-            style_rev: 1,
-        }) else {
-            return Status::Failed;
-        };
-
-        // What the boot built, kept by address. A tile appears once per source, so a style
-        // overlaying two sources on one address has both merged here — the frame draws a tile's
-        // buckets together whichever source produced them.
-        let mut built = Built::default();
-        for tile in booted.tiles {
-            built
-                .by_tile
-                .entry(tile.tile)
-                .and_modify(|existing| {
-                    let mut merged = existing.as_ref().clone();
-                    merged.extend(tile.buckets.iter().cloned());
-                    *existing = Arc::new(merged);
-                })
-                .or_insert(tile.buckets);
-        }
-        for (tile, buckets) in booted.sourceless {
-            built.sourceless.insert(tile, Arc::new(buckets));
-        }
-
-        let mut map = Map::new(style, view, ViewId(0));
-
-        // Glyphs, which `boot` does not fetch. It cannot: which glyphs a style needs is not a
-        // property of the style but of the *data* — `text-field` evaluated against each tile's
-        // own features — so nothing can be asked for until the tiles are built, which is the
-        // last thing boot does.
-        //
-        // One-shot over the boot cover. A tile arriving later may name a codepoint no tile so far
-        // has used — panning into Athens from Rome — and fetching for it belongs with whatever
-        // fetches the tile. Until that exists, a label outside this set draws nothing rather than
-        // drawing wrongly: `Content::is_encodable` withholds a symbol bucket whose glyphs have
-        // not arrived, so it is not bound and stays fresh for the frame that can draw it.
-        if let Some(url) = map.style().glyphs.clone() {
-            let mut wanted: tessella_glyph::fonts::Dependencies = BTreeMap::new();
-            for buckets in built.by_tile.values() {
-                for bucket in buckets.iter() {
-                    if let tessella_orchestrate::tile::Content::Symbol(layout) = &bucket.content {
-                        for (stack, codepoints) in layout.dependencies() {
-                            wanted.entry(stack).or_default().extend(codepoints);
-                        }
-                    }
-                }
-            }
-            if !wanted.is_empty() {
-                let mut fonts = tessella_glyph::fonts::Fonts::new(url);
-                // A glyph range that will not load costs the labels that need it and not the
-                // map, so a failure here is reported by the absence of those labels rather than
-                // by refusing to create a map that is otherwise fine.
-                if fonts.fetch(&wanted, &Coalesced(&files)).is_ok() {
-                    map.set_fonts(fonts);
-                }
-            }
-        }
-        // Behind the `image` feature, because a sheet arrives as a PNG. A build without it draws
-        // patterns as plain fills and icons not at all, which is the same frame a style with no
-        // `sprite` produces — a degradation the format is already allowed to have.
-        #[cfg(feature = "image")]
-        if let Some(sprites) = booted.sprites {
-            let (width, height) = sprites.atlas().size();
-            map.set_sprites(SpriteAtlas {
-                texture: SPRITE_TEXTURE,
-                size: [
-                    u16::try_from(width).unwrap_or(u16::MAX),
-                    u16::try_from(height).unwrap_or(u16::MAX),
-                ],
-                positions: sprites.positions().clone(),
-                pixels: sprites.atlas().pixels().to_vec(),
-            });
-        }
+        let source = TileSource::new(style_text, files, cache, Pool::shared(), 1);
 
         let state = Box::new(MapState {
-            map,
+            map: Map::new(style, view, ViewId(0)),
             region,
             producer,
-            built,
+            source,
             packed: Vec::new(),
-            _files: files,
-            _cache: cache,
+            sprites_set: false,
         });
         unsafe { *out = Box::into_raw(state) };
         Status::Ok
@@ -425,7 +315,41 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
         let Some(state) = (unsafe { map.as_mut() }) else {
             return Status::NoSuchMap;
         };
-        match state.map.tick(&mut state.producer, &state.built) {
+
+        // Says what this frame wants before drawing it. The call schedules and returns: what has
+        // not landed is simply absent from the frame, which the loop already draws by
+        // substituting the ancestor it has.
+        let view = *state.map.view();
+        state.source.want(&view, state.map.wanted());
+
+        // Glyphs are a hand-off rather than a copy -- `Fonts` is not `Clone` -- so this answers
+        // on exactly one tick, the one after the fetch lands.
+        if let Some(fonts) = state.source.take_fonts() {
+            state.map.set_fonts(fonts);
+        }
+
+        // The sheet, once. Behind the `image` feature because a sheet arrives as a PNG: a build
+        // without it draws patterns as plain fills and icons not at all, which is the same frame
+        // a style with no `sprite` produces.
+        #[cfg(feature = "image")]
+        if !state.sprites_set
+            && let Some(sources) = state.source.sources()
+            && let Some((sheet, _)) = sources.sprite_outcome.as_ref()
+        {
+            let (width, height) = sheet.atlas().size();
+            state.map.set_sprites(SpriteAtlas {
+                texture: SPRITE_TEXTURE,
+                size: [
+                    u16::try_from(width).unwrap_or(u16::MAX),
+                    u16::try_from(height).unwrap_or(u16::MAX),
+                ],
+                positions: sheet.positions().clone(),
+                pixels: sheet.atlas().pixels().to_vec(),
+            });
+            state.sprites_set = true;
+        }
+
+        match state.map.tick(&mut state.producer, &state.source) {
             Ok(Tick::Idle) => Status::Ok,
             Ok(Tick::Emitted(_)) => {
                 // Packed after the frame that names the slabs, which is §11.3's ordering: a
@@ -438,6 +362,66 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
             // and calling again resumes from where this attempt started.
             Err(_) => Status::RingFull,
         }
+    })
+}
+
+/// How far along the map's sources are, and why if they failed.
+///
+/// The call §16 traded for a non-blocking [`tessella_create`]. A consumer holding a handle and
+/// looking at an empty map cannot tell a style still resolving from one whose sources will never
+/// answer, and inferring it from the absence of tiles gets it wrong in both directions -- so it
+/// is reported. "Silently blank" is the hazard this project has caught three times; this is what
+/// answers it.
+///
+/// `reason` may be null, and is written only when the readiness is [`Readiness::Failed`]. It is
+/// always NUL-terminated when written, and truncated to fit rather than refused.
+///
+/// # Safety
+///
+/// `map` must be live, `out_readiness` a valid pointer, and `reason` either null or writable for
+/// `reason_cap` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_status(
+    map: MapHandle,
+    out_readiness: *mut i32,
+    reason: *mut c_char,
+    reason_cap: usize,
+) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_ref() }) else {
+            return Status::NoSuchMap;
+        };
+        if out_readiness.is_null() {
+            return Status::NullArgument;
+        }
+        let readiness = state.source.readiness();
+        unsafe {
+            *out_readiness = match readiness {
+                Readiness::Idle => 0,
+                Readiness::Resolving => 1,
+                Readiness::Ready => 2,
+                Readiness::Failed(_) => 3,
+            };
+        }
+
+        if let (Readiness::Failed(message), false) = (&readiness, reason.is_null())
+            && reason_cap > 0
+        {
+            // One byte held back for the terminator, and the copy stops at a character boundary
+            // so a truncated reason is still a string rather than half a codepoint.
+            let room = reason_cap - 1;
+            let mut end = message.len().min(room);
+            while end > 0 && !message.is_char_boundary(end) {
+                end -= 1;
+            }
+            let bytes = &message.as_bytes()[..end];
+            // SAFETY: `reason` is writable for `reason_cap` bytes, and `end < reason_cap`.
+            unsafe {
+                core::ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), reason, end);
+                *reason.add(end) = 0;
+            }
+        }
+        Status::Ok
     })
 }
 
