@@ -253,13 +253,36 @@ impl DrawOrder {
         // whatever the first layer left at that offset. The picture is a layer drawn with
         // another layer's matrices — every tile in the wrong place — and every value that went
         // into it is correct.
+        // Per drawable, not per *entry*. A drawable marked with two passes becomes two entries
+        // above, and numbering those separately hands the second one a slot the buffer does not
+        // have: the buffer is packed once per drawable, so a layer drawn in both passes runs its
+        // indices to twice the slots it owns. The consumer then reads a matrix belonging to some
+        // other drawable -- in practice an ancestor's, which places a tile up to eight times too
+        // large, and the overlap composites into visible bands.
+        //
+        // This is the failure §11.7's golden cannot see. mbgl's iteration over a layer's tiles is
+        // not deterministic, so the dump compares the buffer as a multiset and deliberately does
+        // not assert which slot an entry lands in -- which is exactly the property that would
+        // have caught it.
         let mut next: alloc::collections::BTreeMap<i32, u32> = alloc::collections::BTreeMap::new();
+        let mut assigned: alloc::collections::BTreeMap<
+            (i32, tessella_capture_abi::envelope::GeometryId, i32),
+            u32,
+        > = alloc::collections::BTreeMap::new();
         expanded
             .iter()
             .map(|(placed, pass)| {
-                let slot = next.entry(placed.binding.layer_index).or_default();
-                let ubo_index = *slot;
-                *slot += 1;
+                let drawable = (
+                    placed.binding.layer_index,
+                    placed.binding.geometry,
+                    placed.binding.sub_layer_index,
+                );
+                let ubo_index = *assigned.entry(drawable).or_insert_with(|| {
+                    let slot = next.entry(placed.binding.layer_index).or_default();
+                    let index = *slot;
+                    *slot += 1;
+                    index
+                });
                 #[allow(clippy::cast_sign_loss)]
                 OrderEntry {
                     geometry: placed.binding.geometry,
@@ -649,8 +672,46 @@ mod tests {
         }
         assert_eq!(by_layer.len(), 2, "two layers");
         for (layer, slots) in by_layer {
-            let expected: Vec<u32> = (0..slots.len() as u32).collect();
-            assert_eq!(slots, expected, "layer {layer}");
+            // Dense over *drawables*, not over entries. A drawable marked with two passes appears
+            // twice in the order and must carry the same index both times: the buffer holds one
+            // block per drawable, so numbering the second appearance separately indexes past the
+            // end of the layer's own buffer -- and the consumer then places a tile with some other
+            // drawable's matrix.
+            let mut distinct: Vec<u32> = slots.clone();
+            distinct.sort_unstable();
+            distinct.dedup();
+            let expected: Vec<u32> = (0..distinct.len() as u32).collect();
+            assert_eq!(distinct, expected, "layer {layer} is not dense from zero");
+        }
+    }
+
+    /// A drawable in two passes keeps one slot.
+    ///
+    /// The background is `Opaque | Translucent`, so it is drawn twice, and the two entries address
+    /// the same block. Numbering them apart is what put liberty's tiles at their ancestors' scale.
+    #[test]
+    fn both_passes_of_a_drawable_share_a_slot() {
+        let mut order = DrawOrder::new(5);
+        order.bind(background(4092));
+        order.bind(background(4093));
+
+        let resolved = order.resolve();
+        let mut per_geometry: alloc::collections::BTreeMap<u64, alloc::collections::BTreeSet<u32>> =
+            Default::default();
+        for entry in &resolved {
+            per_geometry
+                .entry(entry.geometry.0)
+                .or_default()
+                .insert(entry.ubo_index);
+        }
+        assert_eq!(resolved.len(), 4, "two drawables, two passes each");
+        assert_eq!(per_geometry.len(), 2, "two drawables");
+        for (geometry, slots) in per_geometry {
+            assert_eq!(
+                slots.len(),
+                1,
+                "geometry {geometry} took more than one slot"
+            );
         }
     }
 
