@@ -52,6 +52,7 @@ fn mirror_dir() -> Option<PathBuf> {
 fn build_probe(mirror: &Path, dir: &Path) -> Option<PathBuf> {
     let source = mirror.join("native/test/reader_probe.cc");
     let reader = mirror.join("native/src/reader.cc");
+    let drawlist = mirror.join("native/src/drawlist.cc");
     if !source.is_file() || !reader.is_file() {
         println!("no reader in {}; skipping", mirror.display());
         return None;
@@ -69,6 +70,7 @@ fn build_probe(mirror: &Path, dir: &Path) -> Option<PathBuf> {
         .arg(&out)
         .arg(&source)
         .arg(&reader)
+        .arg(&drawlist)
         .output()
         .ok()?;
     assert!(
@@ -145,6 +147,50 @@ fn the_mirror_reads_a_real_frame() {
     assert!(
         counts.get("indices").copied().unwrap_or(0) > 0,
         "no indices resolved, so the geometry was never really read: {counts:?}"
+    );
+
+    // §11.7's batching, checked on this frame rather than on a fixture shaped to flatter it.
+    //
+    // The property that matters is not how few batches there are but that batching changed
+    // nothing: flattening the batches back out must reproduce the order that was delivered,
+    // entry for entry. R-9 is the reason -- merging assumes layer-contiguous order, and a
+    // group-by would happily merge the first and third entries of a run and move the second one
+    // behind them. Only adjacent entries are ever collapsed, so this holds by construction, and
+    // this is what says so.
+    assert_eq!(
+        counts.get("order_diverged").copied(),
+        Some(0),
+        "batching reordered the frame: the flattened batches are not the order delivered \
+         ({counts:?})"
+    );
+    assert_eq!(
+        counts.get("symbols_collapsed").copied(),
+        Some(0),
+        "a symbol drawable was collapsed, which R-9 holds back until it is measured: {counts:?}"
+    );
+    assert_eq!(
+        counts.get("batch_slots_mismatched").copied(),
+        Some(0),
+        "a batch extended its geometry list without its UBO slots: {counts:?}"
+    );
+
+    // Every drawable the order named reached a batch. Batching drops nothing; it only groups.
+    assert_eq!(
+        counts.get("batched_geometries").copied(),
+        counts.get("order_entries").copied(),
+        "batching lost entries between the order and the batches: {counts:?}"
+    );
+
+    // And it did something. Measured on this fixture: ninety order entries become nine batches,
+    // a tenfold cut in draw calls for a frame that draws exactly what it drew before. A frame
+    // whose batches equal its entries has merged nothing, which would mean the merge key never
+    // held twice running -- possible in principle, and here it would mean the batcher is broken.
+    let batches = counts.get("batches").copied().unwrap_or(0);
+    let entries = counts.get("order_entries").copied().unwrap_or(0);
+    assert!(
+        batches > 0 && batches < entries,
+        "batching produced {batches} batches for {entries} entries, so it merged nothing: \
+         {counts:?}"
     );
 
     // The camera and its order arrive as one thing at the sink, which is what lets a consumer
