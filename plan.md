@@ -3580,6 +3580,19 @@ a subdivision and a draw the consumer no longer makes.
   over a C++ shim onto the job system, impeller-rs implements it over whatever it has. That keeps
   policy process-scoped per §5.5, keeps the binding thin, and satisfies DR-14. It costs nothing
   to leave open, since `Pool` is already behind an interface at every call site.
+- **A style whose layers draw from no source paints nothing.** Found while joining the consumer:
+  a background-only style creates, resolves, reaches ready, emits a frame — and draws no geometry
+  at all. `Map::tick` builds its buckets from the tiles in `drawn`, and `drawn` comes from the
+  substitution pass over tiles that *have* buckets, so a style with no sources has an empty drawn
+  set and the sourceless layers behind it are never reached. mbgl draws background as a
+  full-viewport layer rather than per tile, which is why the question does not arise there.
+  Whether this matters is a §13.2 question rather than a bug report: never-blank says a view
+  shows something at every moment, and the moment before any tile has landed is exactly when a
+  background is the only thing there is to show. The options are to draw sourceless layers over
+  the cover regardless of what has buckets, or to accept that a map with no data is blank and
+  say so. Not decided here because it changes what every first frame emits, and the measurement
+  that should decide it — what mbgl puts on screen in those frames versus what this does — is
+  the one §12.10 already asks for.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for

@@ -147,6 +147,12 @@ pub struct MapState {
     source: Arc<TileSource<HttpFileSource>>,
     /// Slabs packed for the consumer to resolve against.
     packed: Vec<u8>,
+    /// What the source had landed when this map last drew.
+    ///
+    /// A tile arriving on a worker does not move the camera, so the damage gate would call the
+    /// frame idle and the tiles would sit in the source, built and never drawn. Comparing this is
+    /// what turns a landing back into a frame worth emitting.
+    generation: u64,
     /// Whether the sprite sheet has been handed to the map.
     ///
     /// Once, not every tick: `set_sprites` copies the atlas and marks the map dirty, so repeating
@@ -253,6 +259,7 @@ pub unsafe extern "C" fn tessella_create(
             producer,
             source,
             packed: Vec::new(),
+            generation: 0,
             sprites_set: false,
         });
         unsafe { *out = Box::into_raw(state) };
@@ -315,6 +322,13 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
         let Some(state) = (unsafe { map.as_mut() }) else {
             return Status::NoSuchMap;
         };
+
+        // Anything landed since the last frame makes this one worth drawing.
+        let generation = state.source.generation();
+        if generation != state.generation {
+            state.generation = generation;
+            state.map.mark_dirty();
+        }
 
         // Glyphs are a hand-off rather than a copy -- `Fonts` is not `Clone` -- so this answers
         // on exactly one tick, the one after the fetch lands.

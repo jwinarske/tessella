@@ -22,7 +22,7 @@
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::AtomicUsize;
+use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, PoisonError, RwLock};
 use std::time::Instant;
@@ -112,6 +112,13 @@ pub struct TileSource<S> {
     /// queue behind a worker recording that an unrelated tile has landed.
     landed: RwLock<Landed>,
     glyphs: Mutex<Glyphs>,
+    /// Bumped whenever something lands.
+    ///
+    /// A map draws when its damage gate says something changed, and a tile arriving on a worker
+    /// is a change nothing else would tell it about: the camera has not moved, so the gate would
+    /// return idle for ever and the tiles would sit here, built and undrawn. One atomic read per
+    /// tick is what turns "a tile landed" back into "the frame is worth drawing".
+    generation: AtomicU64,
 }
 
 /// A [`FileSource`] over the coalescing store.
@@ -162,7 +169,16 @@ impl<S: FileSource + 'static> TileSource<S> {
             }),
             landed: RwLock::new(Landed::default()),
             glyphs: Mutex::new(Glyphs::default()),
+            generation: AtomicU64::new(0),
         })
+    }
+
+    /// How much has landed, as a number that changes when it does.
+    ///
+    /// Not a count of anything -- only the change matters. A caller compares it with what it saw
+    /// last tick and redraws when the two differ.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
     }
 
     /// How far along it is.
@@ -282,6 +298,7 @@ impl<S: FileSource + 'static> TileSource<S> {
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .ready = Some(fonts);
+                this.generation.fetch_add(1, Ordering::AcqRel);
             }
         });
     }
@@ -343,6 +360,7 @@ impl<S: FileSource + 'static> TileSource<S> {
                 for id in missing {
                     if let Ok(buckets) = crate::tile::build_sourceless(&sources.style, id) {
                         held.sourceless.insert(id, Arc::new(buckets));
+                        self.generation.fetch_add(1, Ordering::AcqRel);
                     }
                 }
             }
@@ -378,6 +396,7 @@ impl<S: FileSource + 'static> TileSource<S> {
                             *existing = Arc::new(merged);
                         })
                         .or_insert(buckets);
+                    this.generation.fetch_add(1, Ordering::AcqRel);
                 }
                 // Removed whether it built or failed. A tile that failed is one the next tick may
                 // legitimately ask for again -- a transient 503 is not a permanent absence, and

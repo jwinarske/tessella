@@ -28,22 +28,42 @@ fn profile_dir() -> PathBuf {
         .to_path_buf()
 }
 
+/// Builds the staticlib this links against, and returns it.
+///
+/// `cargo test` builds the rlib the harness needs; the staticlib is a *separate artefact of the
+/// same crate* and is not rebuilt by a test run. Linking whatever happens to be on disk means a
+/// test that silently exercises a library from an earlier edit -- which cost real time here
+/// before it was understood, because every run reported the same numbers however the Rust
+/// changed. So it is built rather than found.
+///
+/// Nested cargo is safe at this point: the outer invocation has finished building and released
+/// its lock before any test runs.
+fn staticlib() -> Option<PathBuf> {
+    let built = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()))
+        .arg("build")
+        .arg("-p")
+        .arg("tessella-ffi")
+        .arg("--all-features")
+        .output()
+        .ok()?;
+    if !built.status.success() {
+        eprintln!(
+            "skipping: the staticlib did not build:\n{}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        return None;
+    }
+    let path = profile_dir().join("libtessella_ffi.a");
+    path.exists().then_some(path)
+}
+
 #[test]
 fn the_c_header_describes_the_library_it_claims_to() {
     let root = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
     let source = root.join("crates/tessella-ffi/tests/c_surface.c");
-    let staticlib = profile_dir().join("libtessella_ffi.a");
-
-    // `cargo test` builds the rlib the harness links against; the staticlib is a separate
-    // artefact of the same crate. Skipping rather than failing when it is absent keeps
-    // `cargo test -p tessella-ffi --lib` usable on its own, and CI builds the workspace first.
-    if !staticlib.exists() {
-        eprintln!(
-            "skipping: {} not built — run `cargo build -p tessella-ffi` first",
-            staticlib.display()
-        );
+    let Some(staticlib) = staticlib() else {
         return;
-    }
+    };
 
     let dir = std::env::temp_dir().join(format!("tessella-c-surface-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("a scratch directory");
