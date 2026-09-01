@@ -3598,6 +3598,20 @@ a subdivision and a draw the consumer no longer makes.
   say so. Not decided here because it changes what every first frame emits, and the measurement
   that should decide it — what mbgl puts on screen in those frames versus what this does — is
   the one §12.10 already asks for.
+- **What the Filament backend must author, measured.** The blocking unknown for pixels was how
+  many materials a backend needs, and the ABI's thirty-five shader families is the wrong answer —
+  it is the worst case, not the case. The host probe reports the distinct
+  `(builtin_shader, permutation)` pairs a real frame asks for, so the number is per style and
+  measured rather than guessed. A style with a background, a fill, a fill with an outline, a line
+  and a circle over one GeoJSON source needs **five families and five permutations**, drawn as
+  eight batches over thirty-nine entries from thirty geometries: background (3), circle (5),
+  fill (11), fill outline (12), line (25). Nothing about that is a ceiling — a real basemap adds
+  symbols, patterns and raster — but it does mean the backend can be brought up one family at a
+  time against a style that exercises exactly that family, and `host_join` asserts the set by id
+  so a family appearing or disappearing is not a quiet change. What remains genuinely unknown is
+  the *material* side rather than the count: whether the shaders are authored as `.mat` compiled
+  ahead by `matc`, or built at run time through `filamat`, which fluorite links but does not
+  obviously export.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for

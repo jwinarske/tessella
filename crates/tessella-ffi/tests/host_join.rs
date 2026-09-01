@@ -40,6 +40,11 @@ const STYLE: &str = r##"{
               "type": "Polygon",
               "coordinates": [[[-4.0, 49.0], [4.0, 49.0], [4.0, 54.0], [-4.0, 54.0], [-4.0, 49.0]]]
             }
+          },
+          {
+            "type": "Feature",
+            "properties": {"kind": "dot"},
+            "geometry": {"type": "Point", "coordinates": [-0.11, 51.505]}
           }
         ]
       }
@@ -49,8 +54,12 @@ const STYLE: &str = r##"{
     {"id": "bg", "type": "background", "paint": {"background-color": "#101418"}},
     {"id": "block", "type": "fill", "source": "shapes",
      "paint": {"fill-color": "#3050c0"}},
+    {"id": "block-outline", "type": "fill", "source": "shapes",
+     "paint": {"fill-color": "#3050c0", "fill-outline-color": "#ffffff"}},
     {"id": "edge", "type": "line", "source": "shapes",
-     "paint": {"line-color": "#88aacc", "line-width": 2.0}}
+     "paint": {"line-color": "#88aacc", "line-width": 2.0}},
+    {"id": "dot", "type": "circle", "source": "shapes",
+     "paint": {"circle-color": "#ffcc00", "circle-radius": 4.0}}
   ]
 }"##;
 
@@ -162,7 +171,11 @@ fn a_style_reaches_a_backend_as_batched_draws() {
 
     let got = |name: &str| said.get(name).copied().unwrap_or(-1);
 
-    assert_eq!(got("created"), 1, "the host did not create a map: {said:?}");
+    assert_eq!(
+        got("created"),
+        1,
+        "the host did not create a map: {said:?} "
+    );
     assert_eq!(
         got("readiness"),
         2,
@@ -202,6 +215,46 @@ fn a_style_reaches_a_backend_as_batched_draws() {
         got("unresolved_indexes"),
         0,
         "an index buffer did not resolve against the slab region: {said:?}"
+    );
+
+    // The material inventory: which shader families a real frame actually asks for.
+    //
+    // This is what scopes the Filament backend. The ABI declares thirty-five families and this
+    // style needs five, one per kind of layer it draws -- so the question "how many materials
+    // must be authored" has a measured answer per style rather than a worst case. Asserted by id
+    // because a family appearing or disappearing is a change in what the backend must support,
+    // and that should not happen quietly.
+    //
+    //   3  background        the layer that draws behind everything
+    //   5  circle            the point feature
+    //   11 fill              the polygon
+    //   12 fill outline      the second fill layer's `fill-outline-color`
+    //   25 line              the polygon's edge
+    for (id, what) in [
+        (3, "background"),
+        (5, "circle"),
+        (11, "fill"),
+        (12, "fill outline"),
+        (25, "line"),
+    ] {
+        assert!(
+            got(&format!("shader_{id}")) >= 1,
+            "no batch used the {what} shader ({id}), which this style draws: {said:?}"
+        );
+    }
+    assert_eq!(
+        got("shader_families"),
+        5,
+        "the set of shader families this style needs changed, which changes what a backend must \
+         author: {said:?}"
+    );
+
+    // The background is here only because something else is. A style whose layers draw from no
+    // source paints nothing at all -- the draw loop reaches sourceless layers through tiles that
+    // have buckets -- which is recorded in plan.md §16 as a §13.2 question rather than fixed.
+    assert!(
+        got("shader_3") >= 1,
+        "the background did not draw even beside a source that did: {said:?}"
     );
 
     // The tail moved, so the producer can reuse what the backend is done with. A host that never
