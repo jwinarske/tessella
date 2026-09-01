@@ -427,31 +427,60 @@ impl<S: FileSource + 'static> ColdStart<'_, S> {
     }
 }
 
-/// Runs a cold start and reports how long each stage took.
+/// What a style's sources resolve to, and the style they were read from.
 ///
-/// `workers` threads share the tile work, clamped to the number of tiles. [`Workers::default`]
-/// carries the rationale for the count; [`Workers::serial`] is the one-thread baseline a trace
-/// is compared against.
+/// Split out of [`cold_start`] because resolution is the one stage that is per *style* rather
+/// than per camera. Which manifests a source names does not change when the view moves, so a map
+/// that resolves once can plan every later cover against this — and §16's non-blocking `create`
+/// needs that round trip to happen somewhere other than inside the call that returns a handle.
+/// Repeating it per tile is the thing this exists to make impossible.
+pub struct Sources {
+    /// The compiled style, with the layers this build cannot draw already removed.
+    pub style: Style,
+    /// The layers that removal took, and why.
+    pub rejected_layers: Vec<RejectedLayer>,
+    /// Tiled sources, by name, with the kind that decides their covering zoom.
+    pub sets: Vec<(String, TileSet, SourceKind)>,
+    /// GeoJSON sources that resolved to a document, tiled on this side.
+    pub documents: Vec<(String, alloc::sync::Arc<Vec<GeoJsonFeature>>)>,
+    /// GeoJSON sources that cluster, cut from the index rather than the document.
+    pub clustered: Vec<(
+        String,
+        alloc::sync::Arc<tessella_source::cluster::Clustered>,
+    )>,
+    /// The sprite sheet and when it landed, when the style names one and it arrived.
+    #[cfg(feature = "image")]
+    pub sprite_outcome: Option<(tessella_glyph::sprite::Sprites, Duration)>,
+    /// Without a decoder there is no sheet to have fetched.
+    #[cfg(not(feature = "image"))]
+    pub sprite_outcome: Option<((), Duration)>,
+    /// How long the style took to parse, from `started`.
+    pub style_parsed: Duration,
+    /// How long resolution took in total, from `started`.
+    pub sources_resolved: Duration,
+}
+
+/// Parses a style and resolves every source a layer actually draws from.
 ///
-/// The cache is process-scoped and shared between views. A second view over the same cover
-/// finds the buckets already built; a second view starting *at the same time* joins the build
-/// rather than repeating it, which is the case a cache alone cannot cover (§9.3).
+/// The manifests go out together rather than one after another: they do not depend on each
+/// other, and four sources on a 40 ms link cost 160 ms in front of the first tile request when
+/// they were serial. The sprite goes out beside them, because it is addressed by the style alone
+/// and waiting for a manifest it does not need would put a round trip on the critical path for
+/// nothing.
+///
+/// `started` is the caller's clock, so the durations reported here are comparable with the
+/// stages that follow.
 ///
 /// # Errors
 ///
-/// [`BootError`] when the style, a source, or any tile of the cover fails.
-pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<Boot, BootError> {
-    let &ColdStart {
-        style: style_text,
-        view,
-        ref files,
-        ref cache,
-        pool,
-        priority,
-        style_rev,
-    } = config;
-    let started = Instant::now();
-
+/// [`BootError`] when the style does not parse or a source does not resolve.
+pub fn resolve_sources<S: FileSource + 'static>(
+    style_text: &str,
+    files: &Arc<Coalescing<S>>,
+    pool: &Pool,
+    priority: Priority,
+    started: Instant,
+) -> Result<Sources, BootError> {
     let mut style =
         Style::parse(style_text).map_err(|error| BootError::Style(error.to_string()))?;
     // As mbgl's parser does, and before anything reads a layer: a document that names one thing
@@ -612,6 +641,54 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
     }
 
     let sources_resolved = started.elapsed();
+
+    Ok(Sources {
+        style,
+        rejected_layers,
+        sets,
+        documents,
+        clustered,
+        sprite_outcome,
+        style_parsed,
+        sources_resolved,
+    })
+}
+
+/// Runs a cold start and reports how long each stage took.
+///
+/// `workers` threads share the tile work, clamped to the number of tiles. [`Workers::default`]
+/// carries the rationale for the count; [`Workers::serial`] is the one-thread baseline a trace
+/// is compared against.
+///
+/// The cache is process-scoped and shared between views. A second view over the same cover
+/// finds the buckets already built; a second view starting *at the same time* joins the build
+/// rather than repeating it, which is the case a cache alone cannot cover (§9.3).
+///
+/// # Errors
+///
+/// [`BootError`] when the style, a source, or any tile of the cover fails.
+pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<Boot, BootError> {
+    let &ColdStart {
+        style: style_text,
+        view,
+        ref files,
+        ref cache,
+        pool,
+        priority,
+        style_rev,
+    } = config;
+    let started = Instant::now();
+
+    let Sources {
+        style,
+        rejected_layers,
+        sets,
+        documents,
+        clustered,
+        sprite_outcome,
+        style_parsed,
+        sources_resolved,
+    } = resolve_sources(style_text, files, pool, priority, started)?;
 
     // One cover per *source kind*, not one for the map. mbgl computes `tileCover` per source
     // with that source's own `coveringZoomLevel`, and the levels genuinely differ: a 256-pixel
