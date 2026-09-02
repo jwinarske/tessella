@@ -3752,33 +3752,38 @@ a subdivision and a draw the consumer no longer makes.
   Buildings land at `#e3e0dd` against the oracle's `#e7e4e1`, over 130,846 pixels against its
   132,816. Background and landcover match exactly. The residual 4/255 is unexplained and small
   enough to be a light-parameter or rounding difference; worth a look when the walls land.
-- **Fill-extrusion buildings stand zero metres tall, and the reason is `render_height`.** Traced
-  to the vertex data rather than inferred: the roof's height attribute is 14,613 floats and every
-  one of them is zero.
+- **Fill-extrusion heights work.** *The two entries above this one claimed they did not, and both
+  were wrong.* Recorded because the mistake is more instructive than the fix.
 
-  Where it is *not*: the wire carries the attribute. The producer emits `base` (id 3) and `height`
-  (id 5) as data-driven vertex attributes for the roof, interleaved at one 8-byte stride with base
-  at offset 0 and height at offset 4, and `PaintBinder::push` wrote exactly one entry per vertex.
-  It also correctly classified `fill-extrusion-color` as constant and emitted no attribute for it,
-  so the style side is reading the layer right. An earlier note here said the producer carried no
-  data-driven attributes at all; that was true only of the walls.
+  The chain is sound at every step, each verified against a real z14 Berlin tile rather than
+  reasoned about: the MVT decoder reads `render_height` on all 236 building features with a
+  believable spread, 0 to 103 metres; `resolve_paint` binds it as an `Attribute` carrying
+  `Get { key: "render_height" }`; the expression evaluates against a real feature; `PaintBinder`
+  writes 21,051 nonzero entries out of 21,112; and the wire carries them, base and height
+  interleaved at one 8-byte stride. Forcing a 500-metre height moves 160,440 pixels, so altitude
+  reaches clip space as well.
 
-  So `["get", "render_height"]` is evaluating to null for every building feature and `encode` is
-  falling back to the property's spec default, which is zero. Either the MVT features do not carry
-  the key or `get` is not finding it -- the decoder handles every value wire type and the MVT path
-  does push to the binder, so the next step is to dump one building feature's properties straight
-  out of a z14 tile and see which. mbgl renders real heights from the same tiles, so the data has
-  it.
+  What went wrong was the sampling. The first roof drawable a frame uploads is the *prefetched
+  z13 ancestor*, and openmaptiles carries no `render_height` at z13 -- the layer's own minzoom is
+  13 but the field arrives at 14. Its 14,613 vertices are genuinely all zero. I dumped that one
+  drawable, saw zeros, and wrote up a producer bug that did not exist. Printing the tile id beside
+  the values showed z14/8800/5373 with 21,051 nonzero and a 103-metre maximum, sitting right
+  underneath.
 
-  The consumer side is done and waiting: the roof reads base and height per vertex, keyed by
-  attribute id rather than wire order, and synthesises a constant buffer for whichever of them a
-  style did not make data-driven so one material serves both cases. Heights will appear the moment
-  the values do, and so will the walls, which are degenerate only because base equals height.
+  This is the same error as the four before it, and the pattern is now specific enough to name:
+  **a per-tile quantity sampled from one tile is not a measurement.** The frame holds tiles from
+  several zooms at once, deliberately, and the first to arrive is the coarsest -- so the first
+  sample is systematically the least representative one. Anything read out of a drawable must
+  print its tile id beside it, which is the whole of what turned this around.
 
-  One thing the consumer still cannot do: a height that interpolates across zooms arrives as a
-  `FLOAT2` pair to be mixed by `height_t` from the drawable block. This reads the single-component
-  form that a `["get", ...]` produces. The pair needs handling before a style that zoom-interpolates
-  an extrusion height will draw right.
+  Buildings still read flatter than the oracle's, and the coverage is 158,842 pixels against
+  mbgl's 132,816. That is the open question now, and the z13 ancestor is the first suspect: it is
+  uploaded, its buildings are zero-height, and if it is being drawn under the z14 tiles rather
+  than clipped away it would add exactly this kind of flat excess.
+- **`c_surface` can fail when two `cargo test` runs overlap.** It builds the staticlib itself and
+  links a C binary against it, so two workspace runs started back to back race over the same
+  artifact -- seen once, passing alone and on both of the next two full runs. Harmless to a human
+  running the suite once; worth a guard before CI, which will not be running it once.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for
