@@ -3732,12 +3732,30 @@ a subdivision and a draw the consumer no longer makes.
   percent and that was read as the frame being right; a histogram cannot see a translation, still
   less a reflection, because a mirrored view of the same city has nearly the same one. Landmark
   position is the test that separates them, and it is what the mbgl comparison should assert on.
-- **Fill-extrusion draws its faces far too dark.** Found once the placement was right: at z16
-  liberty's `building` fill is past its maxzoom of 14 and the buildings come from `building-3d`,
-  a fill-extrusion painted `hsl(35,8%,85%)` -- a light beige -- which we render around
-  `rgb(98,97,96)`. The colour reaching the shader is not the problem the placement was; this is
-  the lighting term, so the face normal or the light is wrong. Visible at every zoom (19,738 px
-  at z13) and dominant at z16, where it is most of what is on screen.
+- **Fill-extrusion drew its faces far too dark.** *Fixed.* At z16 liberty's `building` fill is
+  past its maxzoom of 14 and the buildings come from `building-3d`, painted `hsl(35,8%,85%)` --
+  a light beige -- which we rendered around `rgb(98,97,96)`.
+
+  Two faults, both from misreading which shader this family is. DR-16 settles the build on Vulkan,
+  where mbgl defines `MLN_USE_FILL_EXTRUSION_INSTANCING`: roofs go through this shader and walls
+  through the instanced one as their own family, and in that branch attribute slot 2 is
+  `outline_pos` rather than `normal2d`. Our material read a normal out of that slot -- which holds
+  `decimals_ed`, a packed coordinate -- and computed a facing from noise. mbgl's instanced roof
+  shader hardcodes `vec3(0, 0, 1)`, because every vertex it sees is on a horizontal surface.
+
+  The second was the lighting itself, invented rather than ported. mbgl's directional term
+  *brightens* a lit surface: at full incidence it is `max(1 - luminance + intensity, 1)`, never
+  below one, and only a surface facing away is scaled, by `1 - intensity`. Multiplying the colour
+  by the intensity is what made every building near-black. The term is mbgl's now, including the
+  light position, which was not being passed at all.
+
+  Buildings land at `#e3e0dd` against the oracle's `#e7e4e1`, over 130,846 pixels against its
+  132,816. Background and landcover match exactly. The residual 4/255 is unexplained and small
+  enough to be a light-parameter or rounding difference; worth a look when the walls land.
+- **Fill-extrusion walls are not drawn.** Family 17, the instanced variant, has no material, so a
+  building is a flat roof at its full height with nothing under it. `encode_extrusion_walls`
+  already emits them and the capture carries them; this is a consumer gap, and it is the largest
+  remaining visual difference from the oracle after symbols.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for
