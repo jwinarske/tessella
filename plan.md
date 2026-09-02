@@ -4122,6 +4122,26 @@ a subdivision and a draw the consumer no longer makes.
 
   Berlin z14 goes from 885 pixels of text to 2,050, reproducible, and every label reads whole.
 
+- **The style's placement properties never reached placement.** *Fixed.* `FrameOptions` was built
+  with `Rules::default()` and the default paddings whatever the style said, so `text-allow-overlap`,
+  `icon-allow-overlap`, `text-optional`, `icon-optional`, `text-ignore-placement`,
+  `icon-ignore-placement`, `text-padding` and `icon-padding` were all ignored -- eight layout
+  properties read by nothing. A layer asking to overlap competed anyway.
+
+  Found while testing whether a collision hypothesis held: setting `text-allow-overlap` in the
+  style changed nothing, which was read as evidence about collision and was really this. The
+  experiment that mattered had to force the flag in code instead. Worth recording as a
+  measurement error and not only as a bug: an input that silently does nothing turns any
+  experiment using it into a false negative.
+
+  One default moved with it. `icon-padding` read as one pixel, under a test asserting that and a
+  comment saying the spec's text and icon defaults differ. They do not: mbgl's `IconPadding` and
+  `TextPadding` both return 2, and so does the spec. The test now says so.
+
+  Verified through the wire: a road with `text-allow-overlap: true` draws four labels where it
+  drew two. Berlin and Washington are unchanged at 2,816 and 1,827, which is what should happen --
+  neither style sets any of the eight.
+
 - **A collision box was built from a shaped extent at a scale of one.** *Fixed, and it is most of
   the label gap.* Shaping works at one em -- 24 units to the em, whatever the label is finally set
   at -- so `LaidOut::extent` is in ems, and the box reserved against every other label on the

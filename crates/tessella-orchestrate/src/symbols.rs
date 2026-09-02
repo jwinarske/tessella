@@ -108,7 +108,9 @@ impl Default for FrameOptions {
             increment: 1.0,
             viewport: (1024.0, 768.0),
             overscaling: 1.0,
-            icon_padding: Padding::uniform(1.0),
+            // `icon-padding`'s spec default, which this read as one. Every other default here is
+            // the spec's and this one was not.
+            icon_padding: Padding::uniform(2.0),
         }
     }
 }

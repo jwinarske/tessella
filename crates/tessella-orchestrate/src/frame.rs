@@ -707,6 +707,7 @@ fn emit_group(
         tiles,
         fonts,
         patterns,
+        style,
         view,
         &placement,
     );
@@ -1118,6 +1119,50 @@ struct PreparedSymbols {
     icons: Option<SymbolBuffers>,
 }
 
+/// How a layer competes for space, as its style states it.
+///
+/// `text-allow-overlap` and the five flags beside it are *layout* properties, and none of them
+/// reached placement: `FrameOptions` was built with `Rules::default()` and `Padding::uniform(2)`
+/// whatever the style said, so a layer asking to overlap competed anyway and a layer asking for
+/// wider padding got the default. mbgl reads all eight per layer.
+///
+/// `text-padding` is a number of screen pixels and is used as written. mbgl multiplies it by
+/// `tilePixelRatio` because its collision boxes are in tile units; these are in screen pixels
+/// already.
+fn placement_rules(
+    layer: &tessella_style::Layer,
+    zoom: f64,
+) -> (
+    tessella_place::placement::Rules,
+    tessella_place::feature::Padding,
+    tessella_place::feature::Padding,
+) {
+    let flag = |key: &str| {
+        tessella_style::property::layout_value(layer, key, zoom, None)
+            .and_then(|value| value.as_bool())
+            .unwrap_or(false)
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    let pad = |key: &str, fallback: f32| {
+        tessella_style::property::layout_value(layer, key, zoom, None)
+            .as_ref()
+            .and_then(tessella_style::value::Value::as_number)
+            .map_or(fallback, |value| value as f32)
+    };
+    (
+        tessella_place::placement::Rules {
+            text_allow_overlap: flag("text-allow-overlap"),
+            icon_allow_overlap: flag("icon-allow-overlap"),
+            text_optional: flag("text-optional"),
+            icon_optional: flag("icon-optional"),
+            text_ignore_placement: flag("text-ignore-placement"),
+            icon_ignore_placement: flag("icon-ignore-placement"),
+        },
+        tessella_place::feature::Padding::uniform(pad("text-padding", 2.0)),
+        tessella_place::feature::Padding::uniform(pad("icon-padding", 2.0)),
+    )
+}
+
 /// Shapes and places every symbol bucket of a frame, competing them in one grid.
 ///
 /// # Why it is a pass of its own, and why it runs backwards
@@ -1148,6 +1193,7 @@ fn place_symbols(
     tiles: &[TileCoord],
     fonts: Option<&Fonts>,
     patterns: Option<&Patterns<'_>>,
+    style: &tessella_style::Style,
     view: &ViewTransform,
     placement: &core::cell::RefCell<FramePlacement>,
 ) -> BTreeMap<(usize, usize), PreparedSymbols> {
@@ -1206,10 +1252,24 @@ fn place_symbols(
         {
             held.next_id = base.saturating_add(laid.len() as u32);
         }
-        // Per layer, because the scale a shaped extent competes at is the layer's `text-size`.
+        // Per layer, because everything in it is: the scale a shaped extent competes at is the
+        // layer's `text-size`, and how it competes is the layer's own six flags.
+        let (rules, padding, icon_padding) = usize::try_from(entry.layer_index)
+            .ok()
+            .and_then(|index| style.layers.get(index))
+            .map_or_else(
+                || {
+                    let default = crate::symbols::FrameOptions::default();
+                    (default.rules, default.padding, default.icon_padding)
+                },
+                |layer| placement_rules(layer, view.zoom),
+            );
         let options = crate::symbols::FrameOptions {
             viewport,
             font_scale: layout.symbol.size / tessella_glyph::text::ONE_EM,
+            rules,
+            padding,
+            icon_padding,
             ..crate::symbols::FrameOptions::default()
         };
         let labels = frame_labels(layout, &laid, icons.as_ref(), base);

@@ -609,16 +609,17 @@ mod two_halves {
         );
     }
 
-    /// The icon's padding is its own, and the spec's defaults differ.
+    /// The icon's padding is its own field, and its own default.
     ///
-    /// Two pixels around text and one around an icon. Sharing one value crowds icons or spaces
-    /// them, depending which way it is shared — and either reads as a collision bug rather than
-    /// as a padding one.
+    /// Both defaults are two pixels — `TextPadding` and `IconPadding` in mbgl both return 2, and
+    /// the spec agrees. This asserted one for the icon, under a comment saying the two differ;
+    /// they do not, and a style setting one and not the other has to leave the other at *its*
+    /// default rather than at the one it happened to be given here.
     #[test]
     fn the_icon_carries_its_own_padding() {
         let options = FrameOptions::default();
         assert_eq!(options.padding, Padding::uniform(2.0));
-        assert_eq!(options.icon_padding, Padding::uniform(1.0));
+        assert_eq!(options.icon_padding, Padding::uniform(2.0));
 
         // And the value is used: a padding wide enough to make two separated icons collide does.
         let (text, icons) = overlapping();
