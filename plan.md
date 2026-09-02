@@ -3701,6 +3701,25 @@ a subdivision and a draw the consumer no longer makes.
   fifteen of every sixteen stayed empty and the frame came back mostly black. An alias is
   arithmetic, not a result: it is known when the job is *planned*, and recording it there is what
   fills the cover. Both halves are regression-tested in `source.rs`.
+- **The camera diverges from mbgl above z13.** Found while validating the line feather, by
+  rendering the same view through `mbgl-render` and comparing landmarks rather than aggregate
+  colour counts. Measured on the Spree's blue pixels at 52.5163/13.3777, 900x700:
+
+  | zoom | water area, ours / mbgl | centroid dx | centroid dy |
+  |------|-------------------------|-------------|-------------|
+  | z13  | 1.02                    | +1 px       | +21 px      |
+  | z14  | 0.98                    | -16 px      | **+270 px** |
+  | z16  | **8.63**                | -104 px     | -44 px      |
+
+  z13 matches. z14 has the right scale in the wrong place. z16 draws over eight times the water,
+  so it is showing far more ground than it was asked for. Two different symptoms, and neither is
+  the line change -- z14 drew 510 primitives before it and after.
+
+  This matters for how the earlier validation should be read. Green, water and grey pixel counts
+  were matching mbgl to a few percent, and that was taken as the frame being right; it is not a
+  test that can see a translation, because a shifted view of the same city has almost the same
+  histogram. Landmark position is the test that separates them, and it should be what the mbgl
+  comparison asserts on from here.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for
