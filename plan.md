@@ -4100,6 +4100,28 @@ a subdivision and a draw the consumer no longer makes.
   is how it is stated, so the flag now travels with the geometry and gates both the scissor and
   the stencil test.
 
+- **Painter order was never stated to Filament.** *Fixed in the consumer.* The style's layer
+  order reaches it intact -- the producer sends the frame in painter order and `DrawList` never
+  reorders -- and then nothing said so. Renderables were banded by `layerIndex / 32` into one of
+  Filament's three priority bits, so every layer of any style under thirty-two layers shared a
+  band, and within a band Filament sorts blended primitives as it sees fit. Roads painted over
+  the labels naming them, cutting the glyphs wherever a road crossed: it reads as dropped letters
+  rather than as a layer in the wrong place, which is why it was filed under missing glyphs for
+  as long as it was.
+
+  The band carries the render pass now -- the coarse half of painter order, since mbgl draws the
+  opaque pass and then the translucent one -- and `blendOrder`, fifteen bits made global, carries
+  the fine half from the count of renderables issued this frame. Priority takes precedence, so
+  the two nest rather than compete.
+
+  The pass half is not incidental. A background emits into both passes and the producer sends its
+  opaque-pass drawable *after* every translucent one, so stating the order without grouping by
+  pass pinned the background last, over the whole map. That looked like an inverted sort key and
+  was read as one -- counting the blend order down instead, which changed nothing, because the
+  background was never the thing being ordered. `TSF_ORDER_LOG` is what settled it.
+
+  Berlin z14 goes from 885 pixels of text to 2,050, reproducible, and every label reads whole.
+
 - **Frame-wide placement is worse than per-bucket, and three explanations have now failed.**
   With a probe that waits for quiet, per-bucket placement gives 8,654 dark text pixels on every
   run. Sharing one collision grid across the frame's symbol buckets gives 331 to 1,564, and stays
