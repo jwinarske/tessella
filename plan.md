@@ -3798,32 +3798,35 @@ a subdivision and a draw the consumer no longer makes.
   links a C binary against it, so two workspace runs started back to back race over the same
   artifact -- seen once, passing alone and on both of the next two full runs. Harmless to a human
   running the suite once; worth a guard before CI, which will not be running it once.
-- **Symbols reach the GPU and do not yet read as type.** Family 33 has a material -- mbgl's
-  `SymbolSDFShader` transcribed, halo branch and all -- and it is wired end to end: the glyph
-  atlas binds as a sampler, the three matrices and the pass flags come off the wire, and the
-  layer's text paint is chosen over its icon half by the tile props. Family 33 is off the missing
-  list.
+- **The glyph atlas is overwritten by each tile that arrives.** This is what stops labels
+  drawing, and it is the producer's side. Three whole-texture uploads reach the consumer under the
+  same texture id 2, each replacing the last, with 21,118 then 5,411 then 1,829 nonzero bytes. The
+  final atlas is nearly empty, so a label whose glyphs were in an earlier version samples blank
+  space. About one label in nine survives -- whichever happen to live in the atlas that landed
+  last -- and the count moves between runs with tile arrival order.
 
-  Verified rather than assumed, in this order: the atlas is texture 2, 512x512, format ALPHA, and
-  really does fill with glyphs -- 12,708 nonzero bytes growing to 18,254; the geometry reaches the
-  screen, shown by forcing the fragment to solid red and getting 90,291 pixels; and the producer's
-  matrices are right. That last one is worth stating because I doubted it twice. For a
-  viewport-aligned label the plane matrix maps tile units to pixels (262.5 scale, w of 1050) and
-  the coord matrix maps pixels back to clip (0.0022, which is 2/900 for a 900-wide view, w of 1).
-  That is exactly mbgl's arrangement.
+  mbgl keeps one atlas per fontstack for the whole map and grows it; tessella appears to build one
+  per tile and publish them all to one id. Either the atlas becomes shared and growing, or each
+  gets its own id. The consumer needs no change for the first and a trivial one for the second.
 
-  What is wrong is in this consumer: the quads come out the size of the screen instead of the size
-  of a word, so something between the vertex attributes and `pos0` is in the wrong space. The
-  attributes are handed over by the generic path, which assigns Filament's custom slots in wire
-  order, and Filament's normalisation of integer attributes is the first thing to check -- a
-  normalised `USHORT4` would make the texture coordinates a thousandth of what they should be,
-  which is also a reason nothing legible appears even where a quad lands.
+  Everything downstream of it is verified working. The `a_tex` coordinates on the wire are right
+  -- (348,1), (368,1), (348,26), (368,26) is one glyph's four corners, inside the atlas's occupied
+  rows. The quads are the right size. The SDF fragment produces real coverage where a glyph is
+  present: forcing the shader to paint only where alpha exceeds zero draws letters, just few of
+  them. Family 33's material is mbgl's `SymbolSDFShader` transcribed, and the drawable stride
+  (272, not the fill's 96), the atlas sampler binding and the text-versus-icon paint selection are
+  all in place.
 
-  Labels pitched with the map are a *second* arrangement of the same three matrices -- identity
-  plane, tile projection in the coord matrix, offsets in tile units rather than pixels -- and this
-  shader implements only the viewport one. Those 16 batches are counted and skipped rather than
-  drawn in the wrong space. I first wrote that skip up as line labels awaiting a producer pass
-  that does not exist; the flag says `pitch_with_map`, and the note was wrong.
+  Two of my own errors are folded in here rather than left in the history. The dirty-rect upload
+  read `pixels` as a tightly packed run of just the rect; it is the whole texture, with the rect
+  naming a region inside it. That is corrected -- it happens to be identical while the producer
+  sends `(0,0 512x512)`, and would have mattered the moment it sent anything smaller. And I twice
+  read a truncated histogram and concluded the coverage was zero when the high buckets, which were
+  never printed, held it.
+
+- **Labels pitched with the map are a second matrix arrangement, not yet written.** Identity plane
+  matrix, the tile's projection in the coord matrix, offsets in tile units rather than pixels.
+  Sixteen batches at z16. Counted and skipped rather than drawn in the wrong space.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for
