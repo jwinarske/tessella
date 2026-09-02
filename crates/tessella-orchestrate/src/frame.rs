@@ -1871,8 +1871,14 @@ fn write_layer_state(
             #[allow(clippy::cast_possible_truncation)]
             let size = size as f32;
 
-            let entries: Vec<ubo::SymbolDrawableEntry> = matrices(0)
-                .filter_map(|tile| {
+            // Both halves, in sub-layer order, the way a fill packs its triangles and its
+            // outline. A symbol layer that draws sprites has two drawables per tile and each
+            // needs its own matrix slot: packing only the glyphs left the icon drawable pointing
+            // one slot past the end of the buffer, where it was counted `unplaced` and skipped,
+            // and a highway shield drew its number over nothing.
+            let entry = |sub_layer_index: i32| {
+                let sub = sub_layer_index;
+                matrices(sub).filter_map(move |tile| {
                     ubo::SymbolDrawableEntry::for_tile(
                         view,
                         tile.z,
@@ -1880,7 +1886,7 @@ fn write_layer_state(
                         tile.y,
                         i32::from(tile.wrap),
                         layer_index,
-                        0,
+                        sub,
                         atlas_size,
                         [0.0, 0.0],
                         size,
@@ -1889,7 +1895,8 @@ fn write_layer_state(
                     )
                     .ok()
                 })
-                .collect();
+            };
+            let entries: Vec<ubo::SymbolDrawableEntry> = entry(0).chain(entry(1)).collect();
             let buffer =
                 ubo::pack_symbol_drawable_buffer(&entries, ubo_layouts::SYMBOL_DRAWABLE_UBO.stride);
             ubo::write(

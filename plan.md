@@ -3946,22 +3946,22 @@ a subdivision and a draw the consumer no longer makes.
   follow is any change on screen, and the icon batches seen arriving are layer 94's transit
   markers rather than layer 98's shields.
 
-  **Traced further, and it is not binding.** Layer 98 does declare its icon drawable --
-  `hasIcons=true` at binding time, with the second emitted at sub-layer 1. The earlier reading
-  that only layer 94's icon batches arrived came from a log capped at four entries that happened
-  to catch only 94's, which is the truncated-sample mistake this document already records twice.
+  **The icon drawable had no matrix slot.** Symbol drawable UBOs were packed from `matrices(0)`
+  alone -- the glyph half -- so the icon drawable's `ubo_index`, assigned by the order, pointed one
+  slot past the end of the layer's buffer. The consumer counted it `unplaced` and skipped it, which
+  is why the batches arrived, found a material, found a mesh, and produced no renderable. Both
+  halves are packed now, in sub-layer order, the way a fill packs its triangles and its outline.
+  z14 goes from 550 primitives to 564 and `unplaced` from 32 to 18.
 
-  Where it actually stops: the icon geometry never rasterises. Forcing the icon fragment to solid
-  magenta paints **zero** pixels, and `primitives` does not move when the icon drawables are added
-  -- so the batches reach `issue`, find a material and find a mesh, and no renderable comes out of
-  them. That is the next thing to look at, and it is between the batch and the renderable rather
-  than anywhere upstream.
+  Icons draw. They do not yet draw *right*: a transit marker comes out as an opaque black blob
+  rather than the blue sprite, so the sheet is being sampled in the wrong place or its alpha read
+  the wrong way. That is the remaining defect and it is in the fragment, not the pipeline.
 
-  One real defect was found and fixed on the way: an icon was being handed the *glyph* atlas's
-  dimensions. The drawable block carries both `texsize` and `texsize_icon` because one shader can
-  sample both sheets, and a drawable sampling one still has to be told which; using the wrong one
-  scales every sprite coordinate by the ratio between the sheets. That would have drawn shields in
-  the wrong place had they drawn at all.
+  Two things were fixed on the way and are worth keeping separate from that. An icon was being
+  handed the *glyph* atlas's dimensions -- the block carries `texsize` and `texsize_icon` because
+  one shader can sample both sheets, and a drawable sampling one still has to be told which. And
+  the claim that only layer 94's icon batches arrived was wrong: it came from a log capped at four
+  entries that caught only 94's, the same truncated-sample mistake recorded twice above.
 
 - **Frame-wide placement is worse than per-bucket, and three explanations have now failed.**
   With a probe that waits for quiet, per-bucket placement gives 8,654 dark text pixels on every
