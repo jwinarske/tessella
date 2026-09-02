@@ -332,6 +332,27 @@ impl<S: FileSource + 'static> TileSource<S> {
             }
         }
 
+        // Not until the tiles have stopped arriving.
+        //
+        // This fetch happens once, and it asks for the codepoints the tiles that have landed *so
+        // far* need. Firing it on the first tile meant asking for that tile's alphabet and no
+        // other: on a cold start the first tile to land is the prefetched ancestor, which the
+        // frame does not even draw, and measured on liberty at z16 it wanted 90 codepoints where
+        // the two tiles the frame is made of wanted 451 and 476. Every letter outside that ninety
+        // was then missing from every label, which is a map captioned in alphabet soup -- and
+        // which of the ninety you got depended on which tile won the race, so no two runs agreed.
+        //
+        // Waiting for the queue to drain is what makes one fetch enough. It is the weakest
+        // condition that works: not "the cover is complete", which a single failing tile would
+        // block forever, but "nothing further is coming", which a failure satisfies as surely as
+        // a success.
+        {
+            let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            if !inner.inflight.is_empty() {
+                return;
+            }
+        }
+
         let mut wanted: tessella_glyph::fonts::Dependencies = BTreeMap::new();
         {
             let held = self.landed.read().unwrap_or_else(PoisonError::into_inner);

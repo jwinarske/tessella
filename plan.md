@@ -3859,68 +3859,28 @@ a subdivision and a draw the consumer no longer makes.
   Being *under* the oracle's text now rather than over it is unexplained and worth a look: it may
   be the padding defaults, or the sixteen pitched batches still skipped.
 
-- **The glyph fetch happens once, from whatever tile landed first.** *Root cause, established by
-  instrumenting rather than guessing.* `TileSource::want_glyphs` is guarded by a `scheduled`
-  boolean, so it runs exactly once per source for the life of the map, and it collects its
-  dependencies from whatever has landed at that instant. Measured on liberty at z16:
+- **The glyph fetch happens once, and now it happens once the tiles have stopped arriving.**
+  *Fixed.* `want_glyphs` fires on the first tile to land, and on a cold start that is the
+  prefetched ancestor -- a tile the frame does not draw. Measured on liberty at z16 it asked for
+  90 codepoints while the two tiles the frame is made of, landing moments later, wanted 451 and
+  476. Every letter outside that ninety was missing from every label, which rendered the map's
+  captions as alphabet soup, and which ninety you got depended on which tile won the race, so no
+  two runs agreed.
 
-      [glyphs] tile z13/4400/2686 landed with 170 codepoints, scheduled: false
-      [glyphs] scheduling fetch: 1 tiles landed, 3 stacks, 90 codepoints
-      [glyphs] tile z14/8800/5373 landed with 451 codepoints, scheduled: true
-      [glyphs] tile z14/8801/5373 landed with 476 codepoints, scheduled: true
+  It now waits for the in-flight queue to drain. That is the weakest condition that works: not
+  "the cover is complete", which one failing tile would block forever, but "nothing further is
+  coming", which a failure satisfies as surely as a success. One fetch still, so the map still
+  goes quiet and the map is still handed its fonts exactly once.
 
-  The fetch is scheduled off the *prefetched z13 ancestor* -- the first tile to land, and one the
-  frame does not even draw -- and asks for 90 codepoints. The two z14 tiles the frame is made of
-  land afterwards wanting 451 and 476, and nothing fetches them. The map ends up holding about
-  ninety of the six hundred or so distinct codepoints it needs.
+  Both symptoms went with it. z14 draws 32,254 pixels of text against the oracle's 28,000-odd, and
+  the labels read as words -- "Reichstag Building", "Der Bevölkerung", "Brandenburger Tor",
+  umlauts and all. And the frame is reproducible: 32,254 on three consecutive runs, where before
+  the same view gave 6,502, 8,665, 6,502, 6,502.
 
-  This one fact accounts for everything symbols have been doing:
-
-  - **Missing letters.** "Brandenburg Gate" renders as "Brandenburg ate": the G was not in the
-    ninety. `lay_out` drops a glyph whose rectangle is not in the atlas, and a bucket is laid out
-    once.
-  - **Non-reproducibility.** *Which* tile wins the race to land first decides which ninety
-    codepoints exist, so the same view draws differently run to run -- 6,502, 8,665, 6,502, 6,502
-    on four runs of HEAD. Every label measurement this session carries that spread.
-  - **The label deficit against the oracle**, 8,654 pixels against 13,973.
-  - **Why gating on `Fonts::is_resolved` deadlocked** when tried: codepoints that were never
-    fetched never resolve, the bucket is never bound, and `want_glyphs` never runs again to fetch
-    them.
-
-  **The first half of the fix was written and reverted.** Turning `scheduled` into a `requested`
-  set, with a further fetch when a landing tile needs codepoints outside it, works as designed:
-  the fetch rounds converge, 90 codepoints then 170, without looping. But it blanks the map --
-  `readiness` ready, 3,091 records emitted, and zero primitives in the final frame, on four runs
-  out of four.
-
-  What the trace showed before it was reverted: the map collects buckets on only a couple of
-  ticks in the whole run, and the second `set_fonts` -- which no previous code path ever performed,
-  because the fetch only ever happened once -- triggers an emission that comes back with nothing
-  in it. So handing the map a *replacement* `Fonts` mid-session is not something the frame loop
-  survives today, and that is a second defect sitting behind the first. It is not the atlas
-  reference, since the fills disappear too.
-
-  **What a second `set_fonts` actually does, measured.** The emission it triggers is not a
-  teardown and does not remove the scene. It emits an *order of six entries* -- against the 135
-  primitives a good frame draws -- and every one of those six names geometry the consumer no
-  longer holds (`missing_mesh 6`, `renderables 0`). An order is a snapshot and the consumer draws
-  the latest one, so a short order replaces a complete one and the map goes black.
-
-  The two runs are otherwise identical up to that point: baseline and incremental both end with
-  `buckets=2 drawn=6`, and the baseline draws 135 primitives from it. The only difference is the
-  extra emission.
-
-  So the defect is in the incremental order path when the fonts change under it: the frame that
-  re-emits after a new `Fonts` binds almost nothing and publishes that as the whole order. Whether
-  the bindings are short or the order is built from only the fresh ones is the next question, and
-  it is a question about `frame.rs`'s registry interaction rather than about glyphs at all.
-
-  The order of work is therefore: fix that, then make the fetch incremental, then gate binding on
-  `is_resolved`. And separately, the 170 codepoints the incremental version reached against the
-  600 the frame needs says `want_glyphs` stops being called once the cover is satisfied.
-
-  Five changes were tried against these symptoms before this and all five were reverted. The
-  diagnostic that found it took one run.
+  This also supersedes the incremental-fetch work, which is not needed for a static camera and
+  whose second `set_fonts` blanked the map. A camera that moves to ground the first fetch did not
+  cover will still want it, and the defect behind it is real and recorded below; it is simply no
+  longer on the path to legible text.
 
 - **Frame-wide placement is worse than per-bucket, and three explanations have now failed.**
   With a probe that waits for quiet, per-bucket placement gives 8,654 dark text pixels on every
