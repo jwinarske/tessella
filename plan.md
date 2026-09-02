@@ -3882,6 +3882,31 @@ a subdivision and a draw the consumer no longer makes.
   cover will still want it, and the defect behind it is real and recorded below; it is simply no
   longer on the path to legible text.
 
+- **A layer's `minzoom` and `maxzoom` were never applied.** *Fixed, and it answers two questions
+  at once.* `minzoom` appeared nowhere in orchestrate or layout: every layer of a style was built
+  for every tile at every zoom. liberty's POI layers start at 15, 16 and 17, and at z14 they were
+  filtered, shaped, placed, encoded and drawn -- one of them, `poi_r20` at minzoom 17, offered
+  about nine thousand labels across four tiles.
+
+  That is why the map was captioned with shop names the oracle does not show, and it is also why
+  the type looked the wrong *size*: a POI label is set larger than a street label, so drawing the
+  wrong layers changes the apparent size of the text as much as the amount of it. The size
+  arithmetic was never wrong -- `fontScale` measures 0.66 on glyph pixels, which is 16/24 with a
+  perspective ratio of one, exactly mbgl's formula.
+
+  The rule is mbgl's, and the asymmetry is the point: `minzoom` inclusive, `maxzoom` exclusive, so
+  a layer with `maxzoom: 14` is the last thing drawn at 13.9 and gone at 14. Applied against the
+  tile's `overscaled_z`, which is the cover's zoom and so the camera's.
+
+  **What it exposes.** z14 goes from 32,254 pixels of text to 3,917 against the oracle's 28,000 --
+  from too much of the wrong text to too little of the right. The fourteen symbol layers liberty
+  enables at z14 are mostly road names, placed along lines, and 17 of those batches are skipped by
+  the consumer because a line label lays out in the map's plane rather than the viewport's and
+  that arrangement is not written yet. So the previous number was not close to the oracle's, it
+  was wrong twice over in opposite directions, and this is the honest one.
+
+  Line labels are now the whole remaining gap in text.
+
 - **Frame-wide placement is worse than per-bucket, and three explanations have now failed.**
   With a probe that waits for quiet, per-bucket placement gives 8,654 dark text pixels on every
   run. Sharing one collision grid across the frame's symbol buckets gives 331 to 1,564, and stays
