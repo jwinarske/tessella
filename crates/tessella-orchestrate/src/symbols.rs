@@ -384,14 +384,20 @@ impl ViewSymbols {
     ///
     /// A label with no room on its line keeps whatever it last held rather than being written
     /// somewhere arbitrary; placement has already decided whether it draws at all.
+    /// Returns the labels that found no room, by cross-tile id, so a caller can hide the other
+    /// half of the same symbol. A shield whose number will not fit must not keep its shield: an
+    /// empty box strung along a road is worse than nothing there, and it is what happens if only
+    /// the text is hidden.
     pub fn write_line_positions<P>(
         &self,
         labels: &[FrameLabel<'_>],
         project: P,
         buffers: &mut SymbolBuffers,
-    ) where
+    ) -> alloc::vec::Vec<u32>
+    where
         P: Fn((f32, f32)) -> (f32, f32),
     {
+        let mut without_room = alloc::vec::Vec::new();
         for label in labels {
             if label.line.is_empty() {
                 continue;
@@ -424,6 +430,7 @@ impl ViewSymbols {
                         *slot = hidden;
                     }
                 }
+                without_room.push(label.cross_tile_id);
                 continue;
             };
             for (index, glyph) in glyphs.iter().enumerate() {
@@ -436,6 +443,7 @@ impl ViewSymbols {
                 }
             }
         }
+            without_room
     }
 
     /// Writes each label's placed anchor into the per-frame position buffer.

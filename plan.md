@@ -3991,6 +3991,26 @@ a subdivision and a draw the consumer no longer makes.
   builds one from the layer's own `text-size`. That is the next thing to establish, and it is
   worth establishing before touching collision again.
 
+- **Empty shields strung along a road: icons never compete for space.** Seen in the render as
+  chains of small blank boxes following a street where the oracle draws one shield with a number
+  in it. Two causes, one fixed.
+
+  **Fixed.** A line label whose glyphs found no room had its text hidden and its *icon* left
+  drawing, because the icon's opacity is written from the text's placement decision and the walk
+  fails after that. A shield exists to carry a number; without one it is an empty box, and at
+  every anchor along a road it is worse than nothing. `write_line_positions` now reports the
+  labels that found no room and their icons are hidden with them.
+
+  **Not fixed, and this is the rest of the chain.** `FrameLabel.icon` is passed as `None`
+  everywhere it is built, so placement never sees an icon's box and no icon ever collides with
+  anything: every anchor along a road keeps its shield. mbgl lays out both halves *before*
+  placement so the icon competes like the text does, and doing the same here means shaping the
+  icons earlier than the current order does -- `lay_out_icons` runs after placement because it
+  needs the text's instances. That reordering is the fix, and it is the same shape as the change
+  that would let a frame share one collision grid.
+
+  z14 sits at 5,971 pixels of text, reproducible across runs.
+
 - **Frame-wide placement is worse than per-bucket, and three explanations have now failed.**
   With a probe that waits for quiet, per-bucket placement gives 8,654 dark text pixels on every
   run. Sharing one collision grid across the frame's symbol buckets gives 331 to 1,564, and stays

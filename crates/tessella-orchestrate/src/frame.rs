@@ -1287,6 +1287,8 @@ fn encode_parts(
             // which is not wired here yet. One step of the default increment reaches full
             // opacity, which is the settled frame this renders.
             let mut icons: Option<SymbolBuffers> = None;
+            // Labels whose glyphs found no room on their line. Their icons go with them.
+            let mut without_room: Vec<u32> = Vec::new();
             if let Ok(to_clip) =
                 tessella_tile::camera::tile_to_clip(view, tile.z, tile.x, tile.y, wrap)
             {
@@ -1367,7 +1369,7 @@ fn encode_parts(
                 if units.abs() > f64::EPSILON {
                     #[allow(clippy::cast_possible_truncation)]
                     let scale = (1.0 / units) as f32;
-                    held.symbols.write_line_positions(
+                    without_room = held.symbols.write_line_positions(
                         &labels,
                         |point| (point.0 * scale, point.1 * scale),
                         &mut buffers,
@@ -1403,6 +1405,23 @@ fn encode_parts(
                             })
                             .collect();
                         held.symbols.write_opacity(&paired, &mut shaped);
+                        // And hide the ones whose text could not be placed. A shield is drawn
+                        // for its number; without the number it is an empty box, and strung
+                        // along a road at every anchor it is worse than nothing there.
+                        for icon in &paired {
+                            if !without_room.contains(&icon.cross_tile_id) {
+                                continue;
+                            }
+                            let range = icon.laid_out.vertices.clone();
+                            if range.end > shaped.opacity.len() {
+                                continue;
+                            }
+                            let hidden =
+                                tessella_layout::symbol_bucket::opacity_vertex(false, 0.0);
+                            for slot in &mut shaped.opacity[range] {
+                                *slot = hidden;
+                            }
+                        }
                         icons = Some(shaped);
                     }
                 }
