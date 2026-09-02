@@ -1851,6 +1851,10 @@ fn write_layer_state(
             let Some(fonts) = frame.fonts else {
                 return Ok(());
             };
+            #[allow(clippy::cast_precision_loss)]
+            let sheet_size = patterns.map_or([0.0, 0.0], |patterns| {
+                [f32::from(patterns.size[0]), f32::from(patterns.size[1])]
+            });
             let Some(atlas_size) = symbol_atlas_size(style, layer, fonts) else {
                 return Ok(());
             };
@@ -1888,7 +1892,13 @@ fn write_layer_state(
                         layer_index,
                         sub,
                         atlas_size,
-                        [0.0, 0.0],
+                        // The sprite sheet's size, where a zero used to be. An icon's texture
+                        // coordinates are sheet pixels and the shader divides by this to get
+                        // them into 0..1, so a zero here is a division the consumer has to guard
+                        // -- and guarding it with one leaves the coordinates in the hundreds,
+                        // wrapping the sampler round to whatever is at the origin. That is why an
+                        // icon drew as a flat black square rather than as its sprite.
+                        sheet_size,
                         size,
                         alignments,
                         placement,

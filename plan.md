@@ -3953,9 +3953,17 @@ a subdivision and a draw the consumer no longer makes.
   halves are packed now, in sub-layer order, the way a fill packs its triangles and its outline.
   z14 goes from 550 primitives to 564 and `unplaced` from 32 to 18.
 
-  Icons draw. They do not yet draw *right*: a transit marker comes out as an opaque black blob
-  rather than the blue sprite, so the sheet is being sampled in the wrong place or its alpha read
-  the wrong way. That is the remaining defect and it is in the fragment, not the pipeline.
+  **And the sheet size was zero.** `SymbolDrawableEntry` was built with `[0.0, 0.0]` where
+  `texsize_icon` goes. An icon's texture coordinates are sheet pixels and the shader divides by
+  that size to get them into 0..1, so a zero is a division the consumer has to guard -- and
+  guarding it with one leaves the coordinates in the hundreds, wrapping the sampler round to
+  whatever sits at the origin. That is why an icon drew as a flat black square. With the sprite
+  sheet's real dimensions the sprites appear: the blue transit markers draw with their own
+  artwork.
+
+  What is left is where they sit. mbgl puts a transit icon *before* its label; ours draws it at
+  the anchor, on top of the text. That is `icon-text-fit` and the text offset that goes with it,
+  and it is a layout question rather than a rendering one.
 
   Two things were fixed on the way and are worth keeping separate from that. An icon was being
   handed the *glyph* atlas's dimensions -- the block carries `texsize` and `texsize_icon` because
