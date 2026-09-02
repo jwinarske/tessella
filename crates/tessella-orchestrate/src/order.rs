@@ -498,16 +498,18 @@ pub fn bindings_for(
                     view::extrusion_color_flags(depth_pass),
                 );
             }
-            // Sublayer 0 and stencilled, which is what `symbol_style.dump` shows: its symbol
-            // drawable carries the same flags as the fill above it. Symbols overhang tile edges,
-            // so leaving the stencil off would be the defensible guess — the oracle says
-            // otherwise, and the oracle is what this is measured against.
+            // Sublayer 0 and *unstencilled* — see `symbol_flags`. This read `tiled_flags`, on a
+            // comment claiming the oracle showed a symbol drawable with the same flags as the
+            // fill above it. The dump it cites says the opposite: `sh0033` and `sh0034` carry
+            // `flags=0011` where every fill and line carries `0111`. The guess the comment
+            // talked itself out of — that symbols overhang tile edges and must not be clipped —
+            // was the right one, and clipping them cut every label at every tile boundary.
             Content::Symbol(ref layout) => {
-                emit(0, view::fill_pass(), view::tiled_flags());
+                emit(0, view::fill_pass(), view::symbol_flags());
                 // The sprite half, when the layer resolved any. Sub-layer 1, so it draws over the
                 // glyphs the way a shield's number sits on its shield.
                 if layout.has_icons() {
-                    emit(1, view::fill_pass(), view::tiled_flags());
+                    emit(1, view::fill_pass(), view::symbol_flags());
                 }
             }
         }

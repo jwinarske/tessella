@@ -4084,6 +4084,22 @@ a subdivision and a draw the consumer no longer makes.
   cannot repeat closer than its own length -- it runs 200 against 12.5, where spacing is still
   what decides.
 
+- **Symbols were clipped to their tile, and are not.** *Fixed on both sides of the wire.* A label
+  is drawn from an anchor and its glyphs overhang the tile that owns it, so clipping it cuts a
+  road name in half at every tile edge it crosses: a horizontal slice through the letters where
+  the edge runs across the label, the leading glyphs missing where it runs down through them.
+
+  The producer emitted symbol drawables with `ENABLE_STENCIL`, on a comment claiming the oracle
+  showed them carrying a fill's flags. The dump it cites says the opposite -- `sh0033` and
+  `sh0034` carry `flags=0011` where every fill and line carries `0111` -- and mbgl's
+  `RenderSymbolLayer` never calls `setEnableStencil`, whose default is false. The guess that
+  comment talked itself out of was the right one.
+
+  The consumer scissored every drawable regardless, which is the half that was actually cutting
+  the glyphs: `TSF_NO_SCISSOR` restored them. §11.7's clip obligation is per drawable and the flag
+  is how it is stated, so the flag now travels with the geometry and gates both the scissor and
+  the stencil test.
+
 - **Frame-wide placement is worse than per-bucket, and three explanations have now failed.**
   With a probe that waits for quiet, per-bucket placement gives 8,654 dark text pixels on every
   run. Sharing one collision grid across the frame's symbol buckets gives 331 to 1,564, and stays

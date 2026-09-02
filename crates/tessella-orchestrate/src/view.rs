@@ -81,6 +81,22 @@ pub fn circle_flags() -> DrawFlags {
     DrawFlags::ENABLE_DEPTH | DrawFlags::ENABLE_COLOR
 }
 
+/// Draw state for a symbol.
+///
+/// Depth and colour but *no stencil*, which is the same answer as [`circle_flags`] and for the
+/// same reason: a label is drawn from an anchor and its glyphs legitimately overhang the tile
+/// that owns that anchor. Clipping them to the tile square cuts a road name in half at every
+/// tile edge it crosses -- a horizontal slice through the letters where the edge runs across
+/// the label, and the leading glyphs simply missing where it runs down through them.
+///
+/// mbgl agrees twice over. `RenderSymbolLayer` never calls `setEnableStencil`, whose default is
+/// false; and every symbol drawable in the captures -- `sh0033` in `scaled_style.dump`, `sh0034`
+/// in `image_text_style.dump` -- carries `flags=0011` where every fill and line carries `0111`.
+#[must_use]
+pub fn symbol_flags() -> DrawFlags {
+    DrawFlags::ENABLE_DEPTH | DrawFlags::ENABLE_COLOR
+}
+
 /// The depth-only pass of a fill extrusion.
 ///
 /// A translucent extrusion is drawn twice: once writing depth and no colour, then once writing
