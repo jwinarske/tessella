@@ -765,6 +765,9 @@ fn emit_group(
                         patterns,
                         raster_texture,
                         zoom: view.zoom,
+                        view,
+                        tile: buckets.get(tile_index).map_or(TileId::new(0, 0, 0), |(id, _)| *id),
+                        wrap: tiles.get(tile_index).map_or(0, |coord| coord.wrap),
                         stacks: &stacks,
                     },
                 ) else {
@@ -1058,6 +1061,11 @@ struct Encoding<'a> {
     raster_texture: tessella_capture_abi::envelope::TextureId,
     /// The camera's zoom, which a pattern's fade is chosen at.
     zoom: f64,
+    /// The camera, for projecting a label's anchor into the screen space it competes in.
+    view: &'a ViewTransform,
+    /// The tile the bucket came from, and its world copy.
+    tile: TileId,
+    wrap: i32,
     /// The frame's font stacks, in the order their atlases were published.
     ///
     /// A symbol drawable names the atlas holding *its* glyphs, and the only thing that ties the
@@ -1112,6 +1120,9 @@ fn encode_parts(
         patterns,
         raster_texture,
         zoom,
+        view,
+        tile,
+        wrap,
         stacks,
     } = context;
     let bind = |family: &[BuiltIn], shader: BuiltIn| {
@@ -1222,9 +1233,71 @@ fn encode_parts(
             // earlier: the quads are a function of the glyphs, which are a function of the
             // shaped text, which is a function of the tile's features. So the bucket carries a
             // *layout* and the vertices are made here.
-            let (buffers, _laid) = layout.lay_out(fonts?, patterns.map(|p| p.positions));
+            let (mut buffers, laid) = layout.lay_out(fonts?, patterns.map(|p| p.positions));
             if buffers.vertices.is_empty() {
                 return None;
+            }
+
+            // Placement. Without it every label a tile shaped is drawn, and a city block's worth
+            // of names lands on top of itself -- which is what the oracle's frame does not do.
+            //
+            // Per bucket, which is per layer per tile, and that is not yet mbgl's: it places a
+            // whole frame into one grid so a road name and a shop name compete. `ViewSymbols`
+            // builds its own grid inside `frame`, so competing across buckets needs it to accept
+            // a caller's, and that is the next change. Within a bucket it is already right, and
+            // a tile drawn well past its own zoom holds most of what overlaps.
+            //
+            // A fresh state per frame, so a label is drawn or not rather than fading in: the fade
+            // is keyed by cross-tile id and carrying it needs the index that assigns those,
+            // which is not wired here yet. One step of the default increment reaches full
+            // opacity, which is the settled frame this renders.
+            if let Ok(to_clip) =
+                tessella_tile::camera::tile_to_clip(view, tile.z, tile.x, tile.y, wrap)
+            {
+                let plane =
+                    tessella_tile::camera::label_plane_matrix(&to_clip, view.width, view.height);
+                let project = |point: (f32, f32)| -> (f32, f32) {
+                    let (x, y) = (f64::from(point.0), f64::from(point.1));
+                    let w = plane[3] * x + plane[7] * y + plane[15];
+                    if w.abs() < f64::EPSILON {
+                        return (0.0, 0.0);
+                    }
+                    #[allow(clippy::cast_possible_truncation)]
+                    (
+                        ((plane[0] * x + plane[4] * y + plane[12]) / w) as f32,
+                        ((plane[1] * x + plane[5] * y + plane[13]) / w) as f32,
+                    )
+                };
+                let labels: Vec<crate::symbols::FrameLabel<'_>> = laid
+                    .iter()
+                    .enumerate()
+                    .map(|(index, instance)| crate::symbols::FrameLabel {
+                        #[allow(clippy::cast_possible_truncation)]
+                        cross_tile_id: index as u32 + 1,
+                        laid_out: instance.clone(),
+                        icon: None,
+                        line: &[],
+                    })
+                    .collect();
+                #[allow(clippy::cast_possible_truncation)]
+                let options = crate::symbols::FrameOptions {
+                    viewport: (view.width as f32, view.height as f32),
+                    ..crate::symbols::FrameOptions::default()
+                };
+                let mut placement = crate::symbols::ViewSymbols::new();
+                // Stepped to rest rather than once. A fade is a per-frame animation and one step
+                // only starts it, so a single call leaves every label at the opacity it fades
+                // *from*, which is zero and draws nothing. Carrying the state between frames is
+                // what would make the step meaningful; until it is carried, the settled frame is
+                // the honest thing to draw, and this is what settles it. Bounded because a fade
+                // that will not converge must not hang the frame.
+                for _ in 0..8 {
+                    placement.frame(&labels, project, &options);
+                    if placement.settled() {
+                        break;
+                    }
+                }
+                placement.write_opacity(&labels, &mut buffers);
             }
             let ids = attribute_ids(SYMBOL_FAMILY);
             let key = permutation_key(&bucket.paint, &ids);

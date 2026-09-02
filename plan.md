@@ -3826,9 +3826,30 @@ a subdivision and a draw the consumer no longer makes.
   like a finding. The habit that catches all four is the same: say what population is being
   measured, and check the count against what it should be before reading the values.
 
-- **Symbol collision is not implemented.** Every label draws, so a dense frame is cluttered where
-  the oracle's is legible, and the fade opacity the placement pass produces is the constant the
-  layout writes. The largest remaining difference from mbgl at z16.
+- **Symbol collision runs, per bucket.** `tessella-place` had the whole thing -- candidates,
+  a grid, `place`, fades -- and `ViewSymbols` had `frame`, `write_opacity` and `write_positions`
+  wrapping it, tested and never called from the frame path. `lay_out` returns the instances
+  placement needs and the encoder was discarding them. Wired now: at z16 one layer offers 142
+  labels and places 127, and the frame's dark text goes from 18,992 pixels to 8,665 against the
+  oracle's 13,973 -- from more than the oracle to fewer.
+
+  Two things it is not yet:
+
+  **Per bucket, where mbgl is per frame.** Each bucket is one layer of one tile, and
+  `ViewSymbols::frame` builds its own grid, so a road name and a shop name never compete. `place`
+  itself takes the caller's grid, so what this needs is for `frame` to accept one too -- a small
+  addition, and the reason it is not done here is that the projection is per tile while the grid
+  is per frame, so the loop has to turn inside out. Within a bucket it is already right, and a
+  z14 tile drawn at z16 covers the viewport, so most of what overlapped is caught.
+
+  **Stepped to rest rather than animated.** A fade is a per-frame animation keyed by cross-tile
+  id, and nothing carries that state between frames here, so one step leaves every label at the
+  opacity it fades *from* -- zero, drawing nothing, which is what the first attempt did. The loop
+  settles it instead. Carrying the state needs the cross-tile index, and that is what would make
+  a label fade rather than appear.
+
+  Being *under* the oracle's text now rather than over it is unexplained and worth a look: it may
+  be the padding defaults, or the sixteen pitched batches still skipped.
 
 - **Labels pitched with the map are a second matrix arrangement, not yet written.** Identity plane
   matrix, the tile's projection in the coord matrix, offsets in tile units rather than pixels.
