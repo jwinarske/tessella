@@ -3776,10 +3776,24 @@ a subdivision and a draw the consumer no longer makes.
   sample is systematically the least representative one. Anything read out of a drawable must
   print its tile id beside it, which is the whole of what turned this around.
 
-  Buildings still read flatter than the oracle's, and the coverage is 158,842 pixels against
-  mbgl's 132,816. That is the open question now, and the z13 ancestor is the first suspect: it is
-  uploaded, its buildings are zero-height, and if it is being drawn under the z14 tiles rather
-  than clipped away it would add exactly this kind of flat excess.
+  The building coverage that looked excessive -- 158,842 pixels against mbgl's 132,816 -- was not
+  a rendering fault either, and neither was the z13 ancestor suspected of it: the frame draws
+  `zoom_14 124` and nothing else, so the ancestor is uploaded and correctly not drawn.
+
+  The measurement was wrong. It compared the count of *our* most common colour against the count
+  of *mbgl's*, which are two different colours. Classifying pixels instead, at z16 against the
+  oracle: the frame differs by +16,178 grey and -13,953 dark, and the dark is mbgl's text. Labels
+  sit on top of buildings, so where the oracle has type we have the grey underneath. Excluding the
+  pixels mbgl draws a label on drops the grey excess to +3,237.
+
+  What is left after that: green -6,759, road-yellow +2,910, grey +3,237, water -3,019. The water
+  is the same cause once more -- most of the oracle's blue at this zoom is transit badges and POI
+  markers, not water, and the genuine ponds appear in both. So the visible gap from the oracle at
+  z16 is dominated by the symbol family, and the fill and line families are close.
+
+  Twice in one investigation the metric, not the renderer, was what was broken. Both times the fix
+  was to classify rather than to count one colour, and to exclude what the oracle draws and we do
+  not before comparing what remains.
 - **`c_surface` can fail when two `cargo test` runs overlap.** It builds the staticlib itself and
   links a C binary against it, so two workspace runs started back to back race over the same
   artifact -- seen once, passing alone and on both of the next two full runs. Harmless to a human
