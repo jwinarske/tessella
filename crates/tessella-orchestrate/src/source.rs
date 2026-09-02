@@ -79,17 +79,20 @@ struct Landed {
 }
 
 impl Landed {
-    /// The buckets serving `tile`, whether they were built for it or for a coarser tile
-    /// standing in above the source's maxzoom.
-    fn lookup(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
+    /// The tile serving `tile` and its buckets, whether it was built for that coordinate or is a
+    /// coarser tile standing in above the source's maxzoom.
+    ///
+    /// The identity comes back with the buckets because the caller needs both and they are not
+    /// the same thing: the geometry is in the *data* tile's local frame, so that is what places
+    /// it, while the coordinate asked for is what wanted it drawn.
+    fn lookup(&self, tile: TileId) -> Option<(TileId, Arc<Vec<LayerBucket>>)> {
         if let Some(buckets) = self.by_tile.get(&tile) {
-            return Some(Arc::clone(buckets));
+            return Some((tile, Arc::clone(buckets)));
         }
         // Nothing at that coordinate, so ask what is standing in for it.
         self.alias
             .get(&tile)
-            .and_then(|data| self.by_tile.get(data))
-            .map(Arc::clone)
+            .and_then(|data| self.by_tile.get(data).map(|held| (*data, Arc::clone(held))))
     }
 }
 
@@ -526,6 +529,18 @@ impl<S: FileSource + 'static> Tiles for Arc<TileSource<S>> {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .lookup(tile)
+            .map(|(_, buckets)| buckets)
+    }
+
+    /// Above a source's maxzoom the serving tile is not the one asked for, and the difference is
+    /// not cosmetic: the buckets hold tile-local coordinates over the *data* tile's ground, so
+    /// placing them by the cover's coordinate draws a z14 tile's contents into a z16 tile's box
+    /// -- a sixteenth of the size, which puts sixteen times too much world on screen.
+    fn serving(&self, cover: TileId) -> Option<(TileId, Arc<Vec<LayerBucket>>)> {
+        self.landed
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .lookup(cover)
     }
 
     fn sourceless(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
@@ -559,7 +574,8 @@ mod tests {
                 let cover = TileId::new(16, 8802 * 4 + x, 5373 * 4 + y);
                 assert!(landed.lookup(cover).is_none(), "no alias yet");
                 landed.alias.insert(cover, data);
-                assert!(landed.lookup(cover).is_some(), "{cover:?} should find {data:?}");
+                assert_eq!(landed.lookup(cover).map(|(id, _)| id), Some(data),
+                           "{cover:?} should be served by {data:?}");
             }
         }
     }
@@ -571,7 +587,7 @@ mod tests {
         let tile = TileId::new(14, 8802, 5373);
         let mut landed = Landed::default();
         landed.by_tile.insert(tile, Arc::new(Vec::new()));
-        assert!(landed.lookup(tile).is_some());
+        assert_eq!(landed.lookup(tile).map(|(id, _)| id), Some(tile));
         assert!(landed.alias.is_empty());
     }
 }

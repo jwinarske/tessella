@@ -99,6 +99,16 @@ pub trait Tiles {
     /// Called once per cover entry per frame *that emits*, and never on an idle tick.
     fn buckets(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>>;
 
+    /// The tile actually serving `cover`, and its buckets.
+    ///
+    /// Defaults to a coordinate serving itself, which is right for any source that can produce
+    /// the zoom asked for. A source with a maxzoom cannot, above it, and answers with the coarser
+    /// tile standing in -- whose local frame is the one the geometry is really in, and so the one
+    /// that has to place it.
+    fn serving(&self, cover: TileId) -> Option<(TileId, Arc<Vec<LayerBucket>>)> {
+        self.buckets(cover).map(|buckets| (cover, buckets))
+    }
+
     /// Layers that draw from no source — a background — for a tile of the cover.
     fn sourceless(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
         let _ = tile;
@@ -324,18 +334,45 @@ impl Map {
         // would stall the whole frame for ground nobody has looked at yet. What fills the hole in
         // the meantime is the substitution above, not a wait.
         let mut buckets: Vec<(TileId, Vec<LayerBucket>)> = Vec::with_capacity(self.drawn.len());
+        // The cover entry each bucket set is drawn for, kept alongside because the frame reads the
+        // two by index. Built here rather than reusing `self.drawn` because above a source's
+        // maxzoom they are not the same list -- several cover entries share one tile, and the
+        // tile is drawn once.
+        let mut placed: Vec<TileCoord> = Vec::with_capacity(self.drawn.len());
+        let mut served: alloc::collections::BTreeSet<TileId> = alloc::collections::BTreeSet::new();
         for entry in &self.drawn {
-            let id = TileId::new(entry.z, entry.x, entry.y);
+            let cover = TileId::new(entry.z, entry.x, entry.y);
+            // What is standing in for this coordinate, which above a maxzoom is a coarser tile.
+            // Its own coordinate is what the rest of the frame uses: the geometry is in *its*
+            // local frame, so it is what places it, clips it, and identifies it. Drawing a z14
+            // tile as though it were the z16 tile that asked for it shrinks it to a sixteenth and
+            // puts sixteen times too much world on screen.
+            let holding = tiles.serving(cover);
+            let id = holding.as_ref().map_or(cover, |(id, _)| *id);
+            // One z14 tile answers all sixteen z16 coordinates inside it. Drawn once: a second
+            // draw is the same geometry under the same matrix, which blends twice and darkens
+            // every translucent fill it touches.
+            if !served.insert(id) {
+                continue;
+            }
             let mut built: Vec<LayerBucket> = Vec::new();
-            if let Some(ready) = tiles.buckets(id) {
+            if let Some((_, ready)) = &holding {
                 built.extend(ready.iter().cloned());
             }
-            if let Some(sourceless) = tiles.sourceless(id) {
+            // Keyed by the cover, which is what asked for it -- a background belongs to the
+            // coordinate on screen rather than to whatever tile happened to serve it.
+            if let Some(sourceless) = tiles.sourceless(cover) {
                 built.extend(sourceless.iter().cloned());
             }
             if !built.is_empty() {
                 built.sort_by_key(|bucket| bucket.layer_index);
                 buckets.push((id, built));
+                placed.push(TileCoord {
+                    z: id.z,
+                    x: id.x,
+                    y: id.y,
+                    wrap: entry.wrap,
+                });
             }
         }
 
@@ -363,7 +400,7 @@ impl Map {
                 style: &self.style,
                 view: &self.view,
                 view_id: self.view_id,
-                tiles: &self.drawn,
+                tiles: &placed,
                 buckets: &buckets,
                 light: &self.light,
                 fonts: self.fonts.as_ref(),

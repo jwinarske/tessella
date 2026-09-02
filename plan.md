@@ -3701,25 +3701,43 @@ a subdivision and a draw the consumer no longer makes.
   fifteen of every sixteen stayed empty and the frame came back mostly black. An alias is
   arithmetic, not a result: it is known when the job is *planned*, and recording it there is what
   fills the cover. Both halves are regression-tested in `source.rs`.
-- **The camera diverges from mbgl above z13.** Found while validating the line feather, by
-  rendering the same view through `mbgl-render` and comparing landmarks rather than aggregate
-  colour counts. Measured on the Spree's blue pixels at 52.5163/13.3777, 900x700:
+- **The camera diverged from mbgl above z13.** *Fixed -- three separate faults, found by
+  comparing landmarks against `mbgl-render` rather than aggregate colour counts.*
 
-  | zoom | water area, ours / mbgl | centroid dx | centroid dy |
-  |------|-------------------------|-------------|-------------|
-  | z13  | 1.02                    | +1 px       | +21 px      |
-  | z14  | 0.98                    | -16 px      | **+270 px** |
-  | z16  | **8.63**                | -104 px     | -44 px      |
+  **The frame was drawn upside down.** Flipping our z14 render collapsed the water centroid's
+  vertical error from +270 px to -10 px, which said mirrored rather than translated. An
+  orientation probe -- a quad at clip y +0.2..+0.9, the top of the screen in the OpenGL
+  convention mbgl's matrices are written for -- landed in readback rows 3..25 instead of 38..61,
+  the exact mirror. Filament's clip space has +Y down, and identically on its Vulkan and OpenGL
+  backends, so this is Filament's own convention and not a backend's NDC. The camera's projection
+  now carries that flip, which is the whole of the difference between the two conventions.
 
-  z13 matches. z14 has the right scale in the wrong place. z16 draws over eight times the water,
-  so it is showing far more ground than it was asked for. Two different symptoms, and neither is
-  the line change -- z14 drew 510 primitives before it and after.
+  **The scissor was computed in the other space.** It is derived in C++ from the tile's matrix, so
+  unlike the geometry it did not pick the flip up, leaving a rectangle that was the mirror of what
+  it should bound. Each tile was clipped to where its own reflection overlapped it: a band across
+  the middle, 505 of 700 rows, with black above and below.
 
-  This matters for how the earlier validation should be read. Green, water and grey pixel counts
-  were matching mbgl to a few percent, and that was taken as the frame being right; it is not a
-  test that can see a translation, because a shifted view of the same city has almost the same
-  histogram. Landmark position is the test that separates them, and it should be what the mbgl
-  comparison asserts on from here.
+  **Overscaled tiles were placed by the coordinate that asked for them.** Buckets were keyed by
+  the cover, so a z14 tile's 0..8192 geometry was placed by a z16 tile's matrix -- a sixteenth of
+  the size, sixteen times too much world on screen, and drawn once per cover tile that resolved to
+  it. The serving tile's own coordinate now places it, clips it and identifies it, and the tile is
+  drawn once however many coordinates it answers. This is what mbgl's clamped cover does: above a
+  source's maxzoom its cover *is* a handful of canonical tiles, not a fan of overscaled ones.
+
+  Against mbgl afterwards, on water area and centroid: z13 1.02 at (+1, -1), z14 0.98 at
+  (-16, -10), z15 0.99 at (+7, -19). z16 is the same ground at the same scale, confirmed by
+  matching it against the centre quarter of both z14 renders.
+
+  The lesson is in how long it hid. Green, water and grey pixel counts were matching mbgl to a few
+  percent and that was read as the frame being right; a histogram cannot see a translation, still
+  less a reflection, because a mirrored view of the same city has nearly the same one. Landmark
+  position is the test that separates them, and it is what the mbgl comparison should assert on.
+- **Fill-extrusion draws its faces far too dark.** Found once the placement was right: at z16
+  liberty's `building` fill is past its maxzoom of 14 and the buildings come from `building-3d`,
+  a fill-extrusion painted `hsl(35,8%,85%)` -- a light beige -- which we render around
+  `rgb(98,97,96)`. The colour reaching the shader is not the problem the placement was; this is
+  the lighting term, so the face normal or the light is wrong. Visible at every zoom (19,738 px
+  at z13) and dominant at z16, where it is most of what is on screen.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for
