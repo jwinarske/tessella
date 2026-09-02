@@ -4122,32 +4122,34 @@ a subdivision and a draw the consumer no longer makes.
 
   Berlin z14 goes from 885 pixels of text to 2,050, reproducible, and every label reads whole.
 
-- **Frame-wide placement is worse than per-bucket, and three explanations have now failed.**
-  With a probe that waits for quiet, per-bucket placement gives 8,654 dark text pixels on every
-  run. Sharing one collision grid across the frame's symbol buckets gives 331 to 1,564, and stays
-  *non-reproducible even against the quiescent probe* -- which is the part that has not been
-  accounted for.
+- **A frame's labels compete in one grid now.** *Done.* Placement is a decision about the frame --
+  a road name and a shop name want the same screen whatever layer or tile each came from -- and it
+  was happening inside the encode walk, a grid per bucket, so a layer could only ever compete
+  against itself.
 
-  Tried and measured, none of them it:
+  It could not simply share a grid there: that walk visits one bucket at a time and encodes as it
+  goes, and a fade takes its direction from the previous frame's decision, so the first bucket's
+  opacity depends on the last bucket's placement. So placement is a pass of its own now,
+  `place_symbols`, which shapes and places every symbol bucket, settles the fades once, and leaves
+  the written buffers for the encode walk to pick up. Shaping happens once, not twice.
 
-  1. **Placement order.** mbgl places topmost-first; this loop encodes bottom-first. A pass in
-     reverse render order before the encode loop changed nothing.
-  2. **Off-screen labels.** The grid clamps what falls outside the viewport into an edge cell
-     rather than dropping it, and a z14 tile at z16 is mostly off-screen. Culling by projected
-     anchor with a 256-pixel margin changed nothing.
-  3. **Stale decisions from the freshness gate.** Opacity is written during geometry encoding and
-     only fresh buckets are encoded, so a frame could mix decisions taken against different
-     grids. Re-encoding every symbol bucket as a group whenever any one of them is fresh -- which
-     makes a frame's decisions all contemporaneous -- changed nothing either. The reasoning still
-     looks sound and the registry is present, so the gate was active; it is simply not what is
-     costing the labels.
+  The earlier note here said the pass had to run in *reverse* order. That was wrong, and the
+  render said so: reversed, the frame fell to 509 pixels of text from 2,050, with road names
+  keeping everything and place names losing almost all of it -- which is the bottom-up failure
+  that note was describing. `DrawOrder::resolve` sorts on `depth_slot`, which runs opposite the
+  style index, so it is *already* top-layer-first, which is the order mbgl places in. Taken
+  forwards it gives 1,724, reproducible.
 
-  The commit that proposed (3) stated it as the explanation. It is not established, and this
-  corrects it.
+  Lower than the 2,050 the per-bucket grids gave, and that is the point: those 2,050 included a
+  place name printed over a road name, because neither could see the other. The oracle draws 3,005
+  on the same frame, so there is still something to find -- mbgl fits more labels into the same
+  screen, and tighter collision boxes and its retry at other anchors are the two places to look.
 
-  What has not been done, and is what the next attempt should do before changing anything: print,
-  for one frame, every candidate offered and every candidate that blocked it. Three guesses have
-  been spent on a question a diagnostic would answer outright.
+  One thing changed on the way and is worth keeping separate: the line walk now runs *before* the
+  label is offered any space. A label whose road runs out before its name does is not drawn, and a
+  label that is not drawn must not hold a run of collision circles against the ones that are.
+  mbgl decides the two together. It was tried as a fix for the 509 and fixed nothing, which is how
+  it is recorded here -- it is right on its own terms, not because it recovered anything.
 
 - **Labels pitched with the map are a second matrix arrangement, not yet written.** Identity plane
   matrix, the tile's projection in the coord matrix, offsets in tile units rather than pixels.

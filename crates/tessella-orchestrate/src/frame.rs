@@ -698,9 +698,22 @@ fn emit_group(
     });
     placement.borrow_mut().symbols.begin();
 
+    // Resolved once and used twice: placement walks it backwards, encoding forwards.
+    let order = draw_order.resolve();
+    let prepared = place_symbols(
+        &order,
+        &source,
+        buckets,
+        tiles,
+        fonts,
+        patterns,
+        view,
+        &placement,
+    );
+
     let mut packed: BTreeSet<u64> = BTreeSet::new();
     let mut open: Option<u32> = None;
-    for entry in draw_order.resolve() {
+    for entry in order.iter().copied() {
         // A drawable whose pass is a mask appears once per pass; its geometry is packed once.
         if !packed.insert(entry.geometry.0) {
             continue;
@@ -770,15 +783,12 @@ fn emit_group(
                     arena,
                     bucket,
                     &Encoding {
-                        fonts,
                         patterns,
                         raster_texture,
                         zoom: view.zoom,
-                        view,
-                        placement: &placement,
-                        tile: buckets.get(tile_index).map_or(TileId::new(0, 0, 0), |(id, _)| *id),
-                        wrap: tiles.get(tile_index).map_or(0, |coord| coord.wrap),
                         stacks: &stacks,
+                        prepared: &prepared,
+                        key: (tile_index, bucket_index),
                     },
                 ) else {
                     continue;
@@ -1063,33 +1073,22 @@ fn camera_key(view: &ViewTransform) -> crate::damage::CameraKey {
 /// its camera is", and a bucket picks the ones its kind needs.
 #[derive(Clone, Copy)]
 struct Encoding<'a> {
-    /// Glyphs, for a symbol layer.
-    fonts: Option<&'a Fonts>,
     /// Sprites, for a layer with a pattern.
     patterns: Option<&'a Patterns<'a>>,
     /// The texture this tile's raster picture went to.
     raster_texture: tessella_capture_abi::envelope::TextureId,
     /// The camera's zoom, which a pattern's fade is chosen at.
     zoom: f64,
-    /// The camera, for projecting a label's anchor into the screen space it competes in.
-    view: &'a ViewTransform,
-    /// The frame's collision grid and fade state, shared by every symbol bucket.
-    ///
-    /// One grid for the frame, not one per bucket: a road name and a shop name are different
-    /// layers and often different tiles, and placement exists to decide which of them gets the
-    /// space. The order this is visited in is the painter order, which is the order mbgl places
-    /// in. A `RefCell` because the encoder takes its context by shared reference and this is the
-    /// one thing in it that a bucket changes for the buckets after it.
-    placement: &'a core::cell::RefCell<FramePlacement>,
-    /// The tile the bucket came from, and its world copy.
-    tile: TileId,
-    wrap: i32,
     /// The frame's font stacks, in the order their atlases were published.
     ///
     /// A symbol drawable names the atlas holding *its* glyphs, and the only thing that ties the
     /// two together is this order. Passed rather than recomputed so the upload and the reference
     /// cannot drift apart.
     stacks: &'a [alloc::vec::Vec<alloc::string::String>],
+    /// Every symbol bucket of the frame, shaped and placed. See [`place_symbols`].
+    prepared: &'a BTreeMap<(usize, usize), PreparedSymbols>,
+    /// Which bucket this is, to address `prepared` with.
+    key: (usize, usize),
 }
 
 /// A frame's symbol placement: what has been decided, and the space already taken.
@@ -1104,6 +1103,298 @@ struct FramePlacement {
     /// frames; a cross-tile index is what would make them stable, and is what a fade needs to
     /// follow a label from one frame to the next.
     next_id: u32,
+}
+
+/// One symbol bucket, shaped and placed, waiting to be encoded.
+///
+/// Placement is a decision about the *frame* -- a road name and a shop name compete for the same
+/// screen whatever layer or tile each came from -- so it cannot happen inside a walk that visits
+/// one bucket at a time and encodes as it goes. It happens before that walk, and this is what it
+/// leaves behind.
+struct PreparedSymbols {
+    /// The glyphs, with their opacities and their along-line positions already written.
+    buffers: SymbolBuffers,
+    /// The sprites, when the layer resolved any.
+    icons: Option<SymbolBuffers>,
+}
+
+/// Shapes and places every symbol bucket of a frame, competing them in one grid.
+///
+/// # Why it is a pass of its own, and why it runs backwards
+///
+/// mbgl places a frame in one collision grid, in *reverse* render order: the topmost label claims
+/// its space first and the layers beneath take what is left. That is what makes a place name beat
+/// a house number rather than the other way round.
+///
+/// Placement used to happen inside the encode walk, a grid per bucket, so a layer could only
+/// compete against itself -- every label of every other layer and tile was invisible to it, and
+/// the frame drew far more than it should. Sharing one grid *inside* that walk was tried and is
+/// worse than not sharing at all: the walk runs in painter order, bottom first, so the lowest
+/// label layer -- 2,256 house numbers at z16 -- filled the grid before a single place name was
+/// offered. The order is the whole point, and painter order is the wrong one, so the pass has to
+/// be separate.
+///
+/// # Why it also writes
+///
+/// A fade takes its direction from the previous frame's decision, so the opacities cannot be
+/// written until every bucket has been offered and the fades have settled. That is one more
+/// reason this cannot be folded back into the encode walk: the first bucket's opacity depends on
+/// the last bucket's placement.
+#[allow(clippy::too_many_arguments)]
+fn place_symbols(
+    order: &[tessella_capture_abi::envelope::OrderEntry],
+    source: &BTreeMap<u64, (usize, usize, tessella_capture_abi::envelope::TextureId)>,
+    buckets: &[(TileId, Vec<LayerBucket>)],
+    tiles: &[TileCoord],
+    fonts: Option<&Fonts>,
+    patterns: Option<&Patterns<'_>>,
+    view: &ViewTransform,
+    placement: &core::cell::RefCell<FramePlacement>,
+) -> BTreeMap<(usize, usize), PreparedSymbols> {
+    let Some(fonts) = fonts else {
+        return BTreeMap::new();
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    let options = crate::symbols::FrameOptions {
+        viewport: (view.width as f32, view.height as f32),
+        ..crate::symbols::FrameOptions::default()
+    };
+
+    // The frame's grid, and the whole reason this function exists.
+    let mut grid: tessella_place::grid::GridIndex<u32> = tessella_place::grid::GridIndex::new(
+        options.viewport.0.max(1.0),
+        options.viewport.1.max(1.0),
+        32,
+    );
+
+    // A bucket appears once per drawable it produces; it is shaped once.
+    let mut seen: BTreeSet<(usize, usize)> = BTreeSet::new();
+    let mut keys: Vec<(usize, usize)> = Vec::new();
+    let mut prepared: BTreeMap<(usize, usize), PreparedSymbols> = BTreeMap::new();
+    let mut shaped: BTreeMap<(usize, usize), Shaped> = BTreeMap::new();
+
+    for entry in order {
+        let Some(&(tile_index, bucket_index, _)) = source.get(&entry.geometry.0) else {
+            continue;
+        };
+        if !seen.insert((tile_index, bucket_index)) {
+            continue;
+        }
+        let Some((tile, bucket)) = buckets
+            .get(tile_index)
+            .and_then(|(id, list)| list.get(bucket_index).map(|bucket| (*id, bucket)))
+        else {
+            continue;
+        };
+        let Content::Symbol(layout) = &bucket.content else {
+            continue;
+        };
+        let wrap = tiles.get(tile_index).map_or(0, |coord| coord.wrap);
+        let Ok(to_clip) = tessella_tile::camera::tile_to_clip(view, tile.z, tile.x, tile.y, wrap)
+        else {
+            continue;
+        };
+
+        let (mut buffers, laid) = layout.lay_out(fonts, patterns.map(|p| p.positions));
+        if buffers.vertices.is_empty() {
+            continue;
+        }
+        // Shaped before placement, not after, so an icon competes for space the way its label
+        // does. While it came later, `FrameLabel::icon` was always `None`, no icon was ever
+        // offered to the grid, and every anchor along a road kept its shield.
+        let icons = patterns.map(|patterns| layout.lay_out_icons(patterns.positions, &laid));
+
+        let plane = tessella_tile::camera::label_plane_matrix(&to_clip, view.width, view.height);
+        let mut held = placement.borrow_mut();
+        let base = held.next_id;
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            held.next_id = base.saturating_add(laid.len() as u32);
+        }
+        let labels = frame_labels(layout, &laid, icons.as_ref(), base);
+        // Where each glyph lands along its road, *before* the label is offered any space.
+        //
+        // A label whose road runs out before its name does is not drawn, and a label that is not
+        // drawn must not hold space against the ones that are. Deciding this after placement --
+        // which is what writing the positions later amounted to -- left every one of them
+        // reserving a run of collision circles along a road it was never going to be printed on,
+        // and with one grid for the frame that is space taken from a label that would have fit.
+        // mbgl decides the two together for the same reason.
+        let mut without_room: Vec<u32> = Vec::new();
+        let units = tessella_tile::camera::pixels_to_tile_units(tile.z, view.zoom);
+        if units.abs() > f64::EPSILON {
+            #[allow(clippy::cast_possible_truncation)]
+            let scale = (1.0 / units) as f32;
+            without_room = held.symbols.write_line_positions(
+                &labels,
+                |point| (point.0 * scale, point.1 * scale),
+                layout.symbol.size,
+                &mut buffers,
+            );
+        }
+        let offered: Vec<crate::symbols::FrameLabel<'_>> = labels
+            .iter()
+            .filter(|label| !without_room.contains(&label.cross_tile_id))
+            .cloned()
+            .collect();
+        held.symbols
+            .frame_in(&offered, project_with(&plane), &options, &mut grid);
+        drop(held);
+
+        keys.push((tile_index, bucket_index));
+        shaped.insert(
+            (tile_index, bucket_index),
+            Shaped {
+                buffers,
+                laid,
+                icons,
+                base,
+                without_room,
+            },
+        );
+    }
+
+    // Every bucket has been offered, so the fades can reach their resting values and the
+    // opacities they decide can be written.
+    let mut held = placement.borrow_mut();
+    held.symbols.settle(options.increment);
+
+    for key in keys {
+        let Some(entry) = shaped.remove(&key) else {
+            continue;
+        };
+        let Shaped {
+            mut buffers,
+            laid,
+            icons,
+            base,
+            without_room,
+        } = entry;
+        let Some((_, bucket)) = buckets
+            .get(key.0)
+            .and_then(|(id, list)| list.get(key.1).map(|bucket| (*id, bucket)))
+        else {
+            continue;
+        };
+        let Content::Symbol(layout) = &bucket.content else {
+            continue;
+        };
+        let labels = frame_labels(layout, &laid, icons.as_ref(), base);
+        // A label placement never offered has no fade entry, which reads as hidden -- so the
+        // ones whose road ran out stay hidden without being special-cased here.
+        held.symbols.write_opacity(&labels, &mut buffers);
+
+        // The icon half, which is its own drawable rather than an option: a symbol is a label, an
+        // icon, or both, and the two go through different shaders -- an SDF for glyphs, a plain
+        // sampler for a sprite -- so they cannot share a vertex buffer.
+        //
+        // The placement is the text's. The two halves are decided together -- that is what
+        // `text-optional` and `icon-optional` are about -- so an icon takes the opacity its own
+        // label was given, addressed through the icon's vertex ranges.
+        let icons = icons.and_then(|(shaped, placed)| {
+            let mut shaped = shaped;
+            if shaped.vertices.is_empty() {
+                return None;
+            }
+            let paired: Vec<crate::symbols::FrameLabel<'_>> = placed
+                .iter()
+                .filter_map(|icon| {
+                    labels
+                        .iter()
+                        .find(|label| label.laid_out.pending == icon.pending)
+                        .map(|label| crate::symbols::FrameLabel {
+                            cross_tile_id: label.cross_tile_id,
+                            laid_out: icon.clone(),
+                            icon: None,
+                            line: &[],
+                        })
+                })
+                .collect();
+            held.symbols.write_icon_opacity(&paired, &mut shaped);
+            // And hide the ones whose text could not be placed. A shield is drawn for its
+            // number; without the number it is an empty box, and strung along a road at every
+            // anchor it is worse than nothing there.
+            for icon in &paired {
+                if !without_room.contains(&icon.cross_tile_id) {
+                    continue;
+                }
+                let range = icon.laid_out.vertices.clone();
+                if range.end > shaped.opacity.len() {
+                    continue;
+                }
+                let hidden = tessella_layout::symbol_bucket::opacity_vertex(false, 0.0);
+                for slot in &mut shaped.opacity[range] {
+                    *slot = hidden;
+                }
+            }
+            Some(shaped)
+        });
+
+        prepared.insert(key, PreparedSymbols { buffers, icons });
+    }
+    prepared
+}
+
+/// One bucket between being shaped and being written.
+struct Shaped {
+    buffers: SymbolBuffers,
+    laid: Vec<tessella_layout::symbol_bucket::LaidOut>,
+    icons: Option<(SymbolBuffers, Vec<tessella_layout::symbol_bucket::LaidOut>)>,
+    base: u32,
+    /// The labels whose road ran out before their name did, decided before placement.
+    without_room: Vec<u32>,
+}
+
+/// Takes an anchor in tile units to the pixel of the label plane it lands on.
+fn project_with(plane: &[f64; 16]) -> impl Fn((f32, f32)) -> (f32, f32) + '_ {
+    move |point: (f32, f32)| -> (f32, f32) {
+        let (x, y) = (f64::from(point.0), f64::from(point.1));
+        let w = plane[3] * x + plane[7] * y + plane[15];
+        if w.abs() < f64::EPSILON {
+            return (0.0, 0.0);
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        (
+            ((plane[0] * x + plane[4] * y + plane[12]) / w) as f32,
+            ((plane[1] * x + plane[5] * y + plane[13]) / w) as f32,
+        )
+    }
+}
+
+/// The labels of one bucket, numbered from `base`.
+///
+/// Built twice per frame -- once to place and once to write -- because what is expensive is
+/// `lay_out`, which is done once and held; this is references and a clone of each instance's box.
+fn frame_labels<'a>(
+    layout: &'a tessella_layout::symbol_layout::SymbolLayout,
+    laid: &[tessella_layout::symbol_bucket::LaidOut],
+    icons: Option<&(SymbolBuffers, Vec<tessella_layout::symbol_bucket::LaidOut>)>,
+    base: u32,
+) -> Vec<crate::symbols::FrameLabel<'a>> {
+    laid.iter()
+        .enumerate()
+        .map(|(index, instance)| crate::symbols::FrameLabel {
+            #[allow(clippy::cast_possible_truncation)]
+            cross_tile_id: base + index as u32,
+            laid_out: instance.clone(),
+            // Its icon's box, so the pair is decided together: `text-optional` and
+            // `icon-optional` are about exactly this, and a shield that cannot have its number
+            // should not keep its shield.
+            icon: icons.and_then(|(_, placed)| {
+                placed
+                    .iter()
+                    .find(|icon| icon.pending == instance.pending)
+                    .cloned()
+            }),
+            line: match layout.pending.get(instance.pending) {
+                Some(pending) => match &pending.anchoring {
+                    tessella_layout::symbol_layout::Anchoring::Line(line) => line.as_slice(),
+                    tessella_layout::symbol_layout::Anchoring::Point(_) => &[],
+                },
+                None => &[],
+            },
+        })
+        .collect()
 }
 
 /// Encodes one bucket for the wire.
@@ -1150,15 +1441,12 @@ fn encode_parts(
     context: &Encoding<'_>,
 ) -> Option<alloc::vec::Vec<emit::Encoded>> {
     let &Encoding {
-        fonts,
         patterns,
         raster_texture,
         zoom,
-        view,
-        placement,
-        tile,
-        wrap,
         stacks,
+        prepared,
+        key,
     } = context;
     let bind = |family: &[BuiltIn], shader: BuiltIn| {
         let ids = attribute_ids(family);
@@ -1264,181 +1552,13 @@ fn encode_parts(
             Some(roof)
         }
         Content::Symbol(layout) => {
-            // Shaping is where a symbol layer's geometry comes from, and it cannot happen
-            // earlier: the quads are a function of the glyphs, which are a function of the
-            // shaped text, which is a function of the tile's features. So the bucket carries a
-            // *layout* and the vertices are made here.
-            let (mut buffers, laid) = layout.lay_out(fonts?, patterns.map(|p| p.positions));
-            if buffers.vertices.is_empty() {
-                return None;
-            }
-
-            // Placement. Without it every label a tile shaped is drawn, and a city block's worth
-            // of names lands on top of itself -- which is what the oracle's frame does not do.
-            //
-            // Per bucket, which is per layer per tile, and that is not yet mbgl's: it places a
-            // whole frame into one grid so a road name and a shop name compete. `ViewSymbols`
-            // builds its own grid inside `frame`, so competing across buckets needs it to accept
-            // a caller's, and that is the next change. Within a bucket it is already right, and
-            // a tile drawn well past its own zoom holds most of what overlaps.
-            //
-            // A fresh state per frame, so a label is drawn or not rather than fading in: the fade
-            // is keyed by cross-tile id and carrying it needs the index that assigns those,
-            // which is not wired here yet. One step of the default increment reaches full
-            // opacity, which is the settled frame this renders.
-            // Shaped before placement, not after, so an icon competes for space the way its
-            // label does. `lay_out_icons` needs only the text's instances, which exist the moment
-            // `lay_out` returns, so nothing about the order forced this to come later -- and
-            // while it came later, `FrameLabel::icon` was always `None`, no icon was ever offered
-            // to the grid, and every anchor along a road kept its shield.
-            let shaped_icons = patterns.map(|patterns| layout.lay_out_icons(patterns.positions, &laid));
-            let mut icons: Option<SymbolBuffers> = None;
-            // Labels whose glyphs found no room on their line. Their icons go with them.
-            let mut without_room: Vec<u32> = Vec::new();
-            if let Ok(to_clip) =
-                tessella_tile::camera::tile_to_clip(view, tile.z, tile.x, tile.y, wrap)
-            {
-                let plane =
-                    tessella_tile::camera::label_plane_matrix(&to_clip, view.width, view.height);
-                let project = |point: (f32, f32)| -> (f32, f32) {
-                    let (x, y) = (f64::from(point.0), f64::from(point.1));
-                    let w = plane[3] * x + plane[7] * y + plane[15];
-                    if w.abs() < f64::EPSILON {
-                        return (0.0, 0.0);
-                    }
-                    #[allow(clippy::cast_possible_truncation)]
-                    (
-                        ((plane[0] * x + plane[4] * y + plane[12]) / w) as f32,
-                        ((plane[1] * x + plane[5] * y + plane[13]) / w) as f32,
-                    )
-                };
-                let mut held = placement.borrow_mut();
-                let base = held.next_id;
-                #[allow(clippy::cast_possible_truncation)]
-                {
-                    held.next_id = base.saturating_add(laid.len() as u32);
-                }
-                let labels: Vec<crate::symbols::FrameLabel<'_>> = laid
-                    .iter()
-                    .enumerate()
-                    .map(|(index, instance)| crate::symbols::FrameLabel {
-                        #[allow(clippy::cast_possible_truncation)]
-                        cross_tile_id: base + index as u32,
-                        laid_out: instance.clone(),
-                        // Its icon's box, so the pair is decided together: `text-optional` and
-                        // `icon-optional` are about exactly this, and a shield that cannot have
-                        // its number should not keep its shield.
-                        icon: shaped_icons.as_ref().and_then(|(_, placed)| {
-                            placed
-                                .iter()
-                                .find(|icon| icon.pending == instance.pending)
-                                .cloned()
-                        }),
-                        line: match layout.pending.get(instance.pending) {
-                            Some(pending) => match &pending.anchoring {
-                                tessella_layout::symbol_layout::Anchoring::Line(line) => {
-                                    line.as_slice()
-                                }
-                                tessella_layout::symbol_layout::Anchoring::Point(_) => &[],
-                            },
-                            None => &[],
-                        },
-                    })
-                    .collect();
-                #[allow(clippy::cast_possible_truncation)]
-                let options = crate::symbols::FrameOptions {
-                    viewport: (view.width as f32, view.height as f32),
-                    ..crate::symbols::FrameOptions::default()
-                };
-                // A grid per bucket, not the frame's -- and that is a *retreat* from what the
-                // frame's grid would give, recorded rather than hidden.
-                //
-                // Competing a whole frame in one grid is right and is what mbgl does, but mbgl
-                // places its layers in reverse render order: the topmost label claims space
-                // first, and the layers under it take what is left. This loop runs in painter
-                // order, bottom first, so sharing the grid here let the lowest label layer --
-                // 2,256 house numbers at z16 -- fill it before a single place name was offered,
-                // and the frame came back emptier than with no sharing at all. The fix is a
-                // placement pass over the symbol buckets in reverse order before this loop, not
-                // a different grid inside it; `frame_in` exists for that pass to use.
-                held.symbols.frame(&labels, project, &options);
-                // Settled rather than stepped: a fade takes its direction from the previous
-                // frame's decision and nothing carries that between frames here, so one step
-                // leaves every label at the opacity it fades from, which is zero. Placing again
-                // to advance it would enter each label into the grid twice.
-                held.symbols.settle(options.increment);
-                held.symbols.write_opacity(&labels, &mut buffers);
-
-                // And where each glyph of a line-placed label landed along its road.
-                //
-                // Into the label plane, which for a label lying flat on the map is pixels
-                // relative to the tile: `pixels_to_tile_units` is tile units per pixel, so
-                // dividing by it is exactly that conversion, and it is the space the drawable's
-                // coord matrix expects to be handed back. Without this the dynamic buffer holds
-                // the anchor in tile units for every glyph, and the shader draws the whole label
-                // stacked at one point some distance from its road.
-                let units = tessella_tile::camera::pixels_to_tile_units(tile.z, view.zoom);
-                if units.abs() > f64::EPSILON {
-                    #[allow(clippy::cast_possible_truncation)]
-                    let scale = (1.0 / units) as f32;
-                    without_room = held.symbols.write_line_positions(
-                        &labels,
-                        |point| (point.0 * scale, point.1 * scale),
-                        layout.symbol.size,
-                        &mut buffers,
-                    );
-                }
-
-                // The icon half, which is its own drawable rather than an option.
-                //
-                // A symbol is a label, an icon, or both, and the two go through different
-                // shaders -- an SDF for glyphs, a plain sampler for a sprite -- so they cannot
-                // share a vertex buffer. `lay_out_icons` had no caller outside its tests, which
-                // is why a highway shield drew its letter and no shield: the text half was
-                // encoded and the picture under it never existed.
-                //
-                // The placement is the text's. The two halves are decided together -- that is
-                // what `text-optional` and `icon-optional` are about -- so an icon takes the
-                // opacity its own label was given, addressed through the icon's vertex ranges.
-                if let Some((shaped, placed)) = shaped_icons.clone() {
-                    let mut shaped = shaped;
-                    if !shaped.vertices.is_empty() {
-                        let paired: Vec<crate::symbols::FrameLabel<'_>> = placed
-                            .iter()
-                            .filter_map(|icon| {
-                                labels
-                                    .iter()
-                                    .find(|label| label.laid_out.pending == icon.pending)
-                                    .map(|label| crate::symbols::FrameLabel {
-                                        cross_tile_id: label.cross_tile_id,
-                                        laid_out: icon.clone(),
-                                        icon: None,
-                                        line: &[],
-                                    })
-                            })
-                            .collect();
-                        held.symbols.write_icon_opacity(&paired, &mut shaped);
-                        // And hide the ones whose text could not be placed. A shield is drawn
-                        // for its number; without the number it is an empty box, and strung
-                        // along a road at every anchor it is worse than nothing there.
-                        for icon in &paired {
-                            if !without_room.contains(&icon.cross_tile_id) {
-                                continue;
-                            }
-                            let range = icon.laid_out.vertices.clone();
-                            if range.end > shaped.opacity.len() {
-                                continue;
-                            }
-                            let hidden =
-                                tessella_layout::symbol_bucket::opacity_vertex(false, 0.0);
-                            for slot in &mut shaped.opacity[range] {
-                                *slot = hidden;
-                            }
-                        }
-                        icons = Some(shaped);
-                    }
-                }
-            }
+            // Shaped and placed already, by `place_symbols`. Not here, and the reason is the
+            // grid: placement decides a *frame* -- a road name and a shop name compete for the
+            // same screen whatever layer or tile each came from -- and this walk visits one
+            // bucket at a time, in painter order, which is both too narrow a view and the wrong
+            // order to decide in.
+            let PreparedSymbols { buffers, icons } = prepared.get(&key)?;
+            let (buffers, icons) = (buffers, icons.as_ref());
             let ids = attribute_ids(SYMBOL_FAMILY);
             let key = permutation_key(&bucket.paint, &ids);
             // Text is always SDF. An icon may be either, and the flag is already packed into
@@ -1462,7 +1582,7 @@ fn encode_parts(
             let text = emit::encode_symbol(
                 arena,
                 PLACEHOLDER,
-                &buffers,
+                buffers,
                 key,
                 true,
                 atlas,
@@ -1476,7 +1596,7 @@ fn encode_parts(
                     let sheet = patterns.map_or(atlas, |patterns| patterns.texture);
                     return Some(alloc::vec![
                         text,
-                        emit::encode_symbol(arena, PLACEHOLDER, &shaped, key, false, sheet, None),
+                        emit::encode_symbol(arena, PLACEHOLDER, shaped, key, false, sheet, None),
                     ]);
                 }
                 None => Some(text),
