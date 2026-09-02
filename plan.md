@@ -3887,10 +3887,24 @@ a subdivision and a draw the consumer no longer makes.
     fetched never resolve, the bucket is never bound, and `want_glyphs` never runs again to fetch
     them.
 
-  The fix is that `scheduled` has to become a record of *which* dependencies were requested rather
-  than a single flag, with a tile landing that needs codepoints outside it triggering a further
-  fetch. Only once that holds does gating binding on `is_resolved` become the right thing rather
-  than a deadlock. Neither is done here: this entry is the diagnosis.
+  **The first half of the fix was written and reverted.** Turning `scheduled` into a `requested`
+  set, with a further fetch when a landing tile needs codepoints outside it, works as designed:
+  the fetch rounds converge, 90 codepoints then 170, without looping. But it blanks the map --
+  `readiness` ready, 3,091 records emitted, and zero primitives in the final frame, on four runs
+  out of four.
+
+  What the trace showed before it was reverted: the map collects buckets on only a couple of
+  ticks in the whole run, and the second `set_fonts` -- which no previous code path ever performed,
+  because the fetch only ever happened once -- triggers an emission that comes back with nothing
+  in it. So handing the map a *replacement* `Fonts` mid-session is not something the frame loop
+  survives today, and that is a second defect sitting behind the first. It is not the atlas
+  reference, since the fills disappear too.
+
+  So the shape of the real fix is now: make a second `set_fonts` survivable *first*, and only then
+  make the fetch incremental. Gating on `is_resolved` is the third step and correct only after
+  both. The 170 codepoints the incremental version reached against the 600 the frame needs also
+  says `want_glyphs` stops being called once the cover is satisfied, which is a fourth thing to
+  settle.
 
   Five changes were tried against these symptoms before this and all five were reverted. The
   diagnostic that found it took one run.
