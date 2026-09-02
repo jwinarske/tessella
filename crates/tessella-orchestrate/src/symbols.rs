@@ -412,6 +412,18 @@ impl ViewSymbols {
                 &crate::project::LineOffsets::default(),
             );
             let crate::project::Placement::Placed(glyphs) = placement else {
+                // No room on the line for this label at this anchor -- the road runs out before
+                // the last glyph does. Hidden rather than left alone: what `lay_out` put in the
+                // dynamic buffer is the anchor in *tile* units, and the shader reads that buffer
+                // as label-plane coordinates, so leaving it draws the label some thousands of
+                // pixels from where it belongs. mbgl drops such a label too; the difference is
+                // that it never had a wrong position to leave behind.
+                if range.end <= buffers.opacity.len() {
+                    let hidden = tessella_layout::symbol_bucket::opacity_vertex(false, 0.0);
+                    for slot in &mut buffers.opacity[range] {
+                        *slot = hidden;
+                    }
+                }
                 continue;
             };
             for (index, glyph) in glyphs.iter().enumerate() {

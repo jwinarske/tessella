@@ -3971,6 +3971,26 @@ a subdivision and a draw the consumer no longer makes.
   the claim that only layer 94's icon batches arrived was wrong: it came from a log capped at four
   entries that caught only 94's, the same truncated-sample mistake recorded twice above.
 
+- **Label count: we now draw too few, not too many, and the walk is where they go.** With the
+  layer zoom ranges applied the population is finally the oracle's, and z14 sits at 6,518 pixels
+  of text against mbgl's 28,000 -- a quarter. Measured rather than guessed: collision is not the
+  bottleneck. Layers 97 and 98, the road names, offer hundreds of line labels each and placement
+  draws most of them -- 173 of 321, 185 of 258, 136 of 249. What loses them is the *walk*: 1,204
+  succeed and 1,501 answer `NotEnoughRoom`, the road running out before the last glyph does.
+
+  A failed walk now hides its label. It used to leave whatever `lay_out` put in the dynamic
+  buffer, which is the anchor in *tile* units, and the shader reads that buffer as label-plane
+  coordinates -- so the label drew some thousands of pixels from where it belonged. Hiding them
+  removed 224 pixels of stray marks and, more usefully, made the frame exactly reproducible:
+  6,518 twice, where it had been 6,742 and 6,756.
+
+  Whether 55% is the right failure rate is the open question. mbgl drops labels that do not fit
+  too, and `get_anchors` is supposed to place anchors where they *will* fit, so a rate that high
+  suggests either the anchors are spaced for a different scale than the walk uses or
+  `LineOffsets::default` is not what the layer asks for -- `font_scale` is 1.0 there and nothing
+  builds one from the layer's own `text-size`. That is the next thing to establish, and it is
+  worth establishing before touching collision again.
+
 - **Frame-wide placement is worse than per-bucket, and three explanations have now failed.**
   With a probe that waits for quiet, per-bucket placement gives 8,654 dark text pixels on every
   run. Sharing one collision grid across the frame's symbol buckets gives 331 to 1,564, and stays
