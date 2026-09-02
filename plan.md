@@ -3798,35 +3798,41 @@ a subdivision and a draw the consumer no longer makes.
   links a C binary against it, so two workspace runs started back to back race over the same
   artifact -- seen once, passing alone and on both of the next two full runs. Harmless to a human
   running the suite once; worth a guard before CI, which will not be running it once.
-- **The glyph atlas is overwritten by each tile that arrives.** This is what stops labels
-  drawing, and it is the producer's side. Three whole-texture uploads reach the consumer under the
-  same texture id 2, each replacing the last, with 21,118 then 5,411 then 1,829 nonzero bytes. The
-  final atlas is nearly empty, so a label whose glyphs were in an earlier version samples blank
-  space. About one label in nine survives -- whichever happen to live in the atlas that landed
-  last -- and the count moves between runs with tile arrival order.
+- **Labels draw.** *Fixed, two faults, one on each side.*
 
-  mbgl keeps one atlas per fontstack for the whole map and grows it; tessella appears to build one
-  per tile and publish them all to one id. Either the atlas becomes shared and growing, or each
-  gets its own id. The consumer needs no change for the first and a trivial one for the second.
+  **The glyph atlas was published once per font stack to one texture id.** liberty names several
+  -- regular, italic, bold -- and each overwrote the one before it, so the frame drew with
+  whichever landed last: 21,118 then 5,411 then 1,829 nonzero bytes, the last nearly empty. A
+  label's coordinates were right and the pixels under them belonged to another font. Each stack
+  now takes its own id from `GLYPH_ATLAS_BASE`, and the symbol drawable names the atlas holding
+  its own glyphs; the order the frame publishes them in is passed to the encoder rather than
+  recomputed, so the upload and the reference cannot drift apart. A bucket drawing more than one
+  stack still takes the first, which is where mbgl splits the bucket and this does not.
 
-  Everything downstream of it is verified working. The `a_tex` coordinates on the wire are right
-  -- (348,1), (368,1), (348,26), (368,26) is one glyph's four corners, inside the atlas's occupied
-  rows. The quads are the right size. The SDF fragment produces real coverage where a glyph is
-  present: forcing the shader to paint only where alpha exceeds zero draws letters, just few of
-  them. Family 33's material is mbgl's `SymbolSDFShader` transcribed, and the drawable stride
-  (272, not the fill's 96), the atlas sampler binding and the text-versus-icon paint selection are
-  all in place.
+  **The fifth vertex attribute did not bind in the consumer.** A symbol carries five, and the
+  fade opacity in the last one read as zero however the wire described it -- the wire carries
+  255.0, checked. A fade of zero multiplies every glyph away, which is why the labels were
+  invisible rather than merely wrong. The projected position and the fade now travel together in
+  one `FLOAT4`: three components and one, both per-vertex floats, so the pair costs nothing over
+  sending them apart.
 
-  Two of my own errors are folded in here rather than left in the history. The dirty-rect upload
-  read `pixels` as a tightly packed run of just the rect; it is the whole texture, with the rect
-  naming a region inside it. That is corrected -- it happens to be identical while the producer
-  sends `(0,0 512x512)`, and would have mattered the moment it sent anything smaller. And I twice
-  read a truncated histogram and concluded the coverage was zero when the high buckets, which were
-  never printed, held it.
+  z16 draws 18,992 dark text pixels against the oracle's 13,973 -- more, not fewer, because every
+  label is drawn. mbgl's placement pass culls the ones that collide, and that is the next piece.
+
+  Four times in this hunt I measured the wrong population and drew a conclusion from it: a
+  histogram truncated to its lowest buckets, twice; a diagnostic that painted the whole screen
+  opaquely, whose colour buckets were then mostly map and not glyph; and a probe that multiplied
+  the value it was reporting by the coverage, so it reported `fade x alpha` as `fade`. Each looked
+  like a finding. The habit that catches all four is the same: say what population is being
+  measured, and check the count against what it should be before reading the values.
+
+- **Symbol collision is not implemented.** Every label draws, so a dense frame is cluttered where
+  the oracle's is legible, and the fade opacity the placement pass produces is the constant the
+  layout writes. The largest remaining difference from mbgl at z16.
 
 - **Labels pitched with the map are a second matrix arrangement, not yet written.** Identity plane
   matrix, the tile's projection in the coord matrix, offsets in tile units rather than pixels.
-  Sixteen batches at z16. Counted and skipped rather than drawn in the wrong space.
+  Sixteen batches at z16, counted and skipped rather than drawn in the wrong space.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for

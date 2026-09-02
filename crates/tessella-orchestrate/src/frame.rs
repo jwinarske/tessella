@@ -310,13 +310,26 @@ impl Patterns<'_> {
     }
 }
 
-/// The texture a symbol drawable samples.
+/// The first texture id a glyph atlas takes.
 ///
-/// One texture whichever kind of symbol it is. mbgl's `DrawableAtlasesTweaker` is explicit:
-/// a shader declaring no separate icon sampler gets the glyph atlas for a text drawable and the
-/// *icon* atlas for an icon drawable, at the same slot either way.
-const GLYPH_ATLAS: tessella_capture_abi::envelope::TextureId =
-    tessella_capture_abi::envelope::TextureId(2);
+/// One per font stack, not one for all of them. A style names several -- liberty asks for regular,
+/// italic and bold -- and each gets its own packed atlas with its own coordinates. Publishing them
+/// all to one id made every stack overwrite the one before it, so the frame drew with whichever
+/// landed last: the coordinates a label carried were right and the pixels under them belonged to
+/// another font, which is a blank patch of atlas nine times in ten.
+///
+/// Which texture a *symbol* samples is a second question and unchanged: one slot whichever kind
+/// of symbol it is, because mbgl's `DrawableAtlasesTweaker` gives a shader with no separate icon
+/// sampler the glyph atlas for a text drawable and the icon atlas for an icon drawable.
+const GLYPH_ATLAS_BASE: u64 = 2;
+
+/// How many stacks can be published before the ids would run into the raster tiles'.
+const GLYPH_ATLAS_CAP: usize = (RASTER_TEXTURE_BASE - GLYPH_ATLAS_BASE) as usize;
+
+/// The atlas id for the `index`th font stack of a frame.
+fn glyph_atlas_id(index: usize) -> tessella_capture_abi::envelope::TextureId {
+    tessella_capture_abi::envelope::TextureId(GLYPH_ATLAS_BASE + index as u64)
+}
 
 /// The first texture id a raster tile's picture takes.
 ///
@@ -480,9 +493,10 @@ fn emit_group(
     // The glyph atlas, before any drawable names it. A symbol geometry carries a texture
     // reference, and a reference to a texture the consumer has not been given is a drawable that
     // samples whatever was last at that slot.
+    let stacks = symbol_stacks(buckets);
     if let Some(fonts) = fonts {
-        for stack in symbol_stacks(buckets) {
-            if let Some(atlas) = fonts.atlas(&stack) {
+        for (index, stack) in stacks.iter().enumerate().take(GLYPH_ATLAS_CAP) {
+            if let Some(atlas) = fonts.atlas(stack) {
                 let (width, height) = atlas.size();
                 let whole = [tessella_glyph::atlas::Rect {
                     x: 0,
@@ -490,7 +504,7 @@ fn emit_group(
                     width,
                     height,
                 }];
-                if let Some(upload) = texture::glyph_atlas(GLYPH_ATLAS, atlas, &whole) {
+                if let Some(upload) = texture::glyph_atlas(glyph_atlas_id(index), atlas, &whole) {
                     texture::write(producer, &upload)?;
                 }
             }
@@ -751,6 +765,7 @@ fn emit_group(
                         patterns,
                         raster_texture,
                         zoom: view.zoom,
+                        stacks: &stacks,
                     },
                 ) else {
                     continue;
@@ -1043,6 +1058,12 @@ struct Encoding<'a> {
     raster_texture: tessella_capture_abi::envelope::TextureId,
     /// The camera's zoom, which a pattern's fade is chosen at.
     zoom: f64,
+    /// The frame's font stacks, in the order their atlases were published.
+    ///
+    /// A symbol drawable names the atlas holding *its* glyphs, and the only thing that ties the
+    /// two together is this order. Passed rather than recomputed so the upload and the reference
+    /// cannot drift apart.
+    stacks: &'a [alloc::vec::Vec<alloc::string::String>],
 }
 
 /// Encodes one bucket for the wire.
@@ -1091,6 +1112,7 @@ fn encode_parts(
         patterns,
         raster_texture,
         zoom,
+        stacks,
     } = context;
     let bind = |family: &[BuiltIn], shader: BuiltIn| {
         let ids = attribute_ids(family);
@@ -1215,13 +1237,22 @@ fn encode_parts(
                 .icons_in_text
                 .then(|| patterns.map(|patterns| patterns.texture))
                 .flatten();
+            // The atlas this bucket's own glyphs were packed into. A bucket drawing more than
+            // one stack can name only one texture, so it takes the first; splitting such a bucket
+            // per stack is what mbgl does and is not done here yet.
+            let atlas = layout
+                .stacks()
+                .first()
+                .and_then(|stack| stacks.iter().position(|held| held == stack))
+                .filter(|index| *index < GLYPH_ATLAS_CAP)
+                .map_or_else(|| glyph_atlas_id(0), glyph_atlas_id);
             Some(emit::encode_symbol(
                 arena,
                 PLACEHOLDER,
                 &buffers,
                 key,
                 true,
-                GLYPH_ATLAS,
+                atlas,
                 sprites,
             ))
         }
