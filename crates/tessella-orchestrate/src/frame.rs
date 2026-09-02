@@ -1384,6 +1384,7 @@ fn encode_parts(
                     without_room = held.symbols.write_line_positions(
                         &labels,
                         |point| (point.0 * scale, point.1 * scale),
+                        layout.symbol.size,
                         &mut buffers,
                     );
                 }
@@ -1892,15 +1893,16 @@ fn write_layer_state(
             let zoom = view.zoom;
             let placement = Placement::of(layer, zoom);
             let alignments = Alignments::of(layer, zoom, placement, "text");
-            // The layer-wide `text-size`, which is what the shader interpolates against. A
-            // data-driven one is in the vertex instead and this is then the fallback the
+            // The layer-wide `text-size`, which is what the shader scales every glyph's corners
+            // by. A data-driven one is in the vertex instead and this is then the fallback the
             // constant path never reads.
-            let size = tessella_style::property::resolve_layout(layer)
-                .ok()
-                .and_then(|layout| {
-                    let property = layout.get("text-size")?;
-                    property.expression.evaluate(Some(zoom), None).ok()
-                })
+            //
+            // Read the way the layout read it, not out of the spec tables. `resolve_layout`
+            // covers the layer kinds whose layout feeds an interleaved buffer and answers an
+            // empty map for a symbol layer, so this was the spec default for every style ever
+            // loaded: labels drew at 16 pixels whatever the style asked for, which is most of
+            // what made our type a different size from the oracle's.
+            let size = tessella_style::property::layout_value(layer, "text-size", zoom, None)
                 .and_then(|value| value.as_number())
                 .unwrap_or(16.0);
             #[allow(clippy::cast_possible_truncation)]

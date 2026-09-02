@@ -282,15 +282,23 @@ fn placement_decides_point_or_line() {
     );
 
     // Closing the spacing is what shows it: the same roads, more often along each.
-    let closer =
-        build_mvt_tile(&road_style_spaced("line", 6.25), "v", ID, &tile()).expect("builds");
-    let closer = closer[0].content.as_symbol().expect("a symbol layout");
-    let (_, closer_laid) = closer.lay_out(&fonts, None);
+    //
+    // Compared at 200 pixels against 12.5 rather than either against the 25 above, because a
+    // label cannot repeat closer than its own length -- `get_anchors` widens any spacing under
+    // that, so below roughly a label's width the style's number stops being what decides. The
+    // counts run 40, 50, 72, 94, 106 across 200, 100, 50, 25 and 12.5 pixels: spacing still
+    // decides, and the two ends are far enough apart to say so.
+    let count_at = |px: f32| {
+        let built = build_mvt_tile(&road_style_spaced("line", px), "v", ID, &tile())
+            .expect("builds");
+        let layout = built[0].content.as_symbol().expect("a symbol layout");
+        let (_, laid) = layout.lay_out(&fonts, None);
+        laid.len()
+    };
+    let (sparse, dense) = (count_at(200.0), count_at(12.5));
     assert!(
-        closer_laid.len() > line_laid.len() * 2,
-        "{} at spacing 25 and {} at 6.25",
-        line_laid.len(),
-        closer_laid.len()
+        dense > sparse * 2,
+        "{sparse} at spacing 200 and {dense} at 12.5"
     );
 
     // And a line-placed label records where along its road each glyph sits.
@@ -1125,11 +1133,22 @@ fn a_line_placed_icon_repeats_with_its_label() {
     let (_, instances) = layout.lay_out(&fonts, None);
     let sprites = positions(&[("primary", false)]);
 
+    // At least one road long enough to carry its shield twice, which is the case the two
+    // implementations differ on. Not `instances.len() > pending.len()`, which this read before:
+    // that asks for more than one instance *per feature on average* and so needs most of the
+    // tile's roads to repeat, which they cannot once a label is measured at its real length --
+    // most road segments in a tile are shorter than the name they carry.
+    let mut per_feature = std::collections::BTreeMap::<usize, usize>::new();
+    for instance in &instances {
+        *per_feature.entry(instance.pending).or_default() += 1;
+    }
     assert!(
-        instances.len() > layout.pending.len(),
-        "the point of the test is a feature that repeats: {} instances of {} features",
+        per_feature.values().any(|count| *count > 1),
+        "the point of the test is a feature that repeats: {} instances of {} features, most \
+         repeated {:?} times",
         instances.len(),
-        layout.pending.len()
+        layout.pending.len(),
+        per_feature.values().max()
     );
 
     let (buffers, laid) = layout.lay_out_icons(&sprites, &instances);
@@ -1262,3 +1281,4 @@ fn a_wider_icon_places_differently() {
          passing zero for the icon's extent would place both the same"
     );
 }
+

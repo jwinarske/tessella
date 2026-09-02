@@ -403,8 +403,15 @@ impl ViewSymbols {
     /// the walk *is* the projection, and a plane matrix would bend the label a second time.
     ///
     /// `project` takes tile units into the label plane, which for a label lying flat on the map is
-    /// pixels relative to the tile: the glyph distances layout recorded are screen pixels, so
-    /// walking a line in tile units with them would misplace every glyph by the scale factor.
+    /// pixels relative to the tile: walking a line in tile units would misplace every glyph by
+    /// the scale factor.
+    ///
+    /// `font_size` is the layer's `text-size` at this zoom, and it is what turns the glyph
+    /// distances into that same space. Shaping works at one em -- [`tessella_glyph::text::ONE_EM`]
+    /// units to the em, whatever the label is finally set at -- so the distances layout recorded
+    /// are ems, not pixels, and the shader scales them by `size / ONE_EM` when it draws. The walk
+    /// has to scale them by the same factor or it steps a 12px label as though it were 24px, and
+    /// mbgl's `fontScale` in `reprojectLineLabels` is this number.
     ///
     /// A label with no room on its line keeps whatever it last held rather than being written
     /// somewhere arbitrary; placement has already decided whether it draws at all.
@@ -416,12 +423,17 @@ impl ViewSymbols {
         &self,
         labels: &[FrameLabel<'_>],
         project: P,
+        font_size: f32,
         buffers: &mut SymbolBuffers,
     ) -> alloc::vec::Vec<u32>
     where
         P: Fn((f32, f32)) -> (f32, f32),
     {
         let mut without_room = alloc::vec::Vec::new();
+        let offsets = crate::project::LineOffsets {
+            font_scale: font_size / tessella_glyph::text::ONE_EM,
+            ..crate::project::LineOffsets::default()
+        };
         for label in labels {
             if label.line.is_empty() {
                 continue;
@@ -439,7 +451,7 @@ impl ViewSymbols {
                 project(label.laid_out.anchor),
                 label.laid_out.segment,
                 &buffers.glyph_offsets[quads],
-                &crate::project::LineOffsets::default(),
+                &offsets,
             );
             let crate::project::Placement::Placed(glyphs) = placement else {
                 // No room on the line for this label at this anchor -- the road runs out before

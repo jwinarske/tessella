@@ -48,8 +48,14 @@ impl Glyphs for Font {
 }
 
 /// A long straight road across the tile.
+///
+/// The whole 8192-unit width, which at sixteen units to the pixel is the 512 pixels a tile is
+/// drawn at. It used to be half that, from a time when `LineOptions::max_box_scale` was one and
+/// a label was measured in ems against a line measured in tile units -- forty times too short,
+/// so any road looked long enough for any name. At the real scale a 250-pixel road holds two
+/// copies of "Main Street", not several, and these tests are about what a road holds.
 fn road() -> Vec<(f32, f32)> {
-    (0..=20i16)
+    (0..=40i16)
         .map(|index| (f32::from(index) * 200.0 + 100.0, 4000.0))
         .collect()
 }
@@ -240,9 +246,9 @@ fn a_centred_label_appears_once() {
     );
 
     assert_eq!(laid.len(), 1);
-    // The road runs from x=100 to x=4100, so its middle is at 2100.
+    // The road runs from x=100 to x=8100, so its middle is at 4100.
     assert!(
-        (laid[0].anchor.0 - 2100.0).abs() < 2.0,
+        (laid[0].anchor.0 - 4100.0).abs() < 2.0,
         "{:?}",
         laid[0].anchor
     );

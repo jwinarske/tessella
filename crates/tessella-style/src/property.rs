@@ -762,6 +762,39 @@ pub fn layout_specs(kind: &LayerKind) -> Option<&'static [PropertySpec]> {
     }
 }
 
+/// One layout property of any layer, evaluated at a zoom and optionally for one feature.
+///
+/// `None` when the style did not write the property, or when what it wrote does not parse or
+/// does not evaluate here — the caller's own default then applies, because a default that
+/// depends on the property belongs with the code that knows what the property is for.
+///
+/// # Why this is not [`resolve_layout`]
+///
+/// [`resolve_layout`] answers from the spec tables, which cover the layer kinds whose layout
+/// properties feed an interleaved buffer and *silently answer nothing* for the rest: a symbol
+/// layer resolves to an empty map, so every caller reading `text-size` that way got its own
+/// fallback instead of the style's size, and every label in the frame drew at 16 pixels however
+/// large the style asked for. This reads what the style wrote, so it works for every layer kind
+/// and is the function to use for a single named layout property.
+///
+/// Legacy `{"stops": …}` functions parse here as they do everywhere else, which matters because
+/// that is still how many published styles write `text-size`.
+#[must_use]
+pub fn layout_value(
+    layer: &Layer,
+    key: &str,
+    zoom: f64,
+    feature: Option<&dyn expression::Feature>,
+) -> Option<Value> {
+    match layer.layout.get(key)? {
+        PropertyValue::Literal(literal) => Some(literal.clone()),
+        PropertyValue::Expression(expression) => Expression::parse(expression.value())
+            .ok()?
+            .evaluate(Some(zoom), feature)
+            .ok(),
+    }
+}
+
 /// Every paint property of a layer, resolved against its spec.
 ///
 /// Properties the style did not set are present with their defaults, so nothing downstream has

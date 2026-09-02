@@ -22,8 +22,7 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use tessella_style::document::PropertyValue;
-use tessella_style::expression::{Expression, Feature};
+use tessella_style::expression::Feature;
 use tessella_style::{Layer, Value};
 
 use alloc::collections::{BTreeMap, BTreeSet};
@@ -49,20 +48,11 @@ use crate::symbol_bucket::{
 /// A layout property may be a plain value or an expression, and an expression over zoom is the
 /// common case — `text-size` interpolated across a range is in most styles. Evaluating it at
 /// build time is what makes the size the one this tile draws at.
-fn layout_value(
-    layer: &Layer,
-    key: &str,
-    zoom: f64,
-    feature: Option<&dyn Feature>,
-) -> Option<Value> {
-    match layer.layout.get(key)? {
-        PropertyValue::Literal(literal) => Some(literal.clone()),
-        PropertyValue::Expression(expression) => Expression::parse(expression.value())
-            .ok()?
-            .evaluate(Some(zoom), feature)
-            .ok(),
-    }
-}
+///
+/// Shared with the frame, which needs the *same* `text-size` this layout shaped at: the shader
+/// scales a glyph's corners by `size / 24`, so a size derived twice by two routes is a label
+/// whose quads and whose spacing disagree.
+use tessella_style::property::layout_value;
 
 /// How a layer draws its icons, at a zoom and optionally for one feature.
 ///
@@ -368,6 +358,18 @@ impl SymbolLayout {
         let symbol = text_options(layer, zoom, None);
         let placement = Placement::of(layer, zoom);
 
+        // How many tile units a pixel is on this tile. mbgl's `tilePixelRatio`, and the factor
+        // between everything a style states in pixels and the space a tile's geometry lives in.
+        let tile_pixel_ratio = EXTENT / (TILE_SIZE * overscaling.max(1.0));
+        // `text-size` at zoom 18, not at this tile's zoom, which is mbgl's own choice and its
+        // own reason: anchors computed from one size for every zoom are in the same place in
+        // every tile, so a label does not jump when the map crosses a zoom.
+        #[allow(clippy::cast_possible_truncation)]
+        let max_text_size = layout_value(layer, "text-size", 18.0, None)
+            .as_ref()
+            .and_then(Value::as_number)
+            .map_or(16.0, |value| value as f32);
+
         Self {
             pending: Vec::new(),
             symbol,
@@ -386,6 +388,7 @@ impl SymbolLayout {
                 max_angle: number("text-max-angle").unwrap_or(45.0).to_radians(),
                 overscaling,
                 centred: placement == Placement::LineCenter,
+                max_box_scale: tile_pixel_ratio * max_text_size / tessella_glyph::text::ONE_EM,
             },
             text_alignments: Alignments::of(layer, zoom, placement, "text"),
             icon_alignments: Alignments::of(layer, zoom, placement, "icon"),

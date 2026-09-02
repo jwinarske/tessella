@@ -4042,6 +4042,48 @@ a subdivision and a draw the consumer no longer makes.
   at all, which is the premise both tests rest on. They now state small pixel spacings and say
   why.
 
+- **`text-size` reached nothing that needed it.** *Fixed in three places, one cause.* Every
+  label in every frame drew at 16 pixels whatever the style asked for, was spaced along its road
+  as though its glyphs were 24 pixels tall, and was anchored as though its name were a fortieth of
+  its real length. The three are one thing seen three times: the size the style states never got
+  to the code that had to scale by it.
+
+  1. The frame read `text-size` through `resolve_layout`, which answers from the per-kind spec
+     tables and has no symbol table -- it returns an *empty map* for a symbol layer, so the read
+     always fell through to its own `unwrap_or(16.0)`. Silent, and the wrong kind of silent: a
+     missing table and a style that says 16 are indistinguishable. The evaluation the layout
+     already does now lives in `tessella_style::property::layout_value` and both sides call it,
+     which is also what stops the two drifting again -- the shader scales a glyph's corners by
+     `size / 24`, so a size derived twice by two routes is a label whose quads and whose spacing
+     disagree.
+
+  2. The walk that spaces a label's glyphs along its road used `LineOffsets::default()`, whose
+     `font_scale` is one. Shaping works at one em -- 24 units to the em, whatever the label is
+     finally set at -- so the distances it records are ems and the walk has to scale them the way
+     the shader scales the corners. It did not, so a 12-pixel road name was stepped out at 24
+     pixels: the letters stood apart with gaps between them, which is what "Karl-Marx-Allee" read
+     like before this. mbgl's `fontScale` in `reprojectLineLabels` is this number.
+
+  3. `get_anchors` was handed a `box_scale` of one, so a label's em-space extent was compared
+     against a line measured in tile units -- forty times too short, so every road looked long
+     enough for any name. The anchor then landed a few pixels from where the line stopped, close
+     enough to accept and far too close for the label to fit, and the walk found no room and
+     dropped it. Labels placed and thrown away rather than placed where they fit. mbgl's
+     `textMaxBoxScale` is `tilePixelRatio * text-size / 24` with the size taken at zoom 18, which
+     is deliberate: one size for every zoom is what stops labels jumping as the map zooms.
+
+  Measured, not reasoned. Eight lines at eight angles, equal length, `symbol-placement: line`:
+  none of the eight placed a label before, all eight after. The same word point-placed and
+  line-placed now measure the same letter pitch -- 28.0 to 28.5 pixels at `text-size` 40, against
+  28.33 predicted from the font's own 17-unit advance for `H` -- where before the point label
+  measured 11.4, which is 17 at a size of 16.
+
+  Two fixtures moved rather than relaxed. `road()` was 4,000 tile units, from when a label was
+  measured forty times short and any road looked long enough; it is the full 8,192 now. And the
+  spacing comparison ran 25 pixels against 6.25, which no longer differs by much because a label
+  cannot repeat closer than its own length -- it runs 200 against 12.5, where spacing is still
+  what decides.
+
 - **Frame-wide placement is worse than per-bucket, and three explanations have now failed.**
   With a probe that waits for quiet, per-bucket placement gives 8,654 dark text pixels on every
   run. Sharing one collision grid across the frame's symbol buckets gives 331 to 1,564, and stays

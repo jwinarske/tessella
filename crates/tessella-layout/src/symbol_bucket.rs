@@ -676,6 +676,20 @@ pub struct LineOptions {
     pub overscaling: f32,
     /// One label at the line's midpoint rather than a repeating run.
     pub centred: bool,
+    /// How many tile units the shaped label's em-space extent occupies.
+    ///
+    /// mbgl's `textMaxBoxScale`, and the reason anchoring needs it: a shaped extent is in ems --
+    /// [`ONE_EM`] units to the em -- while [`get_anchors`] measures against a line in tile units,
+    /// so an anchor is accepted only if the whole label fits between the line's ends *in tile
+    /// units*. Left at one, a road name is treated as a fortieth of its real length, and the
+    /// anchor lands a few pixels from where the line stops -- close enough to accept, far too
+    /// close for the label to actually fit, so the walk then finds no room and the label is
+    /// dropped. That is a label placed and thrown away rather than placed where it fits.
+    ///
+    /// `tilePixelRatio * text-size / ONE_EM`, with the size taken at zoom 18 rather than at this
+    /// tile's zoom. mbgl says why: one size for every zoom is what stops labels jumping around
+    /// as the map zooms, because every tile then anchors them in the same place.
+    pub max_box_scale: f32,
 }
 
 impl Default for LineOptions {
@@ -686,6 +700,9 @@ impl Default for LineOptions {
             max_angle: core::f32::consts::PI / 4.0,
             overscaling: 1.0,
             centred: false,
+            // Sixteen tile units to the pixel at the default 512-pixel tile, and a default
+            // `text-size` of 16 against a 24-unit em.
+            max_box_scale: 16.0 * 16.0 / tessella_glyph::text::ONE_EM,
         }
     }
 }
@@ -749,7 +766,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                 label.icon.0,
                 label.icon.1,
                 ONE_EM,
-                1.0,
+                options.max_box_scale,
             )
             .into_iter()
             .collect()
@@ -763,7 +780,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                 label.icon.0,
                 label.icon.1,
                 ONE_EM,
-                1.0,
+                options.max_box_scale,
                 options.overscaling,
             )
         };
