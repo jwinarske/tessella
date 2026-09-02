@@ -3859,6 +3859,35 @@ a subdivision and a draw the consumer no longer makes.
   Being *under* the oracle's text now rather than over it is unexplained and worth a look: it may
   be the padding defaults, or the sixteen pitched batches still skipped.
 
+- **The frame is not reproducible, and that blocks everything else about symbols.** The probe
+  waiting for quiet was committed as making the frame deterministic on the strength of three runs
+  that agreed at 8,654. A fourth run does not: the same view at HEAD gives 6,502, 8,665, 6,502,
+  6,502. That claim is wrong and this corrects it. Quiescence was necessary and is not sufficient.
+
+  Everything measured about labels this session carries that spread, including every comparison
+  that concluded a change made things worse. The shared-grid results in particular -- 331 to 2,179
+  across runs -- may be measuring arrival order more than placement.
+
+  **The strongest lead, and it is not confirmed.** A symbol bucket is laid out once, and
+  `lay_out` drops a glyph whose rectangle has not reached the atlas yet, so a bucket encoded
+  before its glyph ranges arrive loses those letters permanently. The renders show exactly that:
+  "Brandenburg Gate" comes out "Brandenburg ate". The gate that should prevent it,
+  `Content::is_encodable`, asks whether *any* fonts exist rather than whether this bucket's
+  codepoints are resolved -- and `Fonts::is_resolved`, whose own doc comment says it is "what a
+  caller asks before deciding a tile's symbols are final rather than provisional", is never
+  called anywhere in orchestrate.
+
+  Wiring `is_resolved` in made it worse -- 498 pixels on three runs of four -- which is consistent
+  with a deadlock: a bucket that is not bound never has its glyph ranges requested, so they never
+  resolve, so it is never bound. If that is right the fix is to request a tile's glyph ranges when
+  the tile is *built* rather than when its symbols are first bound, and only then gate binding on
+  resolution. That is the next thing to establish, and it should be established by instrumenting
+  the glyph request path, not by trying it.
+
+  Five changes have now been tried against this and reverted. What is missing is not another
+  change; it is knowing which glyphs were asked for, when they arrived, and which bucket was laid
+  out in between.
+
 - **Frame-wide placement is worse than per-bucket, and three explanations have now failed.**
   With a probe that waits for quiet, per-bucket placement gives 8,654 dark text pixels on every
   run. Sharing one collision grid across the frame's symbol buckets gives 331 to 1,564, and stays
