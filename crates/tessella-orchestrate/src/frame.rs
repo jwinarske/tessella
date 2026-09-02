@@ -1155,17 +1155,12 @@ fn place_symbols(
         return BTreeMap::new();
     };
     #[allow(clippy::cast_possible_truncation)]
-    let options = crate::symbols::FrameOptions {
-        viewport: (view.width as f32, view.height as f32),
-        ..crate::symbols::FrameOptions::default()
-    };
+    let viewport = (view.width as f32, view.height as f32);
+    let increment = crate::symbols::FrameOptions::default().increment;
 
     // The frame's grid, and the whole reason this function exists.
-    let mut grid: tessella_place::grid::GridIndex<u32> = tessella_place::grid::GridIndex::new(
-        options.viewport.0.max(1.0),
-        options.viewport.1.max(1.0),
-        32,
-    );
+    let mut grid: tessella_place::grid::GridIndex<u32> =
+        tessella_place::grid::GridIndex::new(viewport.0.max(1.0), viewport.1.max(1.0), 32);
 
     // A bucket appears once per drawable it produces; it is shaped once.
     let mut seen: BTreeSet<(usize, usize)> = BTreeSet::new();
@@ -1211,6 +1206,12 @@ fn place_symbols(
         {
             held.next_id = base.saturating_add(laid.len() as u32);
         }
+        // Per layer, because the scale a shaped extent competes at is the layer's `text-size`.
+        let options = crate::symbols::FrameOptions {
+            viewport,
+            font_scale: layout.symbol.size / tessella_glyph::text::ONE_EM,
+            ..crate::symbols::FrameOptions::default()
+        };
         let labels = frame_labels(layout, &laid, icons.as_ref(), base);
         // Where each glyph lands along its road, *before* the label is offered any space.
         //
@@ -1257,7 +1258,7 @@ fn place_symbols(
     // Every bucket has been offered, so the fades can reach their resting values and the
     // opacities they decide can be written.
     let mut held = placement.borrow_mut();
-    held.symbols.settle(options.increment);
+    held.symbols.settle(increment);
 
     for key in keys {
         let Some(entry) = shaped.remove(&key) else {

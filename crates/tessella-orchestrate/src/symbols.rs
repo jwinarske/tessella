@@ -71,6 +71,19 @@ pub struct FrameOptions {
     pub rules: Rules,
     /// `text-padding`, in screen pixels.
     pub padding: Padding,
+    /// Takes the shaped extent into the screen pixels the label competes in.
+    ///
+    /// `text-size / ONE_EM`, which is mbgl's `fontScale` and the same number the shader scales a
+    /// glyph's corners by. Shaping works at one em -- 24 units to the em, whatever the label is
+    /// finally set at -- so a shaped extent is in ems and a collision box built from it directly
+    /// is the label's size only when the label happens to be set at 24 pixels. At the 12 most
+    /// styles ask for it is twice as wide and twice as tall, which is four times the area
+    /// reserved against every other label on the screen.
+    ///
+    /// mbgl carries the same factor into `CollisionFeature` as `textBoxScale`; its boxes are in
+    /// tile units and projected later, and these are in screen pixels already, so the tile
+    /// half of its `tilePixelRatio * fontScale` does not belong here.
+    pub font_scale: f32,
     /// How far a fade moves this frame.
     pub increment: f32,
     /// The viewport, in pixels, which is the extent the collision grid covers.
@@ -90,6 +103,8 @@ impl Default for FrameOptions {
         Self {
             rules: Rules::default(),
             padding: Padding::uniform(2.0),
+            // The spec's default `text-size` against a 24-unit em.
+            font_scale: 16.0 / 24.0,
             increment: 1.0,
             viewport: (1024.0, 768.0),
             overscaling: 1.0,
@@ -186,7 +201,8 @@ impl ViewSymbols {
                 // label reserves one box. Both in screen space, because that is where labels
                 // compete for room.
                 let text = if label.line.is_empty() {
-                    collision_box(extent, anchor, 1.0, options.padding, 0.0).map(Shape::Box)
+                    collision_box(extent, anchor, options.font_scale, options.padding, 0.0)
+                        .map(Shape::Box)
                 } else {
                     let line: Vec<(f32, f32)> =
                         label.line.iter().map(|point| project(*point)).collect();
@@ -195,7 +211,7 @@ impl ViewSymbols {
                         &line,
                         anchor,
                         label.laid_out.segment,
-                        1.0,
+                        options.font_scale,
                         options.padding,
                         options.overscaling,
                     )
@@ -235,7 +251,8 @@ impl ViewSymbols {
                         right,
                     };
                     if label.line.is_empty() {
-                        collision_box(extent, anchor, 1.0, options.padding, 0.0).map(Shape::Box)
+                        collision_box(extent, anchor, options.font_scale, options.padding, 0.0)
+                            .map(Shape::Box)
                     } else {
                         let line: Vec<(f32, f32)> =
                             label.line.iter().map(|point| project(*point)).collect();
@@ -244,7 +261,7 @@ impl ViewSymbols {
                             &line,
                             anchor,
                             label.laid_out.segment,
-                            1.0,
+                            options.font_scale,
                             options.padding,
                             options.overscaling,
                         )

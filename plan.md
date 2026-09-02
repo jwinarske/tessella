@@ -4122,6 +4122,27 @@ a subdivision and a draw the consumer no longer makes.
 
   Berlin z14 goes from 885 pixels of text to 2,050, reproducible, and every label reads whole.
 
+- **A collision box was built from a shaped extent at a scale of one.** *Fixed, and it is most of
+  the label gap.* Shaping works at one em -- 24 units to the em, whatever the label is finally set
+  at -- so `LaidOut::extent` is in ems, and the box reserved against every other label on the
+  screen was built from it unscaled. At the `text-size` of 12 most styles ask for, every label
+  claimed twice its width and twice its height: four times its area. mbgl carries the same factor
+  into `CollisionFeature` as `textBoxScale`, and the field's own doc comment here said "in
+  pixels", which it was not.
+
+  The third of these now -- `symbol-spacing` in pixels, `get_anchors` at a `box_scale` of one, and
+  this -- and they are one mistake made three times: a number in em space used where the space is
+  something else. Anywhere a shaped extent or a glyph distance crosses out of layout, the scale
+  has to cross with it.
+
+  Berlin z14 goes 1,724 to 2,816 pixels of text against the oracle's 3,005; Washington 1,351 to
+  1,827 against 1,931. Ninety-four per cent of the oracle on both, from about sixty. Reproducible.
+
+  Anchors were measured first and are not the problem: on a real tile, 740 of 898 line features
+  are shorter than 62 pixels and cannot hold a name at all, and `get_anchors` agrees with mbgl's
+  line for line -- the same acceptance test, the same spacing adjustment, the same offset. Worth
+  recording because the census is cheap and it is the obvious thing to suspect.
+
 - **A frame's labels compete in one grid now.** *Done.* Placement is a decision about the frame --
   a road name and a shop name want the same screen whatever layer or tile each came from -- and it
   was happening inside the encode walk, a grid per bucket, so a layer could only ever compete

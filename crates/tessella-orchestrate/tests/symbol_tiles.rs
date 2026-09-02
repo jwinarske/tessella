@@ -1281,4 +1281,3 @@ fn a_wider_icon_places_differently() {
          passing zero for the icon's extent would place both the same"
     );
 }
-
