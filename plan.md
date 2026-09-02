@@ -3752,10 +3752,39 @@ a subdivision and a draw the consumer no longer makes.
   Buildings land at `#e3e0dd` against the oracle's `#e7e4e1`, over 130,846 pixels against its
   132,816. Background and landcover match exactly. The residual 4/255 is unexplained and small
   enough to be a light-parameter or rounding difference; worth a look when the walls land.
-- **Fill-extrusion walls are not drawn.** Family 17, the instanced variant, has no material, so a
-  building is a flat roof at its full height with nothing under it. `encode_extrusion_walls`
-  already emits them and the capture carries them; this is a consumer gap, and it is the largest
-  remaining visual difference from the oracle after symbols.
+- **Fill-extrusion walls now reach the screen, and stand zero metres tall.** The consumer half is
+  done: family 17 has a material, the lighting is mbgl's with a real ground-plane normal and the
+  vertical-gradient branch a roof never takes, and the instances are expanded into geometry on
+  upload -- 184,964 wall triangles at z16. Filament has no per-instance vertex attributes, so
+  per-instance data would have to ride in a size-capped uniform array; expanding once per tile
+  into what mbgl's non-instanced branch builds is the option that scales, and it is the same
+  arithmetic and the same pixels.
+
+  They are invisible because **`fill-extrusion-height` and `-base` arrive as zero**. liberty's
+  `building-3d` sets height to `["get", "render_height"]`, a data-driven property, and
+  `encode_extrusion_walls` says in its own comment that the data-driven attributes -- colour, base,
+  height, the pattern rectangles -- are not supplied. So every building is a flat slab at ground
+  level and every wall quad is exactly degenerate. Confirmed by reading the paint block at
+  runtime: `base=0 height=0`. Carrying the data-driven attribute buffer is the producer work that
+  unblocks it, and nothing in the consumer needs to change when it lands.
+
+  Two smaller things found on the way there:
+
+  - **The extrusion drawable stride was the fill's.** 96 where the block is 112, so every drawable
+    after the first in a layer read its matrix at the wrong offset. Confirmed against the wire: the
+    layer's buffer is 448 bytes, which is 4 x 112 and not a multiple of 96. Same bug class `ubo.rs`
+    predicted, third time it has appeared.
+  - **`height_factor` is not a placement term.** Both materials were scaling `z` by it. mbgl uses
+    it in one place only -- the pattern variants, to turn a wall's altitude into a texture
+    coordinate -- and never to place geometry. It is negative, -4 at z14, so it extruded every
+    building four times too far and downward.
+- **`fill-extrusion-vertical-gradient` evaluates to 0 where the spec's default is true.** Read from
+  the paint block at runtime alongside the heights above. Invisible today because a zero-height
+  wall never takes the branch, and wrong the moment heights arrive.
+- **`unplaced` grew from 4 to 12 at z13 when the walls landed.** A drawable is unplaced when its
+  `ubo_index` is past the end of the layer's drawable buffer; the walls doubled the extrusion
+  drawable count and the buffer did not grow with it. Not the stride, which is confirmed correct
+  above. Worth settling before the heights land, since it decides whether a wall gets a matrix.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for
