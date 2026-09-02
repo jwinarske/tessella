@@ -3946,9 +3946,22 @@ a subdivision and a draw the consumer no longer makes.
   follow is any change on screen, and the icon batches seen arriving are layer 94's transit
   markers rather than layer 98's shields.
 
-  So the remaining question is narrow: why layer 98's icon drawables are not among the batches
-  issued, when its layout resolves sprites. That is the next thing to instrument, and it is a
-  question about binding and order rather than about sprites.
+  **Traced further, and it is not binding.** Layer 98 does declare its icon drawable --
+  `hasIcons=true` at binding time, with the second emitted at sub-layer 1. The earlier reading
+  that only layer 94's icon batches arrived came from a log capped at four entries that happened
+  to catch only 94's, which is the truncated-sample mistake this document already records twice.
+
+  Where it actually stops: the icon geometry never rasterises. Forcing the icon fragment to solid
+  magenta paints **zero** pixels, and `primitives` does not move when the icon drawables are added
+  -- so the batches reach `issue`, find a material and find a mesh, and no renderable comes out of
+  them. That is the next thing to look at, and it is between the batch and the renderable rather
+  than anywhere upstream.
+
+  One real defect was found and fixed on the way: an icon was being handed the *glyph* atlas's
+  dimensions. The drawable block carries both `texsize` and `texsize_icon` because one shader can
+  sample both sheets, and a drawable sampling one still has to be told which; using the wrong one
+  scales every sprite coordinate by the ratio between the sheets. That would have drawn shields in
+  the wrong place had they drawn at all.
 
 - **Frame-wide placement is worse than per-bucket, and three explanations have now failed.**
   With a probe that waits for quiet, per-bucket placement gives 8,654 dark text pixels on every
