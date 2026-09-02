@@ -4122,6 +4122,31 @@ a subdivision and a draw the consumer no longer makes.
 
   Berlin z14 goes from 885 pixels of text to 2,050, reproducible, and every label reads whole.
 
+- **Road labels repeat half as often as the oracle's, and it is not the anchors.** *Open, and
+  narrowed.* One straight road, one name, the same style through both renderers: mbgl draws four
+  labels 250 pixels apart, which is exactly `symbol-spacing`; we draw two, 500 apart. A 600-pixel
+  road draws two in mbgl and *none* here.
+
+  What has been ruled out, each by measurement rather than by reading:
+
+  - Anchors. Layout produces two instances per tile at 2,000 and 6,000 tile units -- 250 pixels
+    apart -- and `get_anchors` agrees with mbgl's source line for line: the same acceptance test,
+    the same spacing adjustment, the same offset, the same middle fallback.
+  - Collision, as the *machinery*. Forcing `text_allow_overlap` draws all four at 250 pixels, so
+    the candidates reach placement and are rejected there. Handing `place` the same four
+    candidates in a unit test places all four.
+  - A missing collision run. Fixed on its own merits and changed nothing here.
+  - Stale encoding. Symbol geometry is not re-encoded once the consumer holds it, so the first
+    frame's opacity could have stuck; forcing a re-encode every frame changed nothing.
+
+  So: two labels, an empty grid, nothing in the way, and both rejected by the collision test. The
+  next thing to measure is the grid itself -- what is in it when the first label of the frame is
+  offered.
+
+  `glyph_quads_drawn` and `glyph_quads_hidden` on the consumer are what made this legible: they
+  separate "never shaped" from "shaped and hidden", which is the first fork in any missing-label
+  question and was guesswork before.
+
 - **The style's placement properties never reached placement.** *Fixed.* `FrameOptions` was built
   with `Rules::default()` and the default paddings whatever the style said, so `text-allow-overlap`,
   `icon-allow-overlap`, `text-optional`, `icon-optional`, `text-ignore-placement`,

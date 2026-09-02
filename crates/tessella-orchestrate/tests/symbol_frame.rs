@@ -681,3 +681,32 @@ mod two_halves {
         );
     }
 }
+
+/// A label with glyphs is offered a shape even where no collision run could be built for it.
+///
+/// `None` in `Candidate::text` means "this symbol has no text", and `place` reads it that way --
+/// as nothing to draw. `collision_circles` also answers `None` when the projected road runs out
+/// before the circle run does, and a label with text that got that answer was dropped as though
+/// it had no text at all, against an empty grid, with nothing in its way.
+#[test]
+fn a_label_with_no_room_for_a_run_still_competes() {
+    let (_, labels) = lay_out(&[("Alpha", (1000.0, 1000.0))]);
+    // A road far too short to hold the run, which is what makes `collision_circles` answer none.
+    let stub = [(1000.0f32, 1000.0f32), (1001.0, 1000.0)];
+    let offered: Vec<FrameLabel<'_>> = labels
+        .iter()
+        .map(|label| FrameLabel {
+            cross_tile_id: label.cross_tile_id,
+            laid_out: label.laid_out.clone(),
+            icon: None,
+            line: &stub,
+        })
+        .collect();
+
+    let mut view = ViewSymbols::new();
+    let result = view.frame(&offered, to_screen, &FrameOptions::default());
+    assert!(
+        result.placed[0].text,
+        "a label with nothing in its way was dropped for having no run"
+    );
+}

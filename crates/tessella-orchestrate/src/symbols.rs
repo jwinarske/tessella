@@ -218,6 +218,24 @@ impl ViewSymbols {
                         options.overscaling,
                     )
                     .map(Shape::Circles)
+                    // A label with glyphs always offers a shape, even where no run could be
+                    // built for it.
+                    //
+                    // `None` here means "this symbol has no text", and `place` reads it that way
+                    // -- as nothing to draw. But `line_circles` also answers empty when the
+                    // projected road runs out before the run does, and a label with text that
+                    // got that answer was then dropped as though it had no text at all. On a
+                    // road 600 pixels long that is both of its labels: two shaped, none drawn,
+                    // against an empty grid.
+                    //
+                    // An empty run is what mbgl has here -- a `CollisionFeature` with no boxes
+                    // tests nothing and reserves nothing, so the label places. It is not a label
+                    // that escapes checking: `write_line_positions` walks the same road and hides
+                    // it if the name genuinely will not fit, which is the check that belongs to
+                    // that question.
+                    .or_else(|| {
+                        (label.laid_out.glyphs > 0).then(|| Shape::Circles(Vec::new()))
+                    })
                 };
 
                 // The icon's own box, at its own padding. Point-placed only: a line-placed
