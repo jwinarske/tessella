@@ -3952,6 +3952,28 @@ a subdivision and a draw the consumer no longer makes.
 - **Labels pitched with the map are a second matrix arrangement, not yet written.** Identity plane
   matrix, the tile's projection in the coord matrix, offsets in tile units rather than pixels.
   Sixteen batches at z16, counted and skipped rather than drawn in the wrong space.
+- **All nine shader families draw.** `missing_batches` is zero at z14 and z16 and no family is
+  reported missing. The last three landed together: raster, fill-pattern and fill-outline-pattern,
+  all of which were waiting on the texture path.
+
+  Raster needed two samplers rather than one -- a source crossfades from the parent it is standing
+  on while the finer tile loads -- and its own drawable stride, since its block is a bare matrix at
+  64 bytes where a fill's is 96. At z5, where liberty's `natural_earth` layer actually draws, the
+  coastlines, water, borders and landcover match the oracle.
+
+  The patterned fills anchor their sprite to the *world* rather than the tile, which is what stops
+  a pattern sliding when tiles are replaced or seaming where two meet. That is what
+  `pixel_coord_upper` and `pixel_coord_lower` carry: the tile's origin in world pixels split across
+  two floats, because one float32 runs out of mantissa long before a zoom-22 world runs out of
+  pixels. mbgl's triple `mod` folds the high half against the pattern period *before* multiplying
+  by 256 twice, so the product stays exact; it is transcribed rather than simplified.
+
+  At z14 the base map -- fills, lines, patterns, extrusions -- is close to the oracle's. The labels
+  are not, and the render shows why in the plainest possible way: they come out as scattered
+  fragments, "e", "er", "B", "pla", because only about ninety of the six hundred codepoints the
+  frame needs were ever fetched. The letters that exist are drawn and the rest are absent. That is
+  the glyph-fetch defect above, seen directly rather than inferred.
+
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for
