@@ -612,6 +612,17 @@ impl SymbolLayout {
             .collect()
     }
 
+    /// Whether any of this layout's symbols resolved a sprite.
+    ///
+    /// Asked before shaping, because it decides how many *drawables* the bucket declares, and
+    /// that has to be settled before any of them is encoded. A layer naming an `icon-image` that
+    /// no feature resolves -- a shield expression over features with no `ref` -- declares one
+    /// drawable rather than two, which is what keeps the count and the records in step.
+    #[must_use]
+    pub fn has_icons(&self) -> bool {
+        self.pending.iter().any(|pending| pending.icon.is_some())
+    }
+
     /// Lays out this layer's icons against a sprite index.
     ///
     /// The icon counterpart of [`Self::lay_out`], and a separate buffer for a real reason: text

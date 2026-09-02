@@ -28,6 +28,7 @@ use tessella_capture_abi::ring::{Full, Producer};
 use tessella_capture_abi::{BuiltIn, CameraMode, declared_for};
 use tessella_glyph::fonts::Fonts;
 use tessella_glyph::sprite::IconPosition;
+use tessella_layout::symbol_bucket::SymbolBuffers;
 use tessella_layout::symbol_layout::{Alignments, Placement};
 use tessella_style::crossfade::ZoomHistory;
 use tessella_style::light::Light;
@@ -1122,6 +1123,8 @@ fn part_of(content: &Content, sub_layer_index: i32) -> usize {
     match content {
         Content::Fill(_) => sub.saturating_sub(1),
         Content::Fill3d(_) => sub % 2,
+        // Zero is the glyphs and one the sprites, in the order the encoder returns them.
+        Content::Symbol(_) => sub,
         _ => 0,
     }
 }
@@ -1283,6 +1286,7 @@ fn encode_parts(
             // is keyed by cross-tile id and carrying it needs the index that assigns those,
             // which is not wired here yet. One step of the default increment reaches full
             // opacity, which is the settled frame this renders.
+            let mut icons: Option<SymbolBuffers> = None;
             if let Ok(to_clip) =
                 tessella_tile::camera::tile_to_clip(view, tile.z, tile.x, tile.y, wrap)
             {
@@ -1369,6 +1373,39 @@ fn encode_parts(
                         &mut buffers,
                     );
                 }
+
+                // The icon half, which is its own drawable rather than an option.
+                //
+                // A symbol is a label, an icon, or both, and the two go through different
+                // shaders -- an SDF for glyphs, a plain sampler for a sprite -- so they cannot
+                // share a vertex buffer. `lay_out_icons` had no caller outside its tests, which
+                // is why a highway shield drew its letter and no shield: the text half was
+                // encoded and the picture under it never existed.
+                //
+                // The placement is the text's. The two halves are decided together -- that is
+                // what `text-optional` and `icon-optional` are about -- so an icon takes the
+                // opacity its own label was given, addressed through the icon's vertex ranges.
+                if let Some(patterns) = patterns {
+                    let (mut shaped, placed) = layout.lay_out_icons(patterns.positions, &laid);
+                    if !shaped.vertices.is_empty() {
+                        let paired: Vec<crate::symbols::FrameLabel<'_>> = placed
+                            .iter()
+                            .filter_map(|icon| {
+                                labels
+                                    .iter()
+                                    .find(|label| label.laid_out.pending == icon.pending)
+                                    .map(|label| crate::symbols::FrameLabel {
+                                        cross_tile_id: label.cross_tile_id,
+                                        laid_out: icon.clone(),
+                                        icon: None,
+                                        line: &[],
+                                    })
+                            })
+                            .collect();
+                        held.symbols.write_opacity(&paired, &mut shaped);
+                        icons = Some(shaped);
+                    }
+                }
             }
             let ids = attribute_ids(SYMBOL_FAMILY);
             let key = permutation_key(&bucket.paint, &ids);
@@ -1390,7 +1427,7 @@ fn encode_parts(
                 .and_then(|stack| stacks.iter().position(|held| held == stack))
                 .filter(|index| *index < GLYPH_ATLAS_CAP)
                 .map_or_else(|| glyph_atlas_id(0), glyph_atlas_id);
-            Some(emit::encode_symbol(
+            let text = emit::encode_symbol(
                 arena,
                 PLACEHOLDER,
                 &buffers,
@@ -1398,7 +1435,20 @@ fn encode_parts(
                 true,
                 atlas,
                 sprites,
-            ))
+            );
+
+            match icons {
+                Some(shaped) => {
+                    // Two records, like an extrusion's roof and walls: returned here rather than
+                    // falling through, because what follows expects one.
+                    let sheet = patterns.map_or(atlas, |patterns| patterns.texture);
+                    return Some(alloc::vec![
+                        text,
+                        emit::encode_symbol(arena, PLACEHOLDER, &shaped, key, false, sheet, None),
+                    ]);
+                }
+                None => Some(text),
+            }
         }
         Content::Raster(raster) => Some(emit::encode_raster(
             arena,

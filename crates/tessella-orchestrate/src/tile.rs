@@ -164,8 +164,10 @@ impl LayerBucket {
             // and everything else is four.
             Content::Fill3d(ref bucket) => 2 * (usize::from(bucket.needs_depth_pass()) + 1),
             // And a symbol layer, whose labels share one buffer per tile — the golden's
-            // twelve-glyph drawable is two labels, not two drawables.
-            Content::Symbol(_) => 1,
+            // twelve-glyph drawable is two labels, not two drawables. Two when the layer draws
+            // sprites as well: the glyphs go through an SDF shader and the sprites through a
+            // plain sampler, so the halves cannot share a vertex buffer and are two drawables.
+            Content::Symbol(ref layout) => 1 + usize::from(layout.has_icons()),
         }
     }
 }

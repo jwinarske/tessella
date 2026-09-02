@@ -502,8 +502,13 @@ pub fn bindings_for(
             // drawable carries the same flags as the fill above it. Symbols overhang tile edges,
             // so leaving the stencil off would be the defensible guess — the oracle says
             // otherwise, and the oracle is what this is measured against.
-            Content::Symbol(_) => {
+            Content::Symbol(ref layout) => {
                 emit(0, view::fill_pass(), view::tiled_flags());
+                // The sprite half, when the layer resolved any. Sub-layer 1, so it draws over the
+                // glyphs the way a shield's number sits on its shield.
+                if layout.has_icons() {
+                    emit(1, view::fill_pass(), view::tiled_flags());
+                }
             }
         }
     }

@@ -3931,6 +3931,25 @@ a subdivision and a draw the consumer no longer makes.
   "Spreebogen" along theirs. The gap that remains is mostly highway shields, which render their
   first letter and no number because the icon family has no material, and label count.
 
+- **Icons are laid out, bound and encoded; the shields still do not show.** `lay_out_icons` had
+  no caller outside its tests, so a symbol's sprite half never existed: a highway shield drew its
+  letter and no shield. It now runs, and the pieces behind it are in place -- a symbol bucket
+  declares two drawables when its layout resolved any sprite (`SymbolLayout::has_icons`, asked
+  before shaping because the count must settle before anything is encoded), `bindings_for` emits
+  the second at sub-layer 1, `part_of` maps that to the icon record, and the encoder returns both.
+  Family 32 has a material, derived from the SDF one: same vertex stage, because where a symbol
+  goes has nothing to do with what fills it, and a fragment that samples rather than resolving a
+  distance field.
+
+  Measured: icons resolve (layer 98 gives `road_4`, `road_3`, the shield sprites; layer 94 gives
+  `bus`), the batches reach the consumer, find a material and find their meshes. What does not
+  follow is any change on screen, and the icon batches seen arriving are layer 94's transit
+  markers rather than layer 98's shields.
+
+  So the remaining question is narrow: why layer 98's icon drawables are not among the batches
+  issued, when its layout resolves sprites. That is the next thing to instrument, and it is a
+  question about binding and order rather than about sprites.
+
 - **Frame-wide placement is worse than per-bucket, and three explanations have now failed.**
   With a probe that waits for quiet, per-bucket placement gives 8,654 dark text pixels on every
   run. Sharing one collision grid across the frame's symbol buckets gives 331 to 1,564, and stays
