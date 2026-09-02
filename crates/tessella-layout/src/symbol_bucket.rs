@@ -708,6 +708,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
     options: &LineOptions,
 ) -> (SymbolBuffers, Vec<LaidOut>) {
     use crate::anchors::{get_anchors, get_center_anchor};
+
     use tessella_glyph::quads::{self, Placed};
     use tessella_glyph::shaping::{self, Options as ShapeOptions};
     use tessella_glyph::text::ONE_EM;

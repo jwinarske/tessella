@@ -69,7 +69,7 @@ fn fonts_for(layout: &tessella_layout::symbol_layout::SymbolLayout) -> (Fonts, O
 
 /// A style labelling the fixture's roads by their type, since the fixture's roads have no name.
 fn road_style(placement: &str) -> Style {
-    road_style_spaced(placement, 400.0)
+    road_style_spaced(placement, 25.0)
 }
 
 fn road_style_spaced(placement: &str, spacing: f32) -> Style {
@@ -260,12 +260,18 @@ fn placement_decides_point_or_line() {
     );
 
     // And `symbol-spacing` reached the line options.
+    // In tile units, which is what the field holds: the style says 25 pixels and a tile is 8192
+    // units across 512 of them, so 400 is the same distance stated in the space the line is in.
     assert!((line.line.spacing - 400.0).abs() < 0.01, "{:?}", line.line);
 
     // A point-placed label is one per feature, always. A line-placed one is neither: a road too
-    // short to hold its name gets none, and a long one gets several -- on this fixture at a
-    // spacing of 400 the two effects together give 873 from 1773 roads, so a count alone says
+    // short to hold its name gets none, and a long one gets several, so a count alone says
     // nothing about whether repetition happens.
+    //
+    // The spacings below are small because `symbol-spacing` is *pixels* and a tile is 8192 units
+    // across 512 of them: 25 pixels is the 400 tile units this fixture's roads repeat at. They
+    // used to read 400 and 100, from when the style's number was stored as though it were
+    // already tile units, which is the bug this pair now guards.
     let (fonts, _) = fonts_for(line);
     let (_, point_laid) = point.lay_out(&fonts, None);
     let (_, line_laid) = line.lay_out(&fonts, None);
@@ -275,14 +281,14 @@ fn placement_decides_point_or_line() {
         "no road was long enough for its name"
     );
 
-    // Halving the spacing is what shows it: the same roads, twice as often along each.
+    // Closing the spacing is what shows it: the same roads, more often along each.
     let closer =
-        build_mvt_tile(&road_style_spaced("line", 100.0), "v", ID, &tile()).expect("builds");
+        build_mvt_tile(&road_style_spaced("line", 6.25), "v", ID, &tile()).expect("builds");
     let closer = closer[0].content.as_symbol().expect("a symbol layout");
     let (_, closer_laid) = closer.lay_out(&fonts, None);
     assert!(
         closer_laid.len() > line_laid.len() * 2,
-        "{} at spacing 400 and {} at 100",
+        "{} at spacing 25 and {} at 6.25",
         line_laid.len(),
         closer_laid.len()
     );
@@ -1099,13 +1105,16 @@ fn the_gamma_scale_corrects_only_a_flat_label() {
 /// instance already knows the anchor `get_anchors` gave it.
 #[test]
 fn a_line_placed_icon_repeats_with_its_label() {
+    // `symbol-spacing` is in pixels and a tile is 8192 units across 512 of them, so the 8 below
+    // is 128 tile units -- close enough for this fixture's roads to carry a shield more than
+    // once, which is the whole premise of the test.
     let style: Style = serde_json::from_str(
         r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
             "layers": [{"id": "shields", "type": "symbol", "source": "v",
                         "source-layer": "road",
                         "layout": {"text-field": "{type}", "text-font": ["TestFont"],
                                    "text-size": 14, "symbol-placement": "line",
-                                   "symbol-spacing": 250,
+                                   "symbol-spacing": 8,
                                    "icon-image": "primary"}}]}"#,
     )
     .expect("a style");

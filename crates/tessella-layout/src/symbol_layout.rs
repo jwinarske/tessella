@@ -32,6 +32,12 @@ use tessella_glyph::fonts::Fonts;
 use tessella_glyph::text::ONE_EM;
 
 use crate::anchors::EXTENT;
+
+/// The pixels a tile is drawn across at its own zoom.
+///
+/// With [`EXTENT`] this is mbgl's `tilePixelRatio`: how many tile units make a pixel, and so the
+/// factor between anything a style states in pixels and the space a tile's geometry lives in.
+const TILE_SIZE: f32 = 512.0;
 use crate::symbol::{self, GlyphDependencies};
 use crate::symbol_bucket::{
     IconLabel, IconOptions, Label, LaidOut, LineLabel, LineOptions, SymbolBuffers, SymbolOptions,
@@ -367,7 +373,15 @@ impl SymbolLayout {
             symbol,
             line: LineOptions {
                 symbol,
-                spacing: number("symbol-spacing").unwrap_or(250.0),
+                // Into tile units, which is what this field holds and what `get_anchors` walks.
+                //
+                // `symbol-spacing` is stated in *pixels* -- 250 of them by default -- and a tile
+                // is 8192 units across the 512 pixels it is drawn at. Storing the style's number
+                // unconverted dropped an anchor every 250 tile units where the style asked for
+                // every 4000: sixteen times the labels, which on a map is a road wearing a shield
+                // every few pixels of its length. mbgl calls the factor `tilePixelRatio`.
+                spacing: number("symbol-spacing").unwrap_or(250.0)
+                    * (EXTENT / (TILE_SIZE * overscaling.max(1.0))),
                 // The spec's default is 45 degrees, and it is in degrees on the wire.
                 max_angle: number("text-max-angle").unwrap_or(45.0).to_radians(),
                 overscaling,

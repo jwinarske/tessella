@@ -4020,6 +4020,28 @@ a subdivision and a draw the consumer no longer makes.
 
   z14 sits at 5,971 pixels of text, reproducible across runs.
 
+- **`symbol-spacing` was stored in pixels in a field documented as tile units.** *Fixed, and it
+  is what strung the shields along the roads.* `LineOptions::spacing` says "in tile units" and
+  `get_anchors` walks a line whose coordinates are tile units; the style's number is *pixels*, 250
+  of them by default, and it was being stored unconverted. A tile is 8192 units across the 512
+  pixels it is drawn at, so an anchor landed every 250 units where the style asked for every
+  4000 -- sixteen times the labels, which on a map is a road wearing a shield every few pixels of
+  its length. mbgl calls the factor `tilePixelRatio`.
+
+  Converted where the field is filled, which is what makes the code agree with its own
+  documentation and leaves every caller that already passes tile units correct. Doing it at the
+  `get_anchors` call instead -- which is where mbgl multiplies -- would mean the field holds
+  pixels, and eleven layout tests pass it tile units.
+
+  The chain is gone. z14 draws 3,397 pixels of text against the oracle's 28,000, reproducible.
+  Fewer than before because there are now the right number of anchors rather than sixteen times
+  too many.
+
+  Two test fixtures were recalibrated rather than relaxed: they had been written against the old
+  behaviour, and at the corrected spacing their roads are no longer long enough to repeat a label
+  at all, which is the premise both tests rest on. They now state small pixel spacings and say
+  why.
+
 - **Frame-wide placement is worse than per-bucket, and three explanations have now failed.**
   With a probe that waits for quiet, per-bucket placement gives 8,654 dark text pixels on every
   run. Sharing one collision grid across the frame's symbol buckets gives 331 to 1,564, and stays
