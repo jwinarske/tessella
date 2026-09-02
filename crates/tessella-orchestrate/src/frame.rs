@@ -1286,6 +1286,12 @@ fn encode_parts(
             // is keyed by cross-tile id and carrying it needs the index that assigns those,
             // which is not wired here yet. One step of the default increment reaches full
             // opacity, which is the settled frame this renders.
+            // Shaped before placement, not after, so an icon competes for space the way its
+            // label does. `lay_out_icons` needs only the text's instances, which exist the moment
+            // `lay_out` returns, so nothing about the order forced this to come later -- and
+            // while it came later, `FrameLabel::icon` was always `None`, no icon was ever offered
+            // to the grid, and every anchor along a road kept its shield.
+            let shaped_icons = patterns.map(|patterns| layout.lay_out_icons(patterns.positions, &laid));
             let mut icons: Option<SymbolBuffers> = None;
             // Labels whose glyphs found no room on their line. Their icons go with them.
             let mut without_room: Vec<u32> = Vec::new();
@@ -1319,9 +1325,15 @@ fn encode_parts(
                         #[allow(clippy::cast_possible_truncation)]
                         cross_tile_id: base + index as u32,
                         laid_out: instance.clone(),
-                        icon: None,
-                        // The road this label follows, in tile units. Empty for a point label,
-                        // which is what tells the walk below to leave it alone.
+                        // Its icon's box, so the pair is decided together: `text-optional` and
+                        // `icon-optional` are about exactly this, and a shield that cannot have
+                        // its number should not keep its shield.
+                        icon: shaped_icons.as_ref().and_then(|(_, placed)| {
+                            placed
+                                .iter()
+                                .find(|icon| icon.pending == instance.pending)
+                                .cloned()
+                        }),
                         line: match layout.pending.get(instance.pending) {
                             Some(pending) => match &pending.anchoring {
                                 tessella_layout::symbol_layout::Anchoring::Line(line) => {
@@ -1387,8 +1399,8 @@ fn encode_parts(
                 // The placement is the text's. The two halves are decided together -- that is
                 // what `text-optional` and `icon-optional` are about -- so an icon takes the
                 // opacity its own label was given, addressed through the icon's vertex ranges.
-                if let Some(patterns) = patterns {
-                    let (mut shaped, placed) = layout.lay_out_icons(patterns.positions, &laid);
+                if let Some((shaped, placed)) = shaped_icons.clone() {
+                    let mut shaped = shaped;
                     if !shaped.vertices.is_empty() {
                         let paired: Vec<crate::symbols::FrameLabel<'_>> = placed
                             .iter()
@@ -1404,7 +1416,7 @@ fn encode_parts(
                                     })
                             })
                             .collect();
-                        held.symbols.write_opacity(&paired, &mut shaped);
+                        held.symbols.write_icon_opacity(&paired, &mut shaped);
                         // And hide the ones whose text could not be placed. A shield is drawn
                         // for its number; without the number it is an empty box, and strung
                         // along a road at every anchor it is worse than nothing there.

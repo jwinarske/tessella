@@ -4001,13 +4001,22 @@ a subdivision and a draw the consumer no longer makes.
   every anchor along a road it is worse than nothing. `write_line_positions` now reports the
   labels that found no room and their icons are hidden with them.
 
-  **Not fixed, and this is the rest of the chain.** `FrameLabel.icon` is passed as `None`
-  everywhere it is built, so placement never sees an icon's box and no icon ever collides with
-  anything: every anchor along a road keeps its shield. mbgl lays out both halves *before*
-  placement so the icon competes like the text does, and doing the same here means shaping the
-  icons earlier than the current order does -- `lay_out_icons` runs after placement because it
-  needs the text's instances. That reordering is the fix, and it is the same shape as the change
-  that would let a frame share one collision grid.
+  **Two more fixed, and the chain is still there.** The reordering turned out to cost nothing:
+  `lay_out_icons` needs only the text's *instances*, which exist the moment `lay_out` returns, so
+  icons are shaped before placement now and `FrameLabel::icon` carries a real box. And
+  `write_opacity` was writing the *text's* channel into the icon's buffer, throwing the icon's own
+  decision away -- `write_icon_opacity` reads `state.icon`, which is what the two channels are for.
+
+  Neither removed the chain. Turning the icon family off in the consumer removes it outright and
+  leaves a map that reads well, so the boxes are certainly the icons; what keeps them is that a
+  line-placed symbol has one instance per anchor, the *text* at most of those anchors fails its
+  walk and is hidden, and the icon has no walk to fail. Hiding the icons whose text found no room
+  is implemented and does not account for all of them, so either the anchors are far denser than
+  `symbol-spacing` should give or the icon boxes are not overlapping each other in the grid the
+  way they visibly overlap on screen. That is the next thing to measure -- anchor spacing first,
+  since it is one number.
+
+  z14 sits at 5,295 pixels of text with icons on, 4,683 with them off; reproducible either way.
 
   z14 sits at 5,971 pixels of text, reproducible across runs.
 

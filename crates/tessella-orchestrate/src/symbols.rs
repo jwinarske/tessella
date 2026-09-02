@@ -326,6 +326,30 @@ impl ViewSymbols {
         self.decided = decided;
     }
 
+    /// The same, for the icon half, which has a decision of its own.
+    ///
+    /// A symbol's two channels fade together but not in step: `icon-optional` and `text-optional`
+    /// exist precisely so one half can be dropped and the other kept. Writing the *text's*
+    /// opacity into the icon's buffer throws the icon's own decision away, and what that looks
+    /// like on a map is a shield drawn at every anchor along a road, because the collision that
+    /// rejected all but one of them was never consulted.
+    pub fn write_icon_opacity(&self, labels: &[FrameLabel<'_>], buffers: &mut SymbolBuffers) {
+        for label in labels {
+            let (placed, opacity) = match self.fades.get(label.cross_tile_id) {
+                Some(state) => (state.icon.placed, state.icon.opacity),
+                None => (false, 0.0),
+            };
+            let range = label.laid_out.vertices.clone();
+            if range.end > buffers.opacity.len() {
+                continue;
+            }
+            let packed = opacity_vertex(placed, opacity);
+            for slot in &mut buffers.opacity[range] {
+                *slot = packed;
+            }
+        }
+    }
+
     /// Writes this frame's opacities into the buffer's per-vertex slots.
     ///
     /// Every vertex of a label carries the same value, because opacity is a property of the
