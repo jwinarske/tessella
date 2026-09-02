@@ -3900,11 +3900,24 @@ a subdivision and a draw the consumer no longer makes.
   survives today, and that is a second defect sitting behind the first. It is not the atlas
   reference, since the fills disappear too.
 
-  So the shape of the real fix is now: make a second `set_fonts` survivable *first*, and only then
-  make the fetch incremental. Gating on `is_resolved` is the third step and correct only after
-  both. The 170 codepoints the incremental version reached against the 600 the frame needs also
-  says `want_glyphs` stops being called once the cover is satisfied, which is a fourth thing to
-  settle.
+  **What a second `set_fonts` actually does, measured.** The emission it triggers is not a
+  teardown and does not remove the scene. It emits an *order of six entries* -- against the 135
+  primitives a good frame draws -- and every one of those six names geometry the consumer no
+  longer holds (`missing_mesh 6`, `renderables 0`). An order is a snapshot and the consumer draws
+  the latest one, so a short order replaces a complete one and the map goes black.
+
+  The two runs are otherwise identical up to that point: baseline and incremental both end with
+  `buckets=2 drawn=6`, and the baseline draws 135 primitives from it. The only difference is the
+  extra emission.
+
+  So the defect is in the incremental order path when the fonts change under it: the frame that
+  re-emits after a new `Fonts` binds almost nothing and publishes that as the whole order. Whether
+  the bindings are short or the order is built from only the fresh ones is the next question, and
+  it is a question about `frame.rs`'s registry interaction rather than about glyphs at all.
+
+  The order of work is therefore: fix that, then make the fetch incremental, then gate binding on
+  `is_resolved`. And separately, the 170 codepoints the incremental version reached against the
+  600 the frame needs says `want_glyphs` stops being called once the cover is satisfied.
 
   Five changes were tried against these symptoms before this and all five were reverted. The
   diagnostic that found it took one run.
