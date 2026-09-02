@@ -3859,30 +3859,29 @@ a subdivision and a draw the consumer no longer makes.
   Being *under* the oracle's text now rather than over it is unexplained and worth a look: it may
   be the padding defaults, or the sixteen pitched batches still skipped.
 
-- **Frame-wide placement is worse than per-bucket, and neither hypothesis for why held.**
-  A negative result, recorded because the two obvious fixes are now known not to be the answer
-  and the next person should not spend the afternoon on them again.
+- **Frame-wide placement needs opacity to leave the geometry path.** *Explained, after two wrong
+  guesses.* Sharing one collision grid across a frame's symbol buckets drops z16 from 8,654 dark
+  text pixels to between 400 and 1,500, and leaves the frame non-reproducible even against a
+  quiescent probe.
 
-  Sharing one grid across a frame's symbol buckets drops z16 from about 8,000 dark text pixels to
-  about 1,500. Two explanations were tried and measured:
+  The cause is `frame.rs`'s freshness gate: with a registry, only buckets whose geometry is new
+  are encoded, and opacity is written *during* encoding. A bucket that is not fresh keeps the
+  opacity it was given in the frame where it was, decided against a grid in a different state.
+  Per-bucket placement is immune -- each bucket's decision is self-contained, so a stale one is
+  still valid -- and frame-wide is not, because a decision only means anything relative to the
+  whole frame's grid. Mixing decisions made against different grids is incoherent, which is both
+  the over-culling and the instability.
 
-  1. *Placement order.* mbgl places topmost-first, this loop encodes bottom-first, so the lowest
-     label layer -- 2,256 house numbers -- should have been eating the grid. A pass in reverse
-     order before the encode loop made no difference: still about 1,500.
-  2. *Off-screen labels.* The grid clamps anything outside the viewport into an edge cell rather
-     than dropping it, and a z14 tile drawn at z16 is mostly off-screen, so invisible labels
-     should have been piling against the edges and blocking visible ones. Culling by projected
-     anchor with a 256-pixel margin made no difference either: 331 and 1,437 on two runs.
+  So the fix is not in placement at all. Opacity is per-frame state and has to be emitted every
+  frame for every symbol bucket, whether or not its geometry is re-encoded -- which is what mbgl
+  does: the opacity buffer is a dynamic vertex buffer updated per frame, separate from the
+  geometry it belongs to. `write_positions` is in the same position and will want the same
+  treatment when line labels are walked.
 
-  So something over-reserves once labels compete globally, and it is neither of those. It wants
-  per-label diagnostics -- which candidate blocks which, and what box each reserved -- rather
-  than another guess. `frame_in`, `begin` and `settle` stay; they are what the eventual pass
-  needs, and they are exercised by the per-bucket path today.
-
-  The run-to-run spread on the per-bucket path is worth noting alongside: 6,502, 8,654 and 9,885
-  on three runs of the same frame. Placement is a function of what has landed, and what has
-  landed depends on tile arrival order, so the frame is not yet reproducible. A comparison
-  against the oracle cannot be tightened past that spread until it is.
+  Two hypotheses were tried first and are wrong, recorded so they are not tried again: it is not
+  placement order (a pass in reverse render order, which is mbgl's order, changed nothing), and
+  it is not off-screen labels crowding the grid's edge cells (culling by projected anchor with a
+  256-pixel margin changed nothing).
 
 - **Labels pitched with the map are a second matrix arrangement, not yet written.** Identity plane
   matrix, the tile's projection in the coord matrix, offsets in tile units rather than pixels.
