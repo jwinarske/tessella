@@ -3859,29 +3859,32 @@ a subdivision and a draw the consumer no longer makes.
   Being *under* the oracle's text now rather than over it is unexplained and worth a look: it may
   be the padding defaults, or the sixteen pitched batches still skipped.
 
-- **Frame-wide placement needs opacity to leave the geometry path.** *Explained, after two wrong
-  guesses.* Sharing one collision grid across a frame's symbol buckets drops z16 from 8,654 dark
-  text pixels to between 400 and 1,500, and leaves the frame non-reproducible even against a
-  quiescent probe.
+- **Frame-wide placement is worse than per-bucket, and three explanations have now failed.**
+  With a probe that waits for quiet, per-bucket placement gives 8,654 dark text pixels on every
+  run. Sharing one collision grid across the frame's symbol buckets gives 331 to 1,564, and stays
+  *non-reproducible even against the quiescent probe* -- which is the part that has not been
+  accounted for.
 
-  The cause is `frame.rs`'s freshness gate: with a registry, only buckets whose geometry is new
-  are encoded, and opacity is written *during* encoding. A bucket that is not fresh keeps the
-  opacity it was given in the frame where it was, decided against a grid in a different state.
-  Per-bucket placement is immune -- each bucket's decision is self-contained, so a stale one is
-  still valid -- and frame-wide is not, because a decision only means anything relative to the
-  whole frame's grid. Mixing decisions made against different grids is incoherent, which is both
-  the over-culling and the instability.
+  Tried and measured, none of them it:
 
-  So the fix is not in placement at all. Opacity is per-frame state and has to be emitted every
-  frame for every symbol bucket, whether or not its geometry is re-encoded -- which is what mbgl
-  does: the opacity buffer is a dynamic vertex buffer updated per frame, separate from the
-  geometry it belongs to. `write_positions` is in the same position and will want the same
-  treatment when line labels are walked.
+  1. **Placement order.** mbgl places topmost-first; this loop encodes bottom-first. A pass in
+     reverse render order before the encode loop changed nothing.
+  2. **Off-screen labels.** The grid clamps what falls outside the viewport into an edge cell
+     rather than dropping it, and a z14 tile at z16 is mostly off-screen. Culling by projected
+     anchor with a 256-pixel margin changed nothing.
+  3. **Stale decisions from the freshness gate.** Opacity is written during geometry encoding and
+     only fresh buckets are encoded, so a frame could mix decisions taken against different
+     grids. Re-encoding every symbol bucket as a group whenever any one of them is fresh -- which
+     makes a frame's decisions all contemporaneous -- changed nothing either. The reasoning still
+     looks sound and the registry is present, so the gate was active; it is simply not what is
+     costing the labels.
 
-  Two hypotheses were tried first and are wrong, recorded so they are not tried again: it is not
-  placement order (a pass in reverse render order, which is mbgl's order, changed nothing), and
-  it is not off-screen labels crowding the grid's edge cells (culling by projected anchor with a
-  256-pixel margin changed nothing).
+  The commit that proposed (3) stated it as the explanation. It is not established, and this
+  corrects it.
+
+  What has not been done, and is what the next attempt should do before changing anything: print,
+  for one frame, every candidate offered and every candidate that blocked it. Three guesses have
+  been spent on a question a diagnostic would answer outright.
 
 - **Labels pitched with the map are a second matrix arrangement, not yet written.** Identity plane
   matrix, the tile's projection in the coord matrix, offsets in tile units rather than pixels.
