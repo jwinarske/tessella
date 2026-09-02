@@ -3798,6 +3798,32 @@ a subdivision and a draw the consumer no longer makes.
   links a C binary against it, so two workspace runs started back to back race over the same
   artifact -- seen once, passing alone and on both of the next two full runs. Harmless to a human
   running the suite once; worth a guard before CI, which will not be running it once.
+- **Symbols reach the GPU and do not yet read as type.** Family 33 has a material -- mbgl's
+  `SymbolSDFShader` transcribed, halo branch and all -- and it is wired end to end: the glyph
+  atlas binds as a sampler, the three matrices and the pass flags come off the wire, and the
+  layer's text paint is chosen over its icon half by the tile props. Family 33 is off the missing
+  list.
+
+  Verified rather than assumed, in this order: the atlas is texture 2, 512x512, format ALPHA, and
+  really does fill with glyphs -- 12,708 nonzero bytes growing to 18,254; the geometry reaches the
+  screen, shown by forcing the fragment to solid red and getting 90,291 pixels; and the producer's
+  matrices are right. That last one is worth stating because I doubted it twice. For a
+  viewport-aligned label the plane matrix maps tile units to pixels (262.5 scale, w of 1050) and
+  the coord matrix maps pixels back to clip (0.0022, which is 2/900 for a 900-wide view, w of 1).
+  That is exactly mbgl's arrangement.
+
+  What is wrong is in this consumer: the quads come out the size of the screen instead of the size
+  of a word, so something between the vertex attributes and `pos0` is in the wrong space. The
+  attributes are handed over by the generic path, which assigns Filament's custom slots in wire
+  order, and Filament's normalisation of integer attributes is the first thing to check -- a
+  normalised `USHORT4` would make the texture coordinates a thousandth of what they should be,
+  which is also a reason nothing legible appears even where a quad lands.
+
+  Labels pitched with the map are a *second* arrangement of the same three matrices -- identity
+  plane, tile projection in the coord matrix, offsets in tile units rather than pixels -- and this
+  shader implements only the viewport one. Those 16 batches are counted and skipped rather than
+  drawn in the wrong space. I first wrote that skip up as line labels awaiting a producer pass
+  that does not exist; the flag says `pitch_with_map`, and the note was wrong.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for
