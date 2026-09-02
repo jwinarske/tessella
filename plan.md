@@ -3752,39 +3752,33 @@ a subdivision and a draw the consumer no longer makes.
   Buildings land at `#e3e0dd` against the oracle's `#e7e4e1`, over 130,846 pixels against its
   132,816. Background and landcover match exactly. The residual 4/255 is unexplained and small
   enough to be a light-parameter or rounding difference; worth a look when the walls land.
-- **Fill-extrusion walls now reach the screen, and stand zero metres tall.** The consumer half is
-  done: family 17 has a material, the lighting is mbgl's with a real ground-plane normal and the
-  vertical-gradient branch a roof never takes, and the instances are expanded into geometry on
-  upload -- 184,964 wall triangles at z16. Filament has no per-instance vertex attributes, so
-  per-instance data would have to ride in a size-capped uniform array; expanding once per tile
-  into what mbgl's non-instanced branch builds is the option that scales, and it is the same
-  arithmetic and the same pixels.
+- **Fill-extrusion buildings stand zero metres tall, and the reason is `render_height`.** Traced
+  to the vertex data rather than inferred: the roof's height attribute is 14,613 floats and every
+  one of them is zero.
 
-  They are invisible because **`fill-extrusion-height` and `-base` arrive as zero**. liberty's
-  `building-3d` sets height to `["get", "render_height"]`, a data-driven property, and
-  `encode_extrusion_walls` says in its own comment that the data-driven attributes -- colour, base,
-  height, the pattern rectangles -- are not supplied. So every building is a flat slab at ground
-  level and every wall quad is exactly degenerate. Confirmed by reading the paint block at
-  runtime: `base=0 height=0`. Carrying the data-driven attribute buffer is the producer work that
-  unblocks it, and nothing in the consumer needs to change when it lands.
+  Where it is *not*: the wire carries the attribute. The producer emits `base` (id 3) and `height`
+  (id 5) as data-driven vertex attributes for the roof, interleaved at one 8-byte stride with base
+  at offset 0 and height at offset 4, and `PaintBinder::push` wrote exactly one entry per vertex.
+  It also correctly classified `fill-extrusion-color` as constant and emitted no attribute for it,
+  so the style side is reading the layer right. An earlier note here said the producer carried no
+  data-driven attributes at all; that was true only of the walls.
 
-  Two smaller things found on the way there:
+  So `["get", "render_height"]` is evaluating to null for every building feature and `encode` is
+  falling back to the property's spec default, which is zero. Either the MVT features do not carry
+  the key or `get` is not finding it -- the decoder handles every value wire type and the MVT path
+  does push to the binder, so the next step is to dump one building feature's properties straight
+  out of a z14 tile and see which. mbgl renders real heights from the same tiles, so the data has
+  it.
 
-  - **The extrusion drawable stride was the fill's.** 96 where the block is 112, so every drawable
-    after the first in a layer read its matrix at the wrong offset. Confirmed against the wire: the
-    layer's buffer is 448 bytes, which is 4 x 112 and not a multiple of 96. Same bug class `ubo.rs`
-    predicted, third time it has appeared.
-  - **`height_factor` is not a placement term.** Both materials were scaling `z` by it. mbgl uses
-    it in one place only -- the pattern variants, to turn a wall's altitude into a texture
-    coordinate -- and never to place geometry. It is negative, -4 at z14, so it extruded every
-    building four times too far and downward.
-- **`fill-extrusion-vertical-gradient` evaluates to 0 where the spec's default is true.** Read from
-  the paint block at runtime alongside the heights above. Invisible today because a zero-height
-  wall never takes the branch, and wrong the moment heights arrive.
-- **`unplaced` grew from 4 to 12 at z13 when the walls landed.** A drawable is unplaced when its
-  `ubo_index` is past the end of the layer's drawable buffer; the walls doubled the extrusion
-  drawable count and the buffer did not grow with it. Not the stride, which is confirmed correct
-  above. Worth settling before the heights land, since it decides whether a wall gets a matrix.
+  The consumer side is done and waiting: the roof reads base and height per vertex, keyed by
+  attribute id rather than wire order, and synthesises a constant buffer for whichever of them a
+  style did not make data-driven so one material serves both cases. Heights will appear the moment
+  the values do, and so will the walls, which are degenerate only because base equals height.
+
+  One thing the consumer still cannot do: a height that interpolates across zooms arrives as a
+  `FLOAT2` pair to be mixed by `height_t` from the drawable block. This reads the single-component
+  form that a `["get", ...]` produces. The pair needs handling before a style that zoom-interpolates
+  an extrusion height will draw right.
 - Style-revision transition policy for live restyle across N views (atomic repoint vs
   per-view staggering).
 - Whether OrderUpdate should delta (splice ops) rather than snapshot — snapshot chosen for
