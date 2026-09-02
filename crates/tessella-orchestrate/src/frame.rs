@@ -1314,7 +1314,17 @@ fn encode_parts(
                         cross_tile_id: base + index as u32,
                         laid_out: instance.clone(),
                         icon: None,
-                        line: &[],
+                        // The road this label follows, in tile units. Empty for a point label,
+                        // which is what tells the walk below to leave it alone.
+                        line: match layout.pending.get(instance.pending) {
+                            Some(pending) => match &pending.anchoring {
+                                tessella_layout::symbol_layout::Anchoring::Line(line) => {
+                                    line.as_slice()
+                                }
+                                tessella_layout::symbol_layout::Anchoring::Point(_) => &[],
+                            },
+                            None => &[],
+                        },
                     })
                     .collect();
                 #[allow(clippy::cast_possible_truncation)]
@@ -1340,6 +1350,25 @@ fn encode_parts(
                 // to advance it would enter each label into the grid twice.
                 held.symbols.settle(options.increment);
                 held.symbols.write_opacity(&labels, &mut buffers);
+
+                // And where each glyph of a line-placed label landed along its road.
+                //
+                // Into the label plane, which for a label lying flat on the map is pixels
+                // relative to the tile: `pixels_to_tile_units` is tile units per pixel, so
+                // dividing by it is exactly that conversion, and it is the space the drawable's
+                // coord matrix expects to be handed back. Without this the dynamic buffer holds
+                // the anchor in tile units for every glyph, and the shader draws the whole label
+                // stacked at one point some distance from its road.
+                let units = tessella_tile::camera::pixels_to_tile_units(tile.z, view.zoom);
+                if units.abs() > f64::EPSILON {
+                    #[allow(clippy::cast_possible_truncation)]
+                    let scale = (1.0 / units) as f32;
+                    held.symbols.write_line_positions(
+                        &labels,
+                        |point| (point.0 * scale, point.1 * scale),
+                        &mut buffers,
+                    );
+                }
             }
             let ids = attribute_ids(SYMBOL_FAMILY);
             let key = permutation_key(&bucket.paint, &ids);

@@ -3907,6 +3907,30 @@ a subdivision and a draw the consumer no longer makes.
 
   Line labels are now the whole remaining gap in text.
 
+- **Line labels walk their roads.** `write_line_positions` steps each glyph of a line-placed
+  label along the projected road and writes where it landed, with the angle of the segment it
+  landed on -- which is what makes a street name bend with its street rather than sit as one
+  rotated block. The arithmetic was all in `project.rs` and exercised only by tests; `place_upright`
+  had no caller outside them, and `symbol_preview.rs` showed the intended sequence.
+
+  Into the label plane, which for a label lying flat on the map is pixels relative to the tile:
+  `pixels_to_tile_units` is tile units per pixel, so dividing by it is exactly that conversion. The
+  glyph distances layout records are screen pixels, so walking a line in tile units with them
+  would misplace every glyph by the scale factor.
+
+  This is why the drawable's label-plane matrix is the identity for a walked label, and the
+  consumer no longer skips those batches. An earlier attempt went the other way -- give the walked
+  label a real plane matrix so the existing shader could place it -- and broke
+  `symbol_tiles::the_alignments_decide_the_drawables_matrices`, which asserts mbgl's rule outright:
+  a walked label gets the identity because the walk *is* the projection. The test was right and the
+  change was a divergence from the oracle dressed as a fix; the walk is what the identity was
+  always waiting for.
+
+  z14 goes from 3,917 pixels of text to 5,530 against the oracle's 28,000, and the labels visibly
+  follow their roads -- "S p r e e" along the river where mbgl puts it, "Tiergarten" and
+  "Spreebogen" along theirs. The gap that remains is mostly highway shields, which render their
+  first letter and no number because the icon family has no material, and label count.
+
 - **Frame-wide placement is worse than per-bucket, and three explanations have now failed.**
   With a probe that waits for quiet, per-bucket placement gives 8,654 dark text pixels on every
   run. Sharing one collision grid across the frame's symbol buckets gives 331 to 1,564, and stays

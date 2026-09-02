@@ -370,6 +370,62 @@ impl ViewSymbols {
         }
     }
 
+    /// Walks a line-placed label's glyphs along its road and writes where each one landed.
+    ///
+    /// The counterpart to [`Self::write_positions`] for the labels that follow a line rather than
+    /// sitting at a point. A road name is not one quad rotated: each glyph is stepped along the
+    /// projected road and takes the angle of the segment it lands on, which is what makes the text
+    /// bend with the street. It is also why the drawable's label-plane matrix is the identity --
+    /// the walk *is* the projection, and a plane matrix would bend the label a second time.
+    ///
+    /// `project` takes tile units into the label plane, which for a label lying flat on the map is
+    /// pixels relative to the tile: the glyph distances layout recorded are screen pixels, so
+    /// walking a line in tile units with them would misplace every glyph by the scale factor.
+    ///
+    /// A label with no room on its line keeps whatever it last held rather than being written
+    /// somewhere arbitrary; placement has already decided whether it draws at all.
+    pub fn write_line_positions<P>(
+        &self,
+        labels: &[FrameLabel<'_>],
+        project: P,
+        buffers: &mut SymbolBuffers,
+    ) where
+        P: Fn((f32, f32)) -> (f32, f32),
+    {
+        for label in labels {
+            if label.line.is_empty() {
+                continue;
+            }
+            let range = label.laid_out.vertices.clone();
+            // Four vertices to a glyph, and the distances are one per glyph.
+            let quads = range.start / 4..range.end / 4;
+            if range.end > buffers.dynamic.len() || quads.end > buffers.glyph_offsets.len() {
+                continue;
+            }
+            let line: alloc::vec::Vec<(f32, f32)> =
+                label.line.iter().map(|point| project(*point)).collect();
+            let (placement, _flipped) = crate::project::place_upright(
+                &line,
+                project(label.laid_out.anchor),
+                label.laid_out.segment,
+                &buffers.glyph_offsets[quads],
+                &crate::project::LineOffsets::default(),
+            );
+            let crate::project::Placement::Placed(glyphs) = placement else {
+                continue;
+            };
+            for (index, glyph) in glyphs.iter().enumerate() {
+                let base = range.start + index * 4;
+                if base + 4 > buffers.dynamic.len() {
+                    break;
+                }
+                for slot in &mut buffers.dynamic[base..base + 4] {
+                    *slot = [glyph.point.0, glyph.point.1, glyph.angle];
+                }
+            }
+        }
+    }
+
     /// Writes each label's placed anchor into the per-frame position buffer.
     ///
     /// The position the shader projects against, which is why it is per frame at all: the
