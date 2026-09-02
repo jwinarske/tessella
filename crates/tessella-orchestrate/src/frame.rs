@@ -689,6 +689,14 @@ fn emit_group(
         .map(|(_, &(tile_index, bucket_index, _))| (tile_index, bucket_index))
         .collect();
 
+    // Built once for the frame and handed to every bucket, so the labels compete with each other
+    // rather than each layer of each tile competing with itself alone.
+    let placement = core::cell::RefCell::new(FramePlacement {
+        symbols: crate::symbols::ViewSymbols::new(),
+        next_id: 1,
+    });
+    placement.borrow_mut().symbols.begin();
+
     let mut packed: BTreeSet<u64> = BTreeSet::new();
     let mut open: Option<u32> = None;
     for entry in draw_order.resolve() {
@@ -766,6 +774,7 @@ fn emit_group(
                         raster_texture,
                         zoom: view.zoom,
                         view,
+                        placement: &placement,
                         tile: buckets.get(tile_index).map_or(TileId::new(0, 0, 0), |(id, _)| *id),
                         wrap: tiles.get(tile_index).map_or(0, |coord| coord.wrap),
                         stacks: &stacks,
@@ -1063,6 +1072,14 @@ struct Encoding<'a> {
     zoom: f64,
     /// The camera, for projecting a label's anchor into the screen space it competes in.
     view: &'a ViewTransform,
+    /// The frame's collision grid and fade state, shared by every symbol bucket.
+    ///
+    /// One grid for the frame, not one per bucket: a road name and a shop name are different
+    /// layers and often different tiles, and placement exists to decide which of them gets the
+    /// space. The order this is visited in is the painter order, which is the order mbgl places
+    /// in. A `RefCell` because the encoder takes its context by shared reference and this is the
+    /// one thing in it that a bucket changes for the buckets after it.
+    placement: &'a core::cell::RefCell<FramePlacement>,
     /// The tile the bucket came from, and its world copy.
     tile: TileId,
     wrap: i32,
@@ -1072,6 +1089,20 @@ struct Encoding<'a> {
     /// two together is this order. Passed rather than recomputed so the upload and the reference
     /// cannot drift apart.
     stacks: &'a [alloc::vec::Vec<alloc::string::String>],
+}
+
+/// A frame's symbol placement: what has been decided, and the space already taken.
+struct FramePlacement {
+    symbols: crate::symbols::ViewSymbols,
+    /// The next identity to hand out.
+    ///
+    /// Unique across the frame, not within a bucket. The fade state is keyed by this, and one
+    /// `ViewSymbols` now serves every bucket -- so numbering each bucket from one meant the
+    /// second bucket's first label overwrote the first bucket's, and every bucket after that
+    /// read another's decision. The ids are per frame because nothing carries them between
+    /// frames; a cross-tile index is what would make them stable, and is what a fade needs to
+    /// follow a label from one frame to the next.
+    next_id: u32,
 }
 
 /// Encodes one bucket for the wire.
@@ -1121,6 +1152,7 @@ fn encode_parts(
         raster_texture,
         zoom,
         view,
+        placement,
         tile,
         wrap,
         stacks,
@@ -1268,12 +1300,18 @@ fn encode_parts(
                         ((plane[1] * x + plane[5] * y + plane[13]) / w) as f32,
                     )
                 };
+                let mut held = placement.borrow_mut();
+                let base = held.next_id;
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    held.next_id = base.saturating_add(laid.len() as u32);
+                }
                 let labels: Vec<crate::symbols::FrameLabel<'_>> = laid
                     .iter()
                     .enumerate()
                     .map(|(index, instance)| crate::symbols::FrameLabel {
                         #[allow(clippy::cast_possible_truncation)]
-                        cross_tile_id: index as u32 + 1,
+                        cross_tile_id: base + index as u32,
                         laid_out: instance.clone(),
                         icon: None,
                         line: &[],
@@ -1284,20 +1322,24 @@ fn encode_parts(
                     viewport: (view.width as f32, view.height as f32),
                     ..crate::symbols::FrameOptions::default()
                 };
-                let mut placement = crate::symbols::ViewSymbols::new();
-                // Stepped to rest rather than once. A fade is a per-frame animation and one step
-                // only starts it, so a single call leaves every label at the opacity it fades
-                // *from*, which is zero and draws nothing. Carrying the state between frames is
-                // what would make the step meaningful; until it is carried, the settled frame is
-                // the honest thing to draw, and this is what settles it. Bounded because a fade
-                // that will not converge must not hang the frame.
-                for _ in 0..8 {
-                    placement.frame(&labels, project, &options);
-                    if placement.settled() {
-                        break;
-                    }
-                }
-                placement.write_opacity(&labels, &mut buffers);
+                // A grid per bucket, not the frame's -- and that is a *retreat* from what the
+                // frame's grid would give, recorded rather than hidden.
+                //
+                // Competing a whole frame in one grid is right and is what mbgl does, but mbgl
+                // places its layers in reverse render order: the topmost label claims space
+                // first, and the layers under it take what is left. This loop runs in painter
+                // order, bottom first, so sharing the grid here let the lowest label layer --
+                // 2,256 house numbers at z16 -- fill it before a single place name was offered,
+                // and the frame came back emptier than with no sharing at all. The fix is a
+                // placement pass over the symbol buckets in reverse order before this loop, not
+                // a different grid inside it; `frame_in` exists for that pass to use.
+                held.symbols.frame(&labels, project, &options);
+                // Settled rather than stepped: a fade takes its direction from the previous
+                // frame's decision and nothing carries that between frames here, so one step
+                // leaves every label at the opacity it fades from, which is zero. Placing again
+                // to advance it would enter each label into the grid twice.
+                held.symbols.settle(options.increment);
+                held.symbols.write_opacity(&labels, &mut buffers);
             }
             let ids = attribute_ids(SYMBOL_FAMILY);
             let key = permutation_key(&bucket.paint, &ids);

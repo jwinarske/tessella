@@ -105,6 +105,13 @@ impl Default for FrameOptions {
 #[derive(Debug, Default)]
 pub struct ViewSymbols {
     fades: Fades,
+    /// What placement decided this frame, across every bucket offered to it.
+    ///
+    /// Kept so the fades can be advanced without placing again. A fade's direction comes from the
+    /// *previous* frame's decision, so a label placed for the first time spends one step still
+    /// hidden and reaches full opacity on the second -- which is the fade working, and which
+    /// means a caller that places once and draws once sees nothing at all.
+    decided: alloc::vec::Vec<Placed>,
     /// Which orientation each label last drew in, by cross-tile id.
     ///
     /// mbgl's `placedOrientations`, and it is remembered rather than recomputed because the
@@ -138,7 +145,31 @@ impl ViewSymbols {
         // than dropped: a label hanging off the edge still collides with one that does not.
         let mut grid: GridIndex<u32> =
             GridIndex::new(options.viewport.0.max(1.0), options.viewport.1.max(1.0), 32);
+        self.frame_in(labels, project, options, &mut grid)
+    }
 
+    /// As [`Self::frame`], competing in a grid the caller owns.
+    ///
+    /// What this is for: a frame's labels compete across layers and tiles, not within one bucket.
+    /// A road name and a shop name are laid out separately -- different layers, and often
+    /// different tiles -- and the whole point of placement is that only one of them gets the
+    /// space. [`Self::frame`] builds a grid per call, so it can only ever decide a bucket against
+    /// itself; passing one in is what lets a caller walk a frame's buckets in painter order and
+    /// have each compete against everything already placed.
+    ///
+    /// The projection stays per call because it is per *tile*: a label's anchor is in tile units
+    /// and the matrix that takes it to the screen belongs to the tile it came from, while the
+    /// grid it lands in belongs to the frame.
+    pub fn frame_in<P>(
+        &mut self,
+        labels: &[FrameLabel<'_>],
+        project: P,
+        options: &FrameOptions,
+        grid: &mut GridIndex<u32>,
+    ) -> FrameResult
+    where
+        P: Fn((f32, f32)) -> (f32, f32),
+    {
         let candidates: Vec<Candidate> = labels
             .iter()
             .map(|label| {
@@ -230,7 +261,8 @@ impl ViewSymbols {
             })
             .collect();
 
-        let placed = place(&candidates, &options.rules, &mut grid);
+        let placed = place(&candidates, &options.rules, grid);
+        self.decided.extend_from_slice(&placed);
         for entry in &placed {
             if entry.text {
                 self.orientations
@@ -262,6 +294,36 @@ impl ViewSymbols {
     #[must_use]
     pub fn settled(&self) -> bool {
         self.fades.settled()
+    }
+
+    /// Forgets what the last frame decided, before deciding a new one.
+    pub fn begin(&mut self) {
+        self.decided.clear();
+    }
+
+    /// Advances every fade to its resting value without placing again.
+    ///
+    /// For a caller drawing a settled frame rather than an animation: placement has decided, and
+    /// this takes the labels it placed to opaque and the rest to transparent. Placing again to
+    /// achieve the same would enter every label into the collision grid a second time, where it
+    /// would then collide with itself.
+    ///
+    /// Bounded, because a fade that will not converge must not hang a frame.
+    pub fn settle(&mut self, increment: f32) {
+        let decided = core::mem::take(&mut self.decided);
+        for _ in 0..8 {
+            if self.fades.settled() {
+                break;
+            }
+            self.fades.step(
+                increment,
+                decided
+                    .iter()
+                    .map(|symbol| (symbol.cross_tile_id, symbol.text, symbol.icon)),
+                false,
+            );
+        }
+        self.decided = decided;
     }
 
     /// Writes this frame's opacities into the buffer's per-vertex slots.

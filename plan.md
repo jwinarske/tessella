@@ -3835,12 +3835,20 @@ a subdivision and a draw the consumer no longer makes.
 
   Two things it is not yet:
 
-  **Per bucket, where mbgl is per frame.** Each bucket is one layer of one tile, and
-  `ViewSymbols::frame` builds its own grid, so a road name and a shop name never compete. `place`
-  itself takes the caller's grid, so what this needs is for `frame` to accept one too -- a small
-  addition, and the reason it is not done here is that the projection is per tile while the grid
-  is per frame, so the loop has to turn inside out. Within a bucket it is already right, and a
-  z14 tile drawn at z16 covers the viewport, so most of what overlapped is caught.
+  **Per bucket, where mbgl is per frame -- and sharing the grid made it worse, which is the
+  interesting part.** `ViewSymbols::frame_in` now takes the caller's grid, and threading one grid
+  through the encode loop was tried and reverted. The encode loop runs in *painter* order, bottom
+  first, and mbgl places in **reverse** render order so the topmost label claims its space before
+  the layers under it are offered any. Sharing a grid bottom-first let the lowest label layer --
+  2,256 house numbers at z16 -- fill it before a single place name was offered, and the frame came
+  back emptier than with no sharing at all. The fix is a placement pass over the symbol buckets in
+  reverse order *before* the encode loop, and `frame_in`, `begin` and `settle` are the pieces it
+  needs; the retreat is recorded in the code beside the call.
+
+  Frame-unique identities came out of the same attempt and stay: numbering each bucket's labels
+  from one collided across buckets the moment they shared a `ViewSymbols`, so the second bucket's
+  first label overwrote the first bucket's fade state and every bucket after read another's
+  decision.
 
   **Stepped to rest rather than animated.** A fade is a per-frame animation keyed by cross-tile
   id, and nothing carries that state between frames here, so one step leaves every label at the
