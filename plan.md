@@ -3859,34 +3859,41 @@ a subdivision and a draw the consumer no longer makes.
   Being *under* the oracle's text now rather than over it is unexplained and worth a look: it may
   be the padding defaults, or the sixteen pitched batches still skipped.
 
-- **The frame is not reproducible, and that blocks everything else about symbols.** The probe
-  waiting for quiet was committed as making the frame deterministic on the strength of three runs
-  that agreed at 8,654. A fourth run does not: the same view at HEAD gives 6,502, 8,665, 6,502,
-  6,502. That claim is wrong and this corrects it. Quiescence was necessary and is not sufficient.
+- **The glyph fetch happens once, from whatever tile landed first.** *Root cause, established by
+  instrumenting rather than guessing.* `TileSource::want_glyphs` is guarded by a `scheduled`
+  boolean, so it runs exactly once per source for the life of the map, and it collects its
+  dependencies from whatever has landed at that instant. Measured on liberty at z16:
 
-  Everything measured about labels this session carries that spread, including every comparison
-  that concluded a change made things worse. The shared-grid results in particular -- 331 to 2,179
-  across runs -- may be measuring arrival order more than placement.
+      [glyphs] tile z13/4400/2686 landed with 170 codepoints, scheduled: false
+      [glyphs] scheduling fetch: 1 tiles landed, 3 stacks, 90 codepoints
+      [glyphs] tile z14/8800/5373 landed with 451 codepoints, scheduled: true
+      [glyphs] tile z14/8801/5373 landed with 476 codepoints, scheduled: true
 
-  **The strongest lead, and it is not confirmed.** A symbol bucket is laid out once, and
-  `lay_out` drops a glyph whose rectangle has not reached the atlas yet, so a bucket encoded
-  before its glyph ranges arrive loses those letters permanently. The renders show exactly that:
-  "Brandenburg Gate" comes out "Brandenburg ate". The gate that should prevent it,
-  `Content::is_encodable`, asks whether *any* fonts exist rather than whether this bucket's
-  codepoints are resolved -- and `Fonts::is_resolved`, whose own doc comment says it is "what a
-  caller asks before deciding a tile's symbols are final rather than provisional", is never
-  called anywhere in orchestrate.
+  The fetch is scheduled off the *prefetched z13 ancestor* -- the first tile to land, and one the
+  frame does not even draw -- and asks for 90 codepoints. The two z14 tiles the frame is made of
+  land afterwards wanting 451 and 476, and nothing fetches them. The map ends up holding about
+  ninety of the six hundred or so distinct codepoints it needs.
 
-  Wiring `is_resolved` in made it worse -- 498 pixels on three runs of four -- which is consistent
-  with a deadlock: a bucket that is not bound never has its glyph ranges requested, so they never
-  resolve, so it is never bound. If that is right the fix is to request a tile's glyph ranges when
-  the tile is *built* rather than when its symbols are first bound, and only then gate binding on
-  resolution. That is the next thing to establish, and it should be established by instrumenting
-  the glyph request path, not by trying it.
+  This one fact accounts for everything symbols have been doing:
 
-  Five changes have now been tried against this and reverted. What is missing is not another
-  change; it is knowing which glyphs were asked for, when they arrived, and which bucket was laid
-  out in between.
+  - **Missing letters.** "Brandenburg Gate" renders as "Brandenburg ate": the G was not in the
+    ninety. `lay_out` drops a glyph whose rectangle is not in the atlas, and a bucket is laid out
+    once.
+  - **Non-reproducibility.** *Which* tile wins the race to land first decides which ninety
+    codepoints exist, so the same view draws differently run to run -- 6,502, 8,665, 6,502, 6,502
+    on four runs of HEAD. Every label measurement this session carries that spread.
+  - **The label deficit against the oracle**, 8,654 pixels against 13,973.
+  - **Why gating on `Fonts::is_resolved` deadlocked** when tried: codepoints that were never
+    fetched never resolve, the bucket is never bound, and `want_glyphs` never runs again to fetch
+    them.
+
+  The fix is that `scheduled` has to become a record of *which* dependencies were requested rather
+  than a single flag, with a tile landing that needs codepoints outside it triggering a further
+  fetch. Only once that holds does gating binding on `is_resolved` become the right thing rather
+  than a deadlock. Neither is done here: this entry is the diagnosis.
+
+  Five changes were tried against these symptoms before this and all five were reverted. The
+  diagnostic that found it took one run.
 
 - **Frame-wide placement is worse than per-bucket, and three explanations have now failed.**
   With a probe that waits for quiet, per-bucket placement gives 8,654 dark text pixels on every
