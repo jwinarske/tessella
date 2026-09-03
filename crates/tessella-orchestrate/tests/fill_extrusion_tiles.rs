@@ -275,8 +275,32 @@ fn the_drawable_block_is_an_extrusions_own() {
         bearing: 0.0,
         pitch: 0.0,
     });
-    let entry = ExtrusionDrawableEntry::for_tile(&view, 14, 8802, 5373, 0, 1, 0, [0.0, 0.0, 0.0])
+    let entry = ExtrusionDrawableEntry::for_tile(&view, 14, 8802, 5373, 0, [0.0, 0.0, 0.0])
         .expect("an entry");
+
+    // No sublayer nudge, which nothing pinned before and which the picture depends on.
+    //
+    // mbgl draws a fill-extrusion under `depthModeFor3D` -- the whole depth range, no sublayer
+    // term -- and not under `depthModeForSublayer`, which divides a flat layer's range so a
+    // fill's outline does not z-fight the fill it outlines. Taking the flat-layer offset here
+    // separates the roof from the walls it belongs to by one `DEPTH_EPSILON`, which after the
+    // divide is 9.3e-7 of clip depth against the 2e-4 a 150-metre building spans in total. The
+    // symptom is whole triangles of building where neither surface won the comparison.
+    let flat = tessella_orchestrate::ubo::DrawableEntry::for_tile_with(
+        &view, 14, 8802, 5373, 0, 1, 2, [0.0, 0.0],
+    )
+    .expect("a flat entry");
+    assert_ne!(
+        flat.matrix, entry.matrix,
+        "a flat layer's matrix should carry the sublayer nudge this one must not"
+    );
+    assert_eq!(
+        entry.matrix,
+        tessella_orchestrate::ubo::DrawableEntry::for_tile_3d(&view, 14, 8802, 5373, 0)
+            .expect("a 3d entry")
+            .matrix,
+        "an extrusion's matrix is the unnudged one"
+    );
 
     let packed = pack_extrusion_drawable_buffer(&[entry], FILL_EXTRUSION_DRAWABLE_UBO.stride);
     assert_eq!(packed.len(), FILL_EXTRUSION_DRAWABLE_UBO.stride as usize);

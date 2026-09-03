@@ -222,6 +222,45 @@ impl DrawableEntry {
             interpolations,
         })
     }
+
+    /// As [`Self::for_tile_with`], for a layer that resolves in the depth buffer.
+    ///
+    /// # A 3D layer takes no sublayer nudge
+    ///
+    /// [`depth_offset`] reproduces mbgl's `depthModeForSublayer`, which divides a *flat* layer's
+    /// depth range into [`SUBLAYERS`] steps so a fill's outline does not z-fight the fill it
+    /// outlines. A fill-extrusion does not go through it: mbgl draws it under `depthModeFor3D`,
+    /// which takes the whole depth range and has no sublayer term at all. Its drawables are
+    /// separated by the geometry's own depth, which is the point of a 3D layer.
+    ///
+    /// Nudging one anyway is not the harmless bias it looks like. An extrusion's depth-only pass
+    /// and the colour pass that follows draw the *same* surfaces, and the colour pass has to
+    /// compare equal against what the depth pass wrote. One step of [`DEPTH_EPSILON`] is 9.3e-7
+    /// of clip depth after the divide, against the 2e-4 that a 150-metre building spans in
+    /// total, and `depth_probe`'s third phase puts the tolerance below that: at a separation of
+    /// 1e-6 the colour pass is rejected entirely and the buildings vanish.
+    ///
+    /// # Errors
+    ///
+    /// [`camera::CameraError`] when the view has no area.
+    pub fn for_tile_3d(
+        view: &ViewTransform,
+        z: u8,
+        x: u32,
+        y: u32,
+        wrap: i32,
+    ) -> Result<Self, camera::CameraError> {
+        let matrix = camera::multiply(
+            &camera::proj_matrix(view)?,
+            &camera::matrix_for_tile(z, x, y, wrap, view.zoom),
+        );
+
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(Self {
+            matrix: core::array::from_fn(|index| matrix[index] as f32),
+            interpolations: [0.0, 0.0],
+        })
+    }
 }
 
 /// The two zoom-mix factors a fill drawable's UBO carries.
@@ -632,6 +671,9 @@ impl ExtrusionDrawableEntry {
     /// # Errors
     ///
     /// [`camera::CameraError`] when the view has no area.
+    ///
+    /// No layer or sublayer index: the matrix takes neither, because a 3D layer's depth range is
+    /// the whole buffer. See [`DrawableEntry::for_tile_3d`].
     #[allow(clippy::too_many_arguments)]
     pub fn for_tile(
         view: &ViewTransform,
@@ -639,21 +681,12 @@ impl ExtrusionDrawableEntry {
         x: u32,
         y: u32,
         wrap: i32,
-        layer_index: i32,
-        sub_layer_index: i32,
         interpolations: [f32; 3],
     ) -> Result<Self, camera::CameraError> {
-        let matrix = DrawableEntry::for_tile_with(
-            view,
-            z,
-            x,
-            y,
-            wrap,
-            layer_index,
-            sub_layer_index,
-            [0.0, 0.0],
-        )?
-        .matrix;
+        // `for_tile_3d`, not `for_tile_with`: mbgl's `depthModeFor3D` has no sublayer term, and
+        // applying the flat-layer one here separates this drawable's depth from the depth pass
+        // that precedes it by more than the comparison tolerates.
+        let matrix = DrawableEntry::for_tile_3d(view, z, x, y, wrap)?.matrix;
 
         // mbgl's own arithmetic: the tile's pixel origin at the *integer* zoom, split so the
         // shader can reconstruct it without losing the low bits. `tileSizeAtNearestZoom` is

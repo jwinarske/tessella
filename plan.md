@@ -4243,31 +4243,53 @@ a subdivision and a draw the consumer no longer makes.
   it could not explain -- the same settings working there and not here -- was the real bug all
   along.
 
-- **A translucent extrusion blends some surfaces twice.** *Open. The mechanism is confirmed and two
-  suspects are priced out.* On the side of a stacked building a lighter wedge is composited into an
-  otherwise uniform wall -- a second surface at the depth the first just wrote, passing the test
-  and blending over it. Set `fill-extrusion-opacity` to 1 and it goes, which is what identifies it
-  as blending rather than geometry.
+- **A translucent extrusion blends some surfaces twice.** *Fixed.* On the side of a stacked
+  building a lighter wedge was composited into an otherwise uniform wall -- a second surface at the
+  depth the first just wrote, passing the test and blending over it. Setting `fill-extrusion-opacity`
+  to 1 removed it, which is what identified it as blending rather than geometry.
 
-  mbgl avoids it by writing depth in the depth pass and only *reading* it in the colour pass, so
-  each pixel is drawn once. Ours loses most of its walls when made read-only -- 98.1% of pixels
-  within 24/255 against 99.9% -- and the reason is not yet known.
+  Two bugs, and neither was visible while the other stood.
 
-  What `depth_probe`'s third phase settles: two passes over one surface, a depth-only pass then a
-  read-only colour pass, survive **only at exactly the same depth**. At 1e-6 apart the colour pass
-  is lost. That tolerance matters because the whole depth range a 150-metre building spans is 2e-4.
+  **The consumer drew the colour pass before the depth pass.** `endFrame` reverses the frame's
+  batches, because the producer sends front-to-back and a translucent pass with no depth buffer has
+  to blend bottom-up. That reversal also turned an extrusion inside out: the producer emits the
+  depth-only pass at sub-layers 0 and 1 and the colour pass at 2 and 3, and reversed, the colour
+  pass ran first against a cleared buffer. The measurement that proves it: a read-only colour pass
+  *with* the prepass and one with **no depth buffer at all** lost the same 6,857 wall pixels, which
+  can only hold if nothing ever read what the prepass wrote. It is also why the prepass looked
+  redundant -- dropping it rendered pixel-identically. Fixed by reversing at layer granularity and
+  restoring the producer's order inside a layer that resolves in depth.
 
-  What that priced out: the per-sub-layer depth nudge. `for_tile_with` applies mbgl's
-  `depthModeForSublayer` -- `1 / 2048` per step, which after the divide is 9.3e-7 between an
-  extrusion's depth pass and its colour pass, right at the probe's threshold. A 3D layer should
-  take `depthModeFor3D` instead, which has no nudge. Removing it *and verifying* all four
-  sub-layers land on one `matrix[14]` does **not** bring the walls back, so the nudge is real, is
-  arguably wrong for a 3D layer, and is not the cause. It was reverted rather than shipped: it
-  changes 184 pixels, fixes nothing, and touches matrices the goldens pin.
+  **The extrusion matrix carried the flat-layer sublayer nudge.** `for_tile_with` applies mbgl's
+  `depthModeForSublayer`, which divides a flat layer's depth range so a fill's outline does not
+  z-fight the fill it outlines. mbgl draws a fill-extrusion under `depthModeFor3D` instead -- the
+  whole range, no sublayer term. One step of `DEPTH_EPSILON` is 9.3e-7 of clip depth after the
+  divide, against the 2e-4 a 150-metre building spans in total, and `depth_probe`'s third phase puts
+  the tolerance below that: at 1e-6 apart the colour pass is rejected outright. Fixed with
+  `DrawableEntry::for_tile_3d`, and pinned by a test, which nothing did before.
 
-  Also standing: the depth-only pass is currently redundant -- skipping it gives a pixel-identical
-  frame with 36 renderables instead of 54, because our colour pass writes depth itself. That is the
-  divergence from mbgl in one sentence and the same reason the double blend happens.
+  Removing the nudge alone had been tried and reverted as useless -- correctly, on the evidence
+  available then. With the order still inverted the colour pass was never tested against anything,
+  so no depth change could show. Each fix needs the other to mean anything.
+
+  **mbgl's read-only colour pass is not reproducible here, and does not need to be.** It exists so
+  each pixel blends exactly once, and it works there because both passes draw the same drawables
+  through the same shaders, making the depths bit-identical. Ours are not: the roof and the walls
+  are separate drawables on separate shaders, the walls expanded from outlines and reconstructing
+  position from instance attributes. Swept over every comparison function, a read-only colour pass
+  scores MAE 5.46 against the oracle where a writing one scores 2.05, and the disagreement shows as
+  whole triangles of building where neither surface won.
+
+  So the prepass is skipped at the consumer and the single colour pass writes depth. It resolves
+  roof against wall and building against building, which is what the prepass was for. Against the
+  oracle: **MAE 2.05 and 164 gross pixels, from 2.08 and 342**, with 36 renderables instead of 54.
+  Skipped at the consumer rather than dropped from the stream -- the producer's order is measured
+  against mbgl's own capture and has to keep saying what mbgl says; how a backend satisfies it is
+  §11.7's business.
+
+  Still standing: our walls are a few units lighter than the oracle's -- 28,370 pixels below the
+  dark threshold against 40,323 -- while staying within 48 of it everywhere. That is a shading
+  constant, not geometry, and it is what the remaining exact-match gap is made of.
 
 - **A raster layer paints over the vector layers beneath it.** *Open, and newly isolated.* In the
   all-families style the imagery hides water, the pattern, the roads and the buildings: zero pixels

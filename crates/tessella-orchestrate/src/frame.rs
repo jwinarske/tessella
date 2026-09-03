@@ -2011,8 +2011,6 @@ fn write_layer_state(
                             tile.x,
                             tile.y,
                             i32::from(tile.wrap),
-                            layer_index,
-                            sub_layer_index,
                             interpolations,
                         )
                         .ok()
