@@ -4499,6 +4499,20 @@ a subdivision and a draw the consumer no longer makes.
   the labels now agree with the oracle's on which roads carry a name and where. No Berlin scene
   moves; none of them uses line placement.
 
+  What the remaining 8,229 is, in 36 clusters the size of whole labels, and it is two things:
+
+  - **A different road wins.** Where the oracle sets "11th Street Northwest" down a cross street,
+    ours sets "Massachusetts Avenue Northwest" along the diagonal through the same ground. Both are
+    plausible; they are competing for one piece of screen and the collision resolves it differently.
+  - **The same label sits at a different anchor.** "Pennsylvania Avenue Northwest" is on its road in
+    both, ours further along it than the oracle's.
+
+  `get_anchors` itself is faithful -- the `continued_line` test, the spacing widening and the offset
+  formula all match `get_anchors.cpp` line for line -- so the divergence is not there. Two candidates
+  are left. Ours makes one pending symbol per clipped run, where mbgl keeps a feature's runs together
+  and feeds every run's anchors into the same feature's instances; that changes what competes with
+  what. And `resample` has not been compared against mbgl's the way `get_anchors` now has.
+
 - **A symbol's anchor lands a fraction of a pixel from mbgl's.** *Open, and measured to the
   decimal.* It is what is left of both symbol layers: 811 gross pixels of 630,000 on `poi-labels`
   and 1,351 on the icon-only style, and in each case the split is the same -- about half
