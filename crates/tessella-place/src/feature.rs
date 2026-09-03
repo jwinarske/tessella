@@ -238,6 +238,18 @@ pub struct LineCircle {
     /// "a little bit of conservative padding in choosing which boxes to use" — so a circle near
     /// the edge of what is being tested is included rather than dropped.
     pub distance_from_anchor: f32,
+    /// Whether this circle is one the label itself covers, rather than padding beyond it.
+    ///
+    /// The run reaches about twice the label's length: half a run of *pitch padding* on each
+    /// side, which mbgl adds so that collision still works for a label stretched by a pitched
+    /// camera into the distance. It is not part of what the label occupies now, and mbgl does not
+    /// test it now — `placeLineFeature` skips every circle outside the placed first and last
+    /// glyph, which at pitch zero is the label's own extent.
+    ///
+    /// Testing the padding as though it were the label is what stopped a road carrying its name
+    /// more than once: two labels 250 pixels apart on a straight road, each 114 pixels wide,
+    /// reserved 272 pixels each and so collided with a neighbour they never touched.
+    pub covered_by_label: bool,
 }
 
 /// The circles a line-following label collides as.
@@ -378,6 +390,16 @@ pub fn line_circles(
         out.push(LineCircle {
             circle: Circle::new(center, box_size / 2.0),
             distance_from_anchor,
+            // Against the label's own half-length, which is what mbgl compares the same distance
+            // to: it skips every circle beyond the placed first and last glyph, and at pitch zero
+            // those sit at the ends of the label.
+            //
+            // The *slackened* distance, because that is the value mbgl compares --
+            // `placeLineFeature` reads `circle.signedDistanceFromAnchor`, which is stored with
+            // the fifth already taken off. It widens the band that counts as covered by a
+            // quarter, and it is the difference between drawing a few more labels than the
+            // oracle and drawing the same ones.
+            covered_by_label: distance_from_anchor.abs() <= label_length / 2.0,
         });
     }
 

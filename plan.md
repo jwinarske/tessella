@@ -4122,30 +4122,39 @@ a subdivision and a draw the consumer no longer makes.
 
   Berlin z14 goes from 885 pixels of text to 2,050, reproducible, and every label reads whole.
 
-- **Road labels repeat half as often as the oracle's, and it is not the anchors.** *Open, and
-  narrowed.* One straight road, one name, the same style through both renderers: mbgl draws four
-  labels 250 pixels apart, which is exactly `symbol-spacing`; we draw two, 500 apart. A 600-pixel
-  road draws two in mbgl and *none* here.
+- **A label reserved its pitch padding as though the label covered it.** *Fixed, and it is why a
+  road carried its name once where the oracle carried it four times.* A line label collides as a
+  run of circles, and the run reaches about twice the label's length: half a run of *pitch
+  padding* on each side, which mbgl adds so collision still works for a label a pitched camera
+  stretches into the distance.
 
-  What has been ruled out, each by measurement rather than by reading:
+  mbgl builds the same padded run and then does not test it. `placeLineFeature` skips every circle
+  outside the placed first and last glyph, which at pitch zero is the label's own extent. We
+  tested the whole run, so a label 114 pixels wide reserved 272, and two of them 250 pixels apart
+  -- which is exactly what `symbol-spacing` asks for -- collided with a neighbour they never
+  touched.
 
-  - Anchors. Layout produces two instances per tile at 2,000 and 6,000 tile units -- 250 pixels
-    apart -- and `get_anchors` agrees with mbgl's source line for line: the same acceptance test,
-    the same spacing adjustment, the same offset, the same middle fallback.
-  - Collision, as the *machinery*. Forcing `text_allow_overlap` draws all four at 250 pixels, so
-    the candidates reach placement and are rejected there. Handing `place` the same four
-    candidates in a unit test places all four.
-  - A missing collision run. Fixed on its own merits and changed nothing here.
-  - Stale encoding. Symbol geometry is not re-encoded once the consumer holds it, so the first
-    frame's opacity could have stuck; forcing a re-encode every frame changed nothing.
+  Measured on one straight road with one name, both renderers: mbgl draws four labels 250 pixels
+  apart, we drew two at 500. Now four at 250. A 600-pixel road drew none and now draws two, as the
+  oracle does.
 
-  So: two labels, an empty grid, nothing in the way, and both rejected by the collision test. The
-  next thing to measure is the grid itself -- what is in it when the first label of the frame is
-  offered.
+  Against the *slackened* distance, because that is the value mbgl compares:
+  `signedDistanceFromAnchor` is stored with a fifth already taken off. Comparing the raw distance
+  instead is a quarter narrower and overshoots the oracle -- Berlin 3,176 against 3,005 rather
+  than 3,041.
 
-  `glyph_quads_drawn` and `glyph_quads_hidden` on the consumer are what made this legible: they
-  separate "never shaped" from "shaped and hidden", which is the first fork in any missing-label
-  question and was guesswork before.
+  Four explanations were falsified first, each by measurement: the anchors (right, and
+  `get_anchors` agrees with mbgl line for line), the collision machinery (the same candidates place
+  in isolation), a missing collision run, and stale encoding. The one that found it was
+  reproducing the two labels in-process and printing the circle runs -- 3..275 and 217..507 for
+  labels 114 wide.
+
+- **We draw more labels than the oracle where a name repeats across features.** *Open.* Berlin is
+  at 3,041 against 3,005, which is parity; Washington is at 2,353 against 1,931. The likely cause
+  is named and not yet built: mbgl's `anchorIsTooClose` rejects an anchor within
+  `symbol-spacing / 2` of another anchor carrying the *same text*, per tile, and we have no such
+  filter. Washington is full of streets split into many features sharing a name, which is exactly
+  where it would bite.
 
 - **The style's placement properties never reached placement.** *Fixed.* `FrameOptions` was built
   with `Rules::default()` and the default paddings whatever the style said, so `text-allow-overlap`,

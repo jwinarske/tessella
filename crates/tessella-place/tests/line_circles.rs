@@ -258,6 +258,9 @@ mod thinning {
                 circle: Circle::new((index as f32 * spacing, 0.0), radius),
                 #[allow(clippy::cast_precision_loss)]
                 distance_from_anchor: index as f32 * spacing,
+                // Thinning is about density and does not read this; the runs here are the
+                // label's own, so it is what the label covers.
+                covered_by_label: true,
             })
             .collect()
     }

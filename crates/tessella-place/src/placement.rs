@@ -132,8 +132,15 @@ impl Shape {
             // Any circle hitting is the whole label refused. A partial run would draw part of a
             // road name, and the thinning below drops circles that add nothing rather than
             // circles that are in the way.
+            // Only what the label covers. The run reaches about twice the label's length --
+            // mbgl's pitch padding, for a label a pitched camera stretches into the distance --
+            // and mbgl does not test that padding either: `placeLineFeature` skips every circle
+            // outside the placed first and last glyph. Testing it made a road name collide with
+            // the next copy of itself 250 pixels away, so a road carried its name once where the
+            // oracle carried it four times.
             Self::Circles(circles) => thin(circles)
                 .into_iter()
+                .filter(|index| circles[*index].covered_by_label)
                 .any(|index| grid.hit_test_circle(circles[index].circle)),
         }
     }
@@ -146,7 +153,7 @@ impl Shape {
                 // The same run that was tested. Reserving every circle while testing a thinned
                 // set would make a label block more than it checked against, which reads as a
                 // map that thins out as it fills.
-                for index in thin(circles) {
+                for index in thin(circles).into_iter().filter(|index| circles[*index].covered_by_label) {
                     grid.insert_circle(id, circles[index].circle);
                 }
             }
