@@ -4349,36 +4349,45 @@ a subdivision and a draw the consumer no longer makes.
   the prepass**, and the wall is uniform where mbgl's is uniform. Opaque styles stay at 100.0% and
   MAE 0.00.
 
-  **And the depth pass takes the colour pass's clip.** This is what made the prepass look broken.
-  mbgl sets `setEnableStencil(doDepthPass)` on the colour builder and leaves the depth builder at
-  the default of false, and there it does not matter: mbgl's stencil is what makes exactly one tile
-  paint each pixel, and between them the tiles still cover everything. Here the clip is honoured
-  per drawable, so an unclipped depth pass writes for the whole of a building including the part
-  overhanging its tile -- MVT geometry runs past the edge by design -- and the clipped colour pass
-  can never paint there. The neighbouring tile carries its own copy and does paint it, but from its
-  own origin, so its depth differs in the last bits and the test rejects it. What is left is depth
-  with no colour: whole wall faces replaced by the background.
+  **And an extrusion is not clipped to its tile, in either pass.** This was the anomaly, and it
+  took three tries to read correctly. The producer marks the colour pass `ENABLE_STENCIL` and the
+  depth pass not, which is what mbgl does -- `setEnableStencil(doDepthPass)` on the colour builder,
+  the depth builder left at the default of false. There the asymmetry is harmless, because mbgl's
+  stencil is what makes exactly one tile paint each pixel and between them the tiles cover
+  everything.
 
-  The symptom that identified it: each pass drawn *alone* was correct, and only the pair failed,
-  which is exactly what a clip on one and not the other does. Rendering the depth drawables with
-  colour enabled scored 8 gross pixels against the colour pass's 163 -- the colour pass is the one
-  being clipped, and the walls it loses at tile edges are the difference.
+  Here a building's geometry runs past its tile's edge by design and nothing paints what the clip
+  cuts: the neighbouring tile does not carry its own copy to paint it with. So the clip removes
+  wall faces and leaves the background in their place.
+
+  The measurement that settles it is the gross count, not the exact count. Rendering *only* the
+  depth drawables, which carry no stencil, gives 8 gross pixels against the colour drawables' 163 --
+  identical geometry through an identical shader, differing in one flag.
 
   Berlin at 0.9, against `mbgl-render`:
 
-  | arrangement | exact | MAE | gross px |
-  |---|---|---|---|
-  | colour pass only | 92.0% | 0.41 | 163 |
-  | prepass, unclipped | 94.9% | 0.66 | 2,694 |
-  | **prepass, clipped to match** | **97.8%** | **0.13** | **161** |
+  | arrangement | exact | MAE | gross px | worst region |
+  |---|---|---|---|---|
+  | colour pass only, clipped | 92.0% | 0.41 | 163 | 66 |
+  | prepass unclipped, colour clipped | 94.9% | 0.66 | 2,694 | 1,351 |
+  | both clipped | 97.8% | 0.13 | 161 | 64 |
+  | **neither clipped** | 95.7% | 0.20 | **8** | **1** |
 
-  Opaque styles stay at 100.0% and MAE 0.00.
+  Clipping only one pass is worse than either extreme: the depth pass writes for the whole building
+  and the clipped colour pass cannot paint the part outside the tile, which leaves depth with no
+  colour -- a hole rather than a slice. Clipping both trades the holes back for slices and scores
+  best on exact and MAE while keeping every visible defect, which is what makes those two numbers
+  the wrong ones to steer by here.
+
+  What dropping the clip costs: two tiles' copies of an overlapping building both blend, so 2.1% of
+  pixels differ by a shade. That is the 95.7% against 97.8%, and it is not visible; missing wall
+  faces are.
+
+  Opaque styles stay at 100.0% and MAE 0.00. The all-families scene improved with it, from 8.4% of
+  pixels exact and MAE 31.84 to 16.6% and 20.13.
 
   One thing deliberately not taken: mbgl leaves its colour pass read-only, and measured here that
   is worse, so the colour pass writes depth too.
-
-  Measurement note: the probe's frame is not always the same frame. Tile arrival varies, and a run
-  that catches 64 extrusion drawables instead of 48 scores differently. Compare like with like.
 
 - **A raster layer paints over the vector layers beneath it.** *Open, and newly isolated.* In the
   all-families style the imagery hides water, the pattern, the roads and the buildings: zero pixels
