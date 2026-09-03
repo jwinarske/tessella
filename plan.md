@@ -4493,13 +4493,24 @@ a subdivision and a draw the consumer no longer makes.
   against the box on its own, dropped when wholly outside, and a new run begun whenever a segment
   does not continue the last. Clipping the polyline properly would join runs mbgl keeps apart.
 
-  Washington, the only scene here with `symbol-placement: line`: **gross pixels 17,227 to 8,229**
-  and MAE 3.07 to 2.95. The exact-match count falls, 94.6% to 93.0%, which is the same trade the
-  extrusion clip made and is read the same way -- the halved gross count is what is visible, and
-  the labels now agree with the oracle's on which roads carry a name and where. No Berlin scene
-  moves; none of them uses line placement.
+  **Where the clip goes matters as much as having one.** mbgl's order is merge, then clip, then
+  anchors: `mergeLines(features)` closes the constructor and `clipLines` runs per feature in
+  `finalizeSymbols`. Clipping at the point where a feature is recorded instead hands `merge_lines`
+  the runs rather than the lines, and merging runs re-joins what the clip separated -- undoing it
+  for exactly the roads it was meant to cut. Clipped at anchor time, with one walk per run, the
+  order is mbgl's.
 
-  What the remaining 8,229 is, in 36 clusters the size of whole labels, and it is two things:
+  Washington, the only scene here with `symbol-placement: line`:
+
+  | | exact | MAE | gross |
+  |---|---|---|---|
+  | unclipped | 94.6% | 3.07 | 17,227 |
+  | clipped at push, merged after | 93.0% | 2.95 | 8,229 |
+  | **merged, then clipped at anchor time** | **97.2%** | **1.50** | 8,381 |
+
+  No Berlin scene moves; none of them uses line placement.
+
+  What the remaining gross is, in clusters the size of whole labels, and it is two things:
 
   - **A different road wins.** Where the oracle sets "11th Street Northwest" down a cross street,
     ours sets "Massachusetts Avenue Northwest" along the diagonal through the same ground. Both are
@@ -4508,10 +4519,9 @@ a subdivision and a draw the consumer no longer makes.
     both, ours further along it than the oracle's.
 
   `get_anchors` itself is faithful -- the `continued_line` test, the spacing widening and the offset
-  formula all match `get_anchors.cpp` line for line -- so the divergence is not there. Two candidates
-  are left. Ours makes one pending symbol per clipped run, where mbgl keeps a feature's runs together
-  and feeds every run's anchors into the same feature's instances; that changes what competes with
-  what. And `resample` has not been compared against mbgl's the way `get_anchors` now has.
+  formula all match `get_anchors.cpp` line for line -- so the divergence is not there. One candidate
+  named here has since been settled and is above: the merge/clip order. What is left untested is
+  `resample`, which has not been compared against mbgl's the way `get_anchors` now has.
 
 - **A symbol's anchor lands a fraction of a pixel from mbgl's.** *Open, and measured to the
   decimal.* It is what is left of both symbol layers: 811 gross pixels of 630,000 on `poi-labels`

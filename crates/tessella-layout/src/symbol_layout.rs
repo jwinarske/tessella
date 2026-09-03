@@ -129,7 +129,7 @@ fn icon_options(layer: &Layer, zoom: f64, feature: Option<&dyn Feature>) -> Icon
 ///
 /// It is also what gives `continued_line` its meaning: the flag tests a run's first point against
 /// 0 and `EXTENT` exactly, which is a coordinate only a cut produces.
-fn clip_line(line: &[(f32, f32)], x1: f32, y1: f32, x2: f32, y2: f32) -> Vec<Vec<(f32, f32)>> {
+pub fn clip_line(line: &[(f32, f32)], x1: f32, y1: f32, x2: f32, y2: f32) -> Vec<Vec<(f32, f32)>> {
     let mut out: Vec<Vec<(f32, f32)>> = Vec::new();
     if line.len() < 2 {
         return out;
@@ -520,23 +520,14 @@ impl SymbolLayout {
                 if ring.len() < 2 {
                     continue;
                 }
-                // Clipped to the tile, and one label per run.
+                // Whole, and clipped later.
                 //
-                // mbgl runs `clipLines` over the feature and then `getAnchors` once per clipped
-                // run. Where a road leaves the tile and comes back, that is two runs and two
-                // independent anchor walks; uncut it is one walk whose spacing carries straight
-                // across the gap, so every anchor after the gap is somewhere else and the label
-                // with it.
-                //
-                // The comment that stood here said the opposite -- that cutting would give each
-                // side its own ends and put a name at every seam -- and reasoned from
-                // `get_anchors` testing candidates against the tile. That is true and is not the
-                // whole of it: what the cut changes is where the walk *starts and how far it has
-                // run*, not only which candidates survive.
-                clip_line(ring, 0.0, 0.0, EXTENT, EXTENT)
-                    .into_iter()
-                    .map(Anchoring::Line)
-                    .collect::<Vec<_>>()
+                // mbgl's order is merge, then clip, then anchors: `mergeLines(features)` closes
+                // the constructor and `clipLines` runs per feature in `finalizeSymbols`. Clipping
+                // here instead would hand `merge_lines` the runs rather than the lines, and
+                // merging runs re-joins what the clip separated -- undoing it for exactly the
+                // roads it was meant to cut.
+                alloc::vec![Anchoring::Line(ring.clone())]
             } else {
                 let Some(first) = ring.first() else { continue };
                 // A point label belongs to the tile it is in, and to no other. The features

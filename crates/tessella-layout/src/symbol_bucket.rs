@@ -792,18 +792,29 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
             .into_iter()
             .collect()
         } else {
-            get_anchors(
-                &label.line,
-                options.spacing,
-                options.max_angle,
-                shaping.left,
-                shaping.right,
-                label.icon.0,
-                label.icon.1,
-                ONE_EM,
-                options.max_box_scale,
-                options.overscaling,
-            )
+            // One walk per clipped run, which is mbgl's `for (auto& line : clippedLines)`.
+            //
+            // The clip decides where a walk starts and how far it has run by any point on the
+            // line, not only which candidates survive the tile test. A road that leaves the tile
+            // and comes back is two walks there and was one here, so every anchor past the gap
+            // carried the wrong distance and the label with it.
+            crate::symbol_layout::clip_line(&label.line, 0.0, 0.0, crate::anchors::EXTENT, crate::anchors::EXTENT)
+                .into_iter()
+                .flat_map(|run| {
+                    get_anchors(
+                        &run,
+                        options.spacing,
+                        options.max_angle,
+                        shaping.left,
+                        shaping.right,
+                        label.icon.0,
+                        label.icon.1,
+                        ONE_EM,
+                        options.max_box_scale,
+                        options.overscaling,
+                    )
+                })
+                .collect::<Vec<crate::anchors::Anchor>>()
         };
 
         let placed = |codepoint| {
