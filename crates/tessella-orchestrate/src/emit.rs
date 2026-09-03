@@ -1605,7 +1605,10 @@ pub fn encode_extrusion(
         ),
     ];
     let descriptors = descriptors(&fixed, vertices, EXTRUSION_STRIDE, layout, interleaved);
-    let shared = ExtrusionShared { outline: vertices };
+    let shared = ExtrusionShared {
+        outline: vertices,
+        interleaved,
+    };
     let roof = geometry_add(
         geometry,
         permutation_key,
@@ -1635,6 +1638,15 @@ pub fn encode_extrusion(
 pub struct ExtrusionShared {
     /// The extrusion's own vertex buffer.
     pub outline: SlabRef,
+    /// The binder's interleaved buffer, which carries the data-driven paint per outline point.
+    ///
+    /// The walls need it as much as the roof does, and for the same reason: `fill-extrusion-height`
+    /// is `["get", "height"]` in every real style, so a wall that reads the paint block instead
+    /// gets the fallback -- zero -- and every wall in the tile is a quad of no height, built and
+    /// uploaded and rasterising nothing. mbgl feeds the same properties in as instance attributes
+    /// (`readDataDrivenPaintProperties<FillExtrusionBase, FillExtrusionColor, FillExtrusionHeight,
+    /// FillExtrusionPattern>`), which is what this carries them for.
+    pub interleaved: SlabRef,
 }
 
 /// The wall template: a unit quad, four vertices of `Short2`.
@@ -1672,6 +1684,7 @@ pub fn encode_extrusion_walls(
     arena: &mut SlabArena,
     geometry: GeometryId,
     shared: ExtrusionShared,
+    layout: &VertexLayout,
     permutation_key: u64,
     pattern_atlas: Option<TextureId>,
 ) -> Encoded {
@@ -1703,11 +1716,8 @@ pub fn encode_extrusion_walls(
         let (offset, data_type) = match attribute.name {
             "idFillExtrusionOutlinePosAttribute" => (0, AttributeDataType::Short2),
             "idFillExtrusionDecimalsEdAttribute" => (4, AttributeDataType::UShort2),
-            // The data-driven ones — colour, base, height, the pattern rectangles — come from
-            // the binder's interleaved buffer, which this does not have. A constant-paint
-            // extrusion supplies none of them, which is the case the capture covers; supplying
-            // some and not others would be worse than supplying none, because the shader would
-            // read a buffer that is there for half its instances.
+            // The data-driven ones are appended below, out of the binder's buffer. They are not
+            // in this table's offsets because they are not in the *outline's* buffer.
             _ => continue,
         };
         instances.push(AttributeDesc {
@@ -1718,6 +1728,30 @@ pub fn encode_extrusion_walls(
             vertex_offset: 0,
             stride: EXTRUSION_STRIDE,
             data_type: data_type as u8,
+            declared_data_type: attribute.declared as u8,
+            _pad: [0; 2],
+        });
+    }
+
+    // Then the data-driven paint, per instance, out of the binder's interleaved buffer.
+    //
+    // One entry per outline point, at the binder's own stride -- the same indexing the outline
+    // position above uses, because the binder writes one entry per roof vertex and a wall stands
+    // on one of them. mbgl reads the same four properties into its instance attributes.
+    //
+    // Omitting these is what left every wall flat: `fill-extrusion-height` is data-driven in every
+    // real style, so the shader fell back to the paint block's value, which for a data-driven
+    // property is its fallback of zero. The walls were built, uploaded, and rasterised nothing --
+    // 318,084 triangles of it, which is why the counter said they were there.
+    for attribute in &layout.attributes {
+        instances.push(AttributeDesc {
+            attr_id: attribute.attr_id,
+            binding: attribute.binding,
+            source: shared.interleaved,
+            offset: attribute.offset,
+            vertex_offset: 0,
+            stride: layout.stride,
+            data_type: attribute.supplied as u8,
             declared_data_type: attribute.declared as u8,
             _pad: [0; 2],
         });

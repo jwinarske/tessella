@@ -1706,11 +1706,13 @@ fn encode_parts(
         );
     }
     if let Some(shared) = extrusion_shared {
-        let (_, key) = bind(FILL_EXTRUSION_FAMILY, BuiltIn::FillExtrusionInstancedShader);
+        let (wall_layout, key) =
+            bind(FILL_EXTRUSION_FAMILY, BuiltIn::FillExtrusionInstancedShader);
         parts.push(emit::encode_extrusion_walls(
             arena,
             PLACEHOLDER,
             shared,
+            &wall_layout,
             key,
             extrusion_atlas,
         ));

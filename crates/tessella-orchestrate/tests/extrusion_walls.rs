@@ -37,7 +37,7 @@ fn encode(atlas: Option<TextureId>) -> (SlabArena, tessella_orchestrate::Encoded
     let bucket = bucket();
     let layout = VertexLayout::default();
     let (_, shared) = encode_extrusion(&mut arena, GeometryId(1), &bucket, &layout, &[], 0, atlas);
-    let walls = encode_extrusion_walls(&mut arena, GeometryId(2), shared, 0, atlas);
+    let walls = encode_extrusion_walls(&mut arena, GeometryId(2), shared, &layout, 0, atlas);
     (arena, walls)
 }
 
@@ -87,7 +87,7 @@ fn the_instances_are_the_roofs_outline() {
     let layout = VertexLayout::default();
     let (roof, shared) =
         encode_extrusion(&mut arena, GeometryId(1), &bucket, &layout, &[], 0, None);
-    let walls = encode_extrusion_walls(&mut arena, GeometryId(2), shared, 0, None);
+    let walls = encode_extrusion_walls(&mut arena, GeometryId(2), shared, &layout, 0, None);
 
     let instances = walls.instance_attributes();
     assert_eq!(
