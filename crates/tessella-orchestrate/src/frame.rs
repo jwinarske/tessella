@@ -2124,6 +2124,15 @@ fn write_layer_state(
             #[allow(clippy::cast_possible_truncation)]
             let size = size as f32;
 
+            // `icon-size` is a multiplier and defaults to one, where `text-size` names a size in
+            // pixels. The shader divides by `ONE_EM` for text and does not for an icon, so the
+            // two halves need their own value as well as their own flag.
+            let icon_size = tessella_style::property::layout_value(layer, "icon-size", zoom, None)
+                .and_then(|value| value.as_number())
+                .unwrap_or(1.0);
+            #[allow(clippy::cast_possible_truncation)]
+            let icon_size = icon_size as f32;
+
             // Both halves, in sub-layer order, the way a fill packs its triangles and its
             // outline. A symbol layer that draws sprites has two drawables per tile and each
             // needs its own matrix slot: packing only the glyphs left the icon drawable pointing
@@ -2148,7 +2157,9 @@ fn write_layer_state(
                         // wrapping the sampler round to whatever is at the origin. That is why an
                         // icon drew as a flat black square rather than as its sprite.
                         sheet_size,
-                        size,
+                        // Sub-layer 1 is the sprite half -- see `bindings_for`.
+                        if sub == 1 { icon_size } else { size },
+                        sub != 1,
                         alignments,
                         placement,
                     )

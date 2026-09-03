@@ -1057,6 +1057,7 @@ impl SymbolDrawableEntry {
         texsize: [f32; 2],
         texsize_icon: [f32; 2],
         size: f32,
+        is_text: bool,
         alignments: Alignments,
         placement: Placement,
     ) -> Result<Self, camera::CameraError> {
@@ -1095,7 +1096,15 @@ impl SymbolDrawableEntry {
             coord_matrix: core::array::from_fn(|index| coord[index] as f32),
             texsize,
             texsize_icon,
-            is_text: true,
+            // Per drawable, not per layer. A symbol layer's two halves draw through different
+            // shaders and the flag is what tells one from the other: the shader takes
+            // `fontScale = is_text ? size / 24 : size`, because `text-size` names a size in
+            // pixels and `icon-size` is a multiplier on a sprite that already has one.
+            //
+            // Hardcoded true, an icon was scaled as though its sprite were type. With this
+            // layer's `text-size` of 11 that is a factor of 11/24, and a 17x16 marker drew at
+            // 3x4 where the oracle draws it at 17x16.
+            is_text,
             rotate_symbol: alignments.rotate_in_shader(placement),
             pitch_with_map,
             // A constant `text-size` is constant in both senses, which is the common case and

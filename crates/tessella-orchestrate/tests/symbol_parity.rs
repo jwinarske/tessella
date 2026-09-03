@@ -1268,7 +1268,8 @@ mod symbol_drawable_ubo {
                     // The capture's style names neither alignment, and its placement is point,
                     // so `auto` resolves to viewport for both — which is the branch the golden
                     // pins and the reason it still holds now the other exists.
-                    VIEWPORT,
+                    true,
+            VIEWPORT,
                     Placement::Point,
                 )
                 .expect("the probe has a viewport")
@@ -1301,6 +1302,7 @@ mod symbol_drawable_ubo {
             [512.0, 512.0],
             [0.0, 0.0],
             16.0,
+            true,
             VIEWPORT,
             Placement::Point,
         )
@@ -1316,6 +1318,7 @@ mod symbol_drawable_ubo {
             [512.0, 512.0],
             [0.0, 0.0],
             16.0,
+            true,
             VIEWPORT,
             Placement::Point,
         )

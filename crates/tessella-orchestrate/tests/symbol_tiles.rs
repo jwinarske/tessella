@@ -1007,6 +1007,7 @@ fn the_alignments_decide_the_drawables_matrices() {
             [512.0, 512.0],
             [0.0, 0.0],
             16.0,
+            true,
             alignments,
             placement,
         )
