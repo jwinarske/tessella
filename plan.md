@@ -4287,9 +4287,49 @@ a subdivision and a draw the consumer no longer makes.
   against mbgl's own capture and has to keep saying what mbgl says; how a backend satisfies it is
   §11.7's business.
 
-  Still standing: our walls are a few units lighter than the oracle's -- 28,370 pixels below the
-  dark threshold against 40,323 -- while staying within 48 of it everywhere. That is a shading
-  constant, not geometry, and it is what the remaining exact-match gap is made of.
+  Two things followed from measuring this on controlled styles rather than on the families scene.
+
+  **The walls were flat because a boolean paint property resolved to zero.** Fixed -- see the
+  commit. Berlin's buildings, opaque, went from 93.1% of pixels exact against `mbgl-render` to
+  **100.0%, MAE 0.00**. Geometry, lighting, gradient and depth are all exactly right; anything
+  still visible in a translucent extrusion is the blend and nothing else.
+
+- **A translucent extrusion still blends overlapping surfaces twice.** *Open, root cause found.*
+  At `fill-extrusion-opacity: 1` the same buildings are pixel-exact. At 0.9 they are MAE 2.44, and
+  the artifact is a hard diagonal seam across a wall, following the roof's triangulation edge --
+  a farther surface blended, then a nearer one blended over it.
+
+  Depth is not the problem and neither are ties. Sweeping the comparison, `G` (strict) scores
+  exactly what `GE` does -- 2.44, 164 gross -- so no two fragments arrive at equal depth; and
+  `LE`/`L`/`E` all collapse to 20.36, which fixes the convention: greater is nearer. Depth culling
+  off scores 9.42, so the test is doing real work.
+
+  mbgl prevents the double blend with a depth prepass: fill the buffer with the nearest surface
+  first, then draw colour read-only, so each pixel blends once. **We cannot reproduce it, and the
+  reason is that our roof and our walls are different shader families.** mbgl draws one
+  fill-extrusion drawable carrying both, with a normal attribute deciding which is which, so one
+  shader computes the depth of every surface. Ours splits them: the roof is family 16 reading z
+  from the vertex buffer, the walls are family 17 reconstructing `z = t > 0 ? height : base` from
+  instance attributes. Where the two meet -- the roof perimeter is the wall's top edge -- the two
+  routes do not agree to the last bit, so the prepass's winner rejects the other's colour
+  fragment.
+
+  Measured, all against the same oracle, with matrices verified bit-identical across the four
+  sub-layers and the wall attribute buffers verified byte-identical between the passes:
+
+  | arrangement | MAE | gross px |
+  |---|---|---|
+  | colour pass only, writes depth (shipped) | 2.44 | 164 |
+  | prepass, colour pass also writes | 2.82 | 2,695 |
+  | prepass, colour pass read-only (mbgl's) | 6.51 | 25,706 |
+
+  The prepass adds 2,531 gross pixels of seam where it should add none, which is the disagreement
+  measured directly. Read-only then turns each seam from a blend into a dropped fragment.
+
+  So the fix is not a depth setting. It is to carry the roof and the walls in one drawable through
+  one shader, the way mbgl does, after which the prepass becomes available and with it mbgl's
+  blend-once guarantee. Until then the single pass is the better arrangement on every measure --
+  it is also 36 renderables against 54.
 
 - **A raster layer paints over the vector layers beneath it.** *Open, and newly isolated.* In the
   all-families style the imagery hides water, the pattern, the roads and the buildings: zero pixels
