@@ -4460,46 +4460,35 @@ a subdivision and a draw the consumer no longer makes.
   "this code never runs"; and one reading of `write_icon_opacity` looked like a bug until changing
   it drew nothing at all, which is what showed `laid_out` there is already the icon's own entry.
 
-- **A POI symbol's anchor lands a third of a pixel from mbgl's.** *Open, and small.* What is left
-  of the `poi-labels` layer is 811 gross pixels of 630,000, MAE 0.17, and all of it is icon edges.
+- **A symbol's anchor lands a fraction of a pixel from mbgl's.** *Open, and measured to the
+  decimal.* It is what is left of both symbol layers: 811 gross pixels of 630,000 on `poi-labels`
+  and 1,351 on the icon-only style, and in each case the split is the same -- about half
+  icon-against-icon, which is edge blending, and about half icon-against-background, which is our
+  icon covering a pixel mbgl's does not.
 
-  Read off one icon's green channel, ours against the oracle: mbgl covers x 648..664 and y 279..294
-  with hard edges -- 230 straight to 144, no intermediate value on any side -- so its quad spans
-  exactly 648.0 to 665.0 and its anchor sits at 656.5, a half pixel. Ours covers the same span with
-  a soft edge on all four sides, 195 down the left and 179 down the right, so our anchor is about
-  0.3 of a pixel to the left of it.
+  Read off one icon's green channel on the icon-only style, where nothing else is drawn:
 
-  What that is not. It is not a rounding rule in mbgl: neither `placement.cpp` nor
-  `symbol_projection.cpp` rounds a projected anchor, and both quads are the same, `shapeIcon` giving
-  +/-8.5 around the anchor for a 17-wide sprite exactly as ours does. It is not a systematic bias
-  either -- over 54 icons the offset averages +0.02 in x and -0.01 in y with a spread of +/-0.45, so
-  it is per-symbol rather than a constant. And it is not the projection, because `place-labels` is
-  100.0% of pixels exact with zero gross: anchors on that layer land where mbgl puts them to the
-  pixel.
+  - **Size is exactly right.** Our coverage sums to 17.00 px across and 16.00 down -- 0.407 of a
+    pixel at the left edge, sixteen whole ones, 0.593 at the right -- against the sprite's declared
+    17x16.
+  - **Position is 0.407 px left and 0.174 px down** of mbgl's, whose icon is pixel-aligned: 230
+    straight to 144 with no intermediate value on any side, spanning exactly 17 columns.
+  - So mbgl's anchor sits at a half pixel and ours 0.4 short of it, and the quad around it is the
+    same in both: `shapeIcon` gives +/-8.5 for a 17-wide sprite, plus the one-pixel border, in
+    mbgl and here alike.
 
-  So it is something about *this* layer's anchors -- the `pois` source layer, the one with icons and
-  a text offset -- and the place to start is the anchor's tile-unit coordinate before it is
-  projected, compared against the same feature's in mbgl.
+  Ruled out. Not the quad border -- removing it takes `poi-labels` from 811 gross to 3,363. Not a
+  rounding rule in mbgl -- neither `placement.cpp` nor `symbol_projection.cpp` rounds a projected
+  anchor. Not a constant bias -- over 54 icons the offset averages +0.02 and -0.01 with a +/-0.45
+  spread, so it varies per symbol. Not the projection in general -- `place-labels` is 100.0% of
+  pixels exact with zero gross, so anchors on that layer are bit-identical. And not the scaling to
+  `EXTENT`: `rings_scaled` rounds, but from a 4096 source to 8192 the factor is exactly two.
 
-- **A label's collision box did not move with its offset.** *Fixed.* mbgl seeds its shaping with
-  the text offset -- `Shaping(translate[0], translate[1], writingMode)` sets `top`, `bottom`,
-  `left` and `right` to it before the lines are laid out, and the alignment then *adds* to those
-  rather than replacing them. The glyph positions stay relative and the quads apply the offset
-  separately, so the picture moves once and the extent with it.
-
-  Ours seeded from zero and applied the offset only at quad time. The extent is what a collision
-  box is built from, so a label offset below its icon reserved the ground at the anchor instead of
-  the ground it covers: labels that should have collided did not. It placed **65 icons where the
-  oracle places 55**, which is the ~20% label-coverage excess recorded against Washington and had
-  been carried as its own open item.
-
-  With the shaping seeded and the alignment made `+=`: **55 icons, exactly the oracle's count.**
-  The layer went from 98.2% of pixels exact and MAE 1.15 to **99.4% and 0.17**, gross pixels from
-  6,150 to 811, and the all-families scene from 87.1% and MAE 1.38 to **87.9% and 0.77** with gross
-  down from 5,606 to 1,649.
-
-  Not on the along-line branch, where the offset is perpendicular to the line and `project` applies
-  it -- the same reason the quads do not take it there either.
+  What is left to try is the anchor's tile-unit coordinate for a `pois` feature, compared against
+  the same feature's in mbgl, and why this layer differs from `place` when both are point features.
+  It is worth saying plainly that this is 0.2% of a frame at sub-pixel scale, and every other layer
+  is at or below 8 gross pixels; it is the smallest thing on the list rather than the next most
+  valuable.
 
 - **A raster tile drew a different tile's picture.** *Fixed, in two places.* On the raster fixture
   every tile carries a parity tint, `blue = 190 - ((x + y) % 2) * 40`, so which tile landed where
