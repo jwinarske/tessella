@@ -4243,6 +4243,25 @@ a subdivision and a draw the consumer no longer makes.
   it could not explain -- the same settings working there and not here -- was the real bug all
   along.
 
+- **A raster layer paints over the vector layers beneath it.** *Open, and newly isolated.* In the
+  all-families style the imagery hides water, the pattern, the roads and the buildings: zero pixels
+  of water where the oracle has 36,519. Take the raster layer out of the same style and water draws
+  42,296 and everything reads correctly, so the geometry and the paint are fine and the raster is
+  simply on top.
+
+  It is not the order on the wire. The frame issues background, raster, water, pattern, roads,
+  extrusion, circle, icon, label -- the style's own order -- and every one of them lands in the
+  same priority band with an ascending blend order, which is the order they should composite in.
+  So the wire and the band are right and something further down puts the raster last.
+
+  The raster tiles are the ones the extra-cover walk adds, at their own zoom, which is the one
+  thing about them that differs from every other layer. That is where to look first.
+
+  Measured on Berlin z15: the all-families frame is 44% of pixels within 24/255 of the oracle
+  against 60% before the extrusion work, and the drop is this -- buildings now draw properly and
+  are then covered. The same style without the raster layer does not have the problem, and the
+  labels-only Berlin z14 comparison, which has no raster, is unaffected.
+
 - **Symbol corner cases left standing when this thread was set down.** *Open, and none of them
   blocking.* Recorded together so they are not rediscovered one at a time:
 
