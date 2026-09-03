@@ -4349,17 +4349,36 @@ a subdivision and a draw the consumer no longer makes.
   the prepass**, and the wall is uniform where mbgl's is uniform. Opaque styles stay at 100.0% and
   MAE 0.00.
 
-  Two things deliberately not taken. mbgl leaves its colour pass read-only; measured here that is
-  worse -- 93.0% and 8,267 gross pixels against 94.9% and 2,694 -- so the colour pass writes depth
-  too. And the prepass leaves about 2,700 gross pixels of thin seam along building perimeters,
-  where a colour fragment is rejected and the background shows through. Their cause is not known:
-  the two passes draw the same geometry through the same shaders with placements verified
-  bit-identical, and rendering the prepass drawables *with colour* differs from the colour pass by
-  2.9% of pixels, which should not be possible. That is where to start next.
+  **And the depth pass takes the colour pass's clip.** This is what made the prepass look broken.
+  mbgl sets `setEnableStencil(doDepthPass)` on the colour builder and leaves the depth builder at
+  the default of false, and there it does not matter: mbgl's stencil is what makes exactly one tile
+  paint each pixel, and between them the tiles still cover everything. Here the clip is honoured
+  per drawable, so an unclipped depth pass writes for the whole of a building including the part
+  overhanging its tile -- MVT geometry runs past the edge by design -- and the clipped colour pass
+  can never paint there. The neighbouring tile carries its own copy and does paint it, but from its
+  own origin, so its depth differs in the last bits and the test rejects it. What is left is depth
+  with no colour: whole wall faces replaced by the background.
+
+  The symptom that identified it: each pass drawn *alone* was correct, and only the pair failed,
+  which is exactly what a clip on one and not the other does. Rendering the depth drawables with
+  colour enabled scored 8 gross pixels against the colour pass's 163 -- the colour pass is the one
+  being clipped, and the walls it loses at tile edges are the difference.
+
+  Berlin at 0.9, against `mbgl-render`:
+
+  | arrangement | exact | MAE | gross px |
+  |---|---|---|---|
+  | colour pass only | 92.0% | 0.41 | 163 |
+  | prepass, unclipped | 94.9% | 0.66 | 2,694 |
+  | **prepass, clipped to match** | **97.8%** | **0.13** | **161** |
+
+  Opaque styles stay at 100.0% and MAE 0.00.
+
+  One thing deliberately not taken: mbgl leaves its colour pass read-only, and measured here that
+  is worse, so the colour pass writes depth too.
 
   Measurement note: the probe's frame is not always the same frame. Tile arrival varies, and a run
-  that catches 64 extrusion drawables instead of 48 scores 97.5% rather than 94.9%. The renderer is
-  deterministic given the same tiles; compare like with like.
+  that catches 64 extrusion drawables instead of 48 scores differently. Compare like with like.
 
 - **A raster layer paints over the vector layers beneath it.** *Open, and newly isolated.* In the
   all-families style the imagery hides water, the pattern, the roads and the buildings: zero pixels
