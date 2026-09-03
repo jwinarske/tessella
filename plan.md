@@ -4389,6 +4389,28 @@ a subdivision and a draw the consumer no longer makes.
   One thing deliberately not taken: mbgl leaves its colour pass read-only, and measured here that
   is worse, so the colour pass writes depth too.
 
+- **A symbol layer's two halves were laid out as one.** *Fixed.* Two properties, both unread, and
+  together they are how a style puts a name under the marker it names.
+
+  `SymbolDrawableEntry::for_tile` hardcoded `is_text: true` and took one size for both drawables.
+  The shader computes `fontScale = is_text ? size / 24 : size`, because `text-size` names a size in
+  pixels while `icon-size` multiplies a sprite that already has one -- so every icon was scaled by
+  the layer's text size over `ONE_EM`. At `text-size` 11 that is 11/24, and a 17x16 marker drew at
+  3x4 where the oracle draws it at 17x16.
+
+  And `text-offset` and `text-anchor` were never read at all. `quads::Options` has carried a
+  `text_offset` field the whole time with nothing but a unit test setting it, and `anchor_of` was
+  called for `icon-anchor` and not for `text-anchor`. Without them a POI label sat on top of its
+  own icon rather than below it.
+
+  The layer against `mbgl-render`: **88.0% of pixels exact and 42,979 gross before, 98.2% and 6,150
+  after**. The all-families scene went from 39.4% and MAE 13.31 to **47.2% and 7.39**, with gross
+  pixels down from 46,660 to 8,472.
+
+  Found by measuring every layer of that style in isolation, which is worth repeating when a scene
+  is wrong in several places at once: water, roads, buildings, circles and place labels were all
+  already within a pixel or two of the oracle, and the two that were not were the raster and this.
+
 - **A raster layer masked out the vector layers beneath it.** *Fixed.* It was described as the
   imagery painting over what is under it, and hunted in painter order for a long time. Painter
   order was never wrong: the raster is issued at order 9 and the water at 29, under it as it

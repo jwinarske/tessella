@@ -321,6 +321,13 @@ pub struct SymbolOptions {
     pub line_height_ems: f32,
     /// Where the label sits relative to its anchor.
     pub anchor: tessella_glyph::shaping::Anchor,
+    /// `text-offset`, converted from the spec's ems to the shaping's units.
+    ///
+    /// The spec writes it in ems and the shaping works in `ONE_EM` units, so the conversion
+    /// happens where the property is read rather than wherever the offset is applied. It is what
+    /// lifts a label clear of the icon it labels: `text-offset` of `[0, 1.2]` with
+    /// `text-anchor: top` is the ordinary way a style writes "the name goes underneath".
+    pub offset: [f32; 2],
     /// Which way its lines run.
     ///
     /// A label that permits vertical writing is shaped *twice*, once each way, and placement
@@ -344,6 +351,7 @@ impl Default for SymbolOptions {
             letter_spacing: 0.0,
             line_height_ems: 1.2,
             anchor: tessella_glyph::shaping::Anchor::Center,
+            offset: [0.0, 0.0],
             writing_mode: tessella_glyph::shaping::WritingMode::Horizontal,
             allow_vertical_placement: false,
             justify: tessella_glyph::shaping::Justify::Center,
@@ -550,6 +558,7 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
 
         let before = buffers.glyphs();
         let horizontal = quads::Options {
+            text_offset: options.offset,
             allow_vertical_placement: options.allow_vertical_placement,
             ..quads::Options::default()
         };
@@ -802,6 +811,9 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
         };
         let quad_options = quads::Options {
             along_line: true,
+            // No `text_offset`: a label following a line takes its offset perpendicular to the
+            // line, which `project` applies, and mbgl's `getGlyphQuads` ignores the property on
+            // the along-line branch for the same reason.
             allow_vertical_placement: options.symbol.allow_vertical_placement,
             ..quads::Options::default()
         };

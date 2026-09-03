@@ -143,8 +143,23 @@ fn text_options(layer: &Layer, zoom: f64, feature: Option<&dyn Feature>) -> Symb
             .and_then(Value::as_number)
             .map(|value| value as f32)
     };
+    #[allow(clippy::cast_possible_truncation)]
+    let pair = |key: &str| -> Option<[f32; 2]> {
+        let value = layout_value(layer, key, zoom, feature)?;
+        let array = value.as_array()?;
+        if array.len() != 2 {
+            return None;
+        }
+        Some([array[0].as_number()? as f32, array[1].as_number()? as f32])
+    };
     SymbolOptions {
         size: number("text-size").unwrap_or(16.0),
+        // Both of these were unread, and the pair of them is how a style puts a name under the
+        // marker it names. Without them a POI label sat on top of its own icon.
+        anchor: anchor_of(layout_value(layer, "text-anchor", zoom, feature).as_ref()),
+        offset: pair("text-offset")
+            .map(|offset| [offset[0] * ONE_EM, offset[1] * ONE_EM])
+            .unwrap_or([0.0, 0.0]),
         max_width_ems: number("text-max-width").unwrap_or(10.0),
         // `text-letter-spacing` is in ems and everything downstream of it is in pixels, so it
         // is resolved here where the unit changes rather than carried in the spec's unit and
