@@ -4197,21 +4197,13 @@ a subdivision and a draw the consumer no longer makes.
   exact and 89% within 24/255, with the water drawn over the imagery in both. The residue is
   texture filtering on a synthetic gradient, which is its own question.
 
-- **A fill layer with `fill-pattern` draws nothing, and does not fall back either.** *Open, and
-  narrowed to the consumer.* What is ruled out:
-
-  - The geometry. The same layer with `fill-color` and no pattern draws 344,617 pixels.
-  - The shader choice. The order carries shaders 13 and 14, 24 each -- the pattern permutation is
-    picked, not the plain one.
-  - The sheet. It is fetched (both `emerald.json` and `emerald.png` are requested), and the
-    consumer holds the atlas: `textures 1` in a style whose only texture *is* the sprite atlas.
-  - A fallback. Setting `fill-color` *and* `fill-pattern` draws nothing at all -- 100% background.
-    So the layer is not quietly rendering as a plain fill; the pattern drawable reaches the
-    consumer and draws nothing.
-
-  That leaves the consumer's binding or `fill_pattern.mat` itself: the pattern rectangles in the
-  drawable UBO, or the samplers. `missing_atlas` is zero, so it is not a texture the consumer was
-  never given.
+- **A fill layer with `fill-pattern` draws nothing, and does not fall back either.** *Fixed.* The
+  entry below narrowed it to "the consumer's binding or `fill_pattern.mat` itself: the pattern
+  rectangles in the drawable UBO, or the samplers", and the first of those was right: the producer
+  wrote the *plain fill's* drawable layout for a patterned layer, so `tile_ratio` arrived as zero
+  and every fragment sampled one point of the sprite. See the entry on the patterned fill's own
+  drawable layout for the whole of it. The layer now draws at 92.9% of pixels exact against the
+  oracle with no gross pixels.
 
 - **An extrusion drew its depth pass and threw its colour pass away.** *Fixed, both halves.* The
   producer packs one drawable-UBO entry per drawable, and `ubo_index` is numbered per *layer*
@@ -4650,10 +4642,22 @@ a subdivision and a draw the consumer no longer makes.
     worse: the flag also disables the middle-anchor fallback, and a short road loses its only
     label.
 
-- **Washington still draws about a fifth more label than the oracle.** *Open.* Berlin is at 2,958
-  against 3,005 and Washington at 2,309 against 1,931, on the same code and the same camera rules,
-  so whatever is left is not uniform -- it is something Washington's data has more of. The two
-  scenes disagreeing is the lead: find what one has that the other does not.
+- **Washington drew about a fifth more label than the oracle.** *Fixed, by the collision box.* The
+  lead recorded here was that the two scenes disagreed -- Berlin near the oracle, Washington 20%
+  over -- so whatever was left was something Washington's data had more of. It was not: it was
+  every label offset from its anchor reserving the ground at the anchor instead of the ground it
+  covers, which Washington's style has more of because more of its labels are offset. Seeding the
+  shaping with `text-offset` closed it.
+
+  Re-measured on the same scene and camera: **ours 10,162 label pixels against the oracle's
+  10,397**, two per cent *under* where it was twenty per cent over.
+
+  What is left there is placement rather than quantity. Washington sits at 94.6% of pixels exact
+  with 17,227 gross, and those pixels are symmetric -- roughly as many where ours has a label and
+  mbgl has background as the other way about -- with the two frames carrying nearly the same amount
+  of text. So the labels are the right size and about the right number, in different places. Its
+  style is the only one here with `symbol-placement: line`, which Berlin's scenes never exercise,
+  and that is where to look.
 
 - **The style's placement properties never reached placement.** *Fixed.* `FrameOptions` was built
   with `Rules::default()` and the default paddings whatever the style said, so `text-allow-overlap`,
