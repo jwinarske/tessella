@@ -4213,27 +4213,40 @@ a subdivision and a draw the consumer no longer makes.
   drawable UBO, or the samplers. `missing_atlas` is zero, so it is not a texture the consumer was
   never given.
 
-- **Extrusions have no depth buffer, so a tall building is hollow.** *Open, and the flag flip does
-  not do it.* mbgl draws a translucent extrusion twice -- a depth-only pass that writes no colour,
-  then a colour pass that tests against it -- and that test is what makes a tower solid. This
-  consumer honours neither `ENABLE_DEPTH` nor `ENABLE_COLOR`: `add.enableDepth` arrives on every
-  geometry and is read by nothing, so extrusions are drawn in painter order alone. A building's own
-  walls and roof then paint over each other in whatever order they were listed, and a neighbour's
-  roof paints over both. On a short building it is invisible; on the tallest tower in the frame,
-  whose roof is displaced a long way from its footprint, it is a hollow outline where the oracle
-  has a solid shaded volume.
+- **Extrusions have no depth buffer, so a tall building is hollow.** *Open. Measured, and two
+  attempts recorded so the third does not repeat them.* mbgl draws a translucent extrusion twice --
+  a depth-only pass that writes no colour, then a colour pass that reads it -- and that test is
+  what makes a tower a volume. This consumer honours neither `ENABLE_DEPTH` nor `ENABLE_COLOR`:
+  both arrive on every geometry and are read by nothing. A building's own walls and roof paint over
+  each other in the order they were listed and a neighbour's roof paints over both, which on the
+  tallest tower in the frame is a hollow outline where the oracle has a solid shaded volume. It is
+  also what makes stacked parts -- a tower on a podium, two features at different bases -- lose the
+  face that should be in front.
 
-  Setting `setDepthWrite`/`setDepthCulling`/`setColorWrite` from the flags was tried and discards
-  the whole layer: Filament works in reversed Z -- `DepthFunc::LE` is its *first* enum value and
-  means "less or equal" against a buffer where near is one -- while the clip-space z this producer
-  emits is the OpenGL convention the capture uses. The two have to be reconciled before the depth
-  test means anything, which is a change to `configureCamera` and the z the matrix produces rather
-  than a flag on the material instance.
+  What is measured, and is the thing to build on. The clip space this producer emits is the OpenGL
+  convention the capture uses: at z15 a ground point is 0.999981, twenty metres 0.999956, a hundred
+  and fifty 0.999773. In [0, 1], and *nearer is smaller*. Filament works in reversed Z: it clears
+  the depth buffer to zero meaning far, and its default comparison is `GE`.
 
-  Worth doing: it is the difference between buildings that read as volumes and buildings that read
-  as outlines, and it is the last structural thing between the extrusion family and the oracle.
-  The wall geometry and shading are right now -- 98.1% of pixels within 24/255 -- and this is what
-  the remaining 1.9% is made of.
+  Two attempts, both reverted:
+
+  - Setting `setDepthWrite`/`setDepthCulling`/`setColorWrite` from the flags and leaving the
+    comparison alone. Every fragment failed `GE` against the cleared buffer and the layer drew
+    nothing. Forcing `LE` instead fails the same way, and for the same reason: the *clear* value is
+    the far end of Filament's convention, not ours.
+  - Reversing z in `configureCamera`'s custom projection (`z' = w - z`) so Filament's own default
+    is right. That blanks the extrusions *even with the depth test switched off*, so the flip is
+    interacting with the clip range or the `near`/`far` arguments to `setCustomProjection` rather
+    than only with the comparison.
+
+  What to do instead of a third guess: establish the convention on a two-quad probe -- one quad
+  in front of another, depth on, nothing else in the scene -- and find the combination of custom
+  projection, near/far, and comparison that makes the near one win. Toggling flags on a full scene
+  cannot distinguish "clipped away" from "failed the test", which is what cost the two attempts
+  above. Once the probe is right the flags are a small change.
+
+  The wall geometry and shading are correct meanwhile -- 98.1% of pixels within 24/255 -- and this
+  is what the remaining 1.9% is made of.
 
 - **Symbol corner cases left standing when this thread was set down.** *Open, and none of them
   blocking.* Recorded together so they are not rediscovered one at a time:
