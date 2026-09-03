@@ -4455,11 +4455,35 @@ a subdivision and a draw the consumer no longer makes.
   glyphs is a placeholder for an icon-only symbol". `push` records a feature with an icon and no
   text by design, and `icon_image` resolves a constant `icon-image` to `Some`.
 
-  What is still unexplained is where it is dropped. Instrumenting the `LayerKind::Symbol` arm of
-  `build_tile`, and the bucket loop in `bindings_for`, printed nothing at all -- **not even for a
-  style whose symbols do draw**. So neither is the path a rendered frame takes, and the next step
-  is to find the path that is, rather than to keep reading the one that looks right. A disk cache
-  sits in front of tile building (`cache.sqlite`), which is the first thing to rule out.
+  The earlier note here said instrumenting `build_tile` and `bindings_for` printed nothing even for
+  a working style, and concluded neither was on the live path. That conclusion was wrong and the
+  cause was the shell: `2>&1 >/dev/null | grep` sends stderr to the pipe only if the pipe is
+  already stdout, and in that form it was not, so every probe was discarded. Redirected to a file
+  instead, all of them fire.
+
+  Traced properly, three gates stand between an icon-only layer and the screen, and the first two
+  are now known exactly:
+
+  1. `Content::is_encodable` held back every symbol layer until glyphs arrived. **Fixed** -- a
+     layer waits for glyphs only when it has text.
+  2. `place_symbols` opens with `let Some(fonts) = fonts else { return BTreeMap::new() }`, so with
+     no glyphs *no* symbol geometry is prepared. An icon-only layer never causes any glyphs to be
+     fetched, so it always takes this branch.
+  3. `write_geometry`'s `if buffers.vertices.is_empty() { continue }` drops a symbol whose *text*
+     shaped nothing, one step before `lay_out_icons` runs -- though `lay_out` deliberately leaves
+     a placeholder entry carrying the symbol's anchor for exactly this case.
+
+  With 2 and 3 opened -- an empty `Fonts` in place of the early return, and the test widened to
+  `is_empty() && !layout.has_icons()` -- the pipeline demonstrably advances: `lay_out` runs
+  (`verts=0 laid=133`), and `lay_out_icons` builds real icon buffers, 100, 124 and 140 vertices
+  across the tiles, the same counts a working text style produces. And still **no symbol drawable
+  reaches the consumer**: the order log shows 0 of shader 32 and 0 of shader 33, where the text
+  style shows 9 of each.
+
+  So there is a fourth gate, between `write_geometry` returning its two records and the order
+  carrying them, and that is where to look next. The 2-and-3 changes were reverted rather than
+  shipped: they move the pipeline forward and change nothing visible, which is not a trade worth
+  making until the last gate is found.
 
 - **A POI symbol's anchor lands a third of a pixel from mbgl's.** *Open, and small.* What is left
   of the `poi-labels` layer is 811 gross pixels of 630,000, MAE 0.17, and all of it is icon edges.
