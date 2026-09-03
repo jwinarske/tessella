@@ -2019,8 +2019,22 @@ fn write_layer_state(
                     })
                     .collect()
             };
+            // Every sub-layer the extrusion emits, in the order the indices are handed out.
+            //
+            // Four of them when the layer needs a depth pass -- 0 and 1 draw depth, 2 and 3 draw
+            // colour -- and `ubo_index` is numbered per *layer* across all four. Packing only the
+            // first two left the colour pass indexing past the end of its own buffer, where the
+            // consumer counts it `unplaced` and skips it: eighteen drawables of thirty-six on a
+            // twelve-tile frame. What was on screen was the *depth* pass, drawn with colour
+            // because the consumer did not honour `ENABLE_COLOR` either, which is why the
+            // buildings looked like flat footprints with the roof's shade.
+            //
+            // `matrices` yields nothing for a sub-layer that has no bindings, so chaining all
+            // four is also right for an opaque extrusion, which emits 2 and 3 alone.
             let mut all = entry(0);
             all.extend(entry(1));
+            all.extend(entry(2));
+            all.extend(entry(3));
             let buffer = ubo::pack_extrusion_drawable_buffer(
                 &all,
                 ubo_layouts::FILL_EXTRUSION_DRAWABLE_UBO.stride,

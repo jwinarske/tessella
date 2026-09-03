@@ -4213,39 +4213,35 @@ a subdivision and a draw the consumer no longer makes.
   drawable UBO, or the samplers. `missing_atlas` is zero, so it is not a texture the consumer was
   never given.
 
-- **Extrusions have no depth buffer, so a tall building is hollow.** *Open, and now narrowed by a
-  probe rather than by guesses.* mbgl draws a translucent extrusion twice -- a depth-only pass then
-  a colour pass that reads it -- and that test is what makes a tower a volume. This consumer
-  honours neither `ENABLE_DEPTH` nor `ENABLE_COLOR`; both arrive on every geometry and are read by
-  nothing. It is also what makes stacked parts -- a tower on a podium, two features at different
-  bases -- lose the face that should be in front. Nothing is missing from the frame: measured, zero
-  pixels where the oracle draws and we draw background.
+- **An extrusion drew its depth pass and threw its colour pass away.** *Fixed, both halves.* The
+  producer packs one drawable-UBO entry per drawable, and `ubo_index` is numbered per *layer*
+  across every sub-layer the layer emits. An extrusion emits four when it needs a depth pass -- 0
+  and 1 draw depth, 2 and 3 draw colour -- and the packing covered only the first two. The colour
+  pass therefore indexed past the end of its own buffer, where the consumer counts it `unplaced`
+  and skips it: eighteen drawables of thirty-six on a twelve-tile frame.
 
-  `tessella_fluorite/native/test/depth_probe.cc` settles the convention. Two quads at the depths a
-  z15 frame really produces -- ground 0.999981, a hundred and fifty metres 0.999773, so *nearer is
-  smaller* -- nothing else in the scene, swept over projection, perspective divisor and comparison:
+  What was on screen was the *depth* pass, drawn with colour because the consumer did not honour
+  `ENABLE_COLOR` either. That is why a building was a flat footprint in the roof's shade: it was
+  geometry that exists to fill a depth buffer, painted as though it were the building.
 
-  | projection | func | result |
-  |---|---|---|
-  | passthrough (what the consumer uses) | `GE` | **near wins in both draw orders** |
-  | passthrough | `G` | near wins in both |
-  | passthrough | `LE`, `L` | draws nothing |
-  | reversed (`z' = w - z`) | `GE`, `G` | *far* wins |
+  Both halves needed fixing together. The producer now packs all four sub-layers -- `matrices`
+  yields nothing for one with no bindings, so it is right for an opaque extrusion too, which emits
+  2 and 3 alone. The consumer honours `ENABLE_COLOR`, and gives the extrusion families the depth
+  buffer they need.
 
-  So the projection is already right and Filament's default comparison is already right. Reversing
-  z -- the obvious reading, since Filament is a reversed-Z renderer, and what the second attempt
-  did -- is backwards: Filament evidently applies that transform itself. The perspective divisor
-  makes no difference; one and the thousand-odd a tile matrix produces agree.
+  Depth is scoped to those families rather than read from `ENABLE_DEPTH`, which a background
+  carries too: a background is a viewport quad at clip z zero, and zero is the *near* plane in the
+  producer's convention, so a background taking part in depth stands in front of every building.
+  mbgl draws it `DepthMaskType::ReadOnly` for that reason, a distinction the single wire bit cannot
+  carry.
 
-  And yet those settings on a real frame draw nothing. So what blanks it is something else the
-  frame contains, not the depth setup. The first suspect is a layer that writes depth before the
-  buildings -- the background is drawn first and carries `ENABLE_DEPTH`, while mbgl gives it
-  `DepthMaskType::ReadOnly`, a distinction the single wire bit does not carry. The probe is the
-  cheap place to prove that: add a background quad drawn first and sweep its depth write
-  separately. The note at the foot of the file says so.
+  `unplaced` goes from 18 to 0 and the extrusion frame from 98.1% of pixels within 24/255 to
+  **99.9%**. Berlin and Washington are unchanged at 2,958 and 2,309 pixels of text.
 
-  The wall geometry and shading are correct meanwhile -- 98.1% of pixels within 24/255 -- and this
-  is what the remaining 1.9% is made of.
+  Three attempts failed before the probe existed, each on a full scene where a blank layer could
+  mean clipped, failed the test, or never drawn. `depth_probe` separated those, and then the thing
+  it could not explain -- the same settings working there and not here -- was the real bug all
+  along.
 
 - **Symbol corner cases left standing when this thread was set down.** *Open, and none of them
   blocking.* Recorded together so they are not rediscovered one at a time:
