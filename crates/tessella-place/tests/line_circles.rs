@@ -79,42 +79,56 @@ fn the_run_extends_past_the_label() {
         "{centers:?} ends at the label"
     );
 
-    // And they thin out as they go, because the padding circles are spread further apart than
-    // the label's own -- a short run of them covers the distance a pitched label grows by.
-    let steps: Vec<f32> = centers.windows(2).map(|pair| pair[1] - pair[0]).collect();
+    // And it starts before the label too: the walk back goes past the label's start by an eighth
+    // of its length, which is mbgl's `paddingStartDistance`.
     assert!(
-        steps.last().expect("some") > steps.first().expect("some"),
-        "{steps:?} does not spread"
+        *centers.first().expect("some") < 150.0,
+        "{centers:?} starts at the label"
+    );
+
+    // The padding circles are spread further apart than the label's own -- a short run of them
+    // covers the distance a pitched label grows by -- so the steps at the ends are wider than
+    // those through the middle.
+    let steps: Vec<f32> = centers.windows(2).map(|pair| pair[1] - pair[0]).collect();
+    let middle = steps[steps.len() / 2];
+    assert!(
+        *steps.first().expect("some") > middle && *steps.last().expect("some") > middle,
+        "{steps:?} does not spread at the ends"
     );
 }
 
-/// The padding *before* the label depends on where the line's vertices fall.
+/// How much padding sits *before* the label depends on where the line's vertices fall.
 ///
-/// A quirk of mbgl's, transcribed rather than tidied. The walk backwards stops at the first
-/// vertex at or before the label's start, and a leading padding circle is skipped when it falls
-/// before that vertex -- so on a finely divided line the walk stops right at the label and the
-/// leading padding is dropped, while on a coarse one it overshoots and the padding survives.
-/// mbgl's own comment on the skip says it "could allow for line collisions on distant tiles".
+/// A quirk of mbgl's, transcribed rather than tidied. The walk backwards stops at the first vertex
+/// at or before `labelStart - labelLength / 8`, and a leading padding circle is skipped when it
+/// falls before that vertex -- so a finely divided line stops close to the label and keeps one
+/// circle of leading padding, while a coarse one overshoots and keeps several. mbgl's own comment
+/// on the skip says it "could allow for line collisions on distant tiles".
 ///
 /// It is asserted because it is the kind of asymmetry a later reader corrects on sight.
+///
+/// What this asserted before was the *short* walk: that a finely divided line got no leading
+/// padding at all, stopping at the label's start rather than an eighth before it. That was our
+/// transcription error rather than mbgl's quirk, and the assertion pinned it.
 #[test]
 fn the_leading_padding_depends_on_the_vertices() {
-    // Vertices every twenty units: the walk lands exactly on the label's start.
+    // Vertices every twenty units: the walk stops just past the label's start.
     let fine: Vec<f32> = run().iter().map(|entry| entry.circle.center.0).collect();
-    assert!(
-        fine.first().expect("some") >= &150.0,
-        "{fine:?} has leading padding on a finely divided line"
-    );
 
-    // One long segment: the walk back overshoots, and the padding fits.
+    // One long segment: the walk back overshoots, and more of the padding fits.
     let coarse_line = vec![(0.0, 100.0), (400.0, 100.0)];
     let coarse: Vec<f32> = line_circles(&coarse_line, (200.0, 100.0), 0, LENGTH, HEIGHT, 1.0)
         .iter()
         .map(|entry| entry.circle.center.0)
         .collect();
+
     assert!(
-        coarse.first().expect("some") < &150.0,
-        "{coarse:?} has no leading padding on a coarse line"
+        coarse.first().expect("some") < fine.first().expect("some"),
+        "coarse {coarse:?} should reach further back than fine {fine:?}"
+    );
+    assert!(
+        fine.first().expect("some") < &150.0,
+        "{fine:?} has no leading padding at all"
     );
 }
 

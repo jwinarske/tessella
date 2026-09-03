@@ -304,6 +304,15 @@ pub fn line_circles(
     // label rather than half a box past it.
     let first_offset = -box_size / 2.0;
     let label_start = -label_length / 2.0;
+    // The walk goes back past the label's own start, by an eighth of its length.
+    //
+    // mbgl's loop runs `while (anchorDistance > paddingStartDistance)` with
+    // `paddingStartDistance = labelStartDistance - labelLength / 8`, and stopping at the label's
+    // start instead leaves the walk an eighth of a label short. That does not shorten the chain --
+    // the loop below still emits `-padding..count + padding` circles -- it starts it from a
+    // different segment, so every circle after it sits somewhere else and the label reserves
+    // different ground.
+    let padding_start = label_start - label_length / 8.0;
 
     // Walk backwards to the segment the label actually begins on. The anchor is somewhere in the
     // middle of the label, so the run starts before it, possibly several segments before.
@@ -328,7 +337,7 @@ pub fn line_circles(
         index -= 1;
         anchor_distance -= (line[index].0 - point.0).hypot(line[index].1 - point.1);
         point = line[index];
-        if anchor_distance <= label_start {
+        if anchor_distance <= padding_start {
             break;
         }
     }
