@@ -6,6 +6,7 @@
 
 use tessella_capture_abi::envelope::DrawFlags;
 use tessella_orchestrate::tile::{TileId, build_mvt_tile};
+use tessella_orchestrate::ubo::fill_extrusion_props_from_paint;
 use tessella_orchestrate::ubo::pack_fill_extrusion_props;
 use tessella_source::mvt::Tile;
 use tessella_style::Style;
@@ -192,6 +193,32 @@ fn the_props_buffer_matches_the_oracles_offsets() {
     assert_eq!(at(68), 1.0, "from_scale");
     assert_eq!(at(72), 1.0, "to_scale");
     assert_eq!(at(76), 0.0, "pad2");
+}
+
+/// A boolean paint property reaches the shader as a float, and its default is not zero.
+///
+/// `fill-extrusion-vertical-gradient` is a boolean in the spec and a float in the props block --
+/// mbgl writes 1.0 or 0.0 -- and it defaults to *true*. Resolving it through the number path
+/// dropped both halves: the boolean default did not match `DefaultValue::Number`, and a style
+/// setting the property explicitly produced a boolean value that `as_number` refused. Either way
+/// the shader saw zero, which is the one value that turns the gradient off, and every wall came
+/// out one flat shade where mbgl darkens it toward the ground. Berlin's buildings went from 93.1%
+/// of pixels exact against the oracle to 100.0%.
+#[test]
+fn a_boolean_paint_property_defaults_to_one_not_zero() {
+    use tessella_style::light::Light;
+    use tessella_style::property::resolve_paint;
+
+    let style = style_with("");
+    let paint = resolve_paint(style.layer("buildings").expect("the layer")).expect("resolves");
+    let packed = fill_extrusion_props_from_paint(&paint, 15.0, &Light::default());
+
+    // The third word of the fourth vec4: height, light_intensity, vertical_gradient, opacity.
+    let gradient = f32::from_le_bytes(packed[56..60].try_into().expect("four bytes"));
+    assert_eq!(
+        gradient, 1.0,
+        "the gradient defaults to on, and zero is the value that disables it"
+    );
 }
 
 /// The three data-driven properties are the three an extrusion is.

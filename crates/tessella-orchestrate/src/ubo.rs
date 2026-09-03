@@ -574,15 +574,29 @@ pub(crate) fn uniform_number(
     let Some(property) = paint.get(name) else {
         return 0.0;
     };
+    // A boolean counts as a number here, because that is what the buffer holds.
+    //
+    // A props block has no room for a bool and mbgl writes one as 1.0 or 0.0, so a boolean paint
+    // property arrives at the shader as a float. Falling through to zero instead is not a
+    // neutral default: `fill-extrusion-vertical-gradient` defaults to *true*, and the shader
+    // reads it as `(1 - g) + g * factor`, so a zero turns the gradient off entirely. Every wall
+    // came out one flat shade where the oracle darkens it toward the ground, and a style setting
+    // the property explicitly got the same zero, since the value is a boolean too.
     #[allow(clippy::cast_possible_truncation)]
     let default = match property.spec.default {
         DefaultValue::Number(number) => number as f32,
+        DefaultValue::Boolean(flag) => f32::from(u8::from(flag)),
         _ => 0.0,
     };
     #[allow(clippy::cast_possible_truncation)]
     uniform_value(property, zoom)
-        .and_then(|value| value.as_number())
-        .map_or(default, |number| number as f32)
+        .and_then(|value| {
+            value
+                .as_number()
+                .map(|number| number as f32)
+                .or_else(|| value.as_bool().map(|flag| f32::from(u8::from(flag))))
+        })
+        .map_or(default, |number| number)
 }
 
 /// A line layer's evaluated properties, from its resolved paint.
