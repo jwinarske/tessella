@@ -4480,10 +4480,30 @@ a subdivision and a draw the consumer no longer makes.
   reaches the consumer**: the order log shows 0 of shader 32 and 0 of shader 33, where the text
   style shows 9 of each.
 
-  So there is a fourth gate, between `write_geometry` returning its two records and the order
-  carrying them, and that is where to look next. The 2-and-3 changes were reverted rather than
-  shipped: they move the pipeline forward and change nothing visible, which is not a trade worth
-  making until the last gate is found.
+  There is no fourth gate in the *producer*. With 2 and 3 opened, the whole chain runs and every
+  step was checked by hand:
+
+  | step | icon-only | a working text style |
+  |---|---|---|
+  | bucket built | `empty=false icons=true` | same |
+  | binds (`is_encodable`) | `enc=true` | same |
+  | `lay_out` | `verts=0 laid=133` | `verts=1548 laid=17` |
+  | `lay_out_icons` | 100/124/140 vertices | identical counts |
+  | `prepared` has the key | yes | yes |
+  | records selected | `records=2 sub=0 part=0`, `sub=1 part=1` | identical |
+  | placement | 133 offered, 133 placed, **133 with an icon** | 17 of 17 |
+  | consumer | **18 renderables, 234 glyph quads drawn** | 36 renderables |
+
+  And **zero icon pixels on screen**, against the oracle's 25,214.
+
+  So the icons are laid out, placed, encoded, announced, issued and counted as drawn, and paint
+  nothing. Whatever is left is between the drawable and the pixel, not in the pipeline that builds
+  it: the vertex opacity `write_icon_opacity` writes, or a parameter the icon shader reads. That is
+  a much smaller search than the one that got here, and it is the next thing to do.
+
+  The 2-and-3 changes are reverted rather than shipped. They are almost certainly both needed --
+  nothing downstream runs without them -- but on their own they change no pixel, and a change whose
+  effect cannot be measured is not one to carry.
 
 - **A POI symbol's anchor lands a third of a pixel from mbgl's.** *Open, and small.* What is left
   of the `poi-labels` layer is 811 gross pixels of 630,000, MAE 0.17, and all of it is icon edges.
