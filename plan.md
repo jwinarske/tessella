@@ -4213,6 +4213,28 @@ a subdivision and a draw the consumer no longer makes.
   drawable UBO, or the samplers. `missing_atlas` is zero, so it is not a texture the consumer was
   never given.
 
+- **Extrusions have no depth buffer, so a tall building is hollow.** *Open, and the flag flip does
+  not do it.* mbgl draws a translucent extrusion twice -- a depth-only pass that writes no colour,
+  then a colour pass that tests against it -- and that test is what makes a tower solid. This
+  consumer honours neither `ENABLE_DEPTH` nor `ENABLE_COLOR`: `add.enableDepth` arrives on every
+  geometry and is read by nothing, so extrusions are drawn in painter order alone. A building's own
+  walls and roof then paint over each other in whatever order they were listed, and a neighbour's
+  roof paints over both. On a short building it is invisible; on the tallest tower in the frame,
+  whose roof is displaced a long way from its footprint, it is a hollow outline where the oracle
+  has a solid shaded volume.
+
+  Setting `setDepthWrite`/`setDepthCulling`/`setColorWrite` from the flags was tried and discards
+  the whole layer: Filament works in reversed Z -- `DepthFunc::LE` is its *first* enum value and
+  means "less or equal" against a buffer where near is one -- while the clip-space z this producer
+  emits is the OpenGL convention the capture uses. The two have to be reconciled before the depth
+  test means anything, which is a change to `configureCamera` and the z the matrix produces rather
+  than a flag on the material instance.
+
+  Worth doing: it is the difference between buildings that read as volumes and buildings that read
+  as outlines, and it is the last structural thing between the extrusion family and the oracle.
+  The wall geometry and shading are right now -- 98.1% of pixels within 24/255 -- and this is what
+  the remaining 1.9% is made of.
+
 - **Symbol corner cases left standing when this thread was set down.** *Open, and none of them
   blocking.* Recorded together so they are not rediscovered one at a time:
 
