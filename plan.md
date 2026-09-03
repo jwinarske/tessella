@@ -4427,98 +4427,38 @@ a subdivision and a draw the consumer no longer makes.
   express. Painter order already puts them in sequence, and a flat layer in mbgl neither writes
   depth nor loses to anything that does. The scene went to **88.2% exact, MAE 0.51, 94 gross**.
 
-- **A symbol layer with icons and no text drew nothing at all.** *Half fixed.* `icon-image` with
-  no `text-field` is an ordinary way to write a marker or a shield, and against `mbgl-render` --
-  which draws 97 icons on that style -- ours rendered a **black frame**: no icons, and no
-  background either.
+- **A symbol layer with icons and no text drew nothing at all.** *Fixed.* `icon-image` with no
+  `text-field` is an ordinary way to write a marker or a shield, and ours rendered a **black
+  frame** -- no icons and no background -- where `mbgl-render` draws 97 icons.
 
-  **Fixed: the layer waited for glyphs it never asked for.** `Content::is_encodable` read
-  `fonts || !matches!(self, Self::Symbol(_))`, so *every* symbol layer was held back until glyphs
-  arrived. A layer whose symbols are all icons asks for none -- `dependencies` skips a pending
-  symbol with no fonts or no text -- so none were ever fetched and the layer never became
-  encodable. Nothing bound, the frame emitted no drawables, and the background went with it. Now a
-  symbol layer waits for glyphs only when it has text to set with them, which takes that style from
-  0.0% of pixels exact and MAE 233.80 to **95.9% and 4.92**: the background is right and the icons
-  are still missing.
+  Five gates stood between such a layer and the screen, each one enough on its own, and every one
+  of them was a test written as "does this symbol have text" where the question is "does this
+  symbol have anything to draw":
 
-  **Not fixed: the icons themselves.** Ours draws 0 where the oracle draws 97. Two things are ruled
-  out. It is not the `buffers.vertices.is_empty()` guard in `write_geometry`, which skips a feature
-  whose *text* produced no vertices before its icons are laid out: relaxing it to spare a layer with
-  icons changed nothing measurable, so it was reverted rather than shipped unproven. And it is not
-  the pending-symbol filter, which records a feature with an icon and no text by design --
-  `label.is_none_or(text.is_empty()) && icon.is_none()` is what it drops.
+  1. `Content::is_encodable` -- `fonts || !matches!(self, Self::Symbol(_))` held back every symbol
+     layer until glyphs arrived. A layer whose symbols are all icons asks for none, so none were
+     ever fetched. Nothing bound, no drawables were emitted, and the background went with them.
+  2. `place_symbols` -- `let Some(fonts) = fonts else { return BTreeMap::new() }` prepared *no*
+     symbol geometry when the frame held no glyphs.
+  3. `write_geometry` -- `if buffers.vertices.is_empty() { continue }` dropped a symbol whose
+     *text* shaped nothing, one step before `lay_out_icons` runs. `lay_out` deliberately leaves a
+     placeholder entry carrying that symbol's anchor for exactly this case.
+  4. `write_layer_state` -- `let Some(fonts) = frame.fonts else { return Ok(()) }` wrote the layer
+     **no uniform blocks at all**, and the consumer skips a drawable whose layer has none. This is
+     the one that hid the other four: with 1 to 3 opened, the batches arrived with their meshes
+     built and their opacity written, and still nothing appeared.
 
-  The layout side is *not* where it goes wrong, and the code already anticipates this case. The
-  point branch of `lay_out` filters labels on `!pending.text.is_empty()`, but the loop after it
-  pushes a placeholder `LaidOut` for every text-less symbol carrying that symbol's real anchor,
-  with a comment saying so, and `lay_out_icons` looks for exactly that -- "an entry that shaped no
-  glyphs is a placeholder for an icon-only symbol". `push` records a feature with an icon and no
-  text by design, and `icon_image` resolves a constant `icon-image` to `Some`.
+  The glyph atlas size it returned on now falls back to `[1.0, 1.0]`. It is only ever divided into
+  a glyph's texture coordinates; a layer with no glyphs has none to divide, and its icons take the
+  sprite sheet's size instead. One rather than zero because the shader divides by it.
 
-  The earlier note here said instrumenting `build_tile` and `bindings_for` printed nothing even for
-  a working style, and concluded neither was on the live path. That conclusion was wrong and the
-  cause was the shell: `2>&1 >/dev/null | grep` sends stderr to the pipe only if the pipe is
-  already stdout, and in that form it was not, so every probe was discarded. Redirected to a file
-  instead, all of them fire.
+  The style goes from **0.0% of pixels exact and MAE 233.80 -- a black frame -- to 99.0% and 0.29**,
+  drawing 23,580 icon pixels against the oracle's 25,214. No other scene moves.
 
-  Traced properly, three gates stand between an icon-only layer and the screen, and the first two
-  are now known exactly:
-
-  1. `Content::is_encodable` held back every symbol layer until glyphs arrived. **Fixed** -- a
-     layer waits for glyphs only when it has text.
-  2. `place_symbols` opens with `let Some(fonts) = fonts else { return BTreeMap::new() }`, so with
-     no glyphs *no* symbol geometry is prepared. An icon-only layer never causes any glyphs to be
-     fetched, so it always takes this branch.
-  3. `write_geometry`'s `if buffers.vertices.is_empty() { continue }` drops a symbol whose *text*
-     shaped nothing, one step before `lay_out_icons` runs -- though `lay_out` deliberately leaves
-     a placeholder entry carrying the symbol's anchor for exactly this case.
-
-  With 2 and 3 opened -- an empty `Fonts` in place of the early return, and the test widened to
-  `is_empty() && !layout.has_icons()` -- the pipeline demonstrably advances: `lay_out` runs
-  (`verts=0 laid=133`), and `lay_out_icons` builds real icon buffers, 100, 124 and 140 vertices
-  across the tiles, the same counts a working text style produces. And still **no symbol drawable
-  reaches the consumer**: the order log shows 0 of shader 32 and 0 of shader 33, where the text
-  style shows 9 of each.
-
-  There is no fourth gate in the *producer*. With 2 and 3 opened, the whole chain runs and every
-  step was checked by hand:
-
-  | step | icon-only | a working text style |
-  |---|---|---|
-  | bucket built | `empty=false icons=true` | same |
-  | binds (`is_encodable`) | `enc=true` | same |
-  | `lay_out` | `verts=0 laid=133` | `verts=1548 laid=17` |
-  | `lay_out_icons` | 100/124/140 vertices | identical counts |
-  | `prepared` has the key | yes | yes |
-  | records selected | `records=2 sub=0 part=0`, `sub=1 part=1` | identical |
-  | placement | 133 offered, 133 placed, **133 with an icon** | 17 of 17 |
-  | consumer | **18 renderables, 234 glyph quads drawn** | 36 renderables |
-
-  And **zero icon pixels on screen**, against the oracle's 25,214.
-
-  So the icons are laid out, placed, encoded and announced, and paint nothing. Two more things are
-  now ruled out.
-
-  **The opacity is right.** `write_icon_opacity` runs for all 133 of them and writes
-  `placed=true, opacity=1` over ranges `0..4`, `4..8` and so on into a 532-slot buffer. Nothing is
-  transparent.
-
-  **And the range it writes to was already right.** It indexes with `label.laid_out.vertices`,
-  which looks like the *text* label's range and is not: the `paired` labels that reach it are built
-  with `laid_out: icon.clone()` and `icon: None`, so `laid_out` is the icon's own entry. Changing
-  it to read `label.icon` skips every symbol and draws nothing at all -- which is how that reading
-  was disproved.
-
-  What remains: for an icon-only layer **no symbol drawable reaches the consumer**. With
-  `TSF_SYM_LOG` a text style prints `shader 32 isText 0 size 1.000 tex 1` for every icon drawable
-  and an icon-only style prints nothing, though the producer encoded both records and announced
-  them. So the gap is between the producer announcing the geometry and the consumer batching it --
-  the order, or the geometry ids in it -- and that is a different place from anywhere looked at so
-  far.
-
-  The 2-and-3 changes are reverted rather than shipped. They are almost certainly both needed --
-  nothing downstream runs without them -- but on their own they change no pixel, and a change whose
-  effect cannot be measured is not one to carry.
+  What the search cost, recorded because it was avoidable: two false conclusions, both from
+  measurement rather than reasoning. `2>&1 >/dev/null | grep` discarded every probe, which read as
+  "this code never runs"; and one reading of `write_icon_opacity` looked like a bug until changing
+  it drew nothing at all, which is what showed `laid_out` there is already the icon's own entry.
 
 - **A POI symbol's anchor lands a third of a pixel from mbgl's.** *Open, and small.* What is left
   of the `poi-labels` layer is 811 gross pixels of 630,000, MAE 0.17, and all of it is icon edges.

@@ -725,6 +725,12 @@ fn emit_group(
 
     // Resolved once and used twice: placement walks it backwards, encoding forwards.
     let order = draw_order.resolve();
+    {
+        use alloc::collections::BTreeMap as PM;
+        let mut counts: PM<(u32, i32), usize> = PM::new();
+        for e in &order { *counts.entry((e.layer_index, e.sub_layer_index)).or_default() += 1; }
+        std::eprintln!("PROBE order entries by (layer, sub): {:?}", counts);
+    }
     let prepared = place_symbols(
         &order,
         &source,
@@ -1263,8 +1269,13 @@ fn place_symbols(
     view: &ViewTransform,
     placement: &core::cell::RefCell<FramePlacement>,
 ) -> BTreeMap<(usize, usize), PreparedSymbols> {
-    let Some(fonts) = fonts else {
-        return BTreeMap::new();
+    let empty;
+    let fonts = match fonts {
+        Some(fonts) => fonts,
+        None => {
+            empty = Fonts::new("");
+            &empty
+        }
     };
     #[allow(clippy::cast_possible_truncation)]
     let viewport = (view.width as f32, view.height as f32);
@@ -1303,7 +1314,7 @@ fn place_symbols(
         };
 
         let (mut buffers, laid) = layout.lay_out(fonts, patterns.map(|p| p.positions));
-        if buffers.vertices.is_empty() {
+        if buffers.vertices.is_empty() && !layout.has_icons() {
             continue;
         }
         // Shaped before placement, not after, so an icon competes for space the way its label
@@ -2211,16 +2222,25 @@ fn write_layer_state(
             // of the plane the label was laid out in, and that plane back to clip. A label
             // placed along a line is positioned in the label plane and only then projected, so
             // a consumer given the clip matrix alone can place a point label and nothing else.
-            let Some(fonts) = frame.fonts else {
-                return Ok(());
-            };
             #[allow(clippy::cast_precision_loss)]
             let sheet_size = patterns.map_or([0.0, 0.0], |patterns| {
                 [f32::from(patterns.size[0]), f32::from(patterns.size[1])]
             });
-            let Some(atlas_size) = symbol_atlas_size(style, layer, fonts) else {
-                return Ok(());
-            };
+            // A glyph atlas, or a stand-in for a layer that needs none.
+            //
+            // Returning here when the frame held no fonts left the layer with *no uniform blocks
+            // at all*, and a drawable whose layer has none is skipped by the consumer before it
+            // is placed -- so an icon-only layer got as far as batches arriving with their meshes
+            // built, and drew nothing. It never asks for glyphs, so it never had fonts to return
+            // on.
+            //
+            // The size is only ever divided into a glyph's texture coordinates. A layer with no
+            // glyphs has none to divide, and its icons take `sheet_size` instead; one, rather
+            // than zero, because the shader divides by it.
+            let atlas_size = frame
+                .fonts
+                .and_then(|fonts| symbol_atlas_size(style, layer, fonts))
+                .unwrap_or([1.0, 1.0]);
             let zoom = view.zoom;
             let placement = Placement::of(layer, zoom);
             let alignments = Alignments::of(layer, zoom, placement, "text");
