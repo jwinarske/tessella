@@ -4448,9 +4448,18 @@ a subdivision and a draw the consumer no longer makes.
   the pending-symbol filter, which records a feature with an icon and no text by design --
   `label.is_none_or(text.is_empty()) && icon.is_none()` is what it drops.
 
-  So the icon half is reached but produces nothing, and the next thing to establish is whether
-  `lay_out` returns any `laid` entries for a feature with no text, since `lay_out_icons` takes them
-  and an icon with no anchor has nowhere to go.
+  The layout side is *not* where it goes wrong, and the code already anticipates this case. The
+  point branch of `lay_out` filters labels on `!pending.text.is_empty()`, but the loop after it
+  pushes a placeholder `LaidOut` for every text-less symbol carrying that symbol's real anchor,
+  with a comment saying so, and `lay_out_icons` looks for exactly that -- "an entry that shaped no
+  glyphs is a placeholder for an icon-only symbol". `push` records a feature with an icon and no
+  text by design, and `icon_image` resolves a constant `icon-image` to `Some`.
+
+  What is still unexplained is where it is dropped. Instrumenting the `LayerKind::Symbol` arm of
+  `build_tile`, and the bucket loop in `bindings_for`, printed nothing at all -- **not even for a
+  style whose symbols do draw**. So neither is the path a rendered frame takes, and the next step
+  is to find the path that is, rather than to keep reading the one that looks right. A disk cache
+  sits in front of tile building (`cache.sqlite`), which is the first thing to rule out.
 
 - **A POI symbol's anchor lands a third of a pixel from mbgl's.** *Open, and small.* What is left
   of the `poi-labels` layer is 811 gross pixels of 630,000, MAE 0.17, and all of it is icon edges.
