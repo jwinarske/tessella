@@ -4406,6 +4406,27 @@ a subdivision and a draw the consumer no longer makes.
   before -- a black frame -- and 48.6% with MAE 10.17 and zero gross pixels after.** The
   all-families scene 86.4% to 87.1%.
 
+- **A building occluded the flat layers drawn after it.** *Fixed.* mbgl draws a flat layer under
+  `depthModeForSublayer`, which is a depth *range*: the fragment's depth is remapped into a narrow
+  band a few `depthEpsilon` from the near plane, one band per layer and sublayer. Flat layers
+  resolve against each other by their band, and every one of them sits in front of anything drawn
+  through the whole range -- which is what a fill-extrusion uses.
+
+  The band is reproduced here as a nudge to the projection's `[14]`, because a consumer that binds
+  a matrix has nowhere to put a depth range. A nudge translates the depth; it does not compress it.
+  So a flat layer kept the depth of the ground it sits on, and once the extrusion started writing
+  depth -- which it must, to resolve a building against itself -- a roof was nearer than the circle
+  beside its foot and the test threw the circle away.
+
+  Half the POI dots in the all-families scene: **946 pixels of them against the oracle's 1,811**,
+  and 1,794 with the buildings taken out of the style. The layer measures 99.9% of pixels exact on
+  its own, which is why this was invisible until the scene was measured whole -- the composite had
+  1,649 gross pixels where its layers summed to about 819, and the difference was this.
+
+  Flat layers are now not depth-tested at all, rather than tested against a band this cannot
+  express. Painter order already puts them in sequence, and a flat layer in mbgl neither writes
+  depth nor loses to anything that does. The scene went to **88.2% exact, MAE 0.51, 94 gross**.
+
 - **A POI symbol's anchor lands a third of a pixel from mbgl's.** *Open, and small.* What is left
   of the `poi-labels` layer is 811 gross pixels of 630,000, MAE 0.17, and all of it is icon edges.
 
