@@ -52,7 +52,7 @@ use crate::SlabArena;
 use crate::damage::DamageTracker;
 use crate::frame::{self, Emitted, Frame, FrameError, Patterns};
 use crate::registry::Session;
-use crate::tile::{LayerBucket, TileId};
+use crate::tile::{Content, LayerBucket, TileId};
 use crate::viewcover::{Update, ViewCover};
 
 /// A packed sprite sheet, as the frame needs to see it.
@@ -413,7 +413,21 @@ impl Map {
                 if !served.insert(id) {
                     continue;
                 }
-                let mut built: Vec<LayerBucket> = ready.iter().cloned().collect();
+                // The raster buckets alone, which is the whole reason this walk exists.
+                //
+                // Taking every bucket on the tile draws the vector layers a second time. These
+                // tiles are at the raster's zoom, not the view's, so `served` does not dedupe
+                // them against the walk above -- they are different tiles -- and a z16 cover
+                // holds four tiles for every z15 one. Water, roads and buildings were each drawn
+                // at both zooms and composited over themselves: with the raster layer in the
+                // style the frame carried 128 water drawables where it should carry 20, and 256
+                // background where it should carry 40. What that looks like is the imagery
+                // washing out everything under it, which is how it was first described.
+                let mut built: Vec<LayerBucket> = ready
+                    .iter()
+                    .filter(|bucket| matches!(bucket.content, Content::Raster(_)))
+                    .cloned()
+                    .collect();
                 if built.is_empty() {
                     continue;
                 }

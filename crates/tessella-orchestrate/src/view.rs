@@ -81,6 +81,25 @@ pub fn circle_flags() -> DrawFlags {
     DrawFlags::ENABLE_DEPTH | DrawFlags::ENABLE_COLOR
 }
 
+/// Draw state for a raster tile.
+///
+/// No stencil, and `RenderRasterLayer` is the evidence: it never calls `setEnableStencil` nor
+/// `setStencilTiles`, so it takes the default of false. The clip would be a no-op in any case --
+/// a raster drawable is a quad covering exactly its own tile, so there is nothing outside the
+/// tile square to cut.
+///
+/// It is not a no-op here, and that is the point. A raster source is looked up at *its* zoom, so
+/// a style with one puts z16 tiles in the frame beside the vector layers' z15. Asking for a
+/// stencil put those tiles into the mask buffer, where they overwrote the z15 masks covering the
+/// same screen area, and every z15 drawable that tested against one was rejected: the water and
+/// the pattern vanished outright while the frame went on issuing all of their drawables. What
+/// that looks like is the imagery painting over everything beneath it, which is how it was
+/// described and why it was hunted in painter order for so long.
+#[must_use]
+pub fn raster_flags() -> DrawFlags {
+    DrawFlags::ENABLE_DEPTH | DrawFlags::ENABLE_COLOR
+}
+
 /// Draw state for a symbol.
 ///
 /// Depth and colour but *no stencil*, which is the same answer as [`circle_flags`] and for the

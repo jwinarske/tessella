@@ -1749,7 +1749,28 @@ fn write_layer_state(
             .contains(tessella_capture_abi::envelope::DrawFlags::ENABLE_STENCIL)
     });
     if tiled {
-        let set = stencil::clip_set(view, layer_index, tiles)
+        // This layer's own tiles, not the frame's.
+        //
+        // mbgl sets the stencil per layer group -- `tileLayerGroup->setStencilTiles(renderTiles)`
+        // -- and the distinction only shows when two layers draw at different zooms. A raster
+        // source is looked up at its own zoom, so a style with one puts z16 tiles in the frame
+        // beside the vector layers' z15. Masking every layer with all of them wrote the z16
+        // masks over the same screen area, and a z15 drawable's reference no longer survived: the
+        // water and the pattern vanished outright, 75,340 pixels of river reduced to none, while
+        // the frame still issued every one of their drawables. It reads as the imagery painting
+        // over what is under it, which is how it was first described and why it was looked for in
+        // painter order.
+        let used: alloc::collections::BTreeSet<(u8, u32, u32)> = bindings
+            .iter()
+            .filter_map(|binding| binding.tile)
+            .map(|tile| (tile.z, tile.x, tile.y))
+            .collect();
+        let mine: Vec<TileCoord> = tiles
+            .iter()
+            .copied()
+            .filter(|coord| used.contains(&(coord.z, coord.x, coord.y)))
+            .collect();
+        let set = stencil::clip_set(view, layer_index, &mine)
             .map_err(|error| FrameError::Camera(alloc::format!("{error}")))?;
         stencil::write(producer, view_id, &set)?;
     }

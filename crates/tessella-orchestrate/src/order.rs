@@ -461,7 +461,7 @@ pub fn bindings_for(
             // rather than promoting an opaque one to the opaque pass. An image with an alpha
             // channel is not opaque because its layer is.
             Content::Raster(_) => {
-                emit(0, view::fill_pass(), view::tiled_flags());
+                emit(0, view::fill_pass(), view::raster_flags());
             }
             // Two drawables, and the order between them is load-bearing. mbgl builds a
             // depth-only pass at sub-layer 0 and a colour pass at 1 whenever the layer is not

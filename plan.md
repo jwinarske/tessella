@@ -4389,24 +4389,42 @@ a subdivision and a draw the consumer no longer makes.
   One thing deliberately not taken: mbgl leaves its colour pass read-only, and measured here that
   is worse, so the colour pass writes depth too.
 
-- **A raster layer paints over the vector layers beneath it.** *Open, and newly isolated.* In the
-  all-families style the imagery hides water, the pattern, the roads and the buildings: zero pixels
-  of water where the oracle has 36,519. Take the raster layer out of the same style and water draws
-  42,296 and everything reads correctly, so the geometry and the paint are fine and the raster is
-  simply on top.
+- **A raster layer masked out the vector layers beneath it.** *Fixed.* It was described as the
+  imagery painting over what is under it, and hunted in painter order for a long time. Painter
+  order was never wrong: the raster is issued at order 9 and the water at 29, under it as it
+  should be. The water's drawables were issued too -- nine of them, with the same matrices and
+  index counts as when the layer draws correctly. They were being thrown away by the stencil.
 
-  It is not the order on the wire. The frame issues background, raster, water, pattern, roads,
-  extrusion, circle, icon, label -- the style's own order -- and every one of them lands in the
-  same priority band with an ascending blend order, which is the order they should composite in.
-  So the wire and the band are right and something further down puts the raster last.
+  Two things caused it, and both are about a raster source being looked up at *its* zoom. A 256px
+  raster needs z16 where the vector layers take z15, so a style with one puts two zooms of tiles
+  in the same frame.
 
-  The raster tiles are the ones the extra-cover walk adds, at their own zoom, which is the one
-  thing about them that differs from every other layer. That is where to look first.
+  **The raster asked for a stencil.** `RenderRasterLayer` never calls `setEnableStencil` and takes
+  the default of false; ours emitted `tiled_flags()`. The clip would be a no-op anyway -- a raster
+  drawable is a quad covering exactly its own tile -- but asking for it put those z16 tiles in the
+  mask buffer, where they overwrote the z15 masks over the same screen area.
 
-  Measured on Berlin z15: the all-families frame is 44% of pixels within 24/255 of the oracle
-  against 60% before the extrusion work, and the drop is this -- buildings now draw properly and
-  are then covered. The same style without the raster layer does not have the problem, and the
-  labels-only Berlin z14 comparison, which has no raster, is unaffected.
+  **And every layer's clip set was built from the whole frame's tile list.** mbgl sets the stencil
+  per layer group, `tileLayerGroup->setStencilTiles(renderTiles)`, and the difference only shows
+  when two layers draw at different zooms. Ours masked the water with the raster's tiles as well
+  as its own.
+
+  Either one alone leaves it broken; the per-layer clip set is what carries the fix. The
+  all-families scene went from 16.6% of pixels exact and MAE 20.13 to **39.4% and 13.31**, and the
+  river from zero pixels of `#9ec6dd` to 36,328 against the oracle's 35,324.
+
+  What identified it: `TSF_NO_STENCIL=1` restored the water exactly, 75,340 pixels, which is what
+  the layer draws when the raster is not in the style at all.
+
+  Also changed, and *not* measurably load-bearing here: the extra-zoom walk now takes only the
+  raster buckets off the tiles it finds. On this fixture the store serves vector data only to z15,
+  so those z16 tiles carry nothing else and the filter is a no-op. It is kept because the walk
+  exists for raster and a source serving vector at the raster's zoom would otherwise have its
+  layers drawn twice, at two zooms.
+
+  Still open in that scene: the imagery is tinted more strongly than the oracle's and its tiles
+  look larger, which points at the covering zoom; the pattern layer draws no green; and the icons
+  are far smaller than mbgl's.
 
 - **Symbol corner cases left standing when this thread was set down.** *Open, and none of them
   blocking.* Recorded together so they are not rediscovered one at a time:
