@@ -4427,6 +4427,31 @@ a subdivision and a draw the consumer no longer makes.
   express. Painter order already puts them in sequence, and a flat layer in mbgl neither writes
   depth nor loses to anything that does. The scene went to **88.2% exact, MAE 0.51, 94 gross**.
 
+- **A symbol layer with icons and no text drew nothing at all.** *Half fixed.* `icon-image` with
+  no `text-field` is an ordinary way to write a marker or a shield, and against `mbgl-render` --
+  which draws 97 icons on that style -- ours rendered a **black frame**: no icons, and no
+  background either.
+
+  **Fixed: the layer waited for glyphs it never asked for.** `Content::is_encodable` read
+  `fonts || !matches!(self, Self::Symbol(_))`, so *every* symbol layer was held back until glyphs
+  arrived. A layer whose symbols are all icons asks for none -- `dependencies` skips a pending
+  symbol with no fonts or no text -- so none were ever fetched and the layer never became
+  encodable. Nothing bound, the frame emitted no drawables, and the background went with it. Now a
+  symbol layer waits for glyphs only when it has text to set with them, which takes that style from
+  0.0% of pixels exact and MAE 233.80 to **95.9% and 4.92**: the background is right and the icons
+  are still missing.
+
+  **Not fixed: the icons themselves.** Ours draws 0 where the oracle draws 97. Two things are ruled
+  out. It is not the `buffers.vertices.is_empty()` guard in `write_geometry`, which skips a feature
+  whose *text* produced no vertices before its icons are laid out: relaxing it to spare a layer with
+  icons changed nothing measurable, so it was reverted rather than shipped unproven. And it is not
+  the pending-symbol filter, which records a feature with an icon and no text by design --
+  `label.is_none_or(text.is_empty()) && icon.is_none()` is what it drops.
+
+  So the icon half is reached but produces nothing, and the next thing to establish is whether
+  `lay_out` returns any `laid` entries for a feature with no text, since `lay_out_icons` takes them
+  and an icon with no anchor has nowhere to go.
+
 - **A POI symbol's anchor lands a third of a pixel from mbgl's.** *Open, and small.* What is left
   of the `poi-labels` layer is 811 gross pixels of 630,000, MAE 0.17, and all of it is icon edges.
 

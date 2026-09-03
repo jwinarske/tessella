@@ -655,6 +655,19 @@ impl SymbolLayout {
         self.pending.iter().any(|pending| pending.icon.is_some())
     }
 
+    /// Whether any symbol here has text, and so needs glyphs before it can be encoded.
+    ///
+    /// The same test [`Self::dependencies`] uses to decide what to ask for: a pending symbol with
+    /// no fonts or no text contributes nothing, and a layer made entirely of those asks for
+    /// nothing. Such a layer must not then be held back waiting for glyphs that will never be
+    /// fetched, which is what an unconditional "a symbol needs fonts" does to an icon-only layer.
+    #[must_use]
+    pub fn has_text(&self) -> bool {
+        self.pending
+            .iter()
+            .any(|pending| !pending.fonts.is_empty() && !pending.text.is_empty())
+    }
+
     /// Lays out this layer's icons against a sprite index.
     ///
     /// The icon counterpart of [`Self::lay_out`], and a separate buffer for a real reason: text

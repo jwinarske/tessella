@@ -1285,7 +1285,19 @@ impl Content {
     /// nothing at all.
     #[must_use]
     pub fn is_encodable(&self, fonts: bool) -> bool {
-        self.has_data() && (fonts || !matches!(self, Self::Symbol(_)))
+        // A symbol layer waits for glyphs only if it has text to set with them.
+        //
+        // `matches!(self, Self::Symbol(_))` held back every symbol layer, and a layer whose
+        // symbols are all icons asks for no glyphs at all -- `dependencies` skips a pending
+        // symbol with no fonts or no text -- so nothing ever fetched any and the layer never
+        // became encodable. An `icon-image` layer with no `text-field` drew nothing, which is an
+        // ordinary way to write a marker or a shield.
+        self.has_data()
+            && (fonts
+                || match self {
+                    Self::Symbol(layout) => !layout.has_text(),
+                    _ => true,
+                })
     }
 }
 
