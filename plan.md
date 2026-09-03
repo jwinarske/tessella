@@ -4496,10 +4496,25 @@ a subdivision and a draw the consumer no longer makes.
 
   And **zero icon pixels on screen**, against the oracle's 25,214.
 
-  So the icons are laid out, placed, encoded, announced, issued and counted as drawn, and paint
-  nothing. Whatever is left is between the drawable and the pixel, not in the pipeline that builds
-  it: the vertex opacity `write_icon_opacity` writes, or a parameter the icon shader reads. That is
-  a much smaller search than the one that got here, and it is the next thing to do.
+  So the icons are laid out, placed, encoded and announced, and paint nothing. Two more things are
+  now ruled out.
+
+  **The opacity is right.** `write_icon_opacity` runs for all 133 of them and writes
+  `placed=true, opacity=1` over ranges `0..4`, `4..8` and so on into a 532-slot buffer. Nothing is
+  transparent.
+
+  **And the range it writes to was already right.** It indexes with `label.laid_out.vertices`,
+  which looks like the *text* label's range and is not: the `paired` labels that reach it are built
+  with `laid_out: icon.clone()` and `icon: None`, so `laid_out` is the icon's own entry. Changing
+  it to read `label.icon` skips every symbol and draws nothing at all -- which is how that reading
+  was disproved.
+
+  What remains: for an icon-only layer **no symbol drawable reaches the consumer**. With
+  `TSF_SYM_LOG` a text style prints `shader 32 isText 0 size 1.000 tex 1` for every icon drawable
+  and an icon-only style prints nothing, though the producer encoded both records and announced
+  them. So the gap is between the producer announcing the geometry and the consumer batching it --
+  the order, or the geometry ids in it -- and that is a different place from anywhere looked at so
+  far.
 
   The 2-and-3 changes are reverted rather than shipped. They are almost certainly both needed --
   nothing downstream runs without them -- but on their own they change no pixel, and a change whose
