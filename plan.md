@@ -4243,26 +4243,31 @@ a subdivision and a draw the consumer no longer makes.
   it could not explain -- the same settings working there and not here -- was the real bug all
   along.
 
-- **A translucent extrusion blends some surfaces twice.** *Open, and it is what is left of the
-  1.9%.* On the side of a stacked building a lighter wedge is composited into an otherwise uniform
-  wall -- a second surface at the depth the first just wrote, passing the test and blending over
-  it. Invisible on an opaque extrusion, which does not blend at all, and that is the quickest way
-  to confirm it: set `fill-extrusion-opacity` to 1 and the wedge goes.
+- **A translucent extrusion blends some surfaces twice.** *Open. The mechanism is confirmed and two
+  suspects are priced out.* On the side of a stacked building a lighter wedge is composited into an
+  otherwise uniform wall -- a second surface at the depth the first just wrote, passing the test
+  and blending over it. Set `fill-extrusion-opacity` to 1 and it goes, which is what identifies it
+  as blending rather than geometry.
 
   mbgl avoids it by writing depth in the depth pass and only *reading* it in the colour pass, so
-  each pixel is drawn once. Making ours read-only loses most of its walls instead -- 98.1% against
-  99.9% -- and two explanations for that have been ruled out:
+  each pixel is drawn once. Ours loses most of its walls when made read-only -- 98.1% of pixels
+  within 24/255 against 99.9% -- and the reason is not yet known.
 
-  - The per-sub-layer depth nudge. `for_tile_with` applies mbgl's `depthModeForSublayer`, which
-    exists to lift a fill's *outline* above its fill; a 3D layer takes `depthModeFor3D`, which has
-    no nudge. Removing it for extrusions, so the two passes share a depth, changed nothing.
-  - The depth pass being absent. It is drawn -- 54 renderables against 36 without it.
+  What `depth_probe`'s third phase settles: two passes over one surface, a depth-only pass then a
+  read-only colour pass, survive **only at exactly the same depth**. At 1e-6 apart the colour pass
+  is lost. That tolerance matters because the whole depth range a 150-metre building spans is 2e-4.
 
-  One thing worth having from the same session: **the depth-only pass is currently redundant.**
-  Skipping it gives a pixel-identical frame with 36 renderables instead of 54, because our colour
-  pass writes depth itself. That is the divergence from mbgl in one sentence, and it is also where
-  the double blend comes from -- so the fix is to make the colour pass read-only *and* find why
-  that loses walls, not to drop the pass.
+  What that priced out: the per-sub-layer depth nudge. `for_tile_with` applies mbgl's
+  `depthModeForSublayer` -- `1 / 2048` per step, which after the divide is 9.3e-7 between an
+  extrusion's depth pass and its colour pass, right at the probe's threshold. A 3D layer should
+  take `depthModeFor3D` instead, which has no nudge. Removing it *and verifying* all four
+  sub-layers land on one `matrix[14]` does **not** bring the walls back, so the nudge is real, is
+  arguably wrong for a 3D layer, and is not the cause. It was reverted rather than shipped: it
+  changes 184 pixels, fixes nothing, and touches matrices the goldens pin.
+
+  Also standing: the depth-only pass is currently redundant -- skipping it gives a pixel-identical
+  frame with 36 renderables instead of 54, because our colour pass writes depth itself. That is the
+  divergence from mbgl in one sentence and the same reason the double blend happens.
 
 - **A raster layer paints over the vector layers beneath it.** *Open, and newly isolated.* In the
   all-families style the imagery hides water, the pattern, the roads and the buildings: zero pixels
