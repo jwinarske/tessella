@@ -4158,6 +4158,31 @@ a subdivision and a draw the consumer no longer makes.
   1,931. Kept because it is mbgl's behaviour and was missing, not because of the numbers: it moved
   Berlin from one per cent over to two under, which is noise at this distance.
 
+- **Three of the five remaining shader families do not reach the screen.** *Found by building a
+  style that exercises all of them; none fixed.* Every parity number before this came from a
+  style with a background, a fill, a line and symbols -- a quarter of the renderer. One layer per
+  family, against the same oracle, says:
+
+  | family | verdict |
+  |---|---|
+  | fill-extrusion | draws |
+  | symbol icons, from a sprite sheet | draws -- 2,009 pixels of icon in the combined frame against 2,029 alone |
+  | fill-pattern | **drawables issued, nothing drawn.** Shaders 13 and 14 appear 21 times each in the order and the frame has 0 greenish pixels where the oracle has 122,848 |
+  | raster | **no drawables at all, as soon as any vector layer is present.** Alone it draws and uploads 21 textures; with one fill layer beside it the order carries background, fill and fill-outline and no shader 31 |
+  | circle | **no material in the consumer.** The producer emits shader 5, `missing_family_5`, and nothing draws it |
+
+  The raster one has a two-layer reproducer: a background, one vector fill, and the raster layer.
+  That is worth keeping small, because "works alone, vanishes beside a vector source" is a
+  scheduling or cover question rather than a shader one.
+
+  A fourth thing, smaller: a style whose only source is raster draws no background either. The
+  background is a per-tile bucket here and mbgl's is a viewport quad, so with no vector tiles
+  there is nothing to hang it on.
+
+  The style, the asset server and how to run the pair are in
+  `maplibre-frontend/tileserver/style-families.json` and `README-families.md`, outside this repo
+  because the archives it reads are.
+
 - **Symbol corner cases left standing when this thread was set down.** *Open, and none of them
   blocking.* Recorded together so they are not rediscovered one at a time:
 
