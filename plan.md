@@ -4158,30 +4158,25 @@ a subdivision and a draw the consumer no longer makes.
   1,931. Kept because it is mbgl's behaviour and was missing, not because of the numbers: it moved
   Berlin from one per cent over to two under, which is noise at this distance.
 
-- **Three of the five remaining shader families do not reach the screen.** *Found by building a
-  style that exercises all of them; none fixed.* Every parity number before this came from a
-  style with a background, a fill, a line and symbols -- a quarter of the renderer. One layer per
-  family, against the same oracle, says:
+- **All five remaining shader families reach the screen now.** Every parity number before this
+  came from a style with a background, a fill, a line and symbols -- a quarter of the renderer.
+  One layer per family, against the same oracle, found three that drew nothing; all three are
+  fixed, each measured on its own:
 
-  | family | verdict |
+  | family | against the oracle |
   |---|---|
-  | fill-extrusion | draws |
-  | symbol icons, from a sprite sheet | draws -- 2,009 pixels of icon in the combined frame against 2,029 alone |
-  | fill-pattern | **drawables issued, nothing drawn** -- narrowed, see below |
-  | raster | *fixed* -- see below |
-  | circle | **no material in the consumer.** The producer emits shader 5, `missing_family_5`, and nothing draws it |
+  | fill-extrusion | drew already |
+  | symbol icons | drew already -- 2,009 pixels of icon in the combined frame against 2,029 alone |
+  | circle | 99.91% of pixels exact, 100% within 24/255 |
+  | fill-pattern | 44% exact, **100% within 24/255** |
+  | raster | 72% exact, 89% within 24/255 |
 
-  The raster one has a two-layer reproducer: a background, one vector fill, and the raster layer.
-  That is worth keeping small, because "works alone, vanishes beside a vector source" is a
-  scheduling or cover question rather than a shader one.
+  The whole style together is 60% within 24/255, which is lower than any of its parts and says
+  where the next work is: the raster covers every pixel, so its filtering difference is added to
+  everything under it. Mean brightness agrees to within four of 255, so it is not opacity or
+  ordering -- the draw order carries background, raster, fill, pattern, line, extrusion, circle,
+  icon, label, which is the style's own.
 
-  A fourth thing, smaller: a style whose only source is raster draws no background either. The
-  background is a per-tile bucket here and mbgl's is a viewport quad, so with no vector tiles
-  there is nothing to hang it on.
-
-  The style, the asset server and how to run the pair are in
-  `maplibre-frontend/tileserver/style-families.json` and `README-families.md`, outside this repo
-  because the archives it reads are.
 
 - **A raster source's tiles were fetched, decoded, stored, and never looked up.** *Fixed.* A
   256-pixel raster source covers the screen at one zoom *more* than a vector one -- mbgl's
