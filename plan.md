@@ -4319,36 +4319,47 @@ a subdivision and a draw the consumer no longer makes.
   is moot -- so those numbers were comparing an opaque render against itself and none of them meant
   what they appeared to.
 
-- **A translucent extrusion still blends overlapping surfaces twice.** *Open, and now small.* What
-  is left of the residual is a roof at (209,193,176) where the oracle has (211,196,180): one blend
-  gives 211, two give 208, so a surface is still being composited twice. It is 163 gross pixels
-  against 630,000 and no longer visible.
+- **A translucent extrusion blended overlapping surfaces twice.** *Fixed.* On a stacked building
+  an upper block's wall projects over the lower block's roof. Both were blended, and the overlap
+  reads as a lighter rectangle let into the wall -- the anomaly on the side of the stacked
+  buildings. Two causes, both ported wrong.
 
-  **The earlier claim here that mbgl carries the roof and the walls in one drawable was wrong.**
-  mbgl chooses by backend -- `MLN_USE_FILL_EXTRUSION_INSTANCING` is `(METAL || VULKAN)` -- and the
-  oracle is built `MLN_WITH_VULKAN=ON`, so it takes the same instanced path this does: a roof
-  drawable on one shader, wall instances on another, four builders for the two passes. The split is
-  not the divergence, and there is nothing to unify.
+  **The wall template used mbgl's `quadTriangleIndices`, not its `fillExtrusionTriangleIndices`.**
+  The generic quad winds `0,1,2` then `1,2,3`, and those two triangles turn opposite ways. The
+  extrusion has its own set for exactly this reason, and mbgl's comment on it says so --
+  "Counter-Clockwise winding order" -- flipping the first to `0,2,1`. Nothing reads the winding
+  until something culls by it, and then it is not subtle: back-face culling takes one triangle of
+  every quad and leaves the other, so each wall loses a diagonal half. This is why culling looked
+  destructive and was written off.
 
-  Where it stands, measured against the oracle after the opacity fix:
+  **Back-face culling was off, where mbgl sets `backCCW` on all four builders.** With the winding
+  corrected it is verifiable: at `fill-extrusion-opacity: 1` enabling it is a *no-op* -- 100.0% of
+  pixels exact either way, because a building's far walls are hidden anyway -- which is the proof
+  that the right faces are going. Translucent, those far walls were being blended through the near
+  ones. `front` and not `back`, because Filament's front-facing winding is opposite to mbgl's here:
+  culling `front` on the roof is a no-op and culling `back` removes every roof triangle.
 
-  | arrangement | exact | MAE | gross px |
-  |---|---|---|---|
-  | colour pass only, writes depth (shipped) | 91.8% | 0.45 | 163 |
-  | prepass, colour pass also writes | 95.3% | 0.65 | 2,693 |
-  | prepass, colour pass read-only (mbgl's) | 91.3% | 4.17 | 25,684 |
+  **And the depth prepass is drawn again.** Depth alone cannot prevent a double blend -- the test
+  rejects a farther fragment that arrives second, but nothing stops it arriving first -- so the
+  buffer has to be filled before any colour is blended, which is what mbgl's prepass is for. It was
+  being skipped on the strength of measurements taken while opacity was stuck at one, where the
+  question does not arise.
 
-  The prepass removes double blends -- exact rises to 95.3% -- and adds 2,530 gross pixels of seam
-  along building perimeters, where the roof and the wall meet. Both reconstruct the same footprint
-  from the same packed int16-plus-fraction and the arithmetic is identical, so the seam is not yet
-  explained. Single-pass ships because gross pixels are what is visible.
+  Berlin at 0.9, against `mbgl-render`: **92.0% of pixels exact with the single pass, 94.9% with
+  the prepass**, and the wall is uniform where mbgl's is uniform. Opaque styles stay at 100.0% and
+  MAE 0.00.
 
-  Back-face culling is the other thing mbgl does here and this does not -- `setCullFaceMode(backCCW)`
-  on all four builders. Enabling it is currently destructive: `roof=front` is a *no-op*, meaning
-  every roof triangle is back-facing in Filament's winding and the convention is inverted from
-  mbgl's, while the walls lose about 20,000 pixels whichever face is culled, meaning their winding
-  is mixed rather than consistently outward. Getting that right would halve wall rasterization and
-  remove a building's own far walls from the blend.
+  Two things deliberately not taken. mbgl leaves its colour pass read-only; measured here that is
+  worse -- 93.0% and 8,267 gross pixels against 94.9% and 2,694 -- so the colour pass writes depth
+  too. And the prepass leaves about 2,700 gross pixels of thin seam along building perimeters,
+  where a colour fragment is rejected and the background shows through. Their cause is not known:
+  the two passes draw the same geometry through the same shaders with placements verified
+  bit-identical, and rendering the prepass drawables *with colour* differs from the colour pass by
+  2.9% of pixels, which should not be possible. That is where to start next.
+
+  Measurement note: the probe's frame is not always the same frame. Tile arrival varies, and a run
+  that catches 64 extrusion drawables instead of 48 scores 97.5% rather than 94.9%. The renderer is
+  deterministic given the same tiles; compare like with like.
 
 - **A raster layer paints over the vector layers beneath it.** *Open, and newly isolated.* In the
   all-families style the imagery hides water, the pattern, the roads and the buildings: zero pixels

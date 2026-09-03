@@ -1656,8 +1656,17 @@ pub struct ExtrusionShared {
 /// numbers — which is the whole point of drawing them instanced.
 const WALL_TEMPLATE: [[i16; 2]; 4] = [[1, 0], [1, 1], [0, 0], [0, 1]];
 
-/// Its indices: mbgl's `quadTriangleIndices`.
-const WALL_INDICES: [u16; 6] = [0, 1, 2, 1, 2, 3];
+/// Its indices: mbgl's `fillExtrusionTriangleIndices`, which is *not* its `quadTriangleIndices`.
+///
+/// The generic quad winds `0,1,2` then `1,2,3`, and those two triangles turn opposite ways. mbgl
+/// keeps a separate set for this one template and its comment says why -- "Counter-Clockwise
+/// winding order" -- flipping the first triangle to `0,2,1` so a wall is consistently wound.
+///
+/// Porting the generic one is invisible until something reads the winding, and then it is not
+/// subtle: back-face culling takes one triangle of every quad and leaves the other, so each wall
+/// loses a diagonal half. It also leaves a building's far walls in the frame, which a translucent
+/// extrusion blends through its near ones.
+const WALL_INDICES: [u16; 6] = [0, 2, 1, 1, 2, 3];
 
 /// Bytes between consecutive template vertices.
 const WALL_STRIDE: u32 = 4;
