@@ -4213,37 +4213,36 @@ a subdivision and a draw the consumer no longer makes.
   drawable UBO, or the samplers. `missing_atlas` is zero, so it is not a texture the consumer was
   never given.
 
-- **Extrusions have no depth buffer, so a tall building is hollow.** *Open. Measured, and two
-  attempts recorded so the third does not repeat them.* mbgl draws a translucent extrusion twice --
-  a depth-only pass that writes no colour, then a colour pass that reads it -- and that test is
-  what makes a tower a volume. This consumer honours neither `ENABLE_DEPTH` nor `ENABLE_COLOR`:
-  both arrive on every geometry and are read by nothing. A building's own walls and roof paint over
-  each other in the order they were listed and a neighbour's roof paints over both, which on the
-  tallest tower in the frame is a hollow outline where the oracle has a solid shaded volume. It is
-  also what makes stacked parts -- a tower on a podium, two features at different bases -- lose the
-  face that should be in front.
+- **Extrusions have no depth buffer, so a tall building is hollow.** *Open, and now narrowed by a
+  probe rather than by guesses.* mbgl draws a translucent extrusion twice -- a depth-only pass then
+  a colour pass that reads it -- and that test is what makes a tower a volume. This consumer
+  honours neither `ENABLE_DEPTH` nor `ENABLE_COLOR`; both arrive on every geometry and are read by
+  nothing. It is also what makes stacked parts -- a tower on a podium, two features at different
+  bases -- lose the face that should be in front. Nothing is missing from the frame: measured, zero
+  pixels where the oracle draws and we draw background.
 
-  What is measured, and is the thing to build on. The clip space this producer emits is the OpenGL
-  convention the capture uses: at z15 a ground point is 0.999981, twenty metres 0.999956, a hundred
-  and fifty 0.999773. In [0, 1], and *nearer is smaller*. Filament works in reversed Z: it clears
-  the depth buffer to zero meaning far, and its default comparison is `GE`.
+  `tessella_fluorite/native/test/depth_probe.cc` settles the convention. Two quads at the depths a
+  z15 frame really produces -- ground 0.999981, a hundred and fifty metres 0.999773, so *nearer is
+  smaller* -- nothing else in the scene, swept over projection, perspective divisor and comparison:
 
-  Two attempts, both reverted:
+  | projection | func | result |
+  |---|---|---|
+  | passthrough (what the consumer uses) | `GE` | **near wins in both draw orders** |
+  | passthrough | `G` | near wins in both |
+  | passthrough | `LE`, `L` | draws nothing |
+  | reversed (`z' = w - z`) | `GE`, `G` | *far* wins |
 
-  - Setting `setDepthWrite`/`setDepthCulling`/`setColorWrite` from the flags and leaving the
-    comparison alone. Every fragment failed `GE` against the cleared buffer and the layer drew
-    nothing. Forcing `LE` instead fails the same way, and for the same reason: the *clear* value is
-    the far end of Filament's convention, not ours.
-  - Reversing z in `configureCamera`'s custom projection (`z' = w - z`) so Filament's own default
-    is right. That blanks the extrusions *even with the depth test switched off*, so the flip is
-    interacting with the clip range or the `near`/`far` arguments to `setCustomProjection` rather
-    than only with the comparison.
+  So the projection is already right and Filament's default comparison is already right. Reversing
+  z -- the obvious reading, since Filament is a reversed-Z renderer, and what the second attempt
+  did -- is backwards: Filament evidently applies that transform itself. The perspective divisor
+  makes no difference; one and the thousand-odd a tile matrix produces agree.
 
-  What to do instead of a third guess: establish the convention on a two-quad probe -- one quad
-  in front of another, depth on, nothing else in the scene -- and find the combination of custom
-  projection, near/far, and comparison that makes the near one win. Toggling flags on a full scene
-  cannot distinguish "clipped away" from "failed the test", which is what cost the two attempts
-  above. Once the probe is right the flags are a small change.
+  And yet those settings on a real frame draw nothing. So what blanks it is something else the
+  frame contains, not the depth setup. The first suspect is a layer that writes depth before the
+  buildings -- the background is drawn first and carries `ENABLE_DEPTH`, while mbgl gives it
+  `DepthMaskType::ReadOnly`, a distinction the single wire bit does not carry. The probe is the
+  cheap place to prove that: add a background quad drawn first and sweep its depth write
+  separately. The note at the foot of the file says so.
 
   The wall geometry and shading are correct meanwhile -- 98.1% of pixels within 24/255 -- and this
   is what the remaining 1.9% is made of.
