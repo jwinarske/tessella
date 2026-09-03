@@ -455,10 +455,19 @@ impl Map {
         if let Ok(background) = tessella_tile::cover::cover_at(&self.view, integer_zoom) {
             for entry in &background {
                 let cover = TileId::new(entry.z, entry.x, entry.y);
-                let Some(sourceless) = tiles.sourceless(cover) else {
-                    continue;
+                // Built here when the store has not got to it, because a background is a
+                // function of the style and the coordinate and of nothing else.
+                //
+                // The store fills `sourceless` for whatever coordinates the planner visited, on
+                // the planning thread. Depending on that made a raster-only style render a black
+                // frame at random: the planner had not filled the view's coordinates yet, or had
+                // filled the raster's own zoom instead, and the frame found nothing to draw. A
+                // background that has to wait for a planner is the one layer that never should --
+                // it is what a map shows *before* anything has arrived.
+                let built: Vec<LayerBucket> = match tiles.sourceless(cover) {
+                    Some(held) => held.iter().cloned().collect(),
+                    None => crate::tile::build_sourceless(&self.style, cover).unwrap_or_default(),
                 };
-                let built: Vec<LayerBucket> = sourceless.iter().cloned().collect();
                 if built.is_empty() {
                     continue;
                 }

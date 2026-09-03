@@ -346,10 +346,20 @@ fn labels_draw_only_once_the_glyphs_are_handed_over() {
     let (mut producer, _consumer) =
         unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
 
-    // Without glyphs first.
+    // Without glyphs first, and twice.
+    //
+    // What this measures is the labels, so the frame it compares against has to have announced
+    // everything that is not a label already. The first frame announces the background and the
+    // tile's other layers too -- the background over the whole cover, which is where a map's
+    // colour comes from before any tile arrives -- and counting those as though they were labels
+    // makes the comparison say nothing.
     let mut map = Map::new(style.clone(), at, ViewId(0));
-    let Tick::Emitted(mute) = map.tick(&mut producer, &tiles).expect("a frame") else {
+    let Tick::Emitted(_) = map.tick(&mut producer, &tiles).expect("a frame") else {
         panic!("the first tick emits");
+    };
+    let mute = match map.tick(&mut producer, &tiles).expect("a second frame") {
+        Tick::Emitted(emitted) => emitted,
+        _ => Default::default(),
     };
 
     // Then the same map, the same camera, with the glyphs the labels need.
@@ -365,7 +375,7 @@ fn labels_draw_only_once_the_glyphs_are_handed_over() {
     fonts.fetch(&wanted, &Disk).expect("the fonts read");
     map.set_fonts(fonts);
 
-    let Tick::Emitted(lettered) = map.tick(&mut producer, &tiles).expect("a second frame") else {
+    let Tick::Emitted(lettered) = map.tick(&mut producer, &tiles).expect("a third frame") else {
         panic!("handing over glyphs must reopen the gate");
     };
 
