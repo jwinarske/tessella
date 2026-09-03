@@ -100,6 +100,16 @@ pub fn thin(circles: &[LineCircle]) -> Vec<usize> {
     let mut previous_placed = false;
 
     for (index, entry) in circles.iter().enumerate() {
+        // Outside what the label reaches, so not a circle at all as far as this run is
+        // concerned. mbgl makes this the *first* test in the loop and clears
+        // `previousCirclePlaced` on the way out, which is why it belongs here rather than in a
+        // filter afterwards: thinning compares each circle against the last one kept, and running
+        // it over circles the label never covers compares against neighbours mbgl never sees.
+        if !entry.covered_by_label {
+            previous_placed = false;
+            continue;
+        }
+
         if previous_placed {
             let previous = circles[*kept.last().expect("a placed circle")].circle;
             let dx = entry.circle.center.0 - previous.center.0;
@@ -109,9 +119,14 @@ pub fn thin(circles: &[LineCircle]) -> Vec<usize> {
             // removes the root from the inner loop of placement.
             let too_dense = radius * radius * 2.0 > dx * dx + dy * dy;
 
-            // Unless it is the last one there is, in which case it is kept however tightly it
-            // sits against its neighbour.
-            if too_dense && index + 1 < circles.len() {
+            // Unless it is the last one the *label* can use, in which case it is kept however
+            // tightly it sits against its neighbour. mbgl asks whether the next circle is one it
+            // would test -- `atLeastOneMoreCircle` and then the same reach test again -- not
+            // merely whether the array continues.
+            let next_is_usable = circles
+                .get(index + 1)
+                .is_some_and(|next| next.covered_by_label);
+            if too_dense && next_is_usable {
                 previous_placed = false;
                 continue;
             }
@@ -140,7 +155,6 @@ impl Shape {
             // oracle carried it four times.
             Self::Circles(circles) => thin(circles)
                 .into_iter()
-                .filter(|index| circles[*index].covered_by_label)
                 .any(|index| grid.hit_test_circle(circles[index].circle)),
         }
     }
@@ -153,7 +167,7 @@ impl Shape {
                 // The same run that was tested. Reserving every circle while testing a thinned
                 // set would make a label block more than it checked against, which reads as a
                 // map that thins out as it fills.
-                for index in thin(circles).into_iter().filter(|index| circles[*index].covered_by_label) {
+                for index in thin(circles) {
                     grid.insert_circle(id, circles[index].circle);
                 }
             }

@@ -5062,3 +5062,46 @@ a subdivision and a draw the consumer no longer makes.
   street names that cross it, while we keep both verticals and drop F Street; around (478-646,
   57-175) it is the other way about, and we keep "Massachusetts Avenue Northwest" where mbgl keeps
   "11th Street Northwest". Same anchors, same order, opposite outcomes.
+
+- **The circle thinning ran over circles the label does not reach.** *Fixed.* With placement order
+  and anchors matching exactly, both renderers were made to print, per symbol offered to the grid,
+  the circles it puts up and the verdict it gets. 166 records each, in the same order, on the same
+  anchors -- and 58 of the verdicts disagreed, the first at record six.
+
+  mbgl's `projectedBoxes` is sized to the whole run and only the entries it actually tests are
+  filled, so the log shows which circles a run used: real circles alternating with default-
+  constructed placeholders. Reading ours against that put the divergence in `placeLineFeature`'s
+  loop order. mbgl tests the reach *first* --
+
+      if (!firstAndLastGlyph || (boxSignedDistanceFromAnchor < -firstTileDistance) ||
+          (boxSignedDistanceFromAnchor > lastTileDistance)) {
+          previousCirclePlaced = false;
+          continue;
+      }
+
+  -- and only then thins what is left, comparing each surviving circle against the last one kept.
+  Here the thinning ran over the whole run and `covered_by_label` was applied afterwards as a
+  filter, so circles the label never covers still took part in the density decisions, and the kept
+  set came out different. The "keep the last one however tight it is" guard differed too: mbgl asks
+  whether the *next* circle is one it would test (`atLeastOneMoreCircle` and then the same reach
+  test), where this asked only whether the array continues.
+
+  Washington 4,936 gross pixels to 4,089, 98.3% exact to 98.5%, MAE 0.89 to 0.74. The other scenes
+  are unchanged. Verdicts that disagree: 58 to 53.
+
+- **The reach itself is still an approximation.** *Next, and precisely located.* On record five of
+  Washington the kept sets now differ only at the ends: mbgl keeps circles 4, 6, 8, ... and this
+  keeps 3, 4, 6, 8, ..., 15. Circle 3 is one mbgl's reach test rejects.
+
+  `covered_by_label` here is `|signedDistanceFromAnchor| <= label_length / 2` -- symmetric, and
+  taken from the label's nominal length. mbgl's bounds are `firstTileDistance` and
+  `lastTileDistance`, which come from `placeFirstAndLastGlyph` walking the line in the label plane
+  to find where the first and last glyph actually land, then `approximateTileDistance` converting
+  each back to tile units through the incidence stretch. They are not symmetric and they are not
+  the nominal length. `placeLineFeature` also refuses the label outright when that walk fails
+  (`!firstAndLastGlyph`), and requires `inGrid` -- at least one tested circle inside the padded
+  grid -- neither of which is expressed here.
+
+  The walk already exists in a different form: `write_line_positions` follows the same line to
+  decide whether the name fits, and that is where the first and last glyph's distances would come
+  from.
