@@ -4149,12 +4149,19 @@ a subdivision and a draw the consumer no longer makes.
   reproducing the two labels in-process and printing the circle runs -- 3..275 and 217..507 for
   labels 114 wide.
 
-- **We draw more labels than the oracle where a name repeats across features.** *Open.* Berlin is
-  at 3,041 against 3,005, which is parity; Washington is at 2,353 against 1,931. The likely cause
-  is named and not yet built: mbgl's `anchorIsTooClose` rejects an anchor within
-  `symbol-spacing / 2` of another anchor carrying the *same text*, per tile, and we have no such
-  filter. Washington is full of streets split into many features sharing a name, which is exactly
-  where it would bite.
+- **A name is not printed twice next to itself.** *Added.* mbgl's `anchorIsTooClose` rejects an
+  anchor within `symbol-spacing / 2` of another anchor carrying the same text, across the whole
+  layout rather than one feature -- a street is usually many features sharing a name, and without
+  it each of them labels itself. We had no such filter.
+
+  Berlin goes 3,041 to 2,958 against the oracle's 3,005, and Washington 2,353 to 2,309 against
+  1,931. Kept because it is mbgl's behaviour and was missing, not because of the numbers: it moved
+  Berlin from one per cent over to two under, which is noise at this distance.
+
+- **Washington still draws about a fifth more label than the oracle.** *Open.* Berlin is at 2,958
+  against 3,005 and Washington at 2,309 against 1,931, on the same code and the same camera rules,
+  so whatever is left is not uniform -- it is something Washington's data has more of. The two
+  scenes disagreeing is the lead: find what one has that the other does not.
 
 - **The style's placement properties never reached placement.** *Fixed.* `FrameOptions` was built
   with `Rules::default()` and the default paddings whatever the style said, so `text-allow-overlap`,

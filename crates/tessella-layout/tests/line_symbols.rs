@@ -391,3 +391,32 @@ fn a_line_label_never_wraps() {
         );
     }
 }
+
+/// One name is not printed twice within half a spacing of itself.
+///
+/// mbgl's `anchorIsTooClose`, and it spans the layout rather than one feature: a street is usually
+/// many features sharing a name, and without this each of them labels itself. Washington draws
+/// "15th Street Northwest" down a column of separate road segments; the oracle prints it a few
+/// times, not once per segment.
+#[test]
+fn a_name_is_not_repeated_next_to_itself() {
+    let font = Font::new("Main Street");
+    // Two features, the same name, running alongside each other a tenth of a spacing apart.
+    let near = vec![(100.0f32, 4020.0f32), (8100.0, 4020.0)];
+    let (_, laid) = build_line_symbols(
+        &[label("Main Street", road()), label("Main Street", near)],
+        &font,
+        None,
+        &LineOptions::default(),
+    );
+    for (index, entry) in laid.iter().enumerate() {
+        for other in &laid[index + 1..] {
+            let apart = (entry.anchor.0 - other.anchor.0).hypot(entry.anchor.1 - other.anchor.1);
+            assert!(
+                apart >= LineOptions::default().spacing / 2.0,
+                "two copies of one name {apart} apart, closer than half a spacing"
+            );
+        }
+    }
+    assert!(!laid.is_empty(), "the name is drawn somewhere");
+}

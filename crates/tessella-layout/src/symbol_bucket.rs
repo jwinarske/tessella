@@ -732,6 +732,14 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
 
     let mut buffers = SymbolBuffers::default();
     let mut out = Vec::new();
+    // Where each name has already been put, so it is not put again next to itself.
+    //
+    // mbgl's `compareText`, and it spans the whole layout rather than one feature: a street is
+    // usually many features sharing a name, and without this each of them labels itself. mbgl
+    // rejects an anchor within `symbol-spacing / 2` of another anchor carrying the same text.
+    let mut placed_text: alloc::collections::BTreeMap<&str, Vec<(f32, f32)>> =
+        alloc::collections::BTreeMap::new();
+    let repeat_distance = options.spacing / 2.0;
 
     for label in labels {
         // The same sections a point label gets. A line-placed label is set the same way; what
@@ -830,6 +838,16 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
         };
 
         for anchor in anchors {
+            // Not next to another copy of the same name. Kept per name rather than per feature,
+            // which is the point: two halves of one street are two features and one name.
+            let seen = placed_text.entry(label.text.as_str()).or_default();
+            if seen.iter().any(|point| {
+                (point.0 - anchor.point.0).hypot(point.1 - anchor.point.1) < repeat_distance
+            }) {
+                continue;
+            }
+            seen.push(anchor.point);
+
             let before = buffers.glyphs();
             for quad in &quads {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
