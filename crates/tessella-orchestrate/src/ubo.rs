@@ -702,9 +702,40 @@ impl ExtrusionDrawableEntry {
         // that precedes it by more than the comparison tolerates.
         let matrix = DrawableEntry::for_tile_3d(view, z, x, y, wrap)?.matrix;
 
-        // mbgl's own arithmetic: the tile's pixel origin at the *integer* zoom, split so the
-        // shader can reconstruct it without losing the low bits. `tileSizeAtNearestZoom` is
-        // floored there, and the floor matters at a fractional zoom.
+        let origin = PixelOrigin::of(view, z, x, y, wrap);
+
+        Ok(Self {
+            matrix,
+            pixel_coord_upper: origin.upper,
+            pixel_coord_lower: origin.lower,
+            height_factor: height_factor(z),
+            tile_ratio: origin.tile_ratio,
+            interpolations,
+        })
+    }
+}
+
+/// A tile's pixel origin at the *integer* zoom, split so a shader can reconstruct it.
+///
+/// Shared by the two families that tile something across the world rather than across the tile:
+/// a fill-extrusion, whose walls take a pattern along their length, and a fill-pattern, whose
+/// sprite has to line up across a tile boundary. Both read the same three values under the same
+/// names, and mbgl computes them once in `LayerTweaker` for the same reason.
+#[derive(Debug, Clone, Copy)]
+pub struct PixelOrigin {
+    /// The high half of the origin, in pixels.
+    pub upper: [f32; 2],
+    /// The low half.
+    pub lower: [f32; 2],
+    /// `1 / pixelsToTileUnits(1, integerZoom)` -- the tile's extent over the pixels it covers.
+    pub tile_ratio: f32,
+}
+
+impl PixelOrigin {
+    /// The origin for one tile under a view.
+    #[must_use]
+    pub fn of(view: &ViewTransform, z: u8, x: u32, y: u32, wrap: i32) -> Self {
+        // `tileSizeAtNearestZoom` is floored in mbgl, and the floor matters at a fractional zoom.
         #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
         let integer_zoom = view.zoom.floor() as i32;
         let zoom_scale = 2f64.powi(i32::from(z));
@@ -714,22 +745,101 @@ impl ExtrusionDrawableEntry {
         let pixel_x = (tile_size_at_nearest * (f64::from(x) + f64::from(wrap) * zoom_scale)) as i32;
         #[allow(clippy::cast_possible_truncation)]
         let pixel_y = (tile_size_at_nearest * f64::from(y)) as i32;
-
-        // `1 / pixelsToTileUnits(1, integerZoom)`, which is the tile's extent over the pixels it
-        // covers at that zoom.
         #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-        let tile_ratio = (512.0 * 2f64.powi(integer_zoom - i32::from(z)) / camera::EXTENT) as f32;
-
+        let tile_ratio = (512.0 * nearest_zoom_scale / camera::EXTENT) as f32;
         #[allow(clippy::cast_precision_loss)]
+        Self {
+            upper: [(pixel_x >> 16) as f32, (pixel_y >> 16) as f32],
+            lower: [(pixel_x & 0xffff) as f32, (pixel_y & 0xffff) as f32],
+            tile_ratio,
+        }
+    }
+}
+
+/// One fill-pattern drawable's entry.
+///
+/// A patterned fill does *not* take the plain fill layout. `FillPatternDrawableUBO` puts the
+/// tile's pixel origin and ratio where `FillDrawableUBO` puts its zoom-mix factors, so writing
+/// one where the other is expected leaves `tile_ratio` at zero -- and a zero ratio takes the
+/// world position out of `patternPos` entirely, so every fragment samples the same point of the
+/// sprite. That point is the rectangle's own corner, which in the atlas is the padding around
+/// it: alpha 36 of 255, which is why the pattern drew at a seventh of its strength and looked
+/// like a wash rather than a texture.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PatternDrawableEntry {
+    /// Tile-local to clip.
+    pub matrix: [f32; 16],
+    /// The tile's pixel origin, high half.
+    pub pixel_coord_upper: [f32; 2],
+    /// The low half.
+    pub pixel_coord_lower: [f32; 2],
+    /// The tile's extent over the pixels it covers.
+    pub tile_ratio: f32,
+    /// Mix factors for the from-pattern, the to-pattern and the opacity, in that order.
+    pub interpolations: [f32; 3],
+}
+
+impl PatternDrawableEntry {
+    /// The entry for one tile under a view.
+    ///
+    /// # Errors
+    ///
+    /// [`camera::CameraError`] when the view has no area.
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_tile(
+        view: &ViewTransform,
+        z: u8,
+        x: u32,
+        y: u32,
+        wrap: i32,
+        layer_index: i32,
+        sub_layer_index: i32,
+        interpolations: [f32; 3],
+    ) -> Result<Self, camera::CameraError> {
+        // The flat-layer matrix, nudge included: a patterned fill is still a fill, and its
+        // outline still has to sort above its triangles.
+        let matrix = DrawableEntry::for_tile_with(
+            view,
+            z,
+            x,
+            y,
+            wrap,
+            layer_index,
+            sub_layer_index,
+            [0.0, 0.0],
+        )?
+        .matrix;
+        let origin = PixelOrigin::of(view, z, x, y, wrap);
         Ok(Self {
             matrix,
-            pixel_coord_upper: [(pixel_x >> 16) as f32, (pixel_y >> 16) as f32],
-            pixel_coord_lower: [(pixel_x & 0xffff) as f32, (pixel_y & 0xffff) as f32],
-            height_factor: height_factor(z),
-            tile_ratio,
+            pixel_coord_upper: origin.upper,
+            pixel_coord_lower: origin.lower,
+            tile_ratio: origin.tile_ratio,
             interpolations,
         })
     }
+}
+
+/// A fill-pattern layer's consolidated drawable buffer.
+#[must_use]
+pub fn pack_fill_pattern_drawable_buffer(entries: &[PatternDrawableEntry], stride: u32) -> Vec<u8> {
+    let stride = stride as usize;
+    let mut out = alloc::vec![0u8; stride * entries.len()];
+    for (entry, slot) in entries.iter().zip(out.chunks_exact_mut(stride)) {
+        let mut at = 0usize;
+        let put = |slot: &mut [u8], at: &mut usize, values: &[f32]| {
+            for value in values {
+                slot[*at..*at + 4].copy_from_slice(&value.to_le_bytes());
+                *at += 4;
+            }
+        };
+        put(slot, &mut at, &entry.matrix);
+        put(slot, &mut at, &entry.pixel_coord_upper);
+        put(slot, &mut at, &entry.pixel_coord_lower);
+        put(slot, &mut at, &[entry.tile_ratio]);
+        put(slot, &mut at, &entry.interpolations);
+    }
+    out
 }
 
 /// A fill-extrusion layer's consolidated drawable buffer.

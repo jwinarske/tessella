@@ -4389,6 +4389,31 @@ a subdivision and a draw the consumer no longer makes.
   One thing deliberately not taken: mbgl leaves its colour pass read-only, and measured here that
   is worse, so the colour pass writes depth too.
 
+- **A patterned fill was written with the plain fill's drawable layout.** *Fixed.* The two share
+  the union's stride, so nothing about the buffer's length says which is meant, and
+  `FillPatternDrawableUBO` puts the tile's pixel origin and ratio exactly where `FillDrawableUBO`
+  puts its zoom-mix factors. The producer only ever wrote the plain one, so `tile_ratio` arrived as
+  zero.
+
+  A zero ratio takes the world position out of `patternPos` -- `(unitsToPixels * pos + offset) /
+  size` with both terms zero -- so `mod(patternPos, 1.0)` was `(0, 0)` for *every* fragment and
+  each one sampled the same point of the sprite. That point is the pattern rectangle's own corner,
+  which in the atlas is the padding around it, at alpha 36 of 255. So the layer drew at a seventh
+  of its strength: a wash the shape of the parks rather than a texture in them.
+
+  The layer against `mbgl-render`: **44.1% of pixels exact and MAE 11.31 before, 92.9% and 0.34
+  after**. The all-families scene went from 47.2% and MAE 7.39 to **86.4% and 1.45**.
+
+  How it was found, in the order that mattered: the layer had *zero* gross pixels, so the aggregate
+  numbers were the only signal it was wrong at all. Forcing the material to a solid colour showed
+  the geometry, coverage and blending were all correct, which left the sample. Having the shader
+  output its own sampled alpha gave 36/255 -- the exact factor the colours were short by -- and
+  having it output the tiling coordinate gave `(0, 0)`, which is only possible if `tile_ratio` is
+  zero.
+
+  `PixelOrigin` is now shared with the extrusion, which computes the same three values for the
+  same reason and had the only correct copy of the arithmetic.
+
 - **A symbol layer's two halves were laid out as one.** *Fixed.* Two properties, both unread, and
   together they are how a style puts a name under the marker it names.
 

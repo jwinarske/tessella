@@ -1851,8 +1851,59 @@ fn write_layer_state(
             // Triangles then outline, which is the order the oracle's buffer is in.
             let mut all = entries(1);
             all.extend(entries(2));
-            let buffer =
-                ubo::pack_drawable_buffer(&all, ubo_layouts::FILL_DRAWABLE_UNION_UBO.stride);
+            let placement =
+                patterns.and_then(|patterns| patterns.placement(&paint, "fill-pattern", view.zoom));
+
+            // A patterned fill takes its own drawable layout, not the plain one.
+            //
+            // The two share the union's stride, so nothing about the buffer's length says which
+            // is meant, and `FillPatternDrawableUBO` puts the tile's pixel origin and ratio
+            // exactly where `FillDrawableUBO` puts its zoom-mix factors. Written as a plain fill,
+            // `tile_ratio` arrived as zero -- and a zero ratio drops the world position out of
+            // `patternPos`, so every fragment samples one point of the sprite. That point is the
+            // rectangle's own corner, which in the atlas is the padding around it, so the layer
+            // drew at a seventh of its strength: a wash the shape of the parks rather than a
+            // texture in them.
+            let buffer = if placement.is_some() {
+                // Borrowed, not moved: the closures below are `move` so the factor's source has
+                // to be something they can copy.
+                let paint_ref = &paint;
+                let pattern: Vec<ubo::PatternDrawableEntry> = [1, 2]
+                    .into_iter()
+                    .flat_map(|sub| {
+                        matrices(sub).filter_map(move |tile| {
+                            ubo::PatternDrawableEntry::for_tile(
+                                view,
+                                tile.z,
+                                tile.x,
+                                tile.y,
+                                i32::from(tile.wrap),
+                                layer_index,
+                                sub,
+                                // A data-driven pattern is not implemented, so the two crossfade
+                                // factors are zero; the opacity's is the one a fill already has.
+                                [
+                                    0.0,
+                                    0.0,
+                                    ubo::fill_interpolations(
+                                        paint_ref,
+                                        f64::from(tile.z),
+                                        view.zoom,
+                                        sub,
+                                    )[1],
+                                ],
+                            )
+                            .ok()
+                        })
+                    })
+                    .collect();
+                ubo::pack_fill_pattern_drawable_buffer(
+                    &pattern,
+                    ubo_layouts::FILL_DRAWABLE_UNION_UBO.stride,
+                )
+            } else {
+                ubo::pack_drawable_buffer(&all, ubo_layouts::FILL_DRAWABLE_UNION_UBO.stride)
+            };
             ubo::write(
                 producer,
                 view_id,
@@ -1868,9 +1919,7 @@ fn write_layer_state(
             // One placement repeated, not one per drawable computed separately: a pattern that
             // is not data-driven resolves to the same pair of rectangles for every tile, which
             // is what the capture carries — twelve identical blocks over twelve drawables.
-            let tile_props = match patterns
-                .and_then(|patterns| patterns.placement(&paint, "fill-pattern", view.zoom))
-            {
+            let tile_props = match placement {
                 Some(placement) => ubo::pack_pattern_tile_props(&alloc::vec![placement; all.len()]),
                 None => ubo::pack_tile_props_buffer(
                     all.len(),
