@@ -4406,9 +4406,9 @@ a subdivision and a draw the consumer no longer makes.
   before -- a black frame -- and 48.6% with MAE 10.17 and zero gross pixels after.** The
   all-families scene 86.4% to 87.1%.
 
-- **A raster tile drew a different tile's picture.** *Fixed.* On the raster fixture every tile
-  carries a parity tint, `blue = 190 - ((x + y) % 2) * 40`, so which tile landed where is readable
-  off the picture -- and ours did not alternate across a row where mbgl's did.
+- **A raster tile drew a different tile's picture.** *Fixed, in two places.* On the raster fixture
+  every tile carries a parity tint, `blue = 190 - ((x + y) % 2) * 40`, so which tile landed where
+  is readable off the picture -- and ours did not alternate across a row where mbgl's did.
 
   Everything about the placement was right, which is what made it look like a covering-zoom
   problem: the tile borders fall on identical columns in both, 114/370/626/882 at a 256-pixel
@@ -4416,25 +4416,28 @@ a subdivision and a draw the consumer no longer makes.
   is what a 900x700 viewport at z15 wants of a 256-pixel source. The right tiles were fetched and
   the quads were in the right places; the wrong texture went on each quad.
 
-  `ubo_index` is assigned by walking the *resolved* order -- pass, depth slot, sub-layer, sort key,
-  then tile -- while `by_layer` collects bindings as the cover is walked. For a vector layer the
-  two coincide, because the cover is walked in the order the sort puts it, so nothing ever noticed.
-  A raster source is looked up at its own zoom by a second walk with its own traversal, and there
-  they diverge: the drawable in slot 1 was tile (35206, 21492) while the matrix in slot 1 belonged
-  to (35207, 21491).
+  **The uniform blocks were packed in arrival order and read in slot order.** `ubo_index` is
+  assigned by walking the *resolved* order -- pass, depth slot, sub-layer, sort key, then tile --
+  while `by_layer` collects bindings as the cover is walked. For a vector layer the two coincide,
+  because the cover is walked in the order the sort puts it, so nothing ever noticed. A raster
+  source is looked up at its own zoom by a second walk with its own traversal, and there they
+  diverge: the drawable in slot 1 was tile (35206, 21492) while the matrix in slot 1 belonged to
+  (35207, 21491). Fixed by packing from the resolved order, so there is one definition of the slot
+  numbering instead of two that have to agree.
 
-  Fixed by packing each layer's blocks in the order the slots were handed out, taken from the
-  resolved order rather than re-sorted, so there is one definition of the slot numbering instead of
-  two that have to agree. This is the same class as the two `ubo_index` bugs already recorded in
-  `order.rs` and the third to be found by a picture rather than by arithmetic.
+  **And the texture id was the tile's position in the frame's bucket list.** `RASTER_TEXTURE_BASE +
+  index` is stable only while that list is, and it grows as tiles arrive -- while the textures and
+  the drawables naming them live across frames. A later frame handed the same id to a different
+  tile, the consumer's map took the new picture at that key, and every drawable still holding the
+  id began sampling it. Two tiles reported the same texture, and which two depended on the order
+  the network answered in: the same scene scored anywhere from 64.5% to 73.5% of pixels exact
+  between runs. Now packed from the tile's own zoom, column, row and world copy, injective by
+  construction.
 
   A background-plus-imagery style against `mbgl-render`: **0.0% of pixels exact and MAE 188.52 at
-  the start of the day -- a black frame -- and 72.5% with MAE 4.32 and zero gross pixels now.** No
-  other scene moved, which is the point: the ordering was already right everywhere the cover walk
-  and the sort agreed.
-
-  Still standing: the bottom row of raster tiles is one cell out where the middle three rows match
-  exactly, which looks like a cover-extent difference rather than a pairing one.
+  the start of the day -- a black frame -- and 88.6% with MAE 0.40 and zero gross pixels now, the
+  same to the decimal on every run.** No other scene moved, which is the point: the ordering was
+  already right everywhere the cover walk and the sort agreed.
 
 - **A patterned fill was written with the plain fill's drawable layout.** *Fixed.* The two share
   the union's stride, so nothing about the buffer's length says which is meant, and

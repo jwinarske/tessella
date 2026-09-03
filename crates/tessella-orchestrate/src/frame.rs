@@ -339,6 +339,30 @@ fn glyph_atlas_id(index: usize) -> tessella_capture_abi::envelope::TextureId {
 /// raster texture and a glyph atlas never collide.
 const RASTER_TEXTURE_BASE: u64 = 16;
 
+/// The texture id a raster tile's picture takes, derived from the tile itself.
+///
+/// # Not the tile's position in this frame
+///
+/// It was `RASTER_TEXTURE_BASE + index`, the tile's index in the frame's bucket list. That is
+/// stable only while the list is, and the list grows as tiles arrive -- while the textures and
+/// the drawables that name them live across frames. So a later frame handed the same id to a
+/// different tile, the consumer's texture map took the new picture at that key, and every
+/// drawable still holding the id started sampling it. Tiles ended up wearing each other's
+/// imagery: two of them reported the same texture, and which two depended on the order the
+/// network answered in, so the same frame scored anywhere from 64% to 74% of pixels exact
+/// against the oracle between runs.
+///
+/// Packed rather than hashed, so it is injective by construction: zoom above column above row
+/// above the world copy, in fields wide enough for `MAX_ZOOM`. Added to the base so it can never
+/// land on a glyph atlas.
+#[must_use]
+fn raster_texture_id(z: u8, x: u32, y: u32, wrap: i32) -> tessella_capture_abi::envelope::TextureId {
+    #[allow(clippy::cast_sign_loss)]
+    let copy = u64::from((wrap.clamp(-7, 7) + 8) as u8);
+    let packed = (u64::from(z) << 52) | (u64::from(x) << 28) | (u64::from(y) << 4) | copy;
+    tessella_capture_abi::envelope::TextureId(RASTER_TEXTURE_BASE + packed)
+}
+
 /// Emits a whole frame: state, geometry, uniforms, order, camera — in that order.
 ///
 /// # Errors
@@ -574,12 +598,15 @@ fn emit_group(
     let mut keyed: BTreeMap<u64, DrawableKey> = BTreeMap::new();
 
     for (index, (tile, tile_buckets)) in buckets.iter().enumerate() {
+        // The wrap comes from the cover, which is the only place that has it: a bucket's `TileId`
+        // is canonical and carries no world copy. Read here rather than below because the texture
+        // id is a function of the tile *and* its copy.
+        let wrap = tiles.get(index).map_or(0, |coord| coord.wrap);
+
         // A raster tile's picture goes up before any drawable names it, for the reason the glyph
         // atlas does: a texture reference the consumer has not been given samples whatever was
         // last at that slot.
-        #[allow(clippy::cast_possible_truncation)]
-        let raster_texture =
-            tessella_capture_abi::envelope::TextureId(RASTER_TEXTURE_BASE + index as u64);
+        let raster_texture = raster_texture_id(tile.z, tile.x, tile.y, wrap);
         for bucket in tile_buckets {
             if let Content::Raster(raster) = &bucket.content
                 && let Some(upload) = texture::raster_tile(raster_texture, &raster.image)
@@ -589,11 +616,9 @@ fn emit_group(
             }
         }
 
-        // The wrap comes from the cover, which is the only place that has it: a bucket's
-        // `TileId` is canonical and carries no world copy. `Frame::buckets` is documented as
-        // being in cover order, and this is what depends on that — at low zooms the same
-        // `z/x/y` appears in several copies and only the wrap tells them apart.
-        let wrap = tiles.get(index).map_or(0, |coord| coord.wrap);
+        // `Frame::buckets` is documented as being in cover order, and this is what depends on
+        // that -- at low zooms the same `z/x/y` appears in several copies and only the wrap tells
+        // them apart.
         let at = order::wrapped_tile_of(tile.z, tile.x, tile.y, wrap);
         let mut bindings =
             order::bindings_for(view_id, at, tile_buckets, &mut next_id, fonts.is_some());
