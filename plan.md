@@ -4543,13 +4543,35 @@ a subdivision and a draw the consumer no longer makes.
     ignore-placement flags. The Washington style sets none, so mbgl places in creation order, as
     this does.
 
-  So what is left is the collision machinery itself: which label wins a piece of screen. Every
-  remaining cluster carries ink from both renderers in different amounts, and the largest is the
-  one where the oracle sets a cross street's name and ours sets the avenue's. Five things that
-  could have caused it have been read against mbgl and match -- the clip, its ordering against the
-  merge, `get_anchors`, `resample`, and the placement order -- so the next place to look is the
-  grid and the boxes put into it: a line label reserves a chain of circles rather than a box, and
-  their radius, spacing and padding have not been compared.
+  So what is left is the collision machinery, and reading it against mbgl found one fix and one
+  clear next step.
+
+  **Fixed:** the backwards walk that starts the circle chain stopped an eighth of a label short of
+  mbgl's `paddingStartDistance`. See the entry on it.
+
+  **Next, and specific.** `CollisionIndex::placeLineFeature` skips a circle before it ever reaches
+  the density test:
+
+      if (!firstAndLastGlyph || (boxSignedDistanceFromAnchor < -firstTileDistance) ||
+          (boxSignedDistanceFromAnchor > lastTileDistance)) {
+          previousCirclePlaced = false;
+          continue;
+      }
+
+  Two behaviours in there, and we have neither. mbgl tests only the circles within the reach of the
+  label's *actually placed* first and last glyph, where this tests the whole chain including every
+  padding circle -- so ours reserves more ground than mbgl's and loses contention it should win.
+  And when the first and last glyph cannot be placed at all, mbgl marks every circle unused and the
+  label does not go down; we have no such rejection.
+
+  Both need `placeFirstAndLastGlyph` and the tile distances it returns, which is a real port rather
+  than a correction. Much of the machinery around it -- `approximateTileDistance`, the perspective
+  ratio -- is a no-op at pitch zero and can wait; the two behaviours above are not.
+
+  What has been read against mbgl and matches, so that none of it is searched again: the clip, its
+  ordering against the merge, `merge_lines` itself, `get_anchors`, `resample`, the order symbols are
+  offered in, the circle chain's step, count, padding factor and first-box offset, and the density
+  test that thins the chain.
 
 - **A symbol's anchor lands a fraction of a pixel from mbgl's.** *Open, and measured to the
   decimal.* It is what is left of both symbol layers: 811 gross pixels of 630,000 on `poi-labels`
