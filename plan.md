@@ -4532,11 +4532,24 @@ a subdivision and a draw the consumer no longer makes.
   where they were*, same positions and same sizes. Those two measure different things here -- the
   ordering fixed the many small disagreements, and the clusters are whole labels.
 
-  So what is left is contention: which label wins a piece of screen. Every remaining cluster has
-  ink from both renderers in different amounts, and the largest is the one where the oracle sets a
-  cross street's name and ours sets the avenue's. The place to look is the order symbols are
-  offered to the grid -- mbgl places top layer first and, within a layer, in the order instances
-  were created, and whether ours agrees has not been checked.
+  Nor is it the merge, or the order symbols are offered in. Both have been read against mbgl's:
+
+  - `merge_lines` mirrors `mergeLines` case for case -- both neighbours, left only, right only --
+    and picks the same survivor each time, the earlier feature when merging rightwards and the
+    later when merging leftwards. mbgl leaves a merged-away feature in place with empty geometry
+    where this compacts it away; the relative order of the survivors is the same either way.
+  - mbgl does not sort symbols before placing them here. `getSortedSymbols` runs only when
+    `sortFeaturesByY`, which needs `symbol-z-order: viewport-y` *and* one of the allow-overlap or
+    ignore-placement flags. The Washington style sets none, so mbgl places in creation order, as
+    this does.
+
+  So what is left is the collision machinery itself: which label wins a piece of screen. Every
+  remaining cluster carries ink from both renderers in different amounts, and the largest is the
+  one where the oracle sets a cross street's name and ours sets the avenue's. Five things that
+  could have caused it have been read against mbgl and match -- the clip, its ordering against the
+  merge, `get_anchors`, `resample`, and the placement order -- so the next place to look is the
+  grid and the boxes put into it: a line label reserves a chain of circles rather than a box, and
+  their radius, spacing and padding have not been compared.
 
 - **A symbol's anchor lands a fraction of a pixel from mbgl's.** *Open, and measured to the
   decimal.* It is what is left of both symbol layers: 811 gross pixels of 630,000 on `poi-labels`
