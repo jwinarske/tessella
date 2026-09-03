@@ -4460,6 +4460,32 @@ a subdivision and a draw the consumer no longer makes.
   "this code never runs"; and one reading of `write_icon_opacity` looked like a bug until changing
   it drew nothing at all, which is what showed `laid_out` there is already the icon's own entry.
 
+- **What is left of the extrusion is two tiles drawing the same building.** *Understood, and the
+  fix is not in the renderer.* Buildings sit at 95.7% of pixels exact, MAE 0.20 and 8 gross, and
+  the residual is now fully accounted for.
+
+  It is a double blend, and the arithmetic says so exactly: a roof blended once against the
+  background gives 211, twice gives 209, and our frame carries both -- 211 as its most common roof
+  colour and 209 across 24,840 pixels, with about 900 wall pixels the same way at a delta of 13.
+  The blend itself is right: at opacity 1.0, 0.9 and 0.5 our roof reads 208, 211 and 221, matching
+  the oracle at each.
+
+  The doubled pixels are spread over 829 of 900 columns rather than banded at tile edges, and no
+  drawable is issued twice -- the final frame has nine roof and nine wall drawables, one colour
+  pass each. So the two copies are two *tiles* carrying the same building, which our extrusion no
+  longer clips apart.
+
+  **mbgl's read-only colour pass now measures identically** -- 95.7%, MAE 0.20, 8 gross, the same
+  to the decimal as writing depth -- where it once scored MAE 6.51. That was the ordering and
+  culling bugs, not the technique, and it is worth knowing it is no longer a cost. It is also not a
+  cure: two tiles' copies of one building sit at the *same* depth, so no depth test separates them.
+  Only a per-tile clip can, which is what mbgl uses and what cuts our walls, because the
+  neighbouring tile does not carry the geometry to paint what the clip removes.
+
+  So the remaining work is in what the tiles carry, not in how they are drawn: if a tile's
+  extrusion geometry included its neighbours' overhang the way MVT's buffer intends, the clip
+  would be lossless and the double blend would go with it.
+
 - **A symbol's anchor lands a fraction of a pixel from mbgl's.** *Open, and measured to the
   decimal.* It is what is left of both symbol layers: 811 gross pixels of 630,000 on `poi-labels`
   and 1,351 on the icon-only style, and in each case the split is the same -- about half
