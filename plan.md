@@ -4243,6 +4243,27 @@ a subdivision and a draw the consumer no longer makes.
   it could not explain -- the same settings working there and not here -- was the real bug all
   along.
 
+- **A translucent extrusion blends some surfaces twice.** *Open, and it is what is left of the
+  1.9%.* On the side of a stacked building a lighter wedge is composited into an otherwise uniform
+  wall -- a second surface at the depth the first just wrote, passing the test and blending over
+  it. Invisible on an opaque extrusion, which does not blend at all, and that is the quickest way
+  to confirm it: set `fill-extrusion-opacity` to 1 and the wedge goes.
+
+  mbgl avoids it by writing depth in the depth pass and only *reading* it in the colour pass, so
+  each pixel is drawn once. Making ours read-only loses most of its walls instead -- 98.1% against
+  99.9% -- and two explanations for that have been ruled out:
+
+  - The per-sub-layer depth nudge. `for_tile_with` applies mbgl's `depthModeForSublayer`, which
+    exists to lift a fill's *outline* above its fill; a 3D layer takes `depthModeFor3D`, which has
+    no nudge. Removing it for extrusions, so the two passes share a depth, changed nothing.
+  - The depth pass being absent. It is drawn -- 54 renderables against 36 without it.
+
+  One thing worth having from the same session: **the depth-only pass is currently redundant.**
+  Skipping it gives a pixel-identical frame with 36 renderables instead of 54, because our colour
+  pass writes depth itself. That is the divergence from mbgl in one sentence, and it is also where
+  the double blend comes from -- so the fix is to make the colour pass read-only *and* find why
+  that loses walls, not to drop the pass.
+
 - **A raster layer paints over the vector layers beneath it.** *Open, and newly isolated.* In the
   all-families style the imagery hides water, the pattern, the roads and the buildings: zero pixels
   of water where the oracle has 36,519. Take the raster layer out of the same style and water draws
