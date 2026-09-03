@@ -4913,3 +4913,33 @@ a subdivision and a draw the consumer no longer makes.
   dense enough to be deciding against each other, not against the labels beyond the frame. It goes
   in because it is what mbgl does and because the spurious edge collisions are real, not because
   it closed the contention gap. That gap is still open.
+
+- **The systematic sub-pixel symbol offset is gone.** *Closed, by the fixes either side of it.*
+  This was recorded as a constant bias of 0.407px left and 0.174px down, worth about 811 gross
+  pixels on poi-labels and 1,500 on the icon-only style. Resampling ours over a grid of shifts and
+  taking the minimum gross now puts the optimum at dx -0.10, dy +0.10 on poi-labels -- recovering
+  124 of 806 -- and at exactly zero on Washington. The text-offset/anchor fix and the clipLines
+  reordering account for it between them. What is left in those scenes is per-label, not a shift.
+
+- **Placement order already matches mbgl, in both axes.** *No change; recorded so it is not
+  "fixed" again.* Washington's largest remaining differences are whole line labels: at x 354-364
+  we print "14th Street Northwest" where the oracle prints "13th Street Northwest" at x 463-473,
+  over an identical y span and identical road geometry. Both streets are labelled in both frames;
+  the two renderers just give the second label to different streets. That is placement order, so
+  it was worth checking properly, and it was wrong twice on the way:
+
+  - `Placement::placeLayers` walks `crbegin` to `crend` over a list in render order, so the
+    topmost symbol layer places first. Reading that and reversing our loop over `order` was a
+    regression -- Washington 8,001 gross to 8,754, all-families 90 to 28,945 -- because it also
+    reversed the tile axis, which mbgl does not: `placeLayer` walks a layer's tiles forwards.
+  - Reversing only the layer axis, grouping `order` by `layer_index` first, was still a
+    regression: Washington 15,958, all-families 2,409, poi-labels unchanged at 806 because it has
+    a single symbol layer. The reason is that `order` is *already* top layer first --
+    `Placed::sort_key` orders by `depth_slot`, and `depth_slot` is `layer_count - 1 -
+    layer_index`. Walking it forwards descends the style, which is what mbgl does.
+  - Tile order was the other suspicion, from a recollection that `OverscaledTileID` sorts y before
+    x. It does not: `std::tie(overscaledZ, wrap, canonical)` over `std::tie(z, x, y)`, which is
+    `sort_key`'s `(z, x, y)` exactly.
+
+  Both axes already agreed, and the loop now carries a comment saying so. The label contention is
+  something else.

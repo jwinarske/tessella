@@ -1296,6 +1296,14 @@ fn place_symbols(
     let mut prepared: BTreeMap<(usize, usize), PreparedSymbols> = BTreeMap::new();
     let mut shaped: BTreeMap<(usize, usize), Shaped> = BTreeMap::new();
 
+    // `order` is already top layer first, which is the order mbgl places in.
+    //
+    // `Placement::placeLayers` walks its layers `crbegin` to `crend` over a list in render order,
+    // so the topmost symbol layer is offered space first. Here the equivalent is free: `sort_key`
+    // orders by `depth_slot`, which runs opposite the style index, so walking `order` forwards
+    // already descends the style. Reversing it to "match mbgl" inverts a match that was already
+    // there -- Washington doubles its differing pixels and the all-families scene multiplies them
+    // by twenty-six.
     for entry in order {
         let Some(&(tile_index, bucket_index, _)) = source.get(&entry.geometry.0) else {
             continue;
