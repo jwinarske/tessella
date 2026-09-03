@@ -86,7 +86,8 @@ pub struct FrameOptions {
     pub font_scale: f32,
     /// How far a fade moves this frame.
     pub increment: f32,
-    /// The viewport, in pixels, which is the extent the collision grid covers.
+    /// The viewport, in pixels. The collision grid covers it plus [`VIEWPORT_PADDING`] on each
+    /// side.
     pub viewport: (f32, f32),
     /// The tile's overscaling, which widens a line label's padding circles.
     pub overscaling: f32,
@@ -97,6 +98,12 @@ pub struct FrameOptions {
     /// it is shared.
     pub icon_padding: Padding,
 }
+
+/// How far outside the viewport a label still collides, in pixels.
+///
+/// mbgl's `viewportPaddingDefault`. It doubles when the camera is pitched, and is 1024 for a
+/// single static tile; neither case is produced here yet, so the one value stands.
+pub const VIEWPORT_PADDING: f32 = 100.0;
 
 impl Default for FrameOptions {
     fn default() -> Self {
@@ -158,10 +165,22 @@ impl ViewSymbols {
     where
         P: Fn((f32, f32)) -> (f32, f32),
     {
-        // A grid the size of the viewport. Anything off it is clamped to the nearest cell rather
-        // than dropped: a label hanging off the edge still collides with one that does not.
-        let mut grid: GridIndex<u32> =
-            GridIndex::new(options.viewport.0.max(1.0), options.viewport.1.max(1.0), 32);
+        // The viewport with a margin around it, which is what mbgl collides in.
+        //
+        // `CollisionIndex` builds its grid over `width + 2 * viewportPadding` by
+        // `height + 2 * viewportPadding` and offsets every projected point into it, so a label
+        // that hangs off the screen keeps its real position and still reserves the ground it
+        // covers. A grid the size of the viewport cannot: the index clamps whatever falls outside
+        // to the nearest cell, so every off-screen label piles into the boundary cells and
+        // collides there with labels it is nowhere near.
+        //
+        // Cell size 25, which is mbgl's. It is a broad phase and the exact tests follow it, so it
+        // decides how much work a query does rather than what it answers.
+        let mut grid: GridIndex<u32> = GridIndex::new(
+            options.viewport.0.max(1.0) + 2.0 * VIEWPORT_PADDING,
+            options.viewport.1.max(1.0) + 2.0 * VIEWPORT_PADDING,
+            25,
+        );
         self.frame_in(labels, project, options, &mut grid)
     }
 

@@ -4877,3 +4877,39 @@ a subdivision and a draw the consumer no longer makes.
   with the nine `tessella-*` members held at `publish = false` until they carry content.
 - Direct-scanout product shape: tessella-* + impeller-rs single-binary cluster map over a leased
   DRM connector (wayland-leased-drm/DLM alignment); scope as its own plan doc if pursued.
+
+- **The collision grid was the viewport exactly, and mbgl's is bigger than that.** *Fixed, but
+  worth much less than expected.* `CollisionIndex`'s constructor builds
+
+      collisionGrid(width + 2 * viewportPadding, height + 2 * viewportPadding, 25)
+
+  with `viewportPaddingDefault = 100`, doubled when the camera is pitched and 1024 for a single
+  static tile, and adds that padding to every projected point. Ours was `GridIndex::new(width,
+  height, 32)` with no offset, so it differed in three ways at once: no margin, coordinates not
+  offset into one, and a cell size of 32 against mbgl's 25.
+
+  The margin is the one that can change an answer. `GridIndex` clamps an out-of-range coordinate
+  onto the nearest edge cell rather than dropping it, so without a margin every label hanging off
+  the screen collapsed onto the boundary cells and collided there with labels it was nowhere near
+  -- and Washington has clusters at x 0-77, x 814-866 and y 617-660, right against those edges.
+  Cell size is a broad phase with the exact tests behind it, so it decides how much work a query
+  does, not what it answers.
+
+  `project_with` has exactly one call site, the placement pass in `frame.rs`, so the offset could
+  go straight into it. The first attempt offset the points and resized only the grid in
+  `symbols.rs::frame`, missing the one `frame.rs` builds for the production path; that fired
+  everything 100px into an unpadded grid and cost 2,600 gross pixels on Washington and 6,300 on
+  the all-families scene. With both grids padded:
+
+  | scene | before | after |
+  | --- | --- | --- |
+  | Washington | 97.3% / 1.43 / 8,004 | 97.4% / 1.43 / 8,001 |
+  | all families | 88.2% / 0.51 / 94 | 88.2% / 0.51 / 90 |
+  | poi-labels | 99.4% / 0.17 / 811 | 99.4% / 0.17 / 806 |
+  | place-labels | 100% / 0 / 0 | unchanged |
+
+  Every metric moved the right way and none of them moved much. The reading that predicted this
+  would matter was right about the mechanism and wrong about the scale: the edge clusters are
+  dense enough to be deciding against each other, not against the labels beyond the frame. It goes
+  in because it is what mbgl does and because the spurious edge collisions are real, not because
+  it closed the contention gap. That gap is still open.

@@ -1282,8 +1282,13 @@ fn place_symbols(
     let increment = crate::symbols::FrameOptions::default().increment;
 
     // The frame's grid, and the whole reason this function exists.
-    let mut grid: tessella_place::grid::GridIndex<u32> =
-        tessella_place::grid::GridIndex::new(viewport.0.max(1.0), viewport.1.max(1.0), 32);
+    // The viewport with mbgl's margin around it, and its cell size. `project_with` offsets every
+    // point into the margin, so the two have to agree.
+    let mut grid: tessella_place::grid::GridIndex<u32> = tessella_place::grid::GridIndex::new(
+        viewport.0.max(1.0) + 2.0 * crate::symbols::VIEWPORT_PADDING,
+        viewport.1.max(1.0) + 2.0 * crate::symbols::VIEWPORT_PADDING,
+        25,
+    );
 
     // A bucket appears once per drawable it produces; it is shaped once.
     let mut seen: BTreeSet<(usize, usize)> = BTreeSet::new();
@@ -1491,10 +1496,15 @@ fn project_with(plane: &[f64; 16]) -> impl Fn((f32, f32)) -> (f32, f32) + '_ {
         if w.abs() < f64::EPSILON {
             return (0.0, 0.0);
         }
+        // Offset into the padded grid, as mbgl offsets by `viewportPadding`: screen (0, 0) is
+        // the grid's (padding, padding), so a label off the left edge keeps a real position
+        // instead of being clamped onto the boundary cells.
         #[allow(clippy::cast_possible_truncation)]
         (
-            ((plane[0] * x + plane[4] * y + plane[12]) / w) as f32,
-            ((plane[1] * x + plane[5] * y + plane[13]) / w) as f32,
+            ((plane[0] * x + plane[4] * y + plane[12]) / w) as f32
+                + crate::symbols::VIEWPORT_PADDING,
+            ((plane[1] * x + plane[5] * y + plane[13]) / w) as f32
+                + crate::symbols::VIEWPORT_PADDING,
         )
     }
 }
