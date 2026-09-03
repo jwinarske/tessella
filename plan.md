@@ -4406,21 +4406,35 @@ a subdivision and a draw the consumer no longer makes.
   before -- a black frame -- and 48.6% with MAE 10.17 and zero gross pixels after.** The
   all-families scene 86.4% to 87.1%.
 
-- **A raster tile's imagery does not match the tile mbgl draws there.** *Open, and narrow.* On the
-  raster fixture every tile carries a parity tint, `blue = 190 - ((x + y) % 2) * 40`, so which tile
-  landed where is readable off the picture. Ours does not alternate across a row where mbgl's does:
-  adjacent screen cells get tiles of the same x parity.
+- **A raster tile drew a different tile's picture.** *Fixed.* On the raster fixture every tile
+  carries a parity tint, `blue = 190 - ((x + y) % 2) * 40`, so which tile landed where is readable
+  off the picture -- and ours did not alternate across a row where mbgl's did.
 
-  What is already ruled out. The grid is right: the tile borders fall on identical columns in both,
-  114/370/626/882, at a 256-pixel pitch, so the covering zoom and the alignment agree. The requests
-  are right: logging the fixture shows a contiguous z16 block, 35206..35209 by 21491..21494, which
-  is what a 900x700 viewport at z15 wants of a 256-pixel source. So the tiles fetched are the right
-  ones and the quads are in the right places; what is wrong is which texture goes on which quad.
+  Everything about the placement was right, which is what made it look like a covering-zoom
+  problem: the tile borders fall on identical columns in both, 114/370/626/882 at a 256-pixel
+  pitch, and logging the fixture shows a contiguous z16 block, 35206..35209 by 21491..21494, which
+  is what a 900x700 viewport at z15 wants of a 256-pixel source. The right tiles were fetched and
+  the quads were in the right places; the wrong texture went on each quad.
 
-  It costs zero gross pixels and MAE 10 on a fixture built to make tile identity visible, so it is
-  worth doing and not urgent. Start at the raster drawable's matrix slot: 20 tiles were fetched for
-  12 cells, and a slot mismatch between the fetch order and the draw order would look exactly like
-  this.
+  `ubo_index` is assigned by walking the *resolved* order -- pass, depth slot, sub-layer, sort key,
+  then tile -- while `by_layer` collects bindings as the cover is walked. For a vector layer the
+  two coincide, because the cover is walked in the order the sort puts it, so nothing ever noticed.
+  A raster source is looked up at its own zoom by a second walk with its own traversal, and there
+  they diverge: the drawable in slot 1 was tile (35206, 21492) while the matrix in slot 1 belonged
+  to (35207, 21491).
+
+  Fixed by packing each layer's blocks in the order the slots were handed out, taken from the
+  resolved order rather than re-sorted, so there is one definition of the slot numbering instead of
+  two that have to agree. This is the same class as the two `ubo_index` bugs already recorded in
+  `order.rs` and the third to be found by a picture rather than by arithmetic.
+
+  A background-plus-imagery style against `mbgl-render`: **0.0% of pixels exact and MAE 188.52 at
+  the start of the day -- a black frame -- and 72.5% with MAE 4.32 and zero gross pixels now.** No
+  other scene moved, which is the point: the ordering was already right everywhere the cover walk
+  and the sort agreed.
+
+  Still standing: the bottom row of raster tiles is one cell out where the middle three rows match
+  exactly, which looks like a cover-extent difference rather than a pairing one.
 
 - **A patterned fill was written with the plain fill's drawable layout.** *Fixed.* The two share
   the union's stride, so nothing about the buffer's length says which is meant, and

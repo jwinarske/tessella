@@ -900,8 +900,49 @@ fn emit_group(
     }
 
     if camera_moved || scene_changed || declare {
+        // Packed in the order the slots were handed out, which is not the order the tiles arrived
+        // in.
+        //
+        // `ubo_index` is assigned by walking the *resolved* order -- pass, depth slot, sub-layer,
+        // sort key, then tile -- while `by_layer` collects bindings as the cover is walked. For a
+        // vector layer the two coincide, because the cover is walked in the order the sort puts
+        // it, and nothing here noticed the difference. A raster source is looked up at its own
+        // zoom by a second walk with its own traversal, and there they diverge: the drawable in
+        // slot 1 was tile (35206, 21492) while the matrix in slot 1 belonged to (35207, 21491).
+        //
+        // So every raster tile drew a different tile's picture on a grid that was itself correct.
+        // That is why the tile borders landed on the oracle's columns to the pixel and the imagery
+        // between them did not match -- and why it read as a covering-zoom problem when the zoom
+        // was right all along.
+        //
+        // Taken from the order rather than re-sorted here, so there is one definition of the slot
+        // numbering instead of two that have to agree.
+        let slot_of: BTreeMap<(i32, u64, i32), u32> = order
+            .iter()
+            .map(|entry| {
+                (
+                    (
+                        i32::try_from(entry.layer_index).unwrap_or(-1),
+                        entry.geometry.0,
+                        entry.sub_layer_index,
+                    ),
+                    entry.ubo_index,
+                )
+            })
+            .collect();
         for (layer_index, bindings) in &by_layer {
-            write_layer_state(producer, frame, *layer_index, bindings, tiles)?;
+            let mut ordered = bindings.clone();
+            ordered.sort_by_key(|binding| {
+                slot_of
+                    .get(&(
+                        binding.layer_index,
+                        binding.geometry.0,
+                        binding.sub_layer_index,
+                    ))
+                    .copied()
+                    .unwrap_or(u32::MAX)
+            });
+            write_layer_state(producer, frame, *layer_index, &ordered, tiles)?;
         }
     }
 
