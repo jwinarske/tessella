@@ -113,6 +113,78 @@ fn icon_options(layer: &Layer, zoom: f64, feature: Option<&dyn Feature>) -> Icon
     }
 }
 
+/// Clips a line to the tile box, the way mbgl clips one before placing anchors.
+///
+/// # Why a line is clipped at all
+///
+/// mbgl runs `util::clipLines(feature.geometry, 0, 0, EXTENT, EXTENT)` and then `getAnchors` once
+/// per clipped run. Where a road leaves the tile and comes back, that is two runs and two
+/// independent anchor walks; uncut it is one walk whose spacing carries straight across the gap.
+/// So the anchors land in different places, and a label with them.
+///
+/// This is a *segment* clip and not a polyline clip, which is mbgl's and is the point: each
+/// segment is cut against the box on its own and dropped when it lies wholly outside, and a new
+/// run is started whenever a segment does not continue the last one. Clipping the polyline
+/// properly would join runs mbgl keeps apart.
+///
+/// It is also what gives `continued_line` its meaning: the flag tests a run's first point against
+/// 0 and `EXTENT` exactly, which is a coordinate only a cut produces.
+fn clip_line(line: &[(f32, f32)], x1: f32, y1: f32, x2: f32, y2: f32) -> Vec<Vec<(f32, f32)>> {
+    let mut out: Vec<Vec<(f32, f32)>> = Vec::new();
+    if line.len() < 2 {
+        return out;
+    }
+    for pair in line.windows(2) {
+        let (mut p0, mut p1) = (pair[0], pair[1]);
+
+        // Each edge in turn, and `continue` on a segment wholly outside it. The order is mbgl's;
+        // a segment crossing two edges is cut by both, in this sequence.
+        if p0.0 < x1 && p1.0 < x1 {
+            continue;
+        } else if p0.0 < x1 {
+            p0 = (x1, (p0.1 + (p1.1 - p0.1) * ((x1 - p0.0) / (p1.0 - p0.0))).round());
+        } else if p1.0 < x1 {
+            p1 = (x1, (p0.1 + (p1.1 - p0.1) * ((x1 - p0.0) / (p1.0 - p0.0))).round());
+        }
+
+        if p0.1 < y1 && p1.1 < y1 {
+            continue;
+        } else if p0.1 < y1 {
+            p0 = ((p0.0 + (p1.0 - p0.0) * ((y1 - p0.1) / (p1.1 - p0.1))).round(), y1);
+        } else if p1.1 < y1 {
+            p1 = ((p0.0 + (p1.0 - p0.0) * ((y1 - p0.1) / (p1.1 - p0.1))).round(), y1);
+        }
+
+        if p0.0 >= x2 && p1.0 >= x2 {
+            continue;
+        } else if p0.0 >= x2 {
+            p0 = (x2, (p0.1 + (p1.1 - p0.1) * ((x2 - p0.0) / (p1.0 - p0.0))).round());
+        } else if p1.0 >= x2 {
+            p1 = (x2, (p0.1 + (p1.1 - p0.1) * ((x2 - p0.0) / (p1.0 - p0.0))).round());
+        }
+
+        if p0.1 >= y2 && p1.1 >= y2 {
+            continue;
+        } else if p0.1 >= y2 {
+            p0 = ((p0.0 + (p1.0 - p0.0) * ((y2 - p0.1) / (p1.1 - p0.1))).round(), y2);
+        } else if p1.1 >= y2 {
+            p1 = ((p0.0 + (p1.0 - p0.0) * ((y2 - p0.1) / (p1.1 - p0.1))).round(), y2);
+        }
+
+        let starts_a_run = match out.last() {
+            None => true,
+            Some(run) => !run.is_empty() && run.last() != Some(&p0),
+        };
+        if starts_a_run {
+            out.push(alloc::vec![p0]);
+        }
+        if let Some(run) = out.last_mut() {
+            run.push(p1);
+        }
+    }
+    out
+}
+
 /// Reads a `*-anchor` value, defaulting the way the spec does.
 fn anchor_of(value: Option<&Value>) -> tessella_glyph::shaping::Anchor {
     use tessella_glyph::shaping::Anchor;
@@ -443,16 +515,28 @@ impl SymbolLayout {
             .unwrap_or_default();
 
         for ring in rings {
-            let anchoring = if self.placement.along_line() {
+            let anchorings = if self.placement.along_line() {
                 // A line needs two points to have a direction; one point is not a short line.
                 if ring.len() < 2 {
                     continue;
                 }
-                // Not clipped: `get_anchors` tests each candidate position against the tile, so
-                // a road crossing a seam gets anchors on the near side from each tile and the
-                // two interleave rather than doubling up. Cutting the line here would instead
-                // give each side its own ends, and a name would appear at every seam.
-                Anchoring::Line(ring.clone())
+                // Clipped to the tile, and one label per run.
+                //
+                // mbgl runs `clipLines` over the feature and then `getAnchors` once per clipped
+                // run. Where a road leaves the tile and comes back, that is two runs and two
+                // independent anchor walks; uncut it is one walk whose spacing carries straight
+                // across the gap, so every anchor after the gap is somewhere else and the label
+                // with it.
+                //
+                // The comment that stood here said the opposite -- that cutting would give each
+                // side its own ends and put a name at every seam -- and reasoned from
+                // `get_anchors` testing candidates against the tile. That is true and is not the
+                // whole of it: what the cut changes is where the walk *starts and how far it has
+                // run*, not only which candidates survive.
+                clip_line(ring, 0.0, 0.0, EXTENT, EXTENT)
+                    .into_iter()
+                    .map(Anchoring::Line)
+                    .collect::<Vec<_>>()
             } else {
                 let Some(first) = ring.first() else { continue };
                 // A point label belongs to the tile it is in, and to no other. The features
@@ -463,18 +547,20 @@ impl SymbolLayout {
                 if !(0.0..EXTENT).contains(&first.0) || !(0.0..EXTENT).contains(&first.1) {
                     continue;
                 }
-                Anchoring::Point(*first)
+                alloc::vec![Anchoring::Point(*first)]
             };
 
-            self.pending.push(Pending {
-                text: text.clone(),
-                sections: sections.clone(),
-                icon: icon.clone(),
-                fonts: fonts.clone(),
-                anchoring,
-                symbol: text_options(layer, zoom, Some(feature)),
-                icon_options: icon_options(layer, zoom, Some(feature)),
-            });
+            for anchoring in anchorings {
+                self.pending.push(Pending {
+                    text: text.clone(),
+                    sections: sections.clone(),
+                    icon: icon.clone(),
+                    fonts: fonts.clone(),
+                    anchoring,
+                    symbol: text_options(layer, zoom, Some(feature)),
+                    icon_options: icon_options(layer, zoom, Some(feature)),
+                });
+            }
         }
     }
 

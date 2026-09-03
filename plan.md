@@ -4478,6 +4478,27 @@ a subdivision and a draw the consumer no longer makes.
   extrusion geometry included its neighbours' overhang the way MVT's buffer intends, the clip
   would be lossless and the double blend would go with it.
 
+- **A line label's anchors were walked along the unclipped line.** *Fixed.* mbgl runs
+  `util::clipLines(feature.geometry, 0, 0, EXTENT, EXTENT)` and then `getAnchors` once per clipped
+  run. This layout did not clip, and the comment saying so reasoned that cutting would "give each
+  side its own ends" and put a name at every seam.
+
+  That reasoning was half right and missed the part that matters. `get_anchors` does test each
+  candidate against the tile, so clipping is not what decides which anchors survive -- but it is
+  what decides where the walk *starts* and how far it has run by any point along the line. Where a
+  road leaves the tile and comes back, mbgl gets two runs and two independent walks; uncut, one
+  walk carries its spacing straight across the gap and every anchor after it lands somewhere else.
+
+  Ported as a segment clip rather than a polyline clip, which is what mbgl's is: each segment cut
+  against the box on its own, dropped when wholly outside, and a new run begun whenever a segment
+  does not continue the last. Clipping the polyline properly would join runs mbgl keeps apart.
+
+  Washington, the only scene here with `symbol-placement: line`: **gross pixels 17,227 to 8,229**
+  and MAE 3.07 to 2.95. The exact-match count falls, 94.6% to 93.0%, which is the same trade the
+  extrusion clip made and is read the same way -- the halved gross count is what is visible, and
+  the labels now agree with the oracle's on which roads carry a name and where. No Berlin scene
+  moves; none of them uses line placement.
+
 - **A symbol's anchor lands a fraction of a pixel from mbgl's.** *Open, and measured to the
   decimal.* It is what is left of both symbol layers: 811 gross pixels of 630,000 on `poi-labels`
   and 1,351 on the icon-only style, and in each case the split is the same -- about half
@@ -4635,12 +4656,11 @@ a subdivision and a draw the consumer no longer makes.
   - Point labels drop the occasional glyph mid-word. Filed under this once before and turned out
     to be roads painting over the text, which is fixed; whatever is left is smaller and has not
     been measured.
-  - `continued_line` is dead code. It compares `line[0]` against 0 and EXTENT exactly, which only
-    holds for geometry clipped to the tile, and this layout deliberately does not clip -- 0 of 898
-    features on a real tile set it. mbgl's `clipLines` is what makes it mean anything there, and
-    porting that is the honest fix. Substituting "the line leaves the tile" was tried and is
-    worse: the flag also disables the middle-anchor fallback, and a short road loses its only
-    label.
+  - `continued_line` was dead code, and the precondition it needed now exists. It compares
+    `line[0]` against 0 and EXTENT exactly, which only holds for geometry clipped to the tile, and
+    this layout did not clip -- 0 of 898 features on a real tile set it. `clipLines` is now ported
+    and a cut run starts exactly on a boundary, so the flag can fire; whether it does, and whether
+    it changes anything, has not been measured.
 
 - **Washington drew about a fifth more label than the oracle.** *Fixed, by the collision box.* The
   lead recorded here was that the two scenes disagreed -- Berlin near the oracle, Washington 20%
