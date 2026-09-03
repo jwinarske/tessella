@@ -1304,7 +1304,43 @@ fn place_symbols(
     // already descends the style. Reversing it to "match mbgl" inverts a match that was already
     // there -- Washington doubles its differing pixels and the all-families scene multiplies them
     // by twenty-six.
+    // Each layer's tiles by row, which is the order a symbol layer places in.
+    //
+    // `RenderSymbolLayer::prepare` takes `getRenderTilesSortedByYPosition()`, and no other layer
+    // does -- everything else keeps the plain render tiles, which come out of a map keyed by
+    // `OverscaledTileID` and so run x-major. `sort_key` already matches that, which is why the
+    // draw order is left alone here and only the placement walk is resorted.
+    //
+    // The comparator is `tie(b.z, par.y, par.x) < tie(a.z, pbr.y, pbr.x)`, where `par` is *a*'s
+    // rotated position and `pbr` is *b*'s. Mixing the two sides like that looks like a slip, but
+    // with one zoom on screen the `z` terms are equal and it reduces to ascending `(y, x)`: row
+    // by row, left to right. At a bearing the rotation turns it into "by distance down the
+    // screen", which is the point of the sort.
+    //
+    // It decides contention. Two tiles' labels compete for the same strip of screen along their
+    // shared edge, and whichever tile is offered first keeps it.
+    let mut walk: Vec<(&tessella_capture_abi::envelope::OrderEntry, u8, u32, u32)> = Vec::new();
     for entry in order {
+        let key = source
+            .get(&entry.geometry.0)
+            .and_then(|&(tile_index, _, _)| tiles.get(tile_index))
+            .map_or((0, 0, 0), |coord| (coord.z, coord.y, coord.x));
+        walk.push((entry, key.0, key.1, key.2));
+    }
+    // Stable, and within one layer's contiguous run only: `sort_key` has already put the layers
+    // in the order they place in, and that must not move.
+    let mut at = 0;
+    while at < walk.len() {
+        let layer = walk[at].0.layer_index;
+        let end = walk[at..]
+            .iter()
+            .position(|(entry, ..)| entry.layer_index != layer)
+            .map_or(walk.len(), |offset| at + offset);
+        walk[at..end].sort_by_key(|&(_, z, y, x)| (z, y, x));
+        at = end;
+    }
+
+    for (entry, ..) in walk {
         let Some(&(tile_index, bucket_index, _)) = source.get(&entry.geometry.0) else {
             continue;
         };

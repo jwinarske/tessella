@@ -5020,3 +5020,45 @@ a subdivision and a draw the consumer no longer makes.
   that running `merge_lines` again joins more -- was an artefact of the same misreading: 1,699
   ring-pendings contended for one index slot per (text, endpoint), and 28 features do not. The
   assertion is gone and the reasoning is recorded in its place.
+
+- **Everything before the collision test now matches the oracle exactly.** Three fixes, none of
+  which moved a pixel on their own, and one conclusion that is worth more than they are.
+
+  With both renderers printing per-line-placed-feature records, and mbgl's writes made atomic --
+  its tiles parse on worker threads, and a record split across several `fprintf` calls interleaves
+  with another thread's, which invents differences that are not there -- 389 of 390 anchor records
+  agreed. The one that did not was a hairpin, a divided road running up one side and back down the
+  other, where we placed a label mbgl refuses.
+
+  - **`check_max_angle` exempted the first segment.** *Fixed, and this was the anchor.* mbgl opens
+    with `if (!anchor.segment) return true;` and `Anchor::segment` is a `std::optional<size_t>`, so
+    that asks whether the anchor names a segment at all -- the point-placed case its comment calls
+    out. Reading it as `segment == 0` waved every label anchored on a line's first segment past the
+    check. Not a rare position: `getAnchors` offsets the first anchor by half a label plus two
+    glyphs, which on any line whose first segment is longer than that lands on segment zero.
+
+  - **`distance` used `hypot` where mbgl uses `sqrt(dx * dx + dy * dy)` over `int16_t` fields.**
+    *Fixed.* `dx` and `dy` promote to `int`, so mbgl's sum is exact integer arithmetic and only the
+    root is floating point. Ours was `f32` throughout: a tile coordinate reaches 8192, `dx * dx`
+    wants 27 bits of mantissa and `f32` has 24, so the squares round before they are added. It did
+    not turn out to be what rejected the hairpin, and it is still the wrong arithmetic.
+
+  - **Placement walked each layer's tiles column-major.** *Fixed.* `RenderSymbolLayer::prepare`
+    takes `getRenderTilesSortedByYPosition()` and no other layer does; everything else keeps the
+    plain render tiles, which come out of a map keyed by `OverscaledTileID` and run x-major, which
+    is what `sort_key` already produces. So the draw order stays and only the placement walk is
+    resorted. mbgl's comparator is `tie(b.z, par.y, par.x) < tie(a.z, pbr.y, pbr.x)`, with `par`
+    from *a* and `pbr` from *b*; mixing the sides looks like a slip, but at one zoom the `z` terms
+    are equal and it reduces to ascending `(y, x)` -- row by row, left to right.
+
+  The placement sequence -- every symbol offered to the grid, in order, with its tile and anchor --
+  is now **identical to mbgl's, all 166 of them, zero diff lines**. So are the anchors.
+
+  And Washington did not move: 98.3% exact, MAE 0.89, 4,936 gross, before and after. That is the
+  useful part. What we place, and the order we place it in, is no longer a candidate explanation
+  for anything. The whole remaining gap is in the collision test itself -- the boxes and circles
+  put into the grid, their padding, and the projection that places them there. Two clusters show
+  it plainly: around (556-656, 442-559) mbgl keeps "F Street Northwest" and drops the two vertical
+  street names that cross it, while we keep both verticals and drop F Street; around (478-646,
+  57-175) it is the other way about, and we keep "Massachusetts Avenue Northwest" where mbgl keeps
+  "11th Street Northwest". Same anchors, same order, opposite outcomes.

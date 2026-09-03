@@ -46,8 +46,22 @@ fn angle_to(a: (f32, f32), b: (f32, f32)) -> f32 {
     (a.1 - b.1).atan2(a.0 - b.0)
 }
 
+/// How far apart two points are, computed the way mbgl computes it.
+///
+/// `util::dist` is `sqrt(dx * dx + dy * dy)` over `GeometryCoordinate`, whose fields are `int16_t`
+/// -- so `dx` and `dy` promote to `int` and the sum is exact integer arithmetic, with only the
+/// square root in floating point. `hypot` on `f32` is not the same number. A tile coordinate
+/// reaches 8192, so `dx * dx` wants 27 bits of mantissa and `f32` has 24: the squares are rounded
+/// before they are added, and a walk that accumulates a few hundred of these drifts far enough to
+/// flip `marked + half_label <= length` at the end of a line. Widening to `f64` makes the product
+/// and the sum exact for any coordinate a tile can hold, which is what the integer path gives.
 fn distance(a: (f32, f32), b: (f32, f32)) -> f32 {
-    (a.0 - b.0).hypot(a.1 - b.1)
+    let dx = f64::from(b.0 - a.0);
+    let dy = f64::from(b.1 - a.1);
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        (dx * dx + dy * dy).sqrt() as f32
+    }
 }
 
 /// How far along a line runs.
@@ -75,6 +89,20 @@ pub fn angle_window_size(text_left: f32, text_right: f32, glyph_size: f32, box_s
 /// sum passes `max_angle`. A window rather than a single corner because a label survives one
 /// sharp bend and not three gentle ones in a row — it is the accumulated curvature that makes
 /// text unreadable, not any one turn.
+///
+/// # The first segment is not exempt
+///
+/// mbgl opens with `if (!anchor.segment) return true;`, and `Anchor::segment` there is a
+/// `std::optional<size_t>`. That tests whether the anchor names a segment *at all* -- the
+/// horizontal, point-placed case its comment calls out -- and not whether the index is zero.
+/// Reading it as `segment == 0` waved every label anchored on a line's first segment past the
+/// check without looking at the line. It is not a rare position: `getAnchors` offsets the first
+/// anchor by half a label plus two glyphs, which on any line whose first segment is longer than
+/// that lands there. A hairpin -- a divided road that runs up one side and back down the other --
+/// then took a label across its turn, where mbgl refuses one.
+///
+/// Every anchor reaching here has a segment: `resample` and `get_center_anchor` both record the
+/// index they found it on, and a point label never asks.
 #[must_use]
 pub fn check_max_angle(
     line: &[(f32, f32)],
@@ -83,11 +111,6 @@ pub fn check_max_angle(
     window_size: f32,
     max_angle: f32,
 ) -> bool {
-    // A label on the first segment has no corner behind it to bend.
-    if anchor.segment == 0 {
-        return true;
-    }
-
     let mut point = anchor.point;
     let mut index = anchor.segment + 1;
     let mut anchor_distance = 0.0f32;
