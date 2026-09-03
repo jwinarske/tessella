@@ -4167,7 +4167,7 @@ a subdivision and a draw the consumer no longer makes.
   |---|---|
   | fill-extrusion | draws |
   | symbol icons, from a sprite sheet | draws -- 2,009 pixels of icon in the combined frame against 2,029 alone |
-  | fill-pattern | **drawables issued, nothing drawn.** Shaders 13 and 14 appear 21 times each in the order and the frame has 0 greenish pixels where the oracle has 122,848 |
+  | fill-pattern | **drawables issued, nothing drawn** -- narrowed, see below |
   | raster | *fixed* -- see below |
   | circle | **no material in the consumer.** The producer emits shader 5, `missing_family_5`, and nothing draws it |
 
@@ -4201,6 +4201,22 @@ a subdivision and a draw the consumer no longer makes.
   Against the oracle on a background, one vector fill and a 256-pixel raster source: 72% of pixels
   exact and 89% within 24/255, with the water drawn over the imagery in both. The residue is
   texture filtering on a synthetic gradient, which is its own question.
+
+- **A fill layer with `fill-pattern` draws nothing, and does not fall back either.** *Open, and
+  narrowed to the consumer.* What is ruled out:
+
+  - The geometry. The same layer with `fill-color` and no pattern draws 344,617 pixels.
+  - The shader choice. The order carries shaders 13 and 14, 24 each -- the pattern permutation is
+    picked, not the plain one.
+  - The sheet. It is fetched (both `emerald.json` and `emerald.png` are requested), and the
+    consumer holds the atlas: `textures 1` in a style whose only texture *is* the sprite atlas.
+  - A fallback. Setting `fill-color` *and* `fill-pattern` draws nothing at all -- 100% background.
+    So the layer is not quietly rendering as a plain fill; the pattern drawable reaches the
+    consumer and draws nothing.
+
+  That leaves the consumer's binding or `fill_pattern.mat` itself: the pattern rectangles in the
+  drawable UBO, or the samplers. `missing_atlas` is zero, so it is not a texture the consumer was
+  never given.
 
 - **Symbol corner cases left standing when this thread was set down.** *Open, and none of them
   blocking.* Recorded together so they are not rediscovered one at a time:
