@@ -389,6 +389,18 @@ pub struct LaidOut {
     /// searching the line is both slower and ambiguous where a line crosses itself. Zero for a
     /// point label, which has no line.
     pub segment: usize,
+    /// The line the anchor sits on, shared by every instance anchored on it.
+    ///
+    /// mbgl's `SymbolInstanceSharedData::line`, and it is the *clipped run* rather than the
+    /// feature's whole geometry. That distinction is the whole reason this field exists:
+    /// [`Anchor::segment`] indexes the run `get_anchors` walked, so pairing it with the
+    /// unclipped line indexes a different array whenever the clip actually cut something -- and
+    /// the glyph walk then starts from the wrong vertex and runs the label off along the wrong
+    /// stretch of road.
+    ///
+    /// Empty for a point label, which has no line. Shared rather than copied because a run
+    /// carries every anchor placed along it, and a long road is a long run.
+    pub line: alloc::sync::Arc<Vec<(f32, f32)>>,
     /// Where this label's *vertical* shaping starts within [`Self::vertices`].
     ///
     /// `None` unless the label was shaped both ways, which mbgl does when the layer's
@@ -633,6 +645,7 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
             glyphs: buffers.glyphs() - before,
             content_margins: None,
             segment: 0,
+            line: alloc::sync::Arc::default(),
             vertical,
             vertices: before * 4..buffers.vertices.len(),
         });
@@ -717,6 +730,12 @@ impl Default for LineOptions {
     }
 }
 
+/// An anchor together with the clipped run it was found on.
+///
+/// The pair travels together because `Anchor::segment` indexes that run and means nothing without
+/// it -- mbgl keeps the same pairing in `SymbolInstanceSharedData`.
+type AnchorOnLine = (alloc::sync::Arc<Vec<(f32, f32)>>, crate::anchors::Anchor);
+
 /// Lays out labels that follow lines.
 ///
 /// One shaping per label however many times it repeats: the glyphs, their corners and their
@@ -778,7 +797,14 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
         );
 
         // The label's extent decides both where it fits and how far the bend check looks.
-        let anchors = if options.centred {
+        //
+        // Each anchor is carried with the line it was found on, because that line goes on to the
+        // instance: mbgl hands `createSymbolInstanceSharedData` the very run `getAnchors` walked,
+        // and `Anchor::segment` is an index into it.
+        let anchors: Vec<AnchorOnLine> = if options.centred {
+            // No clip on this branch, which is mbgl's: `line-center` walks `feature.geometry`
+            // whole, so the instance's line is the feature's.
+            let whole = alloc::sync::Arc::new(label.line.clone());
             get_center_anchor(
                 &label.line,
                 options.max_angle,
@@ -790,6 +816,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                 options.max_box_scale,
             )
             .into_iter()
+            .map(|anchor| (alloc::sync::Arc::clone(&whole), anchor))
             .collect()
         } else {
             // One walk per clipped run, which is mbgl's `for (auto& line : clippedLines)`.
@@ -801,7 +828,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
             crate::symbol_layout::clip_line(&label.line, 0.0, 0.0, crate::anchors::EXTENT, crate::anchors::EXTENT)
                 .into_iter()
                 .flat_map(|run| {
-                    get_anchors(
+                    let found = get_anchors(
                         &run,
                         options.spacing,
                         options.max_angle,
@@ -812,11 +839,14 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                         ONE_EM,
                         options.max_box_scale,
                         options.overscaling,
-                    )
+                    );
+                    let run = alloc::sync::Arc::new(run);
+                    found
+                        .into_iter()
+                        .map(move |anchor| (alloc::sync::Arc::clone(&run), anchor))
                 })
-                .collect::<Vec<crate::anchors::Anchor>>()
+                .collect()
         };
-
         let placed = |codepoint| {
             let (metrics, _) = glyphs.metrics(codepoint)?;
             Some(Placed {
@@ -866,7 +896,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
             None
         };
 
-        for anchor in anchors {
+        for (run, anchor) in anchors {
             // Not next to another copy of the same name. Kept per name rather than per feature,
             // which is the point: two halves of one street are two features and one name.
             let seen = placed_text.entry(label.text.as_str()).or_default();
@@ -926,6 +956,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                 glyphs: buffers.glyphs() - before,
                 content_margins: None,
                 segment: anchor.segment,
+                line: run,
                 vertical,
                 vertices: before * 4..buffers.vertices.len(),
             });
@@ -1099,6 +1130,7 @@ pub fn build_icons(
             glyphs: buffers.glyphs() - before,
             content_margins: margins,
             segment: 0,
+            line: alloc::sync::Arc::default(),
             vertices: before * 4..buffers.vertices.len(),
         });
     }

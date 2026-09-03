@@ -1362,7 +1362,7 @@ fn place_symbols(
             icon_padding,
             ..crate::symbols::FrameOptions::default()
         };
-        let labels = frame_labels(layout, &laid, icons.as_ref(), base);
+        let labels = frame_labels(&laid, icons.as_ref(), base);
         // Where each glyph lands along its road, *before* the label is offered any space.
         //
         // A label whose road runs out before its name does is not drawn, and a label that is not
@@ -1427,10 +1427,10 @@ fn place_symbols(
         else {
             continue;
         };
-        let Content::Symbol(layout) = &bucket.content else {
+        let Content::Symbol(_) = &bucket.content else {
             continue;
         };
-        let labels = frame_labels(layout, &laid, icons.as_ref(), base);
+        let labels = frame_labels(&laid, icons.as_ref(), base);
         // A label placement never offered has no fade entry, which reads as hidden -- so the
         // ones whose road ran out stay hidden without being special-cased here.
         held.symbols.write_opacity(&labels, &mut buffers);
@@ -1522,8 +1522,7 @@ fn project_with(plane: &[f64; 16]) -> impl Fn((f32, f32)) -> (f32, f32) + '_ {
 /// Built twice per frame -- once to place and once to write -- because what is expensive is
 /// `lay_out`, which is done once and held; this is references and a clone of each instance's box.
 fn frame_labels<'a>(
-    layout: &'a tessella_layout::symbol_layout::SymbolLayout,
-    laid: &[tessella_layout::symbol_bucket::LaidOut],
+    laid: &'a [tessella_layout::symbol_bucket::LaidOut],
     icons: Option<&(SymbolBuffers, Vec<tessella_layout::symbol_bucket::LaidOut>)>,
     base: u32,
 ) -> Vec<crate::symbols::FrameLabel<'a>> {
@@ -1542,13 +1541,14 @@ fn frame_labels<'a>(
                     .find(|icon| icon.pending == instance.pending)
                     .cloned()
             }),
-            line: match layout.pending.get(instance.pending) {
-                Some(pending) => match &pending.anchoring {
-                    tessella_layout::symbol_layout::Anchoring::Line(line) => line.as_slice(),
-                    tessella_layout::symbol_layout::Anchoring::Point(_) => &[],
-                },
-                None => &[],
-            },
+            // The instance's own run, not the feature's whole line.
+            //
+            // `LaidOut::segment` is an index into the run `get_anchors` walked, so it only means
+            // anything paired with that run. Reading the line back off `pending` handed the walk
+            // the unclipped geometry: on any road the tile boundary cut -- which at this zoom is
+            // most of the long ones -- the segment index then named a different pair of vertices
+            // and the glyphs marched off along the wrong stretch.
+            line: instance.line.as_slice(),
         })
         .collect()
 }

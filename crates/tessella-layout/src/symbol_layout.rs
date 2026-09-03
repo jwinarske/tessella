@@ -969,6 +969,7 @@ impl SymbolLayout {
                             glyphs: 0,
                             content_margins: None,
                             segment: 0,
+                            line: alloc::sync::Arc::default(),
                             vertices: buffers.vertices.len()..buffers.vertices.len(),
                         });
                     } else if let Some(entry) = shifted.next() {

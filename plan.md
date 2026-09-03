@@ -4943,3 +4943,48 @@ a subdivision and a draw the consumer no longer makes.
 
   Both axes already agreed, and the loop now carries a comment saying so. The label contention is
   something else.
+
+- **A symbol instance carried its feature's whole line, not the run its anchor was found on.**
+  *Fixed. Latent here, but wrong.* `getAnchors` walks one clipped run and `Anchor::segment` is an
+  index into that run. mbgl keeps the two together -- `createSymbolInstanceSharedData(std::move(
+  line))` is handed the very run, and every instance anchored on it shares that line. Here the
+  anchors were collected out of `clip_line(...).flat_map(get_anchors)`, the runs dropped on the
+  floor, and `frame_labels` read the line back off `pending`, which holds the *unclipped*
+  geometry. Wherever the clip actually cut, the segment index then named a different pair of
+  vertices and the glyph walk started from the wrong one.
+
+  `LaidOut` now carries the run as an `Arc`, which is mbgl's shared data by another name -- a run
+  holds every anchor along it, and a road is a long run. The `line-center` branch keeps the whole
+  line, because mbgl's does not clip there either.
+
+  No measured change: Washington, the all-families scene, poi-labels and place-labels are all
+  exactly where they were. The reason is the next entry -- our `clip_line` almost never splits,
+  because the geometry reaching it has already been flattened, so the run and the line are the
+  same array. This is a fix for a bug that the *next* fix would otherwise have switched on.
+
+- **`merge_lines` merges every ring; mbgl merges only `geometry[0]`.** *Found, not yet fixed.*
+  Both renderers were instrumented to print, per line-placed feature, the ring count, point count
+  and bounds before the clip, and the spacing, box scale, shaped extents and resulting anchors
+  after it. On Washington:
+
+  | | records | rings | points |
+  | --- | --- | --- | --- |
+  | tessella | 348 | 348 | 2,164 |
+  | mbgl | 358 | 490 | 2,222 |
+
+  The same points in fewer, longer lines. `getAnchors` itself is exact -- for a line both agree
+  on, every input matches to the digit (`spacing=4000.000 boxScale=8.00000 glyphSize=24.0
+  left=-118.500 right=118.500`) and so does every anchor, `(3117.0,6192.0,seg2)` on both sides.
+  What differs is the geometry handed to it.
+
+  `mergeLines` walks `features` and touches `geometry[0]` and nothing else: `getKey` is taken from
+  `geometry[0].front()` and `.back()`, and `mergeFromRight`/`mergeFromLeft` splice into
+  `geometry[0]`. A feature's remaining rings are never keyed, never merged, and stay attached to
+  it. Here every ring becomes its own `Pending`, so every ring is keyed and every ring can merge
+  -- and two rings that mbgl keeps apart get joined into one line whose anchors then fall
+  somewhere else entirely. That is what puts "Pennsylvania Avenue Northwest" about ninety pixels
+  earlier along its road than the oracle does, on identical road geometry.
+
+  The fix is to make `Anchoring::Line` hold a feature's rings rather than one of them, key and
+  splice only the first, and clip the collection in one pass as `clipLines` does -- its
+  `clippedLines` is shared across rings, so the run-continuation test spans ring boundaries.
