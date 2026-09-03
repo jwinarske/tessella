@@ -289,8 +289,8 @@ fn placement_decides_point_or_line() {
     // counts run 40, 50, 72, 94, 106 across 200, 100, 50, 25 and 12.5 pixels: spacing still
     // decides, and the two ends are far enough apart to say so.
     let count_at = |px: f32| {
-        let built = build_mvt_tile(&road_style_spaced("line", px), "v", ID, &tile())
-            .expect("builds");
+        let built =
+            build_mvt_tile(&road_style_spaced("line", px), "v", ID, &tile()).expect("builds");
         let layout = built[0].content.as_symbol().expect("a symbol layout");
         let (_, laid) = layout.lay_out(&fonts, None);
         laid.len()
@@ -721,60 +721,81 @@ fn the_sprite_decides_whether_it_is_a_field() {
 
 /// A road's segments are joined before it is labelled.
 ///
-/// The street fixture is 1773 road *features*, which is not 1773 roads: a tile cuts a street at
-/// its edges and a source cuts it wherever an attribute changes, so one street arrives as a run
-/// of stubs laid end to end. Labelling them separately puts a copy of the name on each — and
-/// drops most of them, because a stub shorter than its own label cannot hold one.
+/// The street fixture is 28 road *features* carrying 1,699 line strings between them -- one of
+/// them a single feature with 562 parts. A tile cuts a street at its edges and a source cuts it
+/// wherever an attribute changes, so one street arrives as a run of stubs laid end to end.
+/// Labelling them separately puts a copy of the name on each -- and drops most of them, because
+/// a stub shorter than its own label cannot hold one.
 ///
-/// The measurable consequence is that merging *raises* the number of labels placed while
-/// *lowering* the number of features, which is the shape that says stubs became roads rather
-/// than that geometry went missing.
+/// What merging may touch is the *first* line of each feature and nothing else, which is what
+/// `mergeLines` does: `getKey` reads `geometry[0].front()` and `.back()`, and both splices write
+/// into `geometry[0]`. So the test is that first lines join, that nothing else moves, and that no
+/// geometry goes missing on the way.
 #[test]
 fn a_roads_segments_are_joined_before_it_is_labelled() {
     let style = road_style("line");
     let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
     let merged = buckets[0].content.as_symbol().expect("a symbol layout");
 
+    let lines = |layout: &tessella_layout::symbol_layout::SymbolLayout| {
+        layout
+            .pending
+            .iter()
+            .filter_map(|pending| match &pending.anchoring {
+                Anchoring::Line(lines) => Some(lines.clone()),
+                Anchoring::Point(_) => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let all = lines(merged);
+    assert!(!all.is_empty(), "no line features survived");
+
+    // A feature keeps every line it arrived with, however many that is.
     assert!(
-        merged.pending.len() < 1773,
-        "{} features survived a merge of 1773",
-        merged.pending.len()
+        all.iter().any(|feature| feature.len() > 100),
+        "the multi-part feature was split up"
     );
 
-    // And the surviving lines are longer than the stubs they came from: at least one is longer
-    // than any single feature could be, which only a join produces.
-    let longest = merged
-        .pending
+    // And the first lines are longer than the stubs they came from: at least one is longer than
+    // two points, which only a join produces.
+    let longest = all
         .iter()
-        .filter_map(|pending| match &pending.anchoring {
-            Anchoring::Line(line) => Some(line.len()),
-            Anchoring::Point(_) => None,
-        })
+        .filter_map(|feature| feature.first().map(Vec::len))
         .max()
         .expect("some roads");
     assert!(longest > 2, "every road is still a two-point stub");
 
-    // A second pass joins more, and that is not a bug in either implementation. The index holds
-    // one entry per (text, endpoint), so where two roads of the same name start at the same
-    // point only one of them is reachable — this tile has fifty such junctions. mbgl's index is
-    // an `unordered_map` assigned into, which overwrites the same way. One greedy pass is what
-    // mbgl does and what this does; running it to a fixed point would be a divergence, and a
-    // silent one, since the extra joins look like better labelling.
+    // One greedy pass, which is what mbgl does. It used to be assertable here that a second pass
+    // joined more -- the index holds one entry per (text, endpoint), so where two roads of the
+    // same name start at the same point only one is reachable. That was an artefact of giving
+    // every line string its own pending: 1,699 of them contended for those slots. With one
+    // pending per feature, and only its first line keyed, a second pass over this fixture joins
+    // nothing, so there is nothing left to assert. mbgl's index is an `unordered_map` assigned
+    // into and overwrites the same way, so a pass to a fixed point would still be a divergence.
     let mut again = merged.clone();
     again.merge_lines();
-    assert!(
-        again.pending.len() < merged.pending.len(),
-        "a second pass changed nothing, so the junction case has gone away"
+    assert_eq!(
+        lines(&again).len(),
+        all.len(),
+        "a second pass moved something a single pass should already have moved"
     );
 
-    // Every merged line is still a line: no empties left behind, and no duplicated joints.
-    for pending in &merged.pending {
-        let Anchoring::Line(line) = &pending.anchoring else {
-            continue;
-        };
-        assert!(line.len() >= 2, "an empty line survived the merge");
-        for pair in line.windows(2) {
-            assert_ne!(pair[0], pair[1], "a zero-length segment at a joint");
+    // Every line that still has points is a line, with no duplicated joints.
+    //
+    // An *empty* first line is not a failure: `mergeLines` clears `geometry[0]` when it splices
+    // a feature onto another and leaves the feature in place, so one with later lines keeps them
+    // and they still reach `clipLines`. What must not survive is a pending with nothing left,
+    // which the retain drops.
+    for feature in &all {
+        assert!(
+            feature.iter().any(|line| !line.is_empty()),
+            "a pending with no geometry survived the merge"
+        );
+        for line in feature.iter().filter(|line| !line.is_empty()) {
+            assert!(line.len() >= 2, "a one-point line survived the merge");
+            for pair in line.windows(2) {
+                assert_ne!(pair[0], pair[1], "a zero-length segment at a joint");
+            }
         }
     }
 }

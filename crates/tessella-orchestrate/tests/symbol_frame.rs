@@ -386,7 +386,7 @@ fn a_line_label_reserves_its_road_and_not_its_box() {
             }],
             icon: (0.0, 0.0),
             text: "Diagonal Road".to_string(),
-            line: road.clone(),
+            lines: vec![road.clone()],
         }],
         &font,
         None,

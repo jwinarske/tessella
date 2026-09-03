@@ -441,10 +441,11 @@ fn draw_line_labels() {
                 }],
                 icon: (0.0, 0.0),
                 text: text.to_string(),
-                line: ring
-                    .iter()
-                    .map(|point| (point[0] as f32, point[1] as f32))
-                    .collect(),
+                lines: vec![
+                    ring.iter()
+                        .map(|point| (point[0] as f32, point[1] as f32))
+                        .collect(),
+                ],
             });
         }
     }
@@ -487,16 +488,19 @@ fn draw_line_labels() {
 
     // Placement, over the run of circles each road name reserves along its road. Without it
     // every repetition draws and a street tile is a solid block of text.
+    // Flattened up front so each borrow outlives the frame labels that point at it.
+    let joined: Vec<Vec<(f32, f32)>> = labels.iter().map(|label| label.lines.concat()).collect();
     let mut frame_labels: Vec<FrameLabel> = Vec::new();
     let mut repetition = 0usize;
-    for label in &labels {
-        while repetition < laid.len() && on_line(&label.line, laid[repetition].anchor) {
+    for (label, line) in labels.iter().zip(&joined) {
+        let _ = label;
+        while repetition < laid.len() && on_line(line, laid[repetition].anchor) {
             frame_labels.push(FrameLabel {
                 #[allow(clippy::cast_possible_truncation)]
                 cross_tile_id: frame_labels.len() as u32 + 1,
                 laid_out: laid[repetition].clone(),
                 icon: None,
-                line: &label.line,
+                line,
             });
             repetition += 1;
         }

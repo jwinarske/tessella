@@ -70,7 +70,7 @@ fn label(text: &str, line: Vec<(f32, f32)>) -> LineLabel {
         }],
         icon: (0.0, 0.0),
         text: text.to_string(),
-        line,
+        lines: vec![line],
     }
 }
 

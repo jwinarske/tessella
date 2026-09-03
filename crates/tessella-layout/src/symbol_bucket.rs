@@ -682,8 +682,11 @@ pub struct LineLabel {
     pub icon: (f32, f32),
     /// The text, already resolved from `text-field`.
     pub text: alloc::string::String,
-    /// The line it follows, in tile units.
-    pub line: Vec<(f32, f32)>,
+    /// The lines it follows, in tile units -- every ring of the feature.
+    ///
+    /// mbgl clips a feature's whole `GeometryCollection` in one call, so rings that meet end to
+    /// end come back as one run; clipping them separately would not join them.
+    pub lines: Vec<Vec<(f32, f32)>>,
 }
 
 /// How a line-placed label repeats.
@@ -802,35 +805,16 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
         // instance: mbgl hands `createSymbolInstanceSharedData` the very run `getAnchors` walked,
         // and `Anchor::segment` is an index into it.
         let anchors: Vec<AnchorOnLine> = if options.centred {
-            // No clip on this branch, which is mbgl's: `line-center` walks `feature.geometry`
-            // whole, so the instance's line is the feature's.
-            let whole = alloc::sync::Arc::new(label.line.clone());
-            get_center_anchor(
-                &label.line,
-                options.max_angle,
-                shaping.left,
-                shaping.right,
-                label.icon.0,
-                label.icon.1,
-                ONE_EM,
-                options.max_box_scale,
-            )
-            .into_iter()
-            .map(|anchor| (alloc::sync::Arc::clone(&whole), anchor))
-            .collect()
-        } else {
-            // One walk per clipped run, which is mbgl's `for (auto& line : clippedLines)`.
-            //
-            // The clip decides where a walk starts and how far it has run by any point on the
-            // line, not only which candidates survive the tile test. A road that leaves the tile
-            // and comes back is two walks there and was one here, so every anchor past the gap
-            // carried the wrong distance and the label with it.
-            crate::symbol_layout::clip_line(&label.line, 0.0, 0.0, crate::anchors::EXTENT, crate::anchors::EXTENT)
-                .into_iter()
-                .flat_map(|run| {
-                    let found = get_anchors(
-                        &run,
-                        options.spacing,
+            // One anchor per ring, and no clip on this branch. mbgl's `line-center` arm loops
+            // `for (const auto& line : feature.geometry)`, takes a centre on each ring longer
+            // than a point, and hands that ring straight to the shared data.
+            label
+                .lines
+                .iter()
+                .filter(|ring| ring.len() > 1)
+                .filter_map(|ring| {
+                    get_center_anchor(
+                        ring,
                         options.max_angle,
                         shaping.left,
                         shaping.right,
@@ -838,14 +822,46 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                         label.icon.1,
                         ONE_EM,
                         options.max_box_scale,
-                        options.overscaling,
-                    );
-                    let run = alloc::sync::Arc::new(run);
-                    found
-                        .into_iter()
-                        .map(move |anchor| (alloc::sync::Arc::clone(&run), anchor))
+                    )
+                    .map(|anchor| (alloc::sync::Arc::new(ring.clone()), anchor))
                 })
                 .collect()
+        } else {
+            // One walk per clipped run, which is mbgl's `for (auto& line : clippedLines)`.
+            //
+            // The clip decides where a walk starts and how far it has run by any point on the
+            // line, not only which candidates survive the tile test. A road that leaves the tile
+            // and comes back is two walks there and was one here, so every anchor past the gap
+            // carried the wrong distance and the label with it.
+            let rings: Vec<&[(f32, f32)]> =
+                label.lines.iter().map(alloc::vec::Vec::as_slice).collect();
+            crate::symbol_layout::clip_lines(
+                &rings,
+                0.0,
+                0.0,
+                crate::anchors::EXTENT,
+                crate::anchors::EXTENT,
+            )
+            .into_iter()
+            .flat_map(|run| {
+                let found = get_anchors(
+                    &run,
+                    options.spacing,
+                    options.max_angle,
+                    shaping.left,
+                    shaping.right,
+                    label.icon.0,
+                    label.icon.1,
+                    ONE_EM,
+                    options.max_box_scale,
+                    options.overscaling,
+                );
+                let run = alloc::sync::Arc::new(run);
+                found
+                    .into_iter()
+                    .map(move |anchor| (alloc::sync::Arc::clone(&run), anchor))
+            })
+            .collect()
         };
         let placed = |codepoint| {
             let (metrics, _) = glyphs.metrics(codepoint)?;

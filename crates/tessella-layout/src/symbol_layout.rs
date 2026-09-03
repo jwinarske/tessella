@@ -130,10 +130,42 @@ fn icon_options(layer: &Layer, zoom: f64, feature: Option<&dyn Feature>) -> Icon
 /// It is also what gives `continued_line` its meaning: the flag tests a run's first point against
 /// 0 and `EXTENT` exactly, which is a coordinate only a cut produces.
 pub fn clip_line(line: &[(f32, f32)], x1: f32, y1: f32, x2: f32, y2: f32) -> Vec<Vec<(f32, f32)>> {
+    clip_lines(core::slice::from_ref(&line), x1, y1, x2, y2)
+}
+
+/// The same, over all of a feature's rings at once.
+///
+/// mbgl's `clipLines` takes the whole `GeometryCollection` and accumulates into one
+/// `clippedLines`, so the "does this segment continue the run" test compares against the last
+/// point pushed *whatever ring it came from*. Two rings that meet end to end therefore come back
+/// as a single run. Clipping each ring on its own is a different answer, so the loop is here
+/// rather than at the call site.
+#[must_use]
+pub fn clip_lines(
+    lines: &[&[(f32, f32)]],
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+) -> Vec<Vec<(f32, f32)>> {
     let mut out: Vec<Vec<(f32, f32)>> = Vec::new();
-    if line.len() < 2 {
-        return out;
+    for line in lines {
+        if line.len() < 2 {
+            continue;
+        }
+        clip_one(line, x1, y1, x2, y2, &mut out);
     }
+    out
+}
+
+fn clip_one(
+    line: &[(f32, f32)],
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    out: &mut Vec<Vec<(f32, f32)>>,
+) {
     for pair in line.windows(2) {
         let (mut p0, mut p1) = (pair[0], pair[1]);
 
@@ -142,33 +174,57 @@ pub fn clip_line(line: &[(f32, f32)], x1: f32, y1: f32, x2: f32, y2: f32) -> Vec
         if p0.0 < x1 && p1.0 < x1 {
             continue;
         } else if p0.0 < x1 {
-            p0 = (x1, (p0.1 + (p1.1 - p0.1) * ((x1 - p0.0) / (p1.0 - p0.0))).round());
+            p0 = (
+                x1,
+                (p0.1 + (p1.1 - p0.1) * ((x1 - p0.0) / (p1.0 - p0.0))).round(),
+            );
         } else if p1.0 < x1 {
-            p1 = (x1, (p0.1 + (p1.1 - p0.1) * ((x1 - p0.0) / (p1.0 - p0.0))).round());
+            p1 = (
+                x1,
+                (p0.1 + (p1.1 - p0.1) * ((x1 - p0.0) / (p1.0 - p0.0))).round(),
+            );
         }
 
         if p0.1 < y1 && p1.1 < y1 {
             continue;
         } else if p0.1 < y1 {
-            p0 = ((p0.0 + (p1.0 - p0.0) * ((y1 - p0.1) / (p1.1 - p0.1))).round(), y1);
+            p0 = (
+                (p0.0 + (p1.0 - p0.0) * ((y1 - p0.1) / (p1.1 - p0.1))).round(),
+                y1,
+            );
         } else if p1.1 < y1 {
-            p1 = ((p0.0 + (p1.0 - p0.0) * ((y1 - p0.1) / (p1.1 - p0.1))).round(), y1);
+            p1 = (
+                (p0.0 + (p1.0 - p0.0) * ((y1 - p0.1) / (p1.1 - p0.1))).round(),
+                y1,
+            );
         }
 
         if p0.0 >= x2 && p1.0 >= x2 {
             continue;
         } else if p0.0 >= x2 {
-            p0 = (x2, (p0.1 + (p1.1 - p0.1) * ((x2 - p0.0) / (p1.0 - p0.0))).round());
+            p0 = (
+                x2,
+                (p0.1 + (p1.1 - p0.1) * ((x2 - p0.0) / (p1.0 - p0.0))).round(),
+            );
         } else if p1.0 >= x2 {
-            p1 = (x2, (p0.1 + (p1.1 - p0.1) * ((x2 - p0.0) / (p1.0 - p0.0))).round());
+            p1 = (
+                x2,
+                (p0.1 + (p1.1 - p0.1) * ((x2 - p0.0) / (p1.0 - p0.0))).round(),
+            );
         }
 
         if p0.1 >= y2 && p1.1 >= y2 {
             continue;
         } else if p0.1 >= y2 {
-            p0 = ((p0.0 + (p1.0 - p0.0) * ((y2 - p0.1) / (p1.1 - p0.1))).round(), y2);
+            p0 = (
+                (p0.0 + (p1.0 - p0.0) * ((y2 - p0.1) / (p1.1 - p0.1))).round(),
+                y2,
+            );
         } else if p1.1 >= y2 {
-            p1 = ((p0.0 + (p1.0 - p0.0) * ((y2 - p0.1) / (p1.1 - p0.1))).round(), y2);
+            p1 = (
+                (p0.0 + (p1.0 - p0.0) * ((y2 - p0.1) / (p1.1 - p0.1))).round(),
+                y2,
+            );
         }
 
         let starts_a_run = match out.last() {
@@ -182,7 +238,6 @@ pub fn clip_line(line: &[(f32, f32)], x1: f32, y1: f32, x2: f32, y2: f32) -> Vec
             run.push(p1);
         }
     }
-    out
 }
 
 /// Reads a `*-anchor` value, defaulting the way the spec does.
@@ -375,8 +430,23 @@ impl Alignments {
 pub enum Anchoring {
     /// At a point.
     Point((f32, f32)),
-    /// Along a line.
-    Line(Vec<(f32, f32)>),
+    /// Along the feature's lines, in tile units.
+    ///
+    /// All of them, because mbgl keeps a feature's `GeometryCollection` whole and only the first
+    /// ring takes part in merging. Holding one ring per pending instead made every ring a
+    /// merge candidate, and rings mbgl keeps apart were spliced into one line whose anchors then
+    /// landed somewhere else entirely.
+    Line(Vec<Vec<(f32, f32)>>),
+}
+
+impl Pending {
+    /// The ring that takes part in merging, which is the first and only the first.
+    fn first_line(&self) -> Option<&Vec<(f32, f32)>> {
+        match &self.anchoring {
+            Anchoring::Line(lines) => lines.first(),
+            Anchoring::Point(_) => None,
+        }
+    }
 }
 
 /// One feature's symbol, resolved but not shaped.
@@ -514,21 +584,42 @@ impl SymbolLayout {
             .map(|label| (label.text, label.sections))
             .unwrap_or_default();
 
+        if self.placement.along_line() {
+            // Every ring of the feature, in one pending, whole and clipped later.
+            //
+            // One pending per *feature*, not per ring, because that is mbgl's `SymbolFeature`:
+            // `mergeLines` keys and splices `geometry[0]` alone and leaves the rest attached, so
+            // a ring that is not the first can never be merged into another feature's line.
+            //
+            // And whole rather than clipped, because mbgl's order is merge, then clip, then
+            // anchors: `mergeLines(features)` closes the constructor and `clipLines` runs per
+            // feature in `finalizeSymbols`. Clipping here would hand `merge_lines` the runs
+            // instead of the lines, and merging runs re-joins what the clip separated.
+            //
+            // A line needs two points to have a direction; one point is not a short line, and
+            // `clipLines` walks `begin()..end() - 1`, which is empty for such a ring anyway.
+            let lines: Vec<Vec<(f32, f32)>> = rings
+                .iter()
+                .filter(|ring| ring.len() >= 2)
+                .cloned()
+                .collect();
+            if lines.is_empty() {
+                return;
+            }
+            self.pending.push(Pending {
+                text,
+                sections,
+                icon,
+                fonts,
+                anchoring: Anchoring::Line(lines),
+                symbol: text_options(layer, zoom, Some(feature)),
+                icon_options: icon_options(layer, zoom, Some(feature)),
+            });
+            return;
+        }
+
         for ring in rings {
-            let anchorings = if self.placement.along_line() {
-                // A line needs two points to have a direction; one point is not a short line.
-                if ring.len() < 2 {
-                    continue;
-                }
-                // Whole, and clipped later.
-                //
-                // mbgl's order is merge, then clip, then anchors: `mergeLines(features)` closes
-                // the constructor and `clipLines` runs per feature in `finalizeSymbols`. Clipping
-                // here instead would hand `merge_lines` the runs rather than the lines, and
-                // merging runs re-joins what the clip separated -- undoing it for exactly the
-                // roads it was meant to cut.
-                alloc::vec![Anchoring::Line(ring.clone())]
-            } else {
+            let anchorings = {
                 let Some(first) = ring.first() else { continue };
                 // A point label belongs to the tile it is in, and to no other. The features
                 // reaching this builder are the whole source rather than one tile's share, so
@@ -621,7 +712,10 @@ impl SymbolLayout {
         let mut starts_at: BTreeMap<End, usize> = BTreeMap::new();
 
         for index in 0..self.pending.len() {
-            let Anchoring::Line(line) = &self.pending[index].anchoring else {
+            // The first ring and no other, which is `mergeLines`: `getKey` reads
+            // `geometry[0].front()` and `.back()`, and the splices are into `geometry[0]`. A
+            // feature's later rings are never keyed, so they cannot be merged onto anything.
+            let Some(line) = self.pending[index].first_line() else {
                 continue;
             };
             if line.is_empty() || self.pending[index].text.is_empty() {
@@ -649,9 +743,11 @@ impl SymbolLayout {
 
                     starts_at.remove(&left);
                     ends_at.remove(&right);
-                    if let Anchoring::Line(line) = &self.pending[before].anchoring {
-                        let far = key(&text, line[line.len() - 1]);
-                        ends_at.insert(far, before);
+                    if let Some(&last) = self.pending[before]
+                        .first_line()
+                        .and_then(|line| line.last())
+                    {
+                        ends_at.insert(key(&text, last), before);
                     }
                 }
                 // A line ending where this one starts: append this to it.
@@ -675,7 +771,10 @@ impl SymbolLayout {
 
         // What was merged away has no line left; a pending symbol with no geometry is not one.
         self.pending.retain(|pending| match &pending.anchoring {
-            Anchoring::Line(line) => !line.is_empty(),
+            // Empty *first* ring, which is what a merge leaves behind. mbgl clears
+            // `geometry[0]` and leaves the feature in the list with its later rings, and those
+            // still reach `clipLines`; dropping the whole pending here would lose them.
+            Anchoring::Line(lines) => lines.iter().any(|line| !line.is_empty()),
             Anchoring::Point(_) => true,
         });
     }
@@ -689,12 +788,20 @@ impl SymbolLayout {
         let Anchoring::Line(moving) = &mut self.pending[from].anchoring else {
             return;
         };
+        // The first ring only, taken out and left empty -- mbgl's `geom[0].clear()`. The later
+        // rings stay where they are.
+        let Some(moving) = moving.first_mut() else {
+            return;
+        };
         let mut moving = core::mem::take(moving);
         if moving.is_empty() {
             return;
         }
 
         let Anchoring::Line(target) = &mut self.pending[into].anchoring else {
+            return;
+        };
+        let Some(target) = target.first_mut() else {
             return;
         };
         if prepend {
@@ -902,12 +1009,12 @@ impl SymbolLayout {
                         !pending.text.is_empty() || pending.icon.is_some()
                     })
                     .filter_map(|(offset, pending)| match &pending.anchoring {
-                        Anchoring::Line(line) => Some(LineLabel {
+                        Anchoring::Line(lines) => Some(LineLabel {
                             pending: start_of_run + offset,
                             sections: pending.sections.clone(),
                             icon: self.icon_extent(pending, icons),
                             text: pending.text.to_string(),
-                            line: line.clone(),
+                            lines: lines.clone(),
                         }),
                         Anchoring::Point(_) => None,
                     })

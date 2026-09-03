@@ -26,7 +26,7 @@ fn layout(features: &[(&str, &[(i32, i32)])]) -> SymbolLayout {
             }],
             icon: None,
             fonts: vec!["TestFont".to_string()],
-            anchoring: Anchoring::Line(
+            anchoring: Anchoring::Line(vec![
                 points
                     .iter()
                     .map(|(x, y)| {
@@ -34,7 +34,7 @@ fn layout(features: &[(&str, &[(i32, i32)])]) -> SymbolLayout {
                         (*x as f32, *y as f32)
                     })
                     .collect(),
-            ),
+            ]),
             symbol: SymbolOptions::default(),
             icon_options: IconOptions::default(),
         })
@@ -63,9 +63,13 @@ fn lines(layout: &SymbolLayout) -> Vec<Vec<(i32, i32)>> {
         .iter()
         .filter_map(|pending| match &pending.anchoring {
             #[allow(clippy::cast_possible_truncation)]
-            Anchoring::Line(line) => {
-                Some(line.iter().map(|(x, y)| (*x as i32, *y as i32)).collect())
-            }
+            Anchoring::Line(lines) => Some(
+                lines
+                    .concat()
+                    .iter()
+                    .map(|(x, y)| (*x as i32, *y as i32))
+                    .collect(),
+            ),
             Anchoring::Point(_) => None,
         })
         .collect()

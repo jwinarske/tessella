@@ -4985,6 +4985,38 @@ a subdivision and a draw the consumer no longer makes.
   somewhere else entirely. That is what puts "Pennsylvania Avenue Northwest" about ninety pixels
   earlier along its road than the oracle does, on identical road geometry.
 
-  The fix is to make `Anchoring::Line` hold a feature's rings rather than one of them, key and
-  splice only the first, and clip the collection in one pass as `clipLines` does -- its
-  `clippedLines` is shared across rings, so the run-continuation test spans ring boundaries.
+  *Fixed.* `Anchoring::Line` holds a feature's lines rather than one of them, `merge_lines` keys
+  and splices only the first, and the collection is clipped in one pass as `clipLines` does --
+  its `clippedLines` is shared across rings, so the run-continuation test spans ring boundaries.
+  `line-center` stayed per ring, which is mbgl's own arm: it loops the geometry and takes a centre
+  on each line longer than a point.
+
+  The instrumented counts, after:
+
+  | | records | rings | points | clipped runs |
+  | --- | --- | --- | --- | --- |
+  | tessella, before | 348 | 348 | 2,164 | -- |
+  | tessella, after | 294 | 426 | **2,222** | **390** |
+  | mbgl | 358 | 490 | **2,222** | **390** |
+
+  Points and clipped runs are now exact, and the runs are what `getAnchors` is handed. The
+  remaining 64 records and 64 rings are husks: `mergeLines` clears a spliced feature's
+  `geometry[0]` and leaves the feature in the vector, so mbgl counts 64 features carrying one
+  empty ring and no points. The retain here drops them instead. Zero points, zero runs, nothing
+  observable -- and keeping them would mean carrying a pending with no geometry through every
+  stage downstream.
+
+  Washington goes **8,001 gross pixels to 4,936**, 97.4% of pixels exact to 98.3%, MAE 1.43 to
+  0.89. The all-families scene, poi-labels and place-labels are unchanged, which is what should
+  happen: they are point-placed or single-ring, so there is nothing for this to regroup.
+
+  It also switched on the fix above it. `clip_line` now sees the geometry mbgl sees, so it splits
+  where mbgl splits -- 390 runs against 348 lines -- and the run an anchor was found on is no
+  longer the same array as the feature's line.
+
+  One test moved with this. `a_roads_segments_are_joined_before_it_is_labelled` read the street
+  fixture as 1,773 road features; it is 28 features carrying 1,699 line strings, one of them a
+  single feature with 562 parts, and the 1,773 was a count of rings. Its second-pass assertion --
+  that running `merge_lines` again joins more -- was an artefact of the same misreading: 1,699
+  ring-pendings contended for one index slot per (text, endpoint), and 28 features do not. The
+  assertion is gone and the reasoning is recorded in its place.
