@@ -543,6 +543,7 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
                     writing_mode: mode,
                     allow_vertical_placement: options.allow_vertical_placement,
                     text_size: options.size,
+                    offset: options.offset,
                 },
             )
         };
@@ -770,6 +771,9 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                 writing_mode: options.symbol.writing_mode,
                 allow_vertical_placement: options.symbol.allow_vertical_placement,
                 text_size: options.symbol.size,
+                // Zero along a line: the offset there is perpendicular to the line and `project`
+                // applies it, which is the same reason the quads do not take it either.
+                offset: [0.0, 0.0],
             },
         );
 
@@ -839,6 +843,8 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                     writing_mode: tessella_glyph::shaping::WritingMode::Vertical,
                     allow_vertical_placement: options.symbol.allow_vertical_placement,
                     text_size: options.symbol.size,
+                    // Along a line, as above.
+                    offset: [0.0, 0.0],
                 },
             );
             Some((

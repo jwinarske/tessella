@@ -531,6 +531,21 @@ pub struct Options {
     pub justify: Justify,
     /// Extra tracking between characters.
     pub spacing: f32,
+    /// `text-offset`, in the same units as the advances.
+    ///
+    /// # It moves the box, not the glyphs
+    ///
+    /// mbgl seeds the shaping with it -- `Shaping(translate[0], translate[1], writingMode)` sets
+    /// `top`, `bottom`, `left` and `right` to it before the lines are laid out, and the alignment
+    /// below then adds to those rather than replacing them. The glyph positions stay relative and
+    /// the *quads* add the offset separately, so the picture is shifted once and the extent with
+    /// it.
+    ///
+    /// Leaving it out here is not invisible, because the extent is what a collision box is built
+    /// from. A label offset below its icon reserved the ground at the anchor instead of the
+    /// ground it actually covers, so labels that should have collided did not, and this placed
+    /// about a fifth more of them than the oracle.
+    pub offset: [f32; 2],
     /// Which way this shaping's lines run.
     pub writing_mode: WritingMode,
     /// Whether the layer permits vertical placement, which changes *which* glyphs stay upright.
@@ -559,6 +574,7 @@ impl Default for Options {
             anchor: Anchor::Center,
             justify: Justify::Center,
             spacing: 0.0,
+            offset: [0.0, 0.0],
             writing_mode: WritingMode::Horizontal,
             allow_vertical_placement: false,
             text_size: 16.0,
@@ -757,7 +773,14 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
     let justify = options.justify.factor();
     let (horizontal_align, vertical_align) = options.anchor.alignment();
 
-    let mut shaping = Shaping::default();
+    // Seeded with the offset, as mbgl seeds its `Shaping` with the translate.
+    let mut shaping = Shaping {
+        top: options.offset[1],
+        bottom: options.offset[1],
+        left: options.offset[0],
+        right: options.offset[0],
+        ..Shaping::default()
+    };
     let mut y = Y_OFFSET;
     let mut max_line_length = 0.0f32;
     let mut max_line_height = 0.0f32;
@@ -912,9 +935,10 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
         }
     }
 
-    shaping.top = -vertical_align * height;
+    // Added to the offset the shaping was seeded with, not assigned over it -- mbgl's `+=`.
+    shaping.top += -vertical_align * height;
     shaping.bottom = shaping.top + height;
-    shaping.left = -horizontal_align * max_line_length;
+    shaping.left += -horizontal_align * max_line_length;
     shaping.right = shaping.left + max_line_length;
     shaping
 }

@@ -4406,6 +4406,26 @@ a subdivision and a draw the consumer no longer makes.
   before -- a black frame -- and 48.6% with MAE 10.17 and zero gross pixels after.** The
   all-families scene 86.4% to 87.1%.
 
+- **A label's collision box did not move with its offset.** *Fixed.* mbgl seeds its shaping with
+  the text offset -- `Shaping(translate[0], translate[1], writingMode)` sets `top`, `bottom`,
+  `left` and `right` to it before the lines are laid out, and the alignment then *adds* to those
+  rather than replacing them. The glyph positions stay relative and the quads apply the offset
+  separately, so the picture moves once and the extent with it.
+
+  Ours seeded from zero and applied the offset only at quad time. The extent is what a collision
+  box is built from, so a label offset below its icon reserved the ground at the anchor instead of
+  the ground it covers: labels that should have collided did not. It placed **65 icons where the
+  oracle places 55**, which is the ~20% label-coverage excess recorded against Washington and had
+  been carried as its own open item.
+
+  With the shaping seeded and the alignment made `+=`: **55 icons, exactly the oracle's count.**
+  The layer went from 98.2% of pixels exact and MAE 1.15 to **99.4% and 0.17**, gross pixels from
+  6,150 to 811, and the all-families scene from 87.1% and MAE 1.38 to **87.9% and 0.77** with gross
+  down from 5,606 to 1,649.
+
+  Not on the along-line branch, where the offset is perpendicular to the line and `project` applies
+  it -- the same reason the quads do not take it there either.
+
 - **A raster tile drew a different tile's picture.** *Fixed, in two places.* On the raster fixture
   every tile carries a parity tint, `blue = 190 - ((x + y) % 2) * 40`, so which tile landed where
   is readable off the picture -- and ours did not alternate across a row where mbgl's did.
