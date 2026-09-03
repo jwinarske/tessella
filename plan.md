@@ -4389,6 +4389,39 @@ a subdivision and a draw the consumer no longer makes.
   One thing deliberately not taken: mbgl leaves its colour pass read-only, and measured here that
   is worse, so the colour pass writes depth too.
 
+- **A background layer needed a vector tile to exist.** *Fixed.* The background was taken off
+  whatever tiles a source happened to serve. mbgl does not do that and says so in as many words --
+  `// renderTiles is always empty, we use tileCover instead` -- computing `util::tileCover` at the
+  integer zoom for this layer alone.
+
+  Taking it from served tiles was wrong twice. A style with no vector source has nothing
+  renderable, so substitution records no coordinates and no background was drawn at all: the frame
+  came out the clear colour, which is black. A raster-only basemap is exactly that style. And where
+  a source *was* present but an ancestor stood in for a missing tile, the background went onto the
+  ancestor's coordinate and covered four or sixteen times the ground it should -- which the comment
+  beside it already said was wrong ("a background belongs to the coordinate on screen rather than
+  to whatever tile happened to serve it") while the code keyed it to the serving tile anyway.
+
+  A background-plus-imagery style against `mbgl-render`: **0.0% of pixels exact and MAE 188.52
+  before -- a black frame -- and 48.6% with MAE 10.17 and zero gross pixels after.** The
+  all-families scene 86.4% to 87.1%.
+
+- **A raster tile's imagery does not match the tile mbgl draws there.** *Open, and narrow.* On the
+  raster fixture every tile carries a parity tint, `blue = 190 - ((x + y) % 2) * 40`, so which tile
+  landed where is readable off the picture. Ours does not alternate across a row where mbgl's does:
+  adjacent screen cells get tiles of the same x parity.
+
+  What is already ruled out. The grid is right: the tile borders fall on identical columns in both,
+  114/370/626/882, at a 256-pixel pitch, so the covering zoom and the alignment agree. The requests
+  are right: logging the fixture shows a contiguous z16 block, 35206..35209 by 21491..21494, which
+  is what a 900x700 viewport at z15 wants of a 256-pixel source. So the tiles fetched are the right
+  ones and the quads are in the right places; what is wrong is which texture goes on which quad.
+
+  It costs zero gross pixels and MAE 10 on a fixture built to make tile identity visible, so it is
+  worth doing and not urgent. Start at the raster drawable's matrix slot: 20 tiles were fetched for
+  12 cells, and a slot mismatch between the fetch order and the draw order would look exactly like
+  this.
+
 - **A patterned fill was written with the plain fill's drawable layout.** *Fixed.* The two share
   the union's stride, so nothing about the buffer's length says which is meant, and
   `FillPatternDrawableUBO` puts the tile's pixel origin and ratio exactly where `FillDrawableUBO`

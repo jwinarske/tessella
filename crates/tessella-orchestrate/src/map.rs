@@ -374,11 +374,6 @@ impl Map {
             if let Some((_, ready)) = &holding {
                 built.extend(ready.iter().cloned());
             }
-            // Keyed by the cover, which is what asked for it -- a background belongs to the
-            // coordinate on screen rather than to whatever tile happened to serve it.
-            if let Some(sourceless) = tiles.sourceless(cover) {
-                built.extend(sourceless.iter().cloned());
-            }
             if !built.is_empty() {
                 built.sort_by_key(|bucket| bucket.layer_index);
                 buckets.push((id, built));
@@ -437,6 +432,41 @@ impl Map {
                     z: id.z,
                     x: id.x,
                     y: id.y,
+                    wrap: entry.wrap,
+                });
+            }
+        }
+
+        // And the background, whose tiles are the view's own cover rather than any source's.
+        //
+        // mbgl says this in as many words -- `renderTiles is always empty, we use tileCover
+        // instead` -- and computes `util::tileCover` at the integer zoom for this layer alone.
+        // Taking the background off whatever tiles a source happened to serve was wrong twice
+        // over. A style with no vector source has nothing renderable, so substitution records no
+        // coordinates and no background was drawn at all: the frame came out the clear colour,
+        // which is black, and a raster-only basemap is exactly that style. And where a source
+        // *was* present but an ancestor stood in for a missing tile, the background went onto the
+        // ancestor's coordinate and so covered four or sixteen times the ground it should.
+        //
+        // Deduped against `served` like the walks above, because a background keyed to a cover
+        // coordinate a walk already placed would blend over itself.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let integer_zoom = self.view.zoom.floor().max(0.0) as u8;
+        if let Ok(background) = tessella_tile::cover::cover_at(&self.view, integer_zoom) {
+            for entry in &background {
+                let cover = TileId::new(entry.z, entry.x, entry.y);
+                let Some(sourceless) = tiles.sourceless(cover) else {
+                    continue;
+                };
+                let built: Vec<LayerBucket> = sourceless.iter().cloned().collect();
+                if built.is_empty() {
+                    continue;
+                }
+                buckets.push((cover, built));
+                placed.push(TileCoord {
+                    z: cover.z,
+                    x: cover.x,
+                    y: cover.y,
                     wrap: entry.wrap,
                 });
             }
