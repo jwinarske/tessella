@@ -4558,15 +4558,21 @@ a subdivision and a draw the consumer no longer makes.
           continue;
       }
 
-  Two behaviours in there, and we have neither. mbgl tests only the circles within the reach of the
-  label's *actually placed* first and last glyph, where this tests the whole chain including every
-  padding circle -- so ours reserves more ground than mbgl's and loses contention it should win.
-  And when the first and last glyph cannot be placed at all, mbgl marks every circle unused and the
-  label does not go down; we have no such rejection.
+  Two behaviours in there, and **one of them is already implemented** -- an earlier reading of this
+  same guard put it in. `LineCircle::covered_by_label` is `distance_from_anchor.abs() <=
+  label_length / 2`, which is `[-firstTileDistance, lastTileDistance]` at pitch zero, and
+  `placement.rs` filters the chain by it before testing. A first pass through this entry said "we
+  have neither", which was wrong: the field, its doc comment and the filter were all already there,
+  and the claim was made from reading mbgl rather than from reading ours.
 
-  Both need `placeFirstAndLastGlyph` and the tile distances it returns, which is a real port rather
-  than a correction. Much of the machinery around it -- `approximateTileDistance`, the perspective
-  ratio -- is a no-op at pitch zero and can wait; the two behaviours above are not.
+  What is genuinely absent is the other half: when the first and last glyph cannot be placed at
+  all, mbgl marks every circle unused and the label does not go down. There is no such rejection
+  here. How much that is worth is unclear and probably small, because `resample` already refuses an
+  anchor unless `marked - half_label >= 0` and `marked + half_label <= length`, so a label that
+  does not fit its line never gets an anchor to begin with; mbgl's own `resample` makes the same
+  test. At pitch zero the projection that could still fail is close to the identity.
+
+  So the contention difference is *not* accounted for, and this guard is no longer the lead.
 
   What has been read against mbgl and matches, so that none of it is searched again: the clip, its
   ordering against the merge, `merge_lines` itself, `get_anchors`, `resample`, the order symbols are
