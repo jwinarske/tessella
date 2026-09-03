@@ -4158,6 +4158,23 @@ a subdivision and a draw the consumer no longer makes.
   1,931. Kept because it is mbgl's behaviour and was missing, not because of the numbers: it moved
   Berlin from one per cent over to two under, which is noise at this distance.
 
+- **Symbol corner cases left standing when this thread was set down.** *Open, and none of them
+  blocking.* Recorded together so they are not rediscovered one at a time:
+
+  - An exactly vertical line places its label upside down. `place_upright` decides by comparing
+    the first and last glyph's `x`, and on a vertical line that difference is noise. mbgl compares
+    the same way for a horizontal-only writing mode, so it is degenerate there too; real roads are
+    rarely exact. Seen on a synthetic line, not on a map.
+  - Point labels drop the occasional glyph mid-word. Filed under this once before and turned out
+    to be roads painting over the text, which is fixed; whatever is left is smaller and has not
+    been measured.
+  - `continued_line` is dead code. It compares `line[0]` against 0 and EXTENT exactly, which only
+    holds for geometry clipped to the tile, and this layout deliberately does not clip -- 0 of 898
+    features on a real tile set it. mbgl's `clipLines` is what makes it mean anything there, and
+    porting that is the honest fix. Substituting "the line leaves the tile" was tried and is
+    worse: the flag also disables the middle-anchor fallback, and a short road loses its only
+    label.
+
 - **Washington still draws about a fifth more label than the oracle.** *Open.* Berlin is at 2,958
   against 3,005 and Washington at 2,309 against 1,931, on the same code and the same camera rules,
   so whatever is left is not uniform -- it is something Washington's data has more of. The two
