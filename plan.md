@@ -4406,6 +4406,27 @@ a subdivision and a draw the consumer no longer makes.
   before -- a black frame -- and 48.6% with MAE 10.17 and zero gross pixels after.** The
   all-families scene 86.4% to 87.1%.
 
+- **A POI symbol's anchor lands a third of a pixel from mbgl's.** *Open, and small.* What is left
+  of the `poi-labels` layer is 811 gross pixels of 630,000, MAE 0.17, and all of it is icon edges.
+
+  Read off one icon's green channel, ours against the oracle: mbgl covers x 648..664 and y 279..294
+  with hard edges -- 230 straight to 144, no intermediate value on any side -- so its quad spans
+  exactly 648.0 to 665.0 and its anchor sits at 656.5, a half pixel. Ours covers the same span with
+  a soft edge on all four sides, 195 down the left and 179 down the right, so our anchor is about
+  0.3 of a pixel to the left of it.
+
+  What that is not. It is not a rounding rule in mbgl: neither `placement.cpp` nor
+  `symbol_projection.cpp` rounds a projected anchor, and both quads are the same, `shapeIcon` giving
+  +/-8.5 around the anchor for a 17-wide sprite exactly as ours does. It is not a systematic bias
+  either -- over 54 icons the offset averages +0.02 in x and -0.01 in y with a spread of +/-0.45, so
+  it is per-symbol rather than a constant. And it is not the projection, because `place-labels` is
+  100.0% of pixels exact with zero gross: anchors on that layer land where mbgl puts them to the
+  pixel.
+
+  So it is something about *this* layer's anchors -- the `pois` source layer, the one with icons and
+  a text offset -- and the place to start is the anchor's tile-unit coordinate before it is
+  projected, compared against the same feature's in mbgl.
+
 - **A label's collision box did not move with its offset.** *Fixed.* mbgl seeds its shaping with
   the text offset -- `Shaping(translate[0], translate[1], writingMode)` sets `top`, `bottom`,
   `left` and `right` to it before the lines are laid out, and the alignment then *adds* to those
