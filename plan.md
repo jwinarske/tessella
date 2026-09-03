@@ -4168,7 +4168,7 @@ a subdivision and a draw the consumer no longer makes.
   | fill-extrusion | draws |
   | symbol icons, from a sprite sheet | draws -- 2,009 pixels of icon in the combined frame against 2,029 alone |
   | fill-pattern | **drawables issued, nothing drawn.** Shaders 13 and 14 appear 21 times each in the order and the frame has 0 greenish pixels where the oracle has 122,848 |
-  | raster | **no drawables at all, as soon as any vector layer is present.** Alone it draws and uploads 21 textures; with one fill layer beside it the order carries background, fill and fill-outline and no shader 31 |
+  | raster | *fixed* -- see below |
   | circle | **no material in the consumer.** The producer emits shader 5, `missing_family_5`, and nothing draws it |
 
   The raster one has a two-layer reproducer: a background, one vector fill, and the raster layer.
@@ -4182,6 +4182,25 @@ a subdivision and a draw the consumer no longer makes.
   The style, the asset server and how to run the pair are in
   `maplibre-frontend/tileserver/style-families.json` and `README-families.md`, outside this repo
   because the archives it reads are.
+
+- **A raster source's tiles were fetched, decoded, stored, and never looked up.** *Fixed.* A
+  256-pixel raster source covers the screen at one zoom *more* than a vector one -- mbgl's
+  `coveringZoomLevel` shifts by `log2(512 / tileSize)` -- and `plan` knows that and keeps a cover
+  of its own for it. The frame then walked only the view's cover, so those tiles sat at
+  coordinates nothing ever asked about.
+
+  It looked like an interaction between sources, because a raster source alone drew normally.
+  It is not: the cover addresses one zoom, and a source at any other zoom is invisible whatever
+  else is in the style. Proved by giving the source `tileSize: 512` so its covering zoom matches
+  the view's -- the same style, the same two layers, and the raster draws.
+
+  The frame walks those covers now. `Tiles::extra_zooms` reports the zooms a store holds tiles at
+  that the view's cover does not address, empty for every vector source; the walk dedups against
+  the same `served` set, so a tile already drawn is not drawn twice.
+
+  Against the oracle on a background, one vector fill and a 256-pixel raster source: 72% of pixels
+  exact and 89% within 24/255, with the water drawn over the imagery in both. The residue is
+  texture filtering on a synthetic gradient, which is its own question.
 
 - **Symbol corner cases left standing when this thread was set down.** *Open, and none of them
   blocking.* Recorded together so they are not rediscovered one at a time:

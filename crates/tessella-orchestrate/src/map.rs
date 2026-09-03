@@ -114,6 +114,21 @@ pub trait Tiles {
         let _ = tile;
         None
     }
+
+    /// Zooms this store holds tiles at that the view's own cover does not address.
+    ///
+    /// A 256-pixel raster source covers the screen at one zoom *more* than a vector one --
+    /// mbgl's `coveringZoomLevel` shifts by `log2(512 / tileSize)` -- so its tiles are at
+    /// coordinates the frame's cover never asks about. They were fetched, decoded and stored,
+    /// and then nothing looked them up: the layer drew nothing at all whenever a vector source
+    /// sat beside it, and drew normally when it was alone and the cover happened to be walked at
+    /// its zoom.
+    ///
+    /// Empty for a store whose tiles are all at the view's zoom, which is every vector one.
+    fn extra_zooms(&self, view: &ViewTransform) -> alloc::vec::Vec<u8> {
+        let _ = view;
+        alloc::vec::Vec::new()
+    }
 }
 
 /// A map being drawn: one style, one view, and the state that makes a frame incremental.
@@ -365,6 +380,43 @@ impl Map {
                 built.extend(sourceless.iter().cloned());
             }
             if !built.is_empty() {
+                built.sort_by_key(|bucket| bucket.layer_index);
+                buckets.push((id, built));
+                placed.push(TileCoord {
+                    z: id.z,
+                    x: id.x,
+                    y: id.y,
+                    wrap: entry.wrap,
+                });
+            }
+        }
+
+        // And the tiles a source holds at a zoom of its own.
+        //
+        // A 256-pixel raster source covers the screen at one zoom more than a vector one, so its
+        // tiles sit at coordinates the walk above never asks about. They were fetched, decoded and
+        // stored, and nothing looked them up: the layer drew nothing whenever a vector source sat
+        // beside it, and drew normally when it was alone -- which is what made it look like an
+        // interaction between sources rather than a cover that addresses one zoom.
+        //
+        // `served` carries over, so a tile already drawn by the walk above is not drawn twice; a
+        // second draw is the same geometry under the same matrix, blended again.
+        for z in tiles.extra_zooms(&self.view) {
+            let Ok(extra) = tessella_tile::cover::cover_at(&self.view, z) else {
+                continue;
+            };
+            for entry in &extra {
+                let cover = TileId::new(entry.z, entry.x, entry.y);
+                let Some((id, ready)) = tiles.serving(cover) else {
+                    continue;
+                };
+                if !served.insert(id) {
+                    continue;
+                }
+                let mut built: Vec<LayerBucket> = ready.iter().cloned().collect();
+                if built.is_empty() {
+                    continue;
+                }
                 built.sort_by_key(|bucket| bucket.layer_index);
                 buckets.push((id, built));
                 placed.push(TileCoord {

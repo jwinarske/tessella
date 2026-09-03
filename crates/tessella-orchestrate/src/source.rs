@@ -572,6 +572,25 @@ impl<S: FileSource + 'static> Tiles for Arc<TileSource<S>> {
             .get(&tile)
             .map(Arc::clone)
     }
+
+    /// The covering zoom of every raster source, which is the one the planner fetched them at.
+    ///
+    /// `plan` keeps a raster source's own cover for exactly this reason and then the frame walked
+    /// only the view's, so the tiles landed under coordinates nothing asked about.
+    fn extra_zooms(&self, view: &ViewTransform) -> Vec<u8> {
+        let Some(sources) = self.sources() else {
+            return Vec::new();
+        };
+        let mut zooms: Vec<u8> = sources
+            .sets
+            .iter()
+            .filter(|(_, _, kind)| matches!(kind, tessella_storage::offline::SourceKind::Raster { .. }))
+            .map(|(_, _, kind)| boot::covering_zoom(*kind, view.zoom))
+            .collect();
+        zooms.sort_unstable();
+        zooms.dedup();
+        zooms
+    }
 }
 
 #[cfg(test)]

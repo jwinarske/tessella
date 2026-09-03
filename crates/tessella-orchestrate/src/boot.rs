@@ -75,7 +75,7 @@ use crate::tile::{LayerBucket, TileId, build_mvt_tile, build_raster_tile, build_
 ///
 /// Clamped to what a cover can address. The zoom arrives from the consumer's camera over the
 /// reverse channel (DR-9) and is not a trusted number, and the shift makes it larger.
-fn covering_zoom(kind: SourceKind, zoom: f64) -> u8 {
+pub(crate) fn covering_zoom(kind: SourceKind, zoom: f64) -> u8 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     {
         kind.covering_zoom(zoom)
