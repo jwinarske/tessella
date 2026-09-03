@@ -4294,42 +4294,61 @@ a subdivision and a draw the consumer no longer makes.
   **100.0%, MAE 0.00**. Geometry, lighting, gradient and depth are all exactly right; anything
   still visible in a translucent extrusion is the blend and nothing else.
 
-- **A translucent extrusion still blends overlapping surfaces twice.** *Open, root cause found.*
-  At `fill-extrusion-opacity: 1` the same buildings are pixel-exact. At 0.9 they are MAE 2.44, and
-  the artifact is a hard diagonal seam across a wall, following the roof's triangulation edge --
-  a farther surface blended, then a nearer one blended over it.
+- **A translucent extrusion was drawn opaque.** *Fixed.* The consumer read a layer's opacity out
+  of its evaluated-paint block through `opacityOffset`, which had cases for fill, fill-outline and
+  background and a default that answers "past the end" so the value stays at one. Neither extrusion
+  family was listed, so `fill-extrusion-opacity` never reached the shader and a building at 0.9 was
+  composited at 1.
 
-  Depth is not the problem and neither are ties. Sweeping the comparison, `G` (strict) scores
-  exactly what `GE` does -- 2.44, 164 gross -- so no two fragments arrive at equal depth; and
-  `LE`/`L`/`E` all collapse to 20.36, which fixes the convention: greater is nearer. Depth culling
-  off scores 9.42, so the test is doing real work.
+  It hid behind a coincidence: at an opacity of one, not blending *is* the right answer, so the
+  layer matched the oracle exactly and every measurement taken on an opaque style said the pipeline
+  was correct. What it cost was 3 of 255 on a roof and 14 on a wall -- the roof came out at the lit
+  colour instead of nine parts lit to one part what was behind it -- across more than a third of
+  the frame.
 
-  mbgl prevents the double blend with a depth prepass: fill the buffer with the nearest surface
-  first, then draw colour read-only, so each pixel blends once. **We cannot reproduce it, and the
-  reason is that our roof and our walls are different shader families.** mbgl draws one
-  fill-extrusion drawable carrying both, with a normal attribute deciding which is which, so one
-  shader computes the depth of every surface. Ours splits them: the roof is family 16 reading z
-  from the vertex buffer, the walls are family 17 reconstructing `z = t > 0 ? height : base` from
-  instance attributes. Where the two meet -- the roof perimeter is the wall's top edge -- the two
-  routes do not agree to the last bit, so the prepass's winner rejects the other's colour
-  fragment.
+  Berlin at `fill-extrusion-opacity: 0.9`: **63.1% of pixels exact and MAE 2.44 before, 91.8% and
+  MAE 0.45 after.** Opaque styles stay at 100.0% and MAE 0.00.
 
-  Measured, all against the same oracle, with matrices verified bit-identical across the four
-  sub-layers and the wall attribute buffers verified byte-identical between the passes:
+  The same nesting cost every other family too. The opacity read sat *inside* the branch that sets
+  a shared colour, which excludes raster, the symbols and the two pattern variants by design --
+  opacity is not a property of having a shared colour. Lifted out, and line, circle and the pattern
+  fills are covered by name.
 
-  | arrangement | MAE | gross px |
-  |---|---|---|
-  | colour pass only, writes depth (shipped) | 2.44 | 164 |
-  | prepass, colour pass also writes | 2.82 | 2,695 |
-  | prepass, colour pass read-only (mbgl's) | 6.51 | 25,706 |
+  This is also why the earlier depth work read the way it did. Every prepass and read-only
+  measurement was taken with opacity stuck at one, which is the value at which the whole question
+  is moot -- so those numbers were comparing an opaque render against itself and none of them meant
+  what they appeared to.
 
-  The prepass adds 2,531 gross pixels of seam where it should add none, which is the disagreement
-  measured directly. Read-only then turns each seam from a blend into a dropped fragment.
+- **A translucent extrusion still blends overlapping surfaces twice.** *Open, and now small.* What
+  is left of the residual is a roof at (209,193,176) where the oracle has (211,196,180): one blend
+  gives 211, two give 208, so a surface is still being composited twice. It is 163 gross pixels
+  against 630,000 and no longer visible.
 
-  So the fix is not a depth setting. It is to carry the roof and the walls in one drawable through
-  one shader, the way mbgl does, after which the prepass becomes available and with it mbgl's
-  blend-once guarantee. Until then the single pass is the better arrangement on every measure --
-  it is also 36 renderables against 54.
+  **The earlier claim here that mbgl carries the roof and the walls in one drawable was wrong.**
+  mbgl chooses by backend -- `MLN_USE_FILL_EXTRUSION_INSTANCING` is `(METAL || VULKAN)` -- and the
+  oracle is built `MLN_WITH_VULKAN=ON`, so it takes the same instanced path this does: a roof
+  drawable on one shader, wall instances on another, four builders for the two passes. The split is
+  not the divergence, and there is nothing to unify.
+
+  Where it stands, measured against the oracle after the opacity fix:
+
+  | arrangement | exact | MAE | gross px |
+  |---|---|---|---|
+  | colour pass only, writes depth (shipped) | 91.8% | 0.45 | 163 |
+  | prepass, colour pass also writes | 95.3% | 0.65 | 2,693 |
+  | prepass, colour pass read-only (mbgl's) | 91.3% | 4.17 | 25,684 |
+
+  The prepass removes double blends -- exact rises to 95.3% -- and adds 2,530 gross pixels of seam
+  along building perimeters, where the roof and the wall meet. Both reconstruct the same footprint
+  from the same packed int16-plus-fraction and the arithmetic is identical, so the seam is not yet
+  explained. Single-pass ships because gross pixels are what is visible.
+
+  Back-face culling is the other thing mbgl does here and this does not -- `setCullFaceMode(backCCW)`
+  on all four builders. Enabling it is currently destructive: `roof=front` is a *no-op*, meaning
+  every roof triangle is back-facing in Filament's winding and the convention is inverted from
+  mbgl's, while the walls lose about 20,000 pixels whichever face is culled, meaning their winding
+  is mixed rather than consistently outward. Getting that right would halve wall rasterization and
+  remove a building's own far walls from the blend.
 
 - **A raster layer paints over the vector layers beneath it.** *Open, and newly isolated.* In the
   all-families style the imagery hides water, the pattern, the roads and the buildings: zero pixels
