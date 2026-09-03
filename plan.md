@@ -4518,10 +4518,25 @@ a subdivision and a draw the consumer no longer makes.
   - **The same label sits at a different anchor.** "Pennsylvania Avenue Northwest" is on its road in
     both, ours further along it than the oracle's.
 
-  `get_anchors` itself is faithful -- the `continued_line` test, the spacing widening and the offset
-  formula all match `get_anchors.cpp` line for line -- so the divergence is not there. One candidate
-  named here has since been settled and is above: the merge/clip order. What is left untested is
-  `resample`, which has not been compared against mbgl's the way `get_anchors` now has.
+  Anchor placement is not the cause, and both halves of it have now been read against mbgl's:
+
+  - `get_anchors` matches `get_anchors.cpp` line for line -- the `continued_line` test, the
+    spacing widening when a label is long relative to it, and both branches of the offset.
+  - `resample` matches too -- `markedDistance` starting at `offset - spacing`, the walk per
+    segment, the four-part test that the point is inside the tile and the label fits between the
+    line's ends, the rounding of the anchor, the angle window, and the middle-anchor fallback for
+    a line that placed nothing.
+
+  Nor is it the merge/clip order, which is fixed above. And the evidence agrees: correcting that
+  order moved the exact count 4.2 points and halved MAE while leaving the gross clusters *exactly
+  where they were*, same positions and same sizes. Those two measure different things here -- the
+  ordering fixed the many small disagreements, and the clusters are whole labels.
+
+  So what is left is contention: which label wins a piece of screen. Every remaining cluster has
+  ink from both renderers in different amounts, and the largest is the one where the oracle sets a
+  cross street's name and ours sets the avenue's. The place to look is the order symbols are
+  offered to the grid -- mbgl places top layer first and, within a layer, in the order instances
+  were created, and whether ours agrees has not been checked.
 
 - **A symbol's anchor lands a fraction of a pixel from mbgl's.** *Open, and measured to the
   decimal.* It is what is left of both symbol layers: 811 gross pixels of 630,000 on `poi-labels`
