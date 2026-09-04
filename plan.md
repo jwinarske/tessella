@@ -5900,3 +5900,20 @@ against; none is scheduled.
   Vertices and indices come from layout, which is camera-free; that leaves the dynamic and opacity
   buffers, which are written per frame -- so the next step is to hash those two separately from the
   vertex data.
+
+- **The producer is deterministic; the consumer is not.** Hashing the last symbol buffers emitted
+  per bucket -- vertex count, dynamic buffer, opacity buffer -- across three pitched runs of
+  `icons_only`: thirteen keys, all three runs **identical**, while the images were 29,221 / 18,192
+  / 25,800 gross pixels.
+
+  Together with the stream comparison above, the producer side is now fully accounted for: same
+  tile list, same placement decisions, same live drawable set, same sprite atlas, same final symbol
+  content. The `GeometryAdd` payload differences seen earlier were slab *references*, not content --
+  the vertex, dynamic and opacity bytes live in slabs the ring dump never captured, so those
+  offsets differ with allocation order and mean nothing.
+
+  So the same bytes produce different pictures, and the defect is in `tessella_fluorite`. The
+  obvious candidate is draw order: symbols are alpha-blended, so the order drawables are issued in
+  changes the result, and `drawlist.cc` merges and retains runs across frames. Four `OrderUpdate`
+  records go out per run; whether the consumer re-sorts on them or keeps insertion order within a
+  batch is the next thing to read.
