@@ -49,6 +49,11 @@ pub enum Status {
     BadStyle = 4,
     /// The ring could not take the frame. The consumer is behind; drain and retry.
     RingFull = 5,
+    /// The slab region had no room for the frame's geometry. Unlike [`Self::RingFull`] this does
+    /// not clear by draining: the arena bump allocates, so the space a swept slab left is only
+    /// recovered once everything above it has gone. The frame compacts and the next tick retries;
+    /// a map that reports this every tick needs a larger `slab_capacity`.
+    RegionFull = 7,
     /// Something failed in a way this ABI has no more specific word for. The producer logs it.
     Failed = 6,
 }
@@ -126,7 +131,31 @@ pub struct Config {
     pub height: u32,
     /// Ring capacity in bytes. Rounded up to a power of two, which the ring requires.
     pub ring_capacity: usize,
+    /// Slab region capacity in bytes, where the frame's geometry is written.
+    ///
+    /// Zero takes [`DEFAULT_SLAB_CAPACITY`]. The region is where vertex and index bytes live,
+    /// and the consumer reads them in place -- so this is the working set of everything on
+    /// screen plus what compaction has not yet reclaimed, not a per-frame buffer.
+    ///
+    /// A frame that does not fit is refused whole and the next one retries after the arena has
+    /// compacted, so a region that is too small shows as a map that will not finish drawing
+    /// rather than as corruption.
+    pub slab_capacity: usize,
 }
+
+/// Slab region capacity when [`Config::slab_capacity`] is zero.
+///
+/// Sixty-four mebibytes. Four street-level views of a dense city settle inside twelve, and the
+/// headroom is for the transient during a pan, when the tiles being left have not been swept
+/// and the tiles being entered are already allocated.
+pub const DEFAULT_SLAB_CAPACITY: usize = 64 << 20;
+
+/// Table slots reserved in the slab region.
+///
+/// One per live slab, fixed because the table is at the front of the region and a handle indexes
+/// it. Sixteen bytes each, so four thousand costs sixty-four kilobytes of the region and is well
+/// past what a view holds: a slab is a run of geometry, not a drawable.
+pub const SLAB_SLOTS: usize = 4096;
 
 /// One map's state.
 ///
@@ -141,12 +170,14 @@ pub struct MapState {
     map: Map,
     /// The ring's backing memory. `u64` so it is eight-aligned, which `ring::init` requires.
     region: Vec<u64>,
+    /// The slab region's backing memory, which the map's arena writes into and C reads through
+    /// `tessella_regions`. Allocated once and never resized, so the `Mapping` the arena holds
+    /// stays valid for as long as this state does.
+    slabs: Vec<u64>,
     producer: Producer,
     /// Where tiles come from. Shared between views by construction, so a tile two maps want is
     /// fetched once and built once.
     source: Arc<TileSource<HttpFileSource>>,
-    /// Slabs packed for the consumer to resolve against.
-    packed: Vec<u8>,
     /// What the source had landed when this map last drew.
     ///
     /// A tile arriving on a worker does not move the camera, so the damage gate would call the
@@ -247,6 +278,27 @@ pub unsafe extern "C" fn tessella_create(
         let (producer, _consumer) =
             unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), capacity) };
 
+        // The slab region. The arena writes the frame's geometry straight into it and the
+        // consumer reads it there, so there is no serialise step: an owned arena has to rebuild
+        // the whole region every frame, which on a moving map is most of the frame.
+        let slab_capacity = if config.slab_capacity == 0 {
+            DEFAULT_SLAB_CAPACITY
+        } else {
+            config.slab_capacity
+        };
+        let mut slabs = alloc::vec![0u64; slab_capacity.div_ceil(8)];
+        // SAFETY: the buffer is `slab_capacity` bytes rounded up to eight, eight-aligned because
+        // it is a `Vec<u64>`, and lives as long as the state that owns it -- it is allocated
+        // here and never resized, so the heap block does not move when the state does. Nothing
+        // else writes it: the arena is the only writer and C only reads.
+        let mapping = unsafe {
+            tessella_capture_abi::mapping::Mapping::new(
+                slabs.as_mut_ptr().cast::<u8>(),
+                slabs.len() * core::mem::size_of::<u64>(),
+            )
+        };
+        let arena = tessella_orchestrate::emit::SlabArena::in_region(mapping, SLAB_SLOTS);
+
         let files = Arc::new(Coalescing::new(HttpFileSource::new(Duration::from_secs(
             30,
         ))));
@@ -254,11 +306,11 @@ pub unsafe extern "C" fn tessella_create(
         let source = TileSource::new(style_text, files, cache, Pool::shared(), 1);
 
         let state = Box::new(MapState {
-            map: Map::new(style, view, ViewId(0)),
+            map: Map::with_arena(style, view, ViewId(0), arena),
             region,
+            slabs,
             producer,
             source,
-            packed: Vec::new(),
             generation: 0,
             sprites_set: false,
         });
@@ -359,13 +411,10 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
 
         let outcome = match state.map.tick(&mut state.producer, &state.source) {
             Ok(Tick::Idle) => Status::Ok,
-            Ok(Tick::Emitted(_)) => {
-                // Packed after the frame that names the slabs, which is §11.3's ordering: a
-                // consumer resolving a handle needs the table, and the table is only complete
-                // once the frame has finished allocating against it.
-                state.packed = state.map.arena().pack();
-                Status::Ok
-            }
+            // Nothing to pack: the arena wrote into the shared region as it went, and the
+            // record naming a slab was published after the bytes were in place. §11.3's window
+            // is closed by construction rather than by ordering a copy after the frame.
+            Ok(Tick::Emitted(_)) => Status::Ok,
             // The consumer is behind. Nothing was emitted and nothing was retired, so draining
             // and calling again resumes from where this attempt started.
             //
@@ -375,6 +424,14 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
             // frame it never sent. Found on OpenFreeMap's liberty, whose first frame is 1.5
             // million vertices and does not fit a four-megabyte ring -- it reported a ready map,
             // every tile landed, and six records on the wire.
+            Err(tessella_orchestrate::frame::FrameError::RegionFull) => {
+                // The frame emitted nothing, but it did run the compaction that empties
+                // poorly-packed slabs, so the retry has room the attempt did not. Dirty for the
+                // same reason a full ring is: without it the spent damage gate leaves the map
+                // idle holding a frame it never sent.
+                state.map.mark_dirty();
+                Status::RegionFull
+            }
             Err(_) => {
                 state.map.mark_dirty();
                 Status::RingFull
@@ -527,8 +584,8 @@ pub unsafe extern "C" fn tessella_regions(map: MapHandle, out: *mut Regions) -> 
             *out = Regions {
                 ring: state.region.as_ptr().cast::<u8>(),
                 ring_len: state.region.len() * core::mem::size_of::<u64>(),
-                slabs: state.packed.as_ptr(),
-                slabs_len: state.packed.len(),
+                slabs: state.slabs.as_ptr().cast::<u8>(),
+                slabs_len: state.slabs.len() * core::mem::size_of::<u64>(),
             };
         }
         Status::Ok

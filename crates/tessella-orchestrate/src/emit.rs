@@ -647,6 +647,134 @@ impl SlabArena {
         Some(self.live_bytes(id) as f64 / total as f64)
     }
 
+    /// How many of the region's bytes are reserved by nothing.
+    ///
+    /// The gap between the cursor and the sealed slabs still under it. Zero for an owned arena,
+    /// which has no region to waste.
+    #[must_use]
+    pub fn region_waste(&self) -> usize {
+        let Backing::Region { cursor, slots, .. } = &self.backing else {
+            return 0;
+        };
+        let start = region_data_start(*slots);
+        let held: usize = self.slabs().map(|slab| slab.bytes.len().next_multiple_of(8)).sum();
+        cursor.saturating_sub(start).saturating_sub(held)
+    }
+
+    /// How far the region's cursor stands above its table, in bytes.
+    #[must_use]
+    pub fn region_used(&self) -> usize {
+        let Backing::Region { cursor, slots, .. } = &self.backing else {
+            return 0;
+        };
+        cursor.saturating_sub(region_data_start(*slots))
+    }
+
+    /// Closes the gaps a sweep left in the region, returning the bytes reclaimed.
+    ///
+    /// # Why this is needed
+    ///
+    /// The region bump allocates, so a swept slab's bytes stay reserved until everything above
+    /// them has gone -- and while a map is moving, nothing above them ever does. The tiles
+    /// leaving the view are the oldest and lowest, the tiles arriving are the newest and
+    /// highest, so the cursor climbs for as long as the camera does. Measured on the quad at
+    /// street zoom: eight hundred kilobytes a frame, which exhausts a gigabyte in twenty
+    /// seconds of panning.
+    ///
+    /// # Why it is invisible to a consumer
+    ///
+    /// A [`SlabRef`] names a slab and an offset *within* it. Where the slab sits in the region
+    /// is only in the table, which this rewrites -- so no reference is invalidated and nothing
+    /// has to be re-announced. That is the whole difference from DR-21's displacement, whose
+    /// purpose is to empty a slab rather than to move one, and which does cost a re-upload.
+    ///
+    /// Slabs move within one tick, before the frame's records are published, and a consumer
+    /// re-reads the table each time it drains. One that cached a region offset across frames
+    /// would break, which is why the table is the only place that offset appears.
+    ///
+    /// Does nothing while a slab is open -- a frame is mid-flight and the open slab is the
+    /// region's top -- or while any sealed slab is held beyond the arena.
+    pub fn compact_region(&mut self) -> usize {
+        if self.open.is_some() {
+            return 0;
+        }
+        let Backing::Region { slots, cursor, .. } = &self.backing else {
+            return 0;
+        };
+        let (slots, was) = (*slots, *cursor);
+
+        // In address order, because moving down is only safe onto ground already vacated.
+        let mut live: Vec<(u32, usize, usize)> = self
+            .slots
+            .iter()
+            .filter_map(|slot| slot.as_ref())
+            .filter_map(|slab| match slab.bytes {
+                Bytes::Region(start, length) => Some((slab.id, start, length)),
+                Bytes::Owned(_) => None,
+            })
+            .collect();
+        live.sort_unstable_by_key(|(_, start, _)| *start);
+
+        // All or nothing. A slab whose `Arc` is shared cannot have its own record of where it
+        // lives updated, and moving its bytes while it still believes the old address would
+        // corrupt the *next* compaction -- the table would be right and the slab wrong. Nothing
+        // clones these today; the check is what keeps that from becoming silent if something
+        // does.
+        if self
+            .slots
+            .iter()
+            .filter_map(|slot| slot.as_ref())
+            .any(|slab| Arc::strong_count(slab) != 1)
+        {
+            return 0;
+        }
+
+        let mut at = region_data_start(slots);
+        let mut moved = Vec::new();
+        for (id, start, length) in live {
+            let to = at;
+            at += length.next_multiple_of(8);
+            if to == start {
+                continue;
+            }
+            debug_assert!(to < start, "compaction only ever moves a slab down");
+            moved.push((id, start, to, length));
+        }
+        if moved.is_empty() && at == was {
+            return 0;
+        }
+
+        let Backing::Region { region, .. } = &mut self.backing else {
+            unreachable!("checked above")
+        };
+        for (_, start, to, length) in &moved {
+            region.bytes_mut().copy_within(*start..*start + *length, *to);
+        }
+        for (id, _, to, length) in &moved {
+            // The slab's own record of where it lives, and the table the consumer reads. Both,
+            // or the next compaction moves it from an address it no longer occupies.
+            if let Some(slot) = self.slots.get_mut(*id as usize)
+                && let Some(slab) = slot.as_mut().and_then(Arc::get_mut)
+            {
+                slab.bytes = Bytes::Region(*to, *length);
+            } else {
+                unreachable!("every slab was uniquely held a moment ago");
+            }
+            self.write_entry(
+                *id,
+                SlabEntry {
+                    offset: *to as u64,
+                    length: *length as u64,
+                },
+            );
+        }
+        if let Backing::Region { cursor, .. } = &mut self.backing {
+            *cursor = at;
+        }
+        self.write_total();
+        was.saturating_sub(at)
+    }
+
     /// Drops every sealed slab nothing wants, returning their ids.
     ///
     /// Returned so a caller can tell a consumer the bytes are gone. The arena cannot: it holds

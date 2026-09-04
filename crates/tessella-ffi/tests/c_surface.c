@@ -28,11 +28,12 @@ static const char* const STYLE =
     " \"paint\": {\"background-color\": \"#101418\"}}]}";
 
 int main(void) {
-    tessella_config config;
+    tessella_config config = {0};
     config.style_json = STYLE;
     config.width = 1024;
     config.height = 768;
     config.ring_capacity = 1u << 22;
+    config.slab_capacity = 0; /* the default */
 
     tessella_map* map = NULL;
     printf("create %d\n", (int)tessella_create(&config, 51.505, -0.11, 13.0, &map));

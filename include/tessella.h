@@ -67,7 +67,12 @@ typedef enum tessella_result {
     /* The ring could not take the frame. The consumer is behind; drain and retry. */
     TESSELLA_RING_FULL = 5,
     /* Something failed in a way this ABI has no more specific word for. The producer logs it. */
-    TESSELLA_FAILED = 6
+    TESSELLA_FAILED = 6,
+    /* The slab region could not take the frame's geometry. Unlike TESSELLA_RING_FULL this does
+     * not clear by draining: the arena bump allocates, so space a swept slab left is recovered
+     * only once everything above it has gone. The frame compacts and the next tick retries; a
+     * map reporting this every tick needs a larger slab_capacity. */
+    TESSELLA_REGION_FULL = 7
 } tessella_result;
 
 /* How far along a map's sources are.
@@ -103,6 +108,14 @@ typedef struct tessella_config {
     uint32_t height;
     /* Ring capacity in bytes. Rounded up to a power of two, which the ring requires. */
     size_t ring_capacity;
+    /* Slab region capacity in bytes, where the frame's geometry is written. Zero takes the
+     * default, which is 64 MiB.
+     *
+     * The consumer reads the geometry in place, so this is the working set of everything on
+     * screen plus what compaction has not yet reclaimed -- not a per-frame buffer. A frame that
+     * does not fit is refused whole and retried after the arena compacts, so a region that is
+     * too small shows as a map that will not finish drawing. */
+    size_t slab_capacity;
 } tessella_config;
 
 TESSELLA_ASSERT(offsetof(tessella_config, style_json) == 0, "tessella_config.style_json moved");

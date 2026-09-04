@@ -31,6 +31,8 @@ fn create() -> MapHandle {
         width: 1024,
         height: 768,
         ring_capacity: 1 << 22,
+        // The default, which is ample for a test cover.
+        slab_capacity: 0,
     };
     let mut map: MapHandle = core::ptr::null_mut();
     // SAFETY: both pointers are valid and the style outlives the call.
@@ -110,10 +112,16 @@ fn the_regions_a_consumer_reads_are_whole() {
             tessella_capture_abi::ABI_REV,
             "the slab region was packed at a different ABI revision"
         );
-        assert_eq!(
-            total as usize, regions.slabs_len,
-            "the region's declared length disagrees with the range handed over"
+        // At most, not equal: the range handed over is the whole region the arena was built on,
+        // and `total_len` is how far the bump cursor has reached inside it. They were equal when
+        // the producer serialised a fresh buffer each frame; it writes in place now, so the
+        // header is what bounds a consumer's reads and the capacity is what bounds the header.
+        assert!(
+            total as usize <= regions.slabs_len,
+            "the region claims {total} bytes of a {} byte range",
+            regions.slabs_len
         );
+        assert!(total >= 16, "the region does not cover its own header");
         assert!(
             16 + (count as usize) * 16 <= regions.slabs_len,
             "the slab table of {count} entries does not fit in {} bytes",
@@ -148,6 +156,8 @@ fn the_boundary_refuses_what_it_cannot_use() {
         width: 1024,
         height: 768,
         ring_capacity: 1 << 22,
+        // The default, which is ample for a test cover.
+        slab_capacity: 0,
     };
     // SAFETY: the config is valid; the out pointer deliberately is not.
     let status =

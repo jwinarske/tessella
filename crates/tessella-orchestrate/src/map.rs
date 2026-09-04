@@ -180,15 +180,35 @@ pub struct Map {
 
 impl Map {
     /// A map at a camera, with nothing emitted yet.
+    ///
+    /// The arena owns its slabs, so the geometry has to be copied out before a consumer that
+    /// does not share this address space can read it. [`Self::with_arena`] over a region is the
+    /// path that does not.
     #[must_use]
     pub fn new(style: Style, view: ViewTransform, view_id: ViewId) -> Self {
+        Self::with_arena(style, view, view_id, SlabArena::new())
+    }
+
+    /// A map whose geometry is allocated out of `arena`.
+    ///
+    /// The point of it is [`SlabArena::in_region`]: an arena over a mapping writes the bytes
+    /// where the consumer already reads them, so there is no pack step and no copy. With an
+    /// owned arena every frame has to serialise the whole arena again, which is the whole of
+    /// [`SlabArena::pack`] and, on a moving map, most of the frame.
+    #[must_use]
+    pub fn with_arena(
+        style: Style,
+        view: ViewTransform,
+        view_id: ViewId,
+        arena: SlabArena,
+    ) -> Self {
         Self {
             style,
             view,
             view_id,
             light: Light::default(),
             session: Session::new(),
-            arena: SlabArena::new(),
+            arena,
             damage: DamageTracker::new(),
             cover: None,
             drawn: Vec::new(),
@@ -304,6 +324,16 @@ impl Map {
         let work = self.damage.begin_frame(self.view_id, key);
         if work.is_idle() {
             return Ok(Tick::Idle);
+        }
+
+        // Before the frame allocates, and only when the region has enough dead space under the
+        // cursor to be worth the memmove. A moving map sweeps from the bottom and allocates at
+        // the top, so without this the cursor climbs for as long as the camera does and no
+        // region is large enough. See `SlabArena::compact_region`.
+        if self.arena.region_waste() >= COMPACTION_FLOOR
+            && self.arena.region_waste() >= self.arena.region_used() / 2
+        {
+            self.arena.compact_region();
         }
 
         // The cover is recomputed every frame and its *change* is what gates the rest. §12.7's
@@ -523,6 +553,13 @@ impl Map {
 /// differs enough that the depth should not, or a comparison would be measuring how far each
 /// reaches rather than which set it asks for.
 const DEFAULT_PREFETCH: u8 = 4;
+
+/// Dead region bytes below which compaction is not worth the memmove.
+///
+/// Four mebibytes. Under this the copy costs more than the space is worth, and the trigger also
+/// wants the waste to be at least half the region in use -- so a map that is merely large does
+/// not compact, and one that is churning does.
+const COMPACTION_FLOOR: usize = 4 << 20;
 
 /// The ideal misses, with their ancestors, coarsest first.
 ///

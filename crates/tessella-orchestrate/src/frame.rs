@@ -460,6 +460,14 @@ fn emit_into(
                 for reference in session.registry().retire() {
                     arena.release(reference);
                 }
+                // And the slabs those releases emptied. Releasing hands back the *bytes* a
+                // drawable held; a slab whose last reference went is still a slot with a length
+                // in the region's table until this drops it. Without the sweep nothing is ever
+                // reclaimable: a region-backed arena's cursor climbs for as long as the map
+                // moves and every slab looks live, which is a map that fills its region and
+                // stops drawing. The removal records went out above, so a consumer is not
+                // holding any of these.
+                arena.sweep();
                 session.record_camera(frame.view_id, key);
                 session.record_declared(frame.view_id);
             }
@@ -1061,6 +1069,7 @@ pub fn teardown_view(
             for reference in session.registry().retire() {
                 arena.release(reference);
             }
+            arena.sweep();
             session.forget(view_id);
             producer.commit();
             Ok(emitted)
