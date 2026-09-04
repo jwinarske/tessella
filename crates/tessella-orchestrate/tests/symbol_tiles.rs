@@ -1012,8 +1012,10 @@ fn the_alignments_decide_the_drawables_matrices() {
         zoom: 13.0,
         width: 1024.0,
         height: 768.0,
-        bearing: core::f64::consts::FRAC_PI_4,
-        pitch: core::f64::consts::FRAC_PI_6,
+        // Degrees, which is what the fields are. These were the radian constants for 45 and 30,
+        // so the view was pitched half a degree and turned three quarters of one.
+        bearing: 45.0,
+        pitch: 30.0,
     };
 
     let entry = |alignments, placement| {
@@ -1096,7 +1098,8 @@ fn the_gamma_scale_corrects_only_a_flat_label() {
         width: 1024.0,
         height: 768.0,
         bearing: 0.0,
-        pitch: core::f64::consts::FRAC_PI_6,
+        // Degrees. `FRAC_PI_6` here was half a degree, not thirty.
+        pitch: 30.0,
     };
 
     assert_eq!(symbol_gamma_scale(&view, Alignment::Viewport), 1.0);
@@ -1109,7 +1112,7 @@ fn the_gamma_scale_corrects_only_a_flat_label() {
 
     // Steeper pitch tips the glyphs further away, so the correction *falls* with the cosine.
     let steeper = ViewTransform {
-        pitch: core::f64::consts::FRAC_PI_3,
+        pitch: 60.0,
         ..view
     };
     assert!(

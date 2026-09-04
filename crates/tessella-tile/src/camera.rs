@@ -1043,13 +1043,16 @@ mod tests {
     fn rotation_and_pitch_are_carried() {
         let upright = proj_matrix(&probe()).expect("the probe has a viewport");
 
+        // Degrees, which is what the field is. These were `FRAC_PI_4` and `FRAC_PI_6` -- the
+        // radian constants for the angles meant -- so the test asked for three quarters of a
+        // degree of bearing and half a degree of pitch and proved almost nothing.
         for view in [
             ViewTransform {
-                bearing: core::f64::consts::FRAC_PI_4,
+                bearing: 45.0,
                 ..probe()
             },
             ViewTransform {
-                pitch: core::f64::consts::FRAC_PI_6,
+                pitch: 30.0,
                 ..probe()
             },
         ] {
@@ -1065,19 +1068,42 @@ mod tests {
     /// Pitch is clamped rather than allowed to diverge.
     ///
     /// At ninety degrees the top of the screen is the horizon, which is infinitely far, so the
-    /// far plane would run to every tile there is. mbgl bounds the angle at 89.25 degrees and
-    /// bounds the arithmetic at ninety-nine hundredths besides; either alone leaves the other
-    /// able to produce an infinity.
+    /// far plane would run to every tile there is. mbgl bounds the angle at 89.25 degrees, and
+    /// bounds the arithmetic at ninety-nine hundredths besides.
+    ///
+    /// Asserted as "past the limit is the limit" rather than as "the matrix is finite". Finite
+    /// is what the *second* bound gives, and it gives it whether or not the first is there --
+    /// this test passed with `MAX_PITCH` removed, which is worth knowing about the two bounds and
+    /// is not what a test named after the first one should say. Two cameras past the limit
+    /// producing the same matrix is the angle having stopped moving, which is the clamp itself.
     #[test]
     fn pitch_is_clamped_short_of_the_horizon() {
-        for pitch in [MAX_PITCH, core::f64::consts::FRAC_PI_2, 3.0] {
+        // Degrees, which is what the field is. This iterated `MAX_PITCH`, `FRAC_PI_2` and 3.0 --
+        // radian constants read as degrees, so one and a half degrees, one and six tenths, and
+        // three. Every one is two orders of magnitude short of the horizon, and a test that
+        // exists to prove the clamp never reached it.
+        let at_limit =
+            proj_matrix(&ViewTransform { pitch: 90.0, ..probe() }).expect("a pitched camera");
+        assert!(
+            at_limit.iter().all(|value| value.is_finite()),
+            "the horizon produced {at_limit:?}"
+        );
+        for pitch in [90.0, 120.0, 180.0, 1.0e6] {
             let view = ViewTransform { pitch, ..probe() };
             let matrix = proj_matrix(&view).expect("a pitched camera is carried");
             assert!(
                 matrix.iter().all(|value| value.is_finite()),
                 "a pitch of {pitch} produced {matrix:?}"
             );
+            assert_eq!(
+                matrix, at_limit,
+                "a pitch of {pitch} is past the limit and should be the limit",
+            );
         }
+        // And below it the angle still moves, or the assertion above would hold for a clamp at
+        // any angle at all, including zero.
+        let below = proj_matrix(&ViewTransform { pitch: 60.0, ..probe() }).expect("a pitched camera");
+        assert_ne!(below, at_limit, "the clamp reached below the horizon");
     }
 
     /// A viewport with no area is refused, rather than dividing by zero.
