@@ -5408,3 +5408,37 @@ against; none is scheduled.
   loop always runs exactly 202 ticks, which says the 200-tick quiet window is never once reset --
   every run believes it settled immediately, and the variation is all in the wait loop before it,
   which exits on the first tick with any primitive drawn.
+
+- **The probe reproduces now, and one number above it was noise.** *Closed.* Ten runs of the icon
+  scene give 272 gross pixels every time; `one_poi-labels`, `families` and Washington give 0, 8 and
+  0 across three runs each. The two fixes together did it -- `tessella_pending` so the settle loop
+  can tell a finished source from a blocked one, and the glyph refetch so the atlas stops being a
+  function of which tiles happened to land first.
+
+  Tracing the settle loop is what showed the shape of it: at the first tick `records=80 pending=2
+  prims=23 glyphs=208`, and by the fiftieth `records=128 pending=0 prims=27 glyphs=221`, holding
+  there for the remaining twelve hundred. The map converges quickly and then genuinely stops; what
+  was missing was any way to know it had. The probe keeps that trace behind `TSF_TRACE`, because
+  the next argument about whether a frame settled is better had with it than without.
+
+  `glyph_quads_drawn` still varies between 176 and 221 across runs whose *pixels* are identical, so
+  that counter is counting something other than what is drawn -- hidden quads, most likely. Worth
+  knowing before it is used as evidence for anything.
+
+  **The correction.** The pitched figures above were taken before any of this and one of them does
+  not survive. Re-measured with a probe that reproduces:
+
+  | scene at pitch 45 | recorded above | actually |
+  | --- | --- | --- |
+  | one_roads | 0 | 0 |
+  | one_place-labels | 0 | 0 |
+  | one_buildings | 36 | 36 |
+  | one_poi-labels | 2,745 | 2,745 |
+  | families | 3,964 | 3,964 |
+  | icons_only | 14,162 | **34,121** |
+
+  So the viewport padding did not take the icon scene from 33,943 to 14,162; that improvement was
+  a noisy run, and pitched icons are roughly where they started. The perspective ratio and the
+  padding stay -- both are what mbgl does, and the poi-labels and all-families improvements
+  reproduce -- but the icon scene at pitch is unexplained rather than half-fixed, and it is the
+  largest open number here by a factor of ten.
