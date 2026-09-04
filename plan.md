@@ -5264,3 +5264,41 @@ against; none is scheduled.
   the renderer in separate address spaces -- a crash domain boundary, and a way to drive a
   consumer this repo does not build. Invisible to the oracle, so the first test passes; nothing
   else about it has been thought through.
+
+- **Parity was only ever measured flat, and the probe can now be pitched.** `render_probe` took a
+  latitude, a longitude, a zoom and a viewport, so every number recorded above was taken with the
+  camera at pitch zero and bearing zero. `mbgl-render` has taken `--pitch` and `--bearing` all
+  along; the probe now takes the same two numbers in the same units, and `Host::setCamera` -- which
+  existed and was never called -- is called only when they would change something, so the flat path
+  is exactly the sequence of calls every earlier measurement went through. Re-running `one_roads`
+  at an explicit pitch zero returns the previous frame pixel for pixel.
+
+  The flat sweep, thirteen scenes against a freshly built oracle: nine at zero gross pixels,
+  including every symbol family. `families`, `one_buildings` and `only_extrusion` share the same
+  eight -- eight *isolated single pixels* on building edges, each about 20/255 out, which is
+  rasteriser tie-breaking at polygon boundaries and about the floor for a different rasteriser.
+  `icons_only` is 272, and that is one 18-by-17 icon this does not draw and mbgl does: 96 against
+  97, so one collision decision.
+
+  Pitched, at 45 degrees, is a different picture:
+
+  | scene | flat | pitch 45 |
+  | --- | --- | --- |
+  | one_roads | 0 | 0 (also 0 at 30 and 60) |
+  | one_place-labels | 0 | 0 |
+  | one_buildings, only_extrusion | 8 | 36 |
+  | families | 8 | 8,622 |
+  | one_poi-labels | 0 | 10,104 |
+  | icons_only | 272 | **33,943** |
+
+  Lines are exact through 60 degrees and point labels are exact at 45, so the projection and the
+  label plane are not the problem. What breaks is what branches on pitch. The icon-only scene draws
+  **12 icons against the oracle's 148** -- 92% of them dropped -- and the ones that survive have a
+  median blob of 218 pixels against 253, so they are also being drawn small. Both point at the
+  perspective ratio: `placeFeature` scales a collision box by `tileToViewport`, which is
+  `projectedAnchor.first * textPixelRatio` where the first element is the perspective ratio, and
+  `approximateTileDistance`'s incidence stretch is `cameraToAnchorDistance / pitchFactor` -- identity
+  at pitch zero and nothing like it at 45. The collision grid's `viewportPadding` also doubles when
+  the camera is pitched, which `symbols.rs` notes and does not do.
+
+  That is the next thread, and it is worth more than the 272 flat pixels above it.
