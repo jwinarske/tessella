@@ -5254,6 +5254,26 @@ against; none is scheduled.
   which cannot consume KTX2 either, so it would be a tessella extension rather than a
   transcription. The style spec has no media type for it.
 
+- **A PMTiles archive read where it lives, rather than where it was copied to.** *Open, and the
+  first test says it is cheap.* `tessella-storage/pmtiles` reads a v3 archive **on local storage**.
+  So showing a place there is no local extract for means cutting one first --
+  `pmtiles extract https://build.protomaps.com/<date>.pmtiles out.pmtiles --bbox=...` -- which is
+  fourteen megabytes and a step, for a view that reads a few dozen tiles.
+
+  It does not have to be. `pmtiles serve / --bucket=https://build.protomaps.com` proxies the whole
+  planet over HTTP range requests with no local copy at all, and a style pointed at
+  `http://127.0.0.1:8091/<date>.json` draws the centre of Paris at zero gross pixels against the
+  oracle, four runs the same. The format is designed for exactly this; it is only *this* reader
+  that insists on a file.
+
+  What that leaves in the loop is a proxy process. Range requests are what `HttpFileSource`
+  already does, and the archive layout is the one `tessella-storage` already parses, so the gap is
+  a directory-and-header reader that takes byte ranges from a URL instead of from a file. Then a
+  style names a planet archive and the map draws anywhere, with no server and no extract.
+
+  Invisible to the oracle -- a different way to reach the same tile bytes -- so by the first
+  question above it needs no second basis.
+
 - **MBTiles as a storage backend.** *Open, and cheap by the first test.* §16 leaves it open next to
   PMTiles. It is invisible to the oracle -- a different way to reach the same tile bytes -- so it
   needs no second basis, only the SQLite dependency the `cache` feature already carries.
