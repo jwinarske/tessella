@@ -6096,3 +6096,20 @@ poi-labels 0, roads 0, icons_only 272, families 8, buildings at bearing 90 7,480
 **What is actually missing** is only the Flutter half: a `FluoriteView` handing its engine, scene and
 size to `MapView::create`, a per-frame `tick()` on the view's callback, and the camera routed from
 Dart. One `MapView` per pane, four maps sharing `Pool::shared()`.
+
+**The shared scene, and what the quad needs because of it.** `filament_producer.cc` gives every
+platform view the *same* scene -- `view_->setScene(filament_system->getFilamentScene())` -- and
+differs them by camera: `FilamentProducer::FilamentProducer() : view_id_(g_next_view_slot.fetch_add(1))`,
+with `ApplyEcsCamera` binding the ECS camera whose `getViewId` matches. The header's "the
+creationParams carry a slot that nothing decodes yet" is stale; slots are handed out in creation
+order and used.
+
+One scene and four maps means four maps drawn in every pane. Filament's answer is layer masks, so
+`FilamentRenderer` now takes a layer and sets it on both of its `RenderableManager` builders, and
+`MapView` passes it through. One bit per view, `View::setVisibleLayers(0xFF, 1 << slot)` on the
+other side. Default 0x01 leaves single-view callers exactly as they were; parity confirmed
+unchanged.
+
+**Remaining for the quad**, in order: a Fluorite-side hook that constructs a `MapView` per producer
+with that producer's engine, scene, size and layer; a `tick()` on the producer's frame path;
+`setVisibleLayers` per view; and the camera routed from Dart's `MapCamera` to `MapView::setCamera`.
