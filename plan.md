@@ -5574,3 +5574,34 @@ against; none is scheduled.
   and timing-independent once the frame is emitted: at pitch 45 we offer 462 icons across
   `15/17602..17605/10744..10747`, which is mbgl's 462 across mbgl's thirteen tiles, and we mark 237
   quads visible at pitch and 237 flat. Those are the numbers to build on.
+
+- **The frame depends on tile arrival order, and that is a defect in this frontend rather than in
+  the probe.** *Open, and it outranks the pitch parity gap.* The probe now settles on the image --
+  it ticks on and re-reads the framebuffer until two consecutive captures agree, bounded, and says
+  whether it got there. It reports `stable_rounds 0` on every run: the image is already stable
+  *within* a run. So the probe was never measuring too early, and the previous two entries blaming
+  it were wrong about where the fault is.
+
+  | | six runs |
+  | --- | --- |
+  | icon scene, flat, 9 tiles | 272, 272, 272, 272, 272, 272 |
+  | icon scene, pitch 45, 13 tiles | 29,221, 29,221, 29,221, 25,800, 29,221, 21,794 |
+
+  Same binary, same style, same camera. Renderables are 39 in every pitched run, `missing_atlas`
+  and `missing_batches` are zero in every one, and the image does not change if it is ticked
+  further. Only `records` moves, 160 to 168. So the map settles into genuinely different final
+  scenes depending on the order the thirteen tiles happened to arrive in, and flat is deterministic
+  only because nine tiles offer fewer orders to arrive in.
+
+  That is worth more than the pitch gap it was found under. A map that draws differently depending
+  on which tile the network returned first is a map whose output is not a function of its inputs,
+  and every parity number here is a sample of a distribution rather than a measurement -- flat ones
+  included, since flat is only rarely bitten rather than immune.
+
+  **Where to look.** Not in placement: it walks `order`, which sorts by `(pass, depth_slot,
+  sublayer, priority, z, x, y)` and is a total order, and there is no `HashMap` or `HashSet` in
+  `tessella-orchestrate`, `tessella-place` or `tessella-layout` for iteration order to escape
+  through. What *is* order-dependent is anything accumulated as tiles land: the sprite atlas's
+  shelf packing, the glyph atlas's, and `Landed::by_tile`'s merge of buckets into an existing
+  entry. The first two change texture coordinates rather than which symbol wins, so the merge is
+  the first place to read.
