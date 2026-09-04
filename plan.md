@@ -5464,12 +5464,29 @@ against; none is scheduled.
   is `pitch > tileLodPitchThreshold` and the threshold is sixty degrees, so at forty-five mbgl
   covers uniformly, as this does.
 
-  Which leaves the frustum walk. The far plane is not the difference: mbgl's
-  `cameraToSeaLevelDistance / (1 - clamp(tanFovAboveCenter * tan(limitedPitch), 0, 0.99)) * 1.01`
-  is term for term what `camera.rs` computes, including the 89.25-degree horizon clamp, and with no
-  centre offset, roll or camera altitude the two agree exactly. So the difference is in
-  `frustum::covered` -- which tiles the walk accepts against that frustum -- and the AABB each tile
-  is tested as is the first thing to compare, in particular what z extent it is given.
+  **That table is wrong in two of its four columns, and the conclusion drawn from it was wrong.**
+  Both errors are mine and both are the same mistake -- comparing numbers that are not the same
+  kind of thing.
 
-  Worth more than the pixels: three times the cover is three times the fetches, decodes and bucket
-  builds for ground nobody is looking at, which §12 would care about even if the frame matched.
+  *The cover is exactly right.* The 39 was renderables, not tiles. Asked directly, `cover()` at
+  this camera returns thirteen tiles, `15/17602..17605/10744..10747`, which is mbgl's list to the
+  identifier. Renderables are three per tile on both the flat and the pitched frame -- nine tiles
+  and twenty-seven, thirteen and thirty-nine -- and the overzoom that looked pitch-specific is
+  present flat as well, at the same scale, because this source's maxzoom is below fifteen.
+
+  Finding that out cost a second self-inflicted detour: a probe of `cover()` across pitches
+  returned nine tiles at every angle up to seventy degrees, which looked like a pitch-invariant
+  cover and is in fact a test passing radians to a field documented in degrees. `ViewTransform::
+  pitch` is degrees, `pitch_radians` converts, and `cover.rs`'s own test at line 1046 passes
+  `FRAC_PI_6` -- half a degree, not thirty. That test is asserting almost nothing and should be
+  fixed.
+
+  *The candidate counts were not per frame.* Placement runs once per emitted frame and the probe
+  ticks until quiescence, so a counter in `frame_in` accumulates across however many frames the
+  settle took: 1,214 labels over eighteen buckets flat, for a nine-tile cover, is two frames. Per
+  frame the pitched figure is nearer eight hundred against mbgl's 462 -- still more, but not the
+  three and a half times that was written down, and not enough to carry the conclusion.
+
+  So what is actually established is only the symptom: **8 icons drawn against 148**, reproducibly,
+  with the cover correct, the tile count correct, and individual collision boxes agreeing to within
+  half a pixel. Whatever is wrong is between those two facts, and it has not been found yet.
