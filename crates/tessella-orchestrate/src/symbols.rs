@@ -214,7 +214,22 @@ impl ViewSymbols {
             options.viewport.1.max(1.0) + 2.0 * VIEWPORT_PADDING,
             25,
         );
-        self.frame_in(labels, project, options, &mut grid)
+        // A whole frame, and all three parts of one: forget what the last frame decided, offer,
+        // then step the fades once with what this one placed.
+        //
+        // `frame_in` does none of that, because it is one bucket of a frame that may have many.
+        // `Fades::step` rebuilds its map from what it is handed, so it is a per-frame call; and
+        // `decided` accumulates until `begin` clears it, so stepping without clearing carries a
+        // previous frame's placements into this one -- which reads as a label that left the
+        // screen and came back at full opacity rather than fading in.
+        self.begin();
+        let mut result = self.frame_in(labels, project, options, &mut grid);
+        self.step(options.increment);
+        // After the step, because that is when this frame's fades exist. `frame_in` reports what
+        // was moving when it was called, which for a caller that offers several buckets is the
+        // count so far and for this one is always zero.
+        result.fading = self.fades.fading();
+        result
     }
 
     /// As [`Self::frame`], competing in a grid the caller owns.
@@ -376,13 +391,16 @@ impl ViewSymbols {
                     .insert(entry.cross_tile_id, entry.vertical);
             }
         }
-        self.fades.step(
-            options.increment,
-            placed
-                .iter()
-                .map(|symbol| (symbol.cross_tile_id, symbol.text, symbol.icon)),
-            false,
-        );
+        // The fades are *not* stepped here, and that is the whole of a defect worth writing
+        // down. `Fades::step` rebuilds its map from the placements it is given -- that is what
+        // drops a symbol whose tile was released -- so it is a per-frame call, not a per-bucket
+        // one. Called here it kept only the bucket it was last given: two symbol layers meant
+        // the second wiped the first, and a last bucket that placed nothing emptied the map
+        // entirely. `settle` then found it settled, because an empty set is, and returned
+        // without creating a single fade -- so every label in the frame drew at zero opacity.
+        //
+        // Found on Liestal at z12 in a 959x440 viewport, where every one of 1848 glyph quads was
+        // hidden while either symbol layer alone drew normally.
 
         FrameResult {
             drawn: placed.iter().filter(|symbol| symbol.text).count(),
@@ -408,6 +426,23 @@ impl ViewSymbols {
         self.decided.clear();
     }
 
+    /// Advances this frame's fades by one increment.
+    ///
+    /// Once per frame, with everything the frame placed: `Fades::step` rebuilds its map from
+    /// what it is handed -- that is how a symbol whose tile was released is dropped -- so
+    /// handing it one bucket at a time would keep only the last one.
+    pub fn step(&mut self, increment: f32) {
+        let decided = core::mem::take(&mut self.decided);
+        self.fades.step(
+            increment,
+            decided
+                .iter()
+                .map(|symbol| (symbol.cross_tile_id, symbol.text, symbol.icon)),
+            false,
+        );
+        self.decided = decided;
+    }
+
     /// Advances every fade to its resting value without placing again.
     ///
     /// For a caller drawing a settled frame rather than an animation: placement has decided, and
@@ -416,12 +451,15 @@ impl ViewSymbols {
     /// would then collide with itself.
     ///
     /// Bounded, because a fade that will not converge must not hang a frame.
+    ///
+    /// Steps before it tests rather than after. The test is "is every fade at rest", and an
+    /// empty set passes it -- so testing first means the first frame of a map, whose fades do
+    /// not exist yet, creates none and draws nothing. This is also the frame's *only* step:
+    /// `Fades::step` rebuilds its map from what it is handed, so it has to be handed everything
+    /// the frame placed at once.
     pub fn settle(&mut self, increment: f32) {
         let decided = core::mem::take(&mut self.decided);
         for _ in 0..8 {
-            if self.fades.settled() {
-                break;
-            }
             self.fades.step(
                 increment,
                 decided
@@ -429,6 +467,9 @@ impl ViewSymbols {
                     .map(|symbol| (symbol.cross_tile_id, symbol.text, symbol.icon)),
                 false,
             );
+            if self.fades.settled() {
+                break;
+            }
         }
         self.decided = decided;
     }
