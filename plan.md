@@ -5982,3 +5982,26 @@ against; none is scheduled.
 
   Also confirmed here: excluding symbols from the re-emission gate works. Twenty of the fifty-eight
   visits were to buckets the gate would have skipped, and none were skipped.
+
+- **Consumer: textures and copy semantics cleared; the puzzle stands.** Continuing on the consumer
+  with three fresh pitched runs (25,800 / 25,800 / 18,192 gross):
+
+  - `TextureUpdate`: two texture ids, uploaded once and six times in every run, final content
+    identical. Cleared.
+  - Draw order: `DrawList::build` walks `order.entries`, never merges a symbol batch, and the final
+    order is identical entry for entry. Cleared.
+  - Hash-map iteration: `meshes_`, `materials_`, `textures_` and `instances_` are `unordered_map`,
+    and the only iteration over them is in `~FilamentRenderer`. Nothing in the render path. Cleared.
+  - Slab lifetime: `frame.h` calls the index buffer borrowed and the producer repacks its slab table
+    each frame that allocates, so a `GeometryAdd` read late would see moved bytes. `buildSymbol`
+    mallocs and memcpys every attribute and the index buffer at add time, so this is not a hazard.
+    Cleared.
+
+  So every record's content is identical, the consumer copies it immediately, the draw order is
+  identical, and the images differ by seven thousand pixels.
+
+  Next, and it is the experiment that closes this either way: hash what the *consumer* holds at
+  capture time -- the bytes it handed Filament per mesh -- and compare across runs. If those match,
+  the divergence is inside Filament or the GPU path and nothing above it matters; if they differ,
+  the consumer transformed identical input into different state, and the transform is in
+  `buildSymbol`.
