@@ -51,6 +51,13 @@ pub struct FrameLabel<'a> {
     /// already in the tile's buffers, so cloning each road per label per *frame* would be the
     /// most expensive thing placement does.
     pub line: &'a [(f32, f32)],
+    /// How much a pitched camera shrinks this label's boxes, at its anchor.
+    ///
+    /// mbgl's `projectAnchor` first element, `0.5 + 0.5 * cameraToCenterDistance / w`, and its
+    /// comment says why it exists: collision is decided in viewport space, so a box has to be
+    /// scaled down in the distance the same way the drawn label is. One at pitch zero, where
+    /// every ground point shares a `w`, which is what keeps the flat path untouched.
+    pub perspective: f32,
     /// The along-line offsets of its first and last glyph, unscaled, when it has glyphs.
     ///
     /// mbgl's `glyphOffsets.front()` and `.back()`, which `placeLineFeature` walks along the
@@ -106,11 +113,30 @@ pub struct FrameOptions {
     pub icon_padding: Padding,
 }
 
-/// How far outside the viewport a label still collides, in pixels.
+/// How far outside the viewport a label still collides, in pixels, at pitch zero.
 ///
-/// mbgl's `viewportPaddingDefault`. It doubles when the camera is pitched, and is 1024 for a
-/// single static tile; neither case is produced here yet, so the one value stands.
+/// mbgl's `viewportPaddingDefault`.
 pub const VIEWPORT_PADDING: f32 = 100.0;
+
+/// The same, for a camera at this pitch.
+///
+/// `findViewportPadding` doubles the default the moment the pitch is non-zero -- not gradually
+/// with it -- because a pitched camera pulls the far edge of the world into the top of the frame
+/// and a label whose anchor is off-screen there can still cover ground that is on it. The grid
+/// clamps whatever falls outside itself onto the boundary cells, so a margin that is too small
+/// does not merely miss those labels: it piles them into the edge cells, where they collide with
+/// everything else that landed there.
+///
+/// The 1024 mbgl uses for a single static tile has no counterpart here yet -- that is
+/// `MapMode::Tile`, which this does not render.
+#[must_use]
+pub fn viewport_padding(pitch: f64) -> f32 {
+    if pitch == 0.0 {
+        VIEWPORT_PADDING
+    } else {
+        VIEWPORT_PADDING * 2.0
+    }
+}
 
 impl Default for FrameOptions {
     fn default() -> Self {
@@ -232,16 +258,20 @@ impl ViewSymbols {
                 // and both are distances walked out from the anchor.
                 let reach = label.glyph_reach.map(|(first, last)| {
                     (
-                        (first * options.font_scale).abs(),
-                        (last * options.font_scale).abs(),
+                        (first * options.font_scale * label.perspective).abs(),
+                        (last * options.font_scale * label.perspective).abs(),
                     )
                 });
 
                 // A line-placed label reserves a run of circles following the road; a point
                 // label reserves one box. Both in screen space, because that is where labels
                 // compete for room.
+                // Scaled by the perspective ratio, which is mbgl's `tileToViewport` --
+                // `textPixelRatio * projectedAnchor.first`. Without it a distant label reserves
+                // as much viewport as a near one, which at pitch is several times what it draws.
+                let box_scale = options.font_scale * label.perspective;
                 let text = if label.line.is_empty() {
-                    collision_box(extent, anchor, options.font_scale, options.padding, 0.0)
+                    collision_box(extent, anchor, box_scale, options.padding, 0.0)
                         .map(Shape::Box)
                 } else {
                     let line: Vec<(f32, f32)> =
@@ -251,7 +281,7 @@ impl ViewSymbols {
                         &line,
                         anchor,
                         label.laid_out.segment,
-                        options.font_scale,
+                        box_scale,
                         options.padding,
                         options.overscaling,
                         reach,
@@ -289,7 +319,7 @@ impl ViewSymbols {
                             right,
                         },
                         project(laid.anchor),
-                        1.0,
+                        label.perspective,
                         options.icon_padding,
                         // After `icon-text-fit` the extent is the shield's *content* area and
                         // the picture reaches further out; collision reserves the picture.
@@ -310,7 +340,7 @@ impl ViewSymbols {
                         right,
                     };
                     if label.line.is_empty() {
-                        collision_box(extent, anchor, options.font_scale, options.padding, 0.0)
+                        collision_box(extent, anchor, box_scale, options.padding, 0.0)
                             .map(Shape::Box)
                     } else {
                         let line: Vec<(f32, f32)> =
@@ -320,7 +350,7 @@ impl ViewSymbols {
                             &line,
                             anchor,
                             label.laid_out.segment,
-                            options.font_scale,
+                            box_scale,
                             options.padding,
                             options.overscaling,
                             reach,

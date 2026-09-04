@@ -1284,11 +1284,15 @@ fn place_symbols(
     // The frame's grid, and the whole reason this function exists.
     // The viewport with mbgl's margin around it, and its cell size. `project_with` offsets every
     // point into the margin, so the two have to agree.
+    let grid_padding = crate::symbols::viewport_padding(view.pitch);
     let mut grid: tessella_place::grid::GridIndex<u32> = tessella_place::grid::GridIndex::new(
-        viewport.0.max(1.0) + 2.0 * crate::symbols::VIEWPORT_PADDING,
-        viewport.1.max(1.0) + 2.0 * crate::symbols::VIEWPORT_PADDING,
+        viewport.0.max(1.0) + 2.0 * grid_padding,
+        viewport.1.max(1.0) + 2.0 * grid_padding,
         25,
     );
+
+    // The camera's distance to the centre of the screen, which the perspective ratio divides by.
+    let camera_to_center = tessella_tile::camera::camera_to_center_distance(view.height);
 
     // A bucket appears once per drawable it produces; it is shaped once.
     let mut seen: BTreeSet<(usize, usize)> = BTreeSet::new();
@@ -1398,7 +1402,13 @@ fn place_symbols(
             icon_padding,
             ..crate::symbols::FrameOptions::default()
         };
-        let labels = frame_labels(&laid, &buffers, icons.as_ref(), base);
+        let labels = frame_labels(
+            &laid,
+            &buffers,
+            icons.as_ref(),
+            base,
+            perspective_with(&plane, camera_to_center),
+        );
         // Where each glyph lands along its road, *before* the label is offered any space.
         //
         // A label whose road runs out before its name does is not drawn, and a label that is not
@@ -1425,7 +1435,7 @@ fn place_symbols(
             .cloned()
             .collect();
         held.symbols
-            .frame_in(&offered, project_with(&plane), &options, &mut grid);
+            .frame_in(&offered, project_with(&plane, grid_padding), &options, &mut grid);
         drop(held);
 
         keys.push((tile_index, bucket_index));
@@ -1466,7 +1476,7 @@ fn place_symbols(
         let Content::Symbol(_) = &bucket.content else {
             continue;
         };
-        let labels = frame_labels(&laid, &buffers, icons.as_ref(), base);
+        let labels = frame_labels(&laid, &buffers, icons.as_ref(), base, |_| 1.0);
         // A label placement never offered has no fade entry, which reads as hidden -- so the
         // ones whose road ran out stay hidden without being special-cased here.
         held.symbols.write_opacity(&labels, &mut buffers);
@@ -1494,6 +1504,8 @@ fn place_symbols(
                             laid_out: icon.clone(),
                             icon: None,
                             line: &[],
+                            // Opacity only; this pairing never reaches placement.
+                            perspective: 1.0,
                             // Opacity only; this pairing never reaches placement.
                             glyph_reach: None,
                         })
@@ -1535,7 +1547,30 @@ struct Shaped {
 }
 
 /// Takes an anchor in tile units to the pixel of the label plane it lands on.
-fn project_with(plane: &[f64; 16]) -> impl Fn((f32, f32)) -> (f32, f32) + '_ {
+/// How much a pitched camera shrinks a box at this point, which is mbgl's `projectAnchor`.
+///
+/// `0.5 + 0.5 * cameraToCenterDistance / w`, with `w` the clip-space fourth component the same
+/// matrix `project_with` divides by. The label plane matrix is the coordinate matrix times the
+/// tile matrix and the coordinate matrix is affine, so its `w` is the `p[3]` mbgl reads off
+/// `posMatrix` -- the two agree without projecting twice.
+///
+/// One at pitch zero: every ground point then shares a `w` equal to the camera distance, so the
+/// ratio is `0.5 + 0.5`. That is what keeps this off the flat path entirely.
+fn perspective_with(plane: &[f64; 16], camera_to_center: f64) -> impl Fn((f32, f32)) -> f32 + '_ {
+    move |point: (f32, f32)| -> f32 {
+        let (x, y) = (f64::from(point.0), f64::from(point.1));
+        let w = plane[3] * x + plane[7] * y + plane[15];
+        if w.abs() < f64::EPSILON {
+            return 1.0;
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            (0.5 + 0.5 * camera_to_center / w) as f32
+        }
+    }
+}
+
+fn project_with(plane: &[f64; 16], padding: f32) -> impl Fn((f32, f32)) -> (f32, f32) + '_ {
     move |point: (f32, f32)| -> (f32, f32) {
         let (x, y) = (f64::from(point.0), f64::from(point.1));
         let w = plane[3] * x + plane[7] * y + plane[15];
@@ -1547,10 +1582,8 @@ fn project_with(plane: &[f64; 16]) -> impl Fn((f32, f32)) -> (f32, f32) + '_ {
         // instead of being clamped onto the boundary cells.
         #[allow(clippy::cast_possible_truncation)]
         (
-            ((plane[0] * x + plane[4] * y + plane[12]) / w) as f32
-                + crate::symbols::VIEWPORT_PADDING,
-            ((plane[1] * x + plane[5] * y + plane[13]) / w) as f32
-                + crate::symbols::VIEWPORT_PADDING,
+            ((plane[0] * x + plane[4] * y + plane[12]) / w) as f32 + padding,
+            ((plane[1] * x + plane[5] * y + plane[13]) / w) as f32 + padding,
         )
     }
 }
@@ -1564,6 +1597,7 @@ fn frame_labels<'a>(
     buffers: &SymbolBuffers,
     icons: Option<&(SymbolBuffers, Vec<tessella_layout::symbol_bucket::LaidOut>)>,
     base: u32,
+    perspective: impl Fn((f32, f32)) -> f32,
 ) -> Vec<crate::symbols::FrameLabel<'a>> {
     laid.iter()
         .enumerate()
@@ -1580,6 +1614,7 @@ fn frame_labels<'a>(
                     .find(|icon| icon.pending == instance.pending)
                     .cloned()
             }),
+            perspective: perspective(instance.anchor),
             // The instance's own run, not the feature's whole line.
             //
             // `LaidOut::segment` is an index into the run `get_anchors` walked, so it only means

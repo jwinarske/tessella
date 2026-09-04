@@ -74,6 +74,8 @@ fn lay_out(entries: &[(&str, (f32, f32))]) -> (SymbolBuffers, Vec<FrameLabel<'st
         .into_iter()
         .enumerate()
         .map(|(index, laid_out)| FrameLabel {
+            // Flat: the pitched case is measured through the probe.
+            perspective: 1.0,
             glyph_reach: None,
             cross_tile_id: index as u32 + 1,
             laid_out,
@@ -419,6 +421,8 @@ fn a_line_label_reserves_its_road_and_not_its_box() {
     let placed = |line: &[(f32, f32)]| {
         let labels = vec![
             FrameLabel {
+                // Flat: the pitched case is measured through the probe.
+                perspective: 1.0,
                 glyph_reach: None,
                 cross_tile_id: 1,
                 laid_out: laid[0].clone(),
@@ -426,6 +430,8 @@ fn a_line_label_reserves_its_road_and_not_its_box() {
                 line,
             },
             FrameLabel {
+                // Flat: the pitched case is measured through the probe.
+                perspective: 1.0,
                 glyph_reach: None,
                 cross_tile_id: 2,
                 laid_out: beside[0].clone(),
@@ -525,6 +531,8 @@ mod two_halves {
             .zip(icons)
             .enumerate()
             .map(|(index, (laid_out, icon))| FrameLabel {
+                // Flat: the pitched case is measured through the probe.
+                perspective: 1.0,
                 glyph_reach: None,
                 #[allow(clippy::cast_possible_truncation)]
                 cross_tile_id: index as u32 + 1,
@@ -646,6 +654,8 @@ mod two_halves {
                 .zip(apart.clone())
                 .enumerate()
                 .map(|(index, (laid_out, icon))| FrameLabel {
+                    // Flat: the pitched case is measured through the probe.
+                    perspective: 1.0,
                     glyph_reach: None,
                     #[allow(clippy::cast_possible_truncation)]
                     cross_tile_id: index as u32 + 1,
@@ -701,6 +711,8 @@ fn a_label_with_no_room_for_a_run_still_competes() {
     let offered: Vec<FrameLabel<'_>> = labels
         .iter()
         .map(|label| FrameLabel {
+            // Flat: the pitched case is measured through the probe.
+            perspective: 1.0,
             glyph_reach: None,
             cross_tile_id: label.cross_tile_id,
             laid_out: label.laid_out.clone(),

@@ -216,6 +216,8 @@ fn draw_a_frame() {
         .into_iter()
         .enumerate()
         .map(|(index, laid_out)| FrameLabel {
+            // Flat: the pitched case is measured through the probe.
+            perspective: 1.0,
             glyph_reach: None,
             cross_tile_id: index as u32 + 1,
             laid_out,
@@ -497,6 +499,8 @@ fn draw_line_labels() {
         let _ = label;
         while repetition < laid.len() && on_line(line, laid[repetition].anchor) {
             frame_labels.push(FrameLabel {
+                // Flat: the pitched case is measured through the probe.
+                perspective: 1.0,
                 glyph_reach: None,
                 #[allow(clippy::cast_possible_truncation)]
                 cross_tile_id: frame_labels.len() as u32 + 1,

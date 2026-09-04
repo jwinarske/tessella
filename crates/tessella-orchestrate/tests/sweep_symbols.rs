@@ -208,6 +208,8 @@ fn run(zooms: &[f64]) -> (Vec<Vec<Opacities>>, usize) {
             for (laid, symbols) in &buffers {
                 for (entry, symbol) in laid.iter().zip(symbols) {
                     frame_labels.push(FrameLabel {
+                        // Flat: the pitched case is measured through the probe.
+                        perspective: 1.0,
                         glyph_reach: None,
                         cross_tile_id: symbol.cross_tile_id,
                         laid_out: entry.clone(),

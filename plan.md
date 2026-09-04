@@ -5302,3 +5302,45 @@ against; none is scheduled.
   the camera is pitched, which `symbols.rs` notes and does not do.
 
   That is the next thread, and it is worth more than the 272 flat pixels above it.
+
+- **Two pitch terms the placement path never had.** *Both fixed; the pitched scenes more than
+  halve.* With the probe able to pitch, the first sweep at 45 degrees said lines and point labels
+  were exact and everything else was not. Two things were missing, and reading told which:
+
+  - **The perspective ratio.** `CollisionIndex::projectAndGetPerspectiveRatio` returns
+    `0.5 + 0.5 * cameraToCenterDistance / w` beside the projected point, and its comment gives the
+    reason outright -- collision is decided in viewport space, so a box has to shrink in the
+    distance the way the drawn label does. `getProjectedCollisionBoundaries` scales the box by
+    `textPixelRatio * perspectiveRatio`, and `placeLineFeature` scales a circle's radius by the
+    same thing taken at the anchor. Nothing here scaled by it at all, so a label at the top of a
+    pitched frame reserved as much viewport as one at the bottom -- several times what it draws.
+
+    `FrameLabel` carries it, as it carries the glyph reach, because mbgl computes it once per
+    feature at the anchor and that is the granularity. `w` comes off the label plane matrix rather
+    than a second projection: that matrix is the coordinate matrix times the tile matrix, the
+    coordinate matrix is affine, so its `w` is the `p[3]` mbgl reads. One at pitch zero, where
+    every ground point shares a `w` equal to the camera distance.
+
+  - **The viewport padding doubles when the camera is pitched.** `findViewportPadding` returns
+    `viewportPaddingDefault * 2` the moment the pitch is non-zero -- not gradually with it. A
+    pitched camera pulls the far edge of the world into the top of the frame, and the grid clamps
+    what falls outside itself onto its boundary cells, so a margin that is too small does not
+    merely miss those labels: it piles them into the edge cells to collide with everything else
+    that landed there. This was noted in `symbols.rs` as a case "not produced here yet"; the probe
+    now produces it.
+
+  | scene at pitch 45 | before | + perspective | + padding |
+  | --- | --- | --- | --- |
+  | one_place-labels | 0 | 0 | 0 |
+  | one_poi-labels | 10,104 | 2,745 | 2,745 |
+  | families | 8,622 | 3,964 | 3,964 |
+  | icons_only | 33,943 | 33,927 | **14,162** |
+
+  Text wanted the ratio and icons wanted the margin, which is what the split says: a text label's
+  box is large enough that scaling it wrongly decides collisions in the middle of the frame, while
+  an icon's is small and what killed it was being clamped to an edge.
+
+  Every flat measurement is byte-identical after both -- ten scenes re-run, all unchanged.
+  `approximateTileDistance`'s incidence stretch, `(incidenceStretch - 1) * lastSegmentTile *
+  |sin(angle)|` with `incidenceStretch = cameraToAnchorDistance / pitchFactor`, is still absent;
+  it is the next candidate for what is left.
