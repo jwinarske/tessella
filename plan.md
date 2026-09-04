@@ -5706,3 +5706,34 @@ against; none is scheduled.
   buckets are here. §13.2 asks that it eventually mean consumer-*acknowledged* rather than merely
   built, which is where mbgl's single-frame holes come from." The gap it describes is the same one
   measured here from the other end.
+
+- **The pitch and bearing sweep, now that most of it reproduces.** Bearing is reliable everywhere
+  tested -- three runs each at 90 degrees give 7,480 and 7,763 exactly. Pitch reproduces too on
+  every scene but one: buildings give 36 three times and poi-labels 2,745 three times at pitch 45.
+  The exception is `icons_only`, which gives 29,221, 33,227, 29,221, 25,800 pitched and a flat 272
+  every time -- the scene with the most symbols and the most tiles, and so the most ancestors to
+  substitute. That is the entry above, seen from the outside.
+
+  Gross pixels of 630,000, against `mbgl-render` at the same camera:
+
+  | scene | p0 b0 | p45 b0 | p0 b90 | p45 b90 | p60 b45 |
+  | --- | --- | --- | --- | --- | --- |
+  | one_roads | 0 | 0 | 0 | 0 | 0 |
+  | one_place-labels | 0 | 0 | 0 | 0 | 0 |
+  | one_water | 0 | 571 | 0 | 536 | 773 |
+  | one_buildings | 8 | 36 | 7,480 | 46,038 | 1,894 |
+  | one_poi-labels | 0 | 2,745 | 1,044 | 11,664 | 18,082 |
+  | families | 8 | 3,964 | 7,763 | 50,427 | 10,588 |
+
+  Lines and point labels are exact at every camera in the grid, which is worth stating plainly:
+  two whole families hold up under rotation and tilt together.
+
+  Everything else degrades with the camera, and the two axes compound rather than add -- buildings
+  are 36 pitched, 7,480 rotated, and 46,038 doing both. That shape says the residue is not one
+  missing term but something that both axes feed, which is what a shared projection or a shared
+  collision space would look like. Extrusions are the worst of it and were never expected to be:
+  8 flat is the rasteriser floor, 46,038 is not.
+
+  Where to start is not in doubt. The ancestor substitution above is the only known defect that
+  scales with tile count, both axes raise tile count, and it is the one thing already proven to
+  change what reaches placement.
