@@ -5344,3 +5344,32 @@ against; none is scheduled.
   `approximateTileDistance`'s incidence stretch, `(incidenceStretch - 1) * lastSegmentTile *
   |sin(angle)|` with `incidenceStretch = cameraToAnchorDistance / pitchFactor`, is still absent;
   it is the next candidate for what is left.
+
+- **The probe is not reliably deterministic, and that has to be fixed before more icon work.**
+  *Open, and blocking.* Chasing what was left of `icons_only` at pitch produced results that would
+  not reproduce. The same binary, the same style, the same camera, eight runs: 0, 0, 9,520, 9,520,
+  272, 272, 272 gross pixels, and then eight consecutive 272s. Every run reported `quiescent 1`
+  and the same 27 renderables; what differed was `records`, which ranged 120 to 136.
+
+  The quiescence condition is the wait loop's own comment made honest -- it was added for exactly
+  this, after "6,502, 8,654 and 9,885 pixels of text" from one frame -- and it is too weak.
+  "No new records for 200 ticks" is satisfied while a fetch is still outstanding: the producer
+  goes quiet because it is *waiting*, not because it is finished. Raising the window to 800 ticks
+  did not fix it either, which says the gap is not a longer silence but a missing signal.
+
+  What is missing is a way to ask whether anything is still in flight. `tessella_status` reports a
+  readiness and a reason and nothing about outstanding work, so the probe cannot distinguish "done"
+  from "blocked". That is the thing to add -- a count of tiles requested and not yet answered --
+  and it is worth adding for its own sake, since a consumer wanting a progress indicator needs the
+  same number.
+
+  **What this invalidates.** The single dropped icon recorded above as `icons_only`'s flat 272 is
+  the modal result and probably real, but it was reported as though it were certain and it is not.
+  An `isInsideGrid` port -- mbgl refuses a feature whose projected box lies wholly outside the
+  padded grid, before testing it for collisions -- was written against this measurement, appeared
+  to regress the flat path, and was reverted. That verdict is not trustworthy either. It should be
+  attempted again once a run means something, and this note is here so it is attempted rather than
+  assumed settled.
+
+  Nothing above this entry is affected: those numbers were taken on scenes that reproduce, and the
+  flat sweep was re-run whole after each change.
