@@ -5737,3 +5737,31 @@ against; none is scheduled.
   Where to start is not in doubt. The ancestor substitution above is the only known defect that
   scales with tile count, both axes raise tile count, and it is the one thing already proven to
   change what reaches placement.
+
+- **Withdrawn: the settled frame does not keep ancestors.** The entry above located the
+  arrival-order defect in ancestor substitution on the strength of z13 and z14 buckets appearing in
+  the encode hashes. They do appear -- and not in the settled frame. Logging the draw list once per
+  frame instead of hashing every encode across the run shows the last two frames plainly:
+
+      DRAWN 13 tiles: 14/8801/5372 15/17602/10745 15/17603/10744 ...
+      DRAWN 13 tiles: 15/17602/10744 15/17602/10745 15/17603/10744 ...
+
+  The second-to-last frame has `14/8801/5372` standing in for `15/17602/10744` while it loads, and
+  the last has the thirteen z15 tiles and nothing else -- mbgl's list exactly. Substitution is
+  working: it collapses when the child arrives, and `onion` feeds `pass.wanted` rather than the
+  draw list, so a prefetched ancestor is fetched and not drawn. `update_renderables` is not at
+  fault and neither is `Substitution::get`.
+
+  So the final tile list is correct *and* deterministic, and the icon scene's image still varies
+  between runs at pitch. The defect is somewhere with an identical set of thirteen tiles on both
+  sides of it.
+
+  **The mistake, which is worth more than the finding.** `packed_bytes` is per frame, so a log
+  placed at its cache miss fires once per bucket per *frame*, and the probe emits many frames while
+  a cover loads. Every ancestor in that hash log came from a frame that legitimately had one. This
+  is the fourth time in this session a conclusion has been drawn from a counter accumulated across
+  frames -- after `records`, after `glyph_quads_drawn`, after the icon candidate counts. The
+  measurement that has never once misled is the one that names a frame and a tile and compares like
+  with like: the Washington placement-sequence diff, the 462-against-462 offer count, and this draw
+  list. Anything summed over a run should be assumed to be summing over frames until shown
+  otherwise.
