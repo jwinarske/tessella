@@ -5877,3 +5877,26 @@ against; none is scheduled.
   Eight `ViewRelease` and eight `GeometryRemove` records are emitted, so release works in general
   and misses this case. That is the next thing to read: what decides a release when substitution
   collapses.
+
+- **Narrowed to eleven symbol payloads.** Keyed comparison of two pitched streams, after the
+  padding fix:
+
+  | | run 1 | run 2 |
+  | --- | --- | --- |
+  | ViewUse emitted | 49 | 47 |
+  | ViewRelease emitted | 10 | 8 |
+  | live drawables at end | **39** | **39** |
+  | live set (tile, layer, sub) | identical | identical |
+  | final payload differs | **11 drawables** | |
+
+  So the extra ancestor bindings in run 1 *are* released -- the previous entry's "not always
+  released" was wrong, the counts balance -- and both runs leave the consumer holding the same
+  thirty-nine drawables on the same tiles. What differs is the last payload emitted for eleven of
+  them, and all eleven are layer 1 sub-layer 1: one half of the symbol layer.
+
+  Everything else is now excluded by measurement: tile list, placement decisions, live drawable
+  set, sprite atlas, geometry payload for every other layer. The remaining question is why a symbol
+  bucket's last-emitted bytes differ between runs whose placement decisions are byte-identical.
+  Vertices and indices come from layout, which is camera-free; that leaves the dynamic and opacity
+  buffers, which are written per frame -- so the next step is to hash those two separately from the
+  vertex data.
