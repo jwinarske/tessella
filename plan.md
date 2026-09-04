@@ -6305,3 +6305,37 @@ whole-frame convenience -- does all three parts rather than the middle one.
 the worst of the last 120 frames of each, primitives, records, tiles outstanding, both regions,
 and readiness. Sampled at 2 Hz rather than pushed: a callback per frame would cost more than the
 thing it measures, and would take the render thread's lock to say so.
+
+### The zoom sweep, and the frames that go blank
+
+The quad sweeps its whole zoom range on start: out to 0, in to 18, home, eased at both ends and
+across the joins. Zoom is interpolated rather than scale -- a level is a doubling, so
+linear-in-zoom is what keeps the apparent rate constant. `quad_bench` runs the same three legs,
+which is the hardest thing the pipeline is asked to do: a pan moves the camera, a sweep replaces
+everything it is looking at, twenty times over.
+
+The timings are comfortable. Four panes at 640x480, 900 frames: tick p50 0.90 ms, p95 3.08, p99
+3.86, worst 9.70; frame p50 0.58, worst 3.55. Inside a 16.7 ms budget at every percentile, no
+region-full ticks, the slab regions steady at 4-6 MiB. The p50 is *lower* than a pan's, because
+the extremes are cheap -- z0 to z2 is one tile and z16 to z18 is overzoomed from the source's z15.
+
+**And it flickers.** Between the map and black, badly enough to be the first thing anyone says
+about it. The timings say nothing about this, which is the point of writing it down here.
+
+`sweep.blank` counts frames the producer emitted with nothing in them: `beginFrame` clears the
+scene and rebuilds it from the frame's order, so an empty one is a pane that goes black. **777 to
+853 of 930.** A captured mid-sweep frame is three panes black and a fourth showing bare
+background. `TSF_BENCH_SWEEP_TRACE` puts zoom beside primitives per frame and says what it is
+not: not a zoom -- blanks land at 12.4, 9.0, 0.4, 17.8 alike -- and not presentation, because the
+producer emitted the frame and the consumer drained it. Roughly one emitted frame in five drains
+records and leaves zero renderables.
+
+**Where this got to.** The draw order is built in the binding pass, not in the geometry loop, so
+the freshness gate that holds back re-encoding a bucket the consumer already has is *not* the
+obvious culprit -- which is as far as it is honest to say. The next step is the consumer's side of
+one blank frame: an order arrives, and no order entry becomes a renderable. Either the order is
+empty when it reaches the wire, or its entries name geometry `meshes_` does not hold. `missing()`
+is zero, so it is not a material.
+
+This is the same family as the arrival-order defect already recorded: a frame that is a function
+of what happened to have landed rather than of what the camera is looking at.
