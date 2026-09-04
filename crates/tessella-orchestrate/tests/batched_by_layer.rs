@@ -117,6 +117,7 @@ fn frame_stream() -> (BTreeMap<u64, Binding>, Vec<OrderEntry>) {
             view_id: ViewId(0),
             tiles: &tiles,
             buckets: &buckets,
+            origins: &[],
             light: &Light::default(),
             fonts: None,
             patterns: None,

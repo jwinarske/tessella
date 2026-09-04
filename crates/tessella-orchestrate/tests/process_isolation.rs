@@ -304,12 +304,14 @@ fn a_consumer_in_another_process_reads_a_live_stream() {
             frame::emit_incremental(
                 &mut producer,
                 &mut arena,
+                &mut frame::SymbolCache::default(),
                 &Frame {
                     style: &scene.style,
                     view: &scene.view,
                     view_id: ViewId(0),
                     tiles: &scene.tiles,
                     buckets: &scene.buckets,
+                    origins: &[],
                     light: &Light::default(),
                     fonts: None,
                     patterns: None,
@@ -390,12 +392,14 @@ fn a_ring_too_small_for_a_frame_never_becomes_writable() {
             frame::emit_incremental(
                 &mut producer,
                 &mut arena,
+                &mut frame::SymbolCache::default(),
                 &Frame {
                     style: &scene.style,
                     view: &scene.view,
                     view_id: ViewId(0),
                     tiles: &scene.tiles,
                     buckets: &scene.buckets,
+                    origins: &[],
                     light: &Light::default(),
                     fonts: None,
                     patterns: None,

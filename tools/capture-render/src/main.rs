@@ -349,6 +349,8 @@ fn run() -> Result<String, String> {
                 view_id: ViewId(0),
                 tiles: &tiles,
                 buckets: &buckets,
+                // One frame, so there is nothing to keep a layout for.
+                origins: &[],
                 light: &Light::default(),
                 fonts: fonts.as_ref(),
                 patterns: None,

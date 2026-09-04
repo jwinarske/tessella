@@ -148,6 +148,10 @@ pub struct Frame<'a> {
     pub tiles: &'a [TileCoord],
     /// Built buckets, per tile, in cover order.
     pub buckets: &'a [(TileId, Vec<LayerBucket>)],
+    /// The store's bucket list each entry of `buckets` was taken from, for the symbol layout
+    /// cache to key on. `None` where the frame built the list itself and there is no identity to
+    /// key on -- the sourceless background, which carries no symbols.
+    pub origins: &'a [Option<alloc::sync::Arc<Vec<LayerBucket>>>],
     /// The style light, which travels in the camera block (§2.2).
     pub light: &'a Light,
     /// Glyphs, for the symbol layers.
@@ -382,7 +386,7 @@ pub fn emit(
     // A session that lives exactly as long as this call, which makes every drawable new, every
     // geometry announced and the view declared — the full emission, as the degenerate case of
     // the incremental one rather than as a second implementation of it.
-    emit_into(producer, arena, frame, Some(&mut Session::new()))
+    emit_into(producer, arena, &mut SymbolCache::default(), frame, Some(&mut Session::new()))
 }
 
 /// As [`emit()`], sending only what the consumer does not already have.
@@ -406,15 +410,17 @@ pub fn emit(
 pub fn emit_incremental(
     producer: &mut Producer,
     arena: &mut SlabArena,
+    layouts: &mut SymbolCache,
     frame: &Frame<'_>,
     session: &mut Session,
 ) -> Result<Emitted, FrameError> {
-    emit_into(producer, arena, frame, Some(session))
+    emit_into(producer, arena, layouts, frame, Some(session))
 }
 
 fn emit_into(
     producer: &mut Producer,
     arena: &mut SlabArena,
+    layouts: &mut SymbolCache,
     frame: &Frame<'_>,
     session: Option<&mut Session>,
 ) -> Result<Emitted, FrameError> {
@@ -436,6 +442,7 @@ fn emit_into(
     let attempt = emit_group(
         producer,
         arena,
+        layouts,
         frame,
         session.as_deref_mut(),
         camera_moved,
@@ -493,6 +500,7 @@ fn emit_into(
 fn emit_group(
     producer: &mut Producer,
     arena: &mut SlabArena,
+    layouts: &mut SymbolCache,
     frame: &Frame<'_>,
     stream: Option<&mut Session>,
     camera_moved: bool,
@@ -504,6 +512,7 @@ fn emit_group(
         view_id,
         tiles,
         buckets,
+        origins: _,
         light,
         fonts,
         patterns,
@@ -737,6 +746,8 @@ fn emit_group(
         &order,
         &source,
         buckets,
+        frame.origins,
+        layouts,
         tiles,
         fonts,
         patterns,
@@ -1273,6 +1284,8 @@ fn place_symbols(
     order: &[tessella_capture_abi::envelope::OrderEntry],
     source: &BTreeMap<u64, (usize, usize, tessella_capture_abi::envelope::TextureId)>,
     buckets: &[(TileId, Vec<LayerBucket>)],
+    origins: &[Option<alloc::sync::Arc<Vec<LayerBucket>>>],
+    layouts: &mut SymbolCache,
     tiles: &[TileCoord],
     fonts: Option<&Fonts>,
     patterns: Option<&Patterns<'_>>,
@@ -1377,14 +1390,33 @@ fn place_symbols(
             continue;
         };
 
-        let (mut buffers, laid) = layout.lay_out(fonts, patterns.map(|p| p.positions));
+        // Laid out once per bucket and held, not once per frame: none of shaping, bidi, glyph
+        // resolution or quad building depends on the camera. See `SymbolCache`.
+        let bucket_laid = layouts.get_or_lay_out(
+            origins.get(tile_index).and_then(Option::as_ref),
+            bucket_index,
+            || {
+                let (buffers, laid) = layout.lay_out(fonts, patterns.map(|p| p.positions));
+                // Shaped with the label, not after it, so an icon competes for space the way its
+                // label does. While it came later, `FrameLabel::icon` was always `None`, no icon
+                // was ever offered to the grid, and every anchor along a road kept its shield.
+                let icons =
+                    patterns.map(|patterns| layout.lay_out_icons(patterns.positions, &laid));
+                Laid {
+                    buffers,
+                    laid,
+                    icons,
+                }
+            },
+        );
+        // The frame writes line positions and opacities into the vertices, so it works on its
+        // own copy; `laid` is read only and is shared.
+        let mut buffers = bucket_laid.buffers.clone();
+        let laid = &bucket_laid.laid;
         if buffers.vertices.is_empty() && !layout.has_icons() {
             continue;
         }
-        // Shaped before placement, not after, so an icon competes for space the way its label
-        // does. While it came later, `FrameLabel::icon` was always `None`, no icon was ever
-        // offered to the grid, and every anchor along a road kept its shield.
-        let icons = patterns.map(|patterns| layout.lay_out_icons(patterns.positions, &laid));
+        let icons = bucket_laid.icons.clone();
 
         let plane = tessella_tile::camera::label_plane_matrix(&to_clip, view.width, view.height);
         let mut held = placement.borrow_mut();
@@ -1414,7 +1446,7 @@ fn place_symbols(
             ..crate::symbols::FrameOptions::default()
         };
         let labels = frame_labels(
-            &laid,
+            laid,
             &buffers,
             icons.as_ref(),
             base,
@@ -1454,7 +1486,7 @@ fn place_symbols(
             (tile_index, bucket_index),
             Shaped {
                 buffers,
-                laid,
+                shaped: alloc::sync::Arc::clone(&bucket_laid),
                 icons,
                 base,
                 without_room,
@@ -1473,11 +1505,12 @@ fn place_symbols(
         };
         let Shaped {
             mut buffers,
-            laid,
+            shaped,
             icons,
             base,
             without_room,
         } = entry;
+        let laid = &shaped.laid;
         let Some((_, bucket)) = buckets
             .get(key.0)
             .and_then(|(id, list)| list.get(key.1).map(|bucket| (*id, bucket)))
@@ -1487,7 +1520,7 @@ fn place_symbols(
         let Content::Symbol(_) = &bucket.content else {
             continue;
         };
-        let labels = frame_labels(&laid, &buffers, icons.as_ref(), base, |_| 1.0);
+        let labels = frame_labels(laid, &buffers, icons.as_ref(), base, |_| 1.0);
         // A label placement never offered has no fade entry, which reads as hidden -- so the
         // ones whose road ran out stay hidden without being special-cased here.
         held.symbols.write_opacity(&labels, &mut buffers);
@@ -1549,11 +1582,121 @@ fn place_symbols(
 /// One bucket between being shaped and being written.
 struct Shaped {
     buffers: SymbolBuffers,
-    laid: Vec<tessella_layout::symbol_bucket::LaidOut>,
+    shaped: alloc::sync::Arc<Laid>,
     icons: Option<(SymbolBuffers, Vec<tessella_layout::symbol_bucket::LaidOut>)>,
     base: u32,
     /// The labels whose road ran out before their name did, decided before placement.
     without_room: Vec<u32>,
+}
+
+/// What `SymbolLayout::lay_out` produced for one bucket.
+///
+/// `buffers` and `icons` are the frame's to write into -- line positions and opacities are
+/// camera-dependent and go into the vertices -- so a frame takes a copy of each. `laid` is read
+/// only and is shared.
+#[derive(Debug)]
+pub struct Laid {
+    buffers: SymbolBuffers,
+    laid: Vec<tessella_layout::symbol_bucket::LaidOut>,
+    icons: Option<(SymbolBuffers, Vec<tessella_layout::symbol_bucket::LaidOut>)>,
+}
+
+/// Symbol layout, kept between the frames that draw it.
+///
+/// `SymbolLayout::lay_out` shapes text, runs bidi, resolves every glyph and builds its quads.
+/// None of that depends on the camera -- mbgl does it once, when the tile is parsed -- and it
+/// was being redone for every symbol bucket of every frame, which on a moving quad was the
+/// largest single item in the producer.
+///
+/// Keyed by the identity of the tile's bucket list rather than by its coordinate. A tile
+/// re-parsed at the same coordinate is a new `Arc`, so it misses rather than resolving to the
+/// layout of the geometry it replaced, and the `Arc` is held here so its address cannot be
+/// reused by something else while the entry stands.
+///
+/// The other two inputs are the fonts and the sprite sheet, which are replaced wholesale rather
+/// than mutated; `epoch` is bumped when either is, and every entry from before it misses.
+#[derive(Debug, Default)]
+pub struct SymbolCache {
+    entries: BTreeMap<(usize, usize), CacheEntry>,
+    epoch: u64,
+    frame: u64,
+}
+
+#[derive(Debug)]
+struct CacheEntry {
+    epoch: u64,
+    /// Last frame this was asked for, so an entry for a tile that has left the cover goes.
+    used: u64,
+    /// Held for its address, which is the key.
+    origin: alloc::sync::Arc<Vec<LayerBucket>>,
+    laid: alloc::sync::Arc<Laid>,
+}
+
+impl SymbolCache {
+    /// Invalidates everything, for a change to the fonts or the sprite sheet.
+    pub fn invalidate(&mut self) {
+        self.epoch = self.epoch.wrapping_add(1);
+    }
+
+    /// Starts a frame, and drops what the last few did not use.
+    ///
+    /// Two frames of grace rather than one: a bucket that is not drawn this frame because its
+    /// tile is momentarily covered by an ancestor should not have to be laid out again when the
+    /// substitution swaps back.
+    pub fn begin_frame(&mut self) {
+        self.frame = self.frame.wrapping_add(1);
+        let frame = self.frame;
+        self.entries
+            .retain(|_, entry| frame.saturating_sub(entry.used) <= 2);
+    }
+
+    /// How many buckets are held, which a test reads.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether it holds nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// This bucket's layout, computing it if this is the first frame to want it.
+    fn get_or_lay_out(
+        &mut self,
+        origin: Option<&alloc::sync::Arc<Vec<LayerBucket>>>,
+        bucket_index: usize,
+        build: impl FnOnce() -> Laid,
+    ) -> alloc::sync::Arc<Laid> {
+        // A bucket list built on the spot rather than taken from the store has no stable
+        // identity, so it is laid out every frame. Only the sourceless background reaches that, and
+        // it carries no symbols.
+        let Some(origin) = origin else {
+            return alloc::sync::Arc::new(build());
+        };
+        let key = (alloc::sync::Arc::as_ptr(origin) as usize, bucket_index);
+        let epoch = self.epoch;
+        let frame = self.frame;
+        if let Some(entry) = self.entries.get_mut(&key)
+            && entry.epoch == epoch
+            && alloc::sync::Arc::ptr_eq(&entry.origin, origin)
+        {
+            entry.used = frame;
+            return alloc::sync::Arc::clone(&entry.laid);
+        }
+        let laid = alloc::sync::Arc::new(build());
+        self.entries.insert(
+            key,
+            CacheEntry {
+                epoch,
+                used: frame,
+                origin: alloc::sync::Arc::clone(origin),
+                laid: alloc::sync::Arc::clone(&laid),
+            },
+        );
+        laid
+    }
 }
 
 /// Takes an anchor in tile units to the pixel of the label plane it lands on.

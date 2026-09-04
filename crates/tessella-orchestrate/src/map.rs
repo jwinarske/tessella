@@ -145,6 +145,8 @@ pub struct Map {
     session: Session,
     /// Holds a retained geometry's bytes until it is removed.
     arena: SlabArena,
+    /// Symbol layout, kept between the frames that draw it. See [`frame::SymbolCache`].
+    layouts: frame::SymbolCache,
     damage: DamageTracker,
     /// The per-view cover, with the zoom latch and the entered/left deltas.
     ///
@@ -209,6 +211,7 @@ impl Map {
             light: Light::default(),
             session: Session::new(),
             arena,
+            layouts: frame::SymbolCache::default(),
             damage: DamageTracker::new(),
             cover: None,
             drawn: Vec::new(),
@@ -229,12 +232,17 @@ impl Map {
     /// is a legitimate frame rather than an error.
     pub fn set_fonts(&mut self, fonts: Fonts) {
         self.fonts = Some(fonts);
+        // Everything laid out so far was laid out against the fonts this replaces, and a label
+        // shaped without its glyphs is a label with holes in it.
+        self.layouts.invalidate();
         self.mark_dirty();
     }
 
     /// Hands the map the sprite atlas its patterns and icons draw from.
     pub fn set_sprites(&mut self, sprites: SpriteAtlas) {
         self.sprites = Some(sprites);
+        // An icon laid out before the sheet arrived has no rectangle to sample.
+        self.layouts.invalidate();
         self.mark_dirty();
     }
 
@@ -384,6 +392,9 @@ impl Map {
         // maxzoom they are not the same list -- several cover entries share one tile, and the
         // tile is drawn once.
         let mut placed: Vec<TileCoord> = Vec::with_capacity(self.drawn.len());
+        // The store's own list each entry came from, for the symbol layout cache to key on.
+        // `None` where the frame built the list itself and there is no identity to key on.
+        let mut origins: Vec<Option<Arc<Vec<LayerBucket>>>> = Vec::with_capacity(self.drawn.len());
         let mut served: alloc::collections::BTreeSet<TileId> = alloc::collections::BTreeSet::new();
         for entry in &self.drawn {
             let cover = TileId::new(entry.z, entry.x, entry.y);
@@ -407,6 +418,7 @@ impl Map {
             if !built.is_empty() {
                 built.sort_by_key(|bucket| bucket.layer_index);
                 buckets.push((id, built));
+                origins.push(holding.as_ref().map(|(_, ready)| Arc::clone(ready)));
                 placed.push(TileCoord {
                     z: id.z,
                     x: id.x,
@@ -458,6 +470,9 @@ impl Map {
                 }
                 built.sort_by_key(|bucket| bucket.layer_index);
                 buckets.push((id, built));
+                // Filtered to the raster buckets, so it is not the store's list -- and a raster
+                // layer has no symbols to lay out.
+                origins.push(None);
                 placed.push(TileCoord {
                     z: id.z,
                     x: id.x,
@@ -502,6 +517,8 @@ impl Map {
                     continue;
                 }
                 buckets.push((cover, built));
+                // A background carries no symbols, and half the time this list was built here.
+                origins.push(None);
                 placed.push(TileCoord {
                     z: cover.z,
                     x: cover.x,
@@ -528,15 +545,18 @@ impl Map {
             history: self.zoom,
         });
 
+        self.layouts.begin_frame();
         let emitted = frame::emit_incremental(
             producer,
             &mut self.arena,
+            &mut self.layouts,
             &Frame {
                 style: &self.style,
                 view: &self.view,
                 view_id: self.view_id,
                 tiles: &placed,
                 buckets: &buckets,
+                origins: &origins,
                 light: &self.light,
                 fonts: self.fonts.as_ref(),
                 patterns: patterns.as_ref(),

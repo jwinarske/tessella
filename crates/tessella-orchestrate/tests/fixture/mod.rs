@@ -88,6 +88,7 @@ pub fn emit_frame() -> (Vec<u8>, Vec<u8>, frame::Emitted) {
             view_id: ViewId(0),
             tiles: &tiles,
             buckets: &buckets,
+            origins: &[],
             light: &Light::default(),
             fonts: None,
             patterns: None,

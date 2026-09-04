@@ -90,12 +90,14 @@ fn emit_frame_for(
     let emitted = frame::emit_incremental(
         producer,
         arena,
+        &mut frame::SymbolCache::default(),
         &Frame {
             style: &scene.style,
             view: &scene.view,
             view_id,
             tiles: &scene.tiles,
             buckets: &scene.buckets,
+            origins: &[],
             light: &Light::default(),
             fonts: None,
             patterns: None,
@@ -262,6 +264,7 @@ fn a_failed_frame_retires_nothing_and_announces_nothing() {
             view_id: ViewId(0),
             tiles: &scene.tiles,
             buckets: &scene.buckets,
+            origins: &[],
             light,
             fonts: None,
             patterns: None,
@@ -270,6 +273,7 @@ fn a_failed_frame_retires_nothing_and_announces_nothing() {
     frame::emit_incremental(
         producer,
         &mut arena,
+       &mut frame::SymbolCache::default(),
         &frame_of(&here, &light),
         &mut registry,
     )
@@ -286,6 +290,7 @@ fn a_failed_frame_retires_nothing_and_announces_nothing() {
     let result = frame::emit_incremental(
         &mut cramped,
         &mut arena,
+        &mut frame::SymbolCache::default(),
         &frame_of(&there, &light),
         &mut registry,
     );
@@ -480,12 +485,14 @@ fn a_frame_touches_only_its_own_view() {
             frame::emit_incremental(
                 producer,
                 &mut arena,
+               &mut frame::SymbolCache::default(),
                 &Frame {
                     style: &scene.style,
                     view: &scene.view,
                     view_id,
                     tiles: &scene.tiles,
                     buckets: &scene.buckets,
+                    origins: &[],
                     light: &Light::default(),
                     fonts: None,
                     patterns: None,
@@ -613,18 +620,19 @@ fn a_parked_view_writes_no_bytes_at_all() {
         view_id: ViewId(0),
         tiles: &scene.tiles,
         buckets: &scene.buckets,
+        origins: &[],
         light: &light,
         fonts: None,
         patterns: None,
     };
 
-    frame::emit_incremental(&mut producer, &mut arena, &frame, &mut session).expect("cold");
+    frame::emit_incremental(&mut producer, &mut arena, &mut frame::SymbolCache::default(), &frame, &mut session).expect("cold");
     let after_cold = producer.head();
     assert!(after_cold > 0, "the cold frame wrote something");
 
     // Five more frames of the same scene: not one byte.
     for round in 0..5 {
-        frame::emit_incremental(&mut producer, &mut arena, &frame, &mut session).expect("parked");
+        frame::emit_incremental(&mut producer, &mut arena, &mut frame::SymbolCache::default(), &frame, &mut session).expect("parked");
         assert_eq!(
             producer.head(),
             after_cold,
@@ -744,6 +752,7 @@ mod teardown {
             view_id: view,
             tiles: &scene.tiles,
             buckets: &scene.buckets,
+            origins: &[],
             light,
             fonts: None,
             patterns: None,
@@ -754,7 +763,13 @@ mod teardown {
         let mut ring = Ring::new(1 << 22);
         let (producer, _consumer) = ring.split();
         let light = Light::default();
-        frame::emit_incremental(producer, arena, &frame_of(scene, view, &light), session)
+        frame::emit_incremental(
+            producer,
+            arena,
+            &mut frame::SymbolCache::default(),
+            &frame_of(scene, view, &light),
+            session,
+        )
             .expect("emits")
             .geometries
     }
@@ -943,12 +958,14 @@ mod under_fault {
         let result = frame::emit_incremental(
             producer,
             arena,
+            &mut frame::SymbolCache::default(),
             &Frame {
                 style: &scene.style,
                 view: &scene.view,
                 view_id: view,
                 tiles: &scene.tiles,
                 buckets: &scene.buckets,
+                origins: &[],
                 light: &light,
                 fonts: None,
                 patterns: None,

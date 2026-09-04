@@ -96,12 +96,14 @@ fn emit(scene: &Scene) -> (Session, u64) {
     frame::emit_incremental(
         producer,
         &mut arena,
+       &mut frame::SymbolCache::default(),
         &Frame {
             style: &scene.style,
             view: &scene.view,
             view_id: ViewId(0),
             tiles: &scene.tiles,
             buckets: &scene.buckets,
+            origins: &[],
             light: &Light::default(),
             fonts: None,
             patterns: None,
