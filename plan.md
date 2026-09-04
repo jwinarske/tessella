@@ -5829,3 +5829,25 @@ against; none is scheduled.
   the first divergent record instead of testing one candidate at a time, and it is the only
   approach left that cannot miss. The probe already reads every record; writing them out is a few
   lines in `Host::tick`.
+
+- **Wire stream diffed; two findings, neither the one being hunted.** `TSF_DUMP=<path>` writes every
+  record the consumer reads, so two runs can be compared byte for byte. Three pitched runs of
+  `icons_only`: 144 records each, identical kind counts (47 GeometryAdd, 47 ViewUse, 18 UboUpdate,
+  8 ViewRelease, 8 GeometryRemove, 7 TextureUpdate, 4 OrderUpdate, 4 CameraUpdate, 1 ViewDeclare).
+  Two runs even produced identical stream lengths and different images.
+
+  **Uninitialised tail padding on the wire.** The first differing record is a `ViewUse`, and the
+  bytes that differ are at record offset 52-55 -- `fe7f0000` against `ff7f0000` -- past
+  `_pad` at 35. `ViewUse`'s fields end at 36 and `size_of::<ViewUse>()` is 40, so four bytes of
+  compiler tail padding are copied to the ring uninitialised. All 47 records carry it. That is
+  process memory published to a consumer, and it makes the stream differ run to run whatever else
+  is happening. Worth fixing on its own account; `#[repr(C)]` structs written as bytes should be
+  zeroed or built field by field.
+
+  **Geometry ids are assigned in arrival order.** `GeometryAdd` records differ at record offset 0,
+  the id, and nowhere else -- payloads are byte-identical. So the same geometry gets a different
+  handle depending on which tile landed first. Harmless in itself, and it defeats a positional
+  diff: records at the same index in two streams are not the same logical record, which is why the
+  `UboUpdate` differences above cannot be read as semantic yet.
+
+  Next: key the diff by (tile, layer, sub-layer) rather than by position, then compare payloads.
