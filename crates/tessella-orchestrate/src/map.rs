@@ -395,7 +395,16 @@ impl Map {
         // The store's own list each entry came from, for the symbol layout cache to key on.
         // `None` where the frame built the list itself and there is no identity to key on.
         let mut origins: Vec<Option<Arc<Vec<LayerBucket>>>> = Vec::with_capacity(self.drawn.len());
-        let mut served: alloc::collections::BTreeSet<TileId> = alloc::collections::BTreeSet::new();
+        // Keyed by the world copy as well as the tile. A `TileId` is canonical -- it carries no
+        // wrap -- so at low zoom every copy of the world is the same key, and deduping on it
+        // alone drew one copy and dropped the rest. At zoom 0 a 1280-pixel viewport holds two
+        // and a half worlds and drew half of one: the rest of the screen was bare background.
+        //
+        // What the dedup is for is a *coarser* tile standing in for several cover coordinates,
+        // which is one tile drawn once. Two copies of the world are two draws of one tile under
+        // two matrices, which is a different thing and the reason `wrap` exists.
+        let mut served: alloc::collections::BTreeSet<(TileId, i32)> =
+            alloc::collections::BTreeSet::new();
         for entry in &self.drawn {
             let cover = TileId::new(entry.z, entry.x, entry.y);
             // What is standing in for this coordinate, which above a maxzoom is a coarser tile.
@@ -408,7 +417,7 @@ impl Map {
             // One z14 tile answers all sixteen z16 coordinates inside it. Drawn once: a second
             // draw is the same geometry under the same matrix, which blends twice and darkens
             // every translucent fill it touches.
-            if !served.insert(id) {
+            if !served.insert((id, entry.wrap)) {
                 continue;
             }
             let mut built: Vec<LayerBucket> = Vec::new();
@@ -447,7 +456,7 @@ impl Map {
                 let Some((id, ready)) = tiles.serving(cover) else {
                     continue;
                 };
-                if !served.insert(id) {
+                if !served.insert((id, entry.wrap)) {
                     continue;
                 }
                 // The raster buckets alone, which is the whole reason this walk exists.

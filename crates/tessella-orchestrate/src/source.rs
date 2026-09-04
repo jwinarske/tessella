@@ -380,11 +380,15 @@ impl<S: FileSource + 'static> TileSource<S> {
             return;
         };
         let generation = self.generation.load(Ordering::Acquire);
+        // Whether anything has been asked for yet, which is what decides whether the drain gate
+        // below applies.
+        let first;
         {
             let held = self.glyphs.lock().unwrap_or_else(PoisonError::into_inner);
             if held.running || held.surveyed == Some(generation) {
                 return;
             }
+            first = held.asked.is_empty();
         }
 
         // Not until the tiles have stopped arriving.
@@ -401,7 +405,18 @@ impl<S: FileSource + 'static> TileSource<S> {
         // condition that works: not "the cover is complete", which a single failing tile would
         // block forever, but "nothing further is coming", which a failure satisfies as surely as
         // a success.
-        {
+        //
+        // The *first* fetch only. A map that keeps moving never has an empty queue -- a zoom
+        // sweep has tiles in flight from the moment it starts until the moment it stops -- so
+        // gating every fetch on the drain meant the alphabet was decided once, at the start, and
+        // every script that arrived afterwards drew with whatever was in the atlas. Which is the
+        // same alphabet soup this gate was written to prevent, from the other end: too early on
+        // a cold start, never again on a moving one.
+        //
+        // After the first, the subset test below is the gate. It asks only for what is missing,
+        // so a fetch mid-flight costs a request for the codepoints a new script brought and
+        // nothing for the ones already held.
+        if first {
             let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
             if !inner.inflight.is_empty() {
                 return;
