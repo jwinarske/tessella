@@ -5809,3 +5809,23 @@ against; none is scheduled.
   The cheaper shape is still open: re-sending a whole symbol bucket to update two small buffers is
   what mbgl avoids by uploading dynamic and opacity separately each frame. An ABI record for that
   is the follow-up, once the remaining nondeterminism is understood.
+
+- **Sprite atlas eliminated.** Hashed pixels and packed positions per frame across four pitched
+  runs of `icons_only`: `size=[1024,1024] n=73 pixels=7896af8d65c414dc pos=51db3747a7e1ec50`,
+  identical every run, while the images were 13,757 / 13,757 / 6,035 / 13,757. Atlas content and
+  packing are deterministic; symbol vertices are computed from them and still differ.
+
+  Eliminated so far, each measured per frame and per tile: iteration order, `Landed::by_tile`'s
+  merge, the tile cover, ancestor substitution, the registry gate for geometry, placement decisions
+  themselves, and now the sprite atlas. Excluding symbols from the re-emission gate was a real fix
+  and did not close it.
+
+  Distributions across batches: before the gate fix 21,794..34,177; one batch after it 13,757 x3
+  and 6,035; the next batch 29,221 x5, 34,177 x2, 21,794. The distribution itself moves between
+  batches, which points at machine load rather than at anything the code chooses.
+
+  **Stop eliminating and diff the stream.** Every remaining hypothesis is about what the consumer
+  receives, so dump the wire records to a file per run and diff two runs byte for byte. That names
+  the first divergent record instead of testing one candidate at a time, and it is the only
+  approach left that cannot miss. The probe already reads every record; writing them out is a few
+  lines in `Host::tick`.
