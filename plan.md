@@ -6240,3 +6240,68 @@ make progress, because a frame is emitted whole or not at all.
 
 Peak RSS **1156 to 472 MiB**, and 5473 to 472 across the whole of this work -- 11.6x. Timings
 unchanged.
+
+### The quad on a screen
+
+It runs: four platform views under ivi-homescreen on Wayland, one Filament engine, one scene,
+four `MapView`s on four layers, with a HUD over each pane. Everything between "the bundle builds"
+and "the map is on the screen" was a defect, and none of them was visible from a probe.
+
+**The library could not be loaded at all.** Dart's native-asset loader opens each asset with
+`RTLD_LOCAL`, so fluorite's symbols are not in the global scope for anything else -- the first
+call into the extension died on `undefined symbol: fluorite_set_view_extension`. A DT_NEEDED plus
+an `$ORIGIN` rpath fixes it, and the two libraries sit in one directory so the loader resolves
+the soname to the file Dart has already mapped: same path, same inode, one Filament. Then
+`libfluorite_core_ffi.so` turned out not to be loadable either -- its `filament_FOUND` branch
+links the package config's aggregate, which carries the core group and not gltfio, imageio or
+the ubershader archive. A shared object is allowed undefined symbols, so nothing said so until a
+`dlopen` failed.
+
+**And it had to be the same Filament.** `filament_DIR`, a CMake package config pointing at the
+emb overlay, wins over fluorite's own `FILAMENT_INCLUDE_DIR`, and that release has a non-const
+`Builder::build`. Compiled against the newer headers the probes use, the builders mangle const
+and nothing resolves. The materials have to come from that Filament too -- `matc` stamps a
+version and Filament refuses one it did not write.
+
+**Then the view.** Four things the probes set on their own views and fluorite does not, each
+found by looking at what came up:
+
+- *Post-processing off.* A map is display-referred sRGB, like the UI over it. Filament's pipeline
+  treats what a shader wrote as scene-referred light and tone-maps it: roads at a couple of
+  percent contrast against their background, water grey. Reproduced headlessly with
+  `TSF_POSTPROCESS`, which `render_probe` honours.
+- *Stencil on.* Tessella clips tiles with a stencil pass, and Filament panics rather than
+  degrades when a view asks for a stencil the swapchain does not carry -- so the swapchain gains
+  the flag as well.
+- *The camera, every frame.* `ApplyEcsCamera` runs immediately before the extension's callback.
+- *The Y sign, which is the target's rather than the producer's.* An offscreen target read back
+  with `readPixels` comes out bottom-up and every probe writes it top-down again, so the two
+  flips cancel and the camera carries one; a swapchain presented straight to a compositor is read
+  by nobody. `configureCamera` takes the answer instead of assuming it, and `FilamentRenderer`
+  takes the same one for its scissor boxes -- flipped one way and scissored the other, every tile
+  is clipped to where its own reflection overlaps it.
+
+### A frame's fades are the frame's
+
+*Found because one pane had no labels.* `Fades::step` rebuilds its map from the placements it is
+handed -- that is how a symbol whose tile was released is dropped -- so it is a per-frame call.
+`frame_in` made it per bucket, with only that bucket's placements, so each bucket wiped the one
+before it. A last bucket that placed nothing emptied the map; `settle` then found it settled,
+because an empty set is, and returned without creating a single fade. **Every label in the frame
+drew at zero opacity.**
+
+Liestal at z12 in a 959x440 viewport: 1848 glyph quads laid out and none drawn, while either
+symbol layer alone drew normally. It needed two symbol layers *and* a particular viewport, which
+is why every scene measured so far missed it -- the parity scenes have one symbol layer each, and
+the quad probe runs at 640x480.
+
+`ViewSymbols::step` is the per-frame call now, `settle` steps before it tests rather than after
+(testing first meant a map whose fades do not exist yet created none), and `frame` -- the
+whole-frame convenience -- does all three parts rather than the middle one.
+
+### What the HUD says
+
+`tessella_fluorite_stats_of` reports a pane's zoom, frame rate, tick split into produce and drain,
+the worst of the last 120 frames of each, primitives, records, tiles outstanding, both regions,
+and readiness. Sampled at 2 Hz rather than pushed: a callback per frame would cost more than the
+thing it measures, and would take the render thread's lock to say so.
