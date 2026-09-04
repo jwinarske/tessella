@@ -18,7 +18,7 @@ const LENGTH: f32 = 100.0;
 const HEIGHT: f32 = 20.0;
 
 fn run() -> Vec<tessella_place::feature::LineCircle> {
-    line_circles(&straight(), (200.0, 100.0), 10, LENGTH, HEIGHT, 1.0)
+    line_circles(&straight(), (200.0, 100.0), 10, LENGTH, HEIGHT, 1.0, None)
 }
 
 /// The circles follow the line and cover the label.
@@ -117,7 +117,7 @@ fn the_leading_padding_depends_on_the_vertices() {
 
     // One long segment: the walk back overshoots, and more of the padding fits.
     let coarse_line = vec![(0.0, 100.0), (400.0, 100.0)];
-    let coarse: Vec<f32> = line_circles(&coarse_line, (200.0, 100.0), 0, LENGTH, HEIGHT, 1.0)
+    let coarse: Vec<f32> = line_circles(&coarse_line, (200.0, 100.0), 0, LENGTH, HEIGHT, 1.0, None)
         .iter()
         .map(|entry| entry.circle.center.0)
         .collect();
@@ -136,7 +136,7 @@ fn the_leading_padding_depends_on_the_vertices() {
 #[test]
 fn overscaling_widens_only_the_padding() {
     let plain = run();
-    let overscaled = line_circles(&straight(), (200.0, 100.0), 10, LENGTH, HEIGHT, 4.0);
+    let overscaled = line_circles(&straight(), (200.0, 100.0), 10, LENGTH, HEIGHT, 4.0, None);
     assert!(
         overscaled.len() > plain.len(),
         "{} then {}",
@@ -191,7 +191,7 @@ fn the_distance_is_signed_and_padded() {
 fn the_circles_follow_a_bend() {
     // East to (200, 100), then south.
     let corner = vec![(0.0, 100.0), (200.0, 100.0), (200.0, 400.0)];
-    let circles = line_circles(&corner, (180.0, 100.0), 0, LENGTH, HEIGHT, 1.0);
+    let circles = line_circles(&corner, (180.0, 100.0), 0, LENGTH, HEIGHT, 1.0, None);
     assert!(!circles.is_empty());
 
     let past = circles
@@ -213,7 +213,7 @@ fn the_circles_follow_a_bend() {
 #[test]
 fn a_short_line_stops_at_its_end() {
     let stub = vec![(150.0, 100.0), (250.0, 100.0)];
-    let circles = line_circles(&stub, (200.0, 100.0), 0, LENGTH, HEIGHT, 1.0);
+    let circles = line_circles(&stub, (200.0, 100.0), 0, LENGTH, HEIGHT, 1.0, None);
 
     assert!(!circles.is_empty(), "the label's own length does fit");
     for entry in &circles {
@@ -229,7 +229,7 @@ fn a_short_line_stops_at_its_end() {
 /// The step is half the height, so a zero height is a zero step and the run would not terminate.
 #[test]
 fn a_zero_height_label_reserves_nothing() {
-    assert!(line_circles(&straight(), (200.0, 100.0), 10, LENGTH, 0.0, 1.0).is_empty());
+    assert!(line_circles(&straight(), (200.0, 100.0), 10, LENGTH, 0.0, 1.0, None).is_empty());
 }
 
 /// A zero-width label still reserves one circle.
@@ -238,7 +238,7 @@ fn a_zero_height_label_reserves_nothing() {
 /// it still has height, and something has to stop another label being placed on top of it.
 #[test]
 fn a_zero_width_label_still_reserves_one() {
-    let circles = line_circles(&straight(), (200.0, 100.0), 10, 0.0, HEIGHT, 1.0);
+    let circles = line_circles(&straight(), (200.0, 100.0), 10, 0.0, HEIGHT, 1.0, None);
     assert_eq!(circles.len(), 1, "a zero-width label reserved {circles:?}");
     assert!(
         (circles[0].circle.center.0 - 200.0).abs() <= HEIGHT,
@@ -249,8 +249,8 @@ fn a_zero_width_label_still_reserves_one() {
 /// A degenerate line is refused rather than divided by zero.
 #[test]
 fn a_degenerate_line_is_refused() {
-    assert!(line_circles(&[], (0.0, 0.0), 0, LENGTH, HEIGHT, 1.0).is_empty());
-    assert!(line_circles(&[(1.0, 1.0)], (1.0, 1.0), 0, LENGTH, HEIGHT, 1.0).is_empty());
+    assert!(line_circles(&[], (0.0, 0.0), 0, LENGTH, HEIGHT, 1.0, None).is_empty());
+    assert!(line_circles(&[(1.0, 1.0)], (1.0, 1.0), 0, LENGTH, HEIGHT, 1.0, None).is_empty());
 }
 
 /// Thinning a run of circles — mbgl's pass in `placeLineFeature`.

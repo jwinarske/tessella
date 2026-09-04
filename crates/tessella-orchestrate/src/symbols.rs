@@ -51,6 +51,13 @@ pub struct FrameLabel<'a> {
     /// already in the tile's buffers, so cloning each road per label per *frame* would be the
     /// most expensive thing placement does.
     pub line: &'a [(f32, f32)],
+    /// The along-line offsets of its first and last glyph, unscaled, when it has glyphs.
+    ///
+    /// mbgl's `glyphOffsets.front()` and `.back()`, which `placeLineFeature` walks along the
+    /// line to find how far the label really reaches in each direction. It is not the collision
+    /// box's half-width: the offsets locate the outermost *glyphs*, so the reach stops short of
+    /// the box, and it is asymmetric whenever the shaping is.
+    pub glyph_reach: Option<(f32, f32)>,
 }
 
 /// What one view's symbols did this frame.
@@ -218,6 +225,18 @@ impl ViewSymbols {
                 };
                 let anchor = project(label.laid_out.anchor);
 
+                // How far the outermost glyphs sit from the anchor, scaled as mbgl scales them:
+                // `fontScale * glyphOffsets.front()` and `.back()`, with `fontScale` the same
+                // `text-size / 24` this calls `font_scale`. Magnitudes, because
+                // `placeLineFeature` compares against `-firstTileDistance` and `lastTileDistance`
+                // and both are distances walked out from the anchor.
+                let reach = label.glyph_reach.map(|(first, last)| {
+                    (
+                        (first * options.font_scale).abs(),
+                        (last * options.font_scale).abs(),
+                    )
+                });
+
                 // A line-placed label reserves a run of circles following the road; a point
                 // label reserves one box. Both in screen space, because that is where labels
                 // compete for room.
@@ -235,6 +254,7 @@ impl ViewSymbols {
                         options.font_scale,
                         options.padding,
                         options.overscaling,
+                        reach,
                     )
                     .map(Shape::Circles)
                     // A label with glyphs always offers a shape, even where no run could be
@@ -303,6 +323,7 @@ impl ViewSymbols {
                             options.font_scale,
                             options.padding,
                             options.overscaling,
+                            reach,
                         )
                         .map(Shape::Circles)
                     }

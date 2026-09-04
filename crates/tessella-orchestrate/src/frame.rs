@@ -1398,7 +1398,7 @@ fn place_symbols(
             icon_padding,
             ..crate::symbols::FrameOptions::default()
         };
-        let labels = frame_labels(&laid, icons.as_ref(), base);
+        let labels = frame_labels(&laid, &buffers, icons.as_ref(), base);
         // Where each glyph lands along its road, *before* the label is offered any space.
         //
         // A label whose road runs out before its name does is not drawn, and a label that is not
@@ -1466,7 +1466,7 @@ fn place_symbols(
         let Content::Symbol(_) = &bucket.content else {
             continue;
         };
-        let labels = frame_labels(&laid, icons.as_ref(), base);
+        let labels = frame_labels(&laid, &buffers, icons.as_ref(), base);
         // A label placement never offered has no fade entry, which reads as hidden -- so the
         // ones whose road ran out stay hidden without being special-cased here.
         held.symbols.write_opacity(&labels, &mut buffers);
@@ -1494,6 +1494,8 @@ fn place_symbols(
                             laid_out: icon.clone(),
                             icon: None,
                             line: &[],
+                            // Opacity only; this pairing never reaches placement.
+                            glyph_reach: None,
                         })
                 })
                 .collect();
@@ -1559,6 +1561,7 @@ fn project_with(plane: &[f64; 16]) -> impl Fn((f32, f32)) -> (f32, f32) + '_ {
 /// `lay_out`, which is done once and held; this is references and a clone of each instance's box.
 fn frame_labels<'a>(
     laid: &'a [tessella_layout::symbol_bucket::LaidOut],
+    buffers: &SymbolBuffers,
     icons: Option<&(SymbolBuffers, Vec<tessella_layout::symbol_bucket::LaidOut>)>,
     base: u32,
 ) -> Vec<crate::symbols::FrameLabel<'a>> {
@@ -1585,6 +1588,15 @@ fn frame_labels<'a>(
             // most of the long ones -- the segment index then named a different pair of vertices
             // and the glyphs marched off along the wrong stretch.
             line: instance.line.as_slice(),
+            // Four vertices to a glyph, and one offset per glyph, which is how
+            // `write_line_positions` indexes the same buffer.
+            glyph_reach: {
+                let quads = instance.vertices.start / 4..instance.vertices.end / 4;
+                buffers
+                    .glyph_offsets
+                    .get(quads)
+                    .and_then(|offsets| Some((*offsets.first()?, *offsets.last()?)))
+            },
         })
         .collect()
 }

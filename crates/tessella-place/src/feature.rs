@@ -277,6 +277,7 @@ pub struct LineCircle {
 /// Empty when the line is too short to hold the run, which is not the same as "collides with
 /// nothing": a label that could not be bboxified was already refused by the bend check.
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn line_circles(
     line: &[(f32, f32)],
     anchor: (f32, f32),
@@ -284,6 +285,7 @@ pub fn line_circles(
     label_length: f32,
     box_size: f32,
     overscaling: f32,
+    reach: Option<(f32, f32)>,
 ) -> Vec<LineCircle> {
     let mut out = Vec::new();
     if box_size <= 0.0 || line.len() < 2 {
@@ -399,16 +401,29 @@ pub fn line_circles(
         out.push(LineCircle {
             circle: Circle::new(center, box_size / 2.0),
             distance_from_anchor,
-            // Against the label's own half-length, which is what mbgl compares the same distance
-            // to: it skips every circle beyond the placed first and last glyph, and at pitch zero
-            // those sit at the ends of the label.
+            // Against how far the label's outermost glyphs actually reach, which is what mbgl
+            // compares the same distance to: `placeLineFeature` skips every circle outside
+            // `-firstTileDistance ..= lastTileDistance`, and those two come from walking the
+            // line to where the first and last glyph land.
+            //
+            // Not the label's half-length. The offsets locate the outermost *glyphs*, so the
+            // reach stops short of the collision box, and it is asymmetric whenever the shaping
+            // is -- on a Washington street name the two differ by a whole em. Comparing against
+            // half the box kept a circle at each end that mbgl drops, which is one circle of
+            // reserved road per label and enough to change who wins a junction.
             //
             // The *slackened* distance, because that is the value mbgl compares --
             // `placeLineFeature` reads `circle.signedDistanceFromAnchor`, which is stored with
-            // the fifth already taken off. It widens the band that counts as covered by a
-            // quarter, and it is the difference between drawing a few more labels than the
-            // oracle and drawing the same ones.
-            covered_by_label: distance_from_anchor.abs() <= label_length / 2.0,
+            // the fifth already taken off.
+            //
+            // Half the label length when no reach is given, which is the icon-only case: there
+            // are no glyph offsets to walk, and mbgl does not reach here at all.
+            covered_by_label: match reach {
+                Some((back, forward)) => {
+                    distance_from_anchor >= -back && distance_from_anchor <= forward
+                }
+                None => distance_from_anchor.abs() <= label_length / 2.0,
+            },
         });
     }
 
@@ -425,6 +440,7 @@ pub fn line_circles(
 /// otherwise reserve circles smaller than the gap between them, and a run of circles that does
 /// not overlap is a dotted line rather than a covering.
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn collision_circles(
     extent: Extent,
     line: &[(f32, f32)],
@@ -433,6 +449,7 @@ pub fn collision_circles(
     box_scale: f32,
     padding: Padding,
     overscaling: f32,
+    reach: Option<(f32, f32)>,
 ) -> Option<Vec<LineCircle>> {
     if extent.is_empty() {
         return None;
@@ -449,7 +466,7 @@ pub fn collision_circles(
     }
     let height = height.max(10.0 * box_scale);
 
-    let circles = line_circles(line, anchor, segment, x2 - x1, height, overscaling);
+    let circles = line_circles(line, anchor, segment, x2 - x1, height, overscaling, reach);
     if circles.is_empty() {
         return None;
     }

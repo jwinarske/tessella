@@ -5105,3 +5105,38 @@ a subdivision and a draw the consumer no longer makes.
   The walk already exists in a different form: `write_line_positions` follows the same line to
   decide whether the name fits, and that is where the first and last glyph's distances would come
   from.
+
+  *Fixed, and it closes Washington.* Logging both sides' per-circle distances settled what the
+  quantity is before anything was changed. On the same label they agree exactly once the units are
+  reconciled -- mbgl stores tile units and this works in label-plane pixels, and at
+  `pixelsToTileUnits = 1/16` its `-1499.520 -1264.000 -1028.480 -792.960 ...` is this frontend's
+  `-93.720 -79.000 -64.280 -49.560 ...` to the last digit. Only the bound differed: mbgl kept
+  `-47.25 ..= 48.75` where this kept `|d| <= 52.75`.
+
+  Two things in that. The bound is **not** the box: it is the outermost *glyphs*, so it stops
+  short of the collision box, which carries the label's padding as well. And it is **asymmetric**
+  -- 47.25 against 48.75, a difference of exactly one em -- because the shaping is. Comparing
+  against half the box kept one extra circle at each end, which is one extra stretch of road
+  reserved per label, and that is enough to change who wins a junction.
+
+  So `FrameLabel` carries `glyph_reach`, the first and last entries of the same
+  `glyph_offsets` buffer `write_line_positions` already walks -- mbgl's `glyphOffsets.front()`
+  and `.back()` -- and `line_circles` compares against `-first ..= last` scaled by `font_scale`,
+  falling back to half the length when there are no glyphs to offer, which is the icon-only case
+  mbgl never reaches with.
+
+  | scene | before | after |
+  | --- | --- | --- |
+  | Washington | 98.5% / 0.74 / 4,089 | **99.7% / 0.01 / 0** |
+  | all families | 88.2% / 0.51 / 90 | unchanged |
+  | poi-labels | 99.4% / 0.17 / 806 | unchanged |
+  | place-labels | 100% / 0 / 0 | unchanged |
+
+  Washington has no differing pixel left above the gross threshold, on the scene that opened this
+  session at 17,227. The two Berlin scenes are point-placed, so nothing here touches them.
+
+  Still not expressed, and no longer measurable on these scenes: `placeLineFeature` refuses a
+  label outright when the first-and-last-glyph walk fails, and requires `inGrid` -- at least one
+  tested circle inside the padded grid. The first is covered in a different place here
+  (`write_line_positions` hides a label whose road runs out, and `frame.rs` drops it before it is
+  offered); the second has no counterpart.
