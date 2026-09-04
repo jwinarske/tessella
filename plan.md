@@ -5943,3 +5943,21 @@ against; none is scheduled.
   replacing, the consumer keeps whichever version arrived first, which is exactly the shape of
   this fault. `filament_renderer.cc` appears to replace via `onRetire` then `meshes_[add.id] = ...`,
   so read that path and the texture uploads next.
+
+- **Withdraw "producer audit complete".** The table above compared the *last* value logged per key
+  across a whole run. Counting the log lines shows each bucket is encoded between one and four
+  times, with 30, 37 and 31 encodes over three runs -- so "last per key" takes different keys from
+  different frames, and says nothing about what any single frame emitted. That is the fifth time
+  this session a conclusion has rested on a value accumulated across frames.
+
+  What still stands, because each was compared per frame or is frame-independent: the tile list,
+  the placement decisions, the live drawable set after releases, the final draw order, the UBO
+  contents keyed by slot, and the sprite atlas. What does *not* stand is "symbol vertex, dynamic
+  and opacity buffers are identical" -- that comparison must be redone with a frame marker, taking
+  only the last frame's encodes.
+
+  It also raises the question the counts imply: if a symbol bucket is encoded once in some runs and
+  four times in others, the consumer's copy came from whichever frame encoded it last, and that
+  frame differs. Excluding symbols from the re-emission gate was meant to make every frame re-encode
+  them; the counts say it did not. Check whether a bucket reaches the encode loop at all when its
+  tile is drawn but nothing about it changed.
