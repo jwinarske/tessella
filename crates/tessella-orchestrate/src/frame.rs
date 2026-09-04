@@ -1791,6 +1791,8 @@ fn encode_parts(
                 true,
                 atlas,
                 sprites,
+                // Glyphs are always sampled linearly, whatever the icons do.
+                tessella_capture_abi::envelope::TextureFilter::Linear,
             );
 
             match icons {
@@ -1798,9 +1800,37 @@ fn encode_parts(
                     // Two records, like an extrusion's roof and walls: returned here rather than
                     // falling through, because what follows expects one.
                     let sheet = patterns.map_or(atlas, |patterns| patterns.texture);
+                    // An icon drawn at its own size is sampled nearest, which is what keeps its
+                    // edges on pixel boundaries. See `SymbolLayout::icons_need_linear` for the
+                    // half of the test that reads the style, and the sprite sheet for the other
+                    // half: a sprite packed at a different pixel ratio from the map's is being
+                    // rescaled whatever the style says.
+                    let scaled = layout.icons_need_linear
+                        || patterns.is_some_and(|patterns| {
+                            layout.icons().iter().any(|name| {
+                                patterns.positions.get(name).is_some_and(|position| {
+                                    // The map's, which this frontend renders at one.
+                                    (position.pixel_ratio - 1.0).abs() > f64::EPSILON
+                                })
+                            })
+                        });
+                    let filter = if scaled {
+                        tessella_capture_abi::envelope::TextureFilter::Linear
+                    } else {
+                        tessella_capture_abi::envelope::TextureFilter::Nearest
+                    };
                     return Some(alloc::vec![
                         text,
-                        emit::encode_symbol(arena, PLACEHOLDER, shaped, key, false, sheet, None),
+                        emit::encode_symbol(
+                            arena,
+                            PLACEHOLDER,
+                            shaped,
+                            key,
+                            false,
+                            sheet,
+                            None,
+                            filter,
+                        ),
                     ]);
                 }
                 None => Some(text),

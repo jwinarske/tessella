@@ -77,7 +77,7 @@ fn labelled(text: &str) -> (SlabArena, emit::Encoded, usize) {
     let glyphs = buffers.glyphs();
 
     let mut arena = SlabArena::new();
-    let encoded = emit::encode_symbol(&mut arena, GeometryId(7), &buffers, 0, true, ATLAS, None);
+    let encoded = emit::encode_symbol(&mut arena, GeometryId(7), &buffers, 0, true, ATLAS, None, tessella_capture_abi::envelope::TextureFilter::Linear);
     arena.seal();
     (arena, encoded, glyphs)
 }
@@ -116,7 +116,7 @@ fn a_non_sdf_symbol_names_the_icon_shader() {
         &SymbolOptions::default(),
     );
     let mut arena = SlabArena::new();
-    let encoded = emit::encode_symbol(&mut arena, GeometryId(1), &buffers, 0, false, ATLAS, None);
+    let encoded = emit::encode_symbol(&mut arena, GeometryId(1), &buffers, 0, false, ATLAS, None, tessella_capture_abi::envelope::TextureFilter::Linear);
     assert_eq!(
         encoded.record.builtin_shader,
         BuiltIn::SymbolIconShader as i32
@@ -257,7 +257,7 @@ fn an_empty_layer_encodes_to_nothing() {
     assert!(buffers.is_empty());
 
     let mut arena = SlabArena::new();
-    let encoded = emit::encode_symbol(&mut arena, GeometryId(1), &buffers, 0, true, ATLAS, None);
+    let encoded = emit::encode_symbol(&mut arena, GeometryId(1), &buffers, 0, true, ATLAS, None, tessella_capture_abi::envelope::TextureFilter::Linear);
     assert_eq!(encoded.record.vertex_count, 0);
     assert_eq!(encoded.segments()[0].vertex_length, 0);
 }

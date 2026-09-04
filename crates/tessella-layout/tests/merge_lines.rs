@@ -41,6 +41,7 @@ fn layout(features: &[(&str, &[(i32, i32)])]) -> SymbolLayout {
         .collect();
 
     SymbolLayout {
+        icons_need_linear: false,
         pending,
         symbol: SymbolOptions::default(),
         line: LineOptions::default(),

@@ -5140,3 +5140,47 @@ a subdivision and a draw the consumer no longer makes.
   tested circle inside the padded grid. The first is covered in a different place here
   (`write_line_positions` hides a label whose road runs out, and `frame.rs` drops it before it is
   offered); the second has no counterpart.
+
+- **An unscaled icon was sampled with interpolation, and mbgl samples it nearest.** *Fixed, and it
+  closes the two Berlin symbol scenes.* The poi-labels difference was 47 small clusters, the
+  largest an 18x18 box around a sprite. Cropped, the sprite is there in both and the same colour,
+  but ours has soft edges where the oracle's are crisp: mbgl drew a 17x16 block with 268 of its
+  272 pixels at full strength, and this drew 18x17 with about 66 partial pixels round the border.
+
+  Weighing the two by ink gives identical mass -- 70,863 either way -- so it is the same picture at
+  the same size, and the centroids differ by a fraction of a pixel. Across eight sprites in the
+  frame those fractions are all different, between -0.30 and +0.33, which is what rules placement
+  out: a misplacement would be constant, and a *sampling* difference is not. mbgl's edges land on
+  pixel boundaries because it is not interpolating at all.
+
+  `DrawableAtlasesTweaker` gives the glyph atlas linear filtering always and the icon atlas
+  `TextureFilterType::Nearest` unless `linearFilterForIcons`, which `RenderSymbolLayer` computes as
+  `iconScaled`: an `icon-size` other than a constant one, or `iconsNeedLinear` -- a data-driven or
+  zoom-varying `icon-size`, a non-zero `icon-rotate`, or a sprite whose pixel ratio differs from
+  the map's. An icon drawn at its own size has its texels one to a pixel, and interpolating between
+  them only smears the edges across two.
+
+  The sampler is a property of the *use* rather than of the texture -- the same sprite sheet is
+  sampled linearly by a pattern -- so it travels with the binding. `TextureRef` had a `_pad` word
+  documented as "must be zero"; it now carries a `TextureFilter`, and zero is `Linear`, so a
+  producer that never sets it and a consumer that never reads it both keep the behaviour they had.
+  `SymbolLayout::icons_need_linear` answers the three conditions that live in the style, reading a
+  literal as constant and an expression as not -- which is mbgl's `constantOr` and
+  `isDataDriven() || !isZoomConstant()` split. The fourth needs the sheet, so the emit site
+  applies it against the bucket's own sprites.
+
+  | scene | before | after |
+  | --- | --- | --- |
+  | poi-labels | 99.4% / 0.17 / 806 | **100.0% / 0.00 / 0** |
+  | all families | 88.2% / 0.51 / 90 | **88.8% / 0.39 / 8** |
+  | Washington | 99.7% / 0.01 / 0 | unchanged |
+  | place-labels | 100% / 0 / 0 | unchanged |
+
+  All four scenes are now at or within eight gross pixels of the oracle.
+
+  Two things worth writing down about how this went. The first attempt measured *no* change,
+  because the consumer had failed to compile and the probe ran a stale binary -- the build script
+  is `set -e` and the failure was hidden behind a `tail -1`. Check that a build succeeded before
+  believing a measurement that says nothing happened. And the consumer's `Mesh` is built with
+  positional initialisers, so a field inserted between `texture` and `texture1` silently took the
+  next one's value; the new field goes after both, and says so.

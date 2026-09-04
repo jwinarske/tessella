@@ -32,7 +32,8 @@ use alloc::vec::Vec;
 
 use tessella_capture_abi::envelope::{
     AddReason, AttributeDesc, GeometryAdd, GeometryId, GeometryRemove, MeshAdd, MeshFormat,
-    Segment as AbiSegment, SlabEntry, SlabRef, SlabRegion, Span, TextureId, TextureRef, WireRecord,
+    Segment as AbiSegment, SlabEntry, SlabRef, SlabRegion, Span, TextureFilter, TextureId, TextureRef,
+    WireRecord,
 };
 use tessella_capture_abi::generated::{shader_attributes, texture_slots, ubo_slots};
 use tessella_capture_abi::mapping::Mapping;
@@ -877,7 +878,7 @@ impl Encoded {
 /// a few lines above every call site — and a drawable with the wrong samplers is worse on the
 /// wire than a panic in a test.
 #[must_use]
-pub fn texture_refs(shader: BuiltIn, bound: &[TextureId]) -> Vec<TextureRef> {
+pub fn texture_refs(shader: BuiltIn, bound: &[TextureId], filter: TextureFilter) -> Vec<TextureRef> {
     let declared = texture_slots::texture_count(shader)
         .unwrap_or_else(|| panic!("{shader:?} has no generated texture table"));
     assert_eq!(
@@ -893,7 +894,7 @@ pub fn texture_refs(shader: BuiltIn, bound: &[TextureId]) -> Vec<TextureRef> {
         .map(|(slot, texture)| TextureRef {
             texture: *texture,
             slot: slot.binding,
-            _pad: 0,
+            filter: filter as u32,
         })
         .collect()
 }
@@ -1185,7 +1186,8 @@ pub fn encode_fill(
     let attrs = push_span(&mut payload, &descriptors);
     let textures = push_span(
         &mut payload,
-        &pattern_atlas.map_or_else(Vec::new, |atlas| texture_refs(shader, &[atlas])),
+        &pattern_atlas
+            .map_or_else(Vec::new, |atlas| texture_refs(shader, &[atlas], TextureFilter::Linear)),
     );
     let segments = push_span(
         &mut payload,
@@ -1303,6 +1305,7 @@ fn geometry_add(
     segments: &[Segment],
     shader: BuiltIn,
     atlas: Option<TextureId>,
+    filter: TextureFilter,
 ) -> Encoded {
     geometry_add_instanced(
         geometry,
@@ -1314,6 +1317,7 @@ fn geometry_add(
         segments,
         shader,
         atlas,
+        filter,
     )
 }
 
@@ -1333,6 +1337,7 @@ fn geometry_add_instanced(
     segments: &[Segment],
     shader: BuiltIn,
     atlas: Option<TextureId>,
+    filter: TextureFilter,
 ) -> Encoded {
     let mut payload = Vec::new();
     let attrs = push_span(&mut payload, descriptors);
@@ -1340,7 +1345,7 @@ fn geometry_add_instanced(
     // The slot comes from the shader's own table, never from the caller — see `texture_refs`.
     let textures = push_span(
         &mut payload,
-        &atlas.map_or_else(Vec::new, |atlas| texture_refs(shader, &[atlas])),
+        &atlas.map_or_else(Vec::new, |atlas| texture_refs(shader, &[atlas], filter)),
     );
     let segments = push_span(
         &mut payload,
@@ -1460,6 +1465,7 @@ pub fn encode_line(
             BuiltIn::LineShader
         },
         pattern_atlas,
+        TextureFilter::Linear,
     )
 }
 
@@ -1529,6 +1535,7 @@ pub fn encode_background(
             BuiltIn::BackgroundShader
         },
         pattern_atlas,
+        TextureFilter::Linear,
     )
 }
 
@@ -1560,6 +1567,7 @@ pub fn encode_circle(
         &bucket.segments,
         BuiltIn::CircleShader,
         None,
+        TextureFilter::Linear,
     )
 }
 
@@ -1624,6 +1632,7 @@ pub fn encode_extrusion(
             BuiltIn::FillExtrusionShader
         },
         pattern_atlas,
+        TextureFilter::Linear,
     );
     (roof, shared)
 }
@@ -1785,6 +1794,7 @@ pub fn encode_extrusion_walls(
         core::slice::from_ref(&segment),
         shader,
         pattern_atlas,
+        TextureFilter::Linear,
     )
 }
 
@@ -1809,6 +1819,7 @@ pub fn encode_extrusion_walls(
 /// declare the second sampler — and both go in. Passing it for a drawable with no images would
 /// bind a texture nothing samples; passing `None` for one that has them would leave the sprite
 /// sampler unbound, which draws a label with holes in it and reports nothing.
+#[allow(clippy::too_many_arguments)]
 pub fn encode_symbol(
     arena: &mut SlabArena,
     geometry: GeometryId,
@@ -1817,6 +1828,7 @@ pub fn encode_symbol(
     is_sdf: bool,
     atlas: TextureId,
     sprites: Option<TextureId>,
+    filter: TextureFilter,
 ) -> Encoded {
     let vertex_bytes = as_symbol_bytes(&buffers.vertices);
     let index_bytes = as_bytes_u16(&buffers.indices);
@@ -1913,7 +1925,7 @@ pub fn encode_symbol(
         None if is_sdf => (BuiltIn::SymbolSDFShader, alloc::vec![atlas]),
         None => (BuiltIn::SymbolIconShader, alloc::vec![atlas]),
     };
-    let texture_refs = push_span(&mut payload, &texture_refs(shader, &textures));
+    let texture_refs = push_span(&mut payload, &texture_refs(shader, &textures, filter));
 
     #[allow(clippy::cast_possible_truncation)]
     let record = GeometryAdd {
@@ -2000,7 +2012,7 @@ pub fn encode_raster(
     );
     let texture_refs = push_span(
         &mut payload,
-        &texture_refs(BuiltIn::RasterShader, &[image, image]),
+        &texture_refs(BuiltIn::RasterShader, &[image, image], TextureFilter::Linear),
     );
 
     #[allow(clippy::cast_possible_truncation)]

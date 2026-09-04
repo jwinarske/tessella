@@ -480,6 +480,28 @@ pub struct Pending {
 /// A symbol layer's contribution to one tile, before glyphs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SymbolLayout {
+    /// Whether this layer's icons have to be sampled with interpolation.
+    ///
+    /// mbgl's `iconsNeedLinear`, plus the `iconScaled` test that wraps it in
+    /// `RenderSymbolLayer`. An icon drawn at exactly its own size wants *nearest* sampling: its
+    /// texels land one to a pixel, and interpolating between them only smears the edges across
+    /// two. Anything that rescales or rotates it wants linear instead, because then the texels do
+    /// not line up and nearest would alias.
+    ///
+    /// Three of mbgl's four conditions live in the style and are answered here:
+    ///
+    /// - `icon-size` other than a constant `1`, which is `constantOr(1.0) != 1.0`;
+    /// - an `icon-size` that is data-driven or varies with zoom, which is an expression here and
+    ///   `isDataDriven() || !isZoomConstant()` there;
+    /// - a non-zero `icon-rotate`.
+    ///
+    /// A literal is a constant and anything else is not, which is the same split mbgl makes: a
+    /// property written as an expression may evaluate to one today and something else at the next
+    /// zoom, and the sampler is chosen once for the bucket.
+    ///
+    /// The fourth -- a sprite whose pixel ratio differs from the map's -- needs the sheet, which
+    /// this does not have. The caller with the sheet applies it.
+    pub icons_need_linear: bool,
     /// One entry per label this layer draws on this tile.
     pub pending: Vec<Pending>,
     /// How the text is set.
@@ -527,8 +549,19 @@ impl SymbolLayout {
             .and_then(Value::as_number)
             .map_or(16.0, |value| value as f32);
 
+        // A literal is a constant; an expression is not. See `icons_need_linear`.
+        let literal_number = |key: &str, default: f64| -> Option<f64> {
+            match layer.layout.get(key) {
+                None => Some(default),
+                Some(property) => property.as_literal().and_then(Value::as_number),
+            }
+        };
+        let icons_need_linear = literal_number("icon-size", 1.0) != Some(1.0)
+            || literal_number("icon-rotate", 0.0) != Some(0.0);
+
         Self {
             pending: Vec::new(),
+            icons_need_linear,
             symbol,
             line: LineOptions {
                 symbol,

@@ -1705,15 +1705,15 @@ typedef struct tsl_texture_ref {
     uint64_t texture;
     /* Shader-side slot. */
     uint32_t slot;
-    /* Must be zero. */
-    uint32_t _pad;
+    /* How to sample it: 0 linear, 1 nearest. */
+    uint32_t filter;
 } tsl_texture_ref;
 
 TSL_ASSERT(sizeof(tsl_texture_ref) == 16, "tsl_texture_ref size differs from the Rust definition");
 TSL_ASSERT(TSL_ALIGNOF(tsl_texture_ref) == 8, "tsl_texture_ref alignment differs from the Rust definition");
 TSL_ASSERT(offsetof(tsl_texture_ref, texture) == 0, "tsl_texture_ref.texture moved");
 TSL_ASSERT(offsetof(tsl_texture_ref, slot) == 8, "tsl_texture_ref.slot moved");
-TSL_ASSERT(offsetof(tsl_texture_ref, _pad) == 12, "tsl_texture_ref._pad moved");
+TSL_ASSERT(offsetof(tsl_texture_ref, filter) == 12, "tsl_texture_ref.filter moved");
 
 /*
  * Geometry, for the emission that carries it.

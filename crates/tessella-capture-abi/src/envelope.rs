@@ -387,6 +387,24 @@ pub struct Segment {
     pub index_length: u32,
 }
 
+/// How a bound texture is sampled.
+///
+/// mbgl configures this per drawable rather than per texture: `DrawableAtlasesTweaker` sets the
+/// glyph atlas to linear always, and the icon atlas to linear only when the icons are scaled --
+/// `icon-size` other than a constant one, a data-driven or zoom-varying `icon-size`, a non-zero
+/// `icon-rotate`, or a sprite whose pixel ratio differs from the map's. Everything else samples
+/// the icon atlas *nearest*, which is what keeps an unscaled sprite's edges on pixel boundaries
+/// instead of smeared across two.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[repr(u32)]
+pub enum TextureFilter {
+    /// Bilinear. The default, and what every family other than an unscaled icon wants.
+    #[default]
+    Linear = 0,
+    /// Nearest texel. An icon drawn at its own size, where interpolation only blurs it.
+    Nearest = 1,
+}
+
 /// Binds a texture to a shader slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(C)]
@@ -395,8 +413,11 @@ pub struct TextureRef {
     pub texture: TextureId,
     /// Shader-side slot.
     pub slot: u32,
-    /// Padding. Must be zero.
-    pub _pad: u32,
+    /// How to sample it, as a [`TextureFilter`] discriminant.
+    ///
+    /// This was padding through R0, and zero is [`TextureFilter::Linear`] -- so a producer that
+    /// never sets it, and a consumer that never reads it, both keep the behaviour they had.
+    pub filter: u32,
 }
 
 /// Announces a piece of geometry, for the emission that carries it.
