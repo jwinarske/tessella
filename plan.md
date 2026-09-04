@@ -6113,3 +6113,62 @@ unchanged.
 **Remaining for the quad**, in order: a Fluorite-side hook that constructs a `MapView` per producer
 with that producer's engine, scene, size and layer; a `tick()` on the producer's frame path;
 `setVisibleLayers` per view; and the camera routed from Dart's `MapCamera` to `MapView::setCamera`.
+
+### The quad renders, headless
+
+`quad_probe` is the shared-scene case with no Flutter in it: one engine, one scene, four
+`filament::View`s with their own camera and viewport over one swapchain, four `MapView`s on layers
+0x01 through 0x08. Seattle z13, Tokyo z15, Liestal z12 and Shanghai z14 each draw in their own pane
+and nowhere else, so the layer masking holds and four maps on one `Pool::shared()` reach quiescence
+together.
+
+One thing the probe got wrong twice before it was right: the map is drawn y-down and the PPM writer
+flips the framebuffer to put it upright, and that flip swaps the pane rows as well. The rows are
+laid out pre-flip.
+
+**The Fluorite seam is written.** `FluoriteViewExtension` -- attach, frame, detach, installed through
+`fluorite_set_view_extension` -- is the general form of the hook the quad needs, because the thing
+it hands over is not map-specific: the view's engine, scene and `filament::View`, plus a per-frame
+call on the Filament thread. `CreateView` narrows the view to `0x01 | (1 << (slot + 1))`, keeping
+layer 0 for the ECS content so it still draws in every pane, and giving each slot one of the seven
+bits left. Seven views fit; past that a view gets no attach.
+
+**What is left** is the Dart package: `tessella_fluorite`'s `hook/` and `lib/` are still empty, so
+nothing installs the extension yet. The native half needs a C entry point that takes a style and a
+per-slot camera and registers a `FluoriteViewExtension` whose `attach` builds a `MapView` on layer
+`1 << (slot + 1)` and whose `frame` ticks it.
+
+### 512 was the atlas's starting size, not its size
+
+*Found by the quad, which is what a Latin-only test scene could not do.* Tokyo and Shanghai rendered
+road geometry with holes in the labels -- `八重洲一丁目` as `八　　一丁`, `さくら通り` as
+`さくら　り` -- with the advance still spent for the missing characters.
+
+Two causes, one asset and one real:
+
+- **The glyph store has no CJK.** Every extracted stack under `/mnt/dev/renders/glyphs` carries the
+  same 129 ranges, and 12288-12543, 19968-40959 and 44032-55295 are absent from all of them. A
+  `Noto Sans Regular` stack mirrored from MapLibre's own font server covers 0-65535 and is what the
+  quad style now asks for. Not customer data, not in any repo, and both renderers read it from the
+  same server.
+
+- **The atlas dropped what would not fit.** `ATLAS_SIZE = 512` was read off an observation --
+  `symbol_style.dump` lists a `512x512` texture -- and generalised into a fixed page, with a comment
+  reasoning that growing would invalidate rectangles already handed out. mbgl's actual behaviour is
+  in `DynamicTextureAtlas::uploadGlyphs`: `startSize` is 512, and when a glyph of the set will not
+  pack it releases what it packed, discards the texture and retries at double, until the whole set
+  fits. 512 holds a few hundred glyphs; a CJK frame has thousands.
+
+  `Atlas::add` now doubles and re-packs. The invalidation the comment feared does not arise: shelves
+  only ever gain room to the right and below, so a bin's x and y do not move. What moves is the
+  texture the rectangles are relative to, so the atlas marks itself wholly dirty and the extent goes
+  out with the upload -- and the consumer already rebuilds a texture whose dimensions changed.
+  Capped at 4096, because this atlas is per font stack and lives as long as the map rather than per
+  bucket and per frame.
+
+  Tokyo z15 against `mbgl-render`: **9,733 gross to 4,482**, every glyph drawn. What is left there
+  is line-label placement on vertical lines, not glyphs. Washington 0 and families 8 unchanged.
+
+The methodological note is the same one §17 already carries in a different dimension: a constant
+read off one scene is a measurement, not a definition. This one had a comment explaining why it
+could not be otherwise, and the explanation was wrong about the oracle rather than about the code.
