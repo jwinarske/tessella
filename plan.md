@@ -5540,3 +5540,37 @@ against; none is scheduled.
   reads it as label-plane coordinates, which the comment in `write_line_positions` already flags as
   worth thousands of pixels when it goes wrong -- and a pitched label plane is exactly where a
   coincidence at pitch zero would stop holding.
+
+- **The pitched probe does not reproduce, and every pitched number in this document is therefore
+  suspect.** *Open, and it invalidates more than the last entry did.* Five identical runs of the
+  icon scene at pitch 45 drew 11, 8, 11, 53 and 0 icons; the last produced an entirely black frame,
+  630,000 gross pixels against the oracle. The "8 icons against 148" of the previous entry was one
+  sample of that distribution reported as a fact.
+
+  So the following, all recorded above as results, are unsupported: the perspective ratio taking
+  poi-labels from 10,104 to 2,745 and the all-families scene from 8,622 to 3,964; the viewport
+  padding taking the icon scene to 14,162 and then not; the icon scene sitting "stably about
+  34,000". The two *fixes* stand on their own -- they are what `projectAndGetPerspectiveRatio` and
+  `findViewportPadding` do, transcribed -- but the numbers attributed to them were measured on an
+  instrument that was not measuring.
+
+  **Flat is a different matter and mostly holds.** Four runs each of Washington, poi-labels, roads,
+  all-families and the icon scene give 0, 0, 0, 8 and 272 every time. But it is not airtight
+  either: an earlier five-run check of the icon scene flat produced one 9,520 among four 272s, so
+  the same fault is present and merely rarer where there are nine tiles instead of thirteen.
+
+  **The hole is precisely locatable.** `TileSource::outstanding` counts `inflight` -- tiles
+  *submitted* and not yet landed -- so a tile the cover wants but has not been submitted for yet is
+  invisible to it, and the settle loop sees zero and stops. More tiles means a wider window for
+  that, which is why pitch is worse. `want()` already receives the whole cover, so the source could
+  answer "wanted and not yet landed" instead, which is the question actually being asked.
+
+  What stops that being a five-line change is failure: a tile that will never land must not keep
+  the count above zero forever, or the probe waits out its budget on every scene with a bad tile.
+  That needs per-tile failure state, which `failures` -- a count and one reason -- does not carry.
+  Both halves are worth having anyway; a consumer showing progress wants the same pair.
+
+  **What still stands, because it is not a rendered frame.** The producer-side counts are internal
+  and timing-independent once the frame is emitted: at pitch 45 we offer 462 icons across
+  `15/17602..17605/10744..10747`, which is mbgl's 462 across mbgl's thirteen tiles, and we mark 237
+  quads visible at pitch and 237 flat. Those are the numbers to build on.
