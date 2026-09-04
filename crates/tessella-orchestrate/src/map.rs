@@ -509,9 +509,16 @@ impl Map {
                 // filled the raster's own zoom instead, and the frame found nothing to draw. A
                 // background that has to wait for a planner is the one layer that never should --
                 // it is what a map shows *before* anything has arrived.
+                // An *empty* stored entry is not an answer either. The store's sourceless map is
+                // a cache of `build_sourceless`, not an authority over it: `TileSource` inserts
+                // whatever the build returned for the coordinates its planner visited, and a
+                // coordinate the planner reached before the style had anything to say about it
+                // is stored empty. Taking that as the answer is a frame with no drawables at
+                // all -- and the consumer rebuilds its scene from the frame's order, so it is a
+                // screen that goes black. On the quad's zoom sweep, 777 of 930 emitted frames.
                 let built: Vec<LayerBucket> = match tiles.sourceless(cover) {
-                    Some(held) => held.iter().cloned().collect(),
-                    None => crate::tile::build_sourceless(&self.style, cover).unwrap_or_default(),
+                    Some(held) if !held.is_empty() => held.iter().cloned().collect(),
+                    _ => crate::tile::build_sourceless(&self.style, cover).unwrap_or_default(),
                 };
                 if built.is_empty() {
                     continue;

@@ -888,3 +888,206 @@ fn empty_tiles_are_covered_rather_than_holes() {
          ever see past, which is the state mbgl is permanently in on the same shape of data"
     );
 }
+
+/// A tile store that only answers at one zoom, which is what a store looks like mid-sweep.
+///
+/// Zooming is not panning: the coordinates the camera wants change wholesale at every level, so
+/// for most of a sweep the store holds tiles for a zoom the camera has left and none for the one
+/// it has reached. What a frame does *then* is the question this fixture asks.
+struct OnlyAt {
+    zoom: u8,
+    buckets: Arc<Vec<LayerBucket>>,
+}
+
+impl Tiles for OnlyAt {
+    fn buckets(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
+        (tile.z == self.zoom).then(|| Arc::clone(&self.buckets))
+    }
+}
+
+/// No frame draws nothing.
+///
+/// A frame's order is what the consumer rebuilds its scene from, so an order with no entries is
+/// a screen that goes black -- and a producer that emits one has thrown away a picture it was
+/// still able to draw. Measured on the quad's zoom sweep: 777 of 930 emitted frames carried an
+/// empty order, and the map flickered between the map and black.
+///
+/// The background alone is enough to satisfy this. It is a function of the style and the
+/// coordinate and of nothing else, so there is no camera anywhere in the range for which a frame
+/// has nothing to say.
+#[test]
+fn every_emitted_frame_draws_something() {
+    let style = Style::parse(STYLE).expect("the style parses");
+    let decoded = Tile::decode(REAL_TILE).expect("the fixture decodes");
+    let built =
+        build_mvt_tile(&style, "src", TileId::new(0, 0, 0), &decoded).expect("the tile builds");
+    let tiles = OnlyAt {
+        zoom: 4,
+        buckets: Arc::new(built),
+    };
+
+    let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
+    // SAFETY: sized by `region_size`, eight-aligned as a `Vec<u64>`, outlives both halves.
+    let mut ring = unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
+
+    let mut map = Map::new(style, view(4.0), ViewId(0));
+    let mut empty: Vec<f64> = Vec::new();
+    let mut emitted = 0usize;
+
+    // The sweep the app runs, in tenths of a level: out to 0, in to 18, home.
+    let mut zooms: Vec<f64> = Vec::new();
+    let mut z = 4.0;
+    while z > 0.0 {
+        zooms.push(z);
+        z -= 0.1;
+    }
+    while z < 18.0 {
+        zooms.push(z);
+        z += 0.1;
+    }
+
+    for zoom in zooms {
+        map.look_at(view(zoom));
+        if let Tick::Emitted(frame) = map.tick(&mut ring.0, &tiles).expect("a swept frame") {
+            emitted += 1;
+            if frame.drawables == 0 {
+                empty.push(zoom);
+            }
+        }
+        // The consumer keeps up, so a full ring is never what this measures.
+        while let Some(record) = ring.1.peek() {
+            let token = record.consumed();
+            ring.1.advance(token);
+        }
+    }
+
+    assert!(emitted > 100, "only {emitted} frames emitted, so this proved little");
+    assert!(
+        empty.is_empty(),
+        "{} of {emitted} emitted frames drew nothing, first at zoom {:?}",
+        empty.len(),
+        empty.first()
+    );
+}
+
+/// A store that has nothing, which is what a store looks like the instant a zoom changes.
+struct Nothing;
+
+impl Tiles for Nothing {
+    fn buckets(&self, _tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
+        None
+    }
+}
+
+/// A store that has answered for the sourceless layers of a coordinate, and had nothing to say.
+///
+/// Not a contrivance: `TileSource` inserts whatever `build_sourceless` returned for the
+/// coordinates its planner visited, empty vector included, and a later frame asking about that
+/// coordinate gets `Some(empty)` rather than `None`.
+struct EmptySourceless;
+
+impl Tiles for EmptySourceless {
+    fn buckets(&self, _tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
+        None
+    }
+
+    fn sourceless(&self, _tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
+        Some(Arc::new(Vec::new()))
+    }
+}
+
+/// The background alone is a frame.
+///
+/// It is a function of the style and the coordinate and of nothing else, so there is no camera
+/// for which a style carrying one has nothing to draw. The narrower case of
+/// [`every_emitted_frame_draws_something`]: that one always has an ancestor to substitute, and
+/// this one has no tile at any zoom.
+#[test]
+fn a_map_with_no_tiles_still_draws_its_background() {
+    let style = Style::parse(STYLE).expect("the style parses");
+    let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
+    // SAFETY: sized by `region_size`, eight-aligned as a `Vec<u64>`, outlives both halves.
+    let mut ring = unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
+
+    let mut map = Map::new(style, view(4.0), ViewId(0));
+    let mut empty: Vec<f64> = Vec::new();
+    let mut emitted = 0usize;
+
+    let mut zooms: Vec<f64> = Vec::new();
+    let mut z = 4.0;
+    while z > 0.0 {
+        zooms.push(z);
+        z -= 0.1;
+    }
+    while z < 18.0 {
+        zooms.push(z);
+        z += 0.1;
+    }
+
+    for zoom in zooms {
+        map.look_at(view(zoom));
+        if let Tick::Emitted(frame) = map.tick(&mut ring.0, &Nothing).expect("a swept frame") {
+            emitted += 1;
+            if frame.drawables == 0 {
+                empty.push(zoom);
+            }
+        }
+        while let Some(record) = ring.1.peek() {
+            let token = record.consumed();
+            ring.1.advance(token);
+        }
+    }
+
+    assert!(
+        emitted > 100,
+        "only {emitted} frames emitted, so this proved little"
+    );
+    assert!(
+        empty.is_empty(),
+        "{} of {emitted} emitted frames drew nothing, first at zoom {:?}",
+        empty.len(),
+        empty.first()
+    );
+}
+
+/// A stored answer of "nothing" does not silence the background.
+///
+/// The store's sourceless entry is a cache of `build_sourceless`, not an authority over it: an
+/// empty one means the planner had nothing to say about that coordinate, and the background is a
+/// function of the style and the coordinate, so the frame can still say it. Taking the empty
+/// entry as the answer is a frame with no drawables at all -- and the consumer rebuilds its
+/// scene from the frame's order, so that is a screen that goes black.
+///
+/// Measured on the quad's zoom sweep before this held: 777 of 930 emitted frames carried an
+/// empty order, and the map flickered between the map and black.
+#[test]
+fn an_empty_stored_background_is_not_an_answer() {
+    let style = Style::parse(STYLE).expect("the style parses");
+    let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
+    // SAFETY: sized by `region_size`, eight-aligned as a `Vec<u64>`, outlives both halves.
+    let mut ring = unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
+
+    let mut map = Map::new(style, view(4.0), ViewId(0));
+    let mut empty = 0usize;
+    let mut emitted = 0usize;
+
+    for step in 0..40 {
+        map.look_at(view(4.0 + f64::from(step) * 0.1));
+        if let Tick::Emitted(frame) = map
+            .tick(&mut ring.0, &EmptySourceless)
+            .expect("a swept frame")
+        {
+            emitted += 1;
+            if frame.drawables == 0 {
+                empty += 1;
+            }
+        }
+        while let Some(record) = ring.1.peek() {
+            let token = record.consumed();
+            ring.1.advance(token);
+        }
+    }
+
+    assert!(emitted > 10, "only {emitted} frames emitted");
+    assert_eq!(empty, 0, "{empty} of {emitted} emitted frames drew nothing");
+}
