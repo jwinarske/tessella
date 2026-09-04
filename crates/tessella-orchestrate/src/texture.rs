@@ -197,9 +197,10 @@ pub fn glyph_atlas(
     let (width, height) = atlas.size();
     let size = Extent { width, height };
 
-    // The atlas measures in `u32` and the envelope in `u16`. The atlas is 512 square, so the
-    // narrowing cannot lose a coordinate — and it is bounded rather than cast, because an atlas
-    // grown past a `u16` would otherwise wrap a rectangle onto the wrong pixels silently.
+    // The atlas measures in `u32` and the envelope in `u16`. The atlas starts at 512 square and
+    // doubles to at most 4096, so the narrowing cannot lose a coordinate — and it is bounded
+    // rather than cast, because an atlas grown past a `u16` would otherwise wrap a rectangle
+    // onto the wrong pixels silently.
     let narrow = |value: u32| -> u16 { u16::try_from(value).unwrap_or(u16::MAX) };
     let rects: Vec<Rect16> = dirty
         .iter()

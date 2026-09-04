@@ -34,16 +34,23 @@ use crate::atlas::{Atlas, Rect};
 use crate::manager::{FontStack, GlyphManager, LoadError};
 use crate::pbf::Metrics;
 
-/// The width and height of a glyph atlas.
+/// The width and height a glyph atlas starts at.
 ///
-/// Five hundred and twelve, because that is what the oracle emits: `symbol_style.dump` lists a
-/// `512x512 fmt=1` texture beside mbgl's two placeholders. A fixed page rather than one that
-/// grows — growing a texture the consumer has already uploaded would invalidate every rectangle
-/// handed out for it, so mbgl opens another texture when one fills instead, which is the note
-/// `ShelfPack` carries.
+/// Five hundred and twelve, because that is where the oracle starts:
+/// `DynamicTextureAtlas::uploadGlyphs` has `constexpr Size startSize = {512, 512}`, and a Latin
+/// scene never needs more, which is why `symbol_style.dump` lists a `512x512 fmt=1` texture.
 ///
-/// It is not a number to change on a hunch: it is on the wire, and a consumer sizing its
-/// allocation from the first upload gets a different texture from the one the oracle describes.
+/// It is not where the oracle stops. When a glyph of the set will not pack, mbgl releases what
+/// it packed, discards the texture and retries at double the dimensions until the whole set
+/// fits. Treating 512 as the size instead of the start cost every character past the first few
+/// hundred: a Tokyo or Shanghai frame has thousands of distinct CJK glyphs in it, and the ones
+/// that did not fit were dropped, so labels drew with holes and the advance still spent. See
+/// [`Atlas::grow`].
+///
+/// It is on the wire either way, so a consumer must size its allocation from each upload's
+/// extent rather than from the first one.
+///
+/// [`Atlas::grow`]: crate::atlas::Atlas
 pub const ATLAS_SIZE: u32 = 512;
 
 /// What a set of layouts needs, per font stack.

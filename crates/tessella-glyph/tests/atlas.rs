@@ -3,9 +3,12 @@
 //! The packer has no mbgl unit test to diff against, so what is asserted here are its
 //! invariants — nothing overlaps, nothing leaves the texture, a repeat ask is free — and the
 //! two properties the rest of the pipeline depends on: that the reported rectangle keeps a
-//! pixel of the glyph's own padding, and that a full atlas refuses rather than overwriting.
+//! pixel of the glyph's own padding, and that a full packer refuses rather than overwriting.
+//!
+//! The packer refusing is not the atlas refusing: an `Atlas` grows and re-packs, which is what
+//! mbgl does by discarding the texture and retrying at double the size.
 
-use tessella_glyph::atlas::{Atlas, PADDING, Rect, ShelfPack};
+use tessella_glyph::atlas::{Atlas, MAX_SIZE, PADDING, Rect, ShelfPack};
 use tessella_glyph::pbf::{BORDER, Glyph, Metrics};
 
 /// A glyph with a distinguishable bitmap: every pixel is `fill`.
@@ -224,4 +227,86 @@ fn additions_report_dirty_rectangles() {
 #[test]
 fn the_padding_is_two() {
     assert_eq!(PADDING, 2);
+}
+
+/// A full atlas doubles rather than dropping the glyph.
+///
+/// The defect this pins: a fixed 512 square holds a few hundred glyphs, so a frame with
+/// thousands of distinct CJK characters in it lost every one past the fill. The label still
+/// spent the advance, so it drew with holes in it -- visible as `八重洲一丁目` rendering as
+/// `八　　一丁`.
+#[test]
+fn a_full_atlas_grows() {
+    let mut atlas = Atlas::new(32, 32);
+    assert_eq!(atlas.size(), (32, 32));
+
+    // A 2x2 glyph takes a 12-square slot, so four of them fill a 32-square atlas.
+    for id in 0..4 {
+        atlas.add(id, &glyph(id, 2, 2, 200)).expect("packs at 32");
+    }
+    let grown = atlas
+        .add(4, &glyph(4, 2, 2, 100))
+        .expect("grows rather than dropping");
+
+    assert_eq!(atlas.size(), (64, 64), "doubled in both dimensions");
+    assert_eq!(atlas.len(), 5);
+    assert!(grown.x + grown.width <= 64 && grown.y + grown.height <= 64);
+}
+
+/// Growing keeps every glyph already packed, pixels and position both.
+///
+/// The rectangles handed out before the growth are still live in the shaper's quads, so a grow
+/// that moved them would draw the wrong character. Only the texture they are relative to
+/// changes.
+#[test]
+fn growing_keeps_what_was_packed() {
+    let mut atlas = Atlas::new(32, 32);
+    let first = atlas.add(65, &glyph(65, 2, 2, 200)).expect("packs");
+    let before = atlas.pixels()[(first.y * 32 + first.x + 1) as usize];
+
+    for id in 1..5 {
+        atlas.add(id, &glyph(id, 2, 2, 100));
+    }
+    assert_eq!(atlas.size(), (64, 64), "it grew");
+
+    assert_eq!(atlas.get(65), Some(first), "the rectangle did not move");
+    let (width, _) = atlas.size();
+    assert_eq!(
+        atlas.pixels()[(first.y * width + first.x + 1) as usize],
+        before,
+        "and its pixels came with it",
+    );
+}
+
+/// A grown atlas asks for the whole texture to be re-uploaded.
+///
+/// Every rectangle is now relative to a texture twice the size, so a consumer holding the old
+/// upload has every glyph at the wrong texture coordinate. One rect covering everything is the
+/// only honest answer.
+#[test]
+fn growing_dirties_the_whole_texture() {
+    let mut atlas = Atlas::new(32, 32);
+    for id in 0..4 {
+        atlas.add(id, &glyph(id, 2, 2, 200));
+    }
+    atlas.take_dirty();
+
+    atlas.add(4, &glyph(4, 2, 2, 100)).expect("grows");
+
+    let dirty = atlas.take_dirty();
+    assert!(
+        dirty
+            .iter()
+            .any(|rect| rect.x == 0 && rect.y == 0 && rect.width == 64 && rect.height == 64),
+        "the whole 64-square texture is dirty: {dirty:?}",
+    );
+}
+
+/// Growth stops at the cap rather than doubling forever.
+#[test]
+fn growth_is_bounded() {
+    let mut atlas = Atlas::new(MAX_SIZE, MAX_SIZE);
+    // One glyph wider than the atlas: it cannot be packed and cannot be grown into.
+    assert!(atlas.add(1, &glyph(1, MAX_SIZE, 2, 200)).is_none());
+    assert_eq!(atlas.size(), (MAX_SIZE, MAX_SIZE), "did not grow past the cap");
 }

@@ -58,9 +58,12 @@ struct Shelf {
 
 /// Shelf packing, as `mapbox::ShelfPack` does it.
 ///
-/// Fixed size: mbgl constructs its textures with `autoResize` off and opens another texture when
-/// one fills, and growing a texture the consumer has already uploaded would invalidate every
-/// rectangle handed out for it.
+/// Sized rather than fixed. mbgl constructs each texture with `autoResize` off, but it does not
+/// live with the first size: `DynamicTextureAtlas::uploadGlyphs` starts at 512, and if any glyph
+/// of the set fails to pack it releases what it packed, throws the texture away and tries again
+/// at double the dimensions, until the whole set fits. So 512 is where it starts, not where it
+/// stays, and [`ShelfPack::grow`] is how this reaches the same sizes without discarding the
+/// rectangles already handed out.
 #[derive(Debug)]
 pub struct ShelfPack {
     width: u32,
@@ -82,6 +85,24 @@ impl ShelfPack {
             bins: BTreeMap::new(),
             free: Vec::new(),
         }
+    }
+
+    /// Enlarges the canvas, keeping every rectangle already handed out where it is.
+    ///
+    /// Growing only ever adds space to the right of each shelf and below the last one, so a bin's
+    /// x and y do not move. What does change is the texture the rectangles are relative to, so a
+    /// caller must re-announce the size and re-upload.
+    ///
+    /// `mapbox::ShelfPack::resize` in the same words: the canvas takes the new size and every
+    /// shelf's free run grows by the width delta.
+    pub fn grow(&mut self, width: u32, height: u32) {
+        debug_assert!(width >= self.width && height >= self.height);
+        let widened = width - self.width;
+        for shelf in &mut self.shelves {
+            shelf.free += widened;
+        }
+        self.width = width;
+        self.height = height;
     }
 
     /// The slot for `id`, if it is packed.
@@ -247,6 +268,13 @@ pub const PADDING: u32 = 2;
 /// The padding that stays outside the reported rectangle.
 const OUTER: u32 = 1;
 
+/// How far [`Atlas::grow`] will double.
+///
+/// Sixteen megabytes of alpha, on the order of sixteen thousand glyphs. Past this a second atlas
+/// is the right answer rather than a bigger one, which is what mbgl does with its per-bucket
+/// textures; this atlas is per font stack and persistent, so it is not the same trade.
+pub const MAX_SIZE: u32 = 4096;
+
 /// A single-channel atlas of glyph distance fields.
 ///
 /// R8 rather than RGBA, per §12.4: this is the largest texture the process keeps, and three of
@@ -285,13 +313,18 @@ impl Atlas {
         &self.pixels
     }
 
-    /// Adds a glyph, or returns `None` when the atlas is full.
+    /// Adds a glyph, growing the atlas if it will not otherwise fit.
     ///
     /// `key` identifies the glyph across font stacks — the same codepoint in two fonts is two
     /// entries, since they are different pictures.
     ///
     /// The returned rectangle covers the distance field plus one pixel on each side, which is
     /// what a quad samples.
+    ///
+    /// `None` means the glyph has no pixels, or that it would not fit even at [`MAX_SIZE`].
+    /// Dropping a glyph is visible: the label draws with a hole in it and the advance still
+    /// spent, which is what a fixed 512 did to any scene with more than a few hundred distinct
+    /// characters in frame. See [`Atlas::grow`].
     pub fn add(&mut self, key: u32, glyph: &Glyph) -> Option<Rect> {
         if let Some(rect) = self.pack.get(key) {
             // Already here: take a reference and hand back the same rectangle.
@@ -306,9 +339,15 @@ impl Atlas {
             return None;
         };
 
-        let slot = self
-            .pack
-            .pack(key, bitmap_width + 2 * PADDING, bitmap_height + 2 * PADDING)?;
+        let (slot_width, slot_height) = (bitmap_width + 2 * PADDING, bitmap_height + 2 * PADDING);
+        let slot = loop {
+            if let Some(slot) = self.pack.pack(key, slot_width, slot_height) {
+                break slot;
+            }
+            if !self.grow() {
+                return None;
+            }
+        };
 
         // Blit the distance field into the middle of its slot.
         for row in 0..bitmap_height {
@@ -325,6 +364,45 @@ impl Atlas {
     #[must_use]
     pub fn get(&self, key: u32) -> Option<Rect> {
         self.pack.get(key).map(reported)
+    }
+
+    /// Doubles both dimensions, keeping every packed glyph where it is.
+    ///
+    /// False when already at [`MAX_SIZE`]. mbgl doubles without a bound, but it is sizing one
+    /// bucket's glyph set and throws the texture away after the frame; this atlas is per font
+    /// stack and lives as long as the map, so it accumulates every character ever drawn. The cap
+    /// is where that stops being worth a bigger texture: 4096 square is sixteen megabytes of
+    /// alpha and holds on the order of sixteen thousand glyphs, past the whole of the common
+    /// CJK block.
+    ///
+    /// Everything moves in texture *coordinates* even though nothing moves in pixels, so the
+    /// whole atlas is marked dirty: the caller must re-announce the size and re-upload.
+    fn grow(&mut self) -> bool {
+        if self.width >= MAX_SIZE || self.height >= MAX_SIZE {
+            return false;
+        }
+        let (width, height) = (self.width * 2, self.height * 2);
+        let mut pixels = vec![0u8; (width * height) as usize];
+        for row in 0..self.height {
+            let from = (row * self.width) as usize;
+            let to = (row * width) as usize;
+            pixels[to..to + self.width as usize]
+                .copy_from_slice(&self.pixels[from..from + self.width as usize]);
+        }
+        self.pixels = pixels;
+        self.pack.grow(width, height);
+        self.width = width;
+        self.height = height;
+        // The old rectangles are still where they were, but they are relative to a texture twice
+        // the size, so every one of them has to be uploaded again.
+        self.dirty.clear();
+        self.dirty.push(Rect {
+            x: 0,
+            y: 0,
+            width,
+            height,
+        });
+        true
     }
 
     /// Drops a reference to a glyph.
