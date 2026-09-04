@@ -5605,3 +5605,31 @@ against; none is scheduled.
   shelf packing, the glyph atlas's, and `Landed::by_tile`'s merge of buckets into an existing
   entry. The first two change texture coordinates rather than which symbol wins, so the merge is
   the first place to read.
+
+- **Four candidates for the arrival-order defect, eliminated.** Recorded so the next attempt does
+  not repeat them:
+
+  - *Iteration order.* There is no `HashMap` or `HashSet` in `tessella-orchestrate`,
+    `tessella-place` or `tessella-layout`, and `order` is a total sort. Nothing can escape through
+    a hash seed.
+  - *`Landed::by_tile`'s merge.* The `and_modify` arm appends a second build's buckets to an
+    existing entry, which would be order-dependent -- and it never fires. Logged across three
+    pitched runs: zero merges. The two dedup guards, `by_tile.contains_key(&job.tile)` and
+    `inflight.insert(job.key)`, are sufficient, because an overscaled job's key carries the data
+    tile *and* its `overscaled_z`.
+  - *The tile cover.* Exactly mbgl's thirteen at pitch 45, identifier for identifier.
+  - *Registry retention.* A retained stream would announce a symbol's dynamic and opacity buffers
+    once and never update them, which is exactly the shape of this fault -- but the registry is
+    optional and the probe's stream does not carry one, so every drawable is re-sent whole each
+    frame.
+
+  And one experiment that did *not* say what it first appeared to. Forcing a single worker made the
+  pitched scene deterministic across five runs at 34,121, which looked like confirmation that
+  concurrent landing order was the cause. It is not: the same knob makes the *flat* icon scene
+  give 21,318, 12,070 and 12,070 where it otherwise gives a reliable 272. Serialising the pool does
+  not order the arrivals so much as starve the settle, so the run ends earlier with less in it. The
+  arrival path is still implicated and the mechanism is still not isolated.
+
+  The honest position: there is no reproducible measurement for anything beyond the flat scenes
+  that happen to be stable, and the parity numbers in this document should be read with that in
+  mind.
