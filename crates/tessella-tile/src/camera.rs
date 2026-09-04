@@ -307,7 +307,13 @@ pub fn pitch_radians(view: &ViewTransform) -> f64 {
 /// Degrees on the way in, for the reason [`pitch_radians`] gives.
 #[must_use]
 pub fn bearing_radians(view: &ViewTransform) -> f64 {
-    view.bearing.to_radians()
+    // Negated, which is mbgl's `util::deg2rad(-*camera.bearing)` where a camera's degrees become
+    // the transform's radians. The two conventions run opposite ways: a bearing is the compass
+    // direction the *camera faces*, clockwise from north, and rotating the camera clockwise turns
+    // the *world* under it anticlockwise. Taking the degrees straight through turned the map the
+    // wrong way -- at 45 degrees it drew a different piece of ground entirely, 186,672 gross
+    // pixels on the all-families scene against 3,627 once the sign is right.
+    -view.bearing.to_radians()
 }
 
 /// A rotation, as mbgl's `Quaternion`.

@@ -5653,3 +5653,31 @@ against; none is scheduled.
   The honest position: there is no reproducible measurement for anything beyond the flat scenes
   that happen to be stable, and the parity numbers in this document should be read with that in
   mind.
+
+- **Bearing turned the map the wrong way.** *Fixed, and it had never been measured.* Every parity
+  number in this document was taken north-up. The probe has taken a bearing since it learned pitch,
+  and the first time one was asked for the answer was plain: at 45 degrees the all-families scene
+  differed by 186,672 gross pixels of 630,000, buildings by 78,257, poi-labels by 62,479 -- and
+  cropping it showed the two renderers drawing different ground entirely, so the fault was the
+  camera rather than any layer.
+
+  Rendering *ours* at minus 45 against the oracle's plus 45 settled it in one command: 78,257 gross
+  pixels became 45. mbgl converts a camera's bearing with `util::deg2rad(-*camera.bearing)`, and
+  `bearing_radians` took the degrees straight through. The two conventions run opposite ways -- a
+  bearing is the compass direction the camera *faces*, and turning the camera clockwise turns the
+  world under it anticlockwise -- so the negation is the whole of it.
+
+  | scene at bearing 45 | before | after |
+  | --- | --- | --- |
+  | one_roads | 0 | 0 |
+  | one_place-labels | 2,425 | **0** |
+  | one_buildings | 78,257 | **45** |
+  | families | 186,672 | **3,627** |
+  | one_poi-labels | 62,479 | **3,998** |
+
+  Every flat scene is unchanged, which is what a sign that only matters when it is non-zero should
+  do. What is left at bearing is symbol contention of the same shape as everywhere else, plus the
+  45 on buildings that is the extrusion rasteriser floor.
+
+  This is the answer to how much a whole untested axis is worth: the largest single visible defect
+  found in this frontend, sitting behind a camera parameter nothing had ever varied.
