@@ -3479,37 +3479,6 @@ a subdivision and a draw the consumer no longer makes.
 
 ## 16. Open questions (rev 0.4 targets)
 
-- **KTX2 for textures.** *Deferred, and one narrow candidate.* Filament's staging already carries
-  `libktxreader.a` and `libbasis_transcoder.a` with a `ktxreader::Ktx2Reader` that transcodes a
-  KTX2/Basis payload into a `filament::Texture`; the probe simply does not link them yet, so the
-  consumer side is a link-list entry and a call. What is missing is a texture worth pointing it at.
-
-  `Ktx2Reader::load` builds a *whole* texture, which is the shape of the thing. Two of this
-  frontend's three textures are built the other way round -- the glyph atlas and the sprite atlas
-  are packed at runtime by a shelf allocator and uploaded as dirty sub-rects, and a
-  block-compressed format cannot take a sub-rect at an arbitrary offset because its blocks are
-  4x4. Even if it could, neither should be lossy: an SDF atlas is a smooth distance field and
-  block artefacts in it read as text with wobbling edges, and an icon is now sampled *nearest*
-  precisely so its texels land one to a pixel.
-
-  That leaves raster tiles, where it is a real if modest win. Today the source serves PNG, JPEG or
-  WebP, `zune-png`/`zune-jpeg`/`image-webp` decode on the CPU and the result uploads as RGBA8. A
-  Basis transcode is much cheaper than a PNG decode, and a 512-square tile drops from 1 MiB of
-  video memory to 256 KiB at BC7. At the covers rendered here -- six tiles at z15 -- the memory is
-  a few megabytes either way, so the decode time is the half that matters.
-
-  **Blocked on parity, not on merit.** The oracle is `mbgl-render`, compared pixel by pixel, and
-  three of the four scenes are at zero differing pixels. Any lossy texture path breaks that on the
-  first frame and takes the measurement away with it. There is no lossless version worth having:
-  KTX2's Zstandard supercompression pays for assets read from storage, and these atlases are
-  generated in process while raster tiles already arrive PNG- or WebP-compressed, which beats
-  Zstandard over RGBA8.
-
-  **The shape if it lands.** Raster sources only, opt-in per source, after the symbol parity work
-  closes, and measured against this frontend's own uncompressed output rather than against mbgl --
-  which cannot consume KTX2 either, so it would be a tessella extension rather than a
-  transcription. The style spec has no media type for it.
-
 - ~~PMTiles in tessella-storage~~ closed: `tessella-storage/pmtiles` reads a v3 archive in
   place, byte-identical to `pmtiles serve` across zoom 0 to 15. It was cheap in Rust, as this
   said. MBTiles is still open, and is a different shape — SQLite rather than a directory format,
@@ -5215,3 +5184,83 @@ a subdivision and a draw the consumer no longer makes.
   believing a measurement that says nothing happened. And the consumer's `Mesh` is built with
   positional initialisers, so a field inserted between `texture` and `texture1` silently took the
   next one's value; the new field goes after both, and says so.
+
+## 17. Extensions beyond the oracle
+
+Everything in §1 through §16 is a transcription: mbgl does a thing, this does the same thing, and
+`mbgl-render` says whether it does. This section is for the other kind of work -- what this
+frontend could do that mbgl does not -- and it exists because the two need different rules.
+
+**The rule.** The oracle is compared pixel by pixel, and three of the four parity scenes are at
+zero differing pixels. An extension must therefore be **opt-in and off by default**, and the
+default path must stay byte-identical with it compiled in. An extension that cannot be switched
+off is not an extension, it is a fork: it takes the measurement away, and after that nothing
+distinguishes a deliberate divergence from a defect.
+
+**What qualifies.** Three questions, in this order.
+
+1. *Is it invisible to the oracle?* A storage backend, a transport, a target platform -- these
+   change how pixels are produced and not what they are, so parity keeps working unchanged. These
+   are cheap and should be preferred.
+2. *If it is visible, is it opt-in per source or per layer?* A raster source that transcodes KTX2
+   changes its own tiles and nothing else, so a scene that does not use one still measures.
+3. *Does it need a second basis?* Anything visible needs something to be right against, and it
+   cannot be mbgl. Say what it is measured against before building it, not after.
+
+**Already here, and worth naming**, because they say what kind of thing belongs in this section:
+
+- **The shared store, and more than one view of it.** §5. Every mbgl `Map` owns its own style,
+  pyramid, file sources, atlases and workers, so N views cost N fetches and N bucket builds. Here
+  buckets are process-scoped and refcounted and a view is a camera over them. Invisible to the
+  oracle by construction -- one view of a shared store draws what one `Map` draws.
+- **A `no_std` core.** `tessella-tile`, `tessella-capture-abi`, `tessella-orchestrate`,
+  `tessella-source`, `tessella-layout` and `tessella-style` are all `#![no_std]` against `alloc`.
+  That is a deployment mbgl cannot reach at all, and it costs the parity path nothing.
+- **A stream that can be replayed.** The capture stream is a description of a frame rather than a
+  frame, so `tools/capture-render` rasterizes one without a consumer and the parity probe reads
+  the same bytes a real consumer does.
+
+**The register.** Candidates, not decisions. Each says what it buys and what it is measured
+against; none is scheduled.
+
+- **KTX2 for raster tiles.** *Deferred, and the first entry here.* Filament's staging already carries
+  `libktxreader.a` and `libbasis_transcoder.a` with a `ktxreader::Ktx2Reader` that transcodes a
+  KTX2/Basis payload into a `filament::Texture`; the probe simply does not link them yet, so the
+  consumer side is a link-list entry and a call. What is missing is a texture worth pointing it at.
+
+  `Ktx2Reader::load` builds a *whole* texture, which is the shape of the thing. Two of this
+  frontend's three textures are built the other way round -- the glyph atlas and the sprite atlas
+  are packed at runtime by a shelf allocator and uploaded as dirty sub-rects, and a
+  block-compressed format cannot take a sub-rect at an arbitrary offset because its blocks are
+  4x4. Even if it could, neither should be lossy: an SDF atlas is a smooth distance field and
+  block artefacts in it read as text with wobbling edges, and an icon is now sampled *nearest*
+  precisely so its texels land one to a pixel.
+
+  That leaves raster tiles, where it is a real if modest win. Today the source serves PNG, JPEG or
+  WebP, `zune-png`/`zune-jpeg`/`image-webp` decode on the CPU and the result uploads as RGBA8. A
+  Basis transcode is much cheaper than a PNG decode, and a 512-square tile drops from 1 MiB of
+  video memory to 256 KiB at BC7. At the covers rendered here -- six tiles at z15 -- the memory is
+  a few megabytes either way, so the decode time is the half that matters.
+
+  **Blocked on parity, not on merit.** The oracle is `mbgl-render`, compared pixel by pixel, and
+  three of the four scenes are at zero differing pixels. Any lossy texture path breaks that on the
+  first frame and takes the measurement away with it. There is no lossless version worth having:
+  KTX2's Zstandard supercompression pays for assets read from storage, and these atlases are
+  generated in process while raster tiles already arrive PNG- or WebP-compressed, which beats
+  Zstandard over RGBA8.
+
+  **The shape if it lands.** Raster sources only, opt-in per source, after the symbol parity work
+  closes, and measured against this frontend's own uncompressed output rather than against mbgl --
+  which cannot consume KTX2 either, so it would be a tessella extension rather than a
+  transcription. The style spec has no media type for it.
+
+- **MBTiles as a storage backend.** *Open, and cheap by the first test.* §16 leaves it open next to
+  PMTiles. It is invisible to the oracle -- a different way to reach the same tile bytes -- so it
+  needs no second basis, only the SQLite dependency the `cache` feature already carries.
+
+- **A cross-process capture ring.** *Unexamined.* §4's transport is an SPSC ring in one process.
+  The envelope ABI is `repr(C)` with offsets asserted against a generated C header, which is most
+  of what a shared-memory variant between two processes would need. It would put the producer and
+  the renderer in separate address spaces -- a crash domain boundary, and a way to drive a
+  consumer this repo does not build. Invisible to the oracle, so the first test passes; nothing
+  else about it has been thought through.
