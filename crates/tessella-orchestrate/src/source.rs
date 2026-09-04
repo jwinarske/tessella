@@ -464,6 +464,16 @@ impl<S: FileSource + 'static> TileSource<S> {
                     .or_default()
                     .extend(codepoints.iter().copied());
             }
+            // Everything asked for so far, not just what this round added. A fetch builds a
+            // *new* `Fonts` with a new atlas and hands it to the map whole, replacing the one
+            // before it -- so a fetch of the difference produces a map that can set the newest
+            // script and has forgotten the rest. That is the alphabet soup this whole path
+            // exists to avoid, arriving by the other door: not "asked too early" but "asked for
+            // too little, and threw away the answer to the last question".
+            //
+            // The ranges already held cost a request each and no bytes worth mentioning; the
+            // file source caches them and the loop below skips a range it holds.
+            wanted = held.asked.clone();
             held.running = true;
         }
 
