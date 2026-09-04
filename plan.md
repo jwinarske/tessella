@@ -6339,3 +6339,44 @@ is zero, so it is not a material.
 
 This is the same family as the arrival-order defect already recorded: a frame that is a function
 of what happened to have landed rather than of what the camera is looking at.
+
+### Pitch exposes a label arrangement that was never written
+
+Asking the quad to lean back fifteen degrees turned every road label into an opaque slab with the
+text over it. Point labels in the same frame are perfect.
+
+Isolated headlessly at Seattle z15, pitch 15, 959x359: the road layer alone draws 1,479 glyph
+quads and reports five pitched labels; the place layer alone draws 56 and reports none. Bearing
+does not do it -- a bearing of 15 with no pitch is clean, which is how the first attempt at this
+missed it.
+
+`filament_renderer.cc` had the reason written down and then talked itself out of it. A label
+pitched *with the map* lays out in the tile's plane: its plane matrix is the identity and its
+coord matrix carries the tile's projection, so the offsets between them are in tile units rather
+than pixels. The viewport shader adds them as pixels. The path was skipped for exactly that
+reason, and later un-skipped on the grounds that "the shader's arithmetic is the same for both".
+It is not, and the slab is what the difference looks like: the quad reaches far enough past its
+glyph to sample the atlas either side.
+
+Left drawing rather than skipped -- a pane with no road labels is not obviously better than one
+with slabs, and the counter is what makes the case. What it wants is the second arrangement
+written, not a branch in the consumer.
+
+### What a zoom sweep found
+
+Six defects, none of which any still-frame test could reach, and all of them from moving a camera
+that had only ever been placed:
+
+| | |
+|---|---|
+| An order held once and drawn once | 777 of 930 frames black |
+| A stored empty background | every frame with nothing to draw |
+| Arabic shaping | a panic on any joining script outside basic Arabic |
+| World copies deduped away | half a world on a screen that holds two and a half |
+| Glyphs fetched once | every script arriving later drew from an empty alphabet |
+| Glyphs fetched from the newest survey alone | and forgot the last one |
+
+The last two are the same bug seen from both ends, and the second was mine: the drain gate exists
+because firing on the first tile asks for the prefetched ancestor's alphabet and nothing else, and
+lifting it entirely replaces a complete `Fonts` with a partial one. A fetch hands the map a *new*
+atlas rather than adding to the old, so it has to ask for everything asked for so far.
