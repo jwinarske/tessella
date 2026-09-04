@@ -6172,3 +6172,60 @@ Two causes, one asset and one real:
 The methodological note is the same one §17 already carries in a different dimension: a constant
 read off one scene is a measurement, not a definition. This one had a comment explaining why it
 could not be otherwise, and the explanation was wrong about the oracle rather than about the code.
+
+### 60 fps with all four cells
+
+The quad was ticking at 202 ms a frame while panning. Four defects, found by profiling rather
+than by reading, and each one a thing being redone every frame that only ever changes when
+something else does.
+
+**The arena was serialised every frame.** `SlabArena::pack` was 83% of the producer's samples,
+copying every slab into a fresh `Vec` so a consumer could read it. `SlabArena::in_region` exists
+so that is not needed and nothing used it; the FFI now allocates a slab region beside the ring
+and the arena writes into it. `Config` gains `slab_capacity`, zero taking 64 MiB.
+
+**Nothing was ever swept.** `arena.sweep()` was not called anywhere in the frame path. Releasing
+hands back the bytes a drawable held, but a slab whose last reference has gone is still a slot
+with a length in the table until a sweep drops it. Over an owned arena that only wasted memory;
+over a region it is fatal, because every slab looks live and nothing is reclaimable.
+
+**A bump cursor does not retreat.** A moving map sweeps from the bottom and allocates at the top,
+so gaps open below it and no region is large enough -- 800 KB a frame, a gigabyte in twenty
+seconds. `compact_region` walks the sealed slabs in address order and moves each down onto the
+last. It is invisible to a consumer, which is the point: a `SlabRef` names a slab and an offset
+*within* it, and where the slab sits is only in the table. Nothing is invalidated and nothing is
+re-announced, which is what separates it from DR-21's displacement.
+
+**Glyph dependencies were surveyed every tick.** `want_glyphs` walked every bucket of every
+landed tile calling `dependencies()` -- cloning a font stack per layer, iterating every feature's
+text -- and only then reached the subset test that decided the walk had been unnecessary. It runs
+on the landed generation now. A settled map's tick went from 1.00 ms to 0.002 ms; the still frame
+was almost entirely this.
+
+**Symbol layout was redone every frame.** Shaping, bidi, glyph resolution and quad building, none
+of which depends on the camera; mbgl does it once when the tile is parsed. `SymbolCache` holds it,
+keyed by the identity of the tile's bucket list so a re-parse misses rather than resolving to the
+geometry it replaced.
+
+Four maps, 640x480 panes, release, ticked serially on one thread:
+
+|                  | before   | after    |
+|------------------|----------|----------|
+| motion tick p50  | 202.2 ms | 3.47 ms  |
+| motion tick p99  | 327.4 ms | 6.09 ms  |
+| motion tick max  | 340.3 ms | 7.50 ms  |
+| still tick p50   | 1.00 ms  | 0.002 ms |
+| peak rss         | 5473 MiB | 1155 MiB |
+
+With the frame at 1.07 ms p50 and 1.80 p99: **4.5 ms at p50, 7.9 at p99, 9.6 at the worst frame
+of 660** -- every percentile inside 16.7 ms, with the four ticks serialised, which is the
+pessimistic arrangement. Fluorite runs every view's Filament work on one strand, so serial is what
+it will see; per pane the worst is 1.16 ms.
+
+`quad_bench` is what says so, and it says it in percentiles rather than means because a quad that
+is fast on average and stalls every thirtieth frame drops frames. Its `prod`/`drain` split at the
+FFI boundary is what made each of these findable: the consumer, the uploads and Filament together
+never exceeded a millisecond, and all four defects were on the other side of the boundary.
+
+**What is left.** Peak RSS is now almost entirely the rings: `map_view.cc` asks for 256 MiB each,
+four of them, against a slab region of 64. Nothing has measured what a ring actually needs.
