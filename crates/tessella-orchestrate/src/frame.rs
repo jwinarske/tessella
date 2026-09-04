@@ -1488,7 +1488,6 @@ fn place_symbols(
         // A label placement never offered has no fade entry, which reads as hidden -- so the
         // ones whose road ran out stay hidden without being special-cased here.
         held.symbols.write_opacity(&labels, &mut buffers);
-
         // The icon half, which is its own drawable rather than an option: a symbol is a label, an
         // icon, or both, and the two go through different shaders -- an SDF for glyphs, a plain
         // sampler for a sprite -- so they cannot share a vertex buffer.

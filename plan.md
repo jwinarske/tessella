@@ -6029,3 +6029,23 @@ against; none is scheduled.
   `write_line_positions` fill those two buffers per frame from placement; placement decisions were
   compared per tile and match, so the next question is what else feeds them -- the fade state, which
   `ViewSymbols` rebuilds per frame, is the obvious candidate.
+
+- **Two measurements in tension; neither is wrong yet, one is mistimed.** Producer-side, hashing the
+  dynamic and opacity buffers *after* `write_opacity`, keyed by real tile id, last value per tile:
+
+      run1 vs run3: identical     (images 14,162 and 31,294 gross)
+      run1 vs run2: one tile only, 13/4401/2686 with n=0 -- an ancestor carrying no symbols
+
+  Consumer-side, hashing what is handed to Filament, also keyed by tile id, last value per tile:
+  `placed` differs for `14/8801/5373`, `13/4401/2686`, `14/8802/5373` and `15/17603/10746`.
+
+  Both cannot be true of the same frame. `placed` is packed from the `projected` and `fade`
+  attributes, which are the dynamic and opacity buffers -- so if the producer's last value per tile
+  matches and the consumer's does not, the two logs are reading different frames. The order within
+  a frame is place, `write_opacity`, encode, so the encoded bytes should be the ones just written;
+  what is not established is that the consumer's last `GeometryAdd` for a tile comes from the
+  producer's last frame for that tile.
+
+  Next: put a frame counter in both logs and compare the same frame number on each side. That
+  settles which of the two is mistimed, and it is the same discipline that has resolved every step
+  here -- name the thing, and name the instant.
