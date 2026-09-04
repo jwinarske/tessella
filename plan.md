@@ -3479,6 +3479,37 @@ a subdivision and a draw the consumer no longer makes.
 
 ## 16. Open questions (rev 0.4 targets)
 
+- **KTX2 for textures.** *Deferred, and one narrow candidate.* Filament's staging already carries
+  `libktxreader.a` and `libbasis_transcoder.a` with a `ktxreader::Ktx2Reader` that transcodes a
+  KTX2/Basis payload into a `filament::Texture`; the probe simply does not link them yet, so the
+  consumer side is a link-list entry and a call. What is missing is a texture worth pointing it at.
+
+  `Ktx2Reader::load` builds a *whole* texture, which is the shape of the thing. Two of this
+  frontend's three textures are built the other way round -- the glyph atlas and the sprite atlas
+  are packed at runtime by a shelf allocator and uploaded as dirty sub-rects, and a
+  block-compressed format cannot take a sub-rect at an arbitrary offset because its blocks are
+  4x4. Even if it could, neither should be lossy: an SDF atlas is a smooth distance field and
+  block artefacts in it read as text with wobbling edges, and an icon is now sampled *nearest*
+  precisely so its texels land one to a pixel.
+
+  That leaves raster tiles, where it is a real if modest win. Today the source serves PNG, JPEG or
+  WebP, `zune-png`/`zune-jpeg`/`image-webp` decode on the CPU and the result uploads as RGBA8. A
+  Basis transcode is much cheaper than a PNG decode, and a 512-square tile drops from 1 MiB of
+  video memory to 256 KiB at BC7. At the covers rendered here -- six tiles at z15 -- the memory is
+  a few megabytes either way, so the decode time is the half that matters.
+
+  **Blocked on parity, not on merit.** The oracle is `mbgl-render`, compared pixel by pixel, and
+  three of the four scenes are at zero differing pixels. Any lossy texture path breaks that on the
+  first frame and takes the measurement away with it. There is no lossless version worth having:
+  KTX2's Zstandard supercompression pays for assets read from storage, and these atlases are
+  generated in process while raster tiles already arrive PNG- or WebP-compressed, which beats
+  Zstandard over RGBA8.
+
+  **The shape if it lands.** Raster sources only, opt-in per source, after the symbol parity work
+  closes, and measured against this frontend's own uncompressed output rather than against mbgl --
+  which cannot consume KTX2 either, so it would be a tessella extension rather than a
+  transcription. The style spec has no media type for it.
+
 - ~~PMTiles in tessella-storage~~ closed: `tessella-storage/pmtiles` reads a v3 archive in
   place, byte-identical to `pmtiles serve` across zoom 0 to 15. It was cheap in Rust, as this
   said. MBTiles is still open, and is a different shape — SQLite rather than a directory format,
