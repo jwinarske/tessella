@@ -6005,3 +6005,27 @@ against; none is scheduled.
   the divergence is inside Filament or the GPU path and nothing above it matters; if they differ,
   the consumer transformed identical input into different state, and the transform is in
   `buildSymbol`.
+
+- **Found it: the per-frame symbol buffer differs per tile, and the earlier "identical" was a
+  positional artefact.** Hashing what the consumer hands Filament, keyed by the tile id the record
+  carries rather than by position:
+
+      MESH t=14/8801/5373 sh=32 n=536 pos=8a62.. dat=8a62.. px=8a62.. placed=279dbe4fcd65ec85 idx=c4ee..
+      MESH t=14/8801/5373 sh=32 n=536 pos=8a62.. dat=8a62.. px=8a62.. placed=b6db261302385d55 idx=c4ee..
+
+  `pos`, `dat`, `px` and `idx` match; **`placed` does not**. `placed` is assembled verbatim from the
+  `projected` and `fade` attributes, so the producer is sending different dynamic and opacity bytes
+  for the same tile between runs. Affected tiles across three runs: `14/8801/5373`, `13/4401/2686`,
+  `14/8802/5373` and `15/17603/10746` -- ancestors *and* at least one z15 tile. Mesh counts differ
+  too, 19 / 19 / 18.
+
+  The producer audit's "symbol dynamic and opacity buffers identical" was keyed by
+  `(tile_index, bucket_index)`, which is **positional within the frame's tile list**. Sorting those
+  lines and diffing proves the multiset matches, not that any tile's buffer matches. Same class of
+  error as the cross-frame ones, in a different dimension: the key has to name the thing, not its
+  index.
+
+  So the hunt returns to the producer with a working handle. `write_opacity` and
+  `write_line_positions` fill those two buffers per frame from placement; placement decisions were
+  compared per tile and match, so the next question is what else feeds them -- the fade state, which
+  `ViewSymbols` rebuilds per frame, is the obvious candidate.
