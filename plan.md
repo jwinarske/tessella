@@ -5373,3 +5373,38 @@ against; none is scheduled.
 
   Nothing above this entry is affected: those numbers were taken on scenes that reproduce, and the
   flat sweep was re-run whole after each change.
+
+- **Glyphs were fetched exactly once, for whatever labels had landed by then.** *Fixed.* `Glyphs`
+  carried a `scheduled` flag, set before the one fetch and never cleared, so `want_glyphs` returned
+  early ever after. Tiles arrive over several ticks, so the labels that existed at that moment are
+  not the labels the map ends up with: everything that landed afterwards wanted glyph ranges that
+  were never asked for and drew without them, for the life of the map. It also made the frame a
+  function of arrival timing -- the icon scene drew between 145 and 298 glyph quads across twelve
+  identical runs.
+
+  The flag is now the *set* that has been asked for, and `want_glyphs` schedules again when the
+  landed tiles want something outside it. A subset test rather than a difference, because `wanted`
+  is the total need of every landed tile rather than what is missing, so the job still fetches one
+  cumulative set into one `Fonts` and hands that off. Guarded by `running` so two views ticking
+  together still schedule once.
+
+  All eight reproducing flat scenes are unchanged.
+
+- **`tessella_pending`, and the probe waits on it.** *Added.* `TileSource::outstanding` counts
+  tiles asked for and not yet answered plus an unfinished glyph fetch -- the two things that arrive
+  after a tick rather than during it. Zero does not mean the map is complete, since a tile that
+  failed is finished and still a hole; it means nothing further comes without another tick, which
+  is the question a caller waiting for a settled frame is asking. `tessella_status` could not
+  answer it, which is why the probe waited for records to stop instead -- a condition a source
+  *blocked* on a fetch satisfies exactly as well as one that has finished.
+
+  The probe's settle loop now requires both. A consumer driving a progress indicator reads the same
+  number, which is why this is on the C API rather than in the test harness.
+
+  **It is better and not yet right.** The icon scene went from three outcomes to mostly one -- nine
+  runs in ten at 272 -- and then, after the glyph fix, back to a spread of 176 to 298 glyph quads.
+  So `pending` closed one hole and there is another: something is still being decided by arrival
+  order after the source reports nothing outstanding. The next thing to look at is that the settle
+  loop always runs exactly 202 ticks, which says the 200-tick quiet window is never once reset --
+  every run believes it settled immediately, and the variation is all in the wait loop before it,
+  which exits on the first tick with any primitive drawn.

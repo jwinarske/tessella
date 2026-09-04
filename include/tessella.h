@@ -185,6 +185,18 @@ tessella_result tessella_tick(tessella_map* map);
  *
  * `reason` may be null, and is written only when the readiness is TESSELLA_FAILED_TO_RESOLVE. It
  * is always NUL-terminated when written, and truncated to fit rather than refused. */
+/* How much work is still in flight.
+ *
+ * Tiles asked for and not yet answered, plus a glyph fetch that has not finished. Zero means
+ * nothing further will arrive without another tick -- not that the map is complete, since a tile
+ * that failed is finished and still a hole; `tessella_status` answers that half.
+ *
+ * This is the question a caller waiting for a settled frame is asking. Waiting for records to
+ * stop arriving instead is satisfied by a source *blocked* on a fetch just as well as by one that
+ * has finished, which is how the render probe came to measure frames that were still filling in.
+ * A consumer driving a progress indicator reads the same number. */
+tessella_result tessella_pending(tessella_map* map, uint64_t* out_pending);
+
 tessella_result tessella_status(tessella_map* map,
                                int32_t* out_readiness,
                                char* reason,

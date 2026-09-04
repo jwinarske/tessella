@@ -397,6 +397,37 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
 
 /// How far along the map's sources are, and why if they failed.
 ///
+/// How much work is still in flight.
+///
+/// Tiles asked for and not yet answered, plus a glyph fetch that has not finished. Zero means
+/// nothing further will arrive without another tick -- not that the map is complete, since a tile
+/// that failed is finished and still a hole. [`tessella_status`] answers that half.
+///
+/// The question a caller waiting for a settled frame is asking, and one that could not be asked
+/// before: the render probe waited for records to stop arriving instead, which a source blocked on
+/// a fetch satisfies just as well as a source that has finished. The same scene measured 0, 272
+/// and 9,520 differing pixels against the oracle across runs that all believed they had settled.
+/// A consumer driving a progress indicator reads the same number.
+///
+/// # Safety
+///
+/// `map` must be live and `out_pending` a valid pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_pending(map: MapHandle, out_pending: *mut u64) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_ref() }) else {
+            return Status::NoSuchMap;
+        };
+        if out_pending.is_null() {
+            return Status::NullArgument;
+        }
+        unsafe {
+            *out_pending = state.source.outstanding() as u64;
+        }
+        Status::Ok
+    })
+}
+
 /// The call §16 traded for a non-blocking [`tessella_create`]. A consumer holding a handle and
 /// looking at an empty map cannot tell a style still resolving from one whose sources will never
 /// answer, and inferring it from the absence of tiles gets it wrong in both directions -- so it

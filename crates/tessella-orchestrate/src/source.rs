@@ -107,9 +107,22 @@ impl Landed {
 /// fresh for the frame that can draw it.
 #[derive(Default)]
 struct Glyphs {
-    /// Whether a fetch has been submitted. Set before the job runs, so ten ticks over the same
-    /// labels schedule one fetch.
-    scheduled: bool,
+    /// What has been asked for, so ten ticks over the same labels schedule one fetch.
+    ///
+    /// The set rather than a flag. A flag said "a fetch has happened" and nothing more, and
+    /// because tiles land over several ticks the labels that existed at that moment were not the
+    /// labels the map ends up with: everything that arrived afterwards wanted glyphs that were
+    /// never asked for, and drew without them, permanently. It also made the frame a function of
+    /// arrival timing -- the render probe's icon scene drew between 145 and 298 glyph quads over
+    /// twelve identical runs.
+    asked: tessella_glyph::fonts::Dependencies,
+    /// Whether that fetch is still running.
+    ///
+    /// Distinct from `scheduled` and from `ready`, and it has to be: `ready` is a hand-off that
+    /// [`TileSource::take_fonts`] empties, so "scheduled and nothing ready" is true both while the
+    /// fetch is in flight and forever after the map has taken its fonts. Cleared whether the
+    /// fetch succeeded or not, because a failure is also finished.
+    running: bool,
     /// Waiting to be taken by a tick. `Fonts` is not `Clone` and [`crate::map::Map`] owns the one
     /// it draws from, so this is a hand-off rather than a copy.
     ready: Option<tessella_glyph::fonts::Fonts>,
@@ -292,6 +305,38 @@ impl<S: FileSource + 'static> TileSource<S> {
         }
     }
 
+    /// How much work is still in flight, which is what "not finished yet" means.
+    ///
+    /// Tiles submitted and not yet landed, plus the one glyph fetch if it has been scheduled and
+    /// has not produced its fonts. Those are the two things that arrive after a tick rather than
+    /// during it; the sprite sheet is not among them, because it rides along with resolution.
+    ///
+    /// Zero does not promise the map is complete -- a tile that failed is finished and still a
+    /// hole, which is why [`Self::failures`] is counted separately. It promises only that nothing
+    /// further is coming without another tick, and that is the question a caller waiting for a
+    /// settled frame is actually asking.
+    ///
+    /// Written for the render probe, which could not tell "done" from "blocked" and so measured
+    /// frames that were still filling in: the same scene gave 0, 272 and 9,520 differing pixels
+    /// across runs that all believed they had settled. A consumer wanting a progress indicator
+    /// reads the same number.
+    #[must_use]
+    pub fn outstanding(&self) -> usize {
+        let tiles = self
+            .inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .inflight
+            .len();
+        let glyphs = usize::from(
+            self.glyphs
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .running,
+        );
+        tiles + glyphs
+    }
+
     /// What the style resolved to, once it has.
     ///
     /// The sprite sheet rides along here rather than through an accessor of its own: it is part of
@@ -327,7 +372,7 @@ impl<S: FileSource + 'static> TileSource<S> {
         };
         {
             let held = self.glyphs.lock().unwrap_or_else(PoisonError::into_inner);
-            if held.scheduled {
+            if held.running {
                 return;
             }
         }
@@ -373,10 +418,25 @@ impl<S: FileSource + 'static> TileSource<S> {
         {
             let mut held = self.glyphs.lock().unwrap_or_else(PoisonError::into_inner);
             // Re-checked under the lock: two views ticking together both got past the first look.
-            if held.scheduled {
+            if held.running {
                 return;
             }
-            held.scheduled = true;
+            // Nothing new, so nothing to do. `wanted` is what the landed tiles need in total, not
+            // what is missing, so this is a subset test rather than a difference.
+            if wanted.iter().all(|(stack, codepoints)| {
+                held.asked
+                    .get(stack)
+                    .is_some_and(|had| codepoints.is_subset(had))
+            }) {
+                return;
+            }
+            for (stack, codepoints) in &wanted {
+                held.asked
+                    .entry(stack.clone())
+                    .or_default()
+                    .extend(codepoints.iter().copied());
+            }
+            held.running = true;
         }
 
         let this = Arc::clone(self);
@@ -384,11 +444,15 @@ impl<S: FileSource + 'static> TileSource<S> {
             let mut fonts = tessella_glyph::fonts::Fonts::new(url);
             // A glyph range that will not load costs the labels that need it and not the map, so
             // a failure here leaves `ready` empty rather than failing the source.
-            if fonts.fetch(&wanted, &Coalesced(&this.files)).is_ok() {
-                this.glyphs
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .ready = Some(fonts);
+            let fetched = fonts.fetch(&wanted, &Coalesced(&this.files)).is_ok();
+            {
+                let mut held = this.glyphs.lock().unwrap_or_else(PoisonError::into_inner);
+                if fetched {
+                    held.ready = Some(fonts);
+                }
+                held.running = false;
+            }
+            if fetched {
                 this.generation.fetch_add(1, Ordering::AcqRel);
             }
         });
