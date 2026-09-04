@@ -6049,3 +6049,37 @@ against; none is scheduled.
   Next: put a frame counter in both logs and compare the same frame number on each side. That
   settles which of the two is mistimed, and it is the same discipline that has resolved every step
   here -- name the thing, and name the instant.
+
+## 18. The quad: four maps, four ihs platform views, one Flutter app
+
+The stated exit requirement. Seattle, Tokyo, Switzerland and China in a 2x2 of ihs platform views
+in a single Flutter app. What follows is what the existing pieces already give and what is missing.
+
+**The stack.** `ihs` is ivi-homescreen, Toyota's Flutter embedder. `/mnt/dev/ihs_filament_view` is
+Fluorite, its Filament-backed engine, exposing `FluoriteView` -- a `PlatformViewLink` on viewType
+`views/fluorite-view`, one platform view per widget.
+
+**Multiple views are already the design.** `packages/fluorite/src/ihs/engine_host.h`:
+
+    /// Get or create the shared host. ...
+    /// Platform thread only, which the ihs_pv factory guarantees: two views
+    /// created concurrently would otherwise race to build the engine.
+    static EngineHost* Acquire();
+
+  Refcounted, one Filament engine shared across views, each view owning its swapchain. A quad is
+  four `FluoriteView` widgets over that one engine.
+
+**tessella already attaches rather than owns.** `tsf::FilamentRenderer(engine, scene, materialDir,
+width, height)` takes an existing engine and scene -- the probe happens to make its own, but nothing
+requires it. So a map can be rendered into a `FluoriteView`'s scene.
+
+**Four maps or one map with four views.** `tessella_create` makes a map with one camera, and
+`Pool::shared()` is process-wide, so four maps already share the worker pool while holding their own
+source, cache and store. For four *different cities* that is the whole of it -- there are no tiles
+in common, so §5's shared store buys nothing here. One map with four views is the §5 shape and is
+not wired.
+
+**What is missing.** A bridge that lets a `FluoriteView` host a tessella map: create the map, drive
+`tessella_tick` against that view's scene through `FilamentRenderer`, and route the camera. Nothing
+in either tree does this yet -- `tessella_fluorite` has a headless probe and no Flutter surface, and
+Fluorite has no notion of a tessella map.
