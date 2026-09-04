@@ -725,12 +725,6 @@ fn emit_group(
 
     // Resolved once and used twice: placement walks it backwards, encoding forwards.
     let order = draw_order.resolve();
-    {
-        use alloc::collections::BTreeMap as PM;
-        let mut counts: PM<(u32, i32), usize> = PM::new();
-        for e in &order { *counts.entry((e.layer_index, e.sub_layer_index)).or_default() += 1; }
-        std::eprintln!("PROBE order entries by (layer, sub): {:?}", counts);
-    }
     let prepared = place_symbols(
         &order,
         &source,
