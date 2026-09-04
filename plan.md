@@ -5851,3 +5851,29 @@ against; none is scheduled.
   `UboUpdate` differences above cannot be read as semantic yet.
 
   Next: key the diff by (tile, layer, sub-layer) rather than by position, then compare payloads.
+
+- **ViewUse tail padding zeroed.** `_pad` was one byte where the record needed five: fields ended at
+  35, `size_of::<ViewUse>()` is 40, and `as_bytes` copied four bytes of compiler padding to the
+  ring uninitialised. All 47 records carried it and it differed run to run. Now `[u8; 5]`, so every
+  byte of the record is a field, which is what the `WireRecord` contract already asked for. Header
+  regenerated. Flat parity unchanged.
+
+- **Arrival-order defect found: an ancestor's `ViewUse` is not always released.** With padding out
+  of the way and the diff keyed by `(tile, layer, sub_layer, pass, flags, has_tile)` rather than by
+  stream position -- geometry ids are handed out in arrival order, so position means nothing --
+  three pitched runs of `icons_only` compare cleanly:
+
+      run1 vs run2: 49 vs 47 ViewUse; only-A 2, only-B 0
+      run1 vs run3: 49 vs 47 ViewUse; only-A 2, only-B 0
+        only A: tile 13/4400/2686, layer 1, sub 0
+        only A: tile 13/4400/2686, layer 1, sub 1
+
+  Both extras are the symbol layer's two drawables on one z13 ancestor. The stream is cumulative:
+  a `ViewUse` binds until a `ViewRelease` unbinds it, and the frame that legitimately drew that
+  ancestor while its children loaded did not always release it when they arrived. The earlier
+  reading that "the settled frame draws thirteen z15 tiles" was measuring the frame's own draw
+  list, which is right; what the *consumer* holds is that list plus whatever was never released.
+
+  Eight `ViewRelease` and eight `GeometryRemove` records are emitted, so release works in general
+  and misses this case. That is the next thing to read: what decides a release when substitution
+  collapses.

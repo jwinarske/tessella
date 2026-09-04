@@ -605,7 +605,11 @@ pub struct ViewUse {
     /// Non-zero when `tile` is meaningful. Rev 1's `tileID` was optional.
     pub has_tile: u8,
     /// Padding. Must be zero.
-    pub _pad: u8,
+    ///
+    /// Five bytes, not one. The fields before it end at 35 and the record is 40, so a single byte
+    /// left four of compiler tail padding that `as_bytes` copied to the ring uninitialised -- the
+    /// trait's contract asks for every byte written, and this is what makes that true.
+    pub _pad: [u8; 5],
 }
 
 /// Releases one view's use of shared geometry.

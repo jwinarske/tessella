@@ -301,7 +301,7 @@ impl ViewSession {
             render_pass: binding.pass,
             draw_flags: binding.flags,
             has_tile: u8::from(binding.tile.is_some()),
-            _pad: 0,
+            _pad: [0; 5],
         };
         producer.write(EnvelopeKind::ViewUse, record.as_bytes(), &[])?;
         Ok(())
@@ -519,7 +519,7 @@ mod tests {
         assert_eq!(used.has_tile, 0);
         assert_eq!(used.tile, TileId::default());
         assert_eq!(used.layer_index, 0);
-        assert_eq!(used._pad, 0);
+        assert_eq!(used._pad, [0; 5]);
     }
 
     /// Several views bind the same geometry, which is the whole point of the split: one

@@ -473,7 +473,7 @@ fn structs() -> Vec<Struct> {
                     "uint8_t has_tile",
                     "Non-zero when tile is meaningful."
                 ),
-                (_pad, "uint8_t _pad", "Must be zero."),
+                (_pad, "uint8_t _pad[5]", "Must be zero."),
             ]
         ),
         c_struct!(

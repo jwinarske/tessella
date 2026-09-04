@@ -1893,7 +1893,7 @@ typedef struct tsl_view_use {
     /* Non-zero when tile is meaningful. */
     uint8_t has_tile;
     /* Must be zero. */
-    uint8_t _pad;
+    uint8_t _pad[5];
 } tsl_view_use;
 
 TSL_ASSERT(sizeof(tsl_view_use) == 40, "tsl_view_use size differs from the Rust definition");
