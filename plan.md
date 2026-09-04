@@ -5442,3 +5442,34 @@ against; none is scheduled.
   padding stay -- both are what mbgl does, and the poi-labels and all-families improvements
   reproduce -- but the icon scene at pitch is unexplained rather than half-fixed, and it is the
   largest open number here by a factor of ten.
+
+- **Pitched icons are a cover problem, not a collision problem.** *Located, not fixed.* With a
+  probe that reproduces, the icon scene at pitch 45 is 34,121 gross pixels and draws **8 icons
+  against the oracle's 148**. Instrumenting both sides at that camera says where it comes from,
+  and it is not where the last three fixes were:
+
+  | | icon candidates offered | placed | drawn | tiles |
+  | --- | --- | --- | --- | --- |
+  | tessella | 1,604 | 1,222 | 8 | 39 renderables |
+  | mbgl | 462 | 279 | 148 | 13 |
+
+  The individual boxes are right. Ours reads `b(42.11,109.75,59.61,126.46)` where mbgl reads
+  `b(42.55,110.13,59.23,126.02)` for the same anchor -- same place, same size to within half a
+  pixel -- and the perspective ratios come out at a sensible 0.79 to 0.89. What is wrong is that
+  there are three and a half times as many of them, all competing for one grid, so the ones that
+  are actually on screen lose to ones that are not.
+
+  mbgl renders thirteen tiles at that camera: `15/17602..17605/10744..10747`, a four-by-four block
+  less three, every one at z15. So this is not the level-of-detail pass either -- `allowVariableZoom`
+  is `pitch > tileLodPitchThreshold` and the threshold is sixty degrees, so at forty-five mbgl
+  covers uniformly, as this does.
+
+  Which leaves the frustum walk. The far plane is not the difference: mbgl's
+  `cameraToSeaLevelDistance / (1 - clamp(tanFovAboveCenter * tan(limitedPitch), 0, 0.99)) * 1.01`
+  is term for term what `camera.rs` computes, including the 89.25-degree horizon clamp, and with no
+  centre offset, roll or camera altitude the two agree exactly. So the difference is in
+  `frustum::covered` -- which tiles the walk accepts against that frustum -- and the AABB each tile
+  is tested as is the first thing to compare, in particular what z extent it is given.
+
+  Worth more than the pixels: three times the cover is three times the fetches, decodes and bucket
+  builds for ground nobody is looking at, which §12 would care about even if the frame matched.
