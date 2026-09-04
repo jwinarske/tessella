@@ -5514,6 +5514,29 @@ against; none is scheduled.
     two hundred and six hundred quiet ticks -- so the 14,162 recorded earlier for the padding fix
     was a third flaky run, and the pitched figure is stably about 34,000.
 
-  So the loss is between a correct set of offers and the vertex buffers, and the buffers are five
-  times smaller at pitch than flat on a larger cover. That is where to look next, and it is a
-  narrower place than anything this entry started with.
+  **It is not the producer at all.** Two more corrections and then the answer.
+
+  This scene has **no text**. `text-field` is set but the features carry no `name`, so every label
+  is icon-only, zero text quads are emitted at either pitch, and the `text_placed=0` that looked
+  like a symptom was never one. And `glyph_quads_drawn`/`_hidden` count quads as a drawable's
+  dynamic buffer is *built*, not as it is drawn, so a drawable the consumer keeps between frames is
+  not counted -- which makes the 251-against-51 comparison meaningless too. Both of those were read
+  as evidence and neither was.
+
+  Measured on the producer, one frame, last thirteen buckets:
+
+  | | icon quads emitted | quads with visible opacity | icons on screen |
+  | --- | --- | --- | --- |
+  | flat, 9 tiles | 340 | **237** | 96 |
+  | pitch 45, 13 tiles | 462 | **237** | 8 |
+
+  The producer emits *more* geometry at pitch, and marks exactly the same number of quads visible.
+  Every decision it makes -- which symbols exist, which are offered, which are placed, which get
+  opacity -- is the same or better at pitch than flat. Then 96 reach the screen and 8 do.
+
+  So the icons are being drawn somewhere invisible, and the search moves out of placement and into
+  the symbol vertex path: the dynamic buffer a point symbol carries and what the shader does with
+  it. `lay_out` writes a point label's anchor into that buffer in *tile* units while the shader
+  reads it as label-plane coordinates, which the comment in `write_line_positions` already flags as
+  worth thousands of pixels when it goes wrong -- and a pitched label plane is exactly where a
+  coincidence at pitch zero would stop holding.
