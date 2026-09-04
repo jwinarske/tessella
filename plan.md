@@ -5961,3 +5961,24 @@ against; none is scheduled.
   frame differs. Excluding symbols from the re-emission gate was meant to make every frame re-encode
   them; the counts say it did not. Check whether a bucket reaches the encode loop at all when its
   tile is drawn but nothing about it changed.
+
+- **Restore the producer audit; the withdrawal was wrong.** The withdrawal argued that "last value
+  per key" could take different keys from different frames. Counted properly, it cannot here.
+  Instrumenting each emit group and the symbol buckets reaching its encode loop, at pitch 45 on
+  `icons_only`:
+
+      groups: 7   symbol-bucket visits: 58
+      distinct symbol buckets per group: group 4: 2, group 5: 4, group 6: 10, group 7: 13
+
+  The last group covers **all thirteen**. `packed_bytes` dedups within a group, so each bucket
+  encodes once per group it appears in -- which is what produced the one-to-four spread that
+  prompted the withdrawal, and it is a count of *groups a tile was drawn in*, not evidence about
+  the last one. Because group 7 holds every key, last-per-key is the last frame's value.
+
+  So the audit stands: tile list, placement decisions, live drawable set, final draw order, UBO
+  contents, symbol vertex content, dynamic buffer, opacity buffer and sprite atlas are all identical
+  between runs whose images differ by twenty thousand pixels. The producer is deterministic; the
+  consumer is not.
+
+  Also confirmed here: excluding symbols from the re-emission gate works. Twenty of the fifty-eight
+  visits were to buckets the gate would have skipped, and none were skipped.
