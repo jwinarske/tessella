@@ -5681,3 +5681,28 @@ against; none is scheduled.
 
   This is the answer to how much a whole untested axis is worth: the largest single visible defect
   found in this frontend, sitting behind a camera parameter nothing had ever varied.
+
+- **The settled frame keeps ancestor tiles the oracle has dropped, and how many varies.** *Located.*
+  Hashing every encoded bucket by tile across pitched runs finds the difference immediately, and it
+  is not in the z15 tiles at all: the records that differ are at **z13 and z14**. Ancestors.
+
+  Their count varies run to run -- ten parts, twelve, ten, ten -- and one run carried an extra tile
+  entirely, 51 distinct bucket-hashes against 49. mbgl's placement log at the same camera lists
+  thirteen tiles and every one is z15. So a settled frame here draws five or six ancestor tiles
+  that the oracle does not draw at all, and which five or six depends on arrival order.
+
+  That is the arrival-order defect, and it is also part of the pitch gap: an ancestor's buckets are
+  offered to placement alongside its children's, so those extra tiles compete for the same grid.
+  It explains a symbol scene losing icons without any symbol code being wrong.
+
+  **Where.** `Substitution::get` answers `renderable: true` for any tile whose buckets are built,
+  and `onion` prefetches ancestors two levels up so their buckets *are* built -- coarsest first, so
+  the map becomes legible early, which is the right strategy for fetching and not a licence to keep
+  drawing them. `updateRenderables` should use an ancestor only where the ideal tile is not
+  renderable; that all thirteen ideal tiles are built by quiescence and ancestors are still drawn
+  says the substitution is not collapsing when its children arrive.
+
+  The comment sitting on `get` already names the mechanism it is missing: "renderable means the
+  buckets are here. §13.2 asks that it eventually mean consumer-*acknowledged* rather than merely
+  built, which is where mbgl's single-frame holes come from." The gap it describes is the same one
+  measured here from the other end.
