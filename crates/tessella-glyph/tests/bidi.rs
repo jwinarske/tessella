@@ -277,3 +277,25 @@ mod arabic {
         );
     }
 }
+
+/// Every joining codepoint in Unicode can be shaped, not only the ones with Arabic forms.
+///
+/// `JOINING` carries the joining type of five hundred ranges -- Syriac, Thaana, N'Ko, Mongolian,
+/// Arabic Extended and more -- while the presentation-form table covers the basic Arabic block.
+/// A letter from any other joining script used to reach the forms lookup with nothing to find,
+/// and the lookup asserted. Sweeping a camera out to zoom zero, where the whole world's labels
+/// are on screen, crashed the producer on the spot.
+#[test]
+fn every_joining_script_shapes_without_panicking() {
+    for (start, end, _) in tessella_glyph::generated::arabic::JOINING {
+        // The ends and the middle of each range rather than all of it: the ranges are contiguous
+        // by construction, so a gap in the forms table shows at an edge.
+        for codepoint in [start, start.midpoint(end), end] {
+            let shaped = tessella_glyph::arabic::shape(&[start, codepoint, end]);
+            assert!(
+                !shaped.is_empty(),
+                "shaping U+{codepoint:04X} produced nothing"
+            );
+        }
+    }
+}

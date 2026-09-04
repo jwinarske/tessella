@@ -165,9 +165,22 @@ pub fn shape(text: &[u32]) -> Vec<u32> {
         }
 
         let after = next_visible(text, index).is_some_and(joins_backward);
-        let entry = &LETTERS[LETTERS
-            .binary_search_by_key(&codepoint, |letter| letter.base)
-            .expect("the joining type was found by the same key")];
+        // The two tables do not cover the same thing, and this is where that shows. `JOINING`
+        // is every joining type in Unicode -- Syriac, Thaana, N'Ko, Mongolian, Arabic Extended,
+        // five hundred ranges of it -- while `LETTERS` is the presentation forms of the basic
+        // Arabic block and nothing else. A joining letter from any other script reaches here
+        // with no entry to find, and the lookup asserted it would.
+        //
+        // Passed through instead, which is what this function already documents doing for
+        // "every other script": a letter with no presentation forms is drawn as itself, and the
+        // font shapes it or does not. Found by sweeping the camera out to zoom zero, where the
+        // whole world's labels are on screen at once and the crash is immediate.
+        let Ok(found) = LETTERS.binary_search_by_key(&codepoint, |letter| letter.base) else {
+            out.push(codepoint);
+            index += 1;
+            continue;
+        };
+        let entry = &LETTERS[found];
 
         // A letter that joins on one side only cannot take the forms of the other. The table
         // repeats its isolated and final for those, so the index is safe rather than the caller
