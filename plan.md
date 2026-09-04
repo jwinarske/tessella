@@ -6079,7 +6079,20 @@ source, cache and store. For four *different cities* that is the whole of it -- 
 in common, so §5's shared store buys nothing here. One map with four views is the §5 shape and is
 not wired.
 
-**What is missing.** A bridge that lets a `FluoriteView` host a tessella map: create the map, drive
-`tessella_tick` against that view's scene through `FilamentRenderer`, and route the camera. Nothing
-in either tree does this yet -- `tessella_fluorite` has a headless probe and no Flutter surface, and
-Fluorite has no notion of a tessella map.
+**Most of the bridge was already written.** `render_probe` is tessella and Fluorite in one view and
+has been all along; the integration inside it is five lines --
+
+    tsf::FilamentRenderer::configureCamera(*camera);
+    auto backend = std::make_unique<tsf::FilamentRenderer>(engine, scene, materialDir, W, H);
+    auto host = tsf::Host::create(config, lat, lon, zoom, &error);
+    host->tick(*backend);   // per frame
+    host->retire(seen);
+
+-- and everything else in that file is Filament setup a `FluoriteView` already provides. Those five
+lines are now `tsf::MapView`, which takes an engine and a scene and owns a `Host` and a
+`FilamentRenderer`. `render_probe` goes through it, and parity is unchanged: Washington 0,
+poi-labels 0, roads 0, icons_only 272, families 8, buildings at bearing 90 7,480.
+
+**What is actually missing** is only the Flutter half: a `FluoriteView` handing its engine, scene and
+size to `MapView::create`, a per-frame `tick()` on the view's callback, and the camera routed from
+Dart. One `MapView` per pane, four maps sharing `Pool::shared()`.
