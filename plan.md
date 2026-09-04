@@ -6227,5 +6227,16 @@ is fast on average and stalls every thirtieth frame drops frames. Its `prod`/`dr
 FFI boundary is what made each of these findable: the consumer, the uploads and Filament together
 never exceeded a millisecond, and all four defects were on the other side of the boundary.
 
-**What is left.** Peak RSS is now almost entirely the rings: `map_view.cc` asks for 256 MiB each,
-four of them, against a slab region of 64. Nothing has measured what a ring actually needs.
+**And the rings, which nothing had measured.** `Host` records the peak unread bytes, taken inside
+`tick` between the producer publishing a frame and the consumer draining it -- the only moment the
+figure means anything, since after the drain the ring is empty. The worst is not the densest
+style: an all-families scene at 900x700 peaks at **11.0 MiB**, liberty's hundred and eleven layers
+at 1920x1080 reach 6.0, and the quad's four street-level views 0.3 to 1.8. It was 256 MiB per view
+on the grounds that a cover had never come close, which was true and was not a measurement.
+
+Sixty-four, about six times the worst. The margin is asymmetric on purpose: a ring that fills
+mid-pan drops a frame and the next retries, but one that cannot hold a *single* frame can never
+make progress, because a frame is emitted whole or not at all.
+
+Peak RSS **1156 to 472 MiB**, and 5473 to 472 across the whole of this work -- 11.6x. Timings
+unchanged.
