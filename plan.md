@@ -5490,3 +5490,30 @@ against; none is scheduled.
   So what is actually established is only the symptom: **8 icons drawn against 148**, reproducibly,
   with the cover correct, the tile count correct, and individual collision boxes agreeing to within
   half a pixel. Whatever is wrong is between those two facts, and it has not been found yet.
+
+  **Measured properly, one frame against one frame, per tile.** Logging the offer and the outcome
+  in `frame.rs`, where the tile is in scope, and taking only the last frame's thirteen records:
+
+  | | offered | placed | drawn |
+  | --- | --- | --- | --- |
+  | tessella | **462** | 348 | 8 |
+  | mbgl | **462** | 279 | 148 |
+
+  The offers are identical -- 462 across `15/17602..17605/10744..10747`, the same thirteen tiles --
+  so everything up to and including which symbols exist is right. What follows is not.
+
+  Three things that are *not* the explanation, each checked rather than assumed:
+
+  - `text_placed` is zero on every tile and `drawn` is zero with everything `fading`, at pitch
+    **and flat alike**. `ViewSymbols` is rebuilt per frame, so `drawn` is always zero and those
+    counters are not diagnostic. Reading them as a pitch symptom was a fourth wrong turn.
+  - The geometry is not being culled, it is not being built: `glyph_quads_drawn` plus
+    `glyph_quads_hidden` is 251 flat and about 51 pitched, and that is the size of the buffers, not
+    of what survived a depth test. With *more* tiles at pitch.
+  - It does not improve with settling. 34,011, 34,121, 34,011 and 31,378 gross at twenty, sixty,
+    two hundred and six hundred quiet ticks -- so the 14,162 recorded earlier for the padding fix
+    was a third flaky run, and the pitched figure is stably about 34,000.
+
+  So the loss is between a correct set of offers and the vertex buffers, and the buffers are five
+  times smaller at pitch than flat on a larger cover. That is where to look next, and it is a
+  narrower place than anything this entry started with.
