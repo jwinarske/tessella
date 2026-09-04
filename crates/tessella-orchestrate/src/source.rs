@@ -116,6 +116,15 @@ struct Glyphs {
     /// arrival timing -- the render probe's icon scene drew between 145 and 298 glyph quads over
     /// twelve identical runs.
     asked: tessella_glyph::fonts::Dependencies,
+    /// The landed generation the dependency walk last ran at.
+    ///
+    /// The walk is over every bucket of every landed tile, calling `dependencies()` on each --
+    /// which clones a font stack per layer and iterates every feature's text. It answered the
+    /// same thing on every tick of a settled map, and it ran before the subset test that decided
+    /// it had been unnecessary. Nothing it reads changes without the generation changing, so
+    /// this is what makes it run when a tile lands rather than when a frame is drawn: a fifth of
+    /// the producer's time on a moving quad.
+    surveyed: Option<u64>,
     /// Whether that fetch is still running.
     ///
     /// Distinct from `scheduled` and from `ready`, and it has to be: `ready` is a hand-off that
@@ -370,9 +379,10 @@ impl<S: FileSource + 'static> TileSource<S> {
         let Some(url) = sources.style.glyphs.clone() else {
             return;
         };
+        let generation = self.generation.load(Ordering::Acquire);
         {
             let held = self.glyphs.lock().unwrap_or_else(PoisonError::into_inner);
-            if held.running {
+            if held.running || held.surveyed == Some(generation) {
                 return;
             }
         }
@@ -411,14 +421,17 @@ impl<S: FileSource + 'static> TileSource<S> {
                 }
             }
         }
-        if wanted.is_empty() {
-            return;
-        }
-
         {
             let mut held = self.glyphs.lock().unwrap_or_else(PoisonError::into_inner);
             // Re-checked under the lock: two views ticking together both got past the first look.
             if held.running {
+                return;
+            }
+            // Recorded before the tests below, not after: the walk answered for this generation
+            // whatever it found, so a repeat of it would find the same. Recorded under the lock
+            // that guards `asked`, so the pair cannot disagree.
+            held.surveyed = Some(generation);
+            if wanted.is_empty() {
                 return;
             }
             // Nothing new, so nothing to do. `wanted` is what the landed tiles need in total, not

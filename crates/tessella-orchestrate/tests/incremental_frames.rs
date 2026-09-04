@@ -799,7 +799,10 @@ mod teardown {
             "and the view itself: {kinds:?}"
         );
         assert_eq!(session.registry().len(), 0, "nothing is held afterwards");
-        assert!(!arena.sweep().is_empty(), "the bytes go back too");
+        // The teardown sweeps, so there is nothing left here to sweep -- which is a stronger
+        // statement than the sweep returning ids: the arena holds no slab at all.
+        assert_eq!(arena.slabs().count(), 0, "the bytes went back too");
+        assert!(arena.sweep().is_empty(), "and there is nothing left to sweep");
     }
 
     /// A view sharing geometry with another releases its use and removes nothing.

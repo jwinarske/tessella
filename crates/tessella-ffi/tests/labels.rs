@@ -87,8 +87,18 @@ fn a_map_created_through_c_draws_its_labels() {
             );
             // The symbol drawable's vertices live in a slab, so a frame with labels packs far
             // more than one without them.
-            packed = packed.max(regions.slabs_len);
-            if packed > 1024 {
+            //
+            // `total_len` out of the region's header rather than `slabs_len`: the arena writes
+            // into a region it was given, so the range handed over is that region's whole
+            // capacity from the first call onwards and says nothing about what has been written.
+            // The header's cursor is what does.
+            if regions.slabs_len >= 16 {
+                let header = core::slice::from_raw_parts(regions.slabs, 16);
+                let total =
+                    u64::from_le_bytes(header[8..16].try_into().expect("eight bytes")) as usize;
+                packed = packed.max(total);
+            }
+            if packed > 16 + 4096 * 16 + 1024 {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(5));
@@ -113,9 +123,15 @@ fn a_map_created_through_c_draws_its_labels() {
     // Measured both ways rather than guessed: 3168 bytes with the glyphs fetched and 224
     // without. The first threshold tried here was 64, which both states clear — the test passed
     // with the fetch disabled, which is the only reason its emptiness was noticed.
+    //
+    // The region's table is ahead of both now, so the floor is the empty region rather than
+    // zero: 16 bytes of header plus 4096 entries of 16, which is what an arena with nothing in
+    // it reports.
+    let empty = 16 + 4096 * 16;
     assert!(
-        drawn > 1024,
-        "the frame packed {drawn} bytes of geometry, against 3168 when the labels reach it and \
-         224 when they do not — the glyphs are not getting in"
+        drawn > empty + 1024,
+        "the region reached {drawn} bytes, {} of geometry past its empty table — against 3168 \
+         when the labels reach it and 224 when they do not, so the glyphs are not getting in",
+        drawn.saturating_sub(empty)
     );
 }
