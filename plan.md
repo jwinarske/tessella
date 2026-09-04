@@ -5765,3 +5765,23 @@ against; none is scheduled.
   with like: the Washington placement-sequence diff, the 462-against-462 offer count, and this draw
   list. Anything summed over a run should be assumed to be summing over frames until shown
   otherwise.
+
+- **Arrival-order defect: placement is deterministic, emission is not.** Measured per frame and per
+  tile, last frame only, three to four runs each at pitch 45 on `icons_only`:
+
+  - draw list: identical, 13 z15 tiles
+  - offered and placed counts per tile: identical
+  - placement decisions, FNV over the `(text, icon, vertical)` sequence per tile: **identical**
+  - encoded payload hashes: **differ**, and the count of freshly encoded buckets differs -- 2, 18, 2
+
+  Images for those runs were 29,221 / 25,800 / 29,221 gross.
+
+  So placement decides the same thing every run and the frame emits a different subset of it.
+  `packed_bytes` is per `emit_group` call, so the hash log counts buckets encoded fresh that frame;
+  a bucket not re-encoded keeps whatever the consumer already holds. Symbol opacity is written per
+  frame from a placement that is global -- every tile competes in one grid -- so when a late tile
+  lands and shifts the decisions, any bucket the frame does not re-emit keeps opacity from an
+  earlier, smaller cover.
+
+  Next: find what gates re-emission per bucket and whether symbol opacity can be excluded from it.
+  A symbol's dynamic and opacity buffers change every frame by construction; geometry does not.
