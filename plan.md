@@ -5917,3 +5917,29 @@ against; none is scheduled.
   changes the result, and `drawlist.cc` merges and retains runs across frames. Four `OrderUpdate`
   records go out per run; whether the consumer re-sorts on them or keeps insertion order within a
   batch is the next thing to read.
+
+- **Producer audit complete: every byte it emits is identical between runs.** Three pitched runs of
+  `icons_only`, images 13,757 / 34,177 / 14,162 gross. Compared, each keyed rather than positional:
+
+  | | result |
+  | --- | --- |
+  | tile list | identical |
+  | placement decisions per tile | identical |
+  | live drawable set after releases | identical (39) |
+  | final draw order | identical (52 entries) |
+  | UBO contents | identical (6 slots) |
+  | symbol vertex content | identical |
+  | symbol dynamic buffer | identical |
+  | symbol opacity buffer | identical |
+  | sprite atlas pixels and packing | identical |
+
+  So `tessella` is deterministic and `tessella_fluorite` is not: the same bytes make different
+  pictures. Draw order is not the cause -- `DrawList::build` walks `order.entries` and never merges
+  a symbol batch, and the order is identical.
+
+  What is left on the consumer side: the seven `TextureUpdate` records, and how a repeated
+  `GeometryAdd` for an id the consumer already knows is applied. Symbols are re-emitted every frame
+  now, so each sends a second `GeometryAdd` under the same id; if that is dropped rather than
+  replacing, the consumer keeps whichever version arrived first, which is exactly the shape of
+  this fault. `filament_renderer.cc` appears to replace via `onRetire` then `meshes_[add.id] = ...`,
+  so read that path and the texture uploads next.
