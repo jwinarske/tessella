@@ -804,7 +804,15 @@ fn emit_group(
         // vertices, indices and attributes that no registry entry ever referenced. Dead bytes
         // in proportion to cover times views, every frame — §11.5's allocation churn, arriving
         // by the one path retention was supposed to close.
-        if registry.is_some() && !fresh_buckets.contains(&(tile_index, bucket_index)) {
+        // A symbol is the exception: its dynamic and opacity buffers are rewritten every frame
+        // from a placement that is global, so a bucket held back here keeps opacity decided
+        // against whatever cover existed when it was announced. That is what made the frame a
+        // function of tile arrival order -- placement agreed run to run, emission did not.
+        let per_frame = matches!(bucket.content, Content::Symbol(_));
+        if registry.is_some()
+            && !per_frame
+            && !fresh_buckets.contains(&(tile_index, bucket_index))
+        {
             continue;
         }
 

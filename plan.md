@@ -5785,3 +5785,27 @@ against; none is scheduled.
 
   Next: find what gates re-emission per bucket and whether symbol opacity can be excluded from it.
   A symbol's dynamic and opacity buffers change every frame by construction; geometry does not.
+
+- **Per-bucket re-emission gate found; symbols excluded.** `emit_group`:
+
+      if registry.is_some() && !fresh_buckets.contains(&(tile_index, bucket_index)) { continue; }
+
+  `fresh_buckets` is `registry.is_new(&key)` -- first announcement only. So a bucket is encoded
+  once ever, which is right for geometry and wrong for a symbol: its dynamic and opacity buffers
+  are rewritten every frame from a placement that is global, so a bucket held back keeps opacity
+  decided against whatever cover existed when it was announced.
+
+  Instrumented at pitch 45 on `icons_only`: 78 non-symbol buckets skipped, 13 fresh; 28 symbol
+  buckets skipped, 36 fresh. The 28 are the bug.
+
+  Symbols now bypass the gate. Flat parity unchanged -- Washington 0, poi-labels 0, place-labels 0,
+  icons_only 272, families 8, buildings at bearing 90 7,480.
+
+  **Not sufficient.** `icons_only` at pitch still varies: 21,794 / 13,757 / 23,223 / 21,794 /
+  34,177 / 31,294. So there is a second contributor with placement decisions identical and symbol
+  buffers now re-sent every frame. Candidates not yet checked: the sprite atlas upload, and
+  whatever else the consumer retains between frames.
+
+  The cheaper shape is still open: re-sending a whole symbol bucket to update two small buffers is
+  what mbgl avoids by uploading dynamic and opacity separately each frame. An ABI record for that
+  is the follow-up, once the remaining nondeterminism is understood.
