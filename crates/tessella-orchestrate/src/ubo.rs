@@ -1244,7 +1244,13 @@ pub fn symbol_gamma_scale(view: &ViewTransform, pitch: Alignment) -> f32 {
     #[allow(clippy::cast_possible_truncation)]
     match pitch {
         Alignment::Map => {
-            (view.pitch.cos() * camera::camera_to_center_distance(view.height)) as f32
+            // Radians. `ViewTransform::pitch` is degrees -- every field of it that is an angle
+            // is -- and `cos` is not. At fifteen degrees this read cos(15 radians), which is
+            // *negative*: the ramp inverted and every line label drew as an opaque slab with its
+            // text over it. At zero the two agree, which is why a map that had only ever been
+            // rendered flat could not find it.
+            (camera::pitch_radians(view).cos() * camera::camera_to_center_distance(view.height))
+                as f32
         }
         Alignment::Viewport => 1.0,
     }

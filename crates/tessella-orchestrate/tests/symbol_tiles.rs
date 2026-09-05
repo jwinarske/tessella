@@ -1306,3 +1306,49 @@ fn a_wider_icon_places_differently() {
          passing zero for the icon's extent would place both the same"
     );
 }
+
+/// The gamma scale reads pitch as degrees, which is what the field is.
+///
+/// `cos` takes radians. Reading a pitch of fifteen as fifteen radians gives a *negative* scale,
+/// the distance field's ramp inverts, and every map-aligned label draws as an opaque slab with
+/// its text over it. At zero the two agree, which is why a renderer only ever exercised flat
+/// could not find it -- and why this asserts a value rather than a direction.
+#[test]
+fn the_gamma_scale_reads_pitch_as_degrees() {
+    use tessella_layout::symbol_layout::Alignment;
+    use tessella_orchestrate::ubo::symbol_gamma_scale;
+    use tessella_tile::cover::ViewTransform;
+
+    let view = ViewTransform {
+        longitude: -122.3321,
+        latitude: 47.6062,
+        zoom: 15.0,
+        width: 959.0,
+        height: 359.0,
+        bearing: 0.0,
+        pitch: 15.0,
+    };
+
+    let scale = symbol_gamma_scale(&view, Alignment::Map);
+    assert!(
+        scale > 0.0,
+        "a pitch of fifteen degrees gave {scale}, so it was read as radians"
+    );
+
+    // Within a percent of cos(15 degrees) times the camera distance, which is the whole formula.
+    let want = 15.0f64.to_radians().cos()
+        * tessella_tile::camera::camera_to_center_distance(view.height);
+    #[allow(clippy::cast_possible_truncation)]
+    let want = want as f32;
+    assert!(
+        (scale - want).abs() < want * 0.01,
+        "gamma scale {scale} is not cos(15 degrees) * camera distance {want}"
+    );
+
+    // And it falls as the camera leans further back, which is the correction it exists to make.
+    let steeper = ViewTransform {
+        pitch: 60.0,
+        ..view
+    };
+    assert!(symbol_gamma_scale(&steeper, Alignment::Map) < scale);
+}
