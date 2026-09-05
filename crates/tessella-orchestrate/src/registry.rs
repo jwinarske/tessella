@@ -99,6 +99,15 @@ pub struct GeometryRegistry {
     added: BTreeSet<DrawableKey>,
     /// Slab ranges this frame has decided to let go, applied on [`Self::retire`].
     releasing: Vec<SlabRef>,
+    /// What this frame's re-announcements displaced, so [`Self::rollback`] can put it back.
+    ///
+    /// A drawable that is announced again keeps its id and gets new bytes, and the range it held
+    /// is dead only once the frame commits. Staging it in `releasing` alone would be enough for
+    /// the success path and wrong for the other one: a frame that fails rewinds the arena, so the
+    /// refs `record_refs` wrote name bytes that no longer exist and the ones it displaced are
+    /// live again. Only a symbol reaches this, which is the one family whose vertices carry the
+    /// camera.
+    replaced: Vec<(DrawableKey, alloc::vec::Vec<SlabRef>, u64)>,
     /// What `next` was when the frame began, for the same reason.
     next_at_frame_start: u64,
     next: u64,
@@ -148,12 +157,24 @@ impl GeometryRegistry {
         id
     }
 
-    /// Records where a newly announced drawable's bytes live, so eviction can release them.
+    /// Records where an announced drawable's bytes live, so eviction can release them.
     ///
-    /// Called only for a drawable that was new: one already known was not re-encoded, and its
-    /// references are the ones recorded when it was.
+    /// Called for a drawable that was new, and for one re-announced because its vertices carry
+    /// the camera — a symbol's do. The range it held is dead the moment the replacement lands,
+    /// so it is staged for [`Self::retire`] rather than left to the sweep: nothing references
+    /// it, and an unreleased range is a slab that never empties.
+    ///
+    /// Staged, not released, for [`Self::retire`]'s reason: a frame that then fails must not
+    /// have moved the arena.
     pub fn record_refs(&mut self, key: DrawableKey, refs: alloc::vec::Vec<SlabRef>, at: u64) {
         if let Some(entry) = self.live.get_mut(&key) {
+            if !entry.refs.is_empty() {
+                self.replaced.push((
+                    key,
+                    core::mem::take(&mut entry.refs),
+                    entry.announced_at,
+                ));
+            }
             entry.refs = refs;
             entry.announced_at = at;
         }
@@ -269,6 +290,10 @@ impl GeometryRegistry {
                 entry.users.remove(&view);
             }
         }
+        // The frame is committing, so what its re-announcements displaced is now dead.
+        for (_, refs, _) in core::mem::take(&mut self.replaced) {
+            self.releasing.extend(refs);
+        }
         let mut releasing = core::mem::take(&mut self.releasing);
         self.live.retain(|_, entry| {
             if entry.users.is_empty() {
@@ -299,6 +324,16 @@ impl GeometryRegistry {
         // Nothing this frame staged for release happens, because nothing this frame said so
         // reached the consumer.
         self.releasing.clear();
+        // And a re-announced drawable goes back to the bytes it had. The arena rewinds to the
+        // frame's mark, so the refs this frame recorded name nothing; the displaced ones are
+        // what the consumer is still holding. Reversed, so a key announced twice in one frame
+        // lands on the oldest.
+        for (key, refs, at) in core::mem::take(&mut self.replaced).into_iter().rev() {
+            if let Some(entry) = self.live.get_mut(&key) {
+                entry.refs = refs;
+                entry.announced_at = at;
+            }
+        }
         self.next = self.next_at_frame_start;
     }
 

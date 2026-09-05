@@ -863,8 +863,18 @@ fn emit_group(
         // And a *drawable* the consumer already has is not announced again, even where its
         // bucket had to be encoded for a sibling's sake. `fresh` is empty without a registry, so
         // the unregistered path announces everything, which is what `GeometryId` documents.
+        //
+        // A symbol is the same exception it is above, and for the same reason carried one step
+        // further. Its vertices are a function of the camera -- `write_line_positions` walks
+        // each label along its *projected* road and `write_opacity` bakes the fade in -- so the
+        // bytes this frame encoded are the only ones that describe this frame. Announcing them
+        // once left the consumer drawing glyph positions computed for whatever camera the tile
+        // arrived under: settled frames were exact and a moving one carried its labels off
+        // their streets, which is the "flying labels" a zoom sweep shows. Re-encoding without
+        // re-announcing also wrote those bytes into the arena every frame with nothing holding
+        // them, so this closes that too.
         let key = keyed.get(&entry.geometry.0).copied();
-        if registry.is_some() && key.is_some_and(|key| !fresh.contains(&key)) {
+        if registry.is_some() && !per_frame && key.is_some_and(|key| !fresh.contains(&key)) {
             continue;
         }
 
