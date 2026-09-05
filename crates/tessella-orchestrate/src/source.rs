@@ -290,7 +290,12 @@ impl<S: FileSource + 'static> TileSource<S> {
     ///
     /// Cheap to call every tick, which is how the frame loop calls it: planning is arithmetic,
     /// and the work it would duplicate is exactly what `inflight` holds back.
-    pub fn want(self: &Arc<Self>, view: &ViewTransform, coords: &[TileCoord]) {
+    pub fn want(
+        self: &Arc<Self>,
+        view: &ViewTransform,
+        coords: &[TileCoord],
+        speculative: &[TileCoord],
+    ) {
         let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         match inner.readiness {
             Readiness::Idle => {
@@ -308,7 +313,7 @@ impl<S: FileSource + 'static> TileSource<S> {
                     return;
                 };
                 drop(inner);
-                self.dispatch(&sources, view, coords);
+                self.dispatch(&sources, view, coords, speculative);
                 self.want_glyphs(&sources);
             }
         }
@@ -525,6 +530,7 @@ impl<S: FileSource + 'static> TileSource<S> {
         sources: &Arc<Sources>,
         view: &ViewTransform,
         coords: &[TileCoord],
+        speculative: &[TileCoord],
     ) {
         let Ok(jobs) = boot::plan(
             &sources.sets,
@@ -601,10 +607,28 @@ impl<S: FileSource + 'static> TileSource<S> {
                 .collect()
         };
 
+        // What the frame is drawing outranks what it might draw. A cover coordinate is urgent
+        // even when a speculative copy of the same tile is also wanted -- two world copies share
+        // a `TileId` and only one of them may be on screen -- so this is built from the tiles
+        // that are *not* speculation rather than from the ones that are.
+        let urgent: BTreeSet<TileId> = coords
+            .iter()
+            .filter(|tile| !speculative.contains(tile))
+            .map(|tile| TileId::new(tile.z, tile.x, tile.y))
+            .collect();
+
         for job in ready {
+            // `Prefetch` is documented as correct to starve, which is exactly the rank a level
+            // the camera is heading for should have: without it a fast zoom fills the pool with
+            // the levels it has already left, and the one it arrives at waits behind them.
+            let priority = if urgent.contains(&job.cover) {
+                Priority::Foreground
+            } else {
+                Priority::Prefetch
+            };
             let this = Arc::clone(self);
             let sources = Arc::clone(sources);
-            self.pool.submit(Priority::Foreground, move || {
+            self.pool.submit(priority, move || {
                 let probe = boot::BuildProbe {
                     bytes: &DISCARDED,
                     fetched: &|| {},

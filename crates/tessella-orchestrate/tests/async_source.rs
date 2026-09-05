@@ -174,7 +174,7 @@ fn wanting_schedules_rather_than_waits() {
         wrap: 0,
     }];
 
-    source.want(&view(0.0), &cover);
+    source.want(&view(0.0), &cover, &[]);
 
     // Resolution runs on a worker, so this thread carried on. `Idle` is the one answer that
     // would mean the call did nothing at all.
@@ -209,12 +209,12 @@ fn tiles_arrive_and_are_not_refetched() {
     let tile = TileId::new(0, 0, 0);
 
     // The first want resolves; the second, once resolved, plans and submits.
-    source.want(&view(0.0), &cover);
+    source.want(&view(0.0), &cover, &[]);
     assert!(
         settle(|| source.readiness() == Readiness::Ready),
         "never resolved"
     );
-    source.want(&view(0.0), &cover);
+    source.want(&view(0.0), &cover, &[]);
 
     assert!(
         settle(|| source.buckets(tile).is_some()),
@@ -230,7 +230,7 @@ fn tiles_arrive_and_are_not_refetched() {
     // Ten more ticks over the same cover. Every one plans the same job, and every one must find
     // it already built -- this is what stops a settled camera from re-fetching its own view.
     for _ in 0..10 {
-        source.want(&view(0.0), &cover);
+        source.want(&view(0.0), &cover, &[]);
     }
     std::thread::sleep(Duration::from_millis(200));
 
@@ -256,7 +256,7 @@ fn a_source_that_cannot_resolve_reports_it() {
         wrap: 0,
     }];
 
-    source.want(&view(0.0), &cover);
+    source.want(&view(0.0), &cover, &[]);
 
     assert!(
         settle(|| matches!(source.readiness(), Readiness::Failed(_))),

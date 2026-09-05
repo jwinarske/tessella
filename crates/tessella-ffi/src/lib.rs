@@ -447,7 +447,9 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
         // not depend on that, and a consumer that has fallen behind is the last one that should
         // also be made to wait for its tiles.
         let view = *state.map.view();
-        state.source.want(&view, state.map.wanted());
+        state
+            .source
+            .want(&view, state.map.wanted(), state.map.speculative());
         outcome
     })
 }

@@ -1091,3 +1091,53 @@ fn an_empty_stored_background_is_not_an_answer() {
     assert!(emitted > 10, "only {emitted} frames emitted");
     assert_eq!(empty, 0, "{empty} of {emitted} emitted frames drew nothing");
 }
+
+/// Zooming out asks further ahead than sitting still, and zooming in does not.
+///
+/// The onion is a depth in *levels*, and what a camera needs is a depth in *time*: the same four
+/// levels are a second and a half of warning at a gentle zoom and a third of a second at a
+/// sweep's rate. Only the outward direction needs it. Zooming in, the level being left is the
+/// ancestor of the level being reached and substitution draws it -- coarse, but there. Zooming
+/// out, what is held is a descendant of what is wanted, and there is no substituting from below.
+#[test]
+fn zooming_out_asks_further_ahead() {
+    let style = Style::parse(STYLE).expect("the style parses");
+    let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
+    // SAFETY: sized by `region_size`, eight-aligned as a `Vec<u64>`, outlives both halves.
+    let mut ring = unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
+
+    // The coarsest level each run reached for, from a store that holds nothing so everything the
+    // cover names is wanted.
+    let mut shallowest = |zooms: &[f64]| -> u8 {
+        let mut map = Map::new(style.clone(), view(zooms[0]), ViewId(0));
+        let mut lowest = u8::MAX;
+        for zoom in zooms {
+            map.look_at(view(*zoom));
+            let _ = map.tick(&mut ring.0, &Nothing);
+            while let Some(record) = ring.1.peek() {
+                let token = record.consumed();
+                ring.1.advance(token);
+            }
+            for tile in map.wanted() {
+                lowest = lowest.min(tile.z);
+            }
+        }
+        lowest
+    };
+
+    // Held at one zoom: the resting depth and nothing more.
+    let still = shallowest(&[10.0; 6]);
+    // Half a level a frame outward, which is what a sweep does.
+    let out = shallowest(&[10.0, 9.5, 9.0, 8.5, 8.0, 7.5]);
+    // And the same rate inward, which should ask no deeper than resting.
+    let into = shallowest(&[10.0, 10.5, 11.0, 11.5, 12.0, 12.5]);
+
+    assert!(
+        out < still,
+        "zooming out reached z{out}, no further ahead than standing still at z{still}"
+    );
+    assert!(
+        into >= still.saturating_sub(1),
+        "zooming in reached z{into} against z{still} standing still, so it deepened too",
+    );
+}

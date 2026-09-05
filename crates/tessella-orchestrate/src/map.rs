@@ -163,6 +163,19 @@ pub struct Map {
     uncovered: usize,
     /// How many ancestor levels to ask for alongside the ideal cover.
     prefetch: u8,
+    /// The zoom the previous frame drew at, for the prefetch's velocity.
+    ///
+    /// `None` until a frame has been drawn: the first has no previous to differ from, and
+    /// guessing a velocity for it would deepen the very fetch a cold start can least afford.
+    last_zoom: Option<f64>,
+    /// The part of [`Self::wanted`] that is speculation rather than cover.
+    ///
+    /// Ancestors asked for because the camera is heading their way. Correct to starve: a tile
+    /// the frame is drawing now outranks one it might draw in half a second, and without the
+    /// distinction a fast zoom fills the pool with levels it has already left.
+    speculative: Vec<TileCoord>,
+    /// Levels of zoom crossed since the previous frame. Negative is zooming out.
+    zoom_velocity: f64,
     /// Glyphs, once a caller has fetched them.
     ///
     /// Owned rather than borrowed because a map outlives any one frame and the glyph set grows
@@ -218,6 +231,9 @@ impl Map {
             wanted: Vec::new(),
             uncovered: 0,
             prefetch: DEFAULT_PREFETCH,
+            last_zoom: None,
+            speculative: Vec::new(),
+            zoom_velocity: 0.0,
             fonts: None,
             sprites: None,
             zoom: ZoomHistory::new(),
@@ -277,6 +293,36 @@ impl Map {
     #[must_use]
     pub fn wanted(&self) -> &[TileCoord] {
         &self.wanted
+    }
+
+    /// How deep to ask, given how fast the camera is zooming.
+    ///
+    /// Only when zooming *out*, because only that direction arrives somewhere it has nothing for.
+    /// Zooming in, the level being left is the ancestor of the level being reached, so
+    /// substitution draws it -- coarse, but there. Zooming out, what is held is a *descendant* of
+    /// what is wanted, and there is no substitution from below: the screen is empty until the
+    /// coarse tile lands.
+    ///
+    /// Measured on the quad's sweep, which crosses thirteen levels in five seconds: the resting
+    /// four levels are a third of a second of warning, and the first pass out ran out of tiles
+    /// below zoom 1.2 while the second, from cache, did not.
+    fn prefetch_levels(&self) -> u8 {
+        if self.zoom_velocity >= 0.0 {
+            return self.prefetch;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let ahead = (-self.zoom_velocity * PREFETCH_LEAD_FRAMES).ceil().min(255.0) as u8;
+        self.prefetch.saturating_add(ahead).min(MAX_PREFETCH)
+    }
+
+    /// Which of [`Self::wanted`] are speculation, for a caller that can rank its fetches.
+    ///
+    /// A subset, not a separate list: everything here is also wanted. What it says is that these
+    /// are the levels the camera is *heading* for rather than the one it is on, so a source with
+    /// a queue should serve them last.
+    #[must_use]
+    pub fn speculative(&self) -> &[TileCoord] {
+        &self.speculative
     }
 
     /// How many ancestor levels to fetch alongside the ideal cover.
@@ -358,6 +404,9 @@ impl Map {
         let Some(cover) = self.cover.as_ref() else {
             return Ok(Tick::Idle);
         };
+        let velocity = self.last_zoom.map_or(0.0, |last| self.view.zoom - last);
+        self.last_zoom = Some(self.view.zoom);
+        self.zoom_velocity = velocity;
 
         // Substitution runs when the cover moved *or* when a tile landed: a tile arriving turns a
         // stand-in ancestor into the real thing at the same cover, which is precisely the case a
@@ -376,9 +425,17 @@ impl Map {
             // what exists — it has the addresses and not the store — so the filter is here,
             // where the source is. Without it a zoomed-in map re-asks every frame for the coarse
             // levels it is already drawing from.
-            self.wanted = onion(&pass.wanted, self.prefetch)
+            let ideal: alloc::collections::BTreeSet<TileCoord> =
+                pass.wanted.iter().copied().collect();
+            self.wanted = onion(&pass.wanted, self.prefetch_levels())
                 .into_iter()
                 .filter(|tile| tiles.buckets(TileId::new(tile.z, tile.x, tile.y)).is_none())
+                .collect();
+            self.speculative = self
+                .wanted
+                .iter()
+                .filter(|tile| !ideal.contains(tile))
+                .copied()
                 .collect();
         }
 
@@ -589,6 +646,23 @@ impl Map {
 /// differs enough that the depth should not, or a comparison would be measuring how far each
 /// reaches rather than which set it asks for.
 const DEFAULT_PREFETCH: u8 = 4;
+
+/// The deepest onion a moving camera asks for.
+///
+/// Eight, which is four levels of speculation beyond the resting depth. Each level up is a
+/// quarter of the tiles of the one below, so the cost of the extra four is a fraction of the
+/// cover itself -- the reason to bound it at all is that a level nine steps away is a different
+/// map, not a preview of this one.
+const MAX_PREFETCH: u8 = 8;
+
+/// How many frames of runway the prefetch aims to keep.
+///
+/// Thirty, half a second at sixty. That is the span a tile has to arrive in for a camera not to
+/// reach its level empty-handed, and it is what turns a depth in *levels* into a depth in time:
+/// the same four levels are a second and a half of warning at a gentle zoom and a third of a
+/// second at a sweep's rate.
+const PREFETCH_LEAD_FRAMES: f64 = 30.0;
+
 
 /// Dead region bytes below which compaction is not worth the memmove.
 ///
