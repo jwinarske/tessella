@@ -251,6 +251,14 @@ impl Map {
         // Everything laid out so far was laid out against the fonts this replaces, and a label
         // shaped without its glyphs is a label with holes in it.
         self.layouts.invalidate();
+        // Not `session.forget(view_id)`, which would be the direct way to re-tell the consumer
+        // everything against the new atlas: it makes the next frame re-announce geometry the
+        // consumer still holds, and the retire path then frees a texture something is still
+        // using -- "Handle (Texture) is being used after it has been freed", on the all-families
+        // scene, immediately. The staleness this would close is measured instead, by
+        // `FilamentRenderer::atlasMismatched`, and worked around where it does harm: the
+        // consumer takes the atlas size from the texture it has bound rather than from the
+        // drawable that named it.
         self.mark_dirty();
     }
 

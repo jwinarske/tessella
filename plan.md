@@ -6380,3 +6380,41 @@ The last two are the same bug seen from both ends, and the second was mine: the 
 because firing on the first tile asks for the prefetched ancestor's alphabet and nothing else, and
 lifting it entirely replaces a complete `Fonts` with a partial one. A fetch hands the map a *new*
 atlas rather than adding to the old, so it has to ask for everything asked for so far.
+
+### Text made of fragments
+
+The CJK panes drew their labels as fragments -- each glyph a magnified corner of itself with its
+neighbours' corners around it. That is what a shader does when it divides atlas coordinates by the
+wrong number.
+
+It took a while to find because it is invisible everywhere it was looked for. Flat is clean.
+Settled is clean. Latin is clean. `render_probe`, `quad_probe`, `extension_probe` and both
+benchmark phases are clean, pitched and moving, at the pane's exact size -- and mbgl agrees with
+all of them. It happens on the *third* pane of a *running* app while the camera moves, and until
+the frame dump could be told to sample periodically and to pick a view, there was no way to look
+at it.
+
+Two causes, one found and one still open.
+
+**The gamma scale read pitch as radians.** `ViewTransform::pitch` is degrees, as every angle on it
+is, and `cos` is not. At fifteen degrees this computed cos(15 radians), which is *negative*: the
+distance field's ramp inverted and every map-aligned label drew as an opaque slab with its text
+over it. Line labels take that alignment by default, so a pitched map lost all of them. At zero
+the two readings agree, which is the whole reason a renderer only ever exercised flat could not
+find it. Against `mbgl-render` at Seattle z15 pitch 15, road labels alone: 23,653 gross to 3,505.
+
+**And a drawable's `texsize` can be a frame behind its atlas.** A glyph fetch that finds a new
+script hands the map a larger atlas; the upload carries the new size and a drawable whose uniforms
+were not re-sent still names the old one. `FilamentRenderer::atlasMismatched` counts it -- three
+drawables on Tokyo, eight on Shanghai, over a minute of sweeping, none on the Latin panes.
+
+The consumer now takes the size from the texture it has bound, which is the authoritative answer
+and one it already had. That is a correction, not a cure: the producer is still emitting a
+drawable that disagrees with the atlas it uploaded in the same frame.
+
+**What the cure wants.** `Map::set_fonts` marking the frame dirty says *redraw*; what a new atlas
+needs is *re-tell*. `session.forget(view_id)` is the direct way to say it and does not work: the
+next frame re-announces geometry the consumer still holds, and the retire path then frees a
+texture something is still using -- "Handle (Texture) is being used after it has been freed", on
+the all-families scene, immediately. So there is a consumer lifetime bug sitting behind this one,
+and it is the next thing to pull on.
