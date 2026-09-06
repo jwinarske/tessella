@@ -692,10 +692,15 @@ pub fn settled_center(longitude: f64, latitude: f64, zoom: f64) -> [f64; 2] {
 /// the nadir. An edge is the same with `pitch ± fov / 2`, which makes each extent
 /// `h * (tan(pitch ± fov / 2) - tan(pitch))` and neither of them a function of the zoom.
 ///
-/// Both clauses then fall out. The zoom floor is the world being at least `north + south` tall,
-/// which at pitch zero is `scale >= height / tileSize` -- `constrain`'s first clause exactly.
-/// With the zoom fixed, the centre is moved back inside `[north, world - south]` pixels of the
-/// north edge, which is its second.
+/// The zoom is what gives way. mbgl clamps the *centre* instead, keeping the requested zoom and
+/// sliding the map until the world covers the viewport -- which at a low zoom takes the place the
+/// camera was aimed at off the screen entirely. Something has to give, since a short pitched
+/// viewport at zoom zero cannot have the requested centre, the requested zoom and no off-world
+/// strip at once; a zoom-out that stops a little short is the one nobody notices. The centre is
+/// still clamped afterwards, for the case the floor cannot reach.
+///
+/// At pitch zero and on the equator the two decompositions agree, and both reduce to `constrain`'s
+/// own `scale >= height / tileSize`.
 ///
 /// A viewport with no height, or a pitch that puts a screen edge at or past the horizon, has no
 /// finite answer and is returned unchanged: [`MAX_PITCH`] is the clamp that keeps that from
@@ -717,18 +722,31 @@ pub fn constrained(view: &ViewTransform) -> ViewTransform {
     let north = above * (pitch + half_fov).tan() - centre;
     let south = centre - above * (pitch - half_fov).tan();
 
-    // The zoom floor is the world being at least as tall as what the frustum reaches, and
-    // nothing to do with where the camera is pointed -- that is the pan clamp's half. Splitting
-    // them is mbgl's decomposition and not an arrangement of convenience: fold the latitude in
-    // here and a map near a pole zooms itself out of a camera the pan clamp would have fixed.
+    // The zoom gives way, not the centre. mbgl splits this the other way -- a floor of
+    // `north + south` on its own, then the centre clamped into what is left -- and the split is
+    // the better decomposition in the abstract, since folding the latitude into the floor makes a
+    // map near a pole zoom itself out further than a map on the equator.
     //
-    // At pitch zero the two extents are half the viewport each, so this is `scale >= height /
-    // tileSize` -- `constrain`'s first clause exactly.
-    let world = world_size(view.zoom).max(north + south);
+    // It is the wrong trade for a map somebody is aiming. At zoom zero in a short viewport under
+    // pitch, a camera on Seattle cannot have all three of its centre, its zoom and no off-world
+    // strip; something gives. mbgl gives the centre, so the map slides south and the city the
+    // camera was pointed at leaves the screen. Giving the zoom instead means a request to zoom
+    // out further than the world allows stops a little short, which is the failure nobody
+    // notices: the map stays where it was put.
+    //
+    // At pitch zero and on the equator the two agree, and both reduce to `constrain`'s own
+    // `scale >= height / tileSize`.
+    let fraction = mercator_fraction(view.latitude);
+    let mut world = world_size(view.zoom).max(north + south);
+    if fraction > f64::EPSILON {
+        world = world.max(north / fraction);
+    }
+    if 1.0 - fraction > f64::EPSILON {
+        world = world.max(south / (1.0 - fraction));
+    }
     if !world.is_finite() || world <= 0.0 {
         return *view;
     }
-    let fraction = mercator_fraction(view.latitude);
     let zoom = (world / projection::TILE_SIZE).log2();
 
     // And the centre back inside the world, now that the zoom admits it. Expressed in the same

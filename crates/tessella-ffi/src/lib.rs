@@ -360,6 +360,34 @@ pub unsafe extern "C" fn tessella_set_camera(
     })
 }
 
+/// Tells a map how much time has passed, so its labels can fade.
+///
+/// A map that is never told this behaves as a still picture: a fade completes in one step and a
+/// label appears or disappears outright. That is what `mbgl-render` does -- `symbolFadeChange`
+/// returns one in static map mode -- and it is what every parity capture on both sides has been
+/// comparing, so it stays the default.
+///
+/// It is the wrong behaviour for a map somebody is looking at. A label that stops being placed at
+/// one anchor and starts at another along the same road, with nothing fading between the two, is
+/// read as the text having *moved*. Call this once a frame with the milliseconds since the last
+/// one and the fades run at mbgl's rate.
+///
+/// Does not emit; the next [`tessella_tick`] does.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_advance(map: MapHandle, elapsed_millis: f64) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_mut() }) else {
+            return Status::NoSuchMap;
+        };
+        state.map.advance(elapsed_millis);
+        Status::Ok
+    })
+}
+
 /// Changes the viewport a map draws into.
 ///
 /// A window resize is not a new map. Before this the size was settable only at

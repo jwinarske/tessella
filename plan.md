@@ -6553,3 +6553,50 @@ What is *not* done here is the consumer half: `FilamentProducer::DestroyView` st
 resize, and `GlFilamentProducer::ResizeOnThread` still goes through `Release()`/`Allocate()`. The
 producer has to keep its view and hand the new size across instead. This is the primitive that made
 that possible, not the change that uses it.
+
+### The labels were never fading, and that is what "flying text" was
+
+Every parity render agreed, and both sides were drawing the same thing: a map with no crossfade.
+`FrameOptions::increment` was the constant `1.0`, `Fade::step` moves an opacity by that much and
+clamps, so a label reached full opacity or full transparency in one frame. That is not a defect
+against the oracle -- `mbgl-render` runs in static map mode and `Placement::symbolFadeChange`
+short-circuits to exactly `1.0` there. Both renderers were right, and the comparison could not see
+it.
+
+It is wrong for a map somebody is looking at. During a zoom the set of placed anchors changes
+constantly: a line label has an anchor every `symbol-spacing` along its road and which of them win
+depends on what else is on screen, so a name stops being drawn at one anchor and starts at another
+further along. With a crossfade that reads as one label yielding to another. With none it reads as
+the text having flown down the road, which is what was reported, from about z11 in -- which is
+where the style's line-placed road labels start.
+
+The measurements that located it are worth keeping, because each one ruled out a whole class:
+
+- Settled at the sweep's own camera, 1.16% gross. Settled at 2.25x overscale past a source's
+  maxzoom, 0.13%. Settled on the *same tile set the sweep was drawing* -- z13 tiles at view 14.25,
+  forced by a maxzoom override so mbgl used them too -- 0.41%. So neither overscale nor a lagging
+  zoom latch is the cause; each individual camera is right.
+- Held: freezing the camera for the last forty frames of a sweep and dumping three of them gives
+  *pixel-identical* frames. So nothing the motion leaves behind is unstable either.
+
+Every frame correct and the sequence wrong is what points at a per-frame decision changing rather
+than a value being miscomputed -- and the fades are what exist to cover that.
+
+`fade::increment` was already written, and already unused, in the same way the cross-tile index
+was. `tessella_advance` is the missing input: the elapsed milliseconds a fade is a fraction of.
+A map that is never told keeps the still-picture behaviour, so every capture and every probe is
+untouched.
+
+### The zoom gives way, not the centre
+
+`camera::constrained` followed mbgl's decomposition: a zoom floor from the frustum's extent, then
+the centre clamped into what is left. Correct, and the wrong trade for a map somebody is aiming.
+At zoom zero in a short pitched viewport a camera on Seattle cannot have all three of its centre,
+its zoom and no off-world strip, and mbgl gives up the centre -- so the map slides south and the
+city leaves the screen, which is what was reported after the strip itself was fixed.
+
+Folding the latitude into the floor gives up the zoom instead: a request to zoom out further than
+the world allows stops a little short. That is the failure nobody notices. It is stricter than mbgl
+away from the equator, where a short side has less world to cover, and identical to it flat on the
+equator -- which is what the flat test's control now uses, since Seattle's latitude is exactly
+where the two diverge.

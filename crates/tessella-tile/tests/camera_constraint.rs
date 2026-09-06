@@ -98,11 +98,19 @@ fn a_pitched_camera_is_pulled_back_inside_the_world() {
         south - (world - from_north)
     );
 
-    // Flat, the same camera needs nothing: this is the gap mbgl's arithmetic leaves.
-    let flat = constrained(&view(0.0, 47.6062, 0.0, 359.0));
+    // Flat *on the equator*, the same viewport needs nothing: 359 pixels is less than the world's
+    // 512 at zoom zero, so there is no off-world area to remove and the constraint has nothing to
+    // do. That is the control -- it shows the pitched case above was constrained for its pitch and
+    // not merely because this viewport is constrained at every camera.
+    //
+    // Not at Seattle's latitude, which is where this differs from mbgl and deliberately: because
+    // the zoom gives way rather than the centre, a camera off the equator has less world on its
+    // short side and the floor rises to cover it. mbgl would keep the zoom and slide the centre
+    // south instead. See `camera::constrained`.
+    let flat = constrained(&view(0.0, 0.0, 0.0, 359.0));
     assert!(
         (flat.zoom - 0.0).abs() < 1e-12,
-        "the flat camera was moved, so the pitched case proves nothing"
+        "the flat equatorial camera was moved, so the pitched case proves nothing"
     );
 }
 

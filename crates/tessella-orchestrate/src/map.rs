@@ -347,6 +347,23 @@ impl Map {
         self.mark_dirty();
     }
 
+    /// How much time has passed since the last frame, for the fades.
+    ///
+    /// A map that is never told stays in the still-picture mode every parity render uses: a fade
+    /// completes in one step, so a label appears and disappears outright. That is
+    /// `mbgl-render`'s behaviour and correct for a capture; on a moving map it is what makes a
+    /// label that stops being placed at one anchor and starts at another read as text that
+    /// *moved*, since nothing crossfades between the two.
+    ///
+    /// See [`frame::PlacementState::advance`] for the arithmetic and
+    /// [`frame::FADE_DURATION_MILLIS`] for the duration.
+    pub fn advance(&mut self, elapsed_millis: f64) {
+        self.placement.advance(elapsed_millis);
+        // A fade in flight is a reason to draw even when nothing else changed: the opacities are
+        // in the vertices, so a frame that is not emitted is a fade that does not move.
+        self.mark_dirty();
+    }
+
     /// Sets the surface the tiles will be drawn on.
     ///
     /// See [`Self::copies`] for what this is and is not. Does not emit, and needs no

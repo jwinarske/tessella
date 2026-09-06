@@ -179,6 +179,21 @@ tessella_result tessella_set_camera(tessella_map* map,
                                     double bearing,
                                     double pitch);
 
+/* Tells a map how much time has passed, so its labels can fade.
+ *
+ * A map that is never told this behaves as a still picture: a fade completes in one step and a
+ * label appears or disappears outright. That is what mbgl-render does -- symbolFadeChange returns
+ * one in static map mode -- and it is what every parity capture on both sides compares, so it stays
+ * the default.
+ *
+ * It is the wrong behaviour for a map somebody is looking at. A label that stops being placed at one
+ * anchor and starts at another along the same road, with nothing fading between the two, is read as
+ * the text having moved. Call this once a frame with the milliseconds since the last one and the
+ * fades run at mbgl's rate of 300 ms.
+ *
+ * Does not emit; the next tessella_tick does. */
+tessella_result tessella_advance(tessella_map* map, double elapsed_millis);
+
 /* Changes the viewport a map draws into.
  *
  * A window resize is not a new map. Before this the size was settable only at tessella_create, so a

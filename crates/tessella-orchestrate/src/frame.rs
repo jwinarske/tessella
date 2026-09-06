@@ -1213,6 +1213,11 @@ struct Encoding<'a> {
     key: (usize, usize),
 }
 
+/// How long a fade takes, in milliseconds.
+///
+/// mbgl's `util::DEFAULT_TRANSITION_DURATION`.
+pub const FADE_DURATION_MILLIS: f64 = 300.0;
+
 /// What a label keeps between frames: its identity, and the fade keyed by it.
 ///
 /// # Why this outlives the frame
@@ -1249,6 +1254,16 @@ pub struct PlacementState {
     indexed: BTreeMap<(u32, DataTileId), Indexed>,
     /// The bucket number the index tells parses apart by.
     next_bucket: u32,
+    /// How far a fade moves on the next frame.
+    ///
+    /// One is *instant*, and it is the right answer for a still picture: mbgl's
+    /// `symbolFadeChange` returns exactly that in static map mode, which is the mode
+    /// `mbgl-render` runs, so every parity render on both sides has been comparing maps with no
+    /// crossfade at all. It is the wrong answer for a map somebody is looking at, where a label
+    /// that stops being placed has to fade rather than vanish -- and a label that vanishes at one
+    /// anchor while another appears further along the same road is read as the text having
+    /// *moved*. See [`Self::advance`].
+    increment: f32,
 }
 
 /// One bucket's assignment, and what it was assigned for.
@@ -1271,7 +1286,43 @@ impl PlacementState {
     /// State with nothing placed and nothing named.
     #[must_use]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            increment: 1.0,
+            ..Self::default()
+        }
+    }
+
+    /// How far the fades move on the next frame, from the time that has passed.
+    ///
+    /// mbgl's `symbolFadeChange`: elapsed over the transition duration, which is
+    /// `DEFAULT_TRANSITION_DURATION` -- 300 ms -- in continuous mode and zero in static mode,
+    /// where the whole expression short-circuits to one. Both are reachable here, and the default
+    /// is the static one so that nothing measuring against `mbgl-render` changes.
+    pub fn advance(&mut self, elapsed_millis: f64) {
+        #[allow(clippy::cast_possible_truncation)]
+        let step = tessella_place::fade::increment(
+            (elapsed_millis / 1000.0) as f32,
+            (FADE_DURATION_MILLIS / 1000.0) as f32,
+        );
+        // Clamped here rather than there: `fade::increment` is the ratio and says nothing about
+        // what a frame may do with it, while a fade that moved by more than its whole range, or
+        // backwards, is a clock that went wrong rather than an instruction.
+        self.increment = if step.is_finite() {
+            step.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+    }
+
+    /// How far a fade moves on the next frame, which a test reads.
+    #[must_use]
+    pub const fn increment(&self) -> f32 {
+        self.increment
+    }
+
+    /// Fades that finish in one step, which is what a still picture wants.
+    pub const fn settle_at_once(&mut self) {
+        self.increment = 1.0;
     }
 
     /// Forgets every identity and every fade.
@@ -1402,7 +1453,7 @@ fn place_symbols(
     };
     #[allow(clippy::cast_possible_truncation)]
     let viewport = (view.width as f32, view.height as f32);
-    let increment = crate::symbols::FrameOptions::default().increment;
+    let increment = placement.borrow().increment;
 
     // The frame's grid, and the whole reason this function exists.
     // The viewport with mbgl's margin around it, and its cell size. `project_with` offsets every

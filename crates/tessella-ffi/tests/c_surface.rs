@@ -129,6 +129,7 @@ fn the_c_header_describes_the_library_it_claims_to() {
     check("set_camera", 0, "the camera did not move");
     // Both directions, because the switch is a toggle a consumer flips at runtime rather than a
     // mode it is created in.
+    check("advance", 0, "a map refused to be told time had passed");
     check("viewport", 0, "a resize was refused");
     check(
         "viewport_zero",

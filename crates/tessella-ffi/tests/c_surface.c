@@ -56,6 +56,10 @@ int main(void) {
 
     printf("set_camera %d\n", (int)tessella_set_camera(map, 48.85, 2.35, 11.0, 0.0, 0.0));
 
+    /* Time passing, which is what makes a fade a fade rather than a switch. */
+    printf("advance %d\n", (int)tessella_advance(map, 16.7));
+    printf("advance_null %d\n", (int)tessella_advance(NULL, 16.7));
+
     /* A resize, through the header. Both a real one and the degenerate one a surface reports
      * while it is being torn down, which must be ignored rather than refused. */
     printf("viewport %d\n", (int)tessella_set_viewport(map, 800, 600));
