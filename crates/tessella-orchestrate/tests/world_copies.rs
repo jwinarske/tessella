@@ -105,7 +105,8 @@ fn a_view_on_the_antimeridian_keeps_its_western_half() {
         "this view does not cross the antimeridian, so it proves nothing"
     );
     assert_eq!(
-        held, wanted,
+        held,
+        wanted,
         "the globe lost ground the plane covers: {:?}",
         wanted.difference(&held).collect::<Vec<_>>()
     );

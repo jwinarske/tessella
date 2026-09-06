@@ -314,7 +314,14 @@ fn the_drawable_block_is_an_extrusions_own() {
     // divide is 9.3e-7 of clip depth against the 2e-4 a 150-metre building spans in total. The
     // symptom is whole triangles of building where neither surface won the comparison.
     let flat = tessella_orchestrate::ubo::DrawableEntry::for_tile_with(
-        &view, 14, 8802, 5373, 0, 1, 2, [0.0, 0.0],
+        &view,
+        14,
+        8802,
+        5373,
+        0,
+        1,
+        2,
+        [0.0, 0.0],
     )
     .expect("a flat entry");
     assert_ne!(

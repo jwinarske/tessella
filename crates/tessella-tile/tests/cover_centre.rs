@@ -5,7 +5,7 @@
 //! When the frame was found to be vertically mirrored, this is the test that said the cover was
 //! not the reason -- which is what moved the search to the consumer, where the flip was.
 
-use tessella_tile::cover::{cover, ViewTransform};
+use tessella_tile::cover::{ViewTransform, cover};
 
 #[test]
 fn the_cover_contains_the_tile_the_centre_falls_in() {
@@ -30,7 +30,9 @@ fn the_cover_contains_the_tile_the_centre_falls_in() {
 
     let tiles = cover(&view).expect("a cover for a viewport with area");
     assert!(
-        tiles.iter().any(|tile| tile.x == x && tile.y == y && tile.wrap == 0),
+        tiles
+            .iter()
+            .any(|tile| tile.x == x && tile.y == y && tile.wrap == 0),
         "cover {tiles:?} should contain the centre tile z14 {x},{y}"
     );
 }

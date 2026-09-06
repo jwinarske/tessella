@@ -169,11 +169,8 @@ impl GeometryRegistry {
     pub fn record_refs(&mut self, key: DrawableKey, refs: alloc::vec::Vec<SlabRef>, at: u64) {
         if let Some(entry) = self.live.get_mut(&key) {
             if !entry.refs.is_empty() {
-                self.replaced.push((
-                    key,
-                    core::mem::take(&mut entry.refs),
-                    entry.announced_at,
-                ));
+                self.replaced
+                    .push((key, core::mem::take(&mut entry.refs), entry.announced_at));
             }
             entry.refs = refs;
             entry.announced_at = at;

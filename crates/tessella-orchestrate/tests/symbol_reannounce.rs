@@ -23,11 +23,11 @@
 use tessella_capture_abi::EnvelopeKind;
 use tessella_capture_abi::envelope::{GeometryAdd, ViewId, WireRecord as _};
 use tessella_capture_abi::ring::Ring;
+use tessella_glyph::fonts::Fonts;
 use tessella_orchestrate::SlabArena;
 use tessella_orchestrate::frame::{self, Frame};
 use tessella_orchestrate::registry::Session;
 use tessella_orchestrate::tile::{LayerBucket, TileId, build_mvt_tile};
-use tessella_glyph::fonts::Fonts;
 use tessella_source::mvt::Tile;
 use tessella_storage::source::{FetchError, FileSource, Response};
 use tessella_style::Style;
@@ -36,7 +36,8 @@ use tessella_tile::camera;
 use tessella_tile::cover::{self, ViewTransform};
 
 const GLYPHS: &[u8] = include_bytes!("../../../tests/glyph-fixtures/TestFont/0-255.pbf");
-const BERLIN: &[u8] = include_bytes!("../../../tests/mvt-fixtures/protomaps-berlin-14-8802-5373.mvt");
+const BERLIN: &[u8] =
+    include_bytes!("../../../tests/mvt-fixtures/protomaps-berlin-14-8802-5373.mvt");
 
 /// A labelled layer and an unlabelled one, so the retained family is the control.
 const STYLE: &str = r##"{"version": 8, "sources": {"src": {"type": "vector", "tiles": []}},

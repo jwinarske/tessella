@@ -308,5 +308,9 @@ fn growth_is_bounded() {
     let mut atlas = Atlas::new(MAX_SIZE, MAX_SIZE);
     // One glyph wider than the atlas: it cannot be packed and cannot be grown into.
     assert!(atlas.add(1, &glyph(1, MAX_SIZE, 2, 200)).is_none());
-    assert_eq!(atlas.size(), (MAX_SIZE, MAX_SIZE), "did not grow past the cap");
+    assert_eq!(
+        atlas.size(),
+        (MAX_SIZE, MAX_SIZE),
+        "did not grow past the cap"
+    );
 }

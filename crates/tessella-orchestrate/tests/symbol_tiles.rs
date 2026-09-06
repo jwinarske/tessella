@@ -1336,8 +1336,8 @@ fn the_gamma_scale_reads_pitch_as_degrees() {
     );
 
     // Within a percent of cos(15 degrees) times the camera distance, which is the whole formula.
-    let want = 15.0f64.to_radians().cos()
-        * tessella_tile::camera::camera_to_center_distance(view.height);
+    let want =
+        15.0f64.to_radians().cos() * tessella_tile::camera::camera_to_center_distance(view.height);
     #[allow(clippy::cast_possible_truncation)]
     let want = want as f32;
     assert!(

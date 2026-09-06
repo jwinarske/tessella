@@ -11,7 +11,7 @@
 //!
 //! §16 settled it: Fluorite's bindings are `@Native` on the calling isolate with no hop, so a
 //! blocking call freezes the application rather than the map. Every entry point here returns
-//! immediately. [`TileSource::want`] says what is wanted and schedules; [`TileSource::buckets`]
+//! immediately. [`TileSource::want`] says what is wanted and schedules; `TileSource::buckets`
 //! answers with what has landed, and a tile that has not arrived is simply absent — which is the
 //! answer the frame loop already knows how to draw, by substituting the ancestor it has.
 //!
@@ -710,7 +710,9 @@ impl<S: FileSource + 'static> Tiles for Arc<TileSource<S>> {
         let mut zooms: Vec<u8> = sources
             .sets
             .iter()
-            .filter(|(_, _, kind)| matches!(kind, tessella_storage::offline::SourceKind::Raster { .. }))
+            .filter(|(_, _, kind)| {
+                matches!(kind, tessella_storage::offline::SourceKind::Raster { .. })
+            })
             .map(|(_, _, kind)| boot::covering_zoom(*kind, view.zoom))
             .collect();
         zooms.sort_unstable();
@@ -740,8 +742,11 @@ mod tests {
                 let cover = TileId::new(16, 8802 * 4 + x, 5373 * 4 + y);
                 assert!(landed.lookup(cover).is_none(), "no alias yet");
                 landed.alias.insert(cover, data);
-                assert_eq!(landed.lookup(cover).map(|(id, _)| id), Some(data),
-                           "{cover:?} should be served by {data:?}");
+                assert_eq!(
+                    landed.lookup(cover).map(|(id, _)| id),
+                    Some(data),
+                    "{cover:?} should be served by {data:?}"
+                );
             }
         }
     }

@@ -247,12 +247,7 @@ impl DrawableEntry {
             1.0,
             -f64::from(depth_offset(layer_index, sub_layer_index)),
         );
-        let matrix = camera::scale(
-            &matrix,
-            2.0 / camera::EXTENT,
-            -2.0 / camera::EXTENT,
-            1.0,
-        );
+        let matrix = camera::scale(&matrix, 2.0 / camera::EXTENT, -2.0 / camera::EXTENT, 1.0);
         #[allow(clippy::cast_possible_truncation)]
         Self {
             matrix: core::array::from_fn(|index| matrix[index] as f32),

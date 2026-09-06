@@ -304,7 +304,7 @@ mod against_a_ring {
                 producer,
                 &mut arena,
                 &mut frame::SymbolCache::default(),
-        &mut frame::PlacementState::new(),
+                &mut frame::PlacementState::new(),
                 &Frame {
                     style: &scene.style,
                     view: &scene.view,

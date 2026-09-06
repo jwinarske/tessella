@@ -338,11 +338,12 @@ impl Map {
         if !(width.is_finite() && height.is_finite()) || width <= 0.0 || height <= 0.0 {
             return;
         }
-        self.view = tessella_tile::camera::settled(&tessella_tile::camera::constrained(&ViewTransform {
-            width,
-            height,
-            ..self.view
-        }));
+        self.view =
+            tessella_tile::camera::settled(&tessella_tile::camera::constrained(&ViewTransform {
+                width,
+                height,
+                ..self.view
+            }));
         self.mark_dirty();
     }
 
@@ -396,7 +397,9 @@ impl Map {
             return self.prefetch;
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let ahead = (-self.zoom_velocity * PREFETCH_LEAD_FRAMES).ceil().min(255.0) as u8;
+        let ahead = (-self.zoom_velocity * PREFETCH_LEAD_FRAMES)
+            .ceil()
+            .min(255.0) as u8;
         self.prefetch.saturating_add(ahead).min(MAX_PREFETCH)
     }
 
@@ -775,7 +778,6 @@ const MAX_PREFETCH: u8 = 8;
 /// the same four levels are a second and a half of warning at a gentle zoom and a third of a
 /// second at a sweep's rate.
 const PREFETCH_LEAD_FRAMES: f64 = 30.0;
-
 
 /// Dead region bytes below which compaction is not worth the memmove.
 ///

@@ -1190,8 +1190,11 @@ mod tests {
         // radian constants read as degrees, so one and a half degrees, one and six tenths, and
         // three. Every one is two orders of magnitude short of the horizon, and a test that
         // exists to prove the clamp never reached it.
-        let at_limit =
-            proj_matrix(&ViewTransform { pitch: 90.0, ..probe() }).expect("a pitched camera");
+        let at_limit = proj_matrix(&ViewTransform {
+            pitch: 90.0,
+            ..probe()
+        })
+        .expect("a pitched camera");
         assert!(
             at_limit.iter().all(|value| value.is_finite()),
             "the horizon produced {at_limit:?}"
@@ -1210,7 +1213,11 @@ mod tests {
         }
         // And below it the angle still moves, or the assertion above would hold for a clamp at
         // any angle at all, including zero.
-        let below = proj_matrix(&ViewTransform { pitch: 60.0, ..probe() }).expect("a pitched camera");
+        let below = proj_matrix(&ViewTransform {
+            pitch: 60.0,
+            ..probe()
+        })
+        .expect("a pitched camera");
         assert_ne!(below, at_limit, "the clamp reached below the horizon");
     }
 

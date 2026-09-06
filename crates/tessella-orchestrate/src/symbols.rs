@@ -286,8 +286,7 @@ impl ViewSymbols {
                 // as much viewport as a near one, which at pitch is several times what it draws.
                 let box_scale = options.font_scale * label.perspective;
                 let text = if label.line.is_empty() {
-                    collision_box(extent, anchor, box_scale, options.padding, 0.0)
-                        .map(Shape::Box)
+                    collision_box(extent, anchor, box_scale, options.padding, 0.0).map(Shape::Box)
                 } else {
                     let line: Vec<(f32, f32)> =
                         label.line.iter().map(|point| project(*point)).collect();
@@ -317,9 +316,7 @@ impl ViewSymbols {
                     // that escapes checking: `write_line_positions` walks the same road and hides
                     // it if the name genuinely will not fit, which is the check that belongs to
                     // that question.
-                    .or_else(|| {
-                        (label.laid_out.glyphs > 0).then(|| Shape::Circles(Vec::new()))
-                    })
+                    .or_else(|| (label.laid_out.glyphs > 0).then(|| Shape::Circles(Vec::new())))
                 };
 
                 // The icon's own box, at its own padding. Point-placed only: a line-placed
@@ -627,7 +624,7 @@ impl ViewSymbols {
                 }
             }
         }
-            without_room
+        without_room
     }
 
     /// Writes each label's placed anchor into the per-frame position buffer.

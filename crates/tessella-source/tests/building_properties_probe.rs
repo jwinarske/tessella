@@ -10,7 +10,11 @@ fn building_features_carry_render_height() {
     let tile = Tile::decode(&bytes).expect("decode");
 
     let layer = tile.layer("building").expect("a building layer");
-    println!("building: {} features, extent {}", layer.len(), layer.extent);
+    println!(
+        "building: {} features, extent {}",
+        layer.len(),
+        layer.extent
+    );
     for index in 0..layer.len().min(4) {
         let feature = layer.feature(index).expect("feature");
         println!("  [{index}] {:?}", feature.properties());

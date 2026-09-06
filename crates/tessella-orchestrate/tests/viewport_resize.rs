@@ -47,10 +47,7 @@ fn a_resize_is_a_camera_change() {
     );
 
     let taller = camera_key_of(&view(1024.0, 900.0));
-    assert!(
-        !before.same_as(&taller),
-        "a height change did not register"
-    );
+    assert!(!before.same_as(&taller), "a height change did not register");
 
     // And a camera that did not move still does not, so the gate this widens has not been opened
     // to everything: the point of the key is that a settled view says nothing.

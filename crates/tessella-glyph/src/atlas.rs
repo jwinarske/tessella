@@ -268,7 +268,7 @@ pub const PADDING: u32 = 2;
 /// The padding that stays outside the reported rectangle.
 const OUTER: u32 = 1;
 
-/// How far [`Atlas::grow`] will double.
+/// How far `Atlas::grow` will double.
 ///
 /// Sixteen megabytes of alpha, on the order of sixteen thousand glyphs. Past this a second atlas
 /// is the right answer rather than a bigger one, which is what mbgl does with its per-bucket
@@ -324,7 +324,7 @@ impl Atlas {
     /// `None` means the glyph has no pixels, or that it would not fit even at [`MAX_SIZE`].
     /// Dropping a glyph is visible: the label draws with a hole in it and the advance still
     /// spent, which is what a fixed 512 did to any scene with more than a few hundred distinct
-    /// characters in frame. See [`Atlas::grow`].
+    /// characters in frame. See `Atlas::grow`.
     pub fn add(&mut self, key: u32, glyph: &Glyph) -> Option<Rect> {
         if let Some(rect) = self.pack.get(key) {
             // Already here: take a reference and hand back the same rectangle.

@@ -34,8 +34,8 @@ use tessella_style::crossfade::ZoomHistory;
 use tessella_style::light::Light;
 use tessella_style::property::ResolvedProperty;
 use tessella_style::{LayerKind, Style};
-use tessella_tile::renderables::DataTileId;
 use tessella_tile::cover::{TileCoord, ViewTransform};
+use tessella_tile::renderables::DataTileId;
 
 use crate::binder::{
     CIRCLE_FAMILY, FILL_EXTRUSION_FAMILY, FILL_FAMILY, LINE_FAMILY, SYMBOL_FAMILY, attribute_ids,
@@ -361,7 +361,12 @@ const RASTER_TEXTURE_BASE: u64 = 16;
 /// above the world copy, in fields wide enough for `MAX_ZOOM`. Added to the base so it can never
 /// land on a glyph atlas.
 #[must_use]
-fn raster_texture_id(z: u8, x: u32, y: u32, wrap: i32) -> tessella_capture_abi::envelope::TextureId {
+fn raster_texture_id(
+    z: u8,
+    x: u32,
+    y: u32,
+    wrap: i32,
+) -> tessella_capture_abi::envelope::TextureId {
     #[allow(clippy::cast_sign_loss)]
     let copy = u64::from((wrap.clamp(-7, 7) + 8) as u8);
     let packed = (u64::from(z) << 52) | (u64::from(x) << 28) | (u64::from(y) << 4) | copy;
@@ -835,9 +840,7 @@ fn emit_group(
         // against whatever cover existed when it was announced. That is what made the frame a
         // function of tile arrival order -- placement agreed run to run, emission did not.
         let per_frame = matches!(bucket.content, Content::Symbol(_));
-        if registry.is_some()
-            && !per_frame
-            && !fresh_buckets.contains(&(tile_index, bucket_index))
+        if registry.is_some() && !per_frame && !fresh_buckets.contains(&(tile_index, bucket_index))
         {
             continue;
         }
@@ -1648,8 +1651,12 @@ fn place_symbols(
             .filter(|label| !without_room.contains(&label.cross_tile_id))
             .cloned()
             .collect();
-        held.symbols
-            .frame_in(&offered, project_with(&plane, grid_padding), &options, &mut grid);
+        held.symbols.frame_in(
+            &offered,
+            project_with(&plane, grid_padding),
+            &options,
+            &mut grid,
+        );
         drop(held);
 
         keys.push((tile_index, bucket_index));
@@ -2252,8 +2259,7 @@ fn encode_parts(
         );
     }
     if let Some(shared) = extrusion_shared {
-        let (wall_layout, key) =
-            bind(FILL_EXTRUSION_FAMILY, BuiltIn::FillExtrusionInstancedShader);
+        let (wall_layout, key) = bind(FILL_EXTRUSION_FAMILY, BuiltIn::FillExtrusionInstancedShader);
         parts.push(emit::encode_extrusion_walls(
             arena,
             PLACEHOLDER,

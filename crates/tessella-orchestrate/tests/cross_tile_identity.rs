@@ -180,7 +180,13 @@ fn a_settled_scene_keeps_its_numbers() {
     let mut placement = frame::PlacementState::new();
     let mut session = Session::new();
 
-    emit(&scene, &mut arena, &mut layouts, &mut placement, &mut session);
+    emit(
+        &scene,
+        &mut arena,
+        &mut layouts,
+        &mut placement,
+        &mut session,
+    );
     let first = placement.identities();
     let named: usize = first.values().map(Vec::len).sum();
     assert!(
@@ -189,7 +195,13 @@ fn a_settled_scene_keeps_its_numbers() {
     );
 
     for frame_number in 2..=8 {
-        emit(&scene, &mut arena, &mut layouts, &mut placement, &mut session);
+        emit(
+            &scene,
+            &mut arena,
+            &mut layouts,
+            &mut placement,
+            &mut session,
+        );
         assert_eq!(
             placement.identities(),
             first,
@@ -217,7 +229,13 @@ fn a_new_tile_does_not_renumber_the_others() {
     let mut placement = frame::PlacementState::new();
     let mut session = Session::new();
 
-    emit(&held, &mut arena, &mut layouts, &mut placement, &mut session);
+    emit(
+        &held,
+        &mut arena,
+        &mut layouts,
+        &mut placement,
+        &mut session,
+    );
     let before = placement.identities();
     assert!(
         before.values().map(Vec::len).sum::<usize>() > 0,
@@ -227,7 +245,13 @@ fn a_new_tile_does_not_renumber_the_others() {
     // The same two tiles, with a third ahead of them. `TILE_C` sorts first, so every bucket after
     // it moves down the walk.
     let wider = scene(&[TILE_C, TILE_A, TILE_B]);
-    emit(&wider, &mut arena, &mut layouts, &mut placement, &mut session);
+    emit(
+        &wider,
+        &mut arena,
+        &mut layouts,
+        &mut placement,
+        &mut session,
+    );
     let after = placement.identities();
 
     let mut compared = 0;
@@ -262,7 +286,13 @@ fn a_re_parsed_tile_keeps_its_labels_identities() {
     let mut placement = frame::PlacementState::new();
     let mut session = Session::new();
 
-    emit(&scene, &mut arena, &mut layouts, &mut placement, &mut session);
+    emit(
+        &scene,
+        &mut arena,
+        &mut layouts,
+        &mut placement,
+        &mut session,
+    );
     let first = placement.identities();
     assert!(
         first.values().map(Vec::len).sum::<usize>() > 0,
@@ -277,7 +307,13 @@ fn a_re_parsed_tile_keeps_its_labels_identities() {
         .map(|(_, built)| Some(std::sync::Arc::new(built.clone())))
         .collect();
 
-    emit(&scene, &mut arena, &mut layouts, &mut placement, &mut session);
+    emit(
+        &scene,
+        &mut arena,
+        &mut layouts,
+        &mut placement,
+        &mut session,
+    );
     assert_eq!(
         placement.identities(),
         first,

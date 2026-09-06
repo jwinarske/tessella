@@ -32,8 +32,8 @@ use alloc::vec::Vec;
 
 use tessella_capture_abi::envelope::{
     AddReason, AttributeDesc, GeometryAdd, GeometryId, GeometryRemove, MeshAdd, MeshFormat,
-    Segment as AbiSegment, SlabEntry, SlabRef, SlabRegion, Span, TextureFilter, TextureId, TextureRef,
-    WireRecord,
+    Segment as AbiSegment, SlabEntry, SlabRef, SlabRegion, Span, TextureFilter, TextureId,
+    TextureRef, WireRecord,
 };
 use tessella_capture_abi::generated::{shader_attributes, texture_slots, ubo_slots};
 use tessella_capture_abi::mapping::Mapping;
@@ -657,7 +657,10 @@ impl SlabArena {
             return 0;
         };
         let start = region_data_start(*slots);
-        let held: usize = self.slabs().map(|slab| slab.bytes.len().next_multiple_of(8)).sum();
+        let held: usize = self
+            .slabs()
+            .map(|slab| slab.bytes.len().next_multiple_of(8))
+            .sum();
         cursor.saturating_sub(start).saturating_sub(held)
     }
 
@@ -748,7 +751,9 @@ impl SlabArena {
             unreachable!("checked above")
         };
         for (_, start, to, length) in &moved {
-            region.bytes_mut().copy_within(*start..*start + *length, *to);
+            region
+                .bytes_mut()
+                .copy_within(*start..*start + *length, *to);
         }
         for (id, _, to, length) in &moved {
             // The slab's own record of where it lives, and the table the consumer reads. Both,
@@ -1006,7 +1011,11 @@ impl Encoded {
 /// a few lines above every call site — and a drawable with the wrong samplers is worse on the
 /// wire than a panic in a test.
 #[must_use]
-pub fn texture_refs(shader: BuiltIn, bound: &[TextureId], filter: TextureFilter) -> Vec<TextureRef> {
+pub fn texture_refs(
+    shader: BuiltIn,
+    bound: &[TextureId],
+    filter: TextureFilter,
+) -> Vec<TextureRef> {
     let declared = texture_slots::texture_count(shader)
         .unwrap_or_else(|| panic!("{shader:?} has no generated texture table"));
     assert_eq!(
@@ -1314,8 +1323,9 @@ pub fn encode_fill(
     let attrs = push_span(&mut payload, &descriptors);
     let textures = push_span(
         &mut payload,
-        &pattern_atlas
-            .map_or_else(Vec::new, |atlas| texture_refs(shader, &[atlas], TextureFilter::Linear)),
+        &pattern_atlas.map_or_else(Vec::new, |atlas| {
+            texture_refs(shader, &[atlas], TextureFilter::Linear)
+        }),
     );
     let segments = push_span(
         &mut payload,
@@ -2140,7 +2150,11 @@ pub fn encode_raster(
     );
     let texture_refs = push_span(
         &mut payload,
-        &texture_refs(BuiltIn::RasterShader, &[image, image], TextureFilter::Linear),
+        &texture_refs(
+            BuiltIn::RasterShader,
+            &[image, image],
+            TextureFilter::Linear,
+        ),
     );
 
     #[allow(clippy::cast_possible_truncation)]

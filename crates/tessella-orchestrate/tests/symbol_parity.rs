@@ -685,7 +685,16 @@ mod through_the_builder {
         for (symbol, layout) in &layouts {
             let (buffers, _) = layout.lay_out(&fonts, None);
             let mut arena = SlabArena::default();
-            let encoded = encode_symbol(&mut arena, GeometryId(1), &buffers, 0, true, ATLAS, None, tessella_capture_abi::envelope::TextureFilter::Linear);
+            let encoded = encode_symbol(
+                &mut arena,
+                GeometryId(1),
+                &buffers,
+                0,
+                true,
+                ATLAS,
+                None,
+                tessella_capture_abi::envelope::TextureFilter::Linear,
+            );
 
             let mut attributes: Vec<(u32, u32, u32, u32)> = encoded
                 .attributes()
@@ -769,7 +778,16 @@ fn an_encoded_symbol_binds_its_atlas_at_the_oracle_s_slot() {
     let mut arena = SlabArena::default();
 
     for is_sdf in [true, false] {
-        let encoded = encode_symbol(&mut arena, GeometryId(1), &buffers, 0, is_sdf, atlas, None, tessella_capture_abi::envelope::TextureFilter::Linear);
+        let encoded = encode_symbol(
+            &mut arena,
+            GeometryId(1),
+            &buffers,
+            0,
+            is_sdf,
+            atlas,
+            None,
+            tessella_capture_abi::envelope::TextureFilter::Linear,
+        );
         assert_eq!(encoded.record.texture_refs.count, 1, "sdf={is_sdf}");
 
         let size = core::mem::size_of::<TextureRef>();
@@ -792,7 +810,11 @@ fn supplying_too_few_textures_is_refused() {
     use tessella_capture_abi::BuiltIn;
     use tessella_capture_abi::envelope::TextureId;
 
-    let _ = tessella_orchestrate::emit::texture_refs(BuiltIn::RasterShader, &[TextureId(1)], tessella_capture_abi::envelope::TextureFilter::Linear);
+    let _ = tessella_orchestrate::emit::texture_refs(
+        BuiltIn::RasterShader,
+        &[TextureId(1)],
+        tessella_capture_abi::envelope::TextureFilter::Linear,
+    );
 }
 
 /// The glyph atlas reaches the stream as the texture the oracle describes.
@@ -1269,7 +1291,7 @@ mod symbol_drawable_ubo {
                     // so `auto` resolves to viewport for both — which is the branch the golden
                     // pins and the reason it still holds now the other exists.
                     true,
-            VIEWPORT,
+                    VIEWPORT,
                     Placement::Point,
                 )
                 .expect("the probe has a viewport")

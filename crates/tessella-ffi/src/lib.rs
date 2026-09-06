@@ -346,14 +346,16 @@ pub unsafe extern "C" fn tessella_set_camera(
         // Constrained first, the way mbgl's Transform constrains every camera it is given: a
         // zoom that would show the world's edge is not a camera a map accepts. See
         // `camera::constrained`.
-        state.map.look_at(camera::settled(&camera::constrained(&ViewTransform {
-            longitude,
-            latitude,
-            zoom,
-            bearing,
-            pitch,
-            ..*state.map.view()
-        })));
+        state
+            .map
+            .look_at(camera::settled(&camera::constrained(&ViewTransform {
+                longitude,
+                latitude,
+                zoom,
+                bearing,
+                pitch,
+                ..*state.map.view()
+            })));
         Status::Ok
     })
 }

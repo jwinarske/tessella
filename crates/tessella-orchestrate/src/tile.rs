@@ -310,10 +310,7 @@ pub fn build_tile_with_patterns(
     let bucket_zoom = f64::from(tile.bucket_zoom());
 
     for (layer_index, layer) in style.layers.iter().enumerate() {
-        if !layer.kind.is_built()
-            || !draws_from(layer, source)
-            || !draws_at(layer, bucket_zoom)
-        {
+        if !layer.kind.is_built() || !draws_from(layer, source) || !draws_at(layer, bucket_zoom) {
             continue;
         }
 
@@ -896,10 +893,7 @@ pub fn build_mvt_tile_with_patterns(
     let bucket_zoom = f64::from(tile.bucket_zoom());
 
     for (layer_index, layer) in style.layers.iter().enumerate() {
-        if !layer.kind.is_built()
-            || !draws_from(layer, source)
-            || !draws_at(layer, bucket_zoom)
-        {
+        if !layer.kind.is_built() || !draws_from(layer, source) || !draws_at(layer, bucket_zoom) {
             continue;
         }
 

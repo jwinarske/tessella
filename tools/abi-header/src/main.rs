@@ -313,7 +313,11 @@ fn structs() -> Vec<Struct> {
             [
                 (texture, "uint64_t texture", "Texture to bind."),
                 (slot, "uint32_t slot", "Shader-side slot."),
-                (filter, "uint32_t filter", "How to sample it: 0 linear, 1 nearest."),
+                (
+                    filter,
+                    "uint32_t filter",
+                    "How to sample it: 0 linear, 1 nearest."
+                ),
             ]
         ),
         c_struct!(

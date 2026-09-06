@@ -79,7 +79,8 @@ impl Pyramid for Ready {
 /// the assertion is against the number of boundaries actually available to cross.
 #[test]
 fn a_pan_recomputes_only_at_boundaries() {
-    let mut state = ViewCover::new(&at(14.0, -0.11, 51.505), WorldCopies::Repeated).expect("covers");
+    let mut state =
+        ViewCover::new(&at(14.0, -0.11, 51.505), WorldCopies::Repeated).expect("covers");
 
     // Two hundred frames drifting across one z14 tile's width, which is 360/2^14 ≈ 0.022°.
     // Each of the two vertical edges can cross at most one boundary in that span.
@@ -131,7 +132,8 @@ fn a_still_camera_never_changes_the_cover() {
 /// rebuild for a tile that never stopped being needed.
 #[test]
 fn a_pan_across_a_boundary_reports_only_the_difference() {
-    let mut state = ViewCover::new(&at(14.0, -0.11, 51.505), WorldCopies::Repeated).expect("covers");
+    let mut state =
+        ViewCover::new(&at(14.0, -0.11, 51.505), WorldCopies::Repeated).expect("covers");
     let held: Vec<_> = state.tiles().to_vec();
 
     let mut moved = None;
@@ -171,7 +173,8 @@ fn a_pan_across_a_boundary_reports_only_the_difference() {
 /// is not quite still.
 #[test]
 fn a_pinch_around_an_integer_zoom_holds_its_level() {
-    let mut state = ViewCover::new(&at(14.0, -0.11, 51.505), WorldCopies::Repeated).expect("covers");
+    let mut state =
+        ViewCover::new(&at(14.0, -0.11, 51.505), WorldCopies::Repeated).expect("covers");
     let level = state.level();
 
     // Sixty frames of wobble inside the dead band, alternating sides of the integer.
@@ -195,28 +198,35 @@ fn a_pinch_around_an_integer_zoom_holds_its_level() {
 /// only checked the band would pass for a latch that never moved at all.
 #[test]
 fn a_deliberate_zoom_still_crosses() {
-    let mut state = ViewCover::new(&at(14.0, -0.11, 51.505), WorldCopies::Repeated).expect("covers");
+    let mut state =
+        ViewCover::new(&at(14.0, -0.11, 51.505), WorldCopies::Repeated).expect("covers");
     assert_eq!(state.level(), 14);
 
     // Exactly 15.0 does *not* cross, and that is the dead band doing its job rather than a
     // failure: a camera resting on the boundary is the case hysteresis exists for, and rising
     // adopts the next level only past 15.0 + the margin.
     assert_eq!(
-        state.update(&at(15.0, -0.11, 51.505), WorldCopies::Repeated).expect("covers"),
+        state
+            .update(&at(15.0, -0.11, 51.505), WorldCopies::Repeated)
+            .expect("covers"),
         Update::Unchanged
     );
     assert_eq!(state.level(), 14, "sitting on the boundary holds the level");
 
     // Past the band it goes.
     assert_eq!(
-        state.update(&at(15.2, -0.11, 51.505), WorldCopies::Repeated).expect("covers"),
+        state
+            .update(&at(15.2, -0.11, 51.505), WorldCopies::Repeated)
+            .expect("covers"),
         Update::Changed
     );
     assert_eq!(state.level(), 15);
 
     // And a jump of nine levels lands where it was aimed rather than creeping.
     assert_eq!(
-        state.update(&at(6.0, -0.11, 51.505), WorldCopies::Repeated).expect("covers"),
+        state
+            .update(&at(6.0, -0.11, 51.505), WorldCopies::Repeated)
+            .expect("covers"),
         Update::Changed
     );
     assert_eq!(state.level(), 6);
@@ -228,7 +238,8 @@ fn a_deliberate_zoom_still_crosses() {
 /// ancestors rather than holes without the caller arranging anything.
 #[test]
 fn the_draw_list_substitutes_for_tiles_that_are_not_built() {
-    let mut state = ViewCover::new(&at(14.0, -0.11, 51.505), WorldCopies::Repeated).expect("covers");
+    let mut state =
+        ViewCover::new(&at(14.0, -0.11, 51.505), WorldCopies::Repeated).expect("covers");
     let ideal: Vec<DataTileId> = state
         .tiles()
         .iter()
@@ -241,7 +252,9 @@ fn the_draw_list_substitutes_for_tiles_that_are_not_built() {
     assert_eq!(ready.drawn, ideal, "a built cover draws exactly itself");
 
     // Now cross to z15 with nothing at that level built. The z14 tiles are the ancestors.
-    state.update(&at(15.0, -0.11, 51.505), WorldCopies::Repeated).expect("covers");
+    state
+        .update(&at(15.0, -0.11, 51.505), WorldCopies::Repeated)
+        .expect("covers");
     let mut cold = Ready::all(&ideal);
     state.draw(&mut cold, 0..=16);
     assert!(!cold.drawn.is_empty(), "a crossing must not draw nothing");
@@ -260,8 +273,11 @@ fn the_draw_list_substitutes_for_tiles_that_are_not_built() {
 /// magnified stand-in where another view wanted the real thing.
 #[test]
 fn past_the_sources_maximum_the_deepest_tile_stands_in() {
-    let mut state = ViewCover::new(&at(16.0, -0.11, 51.505), WorldCopies::Repeated).expect("covers");
-    state.update(&at(16.0, -0.11, 51.505), WorldCopies::Repeated).expect("covers");
+    let mut state =
+        ViewCover::new(&at(16.0, -0.11, 51.505), WorldCopies::Repeated).expect("covers");
+    state
+        .update(&at(16.0, -0.11, 51.505), WorldCopies::Repeated)
+        .expect("covers");
 
     let mut pyramid = Ready::default();
     state.draw(&mut pyramid, 0..=14);

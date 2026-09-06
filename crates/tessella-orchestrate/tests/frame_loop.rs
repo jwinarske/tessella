@@ -961,7 +961,10 @@ fn every_emitted_frame_draws_something() {
         }
     }
 
-    assert!(emitted > 100, "only {emitted} frames emitted, so this proved little");
+    assert!(
+        emitted > 100,
+        "only {emitted} frames emitted, so this proved little"
+    );
     assert!(
         empty.is_empty(),
         "{} of {emitted} emitted frames drew nothing, first at zoom {:?}",

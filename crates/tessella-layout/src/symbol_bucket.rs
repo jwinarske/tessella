@@ -393,7 +393,7 @@ pub struct LaidOut {
     ///
     /// mbgl's `SymbolInstanceSharedData::line`, and it is the *clipped run* rather than the
     /// feature's whole geometry. That distinction is the whole reason this field exists:
-    /// [`Anchor::segment`] indexes the run `get_anchors` walked, so pairing it with the
+    /// `Anchor::segment` indexes the run `get_anchors` walked, so pairing it with the
     /// unclipped line indexes a different array whenever the clip actually cut something -- and
     /// the glyph walk then starts from the wrong vertex and runs the label off along the wrong
     /// stretch of road.
@@ -705,7 +705,7 @@ pub struct LineOptions {
     /// How many tile units the shaped label's em-space extent occupies.
     ///
     /// mbgl's `textMaxBoxScale`, and the reason anchoring needs it: a shaped extent is in ems --
-    /// [`ONE_EM`] units to the em -- while [`get_anchors`] measures against a line in tile units,
+    /// `ONE_EM` units to the em -- while `get_anchors` measures against a line in tile units,
     /// so an anchor is accepted only if the whole label fits between the line's ends *in tile
     /// units*. Left at one, a road name is treated as a fortieth of its real length, and the
     /// anchor lands a few pixels from where the line stops -- close enough to accept, far too

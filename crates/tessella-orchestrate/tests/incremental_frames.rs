@@ -90,7 +90,7 @@ fn emit_frame_for(
     let emitted = frame::emit_incremental(
         producer,
         arena,
-         &mut frame::SymbolCache::default(),
+        &mut frame::SymbolCache::default(),
         &mut frame::PlacementState::new(),
         &Frame {
             style: &scene.style,
@@ -292,7 +292,7 @@ fn a_failed_frame_retires_nothing_and_announces_nothing() {
     let result = frame::emit_incremental(
         &mut cramped,
         &mut arena,
-         &mut frame::SymbolCache::default(),
+        &mut frame::SymbolCache::default(),
         &mut frame::PlacementState::new(),
         &frame_of(&there, &light),
         &mut registry,
@@ -489,7 +489,7 @@ fn a_frame_touches_only_its_own_view() {
                 producer,
                 &mut arena,
                 &mut frame::SymbolCache::default(),
-        &mut frame::PlacementState::new(),
+                &mut frame::PlacementState::new(),
                 &Frame {
                     style: &scene.style,
                     view: &scene.view,
@@ -630,13 +630,29 @@ fn a_parked_view_writes_no_bytes_at_all() {
         patterns: None,
     };
 
-    frame::emit_incremental(&mut producer, &mut arena, &mut frame::SymbolCache::default(), &mut frame::PlacementState::new(), &frame, &mut session).expect("cold");
+    frame::emit_incremental(
+        &mut producer,
+        &mut arena,
+        &mut frame::SymbolCache::default(),
+        &mut frame::PlacementState::new(),
+        &frame,
+        &mut session,
+    )
+    .expect("cold");
     let after_cold = producer.head();
     assert!(after_cold > 0, "the cold frame wrote something");
 
     // Five more frames of the same scene: not one byte.
     for round in 0..5 {
-        frame::emit_incremental(&mut producer, &mut arena, &mut frame::SymbolCache::default(), &mut frame::PlacementState::new(), &frame, &mut session).expect("parked");
+        frame::emit_incremental(
+            &mut producer,
+            &mut arena,
+            &mut frame::SymbolCache::default(),
+            &mut frame::PlacementState::new(),
+            &frame,
+            &mut session,
+        )
+        .expect("parked");
         assert_eq!(
             producer.head(),
             after_cold,
@@ -770,13 +786,13 @@ mod teardown {
         frame::emit_incremental(
             producer,
             arena,
-             &mut frame::SymbolCache::default(),
-        &mut frame::PlacementState::new(),
+            &mut frame::SymbolCache::default(),
+            &mut frame::PlacementState::new(),
             &frame_of(scene, view, &light),
             session,
         )
-            .expect("emits")
-            .geometries
+        .expect("emits")
+        .geometries
     }
 
     fn tear(view: ViewId, arena: &mut SlabArena, session: &mut Session) -> BTreeMap<String, usize> {
@@ -822,7 +838,10 @@ mod teardown {
         // The teardown sweeps, so there is nothing left here to sweep -- which is a stronger
         // statement than the sweep returning ids: the arena holds no slab at all.
         assert_eq!(arena.slabs().count(), 0, "the bytes went back too");
-        assert!(arena.sweep().is_empty(), "and there is nothing left to sweep");
+        assert!(
+            arena.sweep().is_empty(),
+            "and there is nothing left to sweep"
+        );
     }
 
     /// A view sharing geometry with another releases its use and removes nothing.
@@ -963,8 +982,8 @@ mod under_fault {
         let result = frame::emit_incremental(
             producer,
             arena,
-             &mut frame::SymbolCache::default(),
-        &mut frame::PlacementState::new(),
+            &mut frame::SymbolCache::default(),
+            &mut frame::PlacementState::new(),
             &Frame {
                 style: &scene.style,
                 view: &scene.view,

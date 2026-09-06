@@ -83,7 +83,11 @@ impl ViewCover {
     /// # Errors
     ///
     /// [`CoverError`] when the view is pitched.
-    pub fn update(&mut self, view: &ViewTransform, copies: WorldCopies) -> Result<Update, CoverError> {
+    pub fn update(
+        &mut self,
+        view: &ViewTransform,
+        copies: WorldCopies,
+    ) -> Result<Update, CoverError> {
         self.frames += 1;
         // The latch decides the level; the camera decides everything else about the footprint.
         // Substituting the latched level into the transform rather than passing it alongside
