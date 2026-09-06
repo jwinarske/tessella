@@ -6471,3 +6471,41 @@ occupant's identities.
 Cost is nothing measurable: the index runs only for a bucket whose parse changed, and the quad
 bench is inside its usual run-to-run spread on every figure, with zero blank frames on all four
 panes.
+
+
+### The consumer lifetime bug behind the atlas staleness, and why the re-announce is not wanted
+
+The entry above ended "there is a consumer lifetime bug sitting behind this one, and it is the
+next thing to pull on". Both halves of that turned out differently than expected: the bug is real
+and is fixed, and the thing it was blocking should not be done.
+
+**The bug.** `FilamentRenderer` keeps one `MaterialInstance` per (layer, shader, ubo slot) across
+frames, and an instance holds the samplers set on it until they are set again. `onTexture`
+destroys a texture outright when an atlas grows, and every cached instance that named it goes on
+naming it. It is only rebound if the same key comes round again; a full re-announce reshuffles
+which drawable lands on which key, and the first instance reused for a drawable that binds no
+texture draws with a freed handle. That is "Handle id=... (Texture) is being used after it has
+been freed", on the all-families scene, immediately.
+
+The fix is to drop the instance cache when a texture is replaced. That is safe exactly there and
+nowhere later: `beginFrame` has already destroyed every renderable of the previous frame and
+batches are only issued in `endFrame`, so at the moment a texture update is handled no instance is
+attached to anything. They are a cache; `issue` rebuilds and rebinds what it needs.
+
+**The re-announce is not wanted.** `Map::set_fonts` marking the frame dirty says *redraw* where a
+new atlas needs *re-tell*, and `session.forget(view_id)` was the direct way to say it. With the
+crash fixed it runs clean -- and there is nothing left for it to fix. A symbol drawable is
+re-encoded and re-announced every frame now, because its vertices carry the camera, so it names
+the current atlas by construction: `atlasMismatched` reads zero without the re-announce on
+all-families, Tokyo and Shanghai, the three scenes that produced it. Forgetting the view would
+re-announce every fill and line in the cover each time a glyph range lands, for geometry no font
+ever touched.
+
+So the open item closes by a route it did not anticipate: the symbol re-announce landed for the
+label-anchoring defect and took this with it. The consumer fix is kept on its own merits -- a
+stranded sampler is a hazard on any texture replacement, and atlas growth is routine.
+
+**A measurement not to trust, recorded so it is not repeated.** The first pass at this attributed
+a large slowdown to the re-announce, from a quad bench run taken while another homescreen and a
+Flutter build were on the machine. The figures were contention, not cost. The decision above rests
+on `atlasMismatched` instead, which is a correctness count and does not care what else is running.

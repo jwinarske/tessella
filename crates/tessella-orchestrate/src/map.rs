@@ -274,14 +274,25 @@ impl Map {
         // ones the index named: a stack that was missing its glyphs shapes to a different set of
         // symbols, and a fade carried across would belong to something else.
         self.placement.invalidate();
-        // Not `session.forget(view_id)`, which would be the direct way to re-tell the consumer
-        // everything against the new atlas: it makes the next frame re-announce geometry the
-        // consumer still holds, and the retire path then frees a texture something is still
-        // using -- "Handle (Texture) is being used after it has been freed", on the all-families
-        // scene, immediately. The staleness this would close is measured instead, by
-        // `FilamentRenderer::atlasMismatched`, and worked around where it does harm: the
-        // consumer takes the atlas size from the texture it has bound rather than from the
-        // drawable that named it.
+        // Not `session.forget(view_id)`, and no longer for the reason that used to be here.
+        //
+        // A new atlas is a different texture at a different size, so a drawable announced against
+        // the old one names something that no longer exists, and forgetting the view was the
+        // direct way to re-tell the consumer everything. It crashed -- "Handle (Texture) is being
+        // used after it has been freed" -- and that turned out to be a consumer bug worth fixing
+        // on its own: a material instance is cached across frames and keeps the samplers set on
+        // it, so one that named the replaced texture went on naming it. `onTexture` drops the
+        // instance cache when it replaces a texture now, and the re-announce runs clean.
+        //
+        // It is not wanted anyway, and that is the part that decides it. A symbol drawable is
+        // re-encoded and re-announced every frame -- its vertices carry the camera -- so it names
+        // the current atlas by construction. `atlasMismatched` counts a drawable that disagrees
+        // with the texture bound under it, and it reads zero without this on all three scenes
+        // that produced it: all-families, Tokyo and Shanghai. There is no staleness left to
+        // close.
+        //
+        // What forgetting the view would add is re-announcing *everything*, fills and lines
+        // included, every time a glyph range lands -- geometry no font ever touched.
         self.mark_dirty();
     }
 
