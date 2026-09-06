@@ -4616,11 +4616,23 @@ a subdivision and a draw the consumer no longer makes.
   pixels exact with zero gross, so anchors on that layer are bit-identical. And not the scaling to
   `EXTENT`: `rings_scaled` rounds, but from a 4096 source to 8192 the factor is exactly two.
 
-  What is left to try is the anchor's tile-unit coordinate for a `pois` feature, compared against
-  the same feature's in mbgl, and why this layer differs from `place` when both are point features.
+  **The tile-unit anchor is eliminated too, and it was the last lead here.** mbgl builds a point
+  symbol's anchor as `static_cast<float>(point.x)` over a `GeometryCoordinate`, which is
+  `Point<int16_t>` -- an integer in `util::EXTENT` units, since `getGeometries` scales a 4096 tile
+  by an integer factor of two. Ours are integers as well: across the berlin fixture at z14, all
+  140 `pois` point anchors and all 6 `places` ones have a zero fractional part. The two sides agree
+  on the anchor exactly, so the difference is downstream of it, and the question the entry ended on
+  -- why `pois` differs from `place` when both are point features -- has no answer at the anchor
+  because they do not differ there.
+
+  What that leaves is the step between an agreed anchor and a drawn quad, and the shape of the
+  error says which kind: a spread of about half a pixel either way with a mean near zero, varying
+  per symbol, is independent rounding rather than a bias. mbgl's icon lands on exact pixel columns
+  and ours does not.
+
   It is worth saying plainly that this is 0.2% of a frame at sub-pixel scale, and every other layer
   is at or below 8 gross pixels; it is the smallest thing on the list rather than the next most
-  valuable.
+  valuable, and it is not what to pick up next.
 
 - **A raster tile drew a different tile's picture.** *Fixed, in two places.* On the raster fixture
   every tile carries a parity tint, `blue = 190 - ((x + y) % 2) * 40`, so which tile landed where
