@@ -406,6 +406,12 @@ impl ViewSymbols {
         }
     }
 
+    /// How many labels are part way through a fade.
+    #[must_use]
+    pub fn fading(&self) -> usize {
+        self.fades.fading()
+    }
+
     /// The opacity a label is drawing at, if it has one.
     #[must_use]
     pub fn opacity(&self, cross_tile_id: u32) -> Option<Joint> {

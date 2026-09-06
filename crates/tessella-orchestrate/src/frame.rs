@@ -1320,6 +1320,16 @@ impl PlacementState {
         self.increment
     }
 
+    /// How many labels are part way through a fade.
+    ///
+    /// A frame that is not emitted is a fade that does not move, so this is what makes a fade a
+    /// reason to draw on a map where nothing else is happening — the camera stopped mid-fade and
+    /// the labels still have somewhere to get to.
+    #[must_use]
+    pub fn fading(&self) -> usize {
+        self.symbols.fading()
+    }
+
     /// Fades that finish in one step, which is what a still picture wants.
     pub const fn settle_at_once(&mut self) {
         self.increment = 1.0;

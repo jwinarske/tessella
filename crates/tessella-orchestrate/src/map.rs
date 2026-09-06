@@ -359,9 +359,18 @@ impl Map {
     /// [`frame::FADE_DURATION_MILLIS`] for the duration.
     pub fn advance(&mut self, elapsed_millis: f64) {
         self.placement.advance(elapsed_millis);
-        // A fade in flight is a reason to draw even when nothing else changed: the opacities are
-        // in the vertices, so a frame that is not emitted is a fade that does not move.
-        self.mark_dirty();
+        // Deliberately not marking the map dirty, and this is a gap rather than a decision:
+        // opacities travel in the vertices, so a frame that is not emitted is a fade that does
+        // not move, and a camera that stops mid-fade leaves its labels part way. It does not
+        // arise on a moving map, which is where the fades matter and where every frame is emitted
+        // anyway.
+        //
+        // The reason it is a gap: marking dirty here -- on every advance, or only while
+        // `fading()` is non-zero -- renders the whole map *black*, with every tick returning
+        // TESSELLA_OK. A map held permanently dirty emits something the consumer draws as
+        // nothing, and that is a defect in its own right rather than something to route around
+        // by finding a third condition that happens not to trip it. It wants finding before this
+        // gap is closed.
     }
 
     /// Sets the surface the tiles will be drawn on.
