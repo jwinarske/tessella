@@ -42,6 +42,7 @@ use tessella_source::geojson;
 use tessella_source::tiling::TilingOptions;
 use tessella_style::{Source, Style};
 use tessella_tile::cover::ViewTransform;
+use tessella_tile::cover::WorldCopies;
 
 const HERMETIC: &str = include_str!("../../tessella-style/tests/hermetic_style.json");
 
@@ -208,10 +209,13 @@ fn four_view_sweep_budget() {
     let mut states: Vec<ViewCover> = base
         .iter()
         .map(|view| {
-            ViewCover::new(&ViewTransform {
-                zoom: zooms[0],
-                ..*view
-            })
+            ViewCover::new(
+                &ViewTransform {
+                    zoom: zooms[0],
+                    ..*view
+                },
+                WorldCopies::Repeated,
+            )
             .expect("covers")
         })
         .collect();
@@ -221,7 +225,7 @@ fn four_view_sweep_budget() {
     for &zoom in &zooms {
         for (view, state) in base.iter().zip(&mut states) {
             state
-                .update(&ViewTransform { zoom, ..*view })
+                .update(&ViewTransform { zoom, ..*view }, WorldCopies::Repeated)
                 .expect("covers");
             for tile in state.tiles().to_vec() {
                 shared.tile(tile.z, tile.x, tile.y);
@@ -241,7 +245,7 @@ fn four_view_sweep_budget() {
         let mut envelopes = 0;
         for (index, (view, state)) in base.iter().zip(&mut states).enumerate() {
             let at = ViewTransform { zoom, ..*view };
-            state.update(&at).expect("covers");
+            state.update(&at, WorldCopies::Repeated).expect("covers");
             envelopes += emit_view(
                 &mut shared,
                 &mut session,

@@ -37,6 +37,7 @@ use tessella_source::tiling::TilingOptions;
 use tessella_storage::source::{FetchError, FileSource, Response};
 use tessella_style::{Source, Style};
 use tessella_tile::cover::ViewTransform;
+use tessella_tile::cover::WorldCopies;
 use tessella_tile::renderables::DataTileId;
 
 const GLYPHS: &[u8] = include_bytes!("../../../tests/glyph-fixtures/TestFont/0-255.pbf");
@@ -137,10 +138,13 @@ fn run(zooms: &[f64]) -> (Vec<Vec<Opacities>>, usize) {
     let mut covers: Vec<ViewCover> = base
         .iter()
         .map(|view| {
-            ViewCover::new(&ViewTransform {
-                zoom: zooms[0],
-                ..*view
-            })
+            ViewCover::new(
+                &ViewTransform {
+                    zoom: zooms[0],
+                    ..*view
+                },
+                WorldCopies::Repeated,
+            )
             .expect("covers")
         })
         .collect();
@@ -152,7 +156,7 @@ fn run(zooms: &[f64]) -> (Vec<Vec<Opacities>>, usize) {
     for &zoom in zooms {
         for (which, (view, cover)) in base.iter().zip(&mut covers).enumerate() {
             let at = ViewTransform { zoom, ..*view };
-            cover.update(&at).expect("covers");
+            cover.update(&at, WorldCopies::Repeated).expect("covers");
 
             let mut frame_labels: Vec<FrameLabel> = Vec::new();
             let mut texts: Vec<String> = Vec::new();

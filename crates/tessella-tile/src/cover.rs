@@ -171,12 +171,38 @@ pub enum WorldCopies {
 ///
 /// As [`cover`].
 pub fn cover_with(view: &ViewTransform, copies: WorldCopies) -> Result<Vec<TileCoord>, CoverError> {
-    let tiles = cover_at(view, view.tile_zoom())?;
-    Ok(match copies {
+    Ok(fold_copies(cover_at(view, view.tile_zoom())?, copies))
+}
+
+/// As [`cover_at`], under a world-copy policy.
+///
+/// The cover of a *given* level rather than the view's own, which the walks that address a zoom
+/// of their own need: a 256-pixel raster source covers the screen one level in from a vector one,
+/// and a background is drawn at the integer zoom. Those are still tiles on the same surface, so
+/// the same policy applies to them — a globe that folded its vector cover and not its raster one
+/// would draw the imagery twice at the zooms where the fold exists to stop exactly that.
+///
+/// # Errors
+///
+/// As [`cover_at`].
+pub fn cover_at_with(
+    view: &ViewTransform,
+    zoom: u8,
+    copies: WorldCopies,
+) -> Result<Vec<TileCoord>, CoverError> {
+    Ok(fold_copies(cover_at(view, zoom)?, copies))
+}
+
+/// Applies a world-copy policy to a cover.
+///
+/// Folded onto the near copy rather than filtered to it: a tile visible *only* at `wrap: -1` is
+/// still a patch of the sphere, and dropping it would leave a hole where filtering to `wrap == 0`
+/// would. A view centred on the antimeridian is the case — its western half has no `wrap: 0`
+/// entry at all.
+#[must_use]
+pub fn fold_copies(tiles: Vec<TileCoord>, copies: WorldCopies) -> Vec<TileCoord> {
+    match copies {
         WorldCopies::Repeated => tiles,
-        // Folded onto the near copy rather than filtered to it: a tile visible *only* at
-        // `wrap: -1` is still a patch of the sphere, and dropping it would leave a hole where
-        // filtering to `wrap == 0` would.
         WorldCopies::One => {
             let mut folded: Vec<TileCoord> = tiles
                 .into_iter()
@@ -186,7 +212,7 @@ pub fn cover_with(view: &ViewTransform, copies: WorldCopies) -> Result<Vec<TileC
             folded.dedup();
             folded
         }
-    })
+    }
 }
 
 /// The cover of a pitched view, by walking the tile quadtree against the view frustum.

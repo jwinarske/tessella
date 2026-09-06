@@ -56,6 +56,15 @@ int main(void) {
 
     printf("set_camera %d\n", (int)tessella_set_camera(map, 48.85, 2.35, 11.0, 0.0, 0.0));
 
+    /* The globe's one policy, through the declaration in the header rather than the Rust: an
+     * enum whose repr disagreed would pass the wrong value with nothing to say so. */
+    printf("world_copies_one %d\n",
+           (int)tessella_set_world_copies(map, TESSELLA_WORLD_COPIES_ONE));
+    printf("world_copies_repeated %d\n",
+           (int)tessella_set_world_copies(map, TESSELLA_WORLD_COPIES_REPEATED));
+    printf("world_copies_null %d\n",
+           (int)tessella_set_world_copies(NULL, TESSELLA_WORLD_COPIES_ONE));
+
     printf("tick_first %d\n", (int)tessella_tick(map));
     printf("tick_second %d\n", (int)tessella_tick(map));
 

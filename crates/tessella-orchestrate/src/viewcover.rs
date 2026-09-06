@@ -32,7 +32,7 @@
 use alloc::vec::Vec;
 use std::collections::BTreeSet;
 
-use tessella_tile::cover::{self, CoverError, TileCoord, ViewTransform, ZoomLatch};
+use tessella_tile::cover::{self, CoverError, TileCoord, ViewTransform, WorldCopies, ZoomLatch};
 use tessella_tile::renderables::{self, DataTileId, Pyramid};
 
 /// Whether a frame's cover differs from the one before it.
@@ -58,12 +58,16 @@ pub struct ViewCover {
 impl ViewCover {
     /// The cover a view starts with.
     ///
+    /// `copies` is the surface the tiles will be drawn on, which is a property of the request and
+    /// not of the camera: a globe has one of every tile, a plane repeats horizontally. See
+    /// [`cover::WorldCopies`].
+    ///
     /// # Errors
     ///
     /// [`CoverError`] when the view is pitched, which cover does not yet handle.
-    pub fn new(view: &ViewTransform) -> Result<Self, CoverError> {
+    pub fn new(view: &ViewTransform, copies: WorldCopies) -> Result<Self, CoverError> {
         let latch = ZoomLatch::new(view.zoom);
-        let tiles = cover::cover(view)?;
+        let tiles = cover::fold_copies(cover::cover(view)?, copies);
         Ok(Self {
             latch,
             entered: tiles.clone(),
@@ -74,12 +78,12 @@ impl ViewCover {
         })
     }
 
-    /// Recomputes for a new camera.
+    /// Recomputes for a new camera, or a new surface.
     ///
     /// # Errors
     ///
     /// [`CoverError`] when the view is pitched.
-    pub fn update(&mut self, view: &ViewTransform) -> Result<Update, CoverError> {
+    pub fn update(&mut self, view: &ViewTransform, copies: WorldCopies) -> Result<Update, CoverError> {
         self.frames += 1;
         // The latch decides the level; the camera decides everything else about the footprint.
         // Substituting the latched level into the transform rather than passing it alongside
@@ -90,7 +94,10 @@ impl ViewCover {
             zoom: f64::from(level),
             ..*view
         };
-        let tiles = cover::cover(&latched)?;
+        // Passed per frame rather than held, so a view switching between a plane and a globe
+        // recomputes on the frame it switches: the comparison below sees a different cover and
+        // reports `Changed`, which is the same path a pan takes and needs no other signal.
+        let tiles = cover::fold_copies(cover::cover(&latched)?, copies);
 
         if tiles == self.tiles {
             self.entered.clear();

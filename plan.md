@@ -3458,6 +3458,19 @@ leaving a hole: a view centred on the antimeridian sees patches whose only entry
 wrap, and filtering would drop exactly those. The horizon is the consumer's to skip, one dot product per tile
 before it subdivides, which removes the draw as well.
 
+It reaches a consumer as `tessella_set_world_copies`, a toggle rather than a mode a map is
+created in — MapLibre switches projection at runtime and so does this. Nothing invalidates: the
+cover is recomputed every frame anyway, so the frame after the switch reports `Changed` by the
+path a pan takes and everything downstream releases the copies it was drawing. The policy applies
+to every cover a view asks for and not only its own zoom — the raster walk that addresses a zoom
+of its own, and the per-tile background — since those are tiles on the same surface, and a globe
+that folded its vector cover and not its raster one would draw the imagery twice at exactly the
+levels the fold exists to fix.
+
+What is not here is the consumer's half: the vertex bend, the subdivision, the horizon cull, and
+symbol placement on a sphere, which this section does not cover and is the hard part of the
+three.
+
 Four views change none of this. They want the same tiles at these zooms and the shared store
 builds them once — so the waste is four to six tiles for the cluster, not per view.
 

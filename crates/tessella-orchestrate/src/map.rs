@@ -45,7 +45,7 @@ use tessella_glyph::sprite::IconPosition;
 use tessella_style::Style;
 use tessella_style::crossfade::ZoomHistory;
 use tessella_style::light::Light;
-use tessella_tile::cover::{TileCoord, ViewTransform};
+use tessella_tile::cover::{TileCoord, ViewTransform, WorldCopies};
 use tessella_tile::renderables::{DataTileId, Necessity, Pyramid, RenderTileId, TileState};
 
 use crate::SlabArena;
@@ -161,6 +161,20 @@ pub struct Map {
     wanted: Vec<TileCoord>,
     /// Ideal tiles the last frame left as holes — nothing at any resolution over them.
     uncovered: usize,
+    /// The surface the tiles are drawn on, as far as covering is concerned.
+    ///
+    /// The producer's whole part in the globe (§13.4). Placement is not affected — a globe bends
+    /// Mercator geometry per vertex in the consumer's material and the producer emits the
+    /// ordinary flat placement — but *selection* is: a plane repeats horizontally and a sphere
+    /// does not, so a globe drawing a flat cover draws the same patch of the world once per copy.
+    /// At zoom 0 four of five cover tiles are copies and at zoom 1 four of eight, which is
+    /// z-fighting on the surface and subdivision paid twice at the levels where it is dearest.
+    ///
+    /// A request parameter and not a camera one: what the tiles will be drawn on is not something
+    /// the camera knows. The horizon is deliberately not here — `globe_cover` measured it at four
+    /// to six of the cheapest tiles on the map between z1 and z2.5 and none outside, which does
+    /// not pay for a spherical cull on this side and is one dot product per tile on the other.
+    copies: WorldCopies,
     /// How many ancestor levels to ask for alongside the ideal cover.
     prefetch: u8,
     /// The zoom the previous frame drew at, for the prefetch's velocity.
@@ -230,6 +244,7 @@ impl Map {
             drawn: Vec::new(),
             wanted: Vec::new(),
             uncovered: 0,
+            copies: WorldCopies::Repeated,
             prefetch: DEFAULT_PREFETCH,
             last_zoom: None,
             speculative: Vec::new(),
@@ -282,6 +297,21 @@ impl Map {
     #[must_use]
     pub const fn view(&self) -> &ViewTransform {
         &self.view
+    }
+
+    /// Sets the surface the tiles will be drawn on.
+    ///
+    /// See [`Self::copies`] for what this is and is not. Does not emit, and needs no
+    /// invalidation: the cover is recomputed every frame and the next one sees a different set,
+    /// which is the same path a pan takes.
+    pub const fn draw_on(&mut self, copies: WorldCopies) {
+        self.copies = copies;
+    }
+
+    /// The surface the tiles are being drawn on.
+    #[must_use]
+    pub const fn copies(&self) -> WorldCopies {
+        self.copies
     }
 
     /// Reports that a source has new tiles, so the next tick emits.
@@ -403,9 +433,11 @@ impl Map {
         // moves costs more than it saves, while what it gates — substitution, retain, release,
         // rebuilt bindings — is where the frame's money goes.
         let moved = match &mut self.cover {
-            Some(cover) => cover.update(&self.view).unwrap_or(Update::Unchanged),
+            Some(cover) => cover
+                .update(&self.view, self.copies)
+                .unwrap_or(Update::Unchanged),
             None => {
-                self.cover = ViewCover::new(&self.view).ok();
+                self.cover = ViewCover::new(&self.view, self.copies).ok();
                 Update::Changed
             }
         };
@@ -513,7 +545,7 @@ impl Map {
         // `served` carries over, so a tile already drawn by the walk above is not drawn twice; a
         // second draw is the same geometry under the same matrix, blended again.
         for z in tiles.extra_zooms(&self.view) {
-            let Ok(extra) = tessella_tile::cover::cover_at(&self.view, z) else {
+            let Ok(extra) = tessella_tile::cover::cover_at_with(&self.view, z, self.copies) else {
                 continue;
             };
             for entry in &extra {
@@ -594,7 +626,9 @@ impl Map {
                     wrap: 0,
                 });
             }
-        } else if let Ok(background) = tessella_tile::cover::cover_at(&self.view, integer_zoom) {
+        } else if let Ok(background) =
+            tessella_tile::cover::cover_at_with(&self.view, integer_zoom, self.copies)
+        {
             for entry in &background {
                 let cover = TileId::new(entry.z, entry.x, entry.y);
                 // Built here when the store has not got to it, because a background is a

@@ -28,6 +28,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use tessella_orchestrate::sweep;
 use tessella_orchestrate::viewcover::ViewCover;
 use tessella_tile::cover::ViewTransform;
+use tessella_tile::cover::WorldCopies;
 use tessella_tile::renderables::{DataTileId, Necessity, Pyramid, RenderTileId, TileState};
 
 /// How many frames a fetch takes. Long enough that a crossing is visibly mid-flight for several
@@ -168,10 +169,13 @@ fn run(zooms: &[f64]) -> Run {
     let mut covers_state: Vec<ViewCover> = base
         .iter()
         .map(|view| {
-            ViewCover::new(&ViewTransform {
-                zoom: zooms[0],
-                ..*view
-            })
+            ViewCover::new(
+                &ViewTransform {
+                    zoom: zooms[0],
+                    ..*view
+                },
+                WorldCopies::Repeated,
+            )
             .expect("covers")
         })
         .collect();
@@ -186,7 +190,7 @@ fn run(zooms: &[f64]) -> Run {
 
         for (view, state) in base.iter().zip(&mut covers_state) {
             let at = ViewTransform { zoom, ..*view };
-            state.update(&at).expect("covers");
+            state.update(&at, WorldCopies::Repeated).expect("covers");
 
             fleet.drawn.clear();
             state.draw(&mut fleet, 0..=16);
@@ -299,17 +303,20 @@ fn only_the_ideal_tiles_are_fetched() {
     let mut states: Vec<ViewCover> = base
         .iter()
         .map(|view| {
-            ViewCover::new(&ViewTransform {
-                zoom: zooms[0],
-                ..*view
-            })
+            ViewCover::new(
+                &ViewTransform {
+                    zoom: zooms[0],
+                    ..*view
+                },
+                WorldCopies::Repeated,
+            )
             .expect("covers")
         })
         .collect();
     for &zoom in &zooms {
         for (view, state) in base.iter().zip(&mut states) {
             state
-                .update(&ViewTransform { zoom, ..*view })
+                .update(&ViewTransform { zoom, ..*view }, WorldCopies::Repeated)
                 .expect("covers");
             wanted.extend(state.tiles().iter().map(|t| (t.z, t.x, t.y, t.wrap)));
         }

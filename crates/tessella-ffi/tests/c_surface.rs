@@ -127,6 +127,10 @@ fn the_c_header_describes_the_library_it_claims_to() {
     check("create", 0, "a valid style did not create");
     check("handle_non_null", 1, "create returned OK without a handle");
     check("set_camera", 0, "the camera did not move");
+    // Both directions, because the switch is a toggle a consumer flips at runtime rather than a
+    // mode it is created in.
+    check("world_copies_one", 0, "the globe's cover policy was refused");
+    check("world_copies_repeated", 0, "the plane's cover policy was refused");
     check("tick_first", 0, "the first tick failed");
     check("tick_second", 0, "the second tick failed");
     check("status", 0, "the status call failed");
@@ -144,6 +148,11 @@ fn the_c_header_describes_the_library_it_claims_to() {
     check("null_config", 1, "a null config was not rejected");
     check("null_out", 1, "a null out-pointer was not rejected");
     check("null_map_tick", 2, "ticking a null handle was not rejected");
+    check(
+        "world_copies_null",
+        2,
+        "setting the cover policy on a null handle was not rejected",
+    );
 
     // This style has no sources, so nothing can resolve and nothing needs to: the map is ready
     // as soon as it is asked, and there is no failure to report.

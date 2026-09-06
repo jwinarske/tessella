@@ -179,6 +179,34 @@ tessella_result tessella_set_camera(tessella_map* map,
                                     double bearing,
                                     double pitch);
 
+/* What surface a view's tiles will be covered for.
+ *
+ * The producer's whole part in the globe. Placement is unaffected -- a globe bends Mercator
+ * geometry per vertex in the consumer's material, so what travels on the wire is the ordinary flat
+ * placement either way -- but selection is not: a Mercator plane repeats horizontally and a sphere
+ * does not, so a globe drawing a flat cover draws the same patch of the world once per copy. */
+typedef enum tessella_world_copies {
+    /* A plane, which repeats horizontally. The default, and what a Mercator map wants. */
+    TESSELLA_WORLD_COPIES_REPEATED = 0,
+    /* A sphere, which has one of everything.
+     *
+     * At zoom 0 four of five cover tiles are copies and at zoom 1 four of eight -- most of the
+     * cover rather than an edge case -- and drawing them is z-fighting on the surface plus
+     * subdivision paid twice at the levels where subdivision is dearest. */
+    TESSELLA_WORLD_COPIES_ONE = 1
+} tessella_world_copies;
+
+/* Sets the surface a map's tiles are covered for.
+ *
+ * Does not emit, and needs no invalidation: the cover is recomputed every frame, so the next tick
+ * sees a different set of tiles by the same path a pan takes.
+ *
+ * The horizon is deliberately not here. Tiles a sphere has curved out of sight are four to six of
+ * the cheapest on the map between zoom 1 and 2.5 and none outside that band, which does not pay
+ * for a spherical cull on this side -- it is one dot product per tile in the consumer, before it
+ * subdivides, which removes the draw as well as the tile. */
+tessella_result tessella_set_world_copies(tessella_map* map, tessella_world_copies copies);
+
 /* Emits a frame, if anything changed, and asks for what the next one needs.
  *
  * Returns TESSELLA_OK whether or not a frame was emitted: a settled map sending nothing is the

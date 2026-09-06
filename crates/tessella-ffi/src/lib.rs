@@ -74,7 +74,7 @@ use tessella_storage::http::HttpFileSource;
 use tessella_storage::source::Coalescing;
 use tessella_style::Style;
 use tessella_tile::camera;
-use tessella_tile::cover::ViewTransform;
+use tessella_tile::cover::{self, ViewTransform};
 
 /// The texture the sprite atlas is uploaded as.
 ///
@@ -354,6 +354,53 @@ pub unsafe extern "C" fn tessella_set_camera(
             pitch,
             ..*state.map.view()
         })));
+        Status::Ok
+    })
+}
+
+/// What surface a view's tiles will be drawn on.
+///
+/// The producer's whole part in the globe. Placement is unaffected — a globe bends Mercator
+/// geometry per vertex in the consumer's material, so what travels on the wire is the ordinary
+/// flat placement either way — but *selection* is not: a Mercator plane repeats horizontally and
+/// a sphere does not, so a globe drawing a flat cover draws the same patch of the world once per
+/// world copy.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorldCopies {
+    /// A plane, which repeats horizontally. The default, and what a Mercator map wants.
+    Repeated = 0,
+    /// A sphere, which has one of everything.
+    ///
+    /// At zoom 0 four of five cover tiles are copies and at zoom 1 four of eight — most of the
+    /// cover rather than an edge case — and drawing them is z-fighting on the surface plus
+    /// subdivision paid twice at the levels where subdivision is dearest.
+    One = 1,
+}
+
+/// Sets the surface a map's tiles are covered for.
+///
+/// Does not emit, and needs no invalidation: the cover is recomputed every frame, so the next
+/// tick sees a different set of tiles by the same path a pan takes.
+///
+/// The horizon is deliberately not here. Tiles a sphere has curved out of sight are four to six
+/// of the cheapest on the map between zoom 1 and 2.5 and *none* outside that band, which does not
+/// pay for a spherical cull on this side — it is one dot product per tile in the consumer, before
+/// it subdivides, which removes the draw as well as the tile.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_set_world_copies(map: MapHandle, copies: WorldCopies) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_mut() }) else {
+            return Status::NoSuchMap;
+        };
+        state.map.draw_on(match copies {
+            WorldCopies::Repeated => cover::WorldCopies::Repeated,
+            WorldCopies::One => cover::WorldCopies::One,
+        });
         Status::Ok
     })
 }
