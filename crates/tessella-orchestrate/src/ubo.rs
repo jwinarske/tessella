@@ -223,6 +223,45 @@ impl DrawableEntry {
         })
     }
 
+    /// The entry for a background standing in for the oracle's clear.
+    ///
+    /// See [`crate::tile::background_covers_viewport`] for which background reaches this and why.
+    /// There is no clear colour on this wire, so the equivalent of clearing the renderable is a
+    /// quad over the whole of it: the same pixels, and one drawable where the per-tile path has
+    /// one per cover tile.
+    ///
+    /// The matrix takes the quad's own 0..`EXTENT` box to the clip cube and does not consult the
+    /// camera at all — which is the point, because a clear does not either. That also means the
+    /// drawable's geometry *and* its matrix are constant, so it is announced once and its UBO
+    /// rewritten only for the depth nudge.
+    ///
+    /// Y is flipped, as the tile-to-clip path flips it: tile coordinates run down and clip runs
+    /// up. It makes no difference to a quad that covers the cube either way, and it is what the
+    /// orientation would have to be if anything textured ever came through here.
+    #[must_use]
+    pub fn for_viewport(layer_index: i32, sub_layer_index: i32) -> Self {
+        let mut matrix = camera::identity();
+        camera::translate_in_place(
+            &mut matrix,
+            -1.0,
+            1.0,
+            -f64::from(depth_offset(layer_index, sub_layer_index)),
+        );
+        let matrix = camera::scale(
+            &matrix,
+            2.0 / camera::EXTENT,
+            -2.0 / camera::EXTENT,
+            1.0,
+        );
+        #[allow(clippy::cast_possible_truncation)]
+        Self {
+            matrix: core::array::from_fn(|index| matrix[index] as f32),
+            // `BackgroundDrawableUBO` is a matrix and two pads: no property of a background
+            // varies with zoom in a way a drawable entry carries.
+            interpolations: [0.0, 0.0],
+        }
+    }
+
     /// As [`Self::for_tile_with`], for a layer that resolves in the depth buffer.
     ///
     /// # A 3D layer takes no sublayer nudge

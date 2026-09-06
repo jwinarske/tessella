@@ -569,9 +569,32 @@ impl Map {
         //
         // Deduped against `served` like the walks above, because a background keyed to a cover
         // coordinate a walk already placed would blend over itself.
+        //
+        // Unless the oracle would not draw it at all. A solid first-layer background is mbgl's
+        // clear colour, and a clear covers the whole renderable rather than the cover: see
+        // `tile::background_covers_viewport`. One drawable stands in for it, on a fixed
+        // coordinate so the registry keeps it across a pan -- the quad is the viewport and does
+        // not move with the camera, so nothing about it is per tile.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let integer_zoom = self.view.zoom.floor().max(0.0) as u8;
-        if let Ok(background) = tessella_tile::cover::cover_at(&self.view, integer_zoom) {
+        if crate::tile::background_covers_viewport(&self.style, self.view.zoom) {
+            let anchor = TileId::new(0, 0, 0);
+            let built: Vec<LayerBucket> = crate::tile::build_sourceless(&self.style, anchor)
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|bucket| matches!(bucket.content, Content::Background))
+                .collect();
+            if !built.is_empty() {
+                buckets.push((anchor, built));
+                origins.push(None);
+                placed.push(TileCoord {
+                    z: anchor.z,
+                    x: anchor.x,
+                    y: anchor.y,
+                    wrap: 0,
+                });
+            }
+        } else if let Ok(background) = tessella_tile::cover::cover_at(&self.view, integer_zoom) {
             for entry in &background {
                 let cover = TileId::new(entry.z, entry.x, entry.y);
                 // Built here when the store has not got to it, because a background is a

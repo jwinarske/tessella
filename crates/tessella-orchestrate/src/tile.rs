@@ -655,6 +655,58 @@ fn draws_from(layer: &tessella_style::Layer, source: &str) -> bool {
     layer.source.as_deref() == Some(source)
 }
 
+/// Whether the style's background is the one the oracle replaces with a clear.
+///
+/// mbgl does not draw such a layer at all. `RenderOrchestrator` recognises it —
+/// `backgroundLayerAsColor && layer.baseImpl == layerImpls->front()` with a `getSolidBackground`
+/// that answers for a background with no pattern and a positive opacity — takes its colour as
+/// the frame's clear colour and drops the layer from the render items entirely. The clear covers
+/// the whole renderable, which is what `commonClearPass` means by "this also paints in areas
+/// where we don't have any tiles whatsoever".
+///
+/// That last part is the difference that shows. `util::tileCover` has no tiles past the pole, so
+/// a background drawn per cover tile leaves that region unpainted: at a low zoom under pitch the
+/// top of the viewport looks past the world's edge, and where the oracle shows the background
+/// colour a per-tile background shows whatever the pane was cleared to. Black, in a platform
+/// view.
+///
+/// `backgroundLayerAsColor` is `ContextMode::Unique` — mbgl skips the clear entirely when it
+/// shares the context, and draws the layer per cover tile instead. A pane owns its render pass,
+/// so the unique case is the one that applies.
+///
+/// The zoom is needed because `minzoom`/`maxzoom` decide whether the layer draws at all.
+#[must_use]
+pub fn background_covers_viewport(style: &Style, zoom: f64) -> bool {
+    let Some(layer) = style.layers.first() else {
+        return false;
+    };
+    if !matches!(layer.kind, LayerKind::Background) || !draws_at(layer, zoom) {
+        return false;
+    }
+    let Ok(paint) = resolve_paint(layer) else {
+        return false;
+    };
+    // A patterned background keeps the per-tile path: its texture coordinates are anchored in
+    // world space through the tile matrix, and a viewport quad has no tile to anchor to. mbgl
+    // draws it per cover tile for the same reason.
+    //
+    // The *value*, not the key. `resolve_paint` fills every property the spec declares, so a
+    // style that has never heard of `background-pattern` still has the entry -- testing for the
+    // key alone put every style on the per-tile path and the fix drew nothing.
+    if paint
+        .get("background-pattern")
+        .and_then(|source| {
+            use tessella_style::crossfade::PatternSource as _;
+            source.image_at(zoom)
+        })
+        .is_some_and(|name| !name.is_empty())
+    {
+        return false;
+    }
+    // `resolve_paint` fills the spec default, so an unset opacity reads as one here.
+    crate::ubo::uniform_number(&paint, "background-opacity", zoom) > 0.0
+}
+
 /// Builds the layers that draw from no source at all.
 ///
 /// A background is one: it fills the viewport rather than reading a tile, so it is per *tile*

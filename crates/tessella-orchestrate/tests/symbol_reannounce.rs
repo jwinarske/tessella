@@ -41,6 +41,7 @@ const BERLIN: &[u8] = include_bytes!("../../../tests/mvt-fixtures/protomaps-berl
 /// A labelled layer and an unlabelled one, so the retained family is the control.
 const STYLE: &str = r##"{"version": 8, "sources": {"src": {"type": "vector", "tiles": []}},
   "layers": [
+    {"id": "bg", "type": "background", "paint": {"background-color": "#f4f1ea"}},
     {"id": "ground", "type": "fill", "source": "src", "source-layer": "earth",
      "paint": {"fill-color": "#eee"}},
     {"id": "labels", "type": "symbol", "source": "src", "source-layer": "places",
