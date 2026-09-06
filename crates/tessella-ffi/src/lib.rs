@@ -258,7 +258,9 @@ pub unsafe extern "C" fn tessella_create(
             return Status::BadStyle;
         };
 
-        let view = camera::settled(&ViewTransform {
+        // Constrained here too: the first camera is a camera, and one that shows the world's
+        // edge is refused at create for the same reason it is refused later.
+        let view = camera::settled(&camera::constrained(&ViewTransform {
             longitude,
             latitude,
             zoom,
@@ -266,7 +268,7 @@ pub unsafe extern "C" fn tessella_create(
             height: f64::from(config.height),
             bearing: 0.0,
             pitch: 0.0,
-        });
+        }));
 
         // Eight-aligned by construction, which `ring::init` requires, and sized to a power of
         // two, which the ring's masking arithmetic does.
@@ -341,14 +343,17 @@ pub unsafe extern "C" fn tessella_set_camera(
         let Some(state) = (unsafe { map.as_mut() }) else {
             return Status::NoSuchMap;
         };
-        state.map.look_at(camera::settled(&ViewTransform {
+        // Constrained first, the way mbgl's Transform constrains every camera it is given: a
+        // zoom that would show the world's edge is not a camera a map accepts. See
+        // `camera::constrained`.
+        state.map.look_at(camera::settled(&camera::constrained(&ViewTransform {
             longitude,
             latitude,
             zoom,
             bearing,
             pitch,
             ..*state.map.view()
-        }));
+        })));
         Status::Ok
     })
 }

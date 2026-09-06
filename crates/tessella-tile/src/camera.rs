@@ -669,6 +669,114 @@ pub fn settled_center(longitude: f64, latitude: f64, zoom: f64) -> [f64; 2] {
     ]
 }
 
+/// The camera a map will accept, with the world kept over the viewport.
+///
+/// mbgl's `TransformState::constrain`, which its Transform applies on every camera change and
+/// says why in one line: "Constrain scale to avoid zooming out far enough to show off-world
+/// areas on the Y axis". Mercator ends at the poles, `util::tileCover` has no tiles past them,
+/// and a frame that looks past the edge paints the background there and nothing else. In mbgl
+/// that state is simply unreachable.
+///
+/// # Why this is not `constrain` transcribed
+///
+/// Because `constrain` is written for a flat camera — `scale >= height / tileSize`, and a pan
+/// clamp of the same shape — and both clauses read the viewport's height as the ground it
+/// covers. Under pitch it does not: the top of the screen looks further than the bottom, and how
+/// much further is a function of the pitch and the field of view rather than of the height
+/// alone. mbgl leaves that gap open and a pitched map at a low zoom shows the strip past the
+/// pole. Applying mbgl's own stated rule to the frustum it actually has is what this does.
+///
+/// The two extents are the ground distance from the centre to each screen edge, in world pixels.
+/// The camera looks at the centre from `camera_to_center_distance` away at `pitch` off vertical,
+/// so its height above the ground is `d * cos(pitch)` and the centre sits `h * tan(pitch)` from
+/// the nadir. An edge is the same with `pitch ± fov / 2`, which makes each extent
+/// `h * (tan(pitch ± fov / 2) - tan(pitch))` and neither of them a function of the zoom.
+///
+/// Both clauses then fall out. The zoom floor is the world being at least `north + south` tall,
+/// which at pitch zero is `scale >= height / tileSize` -- `constrain`'s first clause exactly.
+/// With the zoom fixed, the centre is moved back inside `[north, world - south]` pixels of the
+/// north edge, which is its second.
+///
+/// A viewport with no height, or a pitch that puts a screen edge at or past the horizon, has no
+/// finite answer and is returned unchanged: [`MAX_PITCH`] is the clamp that keeps that from
+/// arising, and a caller that has bypassed it is not owed a fabricated camera.
+#[must_use]
+pub fn constrained(view: &ViewTransform) -> ViewTransform {
+    if !view.height.is_finite() || view.height <= 0.0 {
+        return *view;
+    }
+    let half_fov = DEFAULT_FOV / 2.0;
+    let pitch = view.pitch.to_radians().clamp(0.0, MAX_PITCH);
+    // Past the horizon the top edge never meets the ground and the extent is not a number.
+    if pitch + half_fov >= core::f64::consts::FRAC_PI_2 {
+        return *view;
+    }
+    let distance = camera_to_center_distance(view.height);
+    let above = distance * pitch.cos();
+    let centre = above * pitch.tan();
+    let north = above * (pitch + half_fov).tan() - centre;
+    let south = centre - above * (pitch - half_fov).tan();
+
+    // The zoom floor is the world being at least as tall as what the frustum reaches, and
+    // nothing to do with where the camera is pointed -- that is the pan clamp's half. Splitting
+    // them is mbgl's decomposition and not an arrangement of convenience: fold the latitude in
+    // here and a map near a pole zooms itself out of a camera the pan clamp would have fixed.
+    //
+    // At pitch zero the two extents are half the viewport each, so this is `scale >= height /
+    // tileSize` -- `constrain`'s first clause exactly.
+    let world = world_size(view.zoom).max(north + south);
+    if !world.is_finite() || world <= 0.0 {
+        return *view;
+    }
+    let fraction = mercator_fraction(view.latitude);
+    let zoom = (world / projection::TILE_SIZE).log2();
+
+    // And the centre back inside the world, now that the zoom admits it. Expressed in the same
+    // pixels the extents are: the fraction that keeps the north edge covered, and the one that
+    // keeps the south edge covered, with the original between them where it already fits.
+    let low = north / world;
+    let high = 1.0 - south / world;
+    let settled_fraction = if low <= high {
+        fraction.clamp(low, high)
+    } else {
+        // A viewport taller than the world it is shown, which the zoom floor above has already
+        // ruled out except for rounding. Centre it rather than picking an edge.
+        0.5
+    };
+
+    ViewTransform {
+        zoom,
+        latitude: latitude_of(settled_fraction),
+        ..*view
+    }
+}
+
+/// Where a latitude falls between the north and south edges of the mercator world, in 0..1.
+///
+/// The same projection [`settled_center`] runs, expressed as a fraction rather than as pixels so
+/// it is independent of the zoom.
+#[must_use]
+pub fn mercator_fraction(latitude: f64) -> f64 {
+    let mercator = 180.0
+        - (core::f64::consts::FRAC_PI_4 + latitude * core::f64::consts::PI / 360.0)
+            .tan()
+            .ln()
+            * 180.0
+            / core::f64::consts::PI;
+    mercator / 360.0
+}
+
+/// The inverse of [`mercator_fraction`].
+#[must_use]
+pub fn latitude_of(fraction: f64) -> f64 {
+    ((180.0 - fraction * 360.0) * core::f64::consts::PI / 180.0)
+        .exp()
+        .atan()
+        * 360.0
+        / core::f64::consts::PI
+        - 90.0
+}
+
 /// A view whose center has been settled the way a map settles it.
 #[must_use]
 pub fn settled(view: &ViewTransform) -> ViewTransform {
