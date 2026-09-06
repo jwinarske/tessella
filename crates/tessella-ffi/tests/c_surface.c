@@ -56,6 +56,12 @@ int main(void) {
 
     printf("set_camera %d\n", (int)tessella_set_camera(map, 48.85, 2.35, 11.0, 0.0, 0.0));
 
+    /* A resize, through the header. Both a real one and the degenerate one a surface reports
+     * while it is being torn down, which must be ignored rather than refused. */
+    printf("viewport %d\n", (int)tessella_set_viewport(map, 800, 600));
+    printf("viewport_zero %d\n", (int)tessella_set_viewport(map, 0, 0));
+    printf("viewport_null %d\n", (int)tessella_set_viewport(NULL, 800, 600));
+
     /* The globe's one policy, through the declaration in the header rather than the Rust: an
      * enum whose repr disagreed would pass the wrong value with nothing to say so. */
     printf("world_copies_one %d\n",

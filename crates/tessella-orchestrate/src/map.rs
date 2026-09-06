@@ -318,6 +318,34 @@ impl Map {
         &self.view
     }
 
+    /// Changes the viewport a map draws into.
+    ///
+    /// # Why a map has this at all
+    ///
+    /// Because the alternative a consumer is left with is destroying the map and building another
+    /// one, and that is what a window resize used to cost: every tile refetched, every bucket
+    /// rebuilt, every glyph re-shaped, for a change that moves no camera. The size was settable
+    /// only at construction, so there was nothing else a consumer could do.
+    ///
+    /// Nothing is invalidated. The cover is recomputed every frame from the view, and the
+    /// viewport is part of the camera key, so the next tick sees a changed camera and rewrites
+    /// the matrices by the path a pan takes. What survives is everything a resize does not
+    /// change: the tiles, their buckets, the layouts, the label identities and their fades.
+    ///
+    /// Constrained like any other camera change, because the zoom floor is a function of the
+    /// viewport's height -- made shorter, a view can be left showing past the pole.
+    pub fn resize(&mut self, width: f64, height: f64) {
+        if !(width.is_finite() && height.is_finite()) || width <= 0.0 || height <= 0.0 {
+            return;
+        }
+        self.view = tessella_tile::camera::settled(&tessella_tile::camera::constrained(&ViewTransform {
+            width,
+            height,
+            ..self.view
+        }));
+        self.mark_dirty();
+    }
+
     /// Sets the surface the tiles will be drawn on.
     ///
     /// See [`Self::copies`] for what this is and is not. Does not emit, and needs no

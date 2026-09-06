@@ -41,6 +41,7 @@ fn camera() -> CameraKey {
         bearing: 0.0,
         pitch: 0.0,
         pixels_per_meter: 1.0,
+        viewport: [1024.0, 768.0],
     }
 }
 

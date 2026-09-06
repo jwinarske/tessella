@@ -1182,6 +1182,7 @@ fn camera_key(view: &ViewTransform) -> crate::damage::CameraKey {
         bearing: view.bearing,
         pitch: view.pitch,
         pixels_per_meter: tessella_tile::camera::pixels_per_meter(view),
+        viewport: [view.width, view.height],
     }
 }
 

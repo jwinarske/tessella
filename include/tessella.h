@@ -179,6 +179,21 @@ tessella_result tessella_set_camera(tessella_map* map,
                                     double bearing,
                                     double pitch);
 
+/* Changes the viewport a map draws into.
+ *
+ * A window resize is not a new map. Before this the size was settable only at tessella_create, so a
+ * consumer whose surface changed had no option but to destroy the map and build another -- every
+ * tile refetched, every bucket rebuilt, every glyph re-shaped, for a change that moves no camera.
+ * What survives a resize now is everything a resize does not change: the tiles, their buckets, the
+ * layouts, and the label identities with the fades keyed on them.
+ *
+ * Does not emit. The next tick sees a changed camera -- the viewport is part of what makes a camera
+ * differ -- and rewrites the matrices by the path a pan takes.
+ *
+ * A width or height of zero is ignored rather than refused: a surface being torn down reports one,
+ * and an error there would have the consumer handling a condition that resolves itself. */
+tessella_result tessella_set_viewport(tessella_map* map, uint32_t width, uint32_t height);
+
 /* What surface a view's tiles will be covered for.
  *
  * The producer's whole part in the globe. Placement is unaffected -- a globe bends Mercator

@@ -6521,3 +6521,35 @@ stranded sampler is a hazard on any texture replacement, and atlas growth is rou
 a large slowdown to the re-announce, from a quad bench run taken while another homescreen and a
 Flutter build were on the machine. The figures were contention, not cost. The decision above rests
 on `atlasMismatched` instead, which is a correctness count and does not care what else is running.
+
+
+### A viewport is a property a map can be told, not one it is born with
+
+`width` and `height` were settable only at `tessella_create`, so a consumer whose surface changed
+had exactly one option: destroy the map and build another. The Filament producer takes it --
+`ResizeOnThread` calls `Release()`, which calls `DestroyView()`, which detaches the view extension
+and takes the map with it -- so every window resize refetched every tile, rebuilt every bucket and
+re-shaped every glyph, for a change that moves no camera.
+
+`tessella_set_viewport` is the missing primitive. Nothing is invalidated by it: the cover is
+recomputed every frame from the view, so the next tick sees a changed camera and rewrites the
+matrices by the path a pan takes. What survives is everything a resize does not change -- the
+tiles, their buckets, the layouts, and the label identities with the fades keyed on them.
+
+**The half that was easy to miss.** A resize has to *register*, and it did not. Nothing else in
+`CameraKey` moves when a window is resized: the centre, zoom, bearing, pitch and `pixels_per_meter`
+are all functions of where the camera points and how far away it is, not of how large the surface
+is. A map that merely accepted a new size would have reported a settled camera and gone on drawing
+through the matrices of the old viewport. The viewport is a field of the key for that reason, and
+removing it again fails `a_resize_is_a_camera_change` and nothing else -- which is the check that
+it is load-bearing rather than decorative.
+
+A resize is constrained like any other camera change, because `camera::constrained`'s zoom floor is
+a function of the viewport's height: a view that is legal at 768 pixels tall is not necessarily
+legal at 200, and a resize that skipped the constraint would be the one way left to reach the state
+that function exists to make unreachable.
+
+What is *not* done here is the consumer half: `FilamentProducer::DestroyView` still detaches on
+resize, and `GlFilamentProducer::ResizeOnThread` still goes through `Release()`/`Allocate()`. The
+producer has to keep its view and hand the new size across instead. This is the primitive that made
+that possible, not the change that uses it.

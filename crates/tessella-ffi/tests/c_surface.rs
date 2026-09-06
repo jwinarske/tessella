@@ -129,6 +129,8 @@ fn the_c_header_describes_the_library_it_claims_to() {
     check("set_camera", 0, "the camera did not move");
     // Both directions, because the switch is a toggle a consumer flips at runtime rather than a
     // mode it is created in.
+    check("viewport", 0, "a resize was refused");
+    check("viewport_zero", 0, "a zero viewport was refused rather than ignored");
     check("world_copies_one", 0, "the globe's cover policy was refused");
     check("world_copies_repeated", 0, "the plane's cover policy was refused");
     check("tick_first", 0, "the first tick failed");
@@ -153,6 +155,7 @@ fn the_c_header_describes_the_library_it_claims_to() {
         2,
         "setting the cover policy on a null handle was not rejected",
     );
+    check("viewport_null", 2, "resizing a null handle was not rejected");
 
     // This style has no sources, so nothing can resolve and nothing needs to: the map is ready
     // as soon as it is asked, and there is no failure to report.

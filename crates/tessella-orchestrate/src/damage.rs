@@ -51,6 +51,14 @@ pub struct CameraKey {
     pub pitch: f64,
     /// World pixels per meter.
     pub pixels_per_meter: f64,
+    /// The viewport, in pixels.
+    ///
+    /// Not a property of where the camera is pointed, and here because every projection matrix on
+    /// the wire is a function of it. Nothing else in this key moves when a window is resized --
+    /// the centre, zoom, bearing, pitch and scale are all unchanged -- so a view whose size was
+    /// the only thing to change reported a settled camera and went on drawing through the
+    /// matrices of the old viewport.
+    pub viewport: [f64; 2],
 }
 
 impl CameraKey {
@@ -68,6 +76,8 @@ impl CameraKey {
                 key.bearing.to_bits(),
                 key.pitch.to_bits(),
                 key.pixels_per_meter.to_bits(),
+                key.viewport[0].to_bits(),
+                key.viewport[1].to_bits(),
             ]
         };
         fields(self) == fields(other)
@@ -229,6 +239,7 @@ mod tests {
             bearing: 0.0,
             pitch: 0.0,
             pixels_per_meter: 1.0,
+            viewport: [1024.0, 768.0],
         }
     }
 

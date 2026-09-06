@@ -358,6 +358,35 @@ pub unsafe extern "C" fn tessella_set_camera(
     })
 }
 
+/// Changes the viewport a map draws into.
+///
+/// A window resize is not a new map. Before this the size was settable only at
+/// [`tessella_create`], so a consumer whose surface changed had no option but to destroy the map
+/// and build another -- every tile refetched, every bucket rebuilt, every glyph re-shaped, for a
+/// change that moves no camera. What survives a resize now is everything a resize does not change:
+/// the tiles, their buckets, the layouts, and the label identities with the fades keyed on them.
+///
+/// Does not emit. The next tick sees a changed camera -- the viewport is part of what makes a
+/// camera differ -- and rewrites the matrices by the path a pan takes.
+///
+/// A width or height that is zero or not finite is ignored rather than refused: a surface being
+/// torn down reports one, and a map that returned an error there would have the consumer handling
+/// a condition that resolves itself on the next resize.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_set_viewport(map: MapHandle, width: u32, height: u32) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_mut() }) else {
+            return Status::NoSuchMap;
+        };
+        state.map.resize(f64::from(width), f64::from(height));
+        Status::Ok
+    })
+}
+
 /// What surface a view's tiles will be drawn on.
 ///
 /// The producer's whole part in the globe. Placement is unaffected — a globe bends Mercator
