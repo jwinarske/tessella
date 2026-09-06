@@ -304,7 +304,8 @@ fn a_consumer_in_another_process_reads_a_live_stream() {
             frame::emit_incremental(
                 &mut producer,
                 &mut arena,
-                &mut frame::SymbolCache::default(),
+                 &mut frame::SymbolCache::default(),
+        &mut frame::PlacementState::new(),
                 &Frame {
                     style: &scene.style,
                     view: &scene.view,
@@ -392,7 +393,8 @@ fn a_ring_too_small_for_a_frame_never_becomes_writable() {
             frame::emit_incremental(
                 &mut producer,
                 &mut arena,
-                &mut frame::SymbolCache::default(),
+                 &mut frame::SymbolCache::default(),
+        &mut frame::PlacementState::new(),
                 &Frame {
                     style: &scene.style,
                     view: &scene.view,

@@ -34,6 +34,7 @@ use tessella_style::crossfade::ZoomHistory;
 use tessella_style::light::Light;
 use tessella_style::property::ResolvedProperty;
 use tessella_style::{LayerKind, Style};
+use tessella_tile::renderables::DataTileId;
 use tessella_tile::cover::{TileCoord, ViewTransform};
 
 use crate::binder::{
@@ -386,7 +387,14 @@ pub fn emit(
     // A session that lives exactly as long as this call, which makes every drawable new, every
     // geometry announced and the view declared — the full emission, as the degenerate case of
     // the incremental one rather than as a second implementation of it.
-    emit_into(producer, arena, &mut SymbolCache::default(), frame, Some(&mut Session::new()))
+    emit_into(
+        producer,
+        arena,
+        &mut SymbolCache::default(),
+        &mut PlacementState::new(),
+        frame,
+        Some(&mut Session::new()),
+    )
 }
 
 /// As [`emit()`], sending only what the consumer does not already have.
@@ -411,16 +419,18 @@ pub fn emit_incremental(
     producer: &mut Producer,
     arena: &mut SlabArena,
     layouts: &mut SymbolCache,
+    placement: &mut PlacementState,
     frame: &Frame<'_>,
     session: &mut Session,
 ) -> Result<Emitted, FrameError> {
-    emit_into(producer, arena, layouts, frame, Some(session))
+    emit_into(producer, arena, layouts, placement, frame, Some(session))
 }
 
 fn emit_into(
     producer: &mut Producer,
     arena: &mut SlabArena,
     layouts: &mut SymbolCache,
+    placement: &mut PlacementState,
     frame: &Frame<'_>,
     session: Option<&mut Session>,
 ) -> Result<Emitted, FrameError> {
@@ -443,6 +453,7 @@ fn emit_into(
         producer,
         arena,
         layouts,
+        placement,
         frame,
         session.as_deref_mut(),
         camera_moved,
@@ -497,10 +508,12 @@ fn emit_into(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_group(
     producer: &mut Producer,
     arena: &mut SlabArena,
     layouts: &mut SymbolCache,
+    placement: &mut PlacementState,
     frame: &Frame<'_>,
     stream: Option<&mut Session>,
     camera_moved: bool,
@@ -734,10 +747,10 @@ fn emit_group(
 
     // Built once for the frame and handed to every bucket, so the labels compete with each other
     // rather than each layer of each tile competing with itself alone.
-    let placement = core::cell::RefCell::new(FramePlacement {
-        symbols: crate::symbols::ViewSymbols::new(),
-        next_id: 1,
-    });
+    // Borrowed, not built. `PlacementState` is the map's and outlives the frame, which is what
+    // lets a fade run: see its documentation for why both the identity and the fade had to stop
+    // being per-frame together.
+    let placement = core::cell::RefCell::new(placement);
     placement.borrow_mut().symbols.begin();
 
     // Resolved once and used twice: placement walks it backwards, encoding forwards.
@@ -1196,18 +1209,90 @@ struct Encoding<'a> {
     key: (usize, usize),
 }
 
-/// A frame's symbol placement: what has been decided, and the space already taken.
-struct FramePlacement {
+/// What a label keeps between frames: its identity, and the fade keyed by it.
+///
+/// # Why this outlives the frame
+///
+/// Because a fade is a function of time and the thing fading has to be recognisable from one
+/// frame to the next. Both halves of that were missing. `ViewSymbols` was constructed inside
+/// `emit_group`, so every frame started with no fades at all; and the identity a fade is keyed by
+/// was `base + index`, an ordinal into whatever order this frame happened to walk its buckets in.
+/// Neither survived a frame, so the fades were decorative: a label's opacity was decided against
+/// a history one tick long.
+///
+/// The ordinal is worse than merely unstable. At a zoom crossing a tile is replaced by four
+/// children, and the label that was "Detroit" in the parent is a different instance at a
+/// different index in the child — so the ordinal that meant "Detroit" last frame means whatever
+/// sorts into that slot now, and a label inherits a stranger's fade. Nothing about the two
+/// labels is related except their position in a list.
+///
+/// [`CrossTileIndex`] is what makes the identity real: it matches by text and by rounded world
+/// position, so the same label keeps its number across the crossing. One index per layer, because
+/// mbgl keeps one per layer and identities are only ever compared within one.
+///
+/// [`CrossTileIndex`]: tessella_place::cross_tile::CrossTileIndex
+#[derive(Debug, Default)]
+pub struct PlacementState {
     symbols: crate::symbols::ViewSymbols,
-    /// The next identity to hand out.
+    /// One index per layer. Identities are compared within a layer and never across.
+    indexes: BTreeMap<u32, tessella_place::cross_tile::CrossTileIndex>,
+    /// What each indexed bucket was given, so an unchanged one is not re-indexed.
     ///
-    /// Unique across the frame, not within a bucket. The fade state is keyed by this, and one
-    /// `ViewSymbols` now serves every bucket -- so numbering each bucket from one meant the
-    /// second bucket's first label overwrote the first bucket's, and every bucket after that
-    /// read another's decision. The ids are per frame because nothing carries them between
-    /// frames; a cross-tile index is what would make them stable, and is what a fade needs to
-    /// follow a label from one frame to the next.
-    next_id: u32,
+    /// `CrossTileIndex::add_bucket` returns early for a bucket it has already seen and leaves the
+    /// symbols it was handed untouched, because mbgl keeps the identities on the bucket itself
+    /// and has nothing to fill in. Here the laid-out symbols are shared and immutable, so the
+    /// assignment is remembered here instead.
+    indexed: BTreeMap<(u32, DataTileId), Indexed>,
+    /// The bucket number the index tells parses apart by.
+    next_bucket: u32,
+}
+
+/// One bucket's assignment, and what it was assigned for.
+#[derive(Debug)]
+struct Indexed {
+    /// The bucket list this came from, *held*.
+    ///
+    /// Held rather than compared by address alone: an `Arc` that dies frees its address for the
+    /// next allocation, and a memo keyed on a recycled address would hand a new tile the previous
+    /// occupant's identities. Keeping the reference keeps the address unique for as long as the
+    /// memo can be consulted.
+    origin: Option<alloc::sync::Arc<Vec<LayerBucket>>>,
+    /// The number this bucket was indexed under, for `remove_stale_buckets`.
+    bucket: u32,
+    /// One identity per laid-out symbol, in the order they were laid out.
+    ids: Vec<u32>,
+}
+
+impl PlacementState {
+    /// State with nothing placed and nothing named.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Forgets every identity and every fade.
+    ///
+    /// For a change that re-lays out the labels themselves — new fonts, a new sprite sheet. The
+    /// symbols on the other side of it are not the ones this named, and a fade carried across
+    /// would be a fade of something else. Cheaper than being wrong: the cost is one frame of
+    /// labels fading in.
+    pub fn invalidate(&mut self) {
+        self.indexes.clear();
+        self.indexed.clear();
+    }
+
+    /// The identity of every label currently named, by layer and tile.
+    ///
+    /// What a test reads, and it is the numbers rather than a count of them: a counter is reset
+    /// by anything that drops an index, so "how many were issued" stays still for a build that
+    /// re-names every label every frame. The numbers do not.
+    #[must_use]
+    pub fn identities(&self) -> BTreeMap<(u32, DataTileId), Vec<u32>> {
+        self.indexed
+            .iter()
+            .map(|(key, held)| (*key, held.ids.clone()))
+            .collect()
+    }
 }
 
 /// One symbol bucket, shaped and placed, waiting to be encoded.
@@ -1301,7 +1386,7 @@ fn place_symbols(
     patterns: Option<&Patterns<'_>>,
     style: &tessella_style::Style,
     view: &ViewTransform,
-    placement: &core::cell::RefCell<FramePlacement>,
+    placement: &core::cell::RefCell<&mut PlacementState>,
 ) -> BTreeMap<(usize, usize), PreparedSymbols> {
     let empty;
     let fonts = match fonts {
@@ -1367,6 +1452,13 @@ fn place_symbols(
     }
     // Stable, and within one layer's contiguous run only: `sort_key` has already put the layers
     // in the order they place in, and that must not move.
+    // Which buckets this frame actually offered, per layer, so the index can drop the rest. A
+    // tile that has left the map must give its identities back: mbgl's `removeStaleBuckets`, and
+    // without it a parent lends a label once and never gets it back, so the child that replaces
+    // the child that replaced it is given a fresh number and starts its fade again.
+    let mut live: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
+    let mut seen_keys: BTreeSet<(u32, DataTileId)> = BTreeSet::new();
+
     let mut at = 0;
     while at < walk.len() {
         let layer = walk[at].0.layer_index;
@@ -1430,11 +1522,79 @@ fn place_symbols(
 
         let plane = tessella_tile::camera::label_plane_matrix(&to_clip, view.width, view.height);
         let mut held = placement.borrow_mut();
-        let base = held.next_id;
+
+        // The identity each label carries into placement and out to the fades.
+        //
+        // Matched by text and by rounded world position against every tile the index already
+        // holds, so the label that was "Detroit" in a parent tile is the same number in the child
+        // that replaces it. What this replaces was `base + index`, an ordinal into this frame's
+        // walk, under which a label inherited the fade of whatever sorted into its slot.
+        //
+        // The `overscaled_z` is the coordinate the tile is *drawn* at and `z` its own: above a
+        // source's maxzoom one tile answers several cover coordinates, and the index has to tell
+        // a parent standing in for a child from the child itself.
+        // `overscaled_z` is `z`: `placed` carries the tile that is *drawn*, so a parent standing
+        // in for a missing child arrives here at its own coordinate rather than the child's, and
+        // there is no second zoom to record.
         #[allow(clippy::cast_possible_truncation)]
-        {
-            held.next_id = base.saturating_add(laid.len() as u32);
-        }
+        let data_tile = DataTileId {
+            overscaled_z: tile.z,
+            wrap: wrap.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16,
+            z: tile.z,
+            x: tile.x,
+            y: tile.y,
+        };
+        let origin = origins.get(tile_index).and_then(Option::as_ref);
+        let indexed_key = (entry.layer_index, data_tile);
+        // An unchanged bucket keeps what it was given. Re-indexing one would be harmless for the
+        // ids and not for the claims: `add_bucket` releases and re-takes them, and a parent that
+        // has already lent a label to one child must not lend it again to another.
+        let reusable = held.indexed.get(&indexed_key).is_some_and(|held| {
+            held.ids.len() == laid.len()
+                && match (&held.origin, origin) {
+                    (Some(was), Some(now)) => alloc::sync::Arc::ptr_eq(was, now),
+                    (None, None) => true,
+                    _ => false,
+                }
+        });
+        let ids: Vec<u32> = if reusable {
+            held.indexed[&indexed_key].ids.clone()
+        } else {
+            let bucket_id = held.next_bucket.wrapping_add(1);
+            held.next_bucket = bucket_id;
+            let mut symbols: Vec<tessella_place::cross_tile::Symbol> = laid
+                .iter()
+                .map(|instance| {
+                    // The text is the key, and it lives on the *pending* symbol rather than on
+                    // the instance: a line label is one pending symbol and one instance per
+                    // anchor, so several instances of one road name share a key and are told
+                    // apart by position, which is exactly what the index compares.
+                    let key = layout
+                        .pending
+                        .get(instance.pending)
+                        .map_or("", |pending| pending.text.as_str());
+                    tessella_place::cross_tile::Symbol::new(key, instance.anchor)
+                })
+                .collect();
+            held.indexes
+                .entry(entry.layer_index)
+                .or_default()
+                .add_bucket(data_tile, bucket_id, &mut symbols);
+            let ids: Vec<u32> = symbols.iter().map(|symbol| symbol.cross_tile_id).collect();
+            held.indexed.insert(
+                indexed_key,
+                Indexed {
+                    origin: origin.cloned(),
+                    bucket: bucket_id,
+                    ids: ids.clone(),
+                },
+            );
+            ids
+        };
+        live.entry(entry.layer_index)
+            .or_default()
+            .insert(held.indexed[&indexed_key].bucket);
+        seen_keys.insert(indexed_key);
         // Per layer, because everything in it is: the scale a shaped extent competes at is the
         // layer's `text-size`, and how it competes is the layer's own six flags.
         let (rules, padding, icon_padding) = usize::try_from(entry.layer_index)
@@ -1459,7 +1619,7 @@ fn place_symbols(
             laid,
             &buffers,
             icons.as_ref(),
-            base,
+            &ids,
             perspective_with(&plane, camera_to_center),
         );
         // Where each glyph lands along its road, *before* the label is offered any space.
@@ -1498,7 +1658,7 @@ fn place_symbols(
                 buffers,
                 shaped: alloc::sync::Arc::clone(&bucket_laid),
                 icons,
-                base,
+                ids,
                 without_room,
             },
         );
@@ -1507,6 +1667,17 @@ fn place_symbols(
     // Every bucket has been offered, so the fades can reach their resting values and the
     // opacities they decide can be written.
     let mut held = placement.borrow_mut();
+
+    // And the index gives back what is no longer on the map. A tile whose bucket this frame did
+    // not offer has left, so the identities it was holding are released and its memo goes with
+    // them -- otherwise a parent that lent a label to a child keeps it lent for the life of the
+    // map, and every later child of that ground is a new label with a fade starting from nothing.
+    for (layer, index) in &mut held.indexes {
+        let current = live.get(layer).cloned().unwrap_or_default();
+        index.remove_stale_buckets(&current);
+    }
+    held.indexed.retain(|key, _| seen_keys.contains(key));
+
     held.symbols.settle(increment);
 
     for key in keys {
@@ -1517,7 +1688,7 @@ fn place_symbols(
             mut buffers,
             shaped,
             icons,
-            base,
+            ids,
             without_room,
         } = entry;
         let laid = &shaped.laid;
@@ -1530,7 +1701,7 @@ fn place_symbols(
         let Content::Symbol(_) = &bucket.content else {
             continue;
         };
-        let labels = frame_labels(laid, &buffers, icons.as_ref(), base, |_| 1.0);
+        let labels = frame_labels(laid, &buffers, icons.as_ref(), &ids, |_| 1.0);
         // A label placement never offered has no fade entry, which reads as hidden -- so the
         // ones whose road ran out stay hidden without being special-cased here.
         held.symbols.write_opacity(&labels, &mut buffers);
@@ -1594,7 +1765,8 @@ struct Shaped {
     buffers: SymbolBuffers,
     shaped: alloc::sync::Arc<Laid>,
     icons: Option<(SymbolBuffers, Vec<tessella_layout::symbol_bucket::LaidOut>)>,
-    base: u32,
+    /// The identity of each laid-out symbol, from the layer's cross-tile index.
+    ids: Vec<u32>,
     /// The labels whose road ran out before their name did, decided before placement.
     without_room: Vec<u32>,
 }
@@ -1759,14 +1931,16 @@ fn frame_labels<'a>(
     laid: &'a [tessella_layout::symbol_bucket::LaidOut],
     buffers: &SymbolBuffers,
     icons: Option<&(SymbolBuffers, Vec<tessella_layout::symbol_bucket::LaidOut>)>,
-    base: u32,
+    ids: &[u32],
     perspective: impl Fn((f32, f32)) -> f32,
 ) -> Vec<crate::symbols::FrameLabel<'a>> {
     laid.iter()
         .enumerate()
         .map(|(index, instance)| crate::symbols::FrameLabel {
-            #[allow(clippy::cast_possible_truncation)]
-            cross_tile_id: base + index as u32,
+            // One per laid-out symbol, in the order they were laid out, from the layer's
+            // cross-tile index. Zero for a symbol the index did not reach, which reads as an
+            // unplaced label rather than as another label's identity.
+            cross_tile_id: ids.get(index).copied().unwrap_or(0),
             laid_out: instance.clone(),
             // Its icon's box, so the pair is decided together: `text-optional` and
             // `icon-optional` are about exactly this, and a shield that cannot have its number

@@ -147,6 +147,9 @@ pub struct Map {
     arena: SlabArena,
     /// Symbol layout, kept between the frames that draw it. See [`frame::SymbolCache`].
     layouts: frame::SymbolCache,
+    /// Label identity and the fades keyed by it, which outlive a frame. See
+    /// [`frame::PlacementState`].
+    placement: frame::PlacementState,
     damage: DamageTracker,
     /// The per-view cover, with the zoom latch and the entered/left deltas.
     ///
@@ -239,6 +242,7 @@ impl Map {
             session: Session::new(),
             arena,
             layouts: frame::SymbolCache::default(),
+            placement: frame::PlacementState::new(),
             damage: DamageTracker::new(),
             cover: None,
             drawn: Vec::new(),
@@ -266,6 +270,10 @@ impl Map {
         // Everything laid out so far was laid out against the fonts this replaces, and a label
         // shaped without its glyphs is a label with holes in it.
         self.layouts.invalidate();
+        // And the identities, because the labels on the other side of a font change are not the
+        // ones the index named: a stack that was missing its glyphs shapes to a different set of
+        // symbols, and a fade carried across would belong to something else.
+        self.placement.invalidate();
         // Not `session.forget(view_id)`, which would be the direct way to re-tell the consumer
         // everything against the new atlas: it makes the next frame re-announce geometry the
         // consumer still holds, and the retire path then frees a texture something is still
@@ -688,6 +696,7 @@ impl Map {
             producer,
             &mut self.arena,
             &mut self.layouts,
+            &mut self.placement,
             &Frame {
                 style: &self.style,
                 view: &self.view,

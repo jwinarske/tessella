@@ -6431,3 +6431,43 @@ next frame re-announces geometry the consumer still holds, and the retire path t
 texture something is still using -- "Handle (Texture) is being used after it has been freed", on
 the all-families scene, immediately. So there is a consumer lifetime bug sitting behind this one,
 and it is the next thing to pull on.
+
+### The cross-tile index is wired, and the fades run for the first time
+
+`CrossTileIndex` was transcribed from mbgl's `CrossTileSymbolLayerIndex`, documented, tested
+against its own cases, and reachable from nothing but those tests. `frame.rs` assigned
+`cross_tile_id = base + index` instead: an ordinal into whatever order a frame happened to walk
+its buckets in, from a counter reset to one every frame.
+
+Two things followed, and they had to be fixed together. `ViewSymbols` was constructed *inside*
+`emit_group`, so a frame began with no fades at all and a label's opacity was decided against a
+history one tick long. And the identity a fade is keyed by did not survive a frame either, so
+there was nothing for a persistent fade to key on. Making the state outlive the frame without
+stable identities would have been worse than neither: the fades would have run, keyed on numbers
+that mean a different label each frame.
+
+The ordinal's failure is not that it is arbitrary but that it *moves*. Insert a tile ahead of
+another in the walk and every number after it shifts, so labels that did not move inherit the
+fade state of whatever now holds their old slot -- which is the same shape as the zoom crossing
+the index exists for, where a tile is replaced by four children and "Detroit" is a different
+instance at a different index.
+
+**What the test had to be, and what it could not be.** §13.3 already recorded this trap for the
+*criterion*: a continuity assertion passes with the index deleted, because a label handed a fresh
+identity every frame is always a new label taking its first step. The same trap sits under the
+regression test. A settled scene walks its buckets in the same order every frame, so an ordinal is
+stable across it and "the numbers do not change" passes with the defect in place -- verified by
+restoring the ordinal and watching that test go on passing. The case that discriminates is a tile
+*arriving beside* another: the walk changes, the ordinal shifts, the index does not. Restoring the
+ordinal fails that one and the re-parse one, and both pass with the index.
+
+**Identity is remembered here, not on the bucket.** mbgl keeps `crossTileID` on the symbol
+instance, so `add_bucket` returning early for a bucket it has seen leaves nothing to fill in. Here
+the laid-out symbols are shared and immutable, so the assignment is memoised per (layer, tile),
+holding the bucket list's `Arc` rather than comparing its address -- a dead `Arc` frees its address
+for the next allocation, and a memo keyed on a recycled address would hand a new tile the previous
+occupant's identities.
+
+Cost is nothing measurable: the index runs only for a bucket whose parse changed, and the quad
+bench is inside its usual run-to-run spread on every figure, with zero blank frames on all four
+panes.

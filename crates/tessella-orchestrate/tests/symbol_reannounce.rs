@@ -93,6 +93,7 @@ fn emit(
         producer,
         arena,
         layouts,
+        &mut frame::PlacementState::new(),
         &Frame {
             style,
             view,

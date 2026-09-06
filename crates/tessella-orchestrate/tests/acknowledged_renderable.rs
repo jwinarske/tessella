@@ -96,7 +96,8 @@ fn emit(scene: &Scene) -> (Session, u64) {
     frame::emit_incremental(
         producer,
         &mut arena,
-       &mut frame::SymbolCache::default(),
+        &mut frame::SymbolCache::default(),
+        &mut frame::PlacementState::new(),
         &Frame {
             style: &scene.style,
             view: &scene.view,
