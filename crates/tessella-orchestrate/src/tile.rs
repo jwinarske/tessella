@@ -674,6 +674,16 @@ fn draws_from(layer: &tessella_style::Layer, source: &str) -> bool {
 /// The zoom is needed because `minzoom`/`maxzoom` decide whether the layer draws at all.
 #[must_use]
 pub fn background_covers_viewport(style: &Style, zoom: f64) -> bool {
+    // A diagnostic escape hatch, read once: the viewport background is one quad over the whole
+    // frame ordered by paint order, so it is the first suspect whenever everything under the
+    // labels disappears. This is how that is tested without editing a style.
+    {
+        static OFF: std::sync::LazyLock<bool> =
+            std::sync::LazyLock::new(|| std::env::var("TSL_NO_VIEWPORT_BG").is_ok());
+        if *OFF {
+            return false;
+        }
+    }
     let Some(layer) = style.layers.first() else {
         return false;
     };

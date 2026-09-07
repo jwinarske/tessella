@@ -1026,7 +1026,21 @@ fn emit_group(
         }
     }
 
-    if camera_moved || scene_changed || declare {
+    // The uniforms follow the camera and the cover, and a frame that moved neither has already
+    // established that both are where they were -- which is DR-8's camera-rate traffic rule and
+    // the reason a parked view is silent.
+    //
+    // And they follow *any frame that wrote geometry*, which is the case those two conditions
+    // were not written for. The consumer rebuilds its scene from the order every frame and draws
+    // each drawable against the uniform slot its layer names; a frame that announces geometry
+    // without refreshing those slots hands it geometry to draw and no matrices to draw it with.
+    // Emitted for a third reason -- a fade in flight is the one that found this -- it left the
+    // whole basemap in the scene and invisible, water and roads both, with the labels on top of
+    // nothing.
+    //
+    // The same shape as the camera at the end of this function, and the same test: did this frame
+    // write anything.
+    if camera_moved || scene_changed || declare || producer.head() != opened_at {
         // Packed in the order the slots were handed out, which is not the order the tiles arrived
         // in.
         //

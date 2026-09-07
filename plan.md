@@ -6961,3 +6961,35 @@ instead of before them would leave exactly this: water and roads painted over, l
 
 Note also that the map never settles with the fades running: 324 emitted frames against about
 eighteen without. Whatever keeps `fading()` above zero forever is worth knowing on its own.
+
+### The uniforms follow the frame, not only the camera — and the fades are on
+
+Two theories died first and both were worth the measurement. The viewport background is not
+hiding the basemap: forcing the per-tile path with `TSL_NO_VIEWPORT_BG` changes nothing, water
+still zero, roads still 913 pixels. Nor is the slab release, per the accounting check above.
+
+It is the uniform gate. `emit_group` writes each layer's consolidated uniform buffer under
+`camera_moved || scene_changed || declare`, which is DR-8's camera-rate rule and is why a parked
+view is silent. A frame emitted for a *third* reason -- a fade in flight is the one that found it --
+announces geometry and refreshes none of the slots that geometry is drawn against. The consumer
+rebuilds its scene from the order every frame and draws each drawable against its layer's uniform
+slot, so it is handed geometry with no matrices to place it. Everything below the labels vanished:
+present in the scene, 28 primitives either way, and invisible.
+
+Exactly the shape of the camera-commit fix earlier in this thread, and the same test settles it:
+`producer.head() != opened_at` -- did this frame write anything. A parked view still writes nothing
+and stays silent.
+
+**The label fades are on by default now**, after four attempts that each regressed the picture. With
+them running: z14 darkest (16,15,14) against mbgl's (16,15,14) and 1.668% gross, where it was
+24.275%; z16 unchanged at 0.563%; and the swept frame at z14.25 is complete -- water, roads, street
+names on their streets, Broadway on First Hill.
+
+`TSF_NO_FADES` turns them off, which is what a capture wants: `mbgl-render` runs in static map mode
+where `symbolFadeChange` returns one, so instant fades are what a parity comparison is against, and
+a settled probe that stops mid-fade reads a label at part of its colour. That is the whole of the
+1.668% against 1.456% difference between the two modes.
+
+Both defects found here -- the camera and the uniforms -- are the same mistake made twice: a gate
+written for "the camera moved" standing in for "this frame has something to say". Anywhere else
+that pattern appears is worth the same look.
