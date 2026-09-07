@@ -6636,3 +6636,38 @@ pixel-identical and only the text differs. The producer is choosing different an
 input that differs is what previous frames did. The next thing to instrument is the placement
 decision itself -- which anchors win, per frame, dumped for both runs and diffed directly -- rather
 than another guess at which piece of state carries the difference.
+
+### The flying text: a label drawn where nothing wrote it
+
+`write_line_positions` hides a label it could not walk, and says why in its own comment: what
+`lay_out` left in the dynamic buffer is the anchor in *tile* units, the shader reads that buffer as
+label-plane coordinates, and a label drawn without a walk "lands some thousands of pixels from
+where it belongs". `write_opacity` then runs and writes every label's fade across the whole opacity
+buffer, hidden ones included, so the hide is undone.
+
+That was harmless while the fades were rebuilt each frame: a label never offered to placement had
+no fade entry, which reads as hidden, and the overwrite wrote the same zero. It stopped being
+harmless the moment the fades began persisting across frames. A label that was placed last frame
+and whose road runs out this one now *has* an entry -- it is fading out -- so the overwrite gives
+it an opacity and it is drawn at a position nothing wrote this frame. Thousands of pixels away.
+Which is the flying.
+
+The icon half has always re-hidden its `without_room` labels after `write_opacity`. The text half
+did not, and nothing noticed until the fades were made real.
+
+**What found it, after three wrong answers.** Dumping the placement decision itself -- id, tile,
+anchor, opacity, per label per frame -- and diffing consecutive swept frames. *Zero* labels changed
+anchor between frames 279 and 281. That killed every remaining theory about placement churn at a
+stroke: the decision is stable, the id is stable, the anchor is stable, and the text still moves.
+Which leaves only the step between an anchor and a drawn glyph, and the one branch there that
+leaves the buffer untouched.
+
+The lesson is the one the earlier entries keep circling. Three explanations were tried from
+plausible mechanisms and pixel diffs -- geometry announced once, the fade rate, the placement
+cadence -- and two of them were real defects that needed fixing while none was this. The thing that
+worked was dumping the intermediate and comparing it, which is what §16 said to do about mbgl and
+is no less true of comparing a frame against the frame before it.
+
+Checked at every zoom from 11 to 16 against `mbgl-render`, settled, pitched: 0.86%, 2.52%, 2.60%,
+2.75%, 2.02%, 0.90% gross. The middle of that range is the settled probe stopping while fades are
+still part way, not misplacement -- the same camera measured 1.16% before the fades ran at all.

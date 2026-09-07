@@ -1774,6 +1774,37 @@ fn place_symbols(
         // A label placement never offered has no fade entry, which reads as hidden -- so the
         // ones whose road ran out stay hidden without being special-cased here.
         held.symbols.write_opacity(&labels, &mut buffers);
+
+        // And hide again the ones whose road ran out, because the line above just un-hid them.
+        //
+        // `write_line_positions` hides a label it could not walk: what `lay_out` left in the
+        // dynamic buffer is the anchor in *tile* units and the shader reads that buffer as
+        // label-plane coordinates, so a label drawn without a walk lands thousands of pixels from
+        // where it belongs. `write_opacity` then writes every label's fade over the whole opacity
+        // buffer, hidden ones included.
+        //
+        // That was harmless while the fades were rebuilt every frame: a label never offered to
+        // placement had no fade entry, which reads as hidden, so the overwrite wrote the same
+        // zero. Once the fades persist across frames it is not. A label that was placed last
+        // frame and whose road runs out this one *has* an entry -- it is fading out -- so the
+        // overwrite gives it an opacity, and it is drawn at a position nothing wrote this frame.
+        // That is the label that flies across the map.
+        //
+        // The icon half below has always done this. The text half is what was missing.
+        for label in &labels {
+            if !without_room.contains(&label.cross_tile_id) {
+                continue;
+            }
+            let range = label.laid_out.vertices.clone();
+            if range.end > buffers.opacity.len() {
+                continue;
+            }
+            let hidden = tessella_layout::symbol_bucket::opacity_vertex(false, 0.0);
+            for slot in &mut buffers.opacity[range] {
+                *slot = hidden;
+            }
+        }
+
         // The icon half, which is its own drawable rather than an option: a symbol is a label, an
         // icon, or both, and the two go through different shaders -- an SDF for glyphs, a plain
         // sampler for a sprite -- so they cannot share a vertex buffer.
