@@ -7038,3 +7038,47 @@ invisible to the parity metric by construction.
 `symbol_fade_change` is `0.0` and its doc says "zero until R2 has symbols to fade". R2's fades
 shipped, per-symbol in the geometry rather than through this field, so the field is dead and the
 comment is stale in a way that reads as unfinished work rather than a road not taken.
+
+### Three pitched entries above do not reproduce, and the instrument is why
+
+Re-measured with `mbgl-render` re-run at the *same* camera as the probe, ten runs per scene:
+
+| scene | flat | pitch 45 |
+| --- | --- | --- |
+| `icons_only` | **0** | **2,029** (0.322%) |
+| `one_poi-labels` | 0 | 450 (0.071%) |
+| `families` | 18 (0.003%) | 967 (0.153%) |
+
+Ten consecutive runs of the worst of those give 2,029 every time. So the icon scene is neither
+flaky nor 34,000 gross, and "8 icons drawn against the oracle's 148" is not a thing this draws.
+
+Two instrument faults account for the difference, and both were mine.
+
+**The oracle was a different camera.** `icons_only_mb.png` in the scratchpad was captured at a
+camera nobody wrote down, and the probe was pointed at one derived from the tile block. Comparing
+those gives 41,355 gross and a confident story about pitch. Re-rendering the oracle at the probe's
+own camera gives 2,029 for the same tessella frame -- the frame never changed.
+
+**A material directory that will not load renders black, and nothing said so.** Filament resolves
+Vulkan on this GPU as *mobile*; a `matc -p desktop` package is refused with "not built for mobile"
+and a null material, which the loader dropped silently. The frame comes out entirely black, the
+probe wrote its PPM and exited zero, and 630,000 gross -- recorded above as one run of a
+distribution -- is what that looks like against any oracle at all. `-p desktop -p mobile` is the
+fix; `materialsLoaded` and a non-zero exit are so the next one is not diagnosed twice.
+
+This does not retire the *reasoning* in those entries -- `projectAndGetPerspectiveRatio` and
+`findViewportPadding` are what mbgl does and are transcribed either way. It retires the numbers,
+including the ones this document treated as symptoms to explain: the cover was always right, the
+462 offers always matched, and there was nothing left over to find.
+
+**What is not established.** These runs are warm: the pmtiles server has been up, and every run is
+a fresh process against a hot page cache. The arrival-order entry's claim is about a race, and a
+warm cache is exactly the condition that hides one. `TileSource::outstanding` still counts
+`inflight` -- tiles *submitted* and not landed -- and still reports zero while `Readiness` is
+`Resolving`, when the whole map is pending and nothing has been submitted at all. That hole is
+real whether or not it is currently reachable, and it is the thing to close before the flakiness
+is called gone.
+
+**Closed.** `outstanding` counts `Resolving` now, and the test holds the manifest fetch on a
+condvar rather than racing a window that is a network round trip -- which would pass on a slow day
+and prove nothing on a fast one. It fails without the change.
