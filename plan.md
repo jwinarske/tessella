@@ -7148,3 +7148,42 @@ measurable from here -- request logs, granted buffers, absence of errors -- says
 Two parity gaps found in the same day's re-measurement are still open and are not visible at this
 zoom: z12 flat at 1.913%, and pitch costing 1 to 3.7% on the full style where the worst
 single-family scene is 0.322%.
+
+### One identity counter per view, and z12 flat goes to zero
+
+The z12 flat outlier was symbols: with the symbol layers stripped it is 0 gross, and with *either*
+symbol layer alone it is also 0. Only both together differ. That shape -- correct apart, wrong
+combined -- is the whole diagnosis.
+
+`ViewSymbols` keys a label's fade and its orientation by the cross-tile identity alone, and every
+layer's `CrossTileIndex` numbered from a `next_id` of its own. So the first road label and the
+first place label were both identity 1, and a road label read a place label's decision. mbgl has
+one `maxCrossTileID` on `CrossTileSymbolIndex` and hands each `CrossTileSymbolLayerIndex` a
+reference to it; the per-layer split is about *matching*, never about numbering.
+
+On screen it was unmistakable once cropped: Elliott Avenue, 2nd Avenue, Stewart Street and Pine
+Street stacked through "Belltown", and three ferry routes over each other in Elliott Bay, where
+mbgl draws three road names in the same square and no ferry pile.
+
+| Seattle, flat | z11 | z12 | z13 | z14 | z15 | z16 |
+| --- | --- | --- | --- | --- | --- | --- |
+| before | 0.000% | 1.913% | 0.529% | 0.128% | 0.010% | 0.000% |
+| after | 0.000% | **0.000%** | **0.000%** | 0.011% | 0.010% | 0.000% |
+
+`families` at pitch 45 goes 967 to 135 for the same reason. Nothing else moved.
+
+### The pitched gap is road labels, and it is not the perspective ratio
+
+Split the same way at z14 pitch 45: no symbols is 13 gross, place labels alone 13, **road labels
+alone 19,747**. So it is line labels at pitch, inside one layer, and the identity fix barely
+touched it (3.023% to 2.975%).
+
+Two things checked and *not* the cause, so the next person does not check them again. The
+collision ratio is `0.5 + 0.5 * cameraToCenterDistance / w`, which is
+`CollisionIndex::projectAndGetPerspectiveRatio` to the character, and mbgl uses it for collision
+boundaries only -- "we need to scale down boxes in the distance". And `symbol_sdf.mat` computes
+`clamp(0.5 + 0.5 * distance_ratio, 0.0, 4.0)` with the viewport-aligned branch dividing, which is
+mbgl's vertex shader transcribed. Both halves are faithful.
+
+What is left is what a pitched frame does to the collision *area* rather than to any one box:
+`viewport_padding`, the grid's size, and which anchors along a line are offered at all.
