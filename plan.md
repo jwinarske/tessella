@@ -6600,3 +6600,39 @@ the world allows stops a little short. That is the failure nobody notices. It is
 away from the equator, where a short side has less world to cover, and identical to it flat on the
 equator -- which is what the flat test's control now uses, since Seattle's latitude is exactly
 where the two diverge.
+
+### Placement cadence: a real difference from mbgl, and why adopting it naively fails
+
+mbgl does not run the collision pass every frame. `PlacementController::placementIsRecent` gates
+it, and while that holds `RenderOrchestrator` does not place at all -- it steps the opacities
+toward the placement it already has and reprojects the line labels against the current camera.
+`Placement::getUpdatePeriod` is at least `DEFAULT_TRANSITION_DURATION`, so a new placement every
+300 ms and eighteen frames at sixty of keeping the last one. When new symbol buckets arrive the
+period drops to 30 ms -- but only on an untilted view, because on a tilted one "the new symbols are
+normally far away and the user is not that interested to see them ASAP". The quad is pitched, so
+mbgl would hold the full 300 ms there.
+
+We place every frame. That is a genuine divergence and it is worth closing.
+
+**It cannot be closed by gating alone.** Tried, measured, reverted: gating on the period takes
+frame 277 of the zoom sweep from 949 text pixels to **zero**. The reason is where opacity lives.
+mbgl keeps it on the bucket -- `updateBucketOpacities` writes into the bucket's own
+`placedSymbols`, so a bucket the current placement did not touch goes on drawing at the opacity it
+was last given. Here the label list is rebuilt every frame from the cached layout and each label's
+opacity is looked up by cross-tile id in what the last placement decided; a label that is not in
+that set reads as hidden rather than as unchanged. Between placements the tile set moves on, the
+kept decision no longer names what is on screen, and the map empties.
+
+So the order is: opacity has to become a property of the laid-out bucket, surviving a frame that
+did not place, before the cadence can be gated. Doing it the other way round trades a defect for a
+worse one.
+
+**And the cadence is not the flying text either.** With the gate in place the labels that remained
+still moved. That is three explanations tried against this defect -- symbol geometry announced once,
+the fade rate, and now the placement cadence -- of which the first two were real defects that
+needed fixing and none of which was the cause. What is established, from diffing a swept frame
+against a settled one at the same camera and tile zoom, is that every road, coastline and fill is
+pixel-identical and only the text differs. The producer is choosing different anchors, and the
+input that differs is what previous frames did. The next thing to instrument is the placement
+decision itself -- which anchors win, per frame, dumped for both runs and diffed directly -- rather
+than another guess at which piece of state carries the difference.
