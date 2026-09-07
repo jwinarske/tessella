@@ -495,10 +495,12 @@ fn emit_into(
                 session.record_camera(frame.view_id, key);
                 session.record_declared(frame.view_id);
             }
+            crate::watch::frame_end(emitted.geometries, true);
             producer.commit();
             Ok(emitted)
         }
         Err(error) => {
+            crate::watch::frame_end(0, false);
             producer.abort();
             // The arena as well as the ring. The discarded records were the only things that
             // would ever have named these slabs.

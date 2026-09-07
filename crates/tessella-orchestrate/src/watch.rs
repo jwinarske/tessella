@@ -136,3 +136,23 @@ pub fn note(text: &str, seen: &Sighting) {
 /// Records one label on one frame. Compiled out without `std`.
 #[cfg(not(feature = "std"))]
 pub const fn note(_text: &str, _seen: &Sighting) {}
+
+/// How a frame ended, so a label seen inside it can be told from one that was published.
+///
+/// `place_symbols` runs while the frame is being *built*. A frame that then fails is aborted --
+/// `producer.abort()` leaves head where it was and the arena rewinds -- so every record it wrote,
+/// including the geometry carrying the opacity just recorded, is discarded. Without this line the
+/// two look identical from the producer's side: the watch says the label reached full opacity and
+/// the consumer never receives it, with nothing to say the frame was thrown away.
+#[cfg(feature = "std")]
+pub fn frame_end(geometries: usize, published: bool) {
+    if pattern().is_none() {
+        return;
+    }
+    let frame = counter().load(core::sync::atomic::Ordering::Relaxed);
+    std::println!("watch frame={frame} end geometries={geometries} published={published}");
+}
+
+/// How a frame ended. Compiled out without `std`.
+#[cfg(not(feature = "std"))]
+pub const fn frame_end(_geometries: usize, _published: bool) {}

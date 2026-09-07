@@ -6804,3 +6804,40 @@ buffer, which belongs to whichever label happens to be first and is not the labe
 watch was following; the two numbers agreed at 0.386 for reasons that had nothing to do with each
 other. Reporting the range instead is what made the two sides comparable. An instrument aimed at
 the wrong quantity is worse than none, because it answers.
+
+### Published and not received: the fade defect, stated exactly
+
+`watch::frame_end` records how each frame ended, because `place_symbols` runs while a frame is
+being *built* and a frame that then fails is aborted -- head stays where it was and the arena
+rewinds -- so every record it wrote is discarded. Without that line a published frame and a thrown
+away one look identical from the producer's side. The probe prints a `capture` marker into the same
+stream, so emits and readbacks can be ordered against each other.
+
+Interleaved, one run, z16, fades on:
+
+    watch frame=40 id=75 room=true fade=0.389 vertex_opacity=0.386
+    watch frame=42 id=75 room=true fade=0.833 vertex_opacity=0.827
+    watch frame=43 id=75 room=true fade=1.000 vertex_opacity=1.000
+    capture   (x6, no emit between any of them)
+
+61 frames in the run, **zero aborted**. Every symbol buffer the consumer receives caps at
+`opacity_max=0.386`; with the fades off the same drawable arrives at 1.000. And the picture is
+(170,168,163), an alpha near 0.383.
+
+So: the producer publishes a buffer holding 1.000, six consumer ticks follow with nothing else
+emitted, and the consumer never receives a buffer above 0.386. Each of those is measured on its own
+side and they cannot both be true of the same bytes. What is *not* the cause, each ruled out by
+measurement rather than argument: placement, cross-tile identity, the fade arithmetic, the opacity
+written into the vertex, the label plane, frame abort, a bounded drain, and the arena release a
+re-announcement stages.
+
+**Next instrument, and it follows the pattern that has worked twice now.** Log the slab reference --
+offset and length -- on both sides: what the `GeometryAdd` names when it is written, and what the
+consumer resolves it to when it reads. That separates "the record names different bytes" from "the
+bytes were overwritten between publish and read", which are the only two shapes left. Everything
+above was found by instrumenting both ends of a value and comparing; nothing was found by reasoning
+about the code.
+
+This thread has now cost far more than the defect is worth against its alternatives, and the fades
+remain off. It is written down at this level of detail so the next attempt starts from the
+measurement rather than from the beginning.
