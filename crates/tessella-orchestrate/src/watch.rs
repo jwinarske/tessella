@@ -65,6 +65,20 @@ pub fn begin_frame() {
 #[cfg(not(feature = "std"))]
 pub const fn begin_frame() {}
 
+/// Whether anything at all is being watched, for a caller with work to do before it can report.
+#[cfg(feature = "std")]
+#[must_use]
+pub fn watching() -> bool {
+    pattern().is_some()
+}
+
+/// Whether anything is being watched. Always false without `std`.
+#[cfg(not(feature = "std"))]
+#[must_use]
+pub const fn watching() -> bool {
+    false
+}
+
 /// Whether this label is being followed.
 #[cfg(feature = "std")]
 #[must_use]
@@ -156,3 +170,48 @@ pub fn frame_end(geometries: usize, published: bool) {
 /// How a frame ended. Compiled out without `std`.
 #[cfg(not(feature = "std"))]
 pub const fn frame_end(_geometries: usize, _published: bool) {}
+
+/// The bytes a geometry record names, as it is written.
+///
+/// Paired with the consumer's `TSF_WATCH_FADE`, which prints what it resolves the same reference
+/// to. Two shapes remain for a buffer that is published holding one value and received holding
+/// another, and this is what tells them apart: either the record names different bytes than the
+/// ones just written, or the bytes are overwritten between the publish and the read. The first
+/// shows as a slab reference that disagrees with the opacity beside it; the second as references
+/// that agree and contents that do not.
+#[cfg(feature = "std")]
+pub fn sent(
+    view: u32,
+    id: u64,
+    attr_id: u32,
+    slab: u32,
+    offset: u32,
+    length: u32,
+    first_opacity: Option<f32>,
+) {
+    if pattern().is_none() {
+        return;
+    }
+    let frame = counter().load(core::sync::atomic::Ordering::Relaxed);
+    std::println!(
+        "sent frame={frame} view={view} id={id} attr={attr_id} slab={slab} offset={offset} \
+         length={length} opacity={opacity}",
+        opacity = first_opacity.map_or_else(
+            || alloc::string::String::from("none"),
+            |v| alloc::format!("{v:.3}")
+        ),
+    );
+}
+
+/// The bytes a geometry record names. Compiled out without `std`.
+#[cfg(not(feature = "std"))]
+pub const fn sent(
+    _view: u32,
+    _id: u64,
+    _attr_id: u32,
+    _slab: u32,
+    _offset: u32,
+    _length: u32,
+    _first_opacity: Option<f32>,
+) {
+}

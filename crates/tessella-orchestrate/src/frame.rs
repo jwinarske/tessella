@@ -900,6 +900,29 @@ fn emit_group(
             continue;
         }
 
+        // What this record names, for the consumer's half to compare against. Only the symbol
+        // fade attribute, which is the one under investigation.
+        if crate::watch::watching() {
+            for desc in encoded.attributes() {
+                if desc.attr_id
+                    == tessella_capture_abi::generated::ubo_slots::ID_SYMBOL_FADE_OPACITY_VERTEX_ATTRIBUTE
+                {
+                    crate::watch::sent(
+                        view_id.0,
+                        encoded.record.geometry.0,
+                        desc.attr_id,
+                        desc.source.slab,
+                        desc.source.offset,
+                        desc.source.length,
+                        arena.resolve(desc.source).and_then(|bytes| {
+                            bytes.get(..4).map(|four| {
+                                f32::from_le_bytes([four[0], four[1], four[2], four[3]])
+                            })
+                        }),
+                    );
+                }
+            }
+        }
         emit::write(producer, &encoded)?;
         emitted.geometries += 1;
 

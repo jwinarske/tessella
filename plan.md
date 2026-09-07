@@ -6841,3 +6841,39 @@ about the code.
 This thread has now cost far more than the defect is worth against its alternatives, and the fades
 remain off. It is written down at this level of detail so the next attempt starts from the
 measurement rather than from the beginning.
+
+### The fade defect, narrowed to a publish that reports success
+
+Three instruments, each added because the previous one could not tell two cases apart, and each
+one wrong first in a way worth recording.
+
+`watch::sent` logs the slab reference a geometry record names as it is written; `TSF_WATCH_FADE`
+logs what the consumer resolves the same reference to. Pairing them looked like a swapped slab
+index -- producer 10 against consumer 9 -- which would have been a fine, wrong conclusion: geometry
+ids restart per map and every pane creates its map with the same view id, so lines from four panes
+are unpairable and the "swap" was two panes' records laid side by side. `TSF_EXT_PANES=1` runs one
+city and removes the ambiguity outright. Every measurement in this section was taken that way.
+
+With one pane, one drawable, fades on:
+
+    sent frame=13 id=15 slab=6 offset=556712 length=14848
+    sent frame=14 id=15 slab=8 offset=556712 length=14848
+    sent frame=15 id=15 slab=5 offset=556712 length=14848
+    recv           id=15 slab=6 offset=556712 length=14848  opacity_max=0.386
+
+The producer writes the drawable three times and the consumer receives the first. Across the run:
+21 records sent, 7 received -- exactly one frame's worth of the seven geometries a frame carries.
+
+And the reader is not behind. Its drain reports `cursor=831840 head=831840 records=0` at the end,
+having consumed everything published, with 831840 the highest head ever seen. So the frames the
+producer reports as `geometries=7 published=true` **do not advance the ring's head**. The records
+are counted, the commit is reached, and nothing is published.
+
+That is the defect: a publish that reports success and moves no head. It is on the producer side,
+which is where it can be fixed, and it is a much smaller thing than "the fades are wrong".
+
+The pattern across all of this is worth stating once. Every step forward came from instrumenting a
+value at both ends and comparing; every step backwards came from reasoning about the code. Three of
+the instruments answered confidently before they were aimed correctly -- a counter a reset could
+hide, a first vertex that belonged to another label, and a slab index compared across panes -- and
+each was caught only by asking what else could produce that number.
