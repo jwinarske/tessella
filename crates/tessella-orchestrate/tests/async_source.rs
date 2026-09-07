@@ -13,6 +13,7 @@
 //! `cold_start`.
 
 use std::sync::Arc;
+use std::sync::PoisonError;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -267,4 +268,95 @@ fn a_source_that_cannot_resolve_reports_it() {
         unreachable!("just asserted")
     };
     assert!(!reason.is_empty(), "the failure carried no reason");
+}
+
+/// A source resolving its style is not "nothing further is coming".
+///
+/// `outstanding` is what a caller waiting on a settled frame reads, and it counted `inflight` --
+/// tiles *submitted* and not landed. While `readiness` is `Resolving` nothing has been submitted,
+/// because a tile's URL comes from a manifest that has not arrived, so the number was zero for the
+/// whole of that round trip. A settle loop stops there, on a frame with no tiles in it.
+///
+/// Held in `Resolving` deliberately rather than raced for: the window is a network round trip, so
+/// a test that merely looked quickly would pass on a slow day and prove nothing on a fast one.
+#[test]
+fn resolving_a_style_counts_as_outstanding() {
+    /// Blocks the manifest fetch until the test says otherwise.
+    struct Gated {
+        inner: HttpFileSource,
+        gate: Arc<(std::sync::Mutex<bool>, std::sync::Condvar)>,
+    }
+
+    impl FileSource for Gated {
+        fn fetch(&self, url: &str) -> Result<Response, FetchError> {
+            if url.ends_with("/tiles.json") {
+                let (lock, cv) = &*self.gate;
+                let mut open = lock.lock().unwrap_or_else(PoisonError::into_inner);
+                while !*open {
+                    open = cv.wait(open).unwrap_or_else(PoisonError::into_inner);
+                }
+            }
+            self.inner.fetch(url)
+        }
+    }
+
+    let server = tile_server::Server::start(
+        tile_server::Routes::new().tiles(FIXTURE.to_vec(), Some((0, 14))),
+    )
+    .expect("binds");
+    // The manifest has to name the server, and the server's port is only known once it is bound.
+    let manifest = format!(
+        r##"{{"tilejson":"3.0.0","tiles":["{origin}/{{z}}/{{x}}/{{y}}.mvt"],
+             "minzoom":0,"maxzoom":14}}"##,
+        origin = server.origin()
+    );
+    server.set_routes(
+        tile_server::Routes::new()
+            .tiles(FIXTURE.to_vec(), Some((0, 14)))
+            .at("/tiles.json", "application/json", manifest.into_bytes()),
+    );
+
+    let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let files = Arc::new(Coalescing::new(Gated {
+        inner: HttpFileSource::new(Duration::from_secs(30)),
+        gate: Arc::clone(&gate),
+    }));
+    let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
+    let source = TileSource::new(
+        style_via_manifest(&server.origin()),
+        files,
+        cache,
+        Pool::shared(),
+        1,
+    );
+
+    let cover = [TileCoord {
+        z: 0,
+        x: 0,
+        y: 0,
+        wrap: 0,
+    }];
+    source.want(&view(0.0), &cover, &[]);
+
+    assert!(
+        settle(|| source.readiness() == Readiness::Resolving),
+        "the source never started resolving: {:?}",
+        source.readiness()
+    );
+    assert!(
+        source.outstanding() > 0,
+        "a source resolving its style reported nothing outstanding, which is what a settle loop \
+         reads as done"
+    );
+
+    {
+        let (lock, cv) = &*gate;
+        *lock.lock().unwrap_or_else(PoisonError::into_inner) = true;
+        cv.notify_all();
+    }
+    assert!(
+        settle(|| source.readiness() == Readiness::Ready),
+        "the source never became ready: {:?}",
+        source.readiness()
+    );
 }

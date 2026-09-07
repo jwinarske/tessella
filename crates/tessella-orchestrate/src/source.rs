@@ -321,9 +321,10 @@ impl<S: FileSource + 'static> TileSource<S> {
 
     /// How much work is still in flight, which is what "not finished yet" means.
     ///
-    /// Tiles submitted and not yet landed, plus the one glyph fetch if it has been scheduled and
-    /// has not produced its fonts. Those are the two things that arrive after a tick rather than
-    /// during it; the sprite sheet is not among them, because it rides along with resolution.
+    /// Style resolution while it is in flight, tiles submitted and not yet landed, and the one
+    /// glyph fetch if it has been scheduled and has not produced its fonts. Those are the things
+    /// that arrive after a tick rather than during it; the sprite sheet is not among them,
+    /// because it rides along with resolution and is therefore already counted by it.
     ///
     /// Zero does not promise the map is complete -- a tile that failed is finished and still a
     /// hole, which is why [`Self::failures`] is counted separately. It promises only that nothing
@@ -336,19 +337,25 @@ impl<S: FileSource + 'static> TileSource<S> {
     /// reads the same number.
     #[must_use]
     pub fn outstanding(&self) -> usize {
-        let tiles = self
-            .inner
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .inflight
-            .len();
+        let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+        // Resolution counts. A tile's URL comes from a manifest, so while this is `Resolving`
+        // nothing has been dispatched and `inflight` is empty -- and the number a caller reads
+        // to mean "nothing further is coming" was zero for the whole of the round trip that
+        // fetches the style's sources. A settle loop stops there, on a frame with no tiles in
+        // it, and whatever lands afterwards arrives in some later frame or not at all.
+        //
+        // `Idle` is zero on purpose: nothing has been asked for yet. `Failed` is zero for the
+        // reason a failed tile is -- finished, and still a hole, which is `failures`' half.
+        let resolving = usize::from(matches!(inner.readiness, Readiness::Resolving));
+        let tiles = inner.inflight.len();
+        drop(inner);
         let glyphs = usize::from(
             self.glyphs
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .running,
         );
-        tiles + glyphs
+        resolving + tiles + glyphs
     }
 
     /// What the style resolved to, once it has.
