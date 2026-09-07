@@ -6910,3 +6910,23 @@ Hill. Settled parity is unchanged, 1.456% at z14 and 0.563% at z16 with the text
 
 The fades stay off: with them on, z16 is 0.660% against 0.563% but z14 is 24%, which is a separate
 fault and not one to chase on the back of this.
+
+### Fades on: the basemap disappears at z14, and it is not the re-join
+
+With the fades running at z14 the frame is *labels on an empty background* -- no roads, no water,
+no coastline, every street name correctly placed on nothing. That is the 24.275% gross, and it
+reads 24.275% both before and after the re-join fix above, so it is a pre-existing fault in the
+fades-on path rather than a consequence of it. z16 does not show it: 0.660% against 0.563% with
+fades off.
+
+Symbols are the only family re-announced per frame, so the basemap's geometry is announced once and
+retained. For it to vanish, something must take it away -- and the candidate worth trying first is
+the release a re-announcement stages. `record_refs` hands the previous frame's slab refs to
+`retire`, which releases them and lets `sweep` free a slab whose live count reaches zero. If a slab
+carries a symbol's bytes beside a fill's, and only the symbol's release is counted, the sweep frees
+a slab the fill is still named against.
+
+A caution from this session, since the same trap was fallen into twice: measure this with the gross
+metric, not `magick compare -threshold`. The two disagree wildly on the same pair of images -- 0.2%
+against 22.5% -- and the ImageMagick reading is what briefly made this look like it was not
+happening at all.
