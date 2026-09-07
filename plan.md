@@ -6775,3 +6775,32 @@ it is that the picture shows an earlier frame's vertices than the last one emitt
 consumer or the capture path, and it is the first time this defect has been narrowed to a side of
 the wire rather than to a candidate mechanism. The next step is to compare what the producer last
 announced against what the consumer last uploaded, at the moment the pixels are read.
+
+### Both sides of the wire, and where the fades actually break
+
+`TSF_WATCH_FADE` is the consumer's half of `TESSELLA_WATCH`: for every symbol geometry it
+receives, the range of packed opacities across the whole buffer, decoded the way the producer
+packs them. The range rather than one vertex, because a buffer whose labels sit at different
+points of their fades is the expected picture and one that is uniformly a single value is a
+buffer nobody rewrote.
+
+Pointed at the same drawable, same run, z16:
+
+    fades off   recv id=9  vertices=2556  opacity_min=0.000  opacity_max=1.000
+    fades on    recv id=9  vertices=2556  opacity_min=0.000  opacity_max=0.386
+
+and on the producer's side, the same run with the fades on, one label over the frames it appears
+in: `0.389`, then `0.833`, then `1.000`, with the vertex tracking the fade to three decimals every
+time.
+
+So the producer writes 1.000 into the buffer and the consumer never receives a buffer holding more
+than 0.386. Every receipt across the run caps there. **The frames carrying the finished fade are
+emitted and not delivered.** That is the whole remaining question, and it is now a question about
+delivery rather than about placement, identity, the fade arithmetic, the opacity written, or the
+label plane -- each of which has been measured and is correct.
+
+Worth noting how the first version of this measurement lied. It printed the *first vertex* of each
+buffer, which belongs to whichever label happens to be first and is not the label the producer's
+watch was following; the two numbers agreed at 0.386 for reasons that had nothing to do with each
+other. Reporting the range instead is what made the two sides comparable. An instrument aimed at
+the wrong quantity is worse than none, because it answers.
