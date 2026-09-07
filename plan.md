@@ -3471,6 +3471,15 @@ What is not here is the consumer's half: the vertex bend, the subdivision, the h
 symbol placement on a sphere, which this section does not cover and is the hard part of the
 three.
 
+It is also the part with no oracle. MapLibre Native has no globe projection -- the two "globe"
+hits in its tree are a doc comment about wrapping horizontally and a Metal widevector shader --
+so `mbgl-render` cannot be rendered against for any of it, and the parity metric that has decided
+every other question here says nothing. The reference that does exist is MapLibre GL JS, a
+different codebase in a different language, and porting to it is a different kind of work than
+transcribing mbgl with its own expectations to check against. That does not make the globe wrong
+to build; it makes it the one piece whose correctness has to be argued rather than measured, and
+worth starting only when the Mercator quad it sits beside is finished.
+
 Four views change none of this. They want the same tiles at these zooms and the shared store
 builds them once — so the waste is four to six tiles for the cluster, not per view.
 
