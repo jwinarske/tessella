@@ -98,3 +98,51 @@ fn a_nonsense_elapsed_falls_back_to_instant() {
         "time running backwards drove the fades backwards"
     );
 }
+
+/// Placement is not a per-frame decision.
+///
+/// mbgl recomputes it every `PLACEMENT_PERIOD_MILLIS` and no more often --
+/// `PlacementController::placementIsRecent` is the gate, and while it holds `RenderOrchestrator`
+/// does not place at all, it steps the opacities toward the placement it already has.
+///
+/// Running the collision pass every frame is what makes labels appear to fly. It is stable at a
+/// still camera and not remotely stable while one moves, so along a road with an anchor every
+/// `symbol-spacing` the winner changes constantly and the name walks down the street. That is why
+/// this was invisible in every settled capture and obvious the moment the map moved.
+#[test]
+fn placement_runs_at_mbgls_cadence_not_every_frame() {
+    use tessella_orchestrate::frame::PLACEMENT_PERIOD_MILLIS;
+
+    let mut state = PlacementState::new();
+    // The first frame of a timed map places: there is nothing to keep.
+    state.advance(1000.0 / 60.0);
+    assert!(state.placing(), "the first timed frame did not place");
+
+    let mut placed = 0;
+    let mut frames = 0;
+    // Two whole periods at sixty frames a second.
+    while (frames as f64) * (1000.0 / 60.0) < 2.0 * PLACEMENT_PERIOD_MILLIS {
+        state.advance(1000.0 / 60.0);
+        if state.placing() {
+            placed += 1;
+        }
+        frames += 1;
+    }
+    assert!(
+        (1..=3).contains(&placed),
+        "placement ran {placed} times in {frames} frames across two 300 ms periods, which is \
+         neither mbgl's cadence nor far from every frame"
+    );
+}
+
+/// A map nobody has timed places every frame, which is what every capture compares.
+#[test]
+fn an_untimed_map_places_every_frame() {
+    let mut state = PlacementState::new();
+    for frame in 0..10 {
+        assert!(
+            state.placing(),
+            "frame {frame} of a still picture skipped placement, so captures just changed"
+        );
+    }
+}
