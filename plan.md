@@ -6993,3 +6993,39 @@ a settled probe that stops mid-fade reads a label at part of its colour. That is
 Both defects found here -- the camera and the uniforms -- are the same mistake made twice: a gate
 written for "the camera moved" standing in for "this frame has something to say". Anywhere else
 that pattern appears is worth the same look.
+
+### The same look, taken: there is no third gate
+
+Three places read `camera_moved`. Two were the defects above. The third writes the frame-wide
+`GlobalPaintParams` block under `camera_moved || declare`, and it is sound for a reason the other
+two did not have: the consumer's `uniforms_` is never cleared, `declare` guarantees a first write,
+and `camera_key` already carries `viewport: [width, height]`, so a resize is a move. A quiet frame
+reads the last value written and it is still the right one. The two that broke were per *layer*,
+where a layer meeting its first drawable on a quiet frame has no slot at all -- absent, not stale.
+
+That is the distinction worth carrying: a durable slot whose key is fixed can be written lazily; a
+durable slot whose key can appear for the first time on any frame cannot. By that test the rest of
+the consumer's stores are already right. `meshes_`, `textures_` and the reader's `geometry_` are
+fed by writes with no gate on them; `masks_` and `references_` come from `write_layer_state`, which
+is inside the gate the fade defect fixed; the reader's `uses_` was the third instance of the shape
+and was fixed earlier in this thread.
+
+The sweep did turn up three constants in that frame-wide block that are not the values they name.
+
+`pattern_atlas_texsize` was `[64.0, 64.0]` against an atlas of whatever size the sprites packed
+into. Inert -- a fill's pattern texsize reaches the shader through the per-tile properties block,
+and no material reads the frame-wide field -- but a value the wire claimed and did not have, which
+is the kind of thing that costs a day when something finally reads it. It now carries
+`patterns.size`, and `[0, 0]` when there is no atlas.
+
+`pixel_ratio` is `1.0`, and this one is read: `line.mat` divides its antialiasing feather and its
+blur by it. The consumer hardcodes `1.0f` for the line material too, with a comment naming the gap
+-- "a host on a HiDPI display passes its scale and the feather narrows to match". Both halves are
+placeholders for a device pixel ratio that nothing carries yet. Left alone deliberately: closing it
+means a number on the FFI, the same wiring `WorldCopies` and `set_viewport` took, and it changes
+nothing until a view runs at a scale other than one. `mbgl-render` captures at 1.0, so it is
+invisible to the parity metric by construction.
+
+`symbol_fade_change` is `0.0` and its doc says "zero until R2 has symbols to fade". R2's fades
+shipped, per-symbol in the geometry rather than through this field, so the field is dead and the
+comment is stale in a way that reads as unfinished work rather than a road not taken.
