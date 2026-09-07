@@ -55,7 +55,8 @@ pub struct GlobalPaintParams {
     pub world_size: [f32; 2],
     /// Distance from camera to map center, in world pixels.
     pub camera_to_center_distance: f32,
-    /// Symbol fade progress. Zero until R2 has symbols to fade.
+    /// Symbol fade progress. Unused: the fades are per-symbol opacity in the geometry, not a
+    /// frame-wide multiplier. Kept because the block's layout is generated and shared.
     pub symbol_fade_change: f32,
     /// Viewport aspect ratio.
     pub aspect_ratio: f32,

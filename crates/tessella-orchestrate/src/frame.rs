@@ -607,9 +607,18 @@ fn emit_group(
         texture::write(producer, &upload)?;
     }
 
-    // Derived from the viewport, so it moves when the camera does and not otherwise.
+    // Derived from the viewport, so it moves when the camera does and not otherwise -- and
+    // `camera_key` covers the viewport, so a resize counts as a move. Sound where the per-layer
+    // gate below was not, because this slot is durable on the consumer and `declare` guarantees
+    // a first write: a quiet frame reads the last value, which is still the right one.
     if camera_moved || declare {
-        let global = ubo::GlobalPaintParams::for_view(view, [64.0, 64.0], 1.0).pack();
+        // The atlas's own size, not a constant. Nothing reads this field today -- a fill's
+        // pattern texsize reaches the shader through the per-tile properties block -- so [64, 64]
+        // cost nothing and was still a value the wire claimed and did not have.
+        let atlas = patterns.map_or([0.0, 0.0], |patterns| {
+            [f32::from(patterns.size[0]), f32::from(patterns.size[1])]
+        });
+        let global = ubo::GlobalPaintParams::for_view(view, atlas, 1.0).pack();
         ubo::write(
             producer,
             view_id,
