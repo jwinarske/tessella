@@ -25,11 +25,12 @@ fn ids(symbols: &[Symbol]) -> Vec<u32> {
 #[test]
 fn identities_match_mbgl() {
     let mut index = CrossTileIndex::new();
+    let mut next_id = 0u32;
 
     // The first tile: everything is new.
     let main = DataTileId::overscaled(6, 0, 6, 8, 8);
     let mut main_symbols = symbols(&[("Detroit", 1000.0, 1000.0), ("Toronto", 2000.0, 2000.0)]);
-    assert!(index.add_bucket(main, 1, &mut main_symbols));
+    assert!(index.add_bucket(main, 1, &mut main_symbols, &mut next_id));
     assert_eq!(ids(&main_symbols), [1, 2]);
 
     // A child tile. Two of its labels are the parent's, two are not.
@@ -40,7 +41,7 @@ fn identities_match_mbgl() {
         ("Toronto", 3000.0, 3000.0), // same text, different place
         ("Toronto", 4001.0, 4001.0), // the parent's Toronto, a shade off
     ]);
-    assert!(index.add_bucket(child, 2, &mut child_symbols));
+    assert!(index.add_bucket(child, 2, &mut child_symbols, &mut next_id));
     assert_eq!(
         ids(&child_symbols),
         [1, 3, 4, 2],
@@ -50,7 +51,7 @@ fn identities_match_mbgl() {
     // A parent tile matches its child's labels the same way.
     let parent = DataTileId::overscaled(5, 0, 5, 4, 4);
     let mut parent_symbols = symbols(&[("Detroit", 500.0, 500.0)]);
-    assert!(index.add_bucket(parent, 3, &mut parent_symbols));
+    assert!(index.add_bucket(parent, 3, &mut parent_symbols, &mut next_id));
     assert_eq!(ids(&parent_symbols), [1]);
 
     // Everything but the first tile goes away.
@@ -61,7 +62,7 @@ fn identities_match_mbgl() {
     let grandchild = DataTileId::overscaled(8, 0, 8, 32, 32);
     let mut grandchild_symbols =
         symbols(&[("Detroit", 4000.0, 4000.0), ("Windsor", 4000.0, 4000.0)]);
-    assert!(index.add_bucket(grandchild, 4, &mut grandchild_symbols));
+    assert!(index.add_bucket(grandchild, 4, &mut grandchild_symbols, &mut next_id));
     assert_eq!(
         ids(&grandchild_symbols),
         [1, 5],
@@ -77,18 +78,19 @@ fn identities_match_mbgl() {
 #[test]
 fn the_same_bucket_twice_is_not_a_change() {
     let mut index = CrossTileIndex::new();
+    let mut next_id = 0u32;
     let tile = DataTileId::overscaled(6, 0, 6, 8, 8);
     let mut first = symbols(&[("Detroit", 1000.0, 1000.0)]);
 
-    assert!(index.add_bucket(tile, 1, &mut first));
+    assert!(index.add_bucket(tile, 1, &mut first, &mut next_id));
     assert_eq!(ids(&first), [1]);
 
     let mut again = symbols(&[("Detroit", 1000.0, 1000.0)]);
     assert!(
-        !index.add_bucket(tile, 1, &mut again),
+        !index.add_bucket(tile, 1, &mut again, &mut next_id),
         "the same bucket is not a change"
     );
-    assert_eq!(index.issued(), 1, "and no identity was handed out");
+    assert_eq!(next_id, 1, "and no identity was handed out");
 }
 
 /// A tile replaced by a new bucket keeps its labels' identities.
@@ -99,19 +101,20 @@ fn the_same_bucket_twice_is_not_a_change() {
 #[test]
 fn a_replaced_bucket_keeps_its_identities() {
     let mut index = CrossTileIndex::new();
+    let mut next_id = 0u32;
     let tile = DataTileId::overscaled(6, 0, 6, 8, 8);
 
     let mut first = symbols(&[("Detroit", 1000.0, 1000.0), ("Toronto", 2000.0, 2000.0)]);
-    index.add_bucket(tile, 1, &mut first);
+    index.add_bucket(tile, 1, &mut first, &mut next_id);
     assert_eq!(ids(&first), [1, 2]);
 
     let mut replaced = symbols(&[("Detroit", 1000.0, 1000.0), ("Toronto", 2000.0, 2000.0)]);
     assert!(
-        index.add_bucket(tile, 2, &mut replaced),
+        index.add_bucket(tile, 2, &mut replaced, &mut next_id),
         "a new bucket is a change"
     );
     assert_eq!(ids(&replaced), [1, 2], "the same labels keep the same ids");
-    assert_eq!(index.issued(), 2, "nothing new was handed out");
+    assert_eq!(next_id, 2, "nothing new was handed out");
 }
 
 /// One parent lends each label to exactly one child.
@@ -121,10 +124,11 @@ fn a_replaced_bucket_keeps_its_identities() {
 #[test]
 fn a_parent_lends_each_label_once() {
     let mut index = CrossTileIndex::new();
+    let mut next_id = 0u32;
 
     let parent = DataTileId::overscaled(6, 0, 6, 8, 8);
     let mut parent_symbols = symbols(&[("Main St", 4096.0, 4096.0)]);
-    index.add_bucket(parent, 1, &mut parent_symbols);
+    index.add_bucket(parent, 1, &mut parent_symbols, &mut next_id);
     let lent = parent_symbols[0].cross_tile_id;
 
     // Two children whose labels both round onto the parent's position.
@@ -132,7 +136,7 @@ fn a_parent_lends_each_label_once() {
     for (index_of, (x, y)) in [(16u32, 16u32), (17, 16)].iter().enumerate() {
         let child = DataTileId::overscaled(7, 0, 7, *x, *y);
         let mut child_symbols = symbols(&[("Main St", 8192.0, 8192.0)]);
-        index.add_bucket(child, 2 + index_of as u32, &mut child_symbols);
+        index.add_bucket(child, 2 + index_of as u32, &mut child_symbols, &mut next_id);
         taken.push(child_symbols[0].cross_tile_id);
     }
 
@@ -147,13 +151,14 @@ fn a_parent_lends_each_label_once() {
 #[test]
 fn distance_separates_labels_with_the_same_text() {
     let mut index = CrossTileIndex::new();
+    let mut next_id = 0u32;
     let tile = DataTileId::overscaled(6, 0, 6, 8, 8);
     let mut first = symbols(&[("Springfield", 1000.0, 1000.0)]);
-    index.add_bucket(tile, 1, &mut first);
+    index.add_bucket(tile, 1, &mut first, &mut next_id);
 
     let child = DataTileId::overscaled(7, 0, 7, 16, 16);
     let mut child_symbols = symbols(&[("Springfield", 7000.0, 7000.0)]);
-    index.add_bucket(child, 2, &mut child_symbols);
+    index.add_bucket(child, 2, &mut child_symbols, &mut next_id);
 
     assert_ne!(
         child_symbols[0].cross_tile_id, first[0].cross_tile_id,
@@ -165,9 +170,10 @@ fn distance_separates_labels_with_the_same_text() {
 #[test]
 fn nothing_stale_is_not_a_change() {
     let mut index = CrossTileIndex::new();
+    let mut next_id = 0u32;
     let tile = DataTileId::overscaled(6, 0, 6, 8, 8);
     let mut first = symbols(&[("Detroit", 1000.0, 1000.0)]);
-    index.add_bucket(tile, 1, &mut first);
+    index.add_bucket(tile, 1, &mut first, &mut next_id);
 
     let current: BTreeSet<u32> = [1].into_iter().collect();
     assert!(!index.remove_stale_buckets(&current));
@@ -188,22 +194,23 @@ fn nothing_stale_is_not_a_change() {
 #[test]
 fn a_position_is_where_the_label_is_on_the_ground() {
     let mut index = CrossTileIndex::new();
+    let mut next_id = 0u32;
 
     let parent = DataTileId::overscaled(6, 0, 6, 8, 8);
     let mut parent_symbols = symbols(&[("Detroit", 1000.0, 1000.0)]);
-    index.add_bucket(parent, 1, &mut parent_symbols);
+    index.add_bucket(parent, 1, &mut parent_symbols, &mut next_id);
     let parent_id = parent_symbols[0].cross_tile_id;
 
     // The eastern child, holding a label at the same local anchor as the western one. On the
     // ground it is a whole child-tile away from the parent's label.
     let east = DataTileId::overscaled(7, 0, 7, 17, 16);
     let mut east_symbols = symbols(&[("Detroit", 2000.0, 2000.0)]);
-    index.add_bucket(east, 2, &mut east_symbols);
+    index.add_bucket(east, 2, &mut east_symbols, &mut next_id);
 
     // The western child, whose label *is* the parent's.
     let west = DataTileId::overscaled(7, 0, 7, 16, 16);
     let mut west_symbols = symbols(&[("Detroit", 2000.0, 2000.0)]);
-    index.add_bucket(west, 3, &mut west_symbols);
+    index.add_bucket(west, 3, &mut west_symbols, &mut next_id);
 
     assert_ne!(
         east_symbols[0].cross_tile_id, parent_id,
@@ -224,16 +231,17 @@ fn a_position_is_where_the_label_is_on_the_ground() {
 #[test]
 fn positions_are_rounded_before_they_are_compared() {
     let mut index = CrossTileIndex::new();
+    let mut next_id = 0u32;
 
     let parent = DataTileId::overscaled(6, 0, 6, 8, 8);
     let mut parent_symbols = symbols(&[("Detroit", 1000.0, 1000.0)]);
-    index.add_bucket(parent, 1, &mut parent_symbols);
+    index.add_bucket(parent, 1, &mut parent_symbols, &mut next_id);
 
     // 1950 rather than the exact 2000: well inside the four-pixel grid cell, well outside an
     // exact comparison.
     let child = DataTileId::overscaled(7, 0, 7, 16, 16);
     let mut child_symbols = symbols(&[("Detroit", 1950.0, 1950.0)]);
-    index.add_bucket(child, 2, &mut child_symbols);
+    index.add_bucket(child, 2, &mut child_symbols, &mut next_id);
 
     assert_eq!(
         child_symbols[0].cross_tile_id, parent_symbols[0].cross_tile_id,
@@ -250,22 +258,23 @@ fn positions_are_rounded_before_they_are_compared() {
 #[test]
 fn two_children_cannot_share_one_parent_label() {
     let mut index = CrossTileIndex::new();
+    let mut next_id = 0u32;
 
     // The parent's label sits exactly on the seam between its western and eastern children.
     let parent = DataTileId::overscaled(6, 0, 6, 8, 8);
     let mut parent_symbols = symbols(&[("Seam", 4096.0, 1000.0)]);
-    index.add_bucket(parent, 1, &mut parent_symbols);
+    index.add_bucket(parent, 1, &mut parent_symbols, &mut next_id);
     let parent_id = parent_symbols[0].cross_tile_id;
 
     // The western child holds it at its far edge; the eastern child at its near edge. Both round
     // onto the parent's grid cell.
     let west = DataTileId::overscaled(7, 0, 7, 16, 16);
     let mut west_symbols = symbols(&[("Seam", 8191.0, 2000.0)]);
-    index.add_bucket(west, 2, &mut west_symbols);
+    index.add_bucket(west, 2, &mut west_symbols, &mut next_id);
 
     let east = DataTileId::overscaled(7, 0, 7, 17, 16);
     let mut east_symbols = symbols(&[("Seam", 0.0, 2000.0)]);
-    index.add_bucket(east, 3, &mut east_symbols);
+    index.add_bucket(east, 3, &mut east_symbols, &mut next_id);
 
     let taken = [west_symbols[0].cross_tile_id, east_symbols[0].cross_tile_id];
     assert!(
@@ -286,16 +295,17 @@ fn two_children_cannot_share_one_parent_label() {
 #[test]
 fn a_removed_tile_gives_its_identities_back() {
     let mut index = CrossTileIndex::new();
+    let mut next_id = 0u32;
 
     let parent = DataTileId::overscaled(6, 0, 6, 8, 8);
     let mut parent_symbols = symbols(&[("Seam", 4096.0, 1000.0)]);
-    index.add_bucket(parent, 1, &mut parent_symbols);
+    index.add_bucket(parent, 1, &mut parent_symbols, &mut next_id);
     let parent_id = parent_symbols[0].cross_tile_id;
 
     // The eastern child takes the parent's identity.
     let east = DataTileId::overscaled(7, 0, 7, 17, 16);
     let mut east_symbols = symbols(&[("Seam", 0.0, 2000.0)]);
-    index.add_bucket(east, 2, &mut east_symbols);
+    index.add_bucket(east, 2, &mut east_symbols, &mut next_id);
     assert_eq!(east_symbols[0].cross_tile_id, parent_id);
 
     // It scrolls off and its bucket is dropped.
@@ -305,10 +315,52 @@ fn a_removed_tile_gives_its_identities_back() {
     // The western child now legitimately wants that identity.
     let west = DataTileId::overscaled(7, 0, 7, 16, 16);
     let mut west_symbols = symbols(&[("Seam", 8191.0, 2000.0)]);
-    index.add_bucket(west, 3, &mut west_symbols);
+    index.add_bucket(west, 3, &mut west_symbols, &mut next_id);
 
     assert_eq!(
         west_symbols[0].cross_tile_id, parent_id,
         "the identity was reserved for a tile that no longer exists"
+    );
+}
+
+/// Two layers' indexes never hand out the same identity.
+///
+/// The numbering is the view's, not the layer's, because a view keys a label's fade and its
+/// orientation by the identity alone. A counter per index gives the first label of every layer
+/// the number one, and from there a road label reads a place label's decision: at Seattle z12
+/// that drew every road name the place names should have suppressed, and only ever with two
+/// symbol layers in the style. Each layer alone was pixel-identical to mbgl.
+#[test]
+fn identities_are_unique_across_layers() {
+    let tile = DataTileId::new(12, 655, 1428);
+    let mut next_id = 0u32;
+
+    let mut roads = CrossTileIndex::new();
+    let mut road_symbols = vec![
+        Symbol::new("Pike Street", (10.0, 10.0)),
+        Symbol::new("Pine Street", (20.0, 20.0)),
+    ];
+    assert!(roads.add_bucket(tile, 1, &mut road_symbols, &mut next_id));
+
+    let mut places = CrossTileIndex::new();
+    let mut place_symbols = vec![
+        Symbol::new("Belltown", (30.0, 30.0)),
+        Symbol::new("West Edge", (40.0, 40.0)),
+    ];
+    assert!(places.add_bucket(tile, 2, &mut place_symbols, &mut next_id));
+
+    let assigned: BTreeSet<u32> = road_symbols
+        .iter()
+        .chain(place_symbols.iter())
+        .map(|symbol| symbol.cross_tile_id)
+        .collect();
+    assert_eq!(
+        assigned.len(),
+        4,
+        "four labels across two layers took four identities, not two twice over: {assigned:?}"
+    );
+    assert!(
+        !assigned.contains(&0),
+        "and every one of them was actually assigned"
     );
 }

@@ -1337,6 +1337,15 @@ pub struct PlacementState {
     indexed: BTreeMap<(u32, DataTileId), Indexed>,
     /// The bucket number the index tells parses apart by.
     next_bucket: u32,
+    /// The identity counter every layer's index draws from.
+    ///
+    /// One per view, not one per layer, because `ViewSymbols` keys a fade and an orientation by
+    /// the identity alone. A counter per layer hands the first label of each the same number, and
+    /// then a road label reads a place label's decision -- which drew every road label the place
+    /// names should have suppressed, and only ever with two symbol layers in the style. mbgl has
+    /// one `maxCrossTileID` on `CrossTileSymbolIndex` and passes it to each layer's index by
+    /// reference, for this reason.
+    next_cross_tile_id: u32,
     /// How far a fade moves on the next frame.
     ///
     /// One is *instant*, and it is the right answer for a still picture: mbgl's
@@ -1724,10 +1733,19 @@ fn place_symbols(
                     tessella_place::cross_tile::Symbol::new(key, instance.anchor)
                 })
                 .collect();
-            held.indexes
-                .entry(entry.layer_index)
-                .or_default()
-                .add_bucket(data_tile, bucket_id, &mut symbols);
+            // Split so the counter and the index can be borrowed at once: they are different
+            // fields of the same state.
+            let PlacementState {
+                indexes,
+                next_cross_tile_id,
+                ..
+            } = &mut **held;
+            indexes.entry(entry.layer_index).or_default().add_bucket(
+                data_tile,
+                bucket_id,
+                &mut symbols,
+                next_cross_tile_id,
+            );
             let ids: Vec<u32> = symbols.iter().map(|symbol| symbol.cross_tile_id).collect();
             held.indexed.insert(
                 indexed_key,

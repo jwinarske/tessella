@@ -281,8 +281,9 @@ fn a_tile_of_labels_places_and_settles() {
 
     // Identities, so the fades have something stable to key on.
     let mut index = CrossTileIndex::new();
+    let mut next_id = 0u32;
     let tile = DataTileId::overscaled(5, 0, 5, 16, 11);
-    assert!(index.add_bucket(tile, 1, &mut symbols));
+    assert!(index.add_bucket(tile, 1, &mut symbols, &mut next_id));
     let unique: BTreeSet<u32> = symbols.iter().map(|symbol| symbol.cross_tile_id).collect();
     assert_eq!(
         unique.len(),

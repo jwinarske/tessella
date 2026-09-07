@@ -132,6 +132,7 @@ fn run(zooms: &[f64]) -> (Vec<Vec<Opacities>>, usize) {
     // is on the ground, and the ground does not move when a camera does. Four views looking at
     // the same label must agree it is one label, or its fade forks.
     let mut index = CrossTileIndex::new();
+    let mut next_id = 0u32;
     let mut bucket_id = 0u32;
 
     let base = sweep::four_views();
@@ -204,6 +205,7 @@ fn run(zooms: &[f64]) -> (Vec<Vec<Opacities>>, usize) {
                     DataTileId::new(tile.z, tile.x, tile.y),
                     bucket_id,
                     &mut symbols,
+                    &mut next_id,
                 );
 
                 buffers.push((laid, symbols));

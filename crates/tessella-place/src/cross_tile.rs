@@ -144,13 +144,18 @@ impl TileIndex {
 }
 
 /// Stable identities for the symbols of one layer, across tiles and zooms.
+///
+/// The numbering is *not* the layer's own: `add_bucket` takes the counter, so every index in a
+/// view draws from one sequence. mbgl's `CrossTileSymbolIndex` owns a single `maxCrossTileID` and
+/// hands each `CrossTileSymbolLayerIndex` a reference to it, and the reason is the same -- an
+/// identity is what a view's fades and orientations are keyed by, so two layers numbering from
+/// one each means a road label reading a place label's state.
 #[derive(Debug, Default)]
 pub struct CrossTileIndex {
     /// Per overscaled zoom, the tiles held there.
     indexes: BTreeMap<u8, BTreeMap<DataTileId, TileIndex>>,
     /// Per zoom, the identities already claimed, so a parent lends each label once.
     claimed: BTreeMap<u8, BTreeSet<u32>>,
-    next_id: u32,
 }
 
 impl CrossTileIndex {
@@ -164,7 +169,14 @@ impl CrossTileIndex {
     ///
     /// Returns whether the index changed, which is what tells a caller placement has to run
     /// again.
-    pub fn add_bucket(&mut self, tile: DataTileId, bucket: u32, symbols: &mut [Symbol]) -> bool {
+    /// `next_id` is the view's identity counter, shared by every layer's index.
+    pub fn add_bucket(
+        &mut self,
+        tile: DataTileId,
+        bucket: u32,
+        symbols: &mut [Symbol],
+        next_id: &mut u32,
+    ) -> bool {
         if let Some(held) = self
             .indexes
             .get(&tile.overscaled_z)
@@ -214,8 +226,8 @@ impl CrossTileIndex {
         // Whatever is left is a label nothing has seen before.
         for symbol in symbols.iter_mut() {
             if symbol.cross_tile_id == 0 {
-                self.next_id += 1;
-                symbol.cross_tile_id = self.next_id;
+                *next_id += 1;
+                symbol.cross_tile_id = *next_id;
                 claimed.insert(symbol.cross_tile_id);
             }
         }
@@ -254,12 +266,6 @@ impl CrossTileIndex {
             }
         }
         changed
-    }
-
-    /// How many identities have ever been handed out.
-    #[must_use]
-    pub const fn issued(&self) -> u32 {
-        self.next_id
     }
 
     /// How many tiles are held.
