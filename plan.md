@@ -6600,36 +6600,3 @@ the world allows stops a little short. That is the failure nobody notices. It is
 away from the equator, where a short side has less world to cover, and identical to it flat on the
 equator -- which is what the flat test's control now uses, since Seattle's latitude is exactly
 where the two diverge.
-
-### Placement is not a per-frame decision, and that is the flying text
-
-The fades were a real defect and not this one. What makes a label appear to fly is that the
-collision pass ran on **every frame**.
-
-mbgl does not. `PlacementController::placementIsRecent` gates it, and while that holds
-`RenderOrchestrator` does not place at all -- it steps the opacities toward the placement it
-already has and reprojects the line labels against the current camera.
-`Placement::getUpdatePeriod` says why in its own comment: "Even if transitionOptions.duration is
-set to a value < 300ms, we still wait for this default transition duration before attempting
-another placement operation." So a new placement every 300 ms, and eighteen frames at sixty of
-keeping the last one.
-
-The collision pass is stable at a still camera and not remotely stable while one moves. A line
-label has an anchor every `symbol-spacing` along its road, and which of them wins depends on
-everything else on screen; recompute that sixty times a second while the camera moves and the
-winner changes constantly, so the name walks down the street. Point labels have one anchor each
-and can only blink, which is why this started at about z11 -- where the style's line-placed road
-labels begin.
-
-**The measurement that found it**, after two wrong answers, was to diff a swept frame against a
-settled one at the *same camera and the same tile zoom* -- the tile set forced to match with a
-source `maxzoom` override so both sides drew z13 tiles at view 14.25. Every road, coastline and
-fill came out pixel-identical and only the text differed, with names stacked at two angles. That
-rules out the projection, the label plane, the overscale and the matrices in one image: if any of
-those were wrong the roads would have moved too. What is left is that the producer chose different
-anchors, and the only input that differs between the two runs is what the previous frames did.
-
-Two things had to land first and neither was the cure on its own: the cross-tile index, so a label
-keeps its identity across the frames a placement now spans; and a real fade rate, so the handover
-between two placements is a crossfade rather than a switch. Placing every frame made both
-pointless -- there was never a previous decision to keep.

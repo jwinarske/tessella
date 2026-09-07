@@ -756,6 +756,7 @@ fn emit_group(
     // lets a fade run: see its documentation for why both the identity and the fade had to stop
     // being per-frame together.
     let placement = core::cell::RefCell::new(placement);
+    placement.borrow_mut().symbols.begin();
 
     // Resolved once and used twice: placement walks it backwards, encoding forwards.
     let order = draw_order.resolve();
@@ -1217,18 +1218,6 @@ struct Encoding<'a> {
 /// mbgl's `util::DEFAULT_TRANSITION_DURATION`.
 pub const FADE_DURATION_MILLIS: f64 = 300.0;
 
-/// How long a placement stands before another is computed, in milliseconds.
-///
-/// mbgl's `Placement::getUpdatePeriod`, whose comment is the whole argument: "Even if
-/// transitionOptions.duration is set to a value < 300ms, we still wait for this default
-/// transition duration before attempting another placement operation." `PlacementController::
-/// placementIsRecent` is the gate, and while it holds, `RenderOrchestrator` does not place at
-/// all -- it steps the opacities against the placement it already has.
-///
-/// mbgl shortens this while zooming out quickly, by `Placement::zoomAdjustment`, so collisions
-/// are resolved sooner when labels are piling up. That is not here yet; this is its floor.
-pub const PLACEMENT_PERIOD_MILLIS: f64 = 300.0;
-
 /// What a label keeps between frames: its identity, and the fade keyed by it.
 ///
 /// # Why this outlives the frame
@@ -1265,18 +1254,6 @@ pub struct PlacementState {
     indexed: BTreeMap<(u32, DataTileId), Indexed>,
     /// The bucket number the index tells parses apart by.
     next_bucket: u32,
-    /// How long since the last placement, in milliseconds.
-    since_placement: f64,
-    /// Whether a placement has ever been computed.
-    ///
-    /// The first frame of a timed map has to place whatever the clock says: there is no previous
-    /// decision to keep, and skipping it would draw no labels until the first period elapsed.
-    placed_once: bool,
-    /// Whether a caller has ever said how much time has passed.
-    ///
-    /// Until one has, this is a still picture: it places every frame and fades in one step, which
-    /// is `mbgl-render`'s behaviour and what every capture compares.
-    timed: bool,
     /// How far a fade moves on the next frame.
     ///
     /// One is *instant*, and it is the right answer for a still picture: mbgl's
@@ -1322,10 +1299,6 @@ impl PlacementState {
     /// where the whole expression short-circuits to one. Both are reachable here, and the default
     /// is the static one so that nothing measuring against `mbgl-render` changes.
     pub fn advance(&mut self, elapsed_millis: f64) {
-        if elapsed_millis.is_finite() && elapsed_millis > 0.0 {
-            self.timed = true;
-            self.since_placement += elapsed_millis;
-        }
         #[allow(clippy::cast_possible_truncation)]
         let step = tessella_place::fade::increment(
             (elapsed_millis / 1000.0) as f32,
@@ -1345,26 +1318,6 @@ impl PlacementState {
     #[must_use]
     pub const fn increment(&self) -> f32 {
         self.increment
-    }
-
-    /// Whether this frame computes a new placement, resetting the clock if it does.
-    ///
-    /// Placement is a decision about which labels get the screen, and it is *not* a per-frame
-    /// one. mbgl recomputes it every [`PLACEMENT_PERIOD_MILLIS`] and no more often; in between it
-    /// keeps the decision and only moves the opacities toward it. Recomputing every frame is what
-    /// makes labels appear to fly: the collision pass is stable at a still camera and not
-    /// remotely stable while one moves, so along a road with an anchor every `symbol-spacing` the
-    /// winner changes constantly and the name walks down the street.
-    ///
-    /// A map nobody has told the time places every frame, which is the still-picture behaviour
-    /// every capture depends on and is what `mbgl-render` does.
-    pub fn placing(&mut self) -> bool {
-        if !self.timed || !self.placed_once || self.since_placement >= PLACEMENT_PERIOD_MILLIS {
-            self.since_placement = 0.0;
-            self.placed_once = true;
-            return true;
-        }
-        false
     }
 
     /// How many labels are part way through a fade.
@@ -1511,13 +1464,6 @@ fn place_symbols(
     #[allow(clippy::cast_possible_truncation)]
     let viewport = (view.width as f32, view.height as f32);
     let increment = placement.borrow().increment;
-    // Decided once for the frame. `begin` clears what the last placement decided, so it runs only
-    // when this frame is going to decide again -- otherwise the fades would step against nothing
-    // and every label would drop out.
-    let placing = placement.borrow_mut().placing();
-    if placing {
-        placement.borrow_mut().symbols.begin();
-    }
 
     // The frame's grid, and the whole reason this function exists.
     // The viewport with mbgl's margin around it, and its cell size. `project_with` offsets every
@@ -1766,14 +1712,12 @@ fn place_symbols(
             .filter(|label| !without_room.contains(&label.cross_tile_id))
             .cloned()
             .collect();
-        if placing {
-            held.symbols.frame_in(
-                &offered,
-                project_with(&plane, grid_padding),
-                &options,
-                &mut grid,
-            );
-        }
+        held.symbols.frame_in(
+            &offered,
+            project_with(&plane, grid_padding),
+            &options,
+            &mut grid,
+        );
         drop(held);
 
         keys.push((tile_index, bucket_index));
