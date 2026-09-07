@@ -6877,3 +6877,36 @@ value at both ends and comparing; every step backwards came from reasoning about
 the instruments answered confidently before they were aimed correctly -- a counter a reset could
 hide, a first vertex that belonged to another label, and a slab index compared across panes -- and
 each was caught only by asking what else could produce that number.
+
+### A re-announced geometry was never applied
+
+**Correcting the entry above.** It concluded that frames reporting `published=true` do not advance
+the ring's head. That was read off the *idle tail* of the drain log, after the producer had stopped
+emitting. Interleaved properly, head advances on exactly the frames that publish: 29168 to 300672
+to 565312 to 829952 across the three frames in question. The records are published and drained.
+
+What actually happens is one line in the reader. `GEOMETRY_ADD` does not deliver anything -- it
+stores the record in `geometry_` and waits, because a geometry announcement is only half a
+drawable and everything per-view arrives with a `ViewUse`. The two are joined when the *use*
+arrives. And a use is durable: the producer sends one when a drawable enters a view's cover and
+never again. So a geometry re-announced afterwards updated the map and was never joined, never
+reached `onGeometry`, and never became a mesh.
+
+The consequence is much wider than the fades. Symbol drawables are re-announced *every frame*,
+because their vertices carry the camera -- that is what `write_line_positions` and `write_opacity`
+put there. None of it has been reaching the consumer. Every label on screen has been drawn with the
+line positions and opacities computed for the frame its tile was first announced in, which is
+exactly "labels not anchored while the map moves", and it is why the per-frame re-announcement
+landed earlier in this thread with no visible effect.
+
+The reader now remembers the last use per geometry and re-joins on re-announcement, and drops it
+again on release or removal so a recycled id cannot inherit another drawable's view, tile and draw
+flags.
+
+Measured: 21 records sent and 21 received where it was 21 and 7; the consumer receives the whole
+fade, 0.386 then 0.827 then 1.000, where it saw only the first. Swept frame 280 -- the frame this
+whole thread started from -- has its street names on their streets, with Broadway back on First
+Hill. Settled parity is unchanged, 1.456% at z14 and 0.563% at z16 with the text exact.
+
+The fades stay off: with them on, z16 is 0.660% against 0.563% but z14 is 24%, which is a separate
+fault and not one to chase on the back of this.
