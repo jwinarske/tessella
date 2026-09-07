@@ -524,6 +524,9 @@ fn emit_group(
     camera_moved: bool,
     declare: bool,
 ) -> Result<Emitted, FrameError> {
+    // Where the ring stood before this frame wrote anything, so the camera gate below can ask
+    // whether it did.
+    let opened_at = producer.head();
     let Frame {
         style,
         view,
@@ -1035,7 +1038,18 @@ fn emit_group(
     // Except when the order changed: the camera names an epoch, and a consumer holding a camera
     // that names an order it no longer has cannot draw. So a new order forces a camera whatever
     // the camera did.
-    if !camera_moved && !order.changed {
+    //
+    // And except when this frame wrote anything at all, which is the rule the other two are
+    // special cases of. The reader says it plainly: "A frame opens at its first record and closes
+    // at its camera, which is the commit point ... nothing is emitted after it." A frame that
+    // writes a record and returns without a camera never closes -- the consumer has already
+    // cleared its scene at `beginFrame` and its `endFrame` never runs, so it draws nothing at all
+    // and the map goes black. Silence is only silent if it is total.
+    //
+    // Reachable whenever a frame is emitted for a reason the camera key cannot see: a fade in
+    // flight is the one that found this, since symbol vertices carry the opacities and have to be
+    // re-sent while nothing about the camera or the cover has moved.
+    if !camera_moved && !order.changed && producer.head() == opened_at {
         return Ok(emitted);
     }
 

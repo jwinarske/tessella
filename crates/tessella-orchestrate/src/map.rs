@@ -359,18 +359,22 @@ impl Map {
     /// [`frame::FADE_DURATION_MILLIS`] for the duration.
     pub fn advance(&mut self, elapsed_millis: f64) {
         self.placement.advance(elapsed_millis);
-        // Deliberately not marking the map dirty, and this is a gap rather than a decision:
-        // opacities travel in the vertices, so a frame that is not emitted is a fade that does
-        // not move, and a camera that stops mid-fade leaves its labels part way. It does not
-        // arise on a moving map, which is where the fades matter and where every frame is emitted
-        // anyway.
+        // A fade in flight is a reason to draw when nothing else has changed. The opacities
+        // travel in the vertices, so a frame that is not emitted is a fade that does not move,
+        // and a settled map does not emit -- which left every capture's labels part way through a
+        // fade, at about half the colour the style asks for.
         //
-        // The reason it is a gap: marking dirty here -- on every advance, or only while
-        // `fading()` is non-zero -- renders the whole map *black*, with every tick returning
-        // TESSELLA_OK. A map held permanently dirty emits something the consumer draws as
-        // nothing, and that is a defect in its own right rather than something to route around
-        // by finding a third condition that happens not to trip it. It wants finding before this
-        // gap is closed.
+        // This used to render the map black instead, and the reason was one gate away: a frame
+        // that wrote records and returned without a camera never closed, because the reader
+        // commits a frame at its camera. `emit_group` sends one for any frame that wrote
+        // anything now.
+        if self.placement.fading() > 0 {
+            self.mark_dirty();
+        }
+        // The gap this leaves: the very last frame of a fade settles the opacity and marks
+        // nothing, so a map that is otherwise idle stops one frame short of its own resting
+        // state. Harmless -- the difference is the final increment of an opacity already at or
+        // past its target.
     }
 
     /// Sets the surface the tiles will be drawn on.

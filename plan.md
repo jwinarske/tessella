@@ -6702,3 +6702,45 @@ and 0.90% to 0.56%.
 The lesson for the parity metric: a 2.75% gross reading was recorded as "the settled probe stopping
 while fades are part way", which was true and was treated as benign. It was a regression in the
 text's colour, visible at a glance, and nobody looked because the number was small.
+
+### A frame that writes anything must send a camera
+
+The reader states the protocol: "A frame opens at its first record and closes at its camera, which
+is the commit point ... nothing is emitted after it. So there is no end-of-frame marker to look for
+and none is needed." `emit_group` violated it. The camera was gated on `camera_moved ||
+order.changed`, and that gate sits *after* the frame may already have written geometry -- so a
+frame emitted for any other reason wrote records and returned without a camera. The frame never
+closed: the consumer had cleared its scene at `beginFrame` and its `endFrame` never ran.
+
+Measured with `render_probe` and the consumer's own counters, forcing the map dirty every tick:
+`renderables 0, primitives 0, missing_batches 0, lit_pixels 0 of 630000`. Nothing was built and
+nothing was even looked for, which is what distinguishes "the draw list was empty" from "the draw
+list never arrived". With the camera sent for any frame that wrote anything: `renderables 66,
+lit_pixels 630000`.
+
+The gate now asks the ring whether the frame wrote anything -- `producer.head()` against its value
+when the frame opened -- which is the rule the other two conditions are special cases of. A parked
+view writes nothing and stays silent, so §10's exit criterion is untouched.
+
+### The fades: three attempts, three regressions, and what is actually known
+
+Enabling them has now been tried three times and made the picture worse every time: black frames,
+then text at half the colour the style asks for, then 26% gross at z14 with the text still wrong.
+The camera-commit bug above was one real cause underneath it and fixing that did not make the
+feature work.
+
+So `tessella_advance`, `MapView::advance` and `Host::advance` exist and are unused, and the
+extension does not pass the frame delta. A fade completes in one step, labels draw at full opacity,
+and the captures agree with the oracle: darkest (16,15,14) against mbgl's (16,15,14) at z14 and
+(47,45,42) against (47,45,42) at z16, at 1.46% and 0.56% gross.
+
+What is worth carrying forward rather than re-deriving:
+
+- The rate is right. `fade::increment` over `DEFAULT_TRANSITION_DURATION` is mbgl's arithmetic, and
+  `mbgl-render` runs in static mode where `symbolFadeChange` returns one -- so instant fades are
+  the correct thing to compare captures against and always were.
+- Persisting the fades exposed a real defect that is now fixed: `write_opacity` un-hid labels whose
+  road had run out, and they drew at their tile-unit anchor, thousands of pixels away.
+- Something downstream still turns a running fade into a wrong picture, and it is not the camera
+  commit and not the arena release. It wants a probe that can watch one label's opacity across
+  frames rather than another attempt at switching the feature on.
