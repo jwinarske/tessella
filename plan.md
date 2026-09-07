@@ -6671,3 +6671,34 @@ is no less true of comparing a frame against the frame before it.
 Checked at every zoom from 11 to 16 against `mbgl-render`, settled, pitched: 0.86%, 2.52%, 2.60%,
 2.75%, 2.02%, 0.90% gross. The middle of that range is the settled probe stopping while fades are
 still part way, not misplacement -- the same camera measured 1.16% before the fades ran at all.
+
+### The text was half the colour it should be, and the fades are parked
+
+Caught by eye, from the parity captures: our glyphs topped out around (137,133,123) where the
+style asks for `#333333` and mbgl reaches (16,15,14). The tint is the giveaway -- ours is *warm*,
+which is the beige background showing through, so the glyphs were being drawn at about 55% alpha.
+Uniform across z11-z16, and absent from every capture taken before the fades were made real:
+darkest (7,7,7) with 7951 dark pixels before, (137,132,122) with 140 after.
+
+It is the gap recorded on `Map::advance`, and the note there was wrong about its reach. "It does
+not arise on a moving map" is true and irrelevant: it arises on every *settled* one, which is every
+capture and every parity comparison this project runs. Opacities travel in the vertices, so a
+frame that is not emitted is a fade that does not move, and a settled map does not emit -- so the
+labels stopped part way and stayed there.
+
+Marking the map dirty while a fade is in flight does complete them -- `fading` runs 294 to 0 -- and
+renders **the whole frame black**, every pixel of it, while the producer reports emitting
+(geometries 8, drawables 21) and every tick returns OK. Suppressing the slab release that a
+re-announcement stages makes no difference, so it is not the arena handing back bytes the same
+frame is using. A map emitting on every tick draws nothing, and that is the defect to find.
+
+Until it is, the frame's elapsed time is not passed to the producer. `tessella_advance`,
+`MapView::advance` and `Host::advance` all exist and are unused, which is the honest shape: the
+mechanism is right and cannot be turned on. A fade completes in one step, labels draw at full
+opacity, and the captures agree with the oracle again -- darkest (16,15,14) against mbgl's
+(16,15,14) at z14 and (47,45,42) against (47,45,42) at z16, with gross falling from 2.75% to 1.46%
+and 0.90% to 0.56%.
+
+The lesson for the parity metric: a 2.75% gross reading was recorded as "the settled probe stopping
+while fades are part way", which was true and was treated as benign. It was a regression in the
+text's colour, visible at a glance, and nobody looked because the number was small.
