@@ -7132,3 +7132,19 @@ Reverting that change and re-running the same six slow pitched runs gives 2,029 
 -- the probe does not depend on `outstanding` alone, so the hole was real in the code and no longer
 reachable through this harness. It still matters to a consumer reading that number for a progress
 indicator, which is what it is for.
+
+### The quad on a screen, confirmed by eye
+
+Four panes under `ivi-homescreen` on `wayland-0`, all four granted dma-buf slots, the tile server
+serving z0 through z15 across four cameras, no errors. Joel's read of it: *"text looks much
+better"* -- which is the thread that started as "labels are flying around, not anchored" and ran
+through the re-announce, the camera commit, the uniform gate and the fades.
+
+That is the confirmation this side could not produce. The compositor has no screen-capture
+protocol and the shell's own Vulkan capture writes black until fluorite #425 lands, so everything
+measurable from here -- request logs, granted buffers, absence of errors -- says the panes are
+*running*, and none of it says what they look like.
+
+Two parity gaps found in the same day's re-measurement are still open and are not visible at this
+zoom: z12 flat at 1.913%, and pitch costing 1 to 3.7% on the full style where the worst
+single-family scene is 0.322%.
