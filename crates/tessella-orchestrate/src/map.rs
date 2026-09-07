@@ -492,6 +492,20 @@ impl Map {
         producer: &mut Producer,
         tiles: &T,
     ) -> Result<Tick, FrameError> {
+        // TSL_FADE_MS advances the fades from inside the tick, so a probe that drives tessella
+        // directly can exercise them without a consumer that knows to pass a frame delta. It is
+        // how the fades reach `render_probe`, which is the only probe that prints the consumer's
+        // own counters.
+        {
+            static STEP: std::sync::LazyLock<Option<f64>> = std::sync::LazyLock::new(|| {
+                std::env::var("TSL_FADE_MS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+            });
+            if let Some(step) = *STEP {
+                self.advance(step);
+            }
+        }
         let key = crate::frame::camera_key_of(&self.view);
         let work = self.damage.begin_frame(self.view_id, key);
         if work.is_idle() {

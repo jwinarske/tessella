@@ -6930,3 +6930,34 @@ A caution from this session, since the same trap was fallen into twice: measure 
 metric, not `magick compare -threshold`. The two disagree wildly on the same pair of images -- 0.2%
 against 22.5% -- and the ImageMagick reading is what briefly made this look like it was not
 happening at all.
+
+### The slab-release theory is wrong, and the basemap is in the scene
+
+The theory was that a re-announcement's staged release drops a slab's live count to zero on a
+symbol's account while a fill still holds bytes in it, and `sweep` then frees the lot. The arena
+documents the invariant that would catch this -- a slab's live bytes equal the lengths of every
+reference still held into it -- so the check is now written where the sweep happens, behind
+`TESSELLA_WATCH`. **Zero divergences, fades on or off.** The accounting holds; the theory is dead.
+
+Four more things fell out, each narrowing rather than explaining:
+
+- **Nothing is removed.** 324 frames with the fades running, `removed=0` on every one. The basemap
+  is not being retired.
+- **It is not the panes.** One pane loses the water exactly as four do, so it is not the shared
+  scene or one renderer clearing another's entities.
+- **It is not the producer.** `render_probe` drives tessella directly, and with `TSL_FADE_MS`
+  advancing the fades from inside the tick it renders a complete frame: 28 renderables, 2034 glyph
+  quads, 630000 of 630000 pixels lit, identical to fades off. Whatever this is, it is on the far
+  side of the extension.
+- **And the geometry is there.** The consumer reports **28 primitives in the scene with the fades on
+  and 28 with them off** -- while the picture has no water at all and 913 road pixels. The basemap
+  is present and not visible.
+
+Present-and-invisible is a different defect from anything chased so far. It is not delivery, not
+retention, not the arena: it is paint order, a uniform, or a blend. The viewport-covering
+background is the first thing to look at -- it is one quad over the whole frame at a fixed
+coordinate, drawn by paint order rather than depth, and a background that lands after the fills
+instead of before them would leave exactly this: water and roads painted over, labels on top.
+
+Note also that the map never settles with the fades running: 324 emitted frames against about
+eighteen without. Whatever keeps `fading()` above zero forever is worth knowing on its own.

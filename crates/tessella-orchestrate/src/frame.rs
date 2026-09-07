@@ -491,16 +491,36 @@ fn emit_into(
                 // moves and every slab looks live, which is a map that fills its region and
                 // stops drawing. The removal records went out above, so a consumer is not
                 // holding any of these.
+                // The accounting the arena documents: a slab's live bytes should equal the
+                // lengths of every reference the registry still holds into it. A divergence is a
+                // release without its counterpart, and it matters because `sweep` frees a slab
+                // whose count reaches zero -- so a slab over-released on one drawable's account
+                // takes every other drawable's bytes with it.
+                if crate::watch::watching() {
+                    let mut held: alloc::collections::BTreeMap<u32, usize> =
+                        alloc::collections::BTreeMap::new();
+                    for (_, refs) in session.registry().live_refs() {
+                        for reference in refs {
+                            *held.entry(reference.slab).or_insert(0) += reference.length as usize;
+                        }
+                    }
+                    for (slab, want) in &held {
+                        let have = arena.live_bytes(*slab);
+                        if have != *want {
+                            crate::watch::accounting(*slab, have, *want);
+                        }
+                    }
+                }
                 arena.sweep();
                 session.record_camera(frame.view_id, key);
                 session.record_declared(frame.view_id);
             }
-            crate::watch::frame_end(emitted.geometries, true);
+            crate::watch::frame_end(emitted.geometries, emitted.removed, emitted.uses, true);
             producer.commit();
             Ok(emitted)
         }
         Err(error) => {
-            crate::watch::frame_end(0, false);
+            crate::watch::frame_end(0, 0, 0, false);
             producer.abort();
             // The arena as well as the ring. The discarded records were the only things that
             // would ever have named these slabs.

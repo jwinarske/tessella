@@ -159,17 +159,20 @@ pub const fn note(_text: &str, _seen: &Sighting) {}
 /// two look identical from the producer's side: the watch says the label reached full opacity and
 /// the consumer never receives it, with nothing to say the frame was thrown away.
 #[cfg(feature = "std")]
-pub fn frame_end(geometries: usize, published: bool) {
+pub fn frame_end(geometries: usize, removed: usize, uses: usize, published: bool) {
     if pattern().is_none() {
         return;
     }
     let frame = counter().load(core::sync::atomic::Ordering::Relaxed);
-    std::println!("watch frame={frame} end geometries={geometries} published={published}");
+    std::println!(
+        "watch frame={frame} end geometries={geometries} removed={removed} uses={uses} \
+         published={published}"
+    );
 }
 
 /// How a frame ended. Compiled out without `std`.
 #[cfg(not(feature = "std"))]
-pub const fn frame_end(_geometries: usize, _published: bool) {}
+pub const fn frame_end(_geometries: usize, _removed: usize, _uses: usize, _published: bool) {}
 
 /// The bytes a geometry record names, as it is written.
 ///
@@ -215,3 +218,25 @@ pub const fn sent(
     _first_opacity: Option<f32>,
 ) {
 }
+
+/// A slab whose live-byte count disagrees with the references still held into it.
+///
+/// The arena frees a slab when its count reaches zero, so an over-release on one drawable's
+/// account takes every other drawable's bytes in that slab with it. That is the shape a basemap
+/// vanishing under running fades would have: symbols are the only family re-announced per frame,
+/// so they are the only family staging releases, and everything else in the slab is collateral.
+#[cfg(feature = "std")]
+pub fn accounting(slab: u32, have: usize, want: usize) {
+    if pattern().is_none() {
+        return;
+    }
+    let frame = counter().load(core::sync::atomic::Ordering::Relaxed);
+    std::println!(
+        "accounting frame={frame} slab={slab} arena_live={have} refs_held={want} delta={delta}",
+        delta = have as i64 - want as i64
+    );
+}
+
+/// A slab whose accounting disagrees. Compiled out without `std`.
+#[cfg(not(feature = "std"))]
+pub const fn accounting(_slab: u32, _have: usize, _want: usize) {}
