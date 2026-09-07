@@ -7082,3 +7082,53 @@ is called gone.
 **Closed.** `outstanding` counts `Resolving` now, and the test holds the manifest fetch on a
 condvar rather than racing a window that is a network round trip -- which would pass on a slow day
 and prove nothing on a fast one. It fails without the change.
+
+### The parity table, re-measured on an instrument that reports itself
+
+Every number below is one camera rendered by both renderers in the same command, with the oracle
+produced at run time rather than read from disk, and with the probe refusing to continue unless
+it reports `materials_loaded 12`. `TSF_NO_FADES`, which is the mode `mbgl-render`'s static map is.
+
+| scene | flat | pitch 45 |
+| --- | --- | --- |
+| `icons_only` | 0 | 2,029 (0.322%) |
+| `families` | 18 (0.003%) | 967 (0.153%) |
+| `one_poi-labels` | 0 | 450 (0.071%) |
+| `one_roads` | 0 | **0** |
+| `one_place-labels` | 0 | **0** |
+| `one_poi-dots` | 0 | 18 (0.003%) |
+| `one_water` | 0 | 197 (0.031%) |
+| `one_buildings` | 18 (0.003%) | 71 (0.011%) |
+
+Seattle on the full planet style, z11 to z16:
+
+| | z11 | z12 | z13 | z14 | z15 | z16 |
+| --- | --- | --- | --- | --- | --- | --- |
+| flat | 0.000% | **1.913%** | 0.529% | 0.128% | 0.010% | 0.000% |
+| pitch 45 | 0.094% | 3.698% | 2.649% | 3.023% | 2.082% | 1.025% |
+
+Two things in that are new and neither is noise -- four repeats each give the identical count.
+
+**z12 flat is an outlier among flat frames**, at 1.913% where every other flat number on the sweep
+is under 0.53% and most are zero. Whatever it is, it is a property of that level rather than of
+pitch.
+
+**Pitch costs an order of magnitude more on the full style than on any single-family scene.** The
+worst single-family frame is 0.322%; the planet sweep is 1 to 3.7% at every level from z12 up. So
+the pitched gap is real, it is not the icon defect that was written down, and it only appears when
+many families are drawn together -- which is where to start looking, rather than in any one of
+them.
+
+### The settle is deterministic, including when tiles arrive late and unevenly
+
+A forwarding proxy in front of both origins delays every response by a uniform 0.8 to 3.5 seconds,
+which takes a run from 1.26s to 5.27s and spreads arrivals across many ticks. Thirty-six runs --
+three scenes, flat and pitched, six each -- give the identical gross count every time, and the
+same count the fast path gives.
+
+So the arrival-order entry's flakiness is gone, and it was gone before this session: settling on
+the *image* is what fixed it. Worth stating because the `outstanding` change above did not do it.
+Reverting that change and re-running the same six slow pitched runs gives 2,029 six times as well
+-- the probe does not depend on `outstanding` alone, so the hole was real in the code and no longer
+reachable through this harness. It still matters to a consumer reading that number for a progress
+indicator, which is what it is for.
