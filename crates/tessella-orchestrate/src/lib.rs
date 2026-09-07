@@ -67,6 +67,7 @@ pub mod topology;
 pub mod ubo;
 pub mod view;
 pub mod viewcover;
+pub mod watch;
 
 pub use binder::{BoundAttribute, VertexLayout, pack_color};
 pub use counters::{SharedCounters, SharedWork};

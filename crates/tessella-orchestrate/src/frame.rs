@@ -440,6 +440,7 @@ fn emit_into(
     session: Option<&mut Session>,
 ) -> Result<Emitted, FrameError> {
     producer.begin();
+    crate::watch::begin_frame();
     let mark = arena.mark();
     let mut session = session;
     let key = camera_key(frame.view);
@@ -1775,13 +1776,13 @@ fn place_symbols(
             without_room,
         } = entry;
         let laid = &shaped.laid;
-        let Some((_, bucket)) = buckets
+        let Some((tile, bucket)) = buckets
             .get(key.0)
             .and_then(|(id, list)| list.get(key.1).map(|bucket| (*id, bucket)))
         else {
             continue;
         };
-        let Content::Symbol(_) = &bucket.content else {
+        let Content::Symbol(layout) = &bucket.content else {
             continue;
         };
         let labels = frame_labels(laid, &buffers, icons.as_ref(), &ids, |_| 1.0);
@@ -1817,6 +1818,32 @@ fn place_symbols(
             for slot in &mut buffers.opacity[range] {
                 *slot = hidden;
             }
+        }
+
+        // After every write that can touch an opacity, so what is recorded is what the shader
+        // will read. See `crate::watch`.
+        for label in &labels {
+            let text = layout
+                .pending
+                .get(label.laid_out.pending)
+                .map_or("", |pending| pending.text.as_str());
+            if !crate::watch::follows(text) {
+                continue;
+            }
+            crate::watch::note(
+                text,
+                &crate::watch::Sighting {
+                    cross_tile_id: label.cross_tile_id,
+                    anchor: label.laid_out.anchor,
+                    tile: (tile.z, tile.x, tile.y),
+                    has_room: !without_room.contains(&label.cross_tile_id),
+                    fade: held
+                        .symbols
+                        .opacity(label.cross_tile_id)
+                        .map(|joint| joint.text.opacity),
+                    vertex: buffers.opacity.get(label.laid_out.vertices.start).copied(),
+                },
+            );
         }
 
         // The icon half, which is its own drawable rather than an option: a symbol is a label, an

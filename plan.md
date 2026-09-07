@@ -6744,3 +6744,34 @@ What is worth carrying forward rather than re-deriving:
 - Something downstream still turns a running fade into a wrong picture, and it is not the camera
   commit and not the arena release. It wants a probe that can watch one label's opacity across
   frames rather than another attempt at switching the feature on.
+
+### A probe that watches one label, and what it said first
+
+`tessella_orchestrate::watch` records one line per watched label per frame, carrying every value
+between the placement decision and the byte the shader reads: the frame, the label's text, its
+cross-tile id, whether the line walk found room for it, the opacity the fade holds, and the
+opacity actually written into the vertex, decoded back out of the packed value.
+`TESSELLA_WATCH=Madison` follows every Madison Street; `TSF_FADES=1` on the consumer side turns the
+fades on, so the two runs can be compared without rebuilding anything.
+
+It exists because every previous attempt on this defect worked from *pictures*, and a picture says
+the frame is wrong without saying which label, when, or which of the several values that decide a
+glyph's opacity disagreed. Three explanations were shipped on that basis and two of them were
+wrong.
+
+**It answered its first question immediately.** With the fades running at z16, one label across
+three emitted frames:
+
+    frame=33  id=75  room=true  fade=0.389  vertex_opacity=0.386  vertex_placed=true
+    frame=35  id=75  room=true  fade=0.833  vertex_opacity=0.827  vertex_placed=true
+    frame=37  id=75  room=true  fade=1.000  vertex_opacity=1.000  vertex_placed=true
+
+The identity is stable, the anchor is stable, the fade ramps and the vertex tracks it to three
+decimals, and the label reaches full opacity. **The producer is correct.** And the captured frame
+is (170,168,163) — an alpha of about 0.383, which is frame 33's value, not frame 37's.
+
+So what is left is not the fade arithmetic, the identity, the placement or the opacity written:
+it is that the picture shows an earlier frame's vertices than the last one emitted. That is the
+consumer or the capture path, and it is the first time this defect has been narrowed to a side of
+the wire rather than to a candidate mechanism. The next step is to compare what the producer last
+announced against what the consumer last uploaded, at the moment the pixels are read.
