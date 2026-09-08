@@ -697,14 +697,17 @@ mod two_halves {
     }
 }
 
-/// A label with glyphs is offered a shape even where no collision run could be built for it.
+/// A label with glyphs is offered a shape even where no collision run could be built for it, and
+/// that shape still cannot be placed.
 ///
-/// `None` in `Candidate::text` means "this symbol has no text", and `place` reads it that way --
-/// as nothing to draw. `collision_circles` also answers `None` when the projected road runs out
-/// before the circle run does, and a label with text that got that answer was dropped as though
-/// it had no text at all, against an empty grid, with nothing in its way.
+/// Two different things, and conflating them cost both ways. `None` in `Candidate::text` means
+/// "this symbol has no text" and `place` reads it that way, so a label whose road ran out has to
+/// arrive as a shape or `text_optional` and `icon_optional` misread it. But the shape is an empty
+/// run, and an empty run collides with nothing -- so offering it placed every road name whose road
+/// was too short to carry it, unconditionally. mbgl returns unplaced when `placeFirstAndLastGlyph`
+/// gives it nothing, which is the same case.
 #[test]
-fn a_label_with_no_room_for_a_run_still_competes() {
+fn a_label_with_no_room_for_a_run_is_offered_but_not_placed() {
     let (_, labels) = lay_out(&[("Alpha", (1000.0, 1000.0))]);
     // A road far too short to hold the run, which is what makes `collision_circles` answer none.
     let stub = [(1000.0f32, 1000.0f32), (1001.0, 1000.0)];
@@ -724,7 +727,13 @@ fn a_label_with_no_room_for_a_run_still_competes() {
     let mut view = ViewSymbols::new();
     let result = view.frame(&offered, to_screen, &FrameOptions::default());
     assert!(
-        result.placed[0].text,
-        "a label with nothing in its way was dropped for having no run"
+        !result.placed[0].text,
+        "a label whose road ran out before its run could be built is not placed, however empty \
+         the grid is"
+    );
+    assert_eq!(
+        result.placed.len(),
+        1,
+        "and it is still a symbol that was decided about, not one that was never offered"
     );
 }

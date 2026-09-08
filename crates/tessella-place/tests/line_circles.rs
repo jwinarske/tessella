@@ -365,3 +365,55 @@ mod thinning {
         }
     }
 }
+
+/// A label with nothing inside the grid is not placed.
+///
+/// mbgl's `isInsideGrid`: the point path tests it beside the hit test and the line path
+/// accumulates `inGrid` over the circles it walks, refusing a label when none of them landed.
+/// Without it a pitched frame draws labels thrown past the padded viewport by the projection --
+/// sixteen of them at Seattle z14 pitch 45, every one in the far field.
+#[test]
+fn a_label_outside_the_grid_is_not_placed() {
+    use tessella_place::feature::{Extent, Padding, collision_box};
+    use tessella_place::grid::GridIndex;
+    use tessella_place::placement::{Candidate, Rules, Shape, place};
+
+    let grid_of = || GridIndex::<u32>::new(200.0, 200.0, 25);
+    let boxed = |x: f32| {
+        collision_box(
+            Extent {
+                top: -5.0,
+                bottom: 5.0,
+                left: -5.0,
+                right: 5.0,
+            },
+            (x, 100.0),
+            1.0,
+            Padding::uniform(0.0),
+            0.0,
+        )
+        .map(Shape::Box)
+    };
+
+    let inside = Candidate {
+        cross_tile_id: 1,
+        text: boxed(100.0),
+        vertical_text: None,
+        icon: None,
+    };
+    let outside = Candidate {
+        cross_tile_id: 2,
+        // Well past the right edge, and nothing is there to collide with.
+        text: boxed(900.0),
+        vertical_text: None,
+        icon: None,
+    };
+
+    let mut grid = grid_of();
+    let placed = place(&[inside, outside], &Rules::default(), &mut grid);
+    assert!(placed[0].text, "a label inside the grid is placed");
+    assert!(
+        !placed[1].text,
+        "and one entirely outside it is not, however empty the grid is"
+    );
+}

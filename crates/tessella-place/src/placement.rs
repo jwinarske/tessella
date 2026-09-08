@@ -159,6 +159,50 @@ impl Shape {
         }
     }
 
+    /// Whether it can be placed at all.
+    ///
+    /// An empty run is a label with glyphs whose road ran out before a run could be built for it.
+    /// It is offered as a shape rather than as `None` so it still counts as *having* text -- that
+    /// is what `text_optional` and `icon_optional` read -- but it cannot be placed, which is
+    /// mbgl returning unplaced when `placeFirstAndLastGlyph` gives nothing. Colliding with
+    /// nothing, an empty run otherwise places unconditionally, and every road too short for its
+    /// own name kept its name.
+    #[must_use]
+    pub fn placeable(&self) -> bool {
+        !matches!(self, Self::Circles(circles) if circles.is_empty())
+    }
+
+    /// Whether any part of it lands inside the grid.
+    ///
+    /// mbgl's `isInsideGrid`, and a label with nothing inside is not placed: the point path tests
+    /// it beside the hit test, and the line path accumulates `inGrid |= isInsideGrid(...)` over the
+    /// circles it walks and refuses the label when none was. Missing here, and a pitched frame is
+    /// where it shows: sixteen labels at Seattle z14 pitch 45 were drawn that mbgl rejected for
+    /// this and nothing else, all of them in the far field where a pitched projection throws a
+    /// label past the padded viewport.
+    #[must_use]
+    pub fn in_grid(&self, grid: &GridIndex<u32>) -> bool {
+        let (right, bottom) = grid.extent();
+        let inside = |min: (f32, f32), max: (f32, f32)| {
+            max.0 >= 0.0 && min.0 < right && max.1 >= 0.0 && min.1 < bottom
+        };
+        match self {
+            Self::Box(box_) => {
+                let bounds = box_.bounds();
+                inside(bounds.min, bounds.max)
+            }
+            // Every circle the label covers, not only the thinned ones: mbgl accumulates `inGrid`
+            // over the whole walk and thins separately.
+            Self::Circles(circles) => circles.iter().any(|entry| {
+                let c = entry.circle;
+                inside(
+                    (c.center.0 - c.radius, c.center.1 - c.radius),
+                    (c.center.0 + c.radius, c.center.1 + c.radius),
+                )
+            }),
+        }
+    }
+
     /// Reserves it, so later labels collide with it.
     pub fn insert(&self, grid: &mut GridIndex<u32>, id: u32) {
         match self {
@@ -213,18 +257,28 @@ pub fn place(candidates: &[Candidate], rules: &Rules, grid: &mut GridIndex<u32>)
         // A half with no box is nothing to draw, and nothing to test.
         let mut place_text = match &candidate.text {
             None => false,
-            Some(shape) => rules.text_allow_overlap || !shape.collides(grid),
+            Some(shape) => {
+                shape.placeable()
+                    && shape.in_grid(grid)
+                    && (rules.text_allow_overlap || !shape.collides(grid))
+            }
         };
         // Horizontal first, and vertical only if it did not fit. mbgl's order, and it is a
         // preference rather than a tie-break: a label that fits both ways is drawn across.
         let mut vertical = false;
         if !place_text && let Some(shape) = &candidate.vertical_text {
-            place_text = rules.text_allow_overlap || !shape.collides(grid);
+            place_text = shape.placeable()
+                && shape.in_grid(grid)
+                && (rules.text_allow_overlap || !shape.collides(grid));
             vertical = place_text;
         }
         let mut place_icon = match &candidate.icon {
             None => false,
-            Some(shape) => rules.icon_allow_overlap || !shape.collides(grid),
+            Some(shape) => {
+                shape.placeable()
+                    && shape.in_grid(grid)
+                    && (rules.icon_allow_overlap || !shape.collides(grid))
+            }
         };
 
         // Whether each half can stand without the other, in mbgl's spelling.

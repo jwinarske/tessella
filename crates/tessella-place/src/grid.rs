@@ -131,6 +131,12 @@ pub struct GridIndex<T> {
 }
 
 impl<T: Clone> GridIndex<T> {
+    /// The grid's right and bottom edges, which is what `isInsideGrid` compares against.
+    #[must_use]
+    pub const fn extent(&self) -> (f32, f32) {
+        (self.width, self.height)
+    }
+
     /// An empty index covering `width` by `height` in cells of `cell_size`.
     ///
     /// # Panics
