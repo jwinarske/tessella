@@ -73,9 +73,27 @@ impl Drop for Guard<'_> {
     }
 }
 
-impl<S: FileSource + 'static> PoolBacked<S> {
-    /// Starts a fetch at a named priority.
-    pub fn request_at(&self, priority: Priority, url: &str, etag: Option<&str>) -> Ticket {
+/// A deferred transport that can be told how urgent a request is.
+///
+/// [`DeferredFileSource`] deliberately has no priority: §5.4's three classes are how native
+/// decides what a worker picks up next, and a browser has one queue and no such decision to make.
+/// Putting `Priority` on that trait would also put an orchestrator type in the storage layer,
+/// which is the wrong direction for it to point.
+///
+/// So the class lives here instead, on a trait the tile path asks for. The default ignores it and
+/// falls through to [`DeferredFileSource::request`], which is exactly right for a transport with
+/// one queue: it is not a stub, it is the whole of the answer for that shape. [`PoolBacked`]
+/// overrides it, because it has somewhere to put the class.
+pub trait TileTransport: DeferredFileSource {
+    /// Starts a fetch, saying what it is competing against.
+    fn request_at(&self, priority: Priority, url: &str, etag: Option<&str>) -> Ticket {
+        let _ = priority;
+        self.request(url, etag)
+    }
+}
+
+impl<S: FileSource + 'static> TileTransport for PoolBacked<S> {
+    fn request_at(&self, priority: Priority, url: &str, etag: Option<&str>) -> Ticket {
         let ticket = self.tickets.issue();
 
         // Everything the job touches has to be owned by it: a pool job is `'static` (see
@@ -104,7 +122,7 @@ impl<S: FileSource + 'static> PoolBacked<S> {
 
 impl<S: FileSource + 'static> DeferredFileSource for PoolBacked<S> {
     fn request(&self, url: &str, etag: Option<&str>) -> Ticket {
-        self.request_at(self.priority, url, etag)
+        TileTransport::request_at(self, self.priority, url, etag)
     }
 
     fn poll(&self, ticket: Ticket) -> Option<Fetched> {

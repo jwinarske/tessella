@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use tessella_orchestrate::deferred::PoolBacked;
+use tessella_orchestrate::deferred::{PoolBacked, TileTransport};
 use tessella_orchestrate::pool::{Pool, Priority};
 use tessella_storage::deferred::{DeferredFileSource, Ticket};
 use tessella_storage::source::{FetchError, FileSource, Response};

@@ -8087,6 +8087,32 @@ was verified by wedging a field in and watching three assertions fire. Beside it
 the Rust struct asserts the same numbers, so the loop closes in both directions: the C compiler
 catches the header drifting from itself, and the Rust test catches it drifting from Rust.
 
+### The transport seam, and what is still blocking a browser
+
+Checking what stood between here and "a browser draws a map" turned up a gap in WS-1 that native
+had hidden. `DeferredFileSource` was built and then wired to exactly one implementation,
+non-generically: `TileSource`'s transport field was `PoolBacked<Coalesced<S>>` by name, so a
+browser transport could not be plugged in at all. The blanket impl made native work, and working
+was mistaken for finished.
+
+`TileSource` is now `TileSource<S, D>` with `D` defaulting to the pool-backed transport, so every
+existing spelling still compiles, and `with_transport` supplies another. Priority stays off
+`DeferredFileSource` for the reason DR-23 gives -- a browser has one queue, and `Priority` is an
+orchestrator type that has no business in the storage layer -- so the class lives on a
+`TileTransport` trait in `tessella-orchestrate` whose default ignores it and falls through to
+`request`. That default is not a stub: for a transport with one queue it is the whole answer.
+
+Proved with a transport that shares no code with `PoolBacked` at all: a tile lands from bytes the
+test posts, at a moment the test chooses, with no network and no sleep.
+
+**What still blocks a browser**, stated plainly because the seam existing is easy to mistake for
+the job being done. Only tile bytes are deferred. Style resolution (`boot::resolve_sources`) and
+the glyph fetch both still run as one blocking pool job over `Coalescing<S>`, and the FFI's source
+is `HttpFileSource`, which is `ureq` on `std::net` -- it compiles for wasm32 and cannot connect.
+So in a browser nothing would resolve, and a source that never resolves never asks for a tile,
+however good its tile transport is. Those two are the next piece, and they come before the WebGL2
+consumer: a consumer with nothing to consume proves nothing.
+
 ### WS-2, and what native got out of it
 
 `Pool` keeps its shape -- `submit`, `batch`, `Priority`, `is_idle`, `panics` all unchanged -- and

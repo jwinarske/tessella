@@ -13,17 +13,19 @@
 //! `cold_start`.
 
 use std::sync::Arc;
-use std::sync::PoisonError;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use tessella_orchestrate::boot::BootError;
 use tessella_orchestrate::boot::Workers;
 use tessella_orchestrate::cache::TileCache;
+use tessella_orchestrate::deferred::TileTransport;
 use tessella_orchestrate::map::Tiles;
 use tessella_orchestrate::pool::Pool;
 use tessella_orchestrate::source::{Readiness, TileSource};
 use tessella_orchestrate::tile::TileId;
+use tessella_storage::deferred::{DeferredFileSource, Ticket, Tickets};
 use tessella_storage::http::HttpFileSource;
 use tessella_storage::source::{Coalescing, FetchError, FileSource, Response};
 use tessella_tile::cover::{TileCoord, ViewTransform};
@@ -144,8 +146,8 @@ fn source_over(
 /// a ticket rather than with bytes, so nothing lands until someone comes back for it -- a loop
 /// that only polled `done` would wait out its full deadline on tiles whose bodies had arrived
 /// long before.
-fn settle<S: FileSource + 'static>(
-    source: &Arc<TileSource<S>>,
+fn settle<S: FileSource + 'static, D: TileTransport + 'static>(
+    source: &Arc<TileSource<S, D>>,
     mut done: impl FnMut() -> bool,
 ) -> bool {
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -422,6 +424,143 @@ fn the_producer_runs_on_one_thread_when_the_pool_has_no_workers() {
         pool.is_idle(),
         "work was left queued on a pool with no workers"
     );
+}
+
+/// A transport the test drives by hand, answering nothing until it is told to.
+///
+/// Not a mock of `PoolBacked` -- it shares no code with it, which is the point. If the tile path
+/// works over this, it works over anything that answers the trait, and a browser's `fetch` is
+/// another such thing.
+#[derive(Default)]
+struct Manual {
+    tickets: Tickets,
+    asked: Mutex<Vec<(Ticket, String)>>,
+}
+
+impl Manual {
+    /// The URLs asked for so far, in order.
+    fn asked(&self) -> Vec<String> {
+        self.asked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .map(|(_, url)| url.clone())
+            .collect()
+    }
+
+    /// Answers the first outstanding request with `body`.
+    fn answer(&self, body: &[u8]) {
+        let held = self.asked.lock().unwrap_or_else(PoisonError::into_inner);
+        let (ticket, _) = *held.first().expect("something was asked for");
+        drop(held);
+        self.tickets.post(
+            ticket,
+            Ok(Arc::new(Response {
+                status: 200,
+                body: body.to_vec(),
+                ..Response::default()
+            })),
+        );
+    }
+}
+
+impl DeferredFileSource for Manual {
+    fn request(&self, url: &str, _etag: Option<&str>) -> Ticket {
+        let ticket = self.tickets.issue();
+        self.asked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push((ticket, url.to_string()));
+        ticket
+    }
+
+    fn poll(&self, ticket: Ticket) -> Option<tessella_storage::source::Fetched> {
+        self.tickets.take(ticket)
+    }
+
+    fn cancel(&self, ticket: Ticket) {
+        self.tickets.cancel(ticket);
+    }
+
+    fn outstanding(&self) -> usize {
+        self.tickets.open()
+    }
+}
+
+// The default: one queue, and no class to put a request in. Exactly the shape a browser has.
+impl TileTransport for Manual {}
+
+/// A source that would fail if the tile path ever reached for it.
+struct Unused;
+
+impl FileSource for Unused {
+    fn fetch(&self, url: &str) -> Result<Response, FetchError> {
+        Err(FetchError::Transport {
+            url: url.to_string(),
+            message: "the blocking source should not have been asked".to_string(),
+        })
+    }
+}
+
+/// Tiles arrive over whatever answers the transport trait, and only when it answers.
+///
+/// The seam DR-23 exists for, tested without a network. The style declares its tiles inline, so
+/// resolution needs no fetch and the only thing that reaches for bytes is the tile path -- which
+/// here reaches a transport the test controls completely.
+#[test]
+fn tiles_arrive_over_a_transport_that_is_not_the_pool() {
+    let manual = Arc::new(Manual::default());
+    let files = Arc::new(Coalescing::new(Unused));
+    let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
+    let source = TileSource::with_transport(
+        style("http://tiles.invalid"),
+        files,
+        Arc::clone(&manual),
+        cache,
+        Pool::shared(),
+        1,
+    );
+    let cover = [TileCoord {
+        z: 0,
+        x: 0,
+        y: 0,
+        wrap: 0,
+    }];
+    let tile = TileId::new(0, 0, 0);
+
+    source.want(&view(0.0), &cover, &[]);
+    assert!(
+        settle(&source, || source.readiness() == Readiness::Ready),
+        "an inline source never resolved"
+    );
+    source.want(&view(0.0), &cover, &[]);
+
+    assert_eq!(
+        manual.asked(),
+        vec!["http://tiles.invalid/0/0/0.pbf".to_string()],
+        "the tile path did not go through the supplied transport"
+    );
+
+    // Nothing has answered, so draining finds nothing however often it runs.
+    for _ in 0..5 {
+        source.drain();
+    }
+    assert!(source.buckets(tile).is_none());
+    assert_eq!(source.outstanding(), 1);
+
+    // The test decides when the bytes exist. No timing, no network, no sleep.
+    manual.answer(FIXTURE);
+    source.drain();
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while source.buckets(tile).is_none() && Instant::now() < deadline {
+        std::thread::yield_now();
+    }
+    assert!(
+        source.buckets(tile).is_some(),
+        "the tile never landed from bytes the transport supplied"
+    );
+    assert_eq!(source.outstanding(), 0);
 }
 
 /// A style whose sources cannot resolve says so, rather than staying blank and quiet.
