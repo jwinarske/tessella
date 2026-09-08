@@ -487,10 +487,28 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
         };
 
         // Anything landed since the last frame makes this one worth drawing.
+        // A pool with no workers has nobody to run its jobs but this thread. Twice, around the
+        // transport's drain, because the two feed each other: the first call runs the fetches
+        // and the style resolution queued last tick, the transport's drain turns whatever landed
+        // into builds, and the second runs those builds so this frame draws them rather than the
+        // next one. A pool that *has* workers is left alone -- helping would spend the frame
+        // budget on somebody else's decode, which is what the workers are for.
+        //
+        // Unbounded on purpose. This is the deterministic mode, and a trace only reproduces if a
+        // tick means "everything that was ready", not "as much as fitted".
+        let serial = tessella_orchestrate::pool::Pool::shared();
+        if serial.workers() == 0 {
+            serial.drain(usize::MAX);
+        }
+
         // Before anything else, and `generation` in particular: a tile whose bytes landed since
         // the last tick becomes a build here, and a drain that ran after the read below would
         // put a frame of lag on every tile the deferred transport delivers.
         state.source.drain();
+
+        if serial.workers() == 0 {
+            serial.drain(usize::MAX);
+        }
 
         let generation = state.source.generation();
         if generation != state.generation {

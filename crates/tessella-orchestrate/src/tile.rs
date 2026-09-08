@@ -677,6 +677,10 @@ pub fn background_covers_viewport(style: &Style, zoom: f64) -> bool {
     // A diagnostic escape hatch, read once: the viewport background is one quad over the whole
     // frame ordered by paint order, so it is the first suspect whenever everything under the
     // labels disappears. This is how that is tested without editing a style.
+    //
+    // Behind `std` for the reason the fade knob in `map.rs` is: reading the environment needs
+    // one, and a target without it is not missing a feature.
+    #[cfg(feature = "std")]
     {
         static OFF: std::sync::LazyLock<bool> =
             std::sync::LazyLock::new(|| std::env::var("TSL_NO_VIEWPORT_BG").is_ok());

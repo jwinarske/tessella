@@ -59,6 +59,7 @@ pub mod pacing;
 pub mod pool;
 pub mod project;
 pub mod registry;
+#[cfg(feature = "std")]
 pub mod source;
 pub mod stencil;
 pub mod sweep;

@@ -98,9 +98,7 @@ jobs:
       #
       # What does assert it is building the crates that claim `no_std` without `std` at all. The
       # list comes from the marker itself rather than a copy, so a new crate is covered the day it
-      # declares one. `tessella-orchestrate` carries the marker and is the standing exception: its
-      # `std` feature is default and `source.rs` still reaches for `std::sync`, which needs a lock
-      # that is not `std`'s before the marker can be honoured.
+      # declares one, and there are no exceptions: a crate that carries the marker honours it.
       - name: the no_std crates build without std
         if: matrix.target == 'wasm32-unknown-unknown'
         run: |
@@ -108,7 +106,6 @@ jobs:
           for lib in crates/*/src/lib.rs; do
             grep -qE '^#!\[.*no_std' "$lib" || continue
             crate=$(basename "$(dirname "$(dirname "$lib")")")
-            if [ "$crate" = tessella-orchestrate ]; then continue; fi
             echo "== $crate"
             cargo check -p "$crate" --no-default-features --target ${{ matrix.target }}
           done

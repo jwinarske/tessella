@@ -496,6 +496,11 @@ impl Map {
         // directly can exercise them without a consumer that knows to pass a frame delta. It is
         // how the fades reach `render_probe`, which is the only probe that prints the consumer's
         // own counters.
+        //
+        // Behind `std` because a knob read from the environment needs an environment. A target
+        // with none does not lose a feature by not having it -- it loses a way of asking for one
+        // in a test.
+        #[cfg(feature = "std")]
         {
             static STEP: std::sync::LazyLock<Option<f64>> = std::sync::LazyLock::new(|| {
                 std::env::var("TSL_FADE_MS")

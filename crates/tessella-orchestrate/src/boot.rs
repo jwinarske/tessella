@@ -283,6 +283,44 @@ impl Workers {
         Self(1)
     }
 
+    /// No workers at all, for a caller that runs the jobs itself.
+    ///
+    /// Distinct from `new(0)`, which clamps to one on purpose: a caller passing a computed zero
+    /// wants the work done and would otherwise get silence. Naming it is the way to say the
+    /// silence is intended -- the jobs run when [`Pool::drain`](crate::pool::Pool::drain) runs
+    /// them, on whichever thread called it.
+    ///
+    /// Two callers want this. A browser has no threads to spawn, so it is the only pool that
+    /// exists there. And on native it is the deterministic mode: the whole producer on one
+    /// thread with one call site per tick, which is a trace that reproduces.
+    #[must_use]
+    pub const fn none() -> Self {
+        Self(0)
+    }
+
+    /// The count the environment asks for, or the default.
+    ///
+    /// `TESSELLA_WORKERS` names it, and zero means [`Self::none`] -- the deterministic mode,
+    /// where the producer runs on the ticking thread and a trace reproduces. Without a way to
+    /// select it, `none` would be a constructor nothing could reach and DR-24's "what native
+    /// gains" would be a paragraph rather than a mode.
+    ///
+    /// Read once, at the process pool's first use. A count that changed under a running pool
+    /// would describe a pool that does not exist.
+    #[must_use]
+    pub fn from_env() -> Self {
+        match std::env::var("TESSELLA_WORKERS").ok().as_deref() {
+            None => Self::default(),
+            // A value that is not a number is a typo, and inventing a count for it would hide
+            // the typo behind a pool that silently is not what was asked for.
+            Some(text) => match text.trim().parse::<usize>() {
+                Ok(0) => Self::none(),
+                Ok(count) => Self::new(count),
+                Err(_) => Self::default(),
+            },
+        }
+    }
+
     /// The number to actually spawn for `jobs` pieces of work.
     #[must_use]
     pub const fn for_jobs(self, jobs: usize) -> usize {

@@ -387,3 +387,148 @@ fn a_waiter_helps_with_higher_priority_work() {
     );
     gate.wait();
 }
+
+/// A pool with no workers holds its jobs until someone runs them.
+///
+/// The shape a browser has, and the shape the deterministic native mode has. `submit` must still
+/// queue, `is_idle` must still say there is work, and nothing must run until it is asked to.
+#[test]
+fn a_pool_with_no_workers_runs_nothing_until_drained() {
+    let pool = Pool::new(Workers::none());
+    assert_eq!(pool.workers(), 0);
+
+    let ran = Arc::new(AtomicUsize::new(0));
+    for _ in 0..5 {
+        let ran = Arc::clone(&ran);
+        pool.submit(Priority::Foreground, move || {
+            ran.fetch_add(1, Ordering::AcqRel);
+        });
+    }
+
+    // Long enough for any thread that existed to have finished. There is none.
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        ran.load(Ordering::Acquire),
+        0,
+        "a job ran with nothing to run it"
+    );
+    assert!(
+        !pool.is_idle(),
+        "a pool with five queued jobs called itself idle"
+    );
+
+    assert_eq!(pool.drain(usize::MAX), 5);
+    assert_eq!(ran.load(Ordering::Acquire), 5);
+    assert!(pool.is_idle());
+    assert_eq!(pool.drain(usize::MAX), 0, "a drained pool found work twice");
+}
+
+/// The budget bounds one call, and the rest waits for the next.
+#[test]
+fn a_drain_stops_at_its_budget() {
+    let pool = Pool::new(Workers::none());
+    let ran = Arc::new(AtomicUsize::new(0));
+    for _ in 0..10 {
+        let ran = Arc::clone(&ran);
+        pool.submit(Priority::Background, move || {
+            ran.fetch_add(1, Ordering::AcqRel);
+        });
+    }
+
+    assert_eq!(pool.drain(4), 4);
+    assert_eq!(ran.load(Ordering::Acquire), 4);
+    assert_eq!(pool.drain(0), 0, "a zero budget ran something");
+    assert_eq!(pool.drain(usize::MAX), 6);
+    assert_eq!(ran.load(Ordering::Acquire), 10);
+}
+
+/// A drain takes work in the same order a worker would.
+///
+/// Strict priority, and the point of asserting it here is that the two paths must not disagree:
+/// a trace taken on a drained pool is only worth having if it is the order the threaded one runs.
+#[test]
+fn a_drain_takes_the_highest_class_first() {
+    let pool = Pool::new(Workers::none());
+    let order = Arc::new(Mutex::new(Vec::new()));
+
+    // Submitted lowest-first, so any answer but strict priority leaves them in submission order.
+    for (priority, name) in [
+        (Priority::Prefetch, "prefetch"),
+        (Priority::Background, "background"),
+        (Priority::Foreground, "foreground"),
+    ] {
+        let order = Arc::clone(&order);
+        pool.submit(priority, move || {
+            order.lock().expect("not poisoned").push(name);
+        });
+    }
+
+    pool.drain(usize::MAX);
+    let seen = order.lock().expect("not poisoned").clone();
+    assert_eq!(seen, vec!["foreground", "background", "prefetch"]);
+}
+
+/// A job that unwinds during a drain is counted, and the drain carries on.
+#[test]
+fn a_drain_survives_a_panicking_job() {
+    let pool = Pool::new(Workers::none());
+    let before = pool.panics();
+    let ran = Arc::new(AtomicUsize::new(0));
+
+    pool.submit(Priority::Foreground, || panic!("this job comes apart"));
+    let after = Arc::clone(&ran);
+    pool.submit(Priority::Foreground, move || {
+        after.fetch_add(1, Ordering::AcqRel);
+    });
+
+    assert_eq!(pool.drain(usize::MAX), 2, "the drain stopped at the panic");
+    assert_eq!(
+        ran.load(Ordering::Acquire),
+        1,
+        "the job after the panic never ran"
+    );
+    assert_eq!(pool.panics(), before + 1);
+}
+
+/// A chain finishes inside one drain rather than a tick short.
+#[test]
+fn a_job_submitted_by_a_job_runs_in_the_same_drain() {
+    // Leaked so the jobs can name the pool they are running on. A job is `'static` (see
+    // `pool.rs`), so it cannot borrow a local one -- and a pool with no workers has nothing to
+    // join, so never dropping it costs the allocation and nothing else.
+    let pool: &'static Pool = Box::leak(Box::new(Pool::new(Workers::none())));
+    let ran = Arc::new(AtomicUsize::new(0));
+
+    let outer = Arc::clone(&ran);
+    pool.submit(Priority::Foreground, move || {
+        outer.fetch_add(1, Ordering::AcqRel);
+        let inner = Arc::clone(&outer);
+        pool.submit(Priority::Foreground, move || {
+            inner.fetch_add(1, Ordering::AcqRel);
+        });
+    });
+
+    // Two, not one. The job the first job queued is eligible in the same call, which is what
+    // stops a chain from costing a tick per link.
+    assert_eq!(pool.drain(usize::MAX), 2);
+    assert_eq!(ran.load(Ordering::Acquire), 2);
+}
+
+/// A batch on a workerless pool still completes, because waiting means helping.
+#[test]
+fn a_batch_completes_on_a_pool_with_no_workers() {
+    let pool = Pool::new(Workers::none());
+    let ran = Arc::new(AtomicUsize::new(0));
+    let batch = pool.batch(Priority::Foreground);
+    for _ in 0..8 {
+        let ran = Arc::clone(&ran);
+        batch.submit(move || {
+            ran.fetch_add(1, Ordering::AcqRel);
+        });
+    }
+
+    // No worker will ever take these. `wait` runs them itself, which is what keeps the cold
+    // start working in the deterministic mode without a second code path.
+    batch.wait().expect("no panics");
+    assert_eq!(ran.load(Ordering::Acquire), 8);
+}
