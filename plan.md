@@ -3384,6 +3384,36 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
   where "visibly better" is most likely to be won: the metric a user perceives is time to a
   legible frame, not frames per second.
 
+- **DR-23 The blocking `FileSource` stays the native contract; wasm gets a completion-shaped
+  transport beside it.** A browser has no blocking fetch on the main thread and no `std::net`, and
+  `FileSource::fetch` (`storage/src/source.rs:148`) is what the whole storage layer sits on. The
+  alternative is making `fetch` async everywhere, and it is rejected: native tiles are fetched from
+  pool workers where blocking is correct and cheap, and an async model there buys a waker, a future
+  and a state machine in `boot::resolve_sources` and `TileSource` for no native gain. So
+  `DeferredFileSource` is a second trait — `request(url, etag) -> Ticket` and a non-blocking
+  `poll(ticket)` — and `TileSource::drain` lands whatever completed, called from `tick` before
+  anything else. `Coalescing`, `Router`, `Shared` and the `Cache-Control` parse are untouched:
+  they sit on `Response`, not on how it arrived. A blanket `impl<S: FileSource> DeferredFileSource
+  for PoolBacked<S>` submits the blocking fetch to the pool, so `drain` has one code path and the
+  deterministic mode below can run the deferred loop on Linux. **Why a ticket and not a handle:**
+  a `u64` into a table the impl owns can be held by JS; a pointer into Rust memory cannot.
+  **What this costs the existing settle question:** nothing, and it inherits an answer. `outstanding`
+  counts style resolution as well as in-flight tiles — a browser fetches its manifest the same way
+  it fetches a tile, so the count a settle loop reads is already the right one.
+- **DR-24 `Pool` stays a concrete type with `cfg`-selected internals. No `dyn Executor`.**
+  `submit`, `batch`, `Priority`, `is_idle` and `panics` are the public shape and do not change;
+  native keeps its worker threads and wasm gets a per-`Priority` `VecDeque` drained by
+  `Pool::drain(budget)` in priority order. **Why not a trait:** an executor trait puts a virtual
+  call on the job path for every target so that one target can be different, and the job path is
+  §12's hot one. `Batch::wait` already runs its own jobs inline when the pool is full, so the
+  single-thread case is a narrowing of behaviour that exists rather than a new one.
+  `Workers::serial` (`boot.rs:281`) supplies the count. Clock: `web_time::Instant` replaces
+  `std::time::Instant` at `source.rs:28` and `boot.rs:53`, and is a re-export of `std` off wasm.
+  **What native gains from it:** `drain(budget)` plus `serial` plus the DR-23 blanket impl is the
+  whole producer on one thread with one call site per tick — a reproducible trace for §12 and for
+  the settle question, falling out of the wasm work rather than being built separately. That is why
+  `drain` is a `Pool` method and not a wasm-only function.
+
 ## 15. Risk register
 
 - **R-1 Symbol pipeline underestimation.** No ecosystem substitute; placement parity is
@@ -3498,6 +3528,20 @@ covers every run — and it is turned into a time separately, by measuring what 
 costs against the nine vendored Protomaps tiles and multiplying. That median is 522 µs, so the
 eighty removed requests are about 42 ms of producer work over the sweep, each of which was also
 a subdivision and a draw the consumer no longer makes.
+- **R-9 DR-23 drifts into "async everywhere".** The pressure is real: once a deferred path
+  exists, making the blocking one call it looks like simplification. Mitigation: `FileSource::fetch`
+  keeps its signature, and a change to it is the review's tripwire rather than a judgement call.
+- **R-10 `Pool` grows a trait.** Same shape as R-9 and the same answer: DR-24 says concrete, `cfg`
+  inside. A `dyn Executor` is one virtual call on §12's hot path to serve one target.
+- **R-11 A single-threaded wasm producer stalls the page on a large cover.** `drain(budget)` bounds
+  the work per tick and `Priority::Prefetch` is documented as correct to starve, which is the
+  existing design rather than a new mechanism. First symptom: a frame budget missed on an integer
+  crossing, which §13.2 already measures.
+- **R-12 The 1.94.1 pin versus a threaded wasm producer.** W-T needs `+atomics`, `-Zbuild-std` and
+  nightly. It is deferred for exactly that reason and touches no pinned toolchain; DR-22's order
+  applies — make the single-threaded one work and measure it before paying for threads.
+- **R-13 CORS on tile origins.** Out of tessella's hands. A web deployment needs origins that
+  answer preflight, the same as every web map; it is documented rather than mitigated.
 
 ## 16. Open questions (rev 0.4 targets)
 
@@ -5218,6 +5262,20 @@ a subdivision and a draw the consumer no longer makes.
   believing a measurement that says nothing happened. And the consumer's `Mesh` is built with
   positional initialisers, so a field inserted between `texture` and `texture1` silently took the
   next one's value; the new field goes after both, and says so.
+
+- **flutter_gpu on Flutter web.** Unverified, and the Dart consumer's shape depends on it: if it is
+  unavailable the consumer targets WebGL2 through `dart:js_interop` and the flutter_gpu seam waits.
+  Decide before the Dart half of §19's WS-3; the TypeScript consumer does not depend on the answer.
+- **The budget `Pool::drain` spends.** Time-based matches what a frame needs; job-count is
+  reproducible. Ship time-based on the web and job-count in the deterministic mode, and let the
+  probe say whether the two agree — which is the question, not which is nicer.
+- **Whether the ring's `AtomicU64` needs a real fence on wasm32.** Without `+atomics` it compiles to
+  plain loads and stores, which is correct for one thread. Nothing in `ring.rs` should depend on the
+  fence being real in that mode — but W-T makes it matter, so it is worth confirming while it is
+  still cheap to be wrong.
+- **Whether fonts and sprites route through the ticket path.** Glyph PBF and sprite fetches go
+  through the same `FileSource`; the deferred path has to catch them too or a web map draws its
+  geometry and none of its labels.
 
 ## 17. Extensions beyond the oracle
 
@@ -7903,3 +7961,113 @@ exactly that: a denial of the view rather than of anything worse, and now clampe
 What this does not cover is the bend, which does not exist yet. A shader has its own version of
 each of these -- an unbounded loop is a hung GPU, and a NaN vertex is a whole draw call gone -- and
 none of the checks above will reach it.
+
+## 19. wasm32 as a fourth target
+
+Build the producer for `wasm32-unknown-unknown` so a browser page draws the same capture stream a
+Linux consumer draws, from the same records and the same header, with no change to native codegen
+and no change to a native contract.
+
+One rule, because everything below follows from it:
+
+> **wasm gets its own backend behind an existing seam. It never adds an indirection to the shared
+> path.**
+
+Two seams need that enforced by hand — the transport and the executor, DR-23 and DR-24. The rest is
+`cfg` noise.
+
+### 19.1 What the tree already gives it
+
+Six crates are `no_std` + `alloc` already — `capture-abi`, `layout`, `orchestrate`, `source`,
+`style`, and `tile` is `std` only for `tan`/`ln`/`exp`/`atan` (`tile/src/lib.rs:24-29`). So §12's hot
+path compiles for wasm32 today or one `cargo check` away from it. The dependency posture is
+pure-Rust by R-6, so the default feature set asks no C toolchain question.
+
+The ring is the part that makes this more than a port. It is plain memory addressed by offset
+handles, and a `WebAssembly.Memory` view *is* the ring — §3.5's zero-copy argument holds in a
+browser without restatement. The FFI already promises a map is driven from one thread, which is what
+the browser main thread requires anyway. `panic = "abort"`, `lto = "fat"` and `codegen-units = 1` are
+already the release profile, which is the wasm size profile with nothing to add but `wasm-opt`.
+`Workers::serial` is a one-thread scheduling baseline that exists. `RangeReader` means pmtiles over
+HTTP `Range:` is a second impl rather than a redesign. And `topology` takes its sysfs reads as a
+closure with no libc, so it degrades to "no policy" for free.
+
+`tessella-ffi` already builds `staticlib`, `cdylib` and `rlib`, so the artefact half of the export
+work is done; what is left is the strings.
+
+### 19.2 What blocks it
+
+**The transport is call-and-return.** `FileSource::fetch` blocks, `HttpFileSource` wraps `ureq`, and
+`ureq` sits on `std::net`. A browser has neither. This is the one trait contract the storage layer
+is built on, and DR-23 is the answer.
+
+**The pool is real threads.** `Condvar`, `Mutex`, `JoinHandle` at `pool.rs:48-50`, and
+`Instant::now` at `source.rs:28` and `boot.rs:53`. All behind the `std` feature, but `std` is default
+and `Pool::shared()` is what the FFI wires. `std::thread::spawn` returns `Err` on wasm32 and
+`Instant::now` panics. DR-24 is the answer.
+
+**Storage assumes a unix filesystem.** `store_path` is always compiled and uses `std::fs` and
+`std::os::unix`; `cache` is `rusqlite` with bundled C; `pmtiles` reads through `File` and
+`FileExt::read_at`. `store_path` moves behind an `fs` feature, default on; `cache` on the web is an
+`OpfsCache` at the same boundary `CachingFileSource` already uses rather than sqlite-wasm, which
+keeps offline regions a later impl instead of a redesign; `pmtiles` gets an `HttpRange` reader over
+the deferred transport and keeps the same directory walk and the same inflate.
+
+**The FFI takes `CStr`.** String parameters become `(*const u8, usize)` on *all* targets. A `CStr`
+was a convenience on native and one signature is easier to keep honest than two.
+`tessella_regions` returns its ranges as offsets into linear memory, which on wasm are the
+`WebAssembly.Memory` byte offsets a consumer reads from. No wasm-bindgen on the producer:
+`#[no_mangle] extern "C"` is enough, and it keeps `include/tessella_capture_abi.h` the single
+description of the stream.
+
+**There is no web consumer.** A minimal WebGL2 consumer in TypeScript, reading the ring from
+`memory.buffer` and drawing fills and lines, proves the memory-view story end to end. It is not the
+product consumer; it reuses the record decoding `tools/capture-render` already does on Linux, ported
+by hand, because the header is the contract. Dart-on-web through `dart:js_interop` is the second
+consumer and the one that matters for the flutter_scene seam.
+
+### 19.3 Workstreams
+
+| | scope | depends on |
+| --- | --- | --- |
+| **WS-0** | target in `rust-toolchain.toml` and the `cross-check` matrix; `store_path` behind `fs`; `web-time` | — |
+| **WS-1** | DR-23: the trait, the ticket table, `TileSource::drain`, the native blanket impl, the `fetch` impl | WS-0 |
+| **WS-2** | DR-24: single-thread `Pool` internals, `drain(budget)`, tick integration | WS-0 |
+| **WS-3** | `(ptr, len)` strings; the WebGL2 consumer drawing fills from the ring | WS-1, WS-2 |
+| **WS-4** | `HttpRange` for pmtiles; `OpfsCache` | WS-1 |
+| **WS-5** | W-T: a worker-side producer over `SharedArrayBuffer` | deferred, see R-12 |
+
+WS-0 through WS-3 is "a browser draws a map from the same records". WS-4 is parity. WS-5 is
+performance and needs its own toolchain decision.
+
+The first gate is the cheapest and the most informative: `cargo check --workspace --target
+wasm32-unknown-unknown` in the cross matrix asserts the `no_std` discipline holds on a target with no
+threads, no clock and no filesystem. It is the same lane `aarch64` and `riscv64gc` already use.
+
+### 19.4 How it is tested, and why the oracle still applies
+
+`wasm-bindgen-test` under headless Chrome or node: create a map, set a camera, tick until `pending`
+is zero, read the ring, and assert the *same record sequence* the Linux `capture-render` oracle
+produced for the same style and camera. §9.1's oracle diff applies unchanged, because the records
+are the contract and neither side gets a say in what they are.
+
+That is worth stating against §13.4's globe, which had to be argued from identities because MapLibre
+Native has no globe to render against. wasm has an oracle, and it is the one this project already
+trusts most: itself on another target, byte for byte.
+
+The deterministic mode from DR-24 gets tested by running the existing native suite through `drain`.
+If the diff is zero, the executor change touched nothing it should not have.
+
+Size goes in CI as a gzipped byte count per feature set. DR-12 applies; expect `image` and `webp` to
+dominate.
+
+### 19.5 What native pays
+
+Nothing, by construction. Native keeps the blocking trait and only meets the blanket impl through
+`drain`, which it does not call outside the deterministic mode. `Pool` stays concrete, so the wasm
+internals compile out and no virtual call appears on the job path. `web-time` is `std` off wasm, `fs`
+is on by default, and `cdylib` is a second artefact from object code that already exists.
+
+What native gains is in DR-24: a one-thread, one-call-site-per-tick execution of the whole producer,
+which is a reproducible trace baseline that falls out of this work rather than being built for its
+own sake.
