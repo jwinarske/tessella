@@ -7845,3 +7845,33 @@ figure is used to size anything.
 Two things the tests hold, beyond the bound itself: one segment fewer would break the tolerance --
 without which "subdivide everything to the ceiling" satisfies it -- and a finer tile never asks for
 more than a coarser one, which is the property that makes the count per tile rather than per frame.
+
+### The globe's view matrix, and what three assertions caught
+
+Sphere to clip: turn the world so the point under the camera faces it, back the camera off along
+that axis, project. `rotate_x` and `rotate_y` join `rotate_z`, which was the only one this had.
+
+Three sign or order errors, each caught by exactly one assertion, and all three of the kind that a
+hand check would have missed:
+
+- **The translation post-multiplied**, giving `R · T` where a view matrix needs `T · R`, so the
+  camera translated in the already-turned frame and everything landed behind it. Caught by "the
+  point under the camera is in front of it".
+- **The rotations composed in the order written**, and these post-multiply, so
+  `rotate_x(rotate_y(I, lon), lat)` applies the *latitude* first. Only a camera on the equator or
+  the prime meridian landed right -- which is precisely the pair of cases anyone hand-checking would
+  have picked. Caught by Seattle.
+- **`sphere_point`'s `y` points down**, GL JS's convention, while clip space has `y` up. The flip
+  belongs on the output side; post-multiplied it flips the point before the rotation rather than the
+  picture after it. It reverses triangle winding, which the consumer needs to know when it culls
+  faces. Caught by "north is up".
+
+And one test was wrong rather than the code. "The antipode is behind the camera" is false: it sits
+on the view axis *inside* the frustum, projects to the centre of the screen, and is merely further
+away in depth. A projection cannot express occlusion — which is the whole reason `faces_camera`
+exists, and the test now asserts the two agreeing instead.
+
+That is three of §13.4's four pieces standing on identities and bounds, with no oracle anywhere:
+the projection, the horizon, the subdivision and now the camera. What is left is the bend itself,
+which is a material, and symbol placement, which needs the bend. The bend is where the eye becomes
+the only instrument — everything up to it has been checkable, which is why it went last.
