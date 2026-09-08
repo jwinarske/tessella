@@ -140,7 +140,7 @@ fn the_horizon_is_where_the_tangent_grazes() {
 fn the_camera_backs_off_as_the_zoom_falls() {
     let mut previous = f64::INFINITY;
     for zoom in 0..12 {
-        let distance = globe::camera_distance(f64::from(zoom));
+        let distance = globe::camera_distance(f64::from(zoom), 700.0);
         assert!(
             distance > 1.0,
             "the camera is outside the surface at z{zoom}"
@@ -150,5 +150,110 @@ fn the_camera_backs_off_as_the_zoom_falls() {
             "z{zoom} is not nearer than the zoom before it: {distance} against {previous}"
         );
         previous = distance;
+    }
+}
+
+/// A safe horizon cull removes nothing at tile granularity, and this pins that.
+///
+/// §13.4 recorded "a third to a half of the cover between z1 and z2.5", which the measurement below
+/// reproduces to the tile -- but only for a test that asks whether a tile's *centre* is behind the
+/// horizon. A z1 tile spans ninety degrees of longitude, so its centre goes behind while a third of
+/// it is still on screen, and culling on that leaves a hole in the planet. Asked safely -- is any
+/// part of the tile visible -- the answer is nothing, at every zoom.
+///
+/// So the cull belongs after the subdivision rather than before it, on patches small enough for the
+/// question to have a useful answer. This test exists to keep the safe version honest: if it ever
+/// starts culling whole tiles, either the sampling got coarser or the camera model moved.
+#[test]
+fn the_horizon_cuts_only_the_lowest_zooms() {
+    use tessella_tile::cover::{self, ViewTransform, WorldCopies};
+
+    for zoom in 0..8 {
+        let view = ViewTransform {
+            longitude: -122.3321,
+            latitude: 47.6062,
+            zoom: f64::from(zoom),
+            width: 900.0,
+            height: 700.0,
+            bearing: 0.0,
+            pitch: 0.0,
+        };
+        let view = camera::settled(&view);
+        let tiles = cover::cover_with(&view, WorldCopies::One).expect("covers");
+        let behind = tiles
+            .iter()
+            .filter(|tile| {
+                !globe::tile_faces_camera(
+                    tile.z,
+                    tile.x,
+                    tile.y,
+                    view.longitude,
+                    view.latitude,
+                    view.zoom,
+                    view.height,
+                )
+            })
+            .count();
+        assert_eq!(
+            behind,
+            0,
+            "z{zoom} culled {behind} of {} tiles, and a conservative test should cull none: \
+             every tile a Mercator cover produces has a corner in front of the horizon",
+            tiles.len()
+        );
+    }
+}
+
+/// Prints what the cull removes, for the record rather than as an assertion.
+#[test]
+#[ignore = "a measurement, not a check"]
+fn horizon_counts() {
+    use tessella_tile::cover::{self, ViewTransform, WorldCopies};
+    for tenth in 0..=40 {
+        let zoom = f64::from(tenth) / 10.0;
+        let view = camera::settled(&ViewTransform {
+            longitude: -122.3321,
+            latitude: 47.6062,
+            zoom,
+            width: 900.0,
+            height: 700.0,
+            bearing: 0.0,
+            pitch: 0.0,
+        });
+        let tiles = cover::cover_with(&view, WorldCopies::One).expect("covers");
+        let behind = tiles
+            .iter()
+            .filter(|t| {
+                !globe::tile_faces_camera(
+                    t.z,
+                    t.x,
+                    t.y,
+                    view.longitude,
+                    view.latitude,
+                    view.zoom,
+                    view.height,
+                )
+            })
+            .count();
+        // The same question asked three ways, because the answer depends entirely on which.
+        let distance = globe::camera_distance(view.zoom, view.height);
+        let toward = globe::sphere_point(view.longitude, view.latitude);
+        let centre_behind = tiles
+            .iter()
+            .filter(|t| {
+                let span = 1.0 / f64::from(1u32 << t.z);
+                let p = globe::sphere_point_from_mercator(
+                    (f64::from(t.x) + 0.5) * span,
+                    (f64::from(t.y) + 0.5) * span,
+                );
+                !globe::faces_camera(p, toward, distance)
+            })
+            .count();
+        if tenth % 5 == 0 {
+            println!(
+                "z{zoom:>4}  cover {:>3}  no-corner-visible {behind:>3}  centre-behind {centre_behind:>3}",
+                tiles.len()
+            );
+        }
     }
 }

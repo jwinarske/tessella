@@ -43,22 +43,23 @@ pub fn sphere_point_from_mercator(x: f64, y: f64) -> [f64; 3] {
     sphere_point(longitude, latitude)
 }
 
-/// How far from the sphere's centre a camera sits to see it at a given zoom, in sphere radii.
+/// How far from the sphere's centre a camera sits, in sphere radii, for a viewport `height` tall.
 ///
-/// One radius is the surface, so this is always greater than one. The globe is the whole world in
-/// view at zoom zero and approaches the surface as the zoom rises, which is the same relationship
-/// `world_size` describes for the plane -- written against it so the two agree at the zoom where a
-/// map switches between them.
+/// One radius is the surface, so this is always greater than one: at zoom zero the world is a small
+/// ball a long way off, and the camera closes on the surface as the zoom rises. The height is not
+/// optional -- `camera_to_center_distance` is proportional to it, and passing a stand-in put the
+/// camera 1.018 radii out at z0, where the visible cap is ten degrees wide and the cull removed the
+/// entire world. The test that counts what the cull removes is what found that.
 #[must_use]
-pub fn camera_distance(zoom: f64) -> f64 {
+pub fn camera_distance(zoom: f64, height: f64) -> f64 {
     // The world spans `world_size(zoom)` pixels and the sphere's circumference is the same world,
-    // so the radius in pixels is `world_size / 2π`. A camera at `camera_to_center_distance` pixels
-    // therefore sits that many radii out.
+    // so the radius in pixels is `world_size / 2π`. A camera `camera_to_center_distance` pixels
+    // from the centre of the screen therefore sits that many radii out.
     let radius = crate::camera::world_size(zoom) / (2.0 * core::f64::consts::PI);
     if radius <= 0.0 {
         return f64::INFINITY;
     }
-    1.0 + crate::camera::camera_to_center_distance(1.0) / radius
+    1.0 + crate::camera::camera_to_center_distance(height) / radius
 }
 
 /// Whether a surface point faces a camera on the `+direction` axis, at `distance` radii out.
@@ -88,4 +89,40 @@ pub fn faces_camera(point: [f64; 3], direction: [f64; 3], distance: f64) -> bool
 #[must_use]
 pub fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+/// Whether any part of a tile faces a camera over `(longitude, latitude)` at `zoom`.
+///
+/// The cull §13.4 leaves to the consumer: one test per tile before it subdivides, which removes the
+/// draw as well as the work. Sampled at the tile's four corners and its centre rather than solved,
+/// because a tile is a curved patch and the extremum is at a corner for every tile a Mercator cover
+/// produces -- and because being wrong in the safe direction matters more than being tight. A tile
+/// wrongly kept costs a subdivision; a tile wrongly culled is a hole in the planet.
+///
+/// Conservative for the same reason: it answers yes if *any* sample faces the camera.
+#[must_use]
+pub fn tile_faces_camera(
+    z: u8,
+    x: u32,
+    y: u32,
+    longitude: f64,
+    latitude: f64,
+    zoom: f64,
+    height: f64,
+) -> bool {
+    let toward = sphere_point(longitude, latitude);
+    let distance = camera_distance(zoom, height);
+    let span = 1.0 / f64::from(1u32 << z);
+    #[allow(clippy::cast_lossless)]
+    let (x0, y0) = (f64::from(x) * span, f64::from(y) * span);
+    let samples = [
+        (x0, y0),
+        (x0 + span, y0),
+        (x0, y0 + span),
+        (x0 + span, y0 + span),
+        (x0 + span / 2.0, y0 + span / 2.0),
+    ];
+    samples
+        .iter()
+        .any(|&(sx, sy)| faces_camera(sphere_point_from_mercator(sx, sy), toward, distance))
 }
