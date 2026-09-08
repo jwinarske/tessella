@@ -359,3 +359,127 @@ fn subdivision_counts() {
         println!("  z{z}: {n} segments -> {} vertices", (n + 1) * (n + 1));
     }
 }
+
+fn globe_view(longitude: f64, latitude: f64, zoom: f64) -> tessella_tile::cover::ViewTransform {
+    tessella_tile::cover::ViewTransform {
+        longitude,
+        latitude,
+        zoom,
+        width: 900.0,
+        height: 700.0,
+        bearing: 0.0,
+        pitch: 0.0,
+    }
+}
+
+/// The point under the camera lands in the middle of the screen.
+///
+/// The one thing a view matrix has to get right, and the check that catches a sign error in either
+/// rotation: get the latitude's sign wrong and the centre moves off in y, the longitude's and it
+/// moves off in x.
+#[test]
+fn the_camera_looks_at_the_point_it_is_over() {
+    for &(longitude, latitude) in &[
+        (0.0, 0.0),
+        (-122.3321, 47.6062),
+        (139.7, 35.7),
+        (0.0, -33.9),
+        (179.0, 0.0),
+    ] {
+        for zoom in [0.0, 2.0, 5.0] {
+            let view = globe_view(longitude, latitude, zoom);
+            let matrix = globe::clip_matrix(&view);
+            let under = globe::sphere_point(longitude, latitude);
+            let ndc = globe::project_point(&matrix, under)
+                .expect("the point under the camera is in front of it");
+            assert!(
+                ndc[0].abs() < 1e-9 && ndc[1].abs() < 1e-9,
+                "({longitude}, {latitude}) at zoom {zoom} landed at {ndc:?}, not the centre"
+            );
+        }
+    }
+}
+
+/// North is up.
+///
+/// A point a little further north than the camera lands above the centre, which pins the sign of
+/// the latitude rotation against `sphere_point`'s downward `y`.
+#[test]
+fn north_is_up() {
+    let view = globe_view(0.0, 10.0, 3.0);
+    let matrix = globe::clip_matrix(&view);
+    let north = globe::project_point(&matrix, globe::sphere_point(0.0, 20.0)).expect("in front");
+    let south = globe::project_point(&matrix, globe::sphere_point(0.0, 0.0)).expect("in front");
+    assert!(
+        north[1] > 0.0,
+        "ten degrees north of the camera landed at y={}, which is not up",
+        north[1]
+    );
+    assert!(south[1] < 0.0, "the equator landed at y={}", south[1]);
+}
+
+/// East is right.
+#[test]
+fn east_is_right() {
+    let view = globe_view(0.0, 0.0, 3.0);
+    let matrix = globe::clip_matrix(&view);
+    let east = globe::project_point(&matrix, globe::sphere_point(10.0, 0.0)).expect("in front");
+    assert!(east[0] > 0.0, "ten degrees east landed at x={}", east[0]);
+}
+
+/// The far side of the planet projects *in front* of the camera, and only the horizon knows.
+///
+/// Written first as "the antipode is behind the camera" and that is false: it sits on the view axis
+/// inside the frustum, so the matrix puts it at the centre of the screen, further away in depth.
+/// A projection cannot express occlusion. That is the whole reason `faces_camera` exists and why a
+/// globe needs either it or a depth test -- and the assertion is the pair of them agreeing, not
+/// the matrix doing something it cannot.
+#[test]
+fn the_antipode_projects_in_front_but_faces_away() {
+    let view = globe_view(-122.3321, 47.6062, 1.0);
+    let matrix = globe::clip_matrix(&view);
+    let toward = globe::sphere_point(view.longitude, view.latitude);
+    let distance = globe::camera_distance(view.zoom, view.height);
+
+    let near = globe::sphere_point(view.longitude, view.latitude);
+    let far = globe::sphere_point(view.longitude + 180.0, -view.latitude);
+
+    let near_ndc = globe::project_point(&matrix, near).expect("the near side is in front");
+    let far_ndc = globe::project_point(&matrix, far).expect("so is the far side, being occluded");
+    assert!(
+        far_ndc[2] > near_ndc[2],
+        "the far side is not further away in depth: {} against {}",
+        far_ndc[2],
+        near_ndc[2]
+    );
+    assert!(globe::faces_camera(near, toward, distance));
+    assert!(
+        !globe::faces_camera(far, toward, distance),
+        "the horizon test kept a point on the far side of the planet"
+    );
+}
+
+/// Everything the horizon test keeps is on screen, and the sphere fits.
+///
+/// The two halves have to agree: a tile `faces_camera` accepts must actually project somewhere a
+/// frame can draw, or the cull and the matrix are describing different cameras.
+#[test]
+fn what_faces_the_camera_projects_in_front_of_it() {
+    for zoom in [0.0, 1.0, 3.0] {
+        let view = globe_view(-122.3321, 47.6062, zoom);
+        let matrix = globe::clip_matrix(&view);
+        let toward = globe::sphere_point(view.longitude, view.latitude);
+        let distance = globe::camera_distance(view.zoom, view.height);
+        for lon in (-180..180).step_by(15) {
+            for lat in (-80..81).step_by(20) {
+                let p = globe::sphere_point(f64::from(lon), f64::from(lat));
+                if globe::faces_camera(p, toward, distance) {
+                    assert!(
+                        globe::project_point(&matrix, p).is_some(),
+                        "({lon}, {lat}) faces the camera at zoom {zoom} but projects behind it"
+                    );
+                }
+            }
+        }
+    }
+}

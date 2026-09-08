@@ -823,6 +823,38 @@ pub fn rotate_z(a: &Mat4, radians: f64) -> Mat4 {
     out
 }
 
+/// `a` turned about the x axis, in the same post-multiplied form as [`rotate_z`].
+///
+/// Columns one and two, because a rotation about x mixes y into z. The globe's view matrix needs
+/// all three axes and only z was here.
+#[must_use]
+pub fn rotate_x(a: &Mat4, radians: f64) -> Mat4 {
+    let (sin, cos) = radians.sin_cos();
+    let mut out = *a;
+    for row in 0..4 {
+        let (first, second) = (a[4 + row], a[8 + row]);
+        out[4 + row] = first * cos + second * sin;
+        out[8 + row] = second * cos - first * sin;
+    }
+    out
+}
+
+/// `a` turned about the y axis, in the same post-multiplied form as [`rotate_z`].
+///
+/// Columns two and zero, in that order: the cycle is x to y to z to x, so y's rotation carries z
+/// into x rather than x into z.
+#[must_use]
+pub fn rotate_y(a: &Mat4, radians: f64) -> Mat4 {
+    let (sin, cos) = radians.sin_cos();
+    let mut out = *a;
+    for row in 0..4 {
+        let (first, second) = (a[8 + row], a[row]);
+        out[8 + row] = first * cos + second * sin;
+        out[row] = second * cos - first * sin;
+    }
+    out
+}
+
 /// mbgl's `UnwrappedTileID::pixelsToTileUnits`, for one pixel.
 ///
 /// How many tile units a screen pixel spans, at a zoom, for a tile of a given level. In `f32`

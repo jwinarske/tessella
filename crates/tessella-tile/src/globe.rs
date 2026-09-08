@@ -191,3 +191,73 @@ pub fn chord_error(z: u8, zoom: f64, segments: u32) -> f64 {
     let arc = 2.0 * core::f64::consts::PI / f64::from(1u32 << z);
     radius * (1.0 - (arc / (2.0 * f64::from(segments))).cos())
 }
+
+/// The matrix that takes a point on the unit sphere to clip space.
+///
+/// Built the way GL JS builds its globe matrix: turn the world so the point under the camera faces
+/// it, back the camera off along that axis, then project. Composed rather than a look-at because
+/// the two rotations are the camera's own longitude and latitude and reading them back out of a
+/// look-at is harder than writing them down.
+///
+/// The `y` axis points *down* in [`sphere_point`]'s convention, so the latitude rotation is the
+/// negative of what a right-handed Earth would take. The tests pin the composition rather than the
+/// derivation: the point under the camera lands at the centre of the screen, and a point a quarter
+/// turn away lands off it in the direction it should.
+#[must_use]
+pub fn clip_matrix(view: &crate::cover::ViewTransform) -> crate::camera::Mat4 {
+    let distance = camera_distance(view.zoom, view.height);
+    // Turn (longitude, latitude) onto the +z axis, which is where the camera is.
+    // Longitude first, then latitude -- and that means writing them the other way round, because
+    // these post-multiply: `rotate_y(rotate_x(I, lat), lon)` is `Rx · Ry`, which applies `Ry` to
+    // the point first. Composed the intuitive way the two turns happen in the wrong order and only
+    // a camera on the equator or the prime meridian lands right.
+    let turned = crate::camera::rotate_y(
+        &crate::camera::rotate_x(&crate::camera::identity(), -view.latitude.to_radians()),
+        -view.longitude.to_radians(),
+    );
+    // Then back the camera off along z. The sphere is a unit ball, so the distance is in radii.
+    //
+    // `T * R`, not `R * T`: the camera pulls back along the axis the rotation has already put the
+    // target on, and `translate_in_place` post-multiplies, which would translate in the turned
+    // frame instead. Composed the wrong way round the target lands behind the camera and every
+    // projection returns nothing, which is what the centring test said first.
+    let mut back = crate::camera::identity();
+    crate::camera::translate_in_place(&mut back, 0.0, 0.0, -distance);
+    let eye = crate::camera::multiply(&back, &turned);
+    // `sphere_point`'s `y` points *down* -- GL JS's convention, kept because everything downstream
+    // of it there assumes the sign -- and clip space has `y` up. One of the two has to give, and it
+    // gives here rather than in the projection so that `sphere_point` stays the thing GL JS
+    // documents. The flip reverses triangle winding, which is the consumer's to know about when it
+    // culls faces: a globe patch wound like a Mercator one comes out back-facing.
+    // On the *output* side: `scale` post-multiplies, and applied there it would flip the point
+    // before the rotation rather than the picture after it, which moves the centre off screen.
+    let flip = crate::camera::scale(&crate::camera::identity(), 1.0, -1.0, 1.0);
+    let eye = crate::camera::multiply(&flip, &eye);
+    // Near and far bracket the ball: it spans `distance ∓ 1` and the margins keep a surface
+    // fragment off both planes.
+    let near = (distance - 1.0).max(0.01) * 0.5;
+    let far = (distance + 1.0) * 1.5;
+    #[allow(clippy::cast_possible_truncation)]
+    let fov = f64::from(crate::camera::DEFAULT_FOV as f32);
+    let projection = crate::camera::perspective(fov, view.width / view.height, near, far);
+    crate::camera::multiply(&projection, &eye)
+}
+
+/// A point through a matrix, divided through by `w`, or `None` when it is behind the camera.
+///
+/// The perspective divide, exposed because every check of [`clip_matrix`] is "where did this land"
+/// and doing it by hand in each is how sign errors survive.
+#[must_use]
+pub fn project_point(matrix: &crate::camera::Mat4, point: [f64; 3]) -> Option<[f64; 3]> {
+    let mut out = [0.0f64; 4];
+    for row in 0..4 {
+        out[row] = matrix[row] * point[0]
+            + matrix[4 + row] * point[1]
+            + matrix[8 + row] * point[2]
+            + matrix[12 + row];
+    }
+    if out[3] <= 0.0 {
+        return None;
+    }
+    Some([out[0] / out[3], out[1] / out[3], out[2] / out[3]])
+}
