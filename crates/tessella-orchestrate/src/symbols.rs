@@ -280,10 +280,20 @@ impl ViewSymbols {
                 // `text-size / 24` this calls `font_scale`. Magnitudes, because
                 // `placeLineFeature` compares against `-firstTileDistance` and `lastTileDistance`
                 // and both are distances walked out from the anchor.
+                //
+                // At the plain size, not the walk's and not the shader's. `approximateTileDistance`
+                // reduces to `prevTileDistance + lastSegmentTile` for a label that pitches with the
+                // map, which an along-line label does, and the walk it measures --
+                // `placeFirstAndLastGlyph` inside `placeLineFeature` -- is handed `fontSize / 24`
+                // rather than the pitch-scaled size the *drawing* walk uses. Two walks, two sizes.
+                //
+                // Both other readings were tried and measured worse against the count of circles
+                // each label covers: the shader's ratio gives 236 of 360 agreeing, the walk's 92,
+                // and this 246.
                 let reach = label.glyph_reach.map(|(first, last)| {
                     (
-                        (first * options.font_scale * label.perspective).abs(),
-                        (last * options.font_scale * label.perspective).abs(),
+                        (first * options.font_scale).abs(),
+                        (last * options.font_scale).abs(),
                     )
                 });
 
@@ -320,12 +330,20 @@ impl ViewSymbols {
                     // 45 had no run at all against mbgl's six -- and a label with no run cannot be
                     // placed, so the far field went bare where over-drawing had been.
                     let to_tile = options.tile_units_per_pixel;
-                    let tile_scale = box_scale * to_tile;
+                    // At *layout* scale, with no camera in it. mbgl builds `CollisionFeature`'s
+                    // circles once per bucket, in tile units, and the camera enters only as
+                    // `tileToViewport` when a circle is projected to be tested. Folding the
+                    // perspective ratio into the run instead moved every circle's
+                    // `signedDistanceFromAnchor` with the camera, so the reach window and the
+                    // distances it is compared against scaled against each other.
+                    let tile_scale = options.font_scale * to_tile;
+                    // Padding too: mbgl adds it in tile units before `tileToViewport`, which is
+                    // what the point path's `scaled()` above reproduces by hand.
                     let tile_padding = Padding {
-                        top: text_padding.top * to_tile,
-                        bottom: text_padding.bottom * to_tile,
-                        left: text_padding.left * to_tile,
-                        right: text_padding.right * to_tile,
+                        top: options.padding.top * to_tile,
+                        bottom: options.padding.bottom * to_tile,
+                        left: options.padding.left * to_tile,
+                        right: options.padding.right * to_tile,
                     };
                     let tile_reach = reach.map(|(first, last)| (first * to_tile, last * to_tile));
                     collision_circles(
@@ -348,7 +366,10 @@ impl ViewSymbols {
                                 .into_iter()
                                 .map(|mut entry| {
                                     entry.circle.center = project(entry.circle.center);
-                                    entry.circle.radius /= to_tile;
+                                    // `tileToViewport`: out of tile units and then shrunk by the
+                                    // camera, which is the only place the perspective belongs.
+                                    entry.circle.radius =
+                                        entry.circle.radius / to_tile * label.perspective;
                                     entry
                                 })
                                 .collect(),
