@@ -118,10 +118,19 @@ fn source_over(
     source_over_with(style(origin))
 }
 
-/// Spins until `done` or the deadline, without holding a lock while it waits.
-fn settle(mut done: impl FnMut() -> bool) -> bool {
+/// Ticks until `done` or the deadline, without holding a lock while it waits.
+///
+/// Drains on every pass, because that is what a tick does. The transport answers a request with
+/// a ticket rather than with bytes, so nothing lands until someone comes back for it -- a loop
+/// that only polled `done` would wait out its full deadline on tiles whose bodies had arrived
+/// long before.
+fn settle<S: FileSource + 'static>(
+    source: &Arc<TileSource<S>>,
+    mut done: impl FnMut() -> bool,
+) -> bool {
     let deadline = Instant::now() + Duration::from_secs(20);
     while Instant::now() < deadline {
+        source.drain();
         if done() {
             return true;
         }
@@ -186,7 +195,7 @@ fn wanting_schedules_rather_than_waits() {
     );
 
     assert!(
-        settle(|| source.readiness() == Readiness::Ready),
+        settle(&source, || source.readiness() == Readiness::Ready),
         "the source never became ready: {:?}",
         source.readiness()
     );
@@ -212,13 +221,13 @@ fn tiles_arrive_and_are_not_refetched() {
     // The first want resolves; the second, once resolved, plans and submits.
     source.want(&view(0.0), &cover, &[]);
     assert!(
-        settle(|| source.readiness() == Readiness::Ready),
+        settle(&source, || source.readiness() == Readiness::Ready),
         "never resolved"
     );
     source.want(&view(0.0), &cover, &[]);
 
     assert!(
-        settle(|| source.buckets(tile).is_some()),
+        settle(&source, || source.buckets(tile).is_some()),
         "the tile never landed"
     );
     assert!(
@@ -242,6 +251,103 @@ fn tiles_arrive_and_are_not_refetched() {
     );
 }
 
+/// Nothing lands without a drain, and one drain is enough.
+///
+/// The contract the split introduced, stated so it cannot be lost: `want` asks the transport for
+/// bytes and returns, and the tile appears only when someone comes back for the answer. A
+/// consumer that forgets to drain gets a map that resolves, reports work outstanding, and never
+/// draws a tile -- which looks exactly like a dead origin and is not one.
+#[test]
+fn a_tile_lands_on_the_drain_and_not_before() {
+    let server = tile_server::Server::start(
+        tile_server::Routes::new().tiles(FIXTURE.to_vec(), Some((0, 14))),
+    )
+    .expect("binds");
+
+    let (source, _fetches, _files) = source_over(&server.origin());
+    let cover = [TileCoord {
+        z: 0,
+        x: 0,
+        y: 0,
+        wrap: 0,
+    }];
+    let tile = TileId::new(0, 0, 0);
+
+    source.want(&view(0.0), &cover, &[]);
+    assert!(
+        settle(&source, || source.readiness() == Readiness::Ready),
+        "never resolved"
+    );
+    source.want(&view(0.0), &cover, &[]);
+
+    // Long enough for the fetch to have finished several times over. Without a drain the bytes
+    // sit in the ticket table and the tile is not built.
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        source.buckets(tile).is_none(),
+        "a tile landed without anything draining for it"
+    );
+    assert_eq!(
+        source.outstanding(),
+        1,
+        "the tile stopped counting as in flight"
+    );
+
+    // One drain starts the build; the build itself still runs on a worker.
+    source.drain();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while source.buckets(tile).is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(
+        source.buckets(tile).is_some(),
+        "the tile never landed after its drain"
+    );
+}
+
+/// A tile whose fetch failed is asked for again, rather than counting as in flight for ever.
+///
+/// The failure path through the drain. A tile that is planned goes into the in-flight set so the
+/// next tick does not ask twice, and only something clearing it lets the tick after that retry --
+/// so a transport error that forgot to clear would turn one refused connection into a permanently
+/// blank coordinate. The origin here is a port nothing is listening on, while the source itself
+/// is declared inline so that resolution still succeeds and the *tile* is the thing that fails.
+#[test]
+fn a_failed_fetch_is_counted_and_the_tile_is_asked_for_again() {
+    let (source, fetches, _files) = source_over("http://127.0.0.1:1");
+    let cover = [TileCoord {
+        z: 0,
+        x: 0,
+        y: 0,
+        wrap: 0,
+    }];
+
+    source.want(&view(0.0), &cover, &[]);
+    assert!(
+        settle(&source, || source.readiness() == Readiness::Ready),
+        "an inline source never resolved"
+    );
+
+    source.want(&view(0.0), &cover, &[]);
+    assert!(
+        settle(&source, || source.failures().0 > 0),
+        "a refused connection was never counted as a failure"
+    );
+    let after_first = fetches.load(Ordering::Acquire);
+    assert!(after_first > 0, "nothing was ever fetched");
+
+    // Nothing is in flight any more, so the next tick may ask again -- and does.
+    assert!(
+        settle(&source, || source.outstanding() == 0),
+        "the failed tile is still counted as in flight"
+    );
+    source.want(&view(0.0), &cover, &[]);
+    assert!(
+        settle(&source, || fetches.load(Ordering::Acquire) > after_first),
+        "a tile whose fetch failed was never asked for again"
+    );
+}
+
 /// A style whose sources cannot resolve says so, rather than staying blank and quiet.
 ///
 /// The hazard §16 names: a consumer holding a handle, looking at an empty map, with no way to
@@ -260,7 +366,10 @@ fn a_source_that_cannot_resolve_reports_it() {
     source.want(&view(0.0), &cover, &[]);
 
     assert!(
-        settle(|| matches!(source.readiness(), Readiness::Failed(_))),
+        settle(&source, || matches!(
+            source.readiness(),
+            Readiness::Failed(_)
+        )),
         "a source pointed at nothing never reported a failure: {:?}",
         source.readiness()
     );
@@ -339,7 +448,7 @@ fn resolving_a_style_counts_as_outstanding() {
     source.want(&view(0.0), &cover, &[]);
 
     assert!(
-        settle(|| source.readiness() == Readiness::Resolving),
+        settle(&source, || source.readiness() == Readiness::Resolving),
         "the source never started resolving: {:?}",
         source.readiness()
     );
@@ -355,7 +464,7 @@ fn resolving_a_style_counts_as_outstanding() {
         cv.notify_all();
     }
     assert!(
-        settle(|| source.readiness() == Readiness::Ready),
+        settle(&source, || source.readiness() == Readiness::Ready),
         "the source never became ready: {:?}",
         source.readiness()
     );

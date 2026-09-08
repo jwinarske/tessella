@@ -27,12 +27,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, PoisonError, RwLock};
 use web_time::Instant;
 
-use tessella_storage::source::{Coalescing, FetchError, FileSource};
+use tessella_storage::deferred::{DeferredFileSource, Ticket};
+use tessella_storage::source::{Coalescing, FetchError, FileSource, Response};
 use tessella_tile::cover::{TileCoord, ViewTransform};
 use tessella_tile::store::TileKey;
 
 use crate::boot::{self, BootError, Sources};
 use crate::cache::TileCache;
+use crate::deferred::PoolBacked;
 use crate::map::Tiles;
 use crate::pool::{Pool, Priority};
 use crate::tile::{LayerBucket, TileId};
@@ -146,6 +148,29 @@ struct Inner {
     inflight: BTreeSet<TileKey>,
 }
 
+/// Clears a tile from the in-flight set on the way out of its build, however that happens.
+struct Clearing<S: FileSource + 'static> {
+    source: Arc<TileSource<S>>,
+    key: TileKey,
+}
+
+impl<S: FileSource + 'static> Drop for Clearing<S> {
+    fn drop(&mut self) {
+        self.source.finish(&self.key);
+    }
+}
+
+/// A tile whose bytes were asked for and have not landed.
+///
+/// The job outlives the request because the request only produces bytes: what to do with them --
+/// which style, which source, which tile, and how urgent -- was decided when the cover was
+/// planned, and re-deriving it on arrival would mean planning twice and risking two answers.
+struct InFlight {
+    job: boot::Job,
+    sources: Arc<Sources>,
+    priority: Priority,
+}
+
 /// The tiles a warm map draws from.
 ///
 /// Process-scoped and shared: one of these serves every view, so a tile wanted by two of them is
@@ -153,6 +178,18 @@ struct Inner {
 pub struct TileSource<S> {
     style_text: String,
     files: Arc<Coalescing<S>>,
+    /// The tile path's transport, which asks for bytes rather than waiting for them.
+    ///
+    /// Wraps the same coalescing store `files` is, so two views wanting one URL still cost one
+    /// fetch -- the deduplication is by URL inside `Coalescing` and does not care which side of
+    /// the trait asked. Style resolution and glyphs keep using `files` directly: both run inside
+    /// a single pool job already and have nothing to gain from being torn in half.
+    deferred: Arc<PoolBacked<Coalesced<S>>>,
+    /// Tiles whose bytes have been asked for and have not arrived.
+    ///
+    /// A separate lock from `inner` because [`TileSource::drain`] walks it on the tick thread
+    /// while workers are clearing `inflight`, and the two must not queue behind each other.
+    pending: Mutex<BTreeMap<Ticket, InFlight>>,
     cache: Arc<TileCache<BootError>>,
     pool: &'static Pool,
     style_rev: u64,
@@ -186,10 +223,10 @@ pub struct TileSource<S> {
 /// go through it rather than around it because two views wanting the same range is exactly the
 /// case coalescing exists for, and a second file source beside it would fetch the range twice and
 /// cache it in neither.
-struct Coalesced<'a, S>(&'a Arc<Coalescing<S>>);
+struct Coalesced<S>(Arc<Coalescing<S>>);
 
-impl<S: FileSource> FileSource for Coalesced<'_, S> {
-    fn fetch(&self, url: &str) -> Result<tessella_storage::source::Response, FetchError> {
+impl<S: FileSource> FileSource for Coalesced<S> {
+    fn fetch(&self, url: &str) -> Result<Response, FetchError> {
         self.0.fetch(url).map(|response| (*response).clone())
     }
 }
@@ -214,9 +251,19 @@ impl<S: FileSource + 'static> TileSource<S> {
         pool: &'static Pool,
         style_rev: u64,
     ) -> Arc<Self> {
+        // Background rather than foreground by default: `dispatch` names a class per request,
+        // and the one it never names is this. A request that reached here without a class would
+        // be a tile nobody said was urgent, so it should not outrank one that is.
+        let deferred = Arc::new(PoolBacked::new(
+            Arc::new(Coalesced(Arc::clone(&files))),
+            pool,
+            Priority::Background,
+        ));
         Arc::new(Self {
             style_text,
             files,
+            deferred,
+            pending: Mutex::new(BTreeMap::new()),
             cache,
             pool,
             style_rev,
@@ -494,7 +541,9 @@ impl<S: FileSource + 'static> TileSource<S> {
             let mut fonts = tessella_glyph::fonts::Fonts::new(url);
             // A glyph range that will not load costs the labels that need it and not the map, so
             // a failure here leaves `ready` empty rather than failing the source.
-            let fetched = fonts.fetch(&wanted, &Coalesced(&this.files)).is_ok();
+            let fetched = fonts
+                .fetch(&wanted, &Coalesced(Arc::clone(&this.files)))
+                .is_ok();
             {
                 let mut held = this.glyphs.lock().unwrap_or_else(PoisonError::into_inner);
                 if fetched {
@@ -633,46 +682,187 @@ impl<S: FileSource + 'static> TileSource<S> {
             } else {
                 Priority::Prefetch
             };
-            let this = Arc::clone(self);
-            let sources = Arc::clone(sources);
-            self.pool.submit(priority, move || {
-                let probe = boot::BuildProbe {
-                    bytes: &DISCARDED,
-                    fetched: &|| {},
-                };
-                let outcome =
-                    boot::build_job(&job, &sources.style, &this.files, &this.cache, &probe);
-                if let Err(ref error) = outcome {
-                    let mut held = this.failures.lock().unwrap_or_else(PoisonError::into_inner);
-                    held.0 += 1;
-                    if held.1.is_none() {
-                        held.1 = Some(alloc::format!("{error}"));
-                    }
+
+            // A tile another view already built costs no fetch at all. The build path checks the
+            // cache too -- it has to, since a tile can land between here and there -- but only
+            // this check happens *before* the network, and the round trip it saves is the whole
+            // reason a second view over the same cover is cheap.
+            if let Some(buckets) = self.cache.peek(&job.key) {
+                self.land(&job, buckets);
+                self.finish(&job.key);
+                continue;
+            }
+
+            match boot::fetch_url(&job) {
+                // Bytes first. `request` returns while the fetch is still running, so a tick
+                // that wants thirty tiles issues thirty requests and gets on with drawing the
+                // ones it has.
+                Some(url) => {
+                    let ticket = self.deferred.request_at(priority, url, None);
+                    // `pending` is taken *after* `request_at` has returned, never across it.
+                    // `request_at` takes the ticket table's lock and `drain` takes `pending`
+                    // before the ticket table's -- so nesting them the other way here would be
+                    // the two halves of a deadlock.
+                    self.pending
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .insert(
+                            ticket,
+                            InFlight {
+                                job,
+                                sources: Arc::clone(sources),
+                                priority,
+                            },
+                        );
                 }
-                if let Ok(buckets) = outcome {
-                    let mut held = this.landed.write().unwrap_or_else(PoisonError::into_inner);
-                    // Keyed by the data tile, which is the thing that was built. What the cover
-                    // asked for reaches it through `alias`, so one tile serving many coordinates
-                    // is stored and decoded once.
-                    held.by_tile
-                        .entry(job.tile)
-                        .and_modify(|existing| {
-                            let mut merged = existing.as_ref().clone();
-                            merged.extend(buckets.iter().cloned());
-                            *existing = Arc::new(merged);
-                        })
-                        .or_insert(buckets);
-                    this.generation.fetch_add(1, Ordering::AcqRel);
+                // Nothing to fetch: the document arrived during source resolution. Straight to
+                // the pool, which is where it went before the split as well.
+                None => self.build(
+                    InFlight {
+                        job,
+                        sources: Arc::clone(sources),
+                        priority,
+                    },
+                    None,
+                ),
+            }
+        }
+    }
+
+    /// Runs one tile's build on a worker, from bytes that have already arrived.
+    fn build(self: &Arc<Self>, work: InFlight, fetched: Option<Arc<Response>>) {
+        let this = Arc::clone(self);
+        self.pool.submit(work.priority, move || {
+            // Held for the whole job, so the tile leaves the in-flight set whether the build
+            // returned, failed, or unwound. Clearing it on the last line instead is the version
+            // that was here before, and it leaks the key on a panic: the pool counts the panic
+            // and carries on, the tile stays "in flight" for ever, and every later tick filters
+            // it out of the cover as already asked for. One malformed tile, and that coordinate
+            // is blank until the process restarts.
+            let _clearing = Clearing {
+                source: Arc::clone(&this),
+                key: work.job.key.clone(),
+            };
+            let probe = boot::BuildProbe {
+                bytes: &DISCARDED,
+                fetched: &|| {},
+            };
+            let outcome = boot::build_fetched(
+                &work.job,
+                &work.sources.style,
+                &this.cache,
+                fetched.as_deref(),
+                &probe,
+            );
+            match outcome {
+                Ok(buckets) => this.land(&work.job, buckets),
+                Err(ref error) => this.fail(&alloc::format!("{error}")),
+            }
+        });
+    }
+
+    /// Files a tile's buckets under the tile that was built, and says the frame is worth redrawing.
+    fn land(&self, job: &boot::Job, buckets: Arc<Vec<LayerBucket>>) {
+        let mut held = self.landed.write().unwrap_or_else(PoisonError::into_inner);
+        // Keyed by the data tile, which is the thing that was built. What the cover asked for
+        // reaches it through `alias`, so one tile serving many coordinates is stored and decoded
+        // once.
+        held.by_tile
+            .entry(job.tile)
+            .and_modify(|existing| {
+                let mut merged = existing.as_ref().clone();
+                merged.extend(buckets.iter().cloned());
+                *existing = Arc::new(merged);
+            })
+            .or_insert(buckets);
+        drop(held);
+        self.generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Counts a tile that did not build, and keeps the first reason one did not.
+    fn fail(&self, reason: &str) {
+        let mut held = self.failures.lock().unwrap_or_else(PoisonError::into_inner);
+        held.0 += 1;
+        if held.1.is_none() {
+            held.1 = Some(String::from(reason));
+        }
+    }
+
+    /// Clears a tile from the in-flight set.
+    ///
+    /// Cleared whether it built or failed. A tile that failed is one the next tick may
+    /// legitimately ask for again -- a transient 503 is not a permanent absence, and an absent
+    /// tile is cached as empty by the layer below rather than retried here.
+    fn finish(&self, key: &TileKey) {
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .inflight
+            .remove(key);
+    }
+
+    /// Lands whatever the transport has finished, and starts building it.
+    ///
+    /// The deferred half of the tile path, and the reason `request` is allowed to return without
+    /// an answer: something has to come back for the answer, and this is it. Called at the top of
+    /// a tick, before anything reads `generation` -- a tile landed here is a redraw, and draining
+    /// after that read defers it by a whole frame.
+    ///
+    /// Cheap when nothing has arrived: one lock, a walk of the tickets outstanding, and no work.
+    pub fn drain(self: &Arc<Self>) {
+        // Snapshotted rather than walked under the lock, because polling takes the ticket
+        // table's lock and holding `pending` across that is the nesting `dispatch` is careful
+        // not to make from the other side.
+        let outstanding: Vec<Ticket> = self
+            .pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .keys()
+            .copied()
+            .collect();
+
+        let mut landed = Vec::new();
+        for ticket in outstanding {
+            // A poll consumes its result, so two ticks racing here cannot both take one tile:
+            // the loser sees `None` and leaves the entry to the winner.
+            if let Some(outcome) = self.deferred.poll(ticket) {
+                landed.push((ticket, outcome));
+            }
+        }
+        if landed.is_empty() {
+            return;
+        }
+
+        let mut ready = Vec::with_capacity(landed.len());
+        {
+            let mut held = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
+            for (ticket, outcome) in landed {
+                if let Some(work) = held.remove(&ticket) {
+                    ready.push((work, outcome));
                 }
-                // Removed whether it built or failed. A tile that failed is one the next tick may
-                // legitimately ask for again -- a transient 503 is not a permanent absence, and
-                // an absent tile is cached as empty by the layer below rather than retried here.
-                this.inner
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .inflight
-                    .remove(&job.key);
-            });
+            }
+        }
+
+        for (work, outcome) in ready {
+            match outcome {
+                // The `Arc` is carried into the job rather than unwrapped: the body is already
+                // shared between whatever views joined this fetch, and copying it per tile would
+                // undo the sharing coalescing exists to provide.
+                Ok(response) => self.build(work, Some(response)),
+                // The fetch is what failed, so there is nothing to build and nothing to retry
+                // here. Counted, named, and cleared from the in-flight set so the next tick may
+                // ask again.
+                Err(error) => {
+                    self.fail(&alloc::format!(
+                        "{}",
+                        BootError::Fetch {
+                            url: boot::fetch_url(&work.job).unwrap_or_default().to_string(),
+                            message: error.to_string(),
+                        }
+                    ));
+                    self.finish(&work.job.key);
+                }
+            }
         }
     }
 }

@@ -8063,18 +8063,33 @@ Building the gate turned up one thing worth recording. `tessella-orchestrate` ca
 the locks are not, and picking their replacement is DR-24's decision rather than a tidy-up. The crate
 is the gate's one named exception until WS-2 lands.
 
-WS-1 lands in two pieces, because the transport and the thing that uses it fail differently. The
-first is done: `Ticket`, `DeferredFileSource` and the `Tickets` table in `tessella-storage`, and
+WS-1 landed in two pieces, because the transport and the thing that uses it fail differently. The
+first: `Ticket`, `DeferredFileSource` and the `Tickets` table in `tessella-storage`, and
 `PoolBacked<S>` in `tessella-orchestrate` -- the blanket impl that wears the deferred trait and
 submits the blocking `fetch_conditional` to the pool. It carries the drop guard `Shared`'s leader
 carries, for the same reason and proved the same way: with the guard removed, the unwinding-source
 test stops failing and starts hanging. Clean under ThreadSanitizer.
 
-The second piece is `TileSource::drain`, and it is the larger one. `build_job` fetches and decodes
-inside one pool job, under `TileCache::get_or_build`, so putting the tile path on the deferred
-transport means splitting it at the fetch -- request, drain, then build -- and `get_or_build`
-cannot be held across the gap. Landing a `drain` before that split would give it nothing to drain,
-which is why the split is where WS-1 continues rather than where WS-2 starts.
+The second piece is `TileSource::drain`, and it is done too. `build_job` split at the fetch:
+`decode_and_build` is the half that runs once the bytes are in hand, `build_job` keeps the
+blocking composition for the cold start, and `build_fetched` is the deferred one. The cache stays
+outermost in both, and `TileCache::peek` is what lets `dispatch` skip the network for a tile
+another view already built -- a decision the blocking path could make inside `get_or_build` and a
+deferred one has to make a whole round trip earlier.
+
+`drain` is called at the top of the FFI tick, before `generation` is read, because a tile landed
+there is a redraw and draining after that read defers it by a frame. Two things fell out of
+writing it. The lock order is one: `dispatch` takes `pending` only after `request_at` has
+returned, and `drain` snapshots `pending` before it polls, so the two never nest. The other is a
+bug that predates the split -- the in-flight set was cleared on the last line of the build job, so
+a build that unwound left its key there for ever and every later tick filtered that coordinate out
+of the cover as already asked for. One malformed tile, one permanently blank coordinate. It is a
+drop guard now.
+
+The tick costs one extra pool submission per tile, since the fetch and the build are separate
+jobs. Measured on the render probe over the eleven-family Berlin scene at z14: 1.75-1.77 s before,
+1.68-1.71 s after -- no regression, and slightly ahead, because the response `Arc` is now carried
+into the build rather than cloned per tile.
 
 WS-0 is done: the target is in `rust-toolchain.toml` and the cross matrix, the `no_std` step sits
 beside it, `store_path` is behind a default-on `fs` feature, and `tessella-orchestrate` takes its

@@ -73,6 +73,28 @@ impl<E: Clone> TileCache<E> {
         }
     }
 
+    /// The buckets, if this tile is already built.
+    ///
+    /// For a caller that decides whether to *fetch*. [`Self::get_or_build`] consults the store
+    /// before it runs its closure, which is what keeps a warm view off the network -- but a
+    /// deferred caller has to make that decision a whole round trip earlier, before it asks any
+    /// origin for bytes it may not need. Same lookup, same hit counter, asked at the point where
+    /// the answer can still save the fetch.
+    ///
+    /// Counts as a hit for exactly that reason: it is a caller answered from the store, and §9.3's
+    /// accounting only adds up if every such caller is counted once. The caller that peeks does
+    /// not go on to call [`Self::get_or_build`] for the same tile.
+    #[must_use]
+    pub fn peek(&self, key: &TileKey) -> Option<Cached> {
+        let tile = self
+            .store
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(key)?;
+        self.hits.fetch_add(1, Ordering::Relaxed);
+        Some(tile)
+    }
+
     /// Builds a tile, or returns the one already built, or joins the build already running.
     ///
     /// # Errors
@@ -86,13 +108,7 @@ impl<E: Clone> TileCache<E> {
         work: impl FnOnce() -> Result<Vec<LayerBucket>, E>,
         abandoned: impl FnOnce() -> E,
     ) -> Result<Built, E> {
-        if let Some(tile) = self
-            .store
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .get(key)
-        {
-            self.hits.fetch_add(1, Ordering::Relaxed);
+        if let Some(tile) = self.peek(key) {
             return Ok(Built {
                 tile,
                 lookup: Lookup::Hit,
