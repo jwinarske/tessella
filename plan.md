@@ -7311,3 +7311,32 @@ first has been rewritten to assert both halves rather than only the half that wa
 The 46 `hitTest` disagreements are what is left: mbgl finds a collision where this does not, with
 the same symbols in the same order. That is now the whole of the pitched gap and it is a question
 about one comparison rather than about the shape of the pass.
+
+### The empty runs, and an overshoot worth knowing about
+
+Counting circles on both sides at the same camera, after the two rules above landed:
+
+| | ours | mbgl |
+| --- | --- | --- |
+| placed, of 388 | **141** | 167 |
+| symbols with *no* collision run | **67** | 6 |
+
+So the fix overshoots. Before it this placed 211 against mbgl's 167 and the error was all
+over-drawing; now it places 141 and 47 of the misses are labels mbgl draws. The parity numbers
+still improve at every level because over-drawing was much the larger error, but "closer" is not
+"right" and the shape of the remaining error has flipped.
+
+The cause is one number: **67 empty runs against six.** A label with no run is not placeable, which
+is mbgl's rule and is correct; the defect is that this side fails to build a run for sixty-one
+labels where mbgl builds one, and mbgl places twenty-nine of those. Every other statistic follows
+from it -- the circles offered differ on 207 of the 321 symbols where both sides do build a run.
+
+Why the two differ is structural rather than a constant to fix. mbgl lays its collision circles out
+**once, in tile units**, at layout time -- `feature.boxes` is built by `CollisionFeature` and
+projected per frame. This builds them per frame from the *projected* line, so a road foreshortened
+by a pitched camera has no room for a run at all, and the label loses its run rather than its
+circles being small. That is exactly why the counts agree flat and diverge at pitch.
+
+So the next piece is not a comparison to correct but a place to move work: the run belongs in tile
+units beside the anchors, projected per frame like everything else, rather than rebuilt in screen
+space each time.
