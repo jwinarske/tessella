@@ -8040,9 +8040,32 @@ consumer and the one that matters for the flutter_scene seam.
 WS-0 through WS-3 is "a browser draws a map from the same records". WS-4 is parity. WS-5 is
 performance and needs its own toolchain decision.
 
-The first gate is the cheapest and the most informative: `cargo check --workspace --target
-wasm32-unknown-unknown` in the cross matrix asserts the `no_std` discipline holds on a target with no
-threads, no clock and no filesystem. It is the same lane `aarch64` and `riscv64gc` already use.
+The first gate was written down as `cargo check --workspace --target wasm32-unknown-unknown`
+asserting "the `no_std` discipline holds on a target with no threads, no clock and no filesystem".
+Measured, that is wrong, and the correction is worth keeping because it sets what the rest of this
+section can trust. `std` exists for `wasm32-unknown-unknown` and compiles: an isolated probe on the
+pinned toolchain type-checks `std::thread::spawn`, `Instant::now` and `std::fs::read_to_string` for
+that target without a diagnostic. They fail at *run time*. The workspace passed the new lane on the
+day it was added, with the threaded pool and the filesystem store still in it, so a green square
+there says the crates build, not that any of DR-23, DR-24 or the storage work is done.
+
+The lane is still worth having -- it is the same one `aarch64` and `riscv64gc` use, and it catches
+a dependency that has no wasm32 build at all. What actually asserts the discipline is a second step
+beside it: `cargo check -p <crate> --no-default-features` over the crates that carry the `no_std`
+marker, with the list read out of the markers rather than copied. That fails the moment one of them
+grows a `std::` path, which is the property the paragraph above wanted. Runtime behaviour needs a
+runtime; it belongs to WS-3's consumer, not to a check lane.
+
+Building the gate turned up one thing worth recording. `tessella-orchestrate` carries
+`#![cfg_attr(not(test), no_std)]` and does not honour it: `source.rs` imports
+`std::collections::{BTreeMap, BTreeSet}` and `std::sync::{Mutex, PoisonError, RwLock}` unguarded, so
+`--no-default-features` fails to resolve `std` there. The collections are a one-line move to `alloc`;
+the locks are not, and picking their replacement is DR-24's decision rather than a tidy-up. The crate
+is the gate's one named exception until WS-2 lands.
+
+WS-0 is done: the target is in `rust-toolchain.toml` and the cross matrix, the `no_std` step sits
+beside it, `store_path` is behind a default-on `fs` feature, and `tessella-orchestrate` takes its
+clock from `web-time` -- `std::time` off wasm, `performance.now` on it.
 
 ### 19.4 How it is tested, and why the oracle still applies
 

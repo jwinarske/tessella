@@ -83,6 +83,7 @@ jobs:
         target:
           - aarch64-unknown-linux-gnu
           - riscv64gc-unknown-linux-gnu
+          - wasm32-unknown-unknown
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - run: rustup show
@@ -90,6 +91,27 @@ jobs:
         with:
           key: ${{ matrix.target }}
       - run: cargo check --workspace --target ${{ matrix.target }}
+      # `cargo check --workspace` above does not assert the no_std discipline on wasm32. `std`
+      # exists for wasm32-unknown-unknown and compiles: `std::thread::spawn`, `Instant::now` and
+      # `std::fs::read_to_string` all type-check there and fail at run time. The workspace passed
+      # this lane the day it was added, threaded pool and filesystem store still in it.
+      #
+      # What does assert it is building the crates that claim `no_std` without `std` at all. The
+      # list comes from the marker itself rather than a copy, so a new crate is covered the day it
+      # declares one. `tessella-orchestrate` carries the marker and is the standing exception: its
+      # `std` feature is default and `source.rs` still reaches for `std::sync`, which needs a lock
+      # that is not `std`'s before the marker can be honoured.
+      - name: the no_std crates build without std
+        if: matrix.target == 'wasm32-unknown-unknown'
+        run: |
+          set -eu
+          for lib in crates/*/src/lib.rs; do
+            grep -qE '^#!\[.*no_std' "$lib" || continue
+            crate=$(basename "$(dirname "$(dirname "$lib")")")
+            if [ "$crate" = tessella-orchestrate ]; then continue; fi
+            echo "== $crate"
+            cargo check -p "$crate" --no-default-features --target ${{ matrix.target }}
+          done
 
   package:
     name: package tessella
