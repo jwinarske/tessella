@@ -7688,3 +7688,36 @@ This version of mbgl has no horizon clamp to be missing.
 So there is no fill defect to chase. Seven of eleven single-family scenes are pixel-exact at both
 angles and the other four differ only along edges, which is where two independent rasterisers stop
 agreeing.
+
+### Placement is exact, and the remainder is the flip
+
+Decomposing the full style at Seattle z14 pitch 45: no symbols is 13 gross, place labels alone 13,
+**road labels alone 4,084** -- and the full style is 2,857, *lower* than road labels by themselves,
+because place names suppress some of them. One layer carries all of it.
+
+`Shape::in_grid` was scanning every circle of a run where mbgl accumulates `inGrid` inside the loop
+that skips out-of-reach and thinned circles -- a circle it never tests never reports itself in the
+grid. Six labels were placed here for that reason alone. Restricted to the tested set, the
+road-label layer's placements are **exact**: 388 anchors on both sides, run sizes matching on all
+388, 167 placed against 167, zero disagreements.
+
+**And the picture is unchanged at 4,084.** Identical decisions, different pixels -- so what is left
+is where the placed labels are drawn.
+
+Dumping every glyph's position says it precisely: of 2,012 glyphs the median difference is 0.000
+and 421 differ, across **33 labels of 153**, and their angles differ by almost exactly π (267
+glyphs) or 3π (142). Those labels are drawn in the opposite direction.
+
+It is the keep-upright test. Both sides ask the same question -- is the first glyph to the right of
+the last, `firstPoint.x > lastPoint.x` -- but mbgl asks it of points **projected to screen**:
+
+    const Point<float> firstPoint = project(firstAndLastGlyph->first.point, glCoordMatrix).first;
+    const Point<float> lastPoint  = project(firstAndLastGlyph->second.point, glCoordMatrix).first;
+
+and this asks it of the label-plane points directly. For a label pitched with the map the label
+plane is the tile's, and the perspective divide between there and the screen can reorder two points
+in x. Flat it cannot, which is why the flat frame is exact and only the pitched one is not.
+
+So the fix is to project the two end points through the label plane's own `getGlCoordMatrix` before
+comparing them, which needs that matrix threaded into `place_upright` -- the one place it is not
+already available.
