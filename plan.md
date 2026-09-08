@@ -7477,3 +7477,27 @@ pitch zero -- and `icons_only`, `families` and `one_poi-labels` are unchanged.
 What is left of the pitched frame is under a percent everywhere and is the 28 placement
 disagreements plus whatever those 421 glyphs are: the labels the two renderers put at different
 anchors, which is a placement question again rather than a projection one.
+
+### What is left of pitch, counted properly
+
+Re-diffed after the walk fix, joined on the tile anchor rather than by row -- the row counts no
+longer match, and pairing by position gave a nonsense 165 disagreements before that was noticed.
+
+| at Seattle z14 pitch 45 | |
+| --- | --- |
+| anchors mbgl offers placement | 388 |
+| anchors this offers | **350** |
+| placed: this / mbgl | 171 / 167 |
+| disagreements on the 350 shared | **31** (18 `hitTest`, 7 mbgl-places, 6 `notInGrid`) |
+| mbgl anchors never offered here | **38**, of which mbgl places 13 |
+
+The 38 are the larger half and the walk fix is what exposed them. `write_line_positions` runs
+before `frame_in` and removes from the offered set every label whose *whole* walk fails; stepping
+by the pitch-scaled size makes a label need more road, so more of them fail. mbgl does not gate
+placement on the whole walk: `placeLineFeature` asks `placeFirstAndLastGlyph` for the two outermost
+glyphs only, and a label whose middle will not fit still competes and is hidden later by
+`placeGlyphsAlongLine` returning `NotEnoughRoom`. So mbgl offers all 388 and draws 13 that this
+never offers.
+
+That is the next piece, and it is an ordering question rather than an arithmetic one: the fit test
+belongs after the competition, on the first and last glyph, not before it on all of them.
