@@ -7568,3 +7568,35 @@ That is the trade taken deliberately: a measured-equal box with a known-weak tes
 whose error happened to cancel. The anchor sets now match exactly too -- 360 against 360 at z15,
 where before the ordering fix they were 350 against 388 -- so what is left in the pitched frame is
 one thing: `Shape::collides` against `collisionGrid.hitTest`, on boxes that are now identical.
+
+### Not the hit test: the reach window
+
+The last entry pointed at `Shape::collides` against `collisionGrid.hitTest`. It is not that.
+Counting circles on both sides for the 360 road labels at Seattle z15 pitch 45, with the boxes now
+identical:
+
+| | agreeing |
+| --- | --- |
+| circles in the run | 195 of 360 |
+| circles inside the label's reach | 236 of 360 |
+
+The run sizes differ by one either way and nothing more -- 195 exact, the rest ±1 to ±3 -- which is
+rounding in the walk that lays them out. The reach is the real difference, and it is one-sided:
+where the two disagree this side almost always includes *more* circles, by one to seventeen.
+
+Which is `approximateTileDistance` again. mbgl decides which circles a label covers by walking the
+line to its outermost glyphs and converting through `pixelsToTileUnits` with the incidence term;
+this still uses `|glyph_offset * font_scale * perspective|` converted to tile units, the right
+quantity from the wrong source, as the earlier entry said. That entry tried the term, took it from
+the *viewport* branch, measured it worse and reverted it -- and the walk it was meant to match was
+itself wrong at the time, since `pitchScaledFontSize` had not been found yet.
+
+So it is worth a third attempt, on a foundation that has since changed twice: the walk is now
+mbgl's, the boxes agree to 0.000, the anchor sets match 360 to 360, and the run sizes agree on
+195. The measurement to hold it to is the in-reach count above, not gross.
+
+**And on the instruments.** Two of the three numbers in this entry were wrong before they were
+right. mbgl's circle counter increments after the reach test but *before* thinning, and the first
+version of this side's counted the thinned survivors -- so "tested equal on 52 of 360" compared two
+different quantities. That is the fifth join or counter in this document to compare unlike things,
+and every one was caught the same way: a number that did not fit the story it was supposed to tell.
