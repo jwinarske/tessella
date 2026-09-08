@@ -7501,3 +7501,26 @@ never offers.
 
 That is the next piece, and it is an ordering question rather than an arithmetic one: the fit test
 belongs after the competition, on the first and last glyph, not before it on all of them.
+
+### Every label competes now, and the pitched frame is under 0.7%
+
+The 38 anchors this was not offering were not a stricter *gate* -- gating on the outermost glyphs,
+which is `placeFirstAndLastGlyph`, gives numbers indistinguishable from gating on the whole walk,
+because when the whole walk fails an outermost glyph is what failed. They were an ordering: mbgl
+lets every symbol reach `placeSymbol` and hides the unwalkable ones afterwards, and this filtered
+them out before the competition.
+
+| Seattle, pitch 45 | z12 | z13 | z14 | z15 | z16 |
+| --- | --- | --- | --- | --- | --- |
+| before the walk fix | 0.908% | 1.485% | 2.453% | 1.831% | 0.958% |
+| walk fixed | 0.259% | 0.404% | 0.781% | 0.191% | 0.007% |
+| and every label competing | 0.259% | **0.347%** | **0.694%** | **0.173%** | 0.007% |
+
+Flat is unchanged at zero but for 63 pixels at z15, and `icons_only`, `families` and
+`one_poi-labels` do not move.
+
+Worth being plain about what this last step is not: it is a *removal*, and the comment it removes
+argued the opposite -- that a label which will not be drawn must not hold space against one that
+will. That argument was sound and the conclusion was still wrong, because mbgl holds the space too.
+The thing that makes it safe is `Shape::placeable` refusing a label with no run, which did not
+exist when the filter was written.
