@@ -7524,3 +7524,23 @@ argued the opposite -- that a label which will not be drawn must not hold space 
 will. That argument was sound and the conclusion was still wrong, because mbgl holds the space too.
 The thing that makes it safe is `Shape::placeable` refusing a label with no run, which did not
 exist when the filter was written.
+
+### Where parity stands, and what the icon scene has left
+
+With pitch under 0.7% everywhere, the largest single-family gap is now `icons_only` at 0.322%,
+which is the *point*-symbol path and untouched by any of the line-label work above.
+
+Diffed the same way, final decision per anchor: **254 anchors on both sides, all shared**. Layout
+and anchor generation agree exactly. This places 146 icons against mbgl's 150, and the two disagree
+about **eight** -- two this places and mbgl does not, six the other way. Eight icons at icon size is
+about two thousand gross pixels, which is the whole of the 2,029.
+
+So the icon scene is eight collision decisions from exact, and nothing structural is left in it.
+
+**A note on the instrument, because this is the fourth time.** The first pass at that comparison
+reported 327 anchors against 254 and 144 disagreements, all of it wrong: the dump is written once
+per `frame_in` call, `frame_in` runs per bucket per frame, and a naive read of the file mixes
+several frames of the same buckets together. Keyed by anchor and read last-write-wins it gives the
+254 above. Every join in this document that has gone wrong has gone wrong the same way -- a key
+that stopped identifying one thing - and the fix each time was to make the dump say which pass,
+which bucket, or which frame it came from.
