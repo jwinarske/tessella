@@ -294,8 +294,23 @@ impl ViewSymbols {
                 // `textPixelRatio * projectedAnchor.first`. Without it a distant label reserves
                 // as much viewport as a near one, which at pitch is several times what it draws.
                 let box_scale = options.font_scale * label.perspective;
+                // Padding follows the box. mbgl adds it in tile units --
+                // `y1 = top * boxScale - padding.top` in `CollisionFeature` -- and scales the
+                // result by `tileToViewport` when it tests, so the padding shrinks into the
+                // distance with everything else. Held at a flat two screen pixels it does not,
+                // and a distant box comes out about six tenths of a pixel wider and taller than
+                // mbgl's: enough, at Seattle z15 pitch 45, to decide eight of the icon scene's
+                // 254 collisions differently.
+                let scaled = |padding: Padding| Padding {
+                    top: padding.top * label.perspective,
+                    bottom: padding.bottom * label.perspective,
+                    left: padding.left * label.perspective,
+                    right: padding.right * label.perspective,
+                };
+                let text_padding = scaled(options.padding);
+                let icon_padding = scaled(options.icon_padding);
                 let text = if label.line.is_empty() {
-                    collision_box(extent, anchor, box_scale, options.padding, 0.0).map(Shape::Box)
+                    collision_box(extent, anchor, box_scale, text_padding, 0.0).map(Shape::Box)
                 } else if options.tile_units_per_pixel > 0.0 {
                     // Walked in *tile* units and projected afterwards, which is where mbgl walks
                     // it: `CollisionFeature` lays its boxes out once against the tile's own line
@@ -307,10 +322,10 @@ impl ViewSymbols {
                     let to_tile = options.tile_units_per_pixel;
                     let tile_scale = box_scale * to_tile;
                     let tile_padding = Padding {
-                        top: options.padding.top * to_tile,
-                        bottom: options.padding.bottom * to_tile,
-                        left: options.padding.left * to_tile,
-                        right: options.padding.right * to_tile,
+                        top: text_padding.top * to_tile,
+                        bottom: text_padding.bottom * to_tile,
+                        left: text_padding.left * to_tile,
+                        right: text_padding.right * to_tile,
                     };
                     let tile_reach = reach.map(|(first, last)| (first * to_tile, last * to_tile));
                     collision_circles(
@@ -365,7 +380,7 @@ impl ViewSymbols {
                         anchor,
                         label.laid_out.segment,
                         box_scale,
-                        options.padding,
+                        text_padding,
                         options.overscaling,
                         reach,
                     )
@@ -386,7 +401,7 @@ impl ViewSymbols {
                         },
                         project(laid.anchor),
                         label.perspective,
-                        options.icon_padding,
+                        icon_padding,
                         // After `icon-text-fit` the extent is the shield's *content* area and
                         // the picture reaches further out; collision reserves the picture.
                         laid.content_margins,
