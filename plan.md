@@ -7223,7 +7223,35 @@ carrying `prevTileDistance` and `lastSegmentViewportDistance` plus the segment a
 the unwalked offset and scales it. Flat the two agree closely enough to score 71 gross, and at
 pitch they do not.
 
-One caution for whoever writes it: mbgl passes `projectedAnchor.second` -- the perspective
-*ratio* -- into a parameter named `cameraToAnchorDistance`, so `incidenceStretch` is that ratio
-over `cos(pitch) * cameraToCenterDistance` and comes out far below one, making the term subtract.
-Transcribe it, do not correct it, and check the sign against a render before believing either.
+That caution was wrong and is struck: `projectAnchor` returns `first` = the perspective ratio and
+`second` = `p[3]`, so the `cameraToAnchorDistance` handed to `approximateTileDistance` is a real
+distance after all. `incidenceStretch` is therefore at least one and grows with distance, and the
+term *adds* -- a wider window, more circles tested, fewer far-field labels surviving. Which is the
+direction the defect needs. The two elements of that pair are a ratio and a distance and it is
+worth reading which is which before trusting either.
+
+### The incidence term is not it, and that was worth finding out
+
+`approximateTileDistance` was implemented and measured, and it does not fix the pitched road
+labels. Recorded because the reasoning for it is good and somebody will reach for it again.
+
+What was built: `PlacedGlyph` carrying `lastSegmentViewportDistance`, the first and last glyph
+walked onto the projected line as `placeFirstAndLastGlyph` does, `pitchFactor` and the camera
+distance on `FrameOptions`, and the reach widened by
+`(incidenceStretch - 1) * lastSegment * |sin(segmentAngle)|` with the anchor's `w` recovered from
+the perspective ratio it already carries.
+
+It behaves as designed and it is the wrong lever: z14 pitch 45 went 19,746 to **20,345**, and flat
+stayed at 71 -- so the term is live, pitch-only, and pointing the wrong way by about three percent.
+Dropping the `* perspective` from the base reach as well, on the grounds that mbgl's walked
+distance carries no such factor, gives **20,668**. Two changes, both small and both the wrong way,
+which is what a wrong model looks like rather than one needing tuning. Reverted.
+
+`covered_by_label` was checked against mbgl on the way past and its sense is right: a circle
+outside the reach is skipped and clears `previousCirclePlaced`, first test in the loop, as in
+`placeLineFeature`.
+
+So the far-field excess is upstream of which circles get tested. What has *not* been looked at:
+which anchors `get_anchors` produces for a pitched frame at all, and whether a label that fails to
+place is still holding its identity's fade open -- the excess is text drawn where mbgl draws
+none, and a fade that never closes would look exactly like that without any collision being wrong.
