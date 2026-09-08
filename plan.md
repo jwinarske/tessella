@@ -7600,3 +7600,46 @@ right. mbgl's circle counter increments after the reach test but *before* thinni
 version of this side's counted the thinned survivors -- so "tested equal on 52 of 360" compared two
 different quantities. That is the fifth join or counter in this document to compare unlike things,
 and every one was caught the same way: a number that did not fit the story it was supposed to tell.
+
+### The run belonged at layout scale, and that was the reach problem too
+
+Three readings of the reach were measured against the count of circles each label covers, on the
+360 road labels at Seattle z15 pitch 45:
+
+| reach scaled by | labels agreeing |
+| --- | --- |
+| the shader's ratio (what was there) | 236 |
+| the walk's ratio | 92 |
+| neither | 132 |
+
+Monotone, and none of them good -- which is what a wrongly-posed question looks like. The reach was
+not the thing.
+
+`CollisionFeature` builds a line label's circles **once per bucket, in tile units**, and the camera
+reaches them only as `tileToViewport` when one is projected to be tested. This folded the
+perspective ratio into the run itself, so every circle's `signedDistanceFromAnchor` moved with the
+camera -- and the reach window those distances are compared against moved *against* them rather
+than with them. No scaling of the window can fix a window and a ruler that disagree.
+
+With the run built at `font_scale`, padding added in tile units as `CollisionFeature` adds it, and
+the ratio applied to the radius on projection:
+
+| | before | after |
+| --- | --- | --- |
+| circle runs matching mbgl's | 195 of 360 | **360 of 360** |
+| in-reach counts agreeing | 236 | 246 |
+
+and the reach then wants no ratio at all, which is what mbgl does:
+`approximateTileDistance` reduces to `prevTileDistance + lastSegmentTile` for a label pitched with
+the map, and the walk it measures is handed `fontSize / 24`, not the pitch-scaled size the drawing
+walk uses. Two walks at two sizes, which is the thing this thread kept conflating.
+
+| Seattle, pitch 45 | z12 | z13 | z14 | z15 | z16 |
+| --- | --- | --- | --- | --- | --- |
+| four turns ago | 0.908% | 1.485% | 2.453% | 1.831% | 0.958% |
+| now | **0.254%** | **0.342%** | **0.453%** | **0.141%** | **0.000%** |
+
+Flat is unchanged and no other scene moves. What is left is 114 labels whose in-reach count still
+differs and the run-size rounding that is now gone -- and the honest note is that gross was the
+wrong instrument for all three reach experiments: it went 0.404%, 1.034%, 0.383% across readings
+whose real quality was 236, 92 and 132. The count is what discriminated.
