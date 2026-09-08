@@ -27,14 +27,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, PoisonError, RwLock};
 use web_time::Instant;
 
-use tessella_storage::deferred::{DeferredFileSource, Ticket};
+use tessella_storage::deferred::Ticket;
 use tessella_storage::source::{Coalescing, FetchError, FileSource, Response};
 use tessella_tile::cover::{TileCoord, ViewTransform};
 use tessella_tile::store::TileKey;
 
 use crate::boot::{self, BootError, Sources};
 use crate::cache::TileCache;
-use crate::deferred::PoolBacked;
+use crate::deferred::{PoolBacked, TileTransport};
 use crate::map::Tiles;
 use crate::pool::{Pool, Priority};
 use crate::tile::{LayerBucket, TileId};
@@ -149,12 +149,12 @@ struct Inner {
 }
 
 /// Clears a tile from the in-flight set on the way out of its build, however that happens.
-struct Clearing<S: FileSource + 'static> {
-    source: Arc<TileSource<S>>,
+struct Clearing<S: FileSource + 'static, D: TileTransport + 'static> {
+    source: Arc<TileSource<S, D>>,
     key: TileKey,
 }
 
-impl<S: FileSource + 'static> Drop for Clearing<S> {
+impl<S: FileSource + 'static, D: TileTransport + 'static> Drop for Clearing<S, D> {
     fn drop(&mut self) {
         self.source.finish(&self.key);
     }
@@ -175,7 +175,7 @@ struct InFlight {
 ///
 /// Process-scoped and shared: one of these serves every view, so a tile wanted by two of them is
 /// fetched once, built once, and held once.
-pub struct TileSource<S> {
+pub struct TileSource<S, D = PoolBacked<Coalesced<S>>> {
     style_text: String,
     files: Arc<Coalescing<S>>,
     /// The tile path's transport, which asks for bytes rather than waiting for them.
@@ -184,7 +184,7 @@ pub struct TileSource<S> {
     /// fetch -- the deduplication is by URL inside `Coalescing` and does not care which side of
     /// the trait asked. Style resolution and glyphs keep using `files` directly: both run inside
     /// a single pool job already and have nothing to gain from being torn in half.
-    deferred: Arc<PoolBacked<Coalesced<S>>>,
+    deferred: Arc<D>,
     /// Tiles whose bytes have been asked for and have not arrived.
     ///
     /// A separate lock from `inner` because [`TileSource::drain`] walks it on the tick thread
@@ -218,12 +218,15 @@ pub struct TileSource<S> {
 
 /// A [`FileSource`] over the coalescing store.
 ///
+/// Public because it names part of [`TileSource`]'s default transport, which a caller has to be
+/// able to spell.
+///
 /// `Coalescing` answers with an `Arc<Response>`, because a response joined by several waiters is
 /// one response shared rather than one each; the trait predates that and wants the value. Glyphs
 /// go through it rather than around it because two views wanting the same range is exactly the
 /// case coalescing exists for, and a second file source beside it would fetch the range twice and
 /// cache it in neither.
-struct Coalesced<S>(Arc<Coalescing<S>>);
+pub struct Coalesced<S>(pub Arc<Coalescing<S>>);
 
 impl<S: FileSource> FileSource for Coalesced<S> {
     fn fetch(&self, url: &str) -> Result<Response, FetchError> {
@@ -238,12 +241,17 @@ impl<S: FileSource> FileSource for Coalesced<S> {
 /// own would only make that more convincing than it deserves to be.
 static DISCARDED: AtomicUsize = AtomicUsize::new(0);
 
-impl<S: FileSource + 'static> TileSource<S> {
+impl<S: FileSource + 'static> TileSource<S, PoolBacked<Coalesced<S>>> {
     /// Holds a style and the process-scoped things a build needs. Fetches nothing.
     ///
     /// Nothing happens until the first [`Self::want`], which is what makes creating a map cheap:
     /// §16's `create` parses the style to reject a bad one and then hands back a handle, and the
     /// first tick is what starts the network.
+    ///
+    /// The transport is the pool-backed one, which is the whole of the native answer: a blocking
+    /// source, waited on where waiting is cheap. A caller with a transport of its own --- a
+    /// browser, or a test that wants to decide when bytes arrive --- uses
+    /// [`Self::with_transport`](TileSource::with_transport) instead.
     pub fn new(
         style_text: String,
         files: Arc<Coalescing<S>>,
@@ -259,6 +267,29 @@ impl<S: FileSource + 'static> TileSource<S> {
             pool,
             Priority::Background,
         ));
+        Self::with_transport(style_text, files, deferred, cache, pool, style_rev)
+    }
+}
+
+impl<S: FileSource + 'static, D: TileTransport + 'static> TileSource<S, D> {
+    /// As [`new`](TileSource::new), with the tile transport supplied.
+    ///
+    /// The seam DR-23 exists for. Tiles reach this source through whatever answers
+    /// [`TileTransport`], so a browser's `fetch` and a pool-backed blocking source are the same
+    /// shape to everything above -- and a test can be a third, deciding exactly when a tile's
+    /// bytes land without a network to arrange it.
+    ///
+    /// `files` is still the blocking source, because style resolution and glyphs still use it.
+    /// Both are one pool job that fetches and finishes, so neither has been torn in half yet, and
+    /// until they are a browser cannot resolve a style however good its transport is.
+    pub fn with_transport(
+        style_text: String,
+        files: Arc<Coalescing<S>>,
+        deferred: Arc<D>,
+        cache: Arc<TileCache<BootError>>,
+        pool: &'static Pool,
+        style_rev: u64,
+    ) -> Arc<Self> {
         Arc::new(Self {
             style_text,
             files,
@@ -867,7 +898,7 @@ impl<S: FileSource + 'static> TileSource<S> {
     }
 }
 
-impl<S: FileSource + 'static> Tiles for Arc<TileSource<S>> {
+impl<S: FileSource + 'static, D: TileTransport + 'static> Tiles for Arc<TileSource<S, D>> {
     fn buckets(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
         self.landed
             .read()
