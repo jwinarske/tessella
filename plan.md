@@ -7366,3 +7366,24 @@ z14 2.576% to 2.453%.
 is left is mostly *not* which labels are drawn -- it is where their glyphs land once drawn. The
 next look belongs in the vertex path at pitch, not in placement: `write_line_positions` and what
 the shader does with the dynamic buffer it fills.
+
+### The pitched remainder is glyph size, not placement
+
+Cropped tight on one label drawn by both at the same anchor -- "Harrison Street" at Seattle z14
+pitch 45 -- mbgl's glyphs are plainly larger than this one's. Same label, same position, different
+size, and flat is pixel-identical. So the remainder is the vertex path, which the arithmetic
+already implied: twenty-eight placement disagreements out of 388 cannot make 2.45% of a frame.
+
+Both sides shrink distant type by the same rule, `clamp(0.5 + 0.5 * distance_ratio, 0, 4)` with the
+viewport-aligned branch dividing `cameraToCenterDistance` by the anchor's `w`. A *smaller* ratio
+here means a larger `w`, so the inputs are where to look, and two of them are already ruled out:
+
+- `camera_to_center_distance` is `0.5 * height / tan(fov / 2)`, character for character
+  `TransformState::getCameraToCenterDistance`, with `DEFAULT_FOV` the same constant.
+- `a_pos` is the tile-unit anchor and `matrix` is tile-local-to-clip on both sides, which is what
+  mbgl's `u_matrix * vec4(a_pos, 0, 1)` takes `w` from.
+
+So the ratio's two named inputs agree and the output does not, which means the next measurement is
+of the value itself rather than of the code around it: the ratio, or `w`, printed per label from
+both renderers at one camera. Reading the two shaders side by side has now failed twice to explain
+a difference that a single printed number would settle.
