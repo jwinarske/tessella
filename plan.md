@@ -8065,6 +8065,28 @@ exactly as `boot`, `cache` and `pool` already are. What was left afterwards was 
 moves to `alloc` and two environment-variable debug knobs, which need an environment and are now
 behind `std` for that reason. The gate has no exceptions.
 
+### WS-3, the ABI half
+
+`Config::style_json` is a pointer and a length on every target. A `CStr` was a convenience for C
+callers and nothing else: a browser hands over a byte range in linear memory, which has no
+terminator to find, and one signature is easier to keep honest than two. It also costs a scan the
+caller has already done -- a `std::string` and a `Uint8Array` both know their own size.
+
+The change separated two faults a NUL-terminated parameter could not tell apart. A null pointer is
+the caller's mistake and answers `NullArgument`; bytes that are not UTF-8 are the *document's*
+mistake and answer `BadStyle`, because the pointer was fine and what it pointed at was not a style.
+A zero length is neither: it is an empty document, which is only reachable at all because the
+length is carried.
+
+Making it turned up a gap worth recording. `tessella.h` is hand-written -- unlike
+`tessella_capture_abi.h`, which is generated from the Rust types and cannot disagree with them --
+and carries `_Static_assert`s about its own field offsets. Nothing compiled it. `probe.c` included
+only the generated header, so those assertions had never run, and a field could have been added on
+either side with the offsets going on claiming what they claimed. `probe.c` includes it now, which
+was verified by wedging a field in and watching three assertions fire. Beside it, `offset_of!` on
+the Rust struct asserts the same numbers, so the loop closes in both directions: the C compiler
+catches the header drifting from itself, and the Rust test catches it drifting from Rust.
+
 ### WS-2, and what native got out of it
 
 `Pool` keeps its shape -- `submit`, `batch`, `Priority`, `is_idle`, `panics` all unchanged -- and

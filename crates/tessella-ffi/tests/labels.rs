@@ -21,7 +21,7 @@
 
 #![cfg(feature = "image")]
 
-use std::ffi::{CStr, CString};
+use std::ffi::CStr;
 
 use tessella_ffi::{Config, MapHandle, Regions, Status};
 
@@ -48,9 +48,12 @@ fn a_map_created_through_c_draws_its_labels() {
     ))
     .expect("the server starts");
 
-    let style = CString::new(style_at(&server.origin())).expect("no interior NUL");
+    // A byte range, not a C string: the ABI takes a pointer and a length, so a
+    // terminator is one thing fewer to get right.
+    let style = style_at(&server.origin());
     let config = Config {
         style_json: style.as_ptr(),
+        style_json_len: style.len(),
         width: 1024,
         height: 768,
         ring_capacity: 1 << 22,

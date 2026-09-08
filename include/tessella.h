@@ -100,8 +100,15 @@ typedef struct tessella_map tessella_map;
 /* How a map is set up. */
 typedef struct tessella_config {
     /* The style document, as JSON. A URL is not accepted here: fetching it is the caller's,
-     * because a caller that already has the bytes should not be made to serve them back. */
-    const char* style_json;
+     * because a caller that already has the bytes should not be made to serve them back.
+     *
+     * A pointer and a length rather than a NUL-terminated string, on every target rather than
+     * only the one that needs it. A C string was a convenience for C callers and nothing else:
+     * a browser hands over a byte range in linear memory, which has no terminator to find, and
+     * one signature is easier to keep honest than two. Pass `s.data(), s.size()`. */
+    const uint8_t* style_json;
+    /* Its length in bytes, not counting any terminator the caller happens to have. */
+    size_t style_json_len;
     /* Viewport width in pixels. */
     uint32_t width;
     /* Viewport height in pixels. */
@@ -119,7 +126,10 @@ typedef struct tessella_config {
 } tessella_config;
 
 TESSELLA_ASSERT(offsetof(tessella_config, style_json) == 0, "tessella_config.style_json moved");
-TESSELLA_ASSERT(offsetof(tessella_config, width) == sizeof(void*), "tessella_config.width moved");
+TESSELLA_ASSERT(offsetof(tessella_config, style_json_len) == sizeof(void*),
+                "tessella_config.style_json_len moved");
+TESSELLA_ASSERT(offsetof(tessella_config, width) == 2 * sizeof(void*),
+                "tessella_config.width moved");
 
 /* Where a consumer reads from.
  *

@@ -29,7 +29,11 @@ static const char* const STYLE =
 
 int main(void) {
     tessella_config config = {0};
-    config.style_json = STYLE;
+    /* A byte range, so a C caller casts rather than relying on a terminator the ABI no longer
+     * looks for. `strlen` here because the literal is one; a caller with a `std::string` or a
+     * buffer off the network already knows the length. */
+    config.style_json = (const uint8_t*)STYLE;
+    config.style_json_len = strlen(STYLE);
     config.width = 1024;
     config.height = 768;
     config.ring_capacity = 1u << 22;
@@ -44,7 +48,9 @@ int main(void) {
 
     /* A style that will not parse must fail at create, and must not hand back a handle. */
     tessella_config bad = config;
-    bad.style_json = "{ this is not a style";
+    static const char* const BAD = "{ this is not a style";
+    bad.style_json = (const uint8_t*)BAD;
+    bad.style_json_len = strlen(BAD);
     tessella_map* rejected = NULL;
     printf("bad_style %d\n", (int)tessella_create(&bad, 0.0, 0.0, 0.0, &rejected));
     printf("bad_style_handle_null %d\n", rejected == NULL ? 1 : 0);
