@@ -2,7 +2,7 @@
 //!
 //! # Why a second trait rather than an async `fetch`
 //!
-//! [`FileSource::fetch`] blocks, and on native that is correct and cheap: tiles are fetched from
+//! [`FileSource::fetch`](crate::source::FileSource::fetch) blocks, and on native that is correct and cheap: tiles are fetched from
 //! pool workers, where waiting costs a thread that has nothing else to do. A browser has no
 //! blocking fetch on the main thread and no `std::net` at all, so the same call cannot exist
 //! there.
