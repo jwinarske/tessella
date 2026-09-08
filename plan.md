@@ -7721,3 +7721,28 @@ in x. Flat it cannot, which is why the flat frame is exact and only the pitched 
 So the fix is to project the two end points through the label plane's own `getGlCoordMatrix` before
 comparing them, which needs that matrix threaded into `place_upright` -- the one place it is not
 already available.
+
+### The upright test, and the pitched frame closes
+
+The last entry named it and it holds. `place_upright` decides the flip where the projection is now,
+not inside the walk, and it asks mbgl's question in mbgl's space.
+
+| Seattle | z12 | z13 | z14 | z15 | z16 |
+| --- | --- | --- | --- | --- | --- |
+| pitch 45, before | 0.254% | 0.342% | 0.453% | 0.141% | 0.000% |
+| pitch 45, after | **0.018%** | **0.023%** | **0.002%** | **0.012%** | **0.000%** |
+| flat | 0.000% | 0.000% | 0.000% | 0.010% | 0.000% |
+
+The road-label layer alone at z14 pitch 45 goes 4,084 gross to **13**. Every remaining number on
+this page is now edge noise of the kind measured two entries ago: single pixels along a boundary,
+pure colour against pure colour.
+
+Worth noting what the sequence looked like from inside, because it did not look like progress at
+the time. Placement was made exact -- 388 anchors, 167 against 167, zero disagreements -- and the
+frame did not move at all, 4,084 pixels before and after. That is the measurement that mattered: it
+proved the remaining error was not *which* labels are drawn, and pointed at the glyph dump, which
+named 33 backwards labels in one pass. A decision that changes no pixels is not a wasted one.
+
+**The parity thread is done.** Flat is exact but for 63 pixels at z15 across the whole Seattle
+sweep; pitched is under 0.025% everywhere and exact at z14 and z16. What remains anywhere is
+polygon and glyph edges.
