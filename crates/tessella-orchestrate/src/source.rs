@@ -25,7 +25,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, PoisonError, RwLock};
-use std::time::Instant;
+use web_time::Instant;
 
 use tessella_storage::source::{Coalescing, FetchError, FileSource};
 use tessella_tile::cover::{TileCoord, ViewTransform};

@@ -21,7 +21,11 @@ ureq = { workspace = true, optional = true }
 flate2 = { version = "1", optional = true }
 
 [features]
-default = []
+default = ["fs"]
+# A unix filesystem. On by default because every native build wants the store path, and a feature
+# only so a target without one can turn it off: `store_path` is `std::fs` and `std::os::unix`, and
+# wasm32 has neither at run time however well it compiles.
+fs = []
 cache = ["dep:rusqlite"]
 http = ["dep:ureq"]
 # HTTPS. Off by default and deliberately so: `rustls` brings `ring`, which is C and assembly,

@@ -4,6 +4,9 @@
 //! and two tests changing it in parallel would read each other's values. That is also why the
 //! library never reads it on its own behalf.
 
+// The whole file is about a filesystem path, so it goes away with the feature that provides one.
+#![cfg(feature = "fs")]
+
 use std::path::Path;
 
 use tessella_storage::store_path::{

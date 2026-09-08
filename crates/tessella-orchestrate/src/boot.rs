@@ -49,8 +49,9 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
+use core::time::Duration;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use web_time::Instant;
 
 use tessella_source::GeoJsonFeature;
 use tessella_source::mvt;
