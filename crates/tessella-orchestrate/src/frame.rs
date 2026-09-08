@@ -889,6 +889,7 @@ fn emit_group(
                     &Encoding {
                         patterns,
                         raster_texture,
+                        pitched: view.pitch.abs() > f64::EPSILON,
                         zoom: view.zoom,
                         stacks: &stacks,
                         prepared: &prepared,
@@ -1282,6 +1283,12 @@ struct Encoding<'a> {
     patterns: Option<&'a Patterns<'a>>,
     /// The texture this tile's raster picture went to.
     raster_texture: tessella_capture_abi::envelope::TextureId,
+    /// Whether the camera is pitched at all, which decides an icon's sampler.
+    ///
+    /// mbgl's `iconTransformed`: `rotationAlignment == Map || state.getPitch() != 0`. A pitched
+    /// icon is being resampled whatever its size says, so nearest leaves its edges hard where
+    /// mbgl's are blended.
+    pitched: bool,
     /// The camera's zoom, which a pattern's fade is chosen at.
     zoom: f64,
     /// The frame's font stacks, in the order their atlases were published.
@@ -2253,6 +2260,7 @@ fn encode_parts(
     let &Encoding {
         patterns,
         raster_texture,
+        pitched,
         zoom,
         stacks,
         prepared,
@@ -2411,7 +2419,14 @@ fn encode_parts(
                     // half of the test that reads the style, and the sprite sheet for the other
                     // half: a sprite packed at a different pixel ratio from the map's is being
                     // rescaled whatever the style says.
-                    let scaled = layout.icons_need_linear
+                    // mbgl: `sdfIcons || isChanging || iconScaled || iconTransformed`, and this
+                    // is the last two of those. A pitched camera or a map-aligned icon is being
+                    // resampled however the style sizes it.
+                    let transformed = pitched
+                        || layout.icon_alignments.rotation
+                            == tessella_layout::symbol_layout::Alignment::Map;
+                    let scaled = transformed
+                        || layout.icons_need_linear
                         || patterns.is_some_and(|patterns| {
                             layout.icons().iter().any(|name| {
                                 patterns.positions.get(name).is_some_and(|position| {
