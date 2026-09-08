@@ -7761,3 +7761,33 @@ soname and the same symbols, and `$ORIGIN` resolves the bundled fresh one at run
 only safe while fluorite removes no symbol `tessella_fluorite` uses. Checked rather than assumed
 this time: 71 undefined filament symbols on that side, all 71 exported by the fluorite in the
 bundle.
+
+### The globe's consumer half, started at the arithmetic
+
+§13.4 leaves four things: the vertex bend, the subdivision, the horizon cull, and symbol placement
+on a sphere. Three of them need the same projection and only one is a shader, so `tessella-tile`
+gets a `globe` module before any material does -- written once, a CPU horizon test and a GPU bend
+cannot drift apart the way a shader and a hand copy of it do.
+
+- `sphere_point` is GL JS's `latLngToECEF`, negated `y` included. That sign is the screen's axis
+  rather than the Earth's and every formula downstream of it there assumes it, so it is kept rather
+  than corrected.
+- `sphere_point_from_mercator` is the form the bend will use, tile geometry being Mercator. It
+  clamps past the Mercator limit, so a tile edge running off the top of the world lands on the pole
+  instead of diverging.
+- `faces_camera` is the horizon: for a unit sphere seen from `d` radii out the tangent grazes at
+  `cos θ = 1/d`.
+- `camera_distance` ties the sphere's radius to `world_size`, so the globe and the plane agree
+  about scale at the zoom a map would switch between them.
+
+**The tests are identities, because there is nothing to render against.** The poles are one place
+however their longitude is spelled; the antimeridian's two spellings meet; a round trip through
+Mercator returns the latitude it started from; a point at exactly sixty degrees is exactly on the
+horizon of a camera two radii out; every point is on the unit sphere. That is weaker than the
+gross-pixel comparison every other page here rests on, and saying so is part of the record: this is
+the one piece whose correctness is argued rather than measured.
+
+What is next, in the order it can be checked: the horizon cull, because it needs only the module
+above and a per-tile dot product and its effect is countable; then the subdivision, whose output is
+a vertex count and can be pinned; then the bend, which needs a material and is the first thing on
+this page that can only be judged by eye; then symbols, which need the bend to exist first.
