@@ -7668,3 +7668,23 @@ The single-family table at z15, pitch 45, after:
 
 Seven of eleven scenes are pixel-exact at both angles. What is left is not symbols: `one_water` and
 `one_buildings` are fills, and they are the two largest numbers on the page now.
+
+### The fills are at the rasterisation floor, not carrying a defect
+
+`one_water` was the largest number left at 0.031%, and it is not extra water. Its 197 differing
+pixels form **170 runs, of which 143 are a single pixel and none is longer than two**: isolated
+specks along the coastline, not a region. `one_buildings` is 41 runs with a maximum of four,
+`families` 70 runs with a maximum of four. All three are edges.
+
+Nor is it antialiasing. Where the two differ, this side is the fill's flat colour and mbgl's is the
+background's -- both pure, neither blended -- so the polygon edge simply lands on the other side of
+a pixel centre. One pixel of coverage, on boundaries thousands of pixels long.
+
+Two things were checked against mbgl and ruled out on the way, because the far-field concentration
+looked like a horizon problem: `tanFovAboveCenter` is `tan(fov/2)` on both sides once offset and
+roll are zero, and the far plane is `cameraToSeaLevelDistance / (1 - tanMultiple) * 1.01` on both.
+This version of mbgl has no horizon clamp to be missing.
+
+So there is no fill defect to chase. Seven of eleven single-family scenes are pixel-exact at both
+angles and the other four differ only along edges, which is where two independent rasterisers stop
+agreeing.
