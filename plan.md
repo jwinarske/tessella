@@ -7643,3 +7643,28 @@ Flat is unchanged and no other scene moves. What is left is 114 labels whose in-
 differs and the run-size rounding that is now gone -- and the honest note is that gross was the
 wrong instrument for all three reach experiments: it went 0.404%, 1.034%, 0.383% across readings
 whose real quality was 236, 92 and 132. The count is what discriminated.
+
+### The icon scene reaches zero, on a sampler
+
+Its placements had agreed exactly since the padding fix, and the 919 pixels left at Seattle z15
+pitch 45 were all of one kind: ours at either the icon's flat colour or the background's, mbgl's a
+blend of the two. Hard edges against antialiased ones.
+
+mbgl picks an icon's filter with `sdfIcons || isChanging || iconScaled || iconTransformed`, and
+`iconTransformed` is `rotationAlignment == Map || pitch != 0`. This tested `iconScaled` only, so a
+pitched icon -- being resampled however the style sizes it -- was still drawn nearest.
+
+The single-family table at z15, pitch 45, after:
+
+| scene | flat | pitch 45 |
+| --- | --- | --- |
+| `icons_only` | 0 | **0** |
+| `one_poi-labels` | 0 | **0** |
+| `one_place-labels`, `one_roads`, `one_parks`, `one_imagery` | 0 | 0 |
+| `one_poi-dots` | 0 | 18 |
+| `one_buildings` | 18 | 71 |
+| `one_water` | 0 | 197 |
+| `families` | 18 | 110 |
+
+Seven of eleven scenes are pixel-exact at both angles. What is left is not symbols: `one_water` and
+`one_buildings` are fills, and they are the two largest numbers on the page now.
