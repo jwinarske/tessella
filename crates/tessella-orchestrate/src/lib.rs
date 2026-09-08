@@ -46,6 +46,8 @@ pub mod cache;
 pub mod camera;
 pub mod counters;
 pub mod damage;
+#[cfg(feature = "std")]
+pub mod deferred;
 pub mod emit;
 pub mod frame;
 pub mod map;

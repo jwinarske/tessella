@@ -8063,6 +8063,19 @@ Building the gate turned up one thing worth recording. `tessella-orchestrate` ca
 the locks are not, and picking their replacement is DR-24's decision rather than a tidy-up. The crate
 is the gate's one named exception until WS-2 lands.
 
+WS-1 lands in two pieces, because the transport and the thing that uses it fail differently. The
+first is done: `Ticket`, `DeferredFileSource` and the `Tickets` table in `tessella-storage`, and
+`PoolBacked<S>` in `tessella-orchestrate` -- the blanket impl that wears the deferred trait and
+submits the blocking `fetch_conditional` to the pool. It carries the drop guard `Shared`'s leader
+carries, for the same reason and proved the same way: with the guard removed, the unwinding-source
+test stops failing and starts hanging. Clean under ThreadSanitizer.
+
+The second piece is `TileSource::drain`, and it is the larger one. `build_job` fetches and decodes
+inside one pool job, under `TileCache::get_or_build`, so putting the tile path on the deferred
+transport means splitting it at the fetch -- request, drain, then build -- and `get_or_build`
+cannot be held across the gap. Landing a `drain` before that split would give it nothing to drain,
+which is why the split is where WS-1 continues rather than where WS-2 starts.
+
 WS-0 is done: the target is in `rust-toolchain.toml` and the cross matrix, the `no_std` step sits
 beside it, `store_path` is behind a default-on `fs` feature, and `tessella-orchestrate` takes its
 clock from `web-time` -- `std::time` off wasm, `performance.now` on it.
