@@ -27,6 +27,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, PoisonError, RwLock};
 use web_time::Instant;
 
+use tessella_glyph::manager::FontStack;
+use tessella_glyph::pbf::Range;
 use tessella_storage::deferred::Ticket;
 use tessella_storage::source::{Coalescing, FetchError, FileSource, Response};
 use tessella_tile::cover::{TileCoord, ViewTransform};
@@ -137,6 +139,31 @@ struct Glyphs {
     /// Waiting to be taken by a tick. `Fonts` is not `Clone` and [`crate::map::Map`] owns the one
     /// it draws from, so this is a hand-off rather than a copy.
     ready: Option<tessella_glyph::fonts::Fonts>,
+    /// The ranges asked for and not yet answered, while a fetch is in flight.
+    ///
+    /// Glyphs go through the same transport tiles do, so the same thing is true of them: the
+    /// request returns without bytes and something has to come back for the answer. That is
+    /// [`TileSource::drain`], which is why this is state rather than a local in a pool job.
+    fetching: Option<GlyphFetch>,
+}
+
+/// One glyph fetch, part-way through.
+///
+/// The ranges are asked for together and accepted together. Not one at a time as they land,
+/// because packing is over a whole stack: an atlas packed from a half-loaded font has shelf slots
+/// for the glyphs it had and nowhere to put the rest.
+struct GlyphFetch {
+    /// What the ranges were asked for, which `packed` needs again at the end.
+    wanted: tessella_glyph::fonts::Dependencies,
+    /// The glyph URL template, so the `Fonts` can be built when the bytes are in.
+    url: String,
+    /// Asked for and not answered.
+    outstanding: BTreeMap<Ticket, (FontStack, Range)>,
+    /// Answered and not yet accepted.
+    landed: Vec<(FontStack, Range, Arc<Response>)>,
+    /// A range that would not load. The whole fetch is abandoned, as it was when one `?` in
+    /// `Fonts::fetch` ended it -- a partial alphabet is the thing this path exists to avoid.
+    failed: bool,
 }
 
 /// What a source is doing, behind one lock.
@@ -567,22 +594,123 @@ impl<S: FileSource + 'static, D: TileTransport + 'static> TileSource<S, D> {
             held.running = true;
         }
 
+        // What to ask for is computed against an empty store, which is what `wanted` above already
+        // accounts for: a fetch builds a *new* `Fonts` and hands it over whole, so every range the
+        // dependencies need is asked for, not just the ones the last fetch did not have.
+        let asks = tessella_glyph::fonts::Fonts::new(url.clone()).wanted(&wanted);
+        if asks.is_empty() {
+            // Nothing to ask the origin for -- every codepoint is above the BMP and rasterised
+            // locally. There is still an atlas to build, so this goes straight to the accepting
+            // half rather than clearing `running` and forgetting about it.
+            self.finish_glyphs(GlyphFetch {
+                wanted,
+                url,
+                outstanding: BTreeMap::new(),
+                landed: Vec::new(),
+                failed: false,
+            });
+            return;
+        }
+
+        // Issued outside the `glyphs` lock, for the reason `dispatch` issues outside `pending`:
+        // `request_at` takes the ticket table, and `drain` takes this lock before it polls.
+        let mut outstanding = BTreeMap::new();
+        for (stack, range, ask) in asks {
+            // Foreground, because a label with no glyphs is a hole in a frame that is otherwise
+            // finished -- the same rank the fetch had when it was one blocking job.
+            let ticket = self.deferred.request_at(Priority::Foreground, &ask, None);
+            outstanding.insert(ticket, (stack, range));
+        }
+        self.glyphs
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .fetching = Some(GlyphFetch {
+            wanted,
+            url,
+            outstanding,
+            landed: Vec::new(),
+            failed: false,
+        });
+    }
+
+    /// Collects whatever the transport has answered for the glyph ranges in flight.
+    ///
+    /// Called from [`Self::drain`], beside the tiles, because it is the same question asked of the
+    /// same transport.
+    fn drain_glyphs(self: &Arc<Self>) {
+        let outstanding: Vec<Ticket> = {
+            let held = self.glyphs.lock().unwrap_or_else(PoisonError::into_inner);
+            match &held.fetching {
+                Some(fetch) => fetch.outstanding.keys().copied().collect(),
+                None => return,
+            }
+        };
+
+        let mut answers = Vec::new();
+        for ticket in outstanding {
+            if let Some(outcome) = self.deferred.poll(ticket) {
+                answers.push((ticket, outcome));
+            }
+        }
+        if answers.is_empty() {
+            return;
+        }
+
+        let ready = {
+            let mut held = self.glyphs.lock().unwrap_or_else(PoisonError::into_inner);
+            let Some(fetch) = held.fetching.as_mut() else {
+                return;
+            };
+            for (ticket, outcome) in answers {
+                let Some((stack, range)) = fetch.outstanding.remove(&ticket) else {
+                    continue;
+                };
+                match outcome {
+                    Ok(response) => fetch.landed.push((stack, range, response)),
+                    // A glyph range that will not load costs the labels that need it and not the
+                    // map, so this abandons the fetch rather than failing the source.
+                    Err(_) => fetch.failed = true,
+                }
+            }
+            if fetch.outstanding.is_empty() {
+                held.fetching.take()
+            } else {
+                None
+            }
+        };
+
+        if let Some(fetch) = ready {
+            self.finish_glyphs(fetch);
+        }
+    }
+
+    /// Builds the atlas from ranges that have all arrived.
+    ///
+    /// On a worker rather than on the draining thread: parsing a range and packing an atlas is
+    /// real work, and it was on a worker before the fetch was split out of it. A pool with no
+    /// workers runs it when it is drained, which is the same thread either way and says so.
+    fn finish_glyphs(self: &Arc<Self>, fetch: GlyphFetch) {
         let this = Arc::clone(self);
         self.pool.submit(Priority::Foreground, move || {
-            let mut fonts = tessella_glyph::fonts::Fonts::new(url);
-            // A glyph range that will not load costs the labels that need it and not the map, so
-            // a failure here leaves `ready` empty rather than failing the source.
-            let fetched = fonts
-                .fetch(&wanted, &Coalesced(Arc::clone(&this.files)))
-                .is_ok();
+            let mut fonts = tessella_glyph::fonts::Fonts::new(fetch.url);
+            let mut ok = !fetch.failed;
+            for (stack, range, response) in &fetch.landed {
+                if fonts.accept(stack, *range, response).is_err() {
+                    ok = false;
+                    break;
+                }
+            }
+            if ok {
+                fonts.packed(&fetch.wanted);
+            }
             {
                 let mut held = this.glyphs.lock().unwrap_or_else(PoisonError::into_inner);
-                if fetched {
+                if ok {
                     held.ready = Some(fonts);
                 }
                 held.running = false;
             }
-            if fetched {
+            if ok {
                 this.generation.fetch_add(1, Ordering::AcqRel);
             }
         });
@@ -841,6 +969,8 @@ impl<S: FileSource + 'static, D: TileTransport + 'static> TileSource<S, D> {
     ///
     /// Cheap when nothing has arrived: one lock, a walk of the tickets outstanding, and no work.
     pub fn drain(self: &Arc<Self>) {
+        self.drain_glyphs();
+
         // Snapshotted rather than walked under the lock, because polling takes the ticket
         // table's lock and holding `pending` across that is the nesting `dispatch` is careful
         // not to make from the other side.
