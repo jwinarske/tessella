@@ -1164,7 +1164,7 @@ fn draw_symbol(
         let Some(indices) = geometry.indices.get(start..end) else {
             continue;
         };
-        for triangle in indices.chunks_exact(3) {
+        for triangle in indices.as_chunks::<3>().0 {
             let slot = |index: u16| segment.vertex_offset as usize + index as usize;
             let (a, b, c) = (slot(triangle[0]), slot(triangle[1]), slot(triangle[2]));
             let (Some(Some(pa)), Some(Some(pb)), Some(Some(pc))) = (
@@ -1264,7 +1264,7 @@ fn draw_raster(
         let Some(indices) = geometry.indices.get(start..end) else {
             continue;
         };
-        for triangle in indices.chunks_exact(3) {
+        for triangle in indices.as_chunks::<3>().0 {
             let slot = |index: u16| segment.vertex_offset as usize + index as usize;
             let (a, b, c) = (slot(triangle[0]), slot(triangle[1]), slot(triangle[2]));
             let (Some(Some(pa)), Some(Some(pb)), Some(Some(pc))) = (
@@ -1300,7 +1300,7 @@ fn triangles(
         let Some(indices) = geometry.indices.get(start..end) else {
             continue;
         };
-        for triangle in indices.chunks_exact(3) {
+        for triangle in indices.as_chunks::<3>().0 {
             let at = |index: u16| {
                 projected
                     .get(segment.vertex_offset as usize + index as usize)
