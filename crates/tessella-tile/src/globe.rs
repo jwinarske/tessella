@@ -126,3 +126,68 @@ pub fn tile_faces_camera(
         .iter()
         .any(|&(sx, sy)| faces_camera(sphere_point_from_mercator(sx, sy), toward, distance))
 }
+
+/// How many segments a tile edge needs so the flat chord stays within `tolerance` pixels of the
+/// sphere it is approximating.
+///
+/// # Why an error bound and not a table
+///
+/// GL JS carries a granularity expression -- a base value halved per zoom, floored at a minimum --
+/// and the numbers in it are chosen rather than derived. A bound can be checked: split an arc of
+/// angle `θ` into `n` pieces and the chord of each sits `R(1 - cos(θ/2n))` inside the arc, so the
+/// segment count that keeps that under a pixel is arithmetic with an answer. It also adapts on its
+/// own to the thing a table has to be re-tuned for -- a taller viewport, a different field of view
+/// -- because the radius it divides is measured in the same pixels the tolerance is.
+///
+/// `z` is the tile's own zoom, which sets how much of the world it spans; `zoom` is the camera's,
+/// which sets how large the sphere is in pixels. One segment is the floor: a tile always has its
+/// own corners.
+///
+/// The viewport's height is deliberately not a parameter. It scales `camera_to_center_distance`
+/// and so the camera's distance, but the sphere's radius in pixels is `world_size(zoom) / 2π` and
+/// has nothing to do with it -- a taller screen sees more of the same globe rather than a bigger
+/// one. It was a parameter here first, unused, which is the kind of thing a signature says and the
+/// body does not.
+#[must_use]
+pub fn edge_segments(z: u8, zoom: f64, tolerance: f64) -> u32 {
+    let radius = crate::camera::world_size(zoom) / (2.0 * core::f64::consts::PI);
+    if !tolerance.is_finite() || tolerance <= 0.0 || radius <= 0.0 {
+        return 1;
+    }
+    // The arc one tile edge subtends at the sphere's centre.
+    let arc = 2.0 * core::f64::consts::PI / f64::from(1u32 << z);
+    // `1 - cos(x) ≈ x²/2` for the small angles this always lands in, so `n ≈ θ/2 · √(R/2t)`.
+    // Solved rather than iterated, then checked below, because the approximation is only good
+    // while the segments are small and the check costs nothing.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let mut n = ((arc / 2.0) * (radius / (2.0 * tolerance)).sqrt())
+        .ceil()
+        .max(1.0) as u32;
+    // The exact test, in case the approximation undershot at a coarse zoom.
+    while n < MAX_EDGE_SEGMENTS && radius * (1.0 - (arc / (2.0 * f64::from(n))).cos()) > tolerance {
+        n += 1;
+    }
+    n.min(MAX_EDGE_SEGMENTS)
+}
+
+/// The most segments an edge is ever given.
+///
+/// A ceiling rather than a computed bound: the arithmetic above is monotone in the sphere's radius
+/// and nothing stops it asking for thousands at a low zoom on a tall screen. Squared, that is the
+/// vertex count of one tile, so the ceiling is what keeps a globe from subdividing itself out of a
+/// frame budget. `128` is the same order as GL JS's base granularity.
+pub const MAX_EDGE_SEGMENTS: u32 = 128;
+
+/// How far the flat chord of one segment sits from the sphere, in pixels.
+///
+/// The quantity [`edge_segments`] bounds, exposed so a test can check the bound rather than trust
+/// it, and so a caller choosing its own tolerance can see what it bought.
+#[must_use]
+pub fn chord_error(z: u8, zoom: f64, segments: u32) -> f64 {
+    if segments == 0 {
+        return f64::INFINITY;
+    }
+    let radius = crate::camera::world_size(zoom) / (2.0 * core::f64::consts::PI);
+    let arc = 2.0 * core::f64::consts::PI / f64::from(1u32 << z);
+    radius * (1.0 - (arc / (2.0 * f64::from(segments))).cos())
+}

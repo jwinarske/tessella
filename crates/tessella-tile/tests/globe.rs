@@ -257,3 +257,105 @@ fn horizon_counts() {
         }
     }
 }
+
+/// The subdivision keeps the chord within the tolerance it was asked for.
+///
+/// The property the bound exists for, checked rather than trusted, across the zooms and tile levels
+/// a globe actually draws.
+#[test]
+fn the_subdivision_holds_its_tolerance() {
+    for &tolerance in &[0.25, 0.5, 1.0, 2.0] {
+        for z in 0..8u8 {
+            for zoom in 0..8 {
+                let zoom = f64::from(zoom);
+                let n = globe::edge_segments(z, zoom, tolerance);
+                assert!(n >= 1, "z{z} at zoom {zoom} asked for no segments");
+                if n < globe::MAX_EDGE_SEGMENTS {
+                    let error = globe::chord_error(z, zoom, n);
+                    assert!(
+                        error <= tolerance,
+                        "z{z} at zoom {zoom} split into {n} leaves {error} pixels, over {tolerance}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// And it is not wasteful about it: one segment fewer would break the tolerance.
+///
+/// Without this the bound is satisfied by subdividing everything to the ceiling, which is the
+/// expensive way to be correct.
+#[test]
+fn the_subdivision_is_not_more_than_it_needs() {
+    let tolerance = 0.5;
+    for z in 0..8u8 {
+        for zoom in 0..8 {
+            let zoom = f64::from(zoom);
+            let n = globe::edge_segments(z, zoom, tolerance);
+            if n > 1 && n < globe::MAX_EDGE_SEGMENTS {
+                let coarser = globe::chord_error(z, zoom, n - 1);
+                assert!(
+                    coarser > tolerance,
+                    "z{z} at zoom {zoom} used {n} segments where {} would have held \
+                     ({coarser} pixels)",
+                    n - 1
+                );
+            }
+        }
+    }
+}
+
+/// A finer tile needs fewer segments than a coarser one at the same camera.
+///
+/// The whole reason the count is per tile rather than per frame: a z8 tile is a small patch of the
+/// sphere and barely curves, a z0 tile is the whole of it.
+#[test]
+fn a_finer_tile_needs_less_subdivision() {
+    let zoom = 3.0;
+    let mut previous = u32::MAX;
+    for z in 0..10u8 {
+        let n = globe::edge_segments(z, zoom, 0.5);
+        assert!(
+            n <= previous,
+            "z{z} wanted {n} segments where z{} wanted {previous}",
+            z - 1
+        );
+        previous = n;
+    }
+    assert_eq!(previous, 1, "a small enough tile is a flat quad");
+}
+
+/// The ceiling holds however extreme the camera.
+#[test]
+fn the_subdivision_has_a_ceiling() {
+    for zoom in [0.0, 8.0, 16.0, 22.0] {
+        for &tolerance in &[0.001, 0.01] {
+            let n = globe::edge_segments(0, zoom, tolerance);
+            assert!(
+                n <= globe::MAX_EDGE_SEGMENTS,
+                "zoom {zoom} at {tolerance} px asked for {n} segments"
+            );
+        }
+    }
+}
+
+/// What the subdivision costs, for the record.
+#[test]
+#[ignore = "a measurement, not a check"]
+fn subdivision_counts() {
+    println!("segments per tile edge, 0.5 px tolerance");
+    println!("      z0    z1    z2    z3    z4    z5    z6    z8   z10");
+    for zoom in [0.0, 1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0] {
+        print!("zoom {zoom:>4}");
+        for z in [0u8, 1, 2, 3, 4, 5, 6, 8, 10] {
+            print!("{:>6}", globe::edge_segments(z, zoom, 0.5));
+        }
+        println!();
+    }
+    println!("\nvertices for one tile (segments+1 squared), at its own zoom:");
+    for z in 0..8u8 {
+        let n = globe::edge_segments(z, f64::from(z), 0.5);
+        println!("  z{z}: {n} segments -> {} vertices", (n + 1) * (n + 1));
+    }
+}
