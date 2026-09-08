@@ -7544,3 +7544,27 @@ several frames of the same buckets together. Keyed by anchor and read last-write
 254 above. Every join in this document that has gone wrong has gone wrong the same way -- a key
 that stopped identifying one thing - and the fix each time was to make the dump say which pass,
 which bucket, or which frame it came from.
+
+### The padding was not scaling, and fixing it exposes the hit test
+
+The icon scene's eight disagreements were one number. Dumping the projected box from both
+renderers for each of them: every one of ours was about six tenths of a pixel wider and taller than
+mbgl's, three tenths on each edge, in all eight and in the same direction.
+
+mbgl adds padding in tile units -- `y1 = top * boxScale - padding.top` in `CollisionFeature` -- and
+multiplies the whole box by `tileToViewport` when it tests. So its two pixels of padding become two
+times the perspective ratio in the distance. This held padding at a flat two screen pixels wherever
+the symbol was. With it scaled the boxes agree to **0.000** and the eight disagreements become
+none; `icons_only` at pitch 45 halves, 0.322% to 0.146%, and the full style reaches zero at z16.
+
+**And it costs something, which is the useful part.** Oversized boxes collide more often, and that
+was masking a hit test that finds *fewer* collisions than mbgl's. With the boxes identical this
+places 194 road labels at Seattle z15 pitch 45 where mbgl places 185, and fourteen of the twenty-one
+remaining disagreements are collisions mbgl finds and this does not. The full style goes 0.347% to
+0.366% at z13, 0.694% to 0.715% at z14 and 0.173% to 0.459% at z15 -- worse numbers out of a
+provably more correct box.
+
+That is the trade taken deliberately: a measured-equal box with a known-weak test beats a wrong box
+whose error happened to cancel. The anchor sets now match exactly too -- 360 against 360 at z15,
+where before the ordering fix they were 350 against 388 -- so what is left in the pitched frame is
+one thing: `Shape::collides` against `collisionGrid.hitTest`, on boxes that are now identical.
