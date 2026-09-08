@@ -7791,3 +7791,29 @@ What is next, in the order it can be checked: the horizon cull, because it needs
 above and a per-tile dot product and its effect is countable; then the subdivision, whose output is
 a vertex count and can be pinned; then the bend, which needs a material and is the first thing on
 this page that can only be judged by eye; then symbols, which need the bend to exist first.
+
+### The horizon cull is worth nothing per tile, and §13.4's number says why
+
+Implemented and counted. The number on this page -- a third to a half of the cover behind the
+sphere between z1 and z2.5, nothing outside it -- reproduces to the tile:
+
+| | z0 | z1 | z2 | z2.5 | z3+ |
+| --- | --- | --- | --- | --- | --- |
+| tiles whose *centre* is behind | 1 of 1 | 2 of 4 | 3 of 9 | 0 | 0 |
+| tiles with *no corner* visible | 0 | 0 | 0 | 0 | 0 |
+
+The first row is what was measured and the second is what can be culled. A z1 tile spans ninety
+degrees of longitude, so its centre passes behind the horizon while a third of it is still on
+screen; culling on the centre leaves a hole in the planet. Asked safely -- is *any* part of this
+tile visible -- nothing is ever removed, because at the zooms where a horizon exists the tiles are
+enormous.
+
+So the cull does not belong before the subdivision, where §13.4 put it. It belongs *after*, on
+patches small enough for the question to have a useful answer, and the arithmetic is written and
+tested for when it gets there. The zero is pinned, so a later change that starts culling whole
+tiles has to explain itself.
+
+Counting it also found a bug that the identity tests could not: `camera_distance` took no viewport
+height and stood in one pixel, which put the camera 1.018 radii out at zoom zero -- a visible cap
+ten degrees wide, and a cull that removed the entire world. It takes the height now. That is the
+argument for doing the countable piece before the one that needs a shader.
