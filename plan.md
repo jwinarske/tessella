@@ -7817,3 +7817,31 @@ Counting it also found a bug that the identity tests could not: `camera_distance
 height and stood in one pixel, which put the camera 1.018 radii out at zoom zero -- a visible cap
 ten degrees wide, and a cull that removed the entire world. It takes the height now. That is the
 argument for doing the countable piece before the one that needs a shader.
+
+### The subdivision, derived rather than tabulated
+
+GL JS carries a granularity expression -- a base halved per zoom, floored at a minimum -- whose
+numbers are chosen. A bound can be checked instead: split an arc of angle θ into n pieces and each
+chord sits `R(1 - cos(θ/2n))` inside the arc, so the count that holds that under a pixel is
+arithmetic with an answer, and it re-derives itself for a different tolerance or field of view
+instead of being re-tuned.
+
+Segments per tile edge at a half-pixel tolerance, and what they cost where a tile is actually drawn:
+
+| tile | z0 | z1 | z2 | z3 | z4 | z5 | z6 | z8 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| segments, at its own zoom | 29 | 21 | 15 | 11 | 8 | 6 | 4 | 1 |
+| vertices | 900 | 484 | 256 | 144 | 81 | 49 | 25 | 4 |
+
+Cheap, and self-limiting: by z8 a tile is a flat quad. The off-diagonal is where it would bite -- a
+z0 tile still on screen at zoom 12 hits the ceiling -- and `MAX_EDGE_SEGMENTS` is there because the
+count is monotone in the radius and squares into a vertex count.
+
+**§13.4's "ninety segments an edge" for a z1 tile is not what the geometry asks for.** A half-pixel
+bound asks for twenty-one. Ninety came from a table, and the table it came from is GL JS's, whose
+base granularity is picked for a renderer with different tolerances. Worth knowing before that
+figure is used to size anything.
+
+Two things the tests hold, beyond the bound itself: one segment fewer would break the tolerance --
+without which "subdivide everything to the ceiling" satisfies it -- and a finer tile never asks for
+more than a coarser one, which is the property that makes the count per tile rather than per frame.
