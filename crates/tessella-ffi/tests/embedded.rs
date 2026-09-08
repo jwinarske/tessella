@@ -12,8 +12,6 @@
 //! The style is inline and its source has no tiles, so nothing is fetched: this is about the
 //! lifecycle, not about drawing a map.
 
-use std::ffi::CString;
-
 use tessella_ffi::{Config, MapHandle, Regions, Status};
 
 const STYLE: &str = r##"{
@@ -25,9 +23,12 @@ const STYLE: &str = r##"{
 }"##;
 
 fn create() -> MapHandle {
-    let style = CString::new(STYLE).expect("no interior NUL");
+    // A byte range, not a C string: the ABI takes a pointer and a length, so a
+    // terminator is one thing fewer to get right.
+    let style = String::from(STYLE);
     let config = Config {
         style_json: style.as_ptr(),
+        style_json_len: style.len(),
         width: 1024,
         height: 768,
         ring_capacity: 1 << 22,
@@ -150,9 +151,12 @@ fn the_boundary_refuses_what_it_cannot_use() {
         tessella_ffi::tessella_destroy(core::ptr::null_mut());
     }
 
-    let style = CString::new(STYLE).expect("no interior NUL");
+    // A byte range, not a C string: the ABI takes a pointer and a length, so a
+    // terminator is one thing fewer to get right.
+    let style = String::from(STYLE);
     let config = Config {
         style_json: style.as_ptr(),
+        style_json_len: style.len(),
         width: 1024,
         height: 768,
         ring_capacity: 1 << 22,

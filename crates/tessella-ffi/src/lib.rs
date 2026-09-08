@@ -61,7 +61,7 @@ pub enum Status {
 extern crate alloc;
 
 use alloc::sync::Arc;
-use std::ffi::{CStr, c_char};
+use std::ffi::c_char;
 use std::time::Duration;
 
 use tessella_capture_abi::envelope::ViewId;
@@ -124,7 +124,15 @@ pub struct Regions {
 pub struct Config {
     /// The style document, as JSON. A URL is not accepted here: fetching it is the caller's,
     /// because a caller that already has the bytes should not be made to serve them back.
-    pub style_json: *const c_char,
+    ///
+    /// A pointer and a length rather than a NUL-terminated string, on every target rather than
+    /// only the one that needs it. A `CStr` was a convenience for C callers and nothing else: a
+    /// browser hands over a byte range in linear memory, which has no terminator to find, and
+    /// keeping two signatures honest is harder than keeping one. It also costs a scan the caller
+    /// has already done -- a `std::string` or a `Uint8Array` knows its own length.
+    pub style_json: *const u8,
+    /// Its length in bytes, not counting any terminator the caller happens to have.
+    pub style_json_len: usize,
     /// Viewport width in pixels.
     pub width: u32,
     /// Viewport height in pixels.
@@ -204,19 +212,23 @@ fn guarded<F: FnOnce() -> Status>(body: F) -> Status {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)).unwrap_or(Status::Failed)
 }
 
-/// Copies a borrowed C string.
+/// Copies a borrowed byte range, if it is a string.
+///
+/// [`None`] means the bytes are not UTF-8. That is a *content* fault rather than an argument
+/// fault, and the caller is told so: a document that arrived mis-decoded should be reported as a
+/// style that did not parse, not built into a map full of replacement characters. Nullness is the
+/// caller's to check first, because `(null, 0)` means "not supplied" and `(p, 0)` means "supplied,
+/// and empty" -- two different mistakes deserving two different answers.
 ///
 /// # Safety
 ///
-/// `text` must be null or a valid NUL-terminated string.
-unsafe fn borrowed(text: *const c_char) -> Option<String> {
-    if text.is_null() {
-        return None;
-    }
-    unsafe { CStr::from_ptr(text) }
-        .to_str()
-        .ok()
-        .map(ToOwned::to_owned)
+/// `text` must be non-null and valid for reads of `len` bytes.
+unsafe fn borrowed(text: *const u8, len: usize) -> Option<String> {
+    // SAFETY: the caller guarantees `len` readable bytes at a non-null `text`. A zero length is
+    // allowed and yields an empty slice, which `from_raw_parts` requires an aligned non-null
+    // pointer for -- hence the caller's null check rather than a shrug here.
+    let bytes = unsafe { core::slice::from_raw_parts(text, len) };
+    core::str::from_utf8(bytes).ok().map(ToOwned::to_owned)
 }
 
 /// Creates a map. Parses the style, and does nothing else.
@@ -237,7 +249,8 @@ unsafe fn borrowed(text: *const c_char) -> Option<String> {
 ///
 /// # Safety
 ///
-/// `config` and `out` must be valid pointers, and `config.style_json` a NUL-terminated string.
+/// `config` and `out` must be valid pointers, and `config.style_json` either null or valid for
+/// reads of `config.style_json_len` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tessella_create(
     config: *const Config,
@@ -251,8 +264,14 @@ pub unsafe extern "C" fn tessella_create(
             return Status::NullArgument;
         }
         let config = unsafe { *config };
-        let Some(style_text) = (unsafe { borrowed(config.style_json) }) else {
+        if config.style_json.is_null() {
             return Status::NullArgument;
+        }
+        // Not UTF-8 is a bad style rather than a bad argument. The pointer was fine; what it
+        // pointed at was not a document.
+        let Some(style_text) = (unsafe { borrowed(config.style_json, config.style_json_len) })
+        else {
+            return Status::BadStyle;
         };
         let Ok(style) = Style::parse(&style_text) else {
             return Status::BadStyle;

@@ -9,8 +9,15 @@
  */
 #include "tessella_capture_abi.h"
 
+/* The map API's header too, which is hand-written rather than generated and carries static
+ * assertions of its own. Nothing compiled it until now, so those assertions were text: a field
+ * could be added to `tessella_config` on either side and the offsets it claims would go on
+ * claiming it. Including it here is what makes them run. */
+#include "tessella.h"
+
 int tsl_probe(void);
 
 int tsl_probe(void) {
-    return (int)(sizeof(tsl_camera_update) + sizeof(tsl_geometry_add) + sizeof(tsl_ring_control));
+    return (int)(sizeof(tsl_camera_update) + sizeof(tsl_geometry_add) + sizeof(tsl_ring_control)
+                 + sizeof(tessella_config) + sizeof(tessella_map_regions));
 }
