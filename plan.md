@@ -8087,9 +8087,32 @@ of the cover as already asked for. One malformed tile, one permanently blank coo
 drop guard now.
 
 The tick costs one extra pool submission per tile, since the fetch and the build are separate
-jobs. Measured on the render probe over the eleven-family Berlin scene at z14: 1.75-1.77 s before,
-1.68-1.71 s after -- no regression, and slightly ahead, because the response `Arc` is now carried
-into the build rather than cloned per tile.
+jobs. Measured properly afterwards -- `973df3d` against `3d93c71`, both probes built from their own
+tree, runs interleaved so machine drift is charged to both sides, ten reps over seven cameras.
+`primitives` and `renderables` are identical in all seventy paired runs, so the frame did not
+change. Records emitted fall 25-60%, worst case 3,531 to 1,406 at z14 pitch 60: tiles land in
+batches at drain time instead of one at a time, and the damage gate fires that much less. Time to
+settle is 4.9-7.6% better across every camera.
+
+**A caution about that measurement, in the same family as the instrument artifacts in §12.** Two
+of the three obvious numbers were untrustworthy, and the first read of them was wrong in both
+directions. The probe ticks `work + sleep`, so its tick *rate* depends on how expensive a tick is:
+a build with cheaper ticks runs more of them inside the same arrival window, which inflates its
+tick count for no real reason, and finishes the probe's fixed quiet tail sooner, which flatters its
+wall clock for no real reason. Reasoning the tail back out by hand gave "settle is probably 3%
+worse", which was also wrong. What works is measuring the tail rather than arguing about it: run
+each configuration twice at different tail lengths, and since the tail is the only thing that
+differs, `per_tick = dwall / dquiet` and `settle = wall - quiet * per_tick`. That says `per_tick` is
+~5.1 ms on both builds -- the tail is idle, so there was never any tick work there to differ -- and
+the settle improvement is real.
+
+The rising tick count at pitch (+46% at z14 p60) looked like it might still cost a consumer locked
+to a frame clock, where the count is what a user feels rather than the cost. Tested rather than
+assumed, with `TSF_PROBE_TICK_MS` added to the probe: at a fixed 16 ms tick, settle is still
+4.9-7.6% better on every camera. Most of the time to a complete map is the pre-settle wait and
+engine startup, not the tick loop. The extra ticks are one per *round* of tile requests -- only
+tile bytes are drain-gated, glyphs and style resolution still fetch directly on a worker -- and a
+pitched cover refills in more rounds.
 
 WS-0 is done: the target is in `rust-toolchain.toml` and the cross matrix, the `no_std` step sits
 beside it, `store_path` is behind a default-on `fs` feature, and `tessella-orchestrate` takes its
