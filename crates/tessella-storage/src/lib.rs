@@ -47,6 +47,7 @@
 #[cfg(feature = "cache")]
 pub mod cache;
 pub mod canonical;
+pub mod deferred;
 #[cfg(feature = "cache")]
 pub mod download;
 pub mod geojson;
@@ -68,6 +69,7 @@ pub use cache::{
     StoredRegion,
 };
 pub use canonical::{Canonical, CanonicalError, Kind, TileServer, canonicalize, canonicalize_any};
+pub use deferred::{DeferredFileSource, Ticket, Tickets};
 #[cfg(feature = "cache")]
 pub use download::{Download, DownloadError, Got, Progress, Summary};
 pub use geojson::{GeoJsonSourceError, Origin};
