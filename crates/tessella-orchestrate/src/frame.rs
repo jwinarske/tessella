@@ -1779,6 +1779,12 @@ fn place_symbols(
             rules,
             padding,
             icon_padding,
+            // The collision run is walked in tile units and projected after, so it needs the
+            // tile's own scale. mbgl's `pixelsToTileUnits`, and the same value
+            // `write_line_positions` already takes.
+            #[allow(clippy::cast_possible_truncation)]
+            tile_units_per_pixel: tessella_tile::camera::pixels_to_tile_units(tile.z, view.zoom)
+                as f32,
             ..crate::symbols::FrameOptions::default()
         };
         let labels = frame_labels(

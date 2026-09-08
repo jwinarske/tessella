@@ -111,6 +111,14 @@ pub struct FrameOptions {
     /// *one* around an icon. Sharing one value crowds icons or spaces them, depending which way
     /// it is shared.
     pub icon_padding: Padding,
+    /// Tile units per screen pixel for the bucket being offered, at perspective ratio one.
+    ///
+    /// `pixels_to_tile_units` for the tile's zoom against the view's. The collision run is walked
+    /// in tile units and projected afterwards -- mbgl builds `CollisionFeature`'s boxes once, in
+    /// tile units, and scales each by `tileToViewport` when it tests them -- so this is what turns
+    /// a screen-space box size into the tile-space one the walk needs. Zero means "walk in screen
+    /// space", which is what a caller with no tile has.
+    pub tile_units_per_pixel: f32,
 }
 
 /// How far outside the viewport a label still collides, in pixels, at pitch zero.
@@ -151,6 +159,7 @@ impl Default for FrameOptions {
             // `icon-padding`'s spec default, which this read as one. Every other default here is
             // the spec's and this one was not.
             icon_padding: Padding::uniform(2.0),
+            tile_units_per_pixel: 0.0,
         }
     }
 }
@@ -287,7 +296,67 @@ impl ViewSymbols {
                 let box_scale = options.font_scale * label.perspective;
                 let text = if label.line.is_empty() {
                     collision_box(extent, anchor, box_scale, options.padding, 0.0).map(Shape::Box)
+                } else if options.tile_units_per_pixel > 0.0 {
+                    // Walked in *tile* units and projected afterwards, which is where mbgl walks
+                    // it: `CollisionFeature` lays its boxes out once against the tile's own line
+                    // and `placeLineFeature` scales each by `tileToViewport` when it tests them.
+                    // Walking the projected line instead loses the run entirely on a road a
+                    // pitched camera has foreshortened -- sixty-seven labels at Seattle z14 pitch
+                    // 45 had no run at all against mbgl's six -- and a label with no run cannot be
+                    // placed, so the far field went bare where over-drawing had been.
+                    let to_tile = options.tile_units_per_pixel;
+                    let tile_scale = box_scale * to_tile;
+                    let tile_padding = Padding {
+                        top: options.padding.top * to_tile,
+                        bottom: options.padding.bottom * to_tile,
+                        left: options.padding.left * to_tile,
+                        right: options.padding.right * to_tile,
+                    };
+                    let tile_reach = reach.map(|(first, last)| (first * to_tile, last * to_tile));
+                    collision_circles(
+                        extent,
+                        label.line,
+                        label.laid_out.anchor,
+                        label.laid_out.segment,
+                        tile_scale,
+                        tile_padding,
+                        options.overscaling,
+                        tile_reach,
+                    )
+                    .map(|circles| {
+                        // Back to the screen, one circle at a time: the centre through the same
+                        // projection every other anchor takes, the radius by the ratio that built
+                        // it. `distance_from_anchor` stays in tile units, which is the space its
+                        // reach is compared in.
+                        Shape::Circles(
+                            circles
+                                .into_iter()
+                                .map(|mut entry| {
+                                    entry.circle.center = project(entry.circle.center);
+                                    entry.circle.radius /= to_tile;
+                                    entry
+                                })
+                                .collect(),
+                        )
+                    })
+                    // A label with glyphs always offers a shape, even where no run could be
+                    // built for it.
+                    //
+                    // `None` here means "this symbol has no text", and `place` reads it that way
+                    // -- as nothing to draw. But `line_circles` also answers empty when the
+                    // projected road runs out before the run does, and a label with text that
+                    // got that answer was then dropped as though it had no text at all. On a
+                    // road 600 pixels long that is both of its labels: two shaped, none drawn,
+                    // against an empty grid.
+                    //
+                    // An empty run is *not* a label that places. mbgl leaves `inGrid` false when
+                    // it walks no circles, and returns unplaced on it; the shape is offered so the
+                    // label still counts as having text, which is what `text_optional` reads. See
+                    // `Shape::placeable`.
+                    .or_else(|| (label.laid_out.glyphs > 0).then(|| Shape::Circles(Vec::new())))
                 } else {
+                    // No tile to scale by, so the walk stays in screen space. Only a caller that
+                    // built its own options reaches this; every frame sets the scale.
                     let line: Vec<(f32, f32)> =
                         label.line.iter().map(|point| project(*point)).collect();
                     collision_circles(
@@ -301,21 +370,6 @@ impl ViewSymbols {
                         reach,
                     )
                     .map(Shape::Circles)
-                    // A label with glyphs always offers a shape, even where no run could be
-                    // built for it.
-                    //
-                    // `None` here means "this symbol has no text", and `place` reads it that way
-                    // -- as nothing to draw. But `line_circles` also answers empty when the
-                    // projected road runs out before the run does, and a label with text that
-                    // got that answer was then dropped as though it had no text at all. On a
-                    // road 600 pixels long that is both of its labels: two shaped, none drawn,
-                    // against an empty grid.
-                    //
-                    // An empty run is what mbgl has here -- a `CollisionFeature` with no boxes
-                    // tests nothing and reserves nothing, so the label places. It is not a label
-                    // that escapes checking: `write_line_positions` walks the same road and hides
-                    // it if the name genuinely will not fit, which is the check that belongs to
-                    // that question.
                     .or_else(|| (label.laid_out.glyphs > 0).then(|| Shape::Circles(Vec::new())))
                 };
 
