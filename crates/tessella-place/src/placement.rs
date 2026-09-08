@@ -191,9 +191,14 @@ impl Shape {
                 let bounds = box_.bounds();
                 inside(bounds.min, bounds.max)
             }
-            // Every circle the label covers, not only the thinned ones: mbgl accumulates `inGrid`
-            // over the whole walk and thins separately.
-            Self::Circles(circles) => circles.iter().any(|entry| {
+            // Only the circles actually tested. mbgl accumulates `inGrid |= isInsideGrid(...)`
+            // inside the same loop that skips a circle outside the label's reach and one thinned
+            // for sitting too close to the last, so both `continue` past it -- a circle that is
+            // never tested never reports itself in the grid either. Scanning the whole run instead
+            // placed six labels at Seattle z14 pitch 45 that mbgl refused for this and nothing
+            // else.
+            Self::Circles(circles) => thin(circles).into_iter().any(|index| {
+                let entry = &circles[index];
                 let c = entry.circle;
                 inside(
                     (c.center.0 - c.radius, c.center.1 - c.radius),
