@@ -1794,14 +1794,19 @@ fn place_symbols(
             &ids,
             perspective_with(&plane, camera_to_center),
         );
-        // Where each glyph lands along its road, *before* the label is offered any space.
+        // Where each glyph lands along its road. Written before placement because the answer is
+        // needed to hide the label afterwards, *not* to keep it out of the competition.
         //
-        // A label whose road runs out before its name does is not drawn, and a label that is not
-        // drawn must not hold space against the ones that are. Deciding this after placement --
-        // which is what writing the positions later amounted to -- left every one of them
-        // reserving a run of collision circles along a road it was never going to be printed on,
-        // and with one grid for the frame that is space taken from a label that would have fit.
-        // mbgl decides the two together for the same reason.
+        // It used to filter the offered set: a label whose road ran out before its name did never
+        // competed at all. mbgl does not do that. Every symbol reaches `placeSymbol`, and a label
+        // whose walk fails is hidden later, when `placeGlyphsAlongLine` answers `NotEnoughRoom` --
+        // so it takes its turn for the space and `Shape::placeable` is what refuses the ones with
+        // no run to compete with. Filtering here instead left this offering 350 of the 388 anchors
+        // mbgl offers, and mbgl drew 13 of the 38 that were missing.
+        //
+        // Gating on the outermost glyphs alone -- `placeFirstAndLastGlyph`, which is the narrower
+        // question mbgl asks inside `placeLineFeature` -- was tried and is indistinguishable here:
+        // when the whole walk fails, an outermost glyph is what failed.
         let mut without_room: Vec<u32> = Vec::new();
         let units = tessella_tile::camera::pixels_to_tile_units(tile.z, view.zoom);
         if units.abs() > f64::EPSILON {
@@ -1814,11 +1819,7 @@ fn place_symbols(
                 &mut buffers,
             );
         }
-        let offered: Vec<crate::symbols::FrameLabel<'_>> = labels
-            .iter()
-            .filter(|label| !without_room.contains(&label.cross_tile_id))
-            .cloned()
-            .collect();
+        let offered: Vec<crate::symbols::FrameLabel<'_>> = labels.to_vec();
         held.symbols.frame_in(
             &offered,
             project_with(&plane, grid_padding),
