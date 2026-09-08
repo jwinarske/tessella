@@ -483,3 +483,53 @@ fn what_faces_the_camera_projects_in_front_of_it() {
         }
     }
 }
+
+/// A zoom past the shift's width must not panic, and must not silently mean "one tile".
+///
+/// `1u32 << z` panics in debug for `z >= 32` and shifts by `z % 32` in release, where `z = 32`
+/// answers one tile across and the caller reads a tile covering the whole world. Every entry point
+/// clamps to `MAX_ZOOM`.
+#[test]
+fn an_impossible_zoom_is_clamped_not_wrapped() {
+    for z in [0u8, 22, 30, 31, 32, 64, 255] {
+        let n = globe::edge_segments(z, 4.0, 0.5);
+        let e = globe::chord_error(z, 4.0, 4);
+        let f = globe::tile_faces_camera(z, 0, 0, 0.0, 0.0, 4.0, 700.0);
+        let _ = f;
+        assert!(
+            (1..=globe::MAX_EDGE_SEGMENTS).contains(&n),
+            "z{z} asked for {n} segments"
+        );
+        assert!(e.is_finite(), "z{z} has a chord error of {e}");
+    }
+    // And the clamp is a clamp: past the ceiling every level answers the same as the ceiling.
+    assert_eq!(
+        globe::edge_segments(30, 4.0, 0.5),
+        globe::edge_segments(255, 4.0, 0.5),
+        "a zoom past MAX_ZOOM should read as MAX_ZOOM"
+    );
+}
+
+/// A degenerate viewport must not produce a matrix of NaNs.
+///
+/// A zero width divides by zero inside `perspective`, and a NaN matrix propagates into every vertex
+/// rather than failing anywhere a caller could find it.
+#[test]
+fn a_degenerate_viewport_still_gives_a_matrix() {
+    for (w, h) in [(900.0, 700.0), (0.0, 700.0), (900.0, 0.0), (0.0, 0.0)] {
+        let view = tessella_tile::cover::ViewTransform {
+            longitude: 0.0,
+            latitude: 0.0,
+            zoom: 3.0,
+            width: w,
+            height: h,
+            bearing: 0.0,
+            pitch: 0.0,
+        };
+        let m = globe::clip_matrix(&view);
+        assert!(
+            m.iter().all(|v| v.is_finite()),
+            "a {w}x{h} viewport produced a non-finite matrix"
+        );
+    }
+}

@@ -18,6 +18,16 @@
 //! horizon is exactly on the horizon. Identities are weaker than an oracle and they are what
 //! there is.
 
+/// How many tiles a zoom level has to a side, with the shift kept inside its width.
+///
+/// `1u32 << z` panics in a debug build for `z >= 32` and shifts by `z % 32` in a release one, which
+/// is worse: at `z = 32` it answers one tile to a side and a caller reads a tile covering the whole
+/// world. `cover::MAX_ZOOM` is the ceiling every cover already clamps to, and DR-9's posture is
+/// that a camera is not necessarily trustworthy -- so this clamps rather than trusting.
+fn tiles_across(z: u8) -> f64 {
+    f64::from(1u32 << z.min(crate::cover::MAX_ZOOM))
+}
+
 /// A point on the unit sphere, in MapLibre GL JS's ECEF convention.
 ///
 /// `latLngToECEF`: `x = cos(lat) sin(lng)`, `y = -sin(lat)`, `z = cos(lat) cos(lng)`. So `+z`
@@ -112,7 +122,7 @@ pub fn tile_faces_camera(
 ) -> bool {
     let toward = sphere_point(longitude, latitude);
     let distance = camera_distance(zoom, height);
-    let span = 1.0 / f64::from(1u32 << z);
+    let span = 1.0 / tiles_across(z);
     #[allow(clippy::cast_lossless)]
     let (x0, y0) = (f64::from(x) * span, f64::from(y) * span);
     let samples = [
@@ -155,7 +165,7 @@ pub fn edge_segments(z: u8, zoom: f64, tolerance: f64) -> u32 {
         return 1;
     }
     // The arc one tile edge subtends at the sphere's centre.
-    let arc = 2.0 * core::f64::consts::PI / f64::from(1u32 << z);
+    let arc = 2.0 * core::f64::consts::PI / tiles_across(z);
     // `1 - cos(x) ≈ x²/2` for the small angles this always lands in, so `n ≈ θ/2 · √(R/2t)`.
     // Solved rather than iterated, then checked below, because the approximation is only good
     // while the segments are small and the check costs nothing.
@@ -188,7 +198,7 @@ pub fn chord_error(z: u8, zoom: f64, segments: u32) -> f64 {
         return f64::INFINITY;
     }
     let radius = crate::camera::world_size(zoom) / (2.0 * core::f64::consts::PI);
-    let arc = 2.0 * core::f64::consts::PI / f64::from(1u32 << z);
+    let arc = 2.0 * core::f64::consts::PI / tiles_across(z);
     radius * (1.0 - (arc / (2.0 * f64::from(segments))).cos())
 }
 
@@ -239,7 +249,16 @@ pub fn clip_matrix(view: &crate::cover::ViewTransform) -> crate::camera::Mat4 {
     let far = (distance + 1.0) * 1.5;
     #[allow(clippy::cast_possible_truncation)]
     let fov = f64::from(crate::camera::DEFAULT_FOV as f32);
-    let projection = crate::camera::perspective(fov, view.width / view.height, near, far);
+    // A viewport with no width divides by zero inside `perspective` and hands back a matrix of
+    // NaNs, which propagates into every vertex rather than failing anywhere findable. A square
+    // frustum is the wrong picture for a degenerate viewport and it is a picture.
+    let aspect = if view.width > 0.0 && view.height > 0.0 && (view.width / view.height).is_finite()
+    {
+        view.width / view.height
+    } else {
+        1.0
+    };
+    let projection = crate::camera::perspective(fov, aspect, near, far);
     crate::camera::multiply(&projection, &eye)
 }
 
