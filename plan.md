@@ -7367,7 +7367,7 @@ is left is mostly *not* which labels are drawn -- it is where their glyphs land 
 next look belongs in the vertex path at pitch, not in placement: `write_line_positions` and what
 the shader does with the dynamic buffer it fills.
 
-### The pitched remainder is glyph size, not placement
+### The pitched remainder is glyph size, not placement -- *wrong, see below*
 
 Cropped tight on one label drawn by both at the same anchor -- "Harrison Street" at Seattle z14
 pitch 45 -- mbgl's glyphs are plainly larger than this one's. Same label, same position, different
@@ -7415,3 +7415,31 @@ So the open question is unchanged and now sharper: the shader's `perspective_rat
 smaller here than in mbgl, its two named inputs agree, and the next measurement is the value
 itself. Printing `w` per label from both at one camera settles it; three attempts at reading the
 two shaders side by side have not.
+
+### The ratio is right, and the size entry above was a bad read
+
+Printed `w` and the perspective ratio per label from both renderers at Seattle z14 pitch 45 and
+joined on the tile anchor. Across all 166 anchors mbgl draws, the two ratios agree to **5e-5**:
+median difference 2e-5, worst 5e-5, none over 0.01. The ratio is not the defect and neither are its
+inputs.
+
+So "mbgl's glyphs are plainly larger" was wrong, and the way it was wrong is worth keeping. The
+crop compared *"Harrison Street" to "Harrison Street"* -- but a road name appears at many anchors,
+and the two renderers had drawn different instances of it, at different distances, therefore at
+legitimately different sizes. Comparing a label to a label of the same name is not comparing like
+with like, and nothing in the picture says which anchor a given piece of text came from.
+
+Two instrument faults on the way to that, both caught by the numbers disagreeing with themselves:
+`frame_labels` is called twice per bucket -- once for placement with the real projection, once for
+opacity with `|_| 1.0` -- so a dump keyed by anchor and read last-write-wins reported a ratio of
+exactly one for 161 of 166 anchors and looked like a spectacular defect. Taking the first pass
+gives the agreement above. Anything that instruments `frame_labels` has to say which pass it means.
+
+**Where that leaves the pitched gap.** The ratio agrees, placement agrees on 360 of 388, and the
+frame still differs by 2.45%. Twenty-eight whole labels is on the order of a thousand text pixels
+against sixteen thousand gross, so the remainder is most likely neither: it is the *positions*
+agreed-on labels are drawn at. That is `write_line_positions` against `reprojectLineLabels`, and
+the one term known to be missing there is the `pitchScaledFontSize` above -- which was reverted for
+making gross worse, on the strength of a size argument that has just been withdrawn. It deserves a
+second look now that the scale is known to be right, measured by how far agreed labels move rather
+than by gross alone.
