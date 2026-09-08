@@ -7340,3 +7340,29 @@ circles being small. That is exactly why the counts agree flat and diverge at pi
 So the next piece is not a comparison to correct but a place to move work: the run belongs in tile
 units beside the anchors, projected per frame like everything else, rather than rebuilt in screen
 space each time.
+
+### The run moves into tile units, and the placements nearly agree
+
+The structural fix the last entry called for. `collision_circles` is walked against the tile's own
+line now and each circle projected afterwards -- centre through the same projection every anchor
+takes, radius by the ratio that built it -- rather than walking a line already flattened by the
+camera.
+
+| at Seattle z14 pitch 45 | before | after | mbgl |
+| --- | --- | --- | --- |
+| labels with no run | 67 | **7** | 6 |
+| placed | 141 | **179** | 167 |
+| placement disagreements | 80 | **28** | -- |
+
+The remaining 28 are fourteen where mbgl finds a collision this misses, six outside its grid, and
+eight the other way. Where both build a run -- 381 of 388 now, against 321 - the circle counts
+agree on 192.
+
+Pitched parity improves at every level, z12 0.998% to 0.908% through z16 1.006% to 0.958%, and
+z14 2.576% to 2.453%.
+
+**And that is the interesting part.** Twenty-eight disagreements out of 388 cannot account for
+2.45% of a frame. The placement decisions now nearly agree while the picture still differs, so what
+is left is mostly *not* which labels are drawn -- it is where their glyphs land once drawn. The
+next look belongs in the vertex path at pitch, not in placement: `write_line_positions` and what
+the shader does with the dynamic buffer it fills.
