@@ -635,11 +635,35 @@ impl ViewSymbols {
         P: Fn((f32, f32)) -> (f32, f32),
     {
         let mut without_room = alloc::vec::Vec::new();
-        let offsets = crate::project::LineOffsets {
-            font_scale: font_size / tessella_glyph::text::ONE_EM,
-            ..crate::project::LineOffsets::default()
-        };
         for label in labels {
+            // The size the *walk* uses, which is not the size the glyph is drawn at.
+            //
+            // mbgl's `reprojectLineLabels`: `pitchScaledFontSize = pitchWithMap ? fontSize *
+            // perspectiveRatio : fontSize / perspectiveRatio`, with the ratio here in the
+            // orientation the shader does not use -- `0.5 + 0.5 * cameraToAnchorDistance /
+            // cameraToCenterDistance`, one at the centre distance and growing with it.
+            //
+            // This path is the along-line one, and along-line means `*-rotation-alignment: map`,
+            // which `*-pitch-alignment` inherits -- so it is the *multiplying* branch. A label
+            // lying on the ground covers more of it the further off it is, and its glyphs step
+            // further apart in the plane to land the same distance apart on screen.
+            //
+            // Without it the walk stepped by the near-field size wherever the label was: measured
+            // against mbgl at Seattle z14 pitch 45, one label's glyphs sat 5.25 apart where mbgl
+            // put them 6.47, which is this ratio exactly.
+            //
+            // `label.perspective` is `0.5 + 0.5 * cameraToCenter / w`, so the other orientation
+            // comes from it without projecting the anchor again. One at pitch zero, where `w` is
+            // the centre distance, so the flat path does not move.
+            let walk_scale = if label.perspective > 0.5 {
+                0.5 + 0.5 / (2.0 * label.perspective - 1.0)
+            } else {
+                1.0
+            };
+            let offsets = crate::project::LineOffsets {
+                font_scale: font_size * walk_scale / tessella_glyph::text::ONE_EM,
+                ..crate::project::LineOffsets::default()
+            };
             if label.line.is_empty() {
                 continue;
             }
