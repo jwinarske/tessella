@@ -7387,3 +7387,31 @@ So the ratio's two named inputs agree and the output does not, which means the n
 of the value itself rather than of the code around it: the ratio, or `w`, printed per label from
 both renderers at one camera. Reading the two shaders side by side has now failed twice to explain
 a difference that a single printed number would settle.
+
+### The advance scale mbgl has, why it is not enough, and what it proves
+
+mbgl scales the font size used to *walk* a line label, in `reprojectLineLabels`:
+
+    perspectiveRatio    = 0.5 + 0.5 * cameraToAnchorDistance / cameraToCenterDistance
+    pitchScaledFontSize = pitchWithMap ? fontSize * ratio : fontSize / ratio
+
+That ratio is the shader's in the *other* orientation -- at least one, growing with distance -- so a
+viewport-aligned label walks its line with a smaller size the further off it sits, and the shader's
+`size *= perspective_ratio` shrinks the quads to match. There is no equivalent here: the walk uses
+the plain size.
+
+Adding it does not help, and the way it fails is the useful part. With it the label's advance
+tightens and its glyphs do not change height at all -- "Harrison Street" goes from 101 pixels wide
+to narrower, still out of the same small type, while mbgl draws it 114 wide out of visibly larger
+type. Gross at z14 pitch 45 goes 16,900 to 20,456, because a tighter walk makes more labels fit
+their roads and more of them are drawn. Reverted.
+
+What that proves is worth more than the change. mbgl is larger in *both* dimensions and this is
+smaller in both while being relatively wider between glyphs, so the two differ by an overall scale
+and not by an advance. The walk term is real and belongs here -- but only after the scale is right,
+because it can only be judged against a label that is already the correct size.
+
+So the open question is unchanged and now sharper: the shader's `perspective_ratio` comes out
+smaller here than in mbgl, its two named inputs agree, and the next measurement is the value
+itself. Printing `w` per label from both at one camera settles it; three attempts at reading the
+two shaders side by side have not.
