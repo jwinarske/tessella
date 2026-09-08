@@ -631,7 +631,7 @@ pub(crate) fn uniform_number(
                 .map(|number| number as f32)
                 .or_else(|| value.as_bool().map(|flag| f32::from(u8::from(flag))))
         })
-        .map_or(default, |number| number)
+        .unwrap_or(default)
 }
 
 /// A line layer's evaluated properties, from its resolved paint.
