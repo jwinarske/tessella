@@ -7746,3 +7746,18 @@ named 33 backwards labels in one pass. A decision that changes no pixels is not 
 **The parity thread is done.** Flat is exact but for 63 pixels at z15 across the whole Seattle
 sweep; pitched is under 0.025% everywhere and exact at z14 and z16. What remains anywhere is
 polygon and glyph edges.
+
+### The quad, rebuilt on the finished parity work
+
+`emb bundle --build` against fluorite `main` at `e0241bcc` -- twelve commits on from the view
+extension -- and tessella at the end of the parity thread. Four platform views granted their
+dma-buf slots, no errors, 381 tiles served, and it holds. Killed after, since nobody is watching it.
+
+Two notes for the next rebuild. The hook tree has to go first (`rm -rf <app>/.dart_tool/hooks_runner
+<app>/build`) or a cached `filament_DIR` outlives the change that was meant to move it. And the
+`fluorite_core_ffi` the quad's pubspec links against is a build artifact of fluorite's own hook,
+dated a day behind: it did not matter this time, because the link only needs a copy with the right
+soname and the same symbols, and `$ORIGIN` resolves the bundled fresh one at runtime -- but it is
+only safe while fluorite removes no symbol `tessella_fluorite` uses. Checked rather than assumed
+this time: 71 undefined filament symbols on that side, all 71 exported by the fluorite in the
+bundle.
