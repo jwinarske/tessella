@@ -487,6 +487,11 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
         };
 
         // Anything landed since the last frame makes this one worth drawing.
+        // Before anything else, and `generation` in particular: a tile whose bytes landed since
+        // the last tick becomes a build here, and a drain that ran after the read below would
+        // put a frame of lag on every tile the deferred transport delivers.
+        state.source.drain();
+
         let generation = state.source.generation();
         if generation != state.generation {
             state.generation = generation;
