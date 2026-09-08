@@ -216,10 +216,12 @@ impl Scene {
         let indices = arena
             .resolve(add.indexes)
             .map(|bytes| {
-                bytes
-                    .chunks_exact(2)
-                    .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
-                    .collect()
+                // `as_chunks` rather than `chunks_exact(2)`: the pair arrives as an array, so the
+                // two indexings go away and with them the bounds checks a reader has to convince
+                // itself of. Clippy's stable canary asked for this before the pinned toolchain
+                // did, which is the lane working.
+                let (pairs, _odd) = bytes.as_chunks::<2>();
+                pairs.iter().map(|pair| u16::from_le_bytes(*pair)).collect()
             })
             .unwrap_or_default();
 
