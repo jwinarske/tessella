@@ -7443,3 +7443,37 @@ the one term known to be missing there is the `pitchScaledFontSize` above -- whi
 making gross worse, on the strength of a size argument that has just been withdrawn. It deserves a
 second look now that the scale is known to be right, measured by how far agreed labels move rather
 than by gross alone.
+
+### The pitched gap was the walk's font size, and it is closed
+
+Printing each glyph's label-plane position from both renderers -- anchor, index, x, y, angle --
+found it in one measurement. At the first shared anchor mbgl's glyphs sat 6.47 apart and this one's
+5.25: a ratio of 1.232, which is that anchor's `perspectiveRatio` to three decimals.
+
+mbgl walks a line label with `pitchScaledFontSize`, not with the font size:
+
+    pitchScaledFontSize = pitchWithMap ? fontSize * perspectiveRatio : fontSize / perspectiveRatio
+
+and the along-line path is the *multiplying* branch, because along-line implies
+`*-rotation-alignment: map` and `*-pitch-alignment` inherits it. A label lying on the ground covers
+more ground the further off it is, so its glyphs step further apart in the plane to land the same
+distance apart on screen. This walked at the near-field size wherever the label was.
+
+The division was tried first, two entries ago, from the viewport branch -- and reverted for making
+the picture worse, which it did. The branch was wrong, not the term.
+
+With it the walks agree: of the 2,012 glyphs mbgl writes, the median position difference is
+**0.000** and the first label matches to the printed digit, angle included. 421 still differ by
+more than half a pixel, which is the labels the two place at different anchors.
+
+| Seattle, pitch 45 | z12 | z13 | z14 | z15 | z16 |
+| --- | --- | --- | --- | --- | --- |
+| before | 0.908% | 1.485% | 2.453% | 1.831% | 0.958% |
+| after | **0.259%** | **0.404%** | **0.781%** | **0.191%** | **0.007%** |
+
+The road-label layer alone at z14 goes 2.683% to 1.065%. Flat does not move -- the ratio is one at
+pitch zero -- and `icons_only`, `families` and `one_poi-labels` are unchanged.
+
+What is left of the pitched frame is under a percent everywhere and is the 28 placement
+disagreements plus whatever those 421 glyphs are: the labels the two renderers put at different
+anchors, which is a placement question again rather than a projection one.
