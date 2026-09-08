@@ -7875,3 +7875,31 @@ That is three of §13.4's four pieces standing on identities and bounds, with no
 the projection, the horizon, the subdivision and now the camera. What is left is the bend itself,
 which is a material, and symbol placement, which needs the bend. The bend is where the eye becomes
 the only instrument — everything up to it has been checkable, which is why it went last.
+
+### Reviewing the globe module: two defects, and what is not there
+
+**Reliability.** `1u32 << z` panics in a debug build for `z >= 32` and shifts by `z % 32` in a
+release one -- the worse half, because at `z = 32` it answers one tile across and a caller reads a
+tile covering the whole world. Three call sites. All now go through `tiles_across`, which clamps to
+`cover::MAX_ZOOM`, the ceiling every cover already applies and the posture DR-9 states about a
+camera not being trustworthy. And a viewport with no width divides by zero inside `perspective`,
+handing back a matrix of NaNs that propagates into every vertex rather than failing anywhere a
+caller can find; a degenerate viewport gets a square frustum instead.
+
+Both were found by probing rather than reading, and both are tests now.
+
+**Performance.** Nothing allocates on any path -- no `Vec`, no `Box`, no formatting. The one loop
+is `edge_segments`' exact-check refinement, bounded by `MAX_EDGE_SEGMENTS` and normally not entered
+at all, because the closed form it starts from is already right. The per-tile cost is five
+`sphere_point` calls in the horizon test, each a pair of trig calls plus `latitude_of`'s `exp` and
+`atan`; at forty tiles a frame that is two hundred, against the thousands of glyph quads a symbol
+layer already lays out. Worth revisiting only if the horizon test moves per-patch, where the count
+becomes five per *sub-patch* and the arithmetic wants hoisting out of the loop.
+
+**Security.** No `unsafe`. Nothing here parses, allocates from a size it was handed, or indexes by
+one. The exposure a renderer has to a hostile camera or tile id is a panic, and the shift was
+exactly that: a denial of the view rather than of anything worse, and now clamped.
+
+What this does not cover is the bend, which does not exist yet. A shader has its own version of
+each of these -- an unbounded loop is a hung GPU, and a NaN vertex is a whole draw call gone -- and
+none of the checks above will reach it.
