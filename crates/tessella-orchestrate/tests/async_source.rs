@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use tessella_orchestrate::boot::BootError;
+use tessella_orchestrate::boot::Workers;
 use tessella_orchestrate::cache::TileCache;
 use tessella_orchestrate::map::Tiles;
 use tessella_orchestrate::pool::Pool;
@@ -87,6 +88,25 @@ fn view(zoom: f64) -> ViewTransform {
         bearing: 0.0,
         pitch: 0.0,
     }
+}
+
+/// Builds a source over a counted HTTP file source, on a named pool.
+fn source_over_pool(
+    document: String,
+    pool: &'static Pool,
+) -> (
+    Arc<TileSource<Counted>>,
+    Arc<AtomicUsize>,
+    Arc<Coalescing<Counted>>,
+) {
+    let fetches = Arc::new(AtomicUsize::new(0));
+    let files = Arc::new(Coalescing::new(Counted {
+        inner: HttpFileSource::new(Duration::from_secs(30)),
+        fetches: Arc::clone(&fetches),
+    }));
+    let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
+    let source = TileSource::new(document, Arc::clone(&files), cache, pool, 1);
+    (source, fetches, files)
 }
 
 /// Builds a source over a counted HTTP file source.
@@ -345,6 +365,62 @@ fn a_failed_fetch_is_counted_and_the_tile_is_asked_for_again() {
     assert!(
         settle(&source, || fetches.load(Ordering::Acquire) > after_first),
         "a tile whose fetch failed was never asked for again"
+    );
+}
+
+/// The whole producer on one thread, with one call site per tick.
+///
+/// DR-24's claim about what native gains from the wasm work, stated as a test. A pool with no
+/// workers has nobody to run its jobs but the thread that ticks it, so this drives the exact loop
+/// the FFI drives in that mode -- run what is queued, drain the transport, run what that queued.
+/// Nothing else in the producer needs to know which mode it is in, which is the property that
+/// makes the trace worth having.
+#[test]
+fn the_producer_runs_on_one_thread_when_the_pool_has_no_workers() {
+    let server = tile_server::Server::start(
+        tile_server::Routes::new().tiles(FIXTURE.to_vec(), Some((0, 14))),
+    )
+    .expect("binds");
+
+    // Leaked because a source holds its pool for `'static`, and a pool with no threads has
+    // nothing to join, so never dropping it costs the allocation and nothing else.
+    let pool: &'static Pool = Box::leak(Box::new(Pool::new(Workers::none())));
+    let (source, fetches, _files) = source_over_pool(style(&server.origin()), pool);
+    let cover = [TileCoord {
+        z: 0,
+        x: 0,
+        y: 0,
+        wrap: 0,
+    }];
+    let tile = TileId::new(0, 0, 0);
+
+    let tick = || {
+        pool.drain(usize::MAX);
+        source.drain();
+        pool.drain(usize::MAX);
+    };
+
+    source.want(&view(0.0), &cover, &[]);
+    // No worker exists, so nothing has happened yet -- not even the style resolution, which is
+    // the first thing `want` queues.
+    assert_eq!(source.readiness(), Readiness::Resolving);
+    assert_eq!(fetches.load(Ordering::Acquire), 0);
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while source.buckets(tile).is_none() && Instant::now() < deadline {
+        tick();
+        source.want(&view(0.0), &cover, &[]);
+    }
+
+    assert_eq!(source.readiness(), Readiness::Ready, "never resolved");
+    assert!(
+        source.buckets(tile).is_some(),
+        "the tile never landed on a pool nobody but this thread was running"
+    );
+    assert_eq!(source.outstanding(), 0);
+    assert!(
+        pool.is_idle(),
+        "work was left queued on a pool with no workers"
     );
 }
 

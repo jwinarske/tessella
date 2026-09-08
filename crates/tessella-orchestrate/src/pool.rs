@@ -231,6 +231,34 @@ impl std::fmt::Debug for Inner {
     }
 }
 
+/// Starts the worker threads, where there are threads to start.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+fn spawn(inner: &Arc<Inner>, workers: Workers) -> Vec<JoinHandle<()>> {
+    (0..workers.get())
+        .map(|index| {
+            let inner = Arc::clone(inner);
+            std::thread::Builder::new()
+                // Named so a profile or a core-affinity policy has something to match on.
+                // §5.4 wants these on the little cores; naming them is the part that does
+                // not need the RK3566 lane to land first.
+                .name(format!("tessella-decode-{index}"))
+                .spawn(move || inner.work())
+                .expect("a worker thread")
+        })
+        .collect()
+}
+
+/// A browser has no threads to start.
+///
+/// `std::thread::spawn` compiles for wasm32 and answers `Err` when it runs, so the version above
+/// would panic on the first pool ever built rather than fail a check. The count is ignored rather
+/// than refused: every caller that asks for a pool wants one, and what differs is who runs the
+/// jobs -- here it is whoever calls [`Pool::drain`].
+#[cfg(all(target_family = "wasm", target_os = "unknown"))]
+fn spawn(_inner: &Arc<Inner>, _workers: Workers) -> Vec<JoinHandle<()>> {
+    Vec::new()
+}
+
 impl Pool {
     /// Starts `workers` threads.
     ///
@@ -244,28 +272,19 @@ impl Pool {
             running: AtomicUsize::new(0),
             panics: AtomicUsize::new(0),
         });
-        let threads = (0..workers.get())
-            .map(|index| {
-                let inner = Arc::clone(&inner);
-                std::thread::Builder::new()
-                    // Named so a profile or a core-affinity policy has something to match on.
-                    // §5.4 wants these on the little cores; naming them is the part that does
-                    // not need the RK3566 lane to land first.
-                    .name(format!("tessella-decode-{index}"))
-                    .spawn(move || inner.work())
-                    .expect("a worker thread")
-            })
-            .collect();
-        Self { inner, threads }
+        Self {
+            threads: spawn(&inner, workers),
+            inner,
+        }
     }
 
     /// The one pool for this process (§5.5).
     ///
-    /// Started on first use with [`Workers::default`], and never stopped: it outlives every
+    /// Started on first use with [`Workers::from_env`], and never stopped: it outlives every
     /// view, which is the whole point of it being process-scoped.
     pub fn shared() -> &'static Self {
         static SHARED: std::sync::OnceLock<Pool> = std::sync::OnceLock::new();
-        SHARED.get_or_init(|| Self::new(Workers::default()))
+        SHARED.get_or_init(|| Self::new(Workers::from_env()))
     }
 
     /// How many threads are running.
@@ -310,6 +329,36 @@ impl Pool {
                 lock: Mutex::new(()),
             }),
         }
+    }
+
+    /// Runs up to `budget` queued jobs on the calling thread, highest priority first.
+    ///
+    /// Returns how many ran. Selection is the same strict-priority rule a worker uses, so a
+    /// drained pool and a threaded one disagree about *when* work happens and not about what
+    /// happens first.
+    ///
+    /// A `Pool` method rather than a wasm-only function, because native has a use for it that is
+    /// not a fallback. A pool built with [`Workers::none`] plus this plus the deferred transport
+    /// is the whole producer on one thread with one call site per tick -- a trace that
+    /// reproduces, which a thread pool cannot give however carefully it is driven.
+    ///
+    /// `budget` bounds the work one call may do; [`usize::MAX`] means "everything queued". Jobs
+    /// submitted *by* these jobs are eligible in the same call while the budget lasts, which is
+    /// what lets one drain finish a chain rather than leave it a tick short.
+    ///
+    /// Calling this on a pool that has workers is legal and helps rather than conflicts -- it is
+    /// the same take-and-run [`Batch::wait`] already does. It is still usually wrong on a thread
+    /// with a frame budget, which is what the workers are for.
+    pub fn drain(&self, budget: usize) -> usize {
+        let mut ran = 0;
+        while ran < budget {
+            let Some(task) = self.inner.try_take(Priority::Prefetch) else {
+                break;
+            };
+            let _ = self.inner.run(task);
+            ran += 1;
+        }
+        ran
     }
 
     /// How many jobs have panicked, ever.

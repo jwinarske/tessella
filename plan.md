@@ -8056,12 +8056,40 @@ marker, with the list read out of the markers rather than copied. That fails the
 grows a `std::` path, which is the property the paragraph above wanted. Runtime behaviour needs a
 runtime; it belongs to WS-3's consumer, not to a check lane.
 
-Building the gate turned up one thing worth recording. `tessella-orchestrate` carries
-`#![cfg_attr(not(test), no_std)]` and does not honour it: `source.rs` imports
-`std::collections::{BTreeMap, BTreeSet}` and `std::sync::{Mutex, PoisonError, RwLock}` unguarded, so
-`--no-default-features` fails to resolve `std` there. The collections are a one-line move to `alloc`;
-the locks are not, and picking their replacement is DR-24's decision rather than a tidy-up. The crate
-is the gate's one named exception until WS-2 lands.
+Building the gate turned up one thing worth recording. `tessella-orchestrate` carried
+`#![cfg_attr(not(test), no_std)]` and did not honour it: `source.rs` reached for `std::sync`
+unguarded, so `--no-default-features` failed to resolve `std` there, and it was the gate's one
+named exception. WS-2 closed it, and more cheaply than expected -- no `no_std` lock was needed.
+Nothing else in the crate refers to `crate::source`, so the module goes behind the `std` feature
+exactly as `boot`, `cache` and `pool` already are. What was left afterwards was one `BTreeSet` that
+moves to `alloc` and two environment-variable debug knobs, which need an environment and are now
+behind `std` for that reason. The gate has no exceptions.
+
+### WS-2, and what native got out of it
+
+`Pool` keeps its shape -- `submit`, `batch`, `Priority`, `is_idle`, `panics` all unchanged -- and
+grows `drain(budget)`, which runs queued jobs on the calling thread in the same strict-priority
+order a worker uses. Spawning is `cfg`-selected: a browser gets no threads, because
+`std::thread::spawn` compiles for wasm32 and answers `Err` at run time, so the threaded version
+would panic on the first pool ever built rather than fail a check. `Workers::none` names a pool
+with no workers, distinct from `new(0)`, which clamps to one on purpose; `Workers::from_env` reads
+`TESSELLA_WORKERS` so the mode is reachable rather than merely constructible.
+
+The claim to test was DR-24's "what native gains": the whole producer on one thread with one call
+site per tick, giving a trace that reproduces. It does, and the size of the difference was not
+obvious beforehand. Over the eleven-family Berlin scene at z14 pitch 60, six runs each:
+
+| | settle ticks | records | texture uploads |
+| --- | --- | --- | --- |
+| threaded | 203-220 | 1,376-1,432 | 205-245 |
+| `TESSELLA_WORKERS=0` | 42 every run | 1,025 every run | 149 every run |
+
+Worth being precise about what that is and is not. The *settled frame* was already reproducible --
+five runs in each mode are byte-identical, and identical to each other, which is what the
+quiescence gate buys. What was not reproducible was the trace: how many ticks it took, how many
+records went out, how many textures were uploaded. Now it is, exactly, and parity against
+`mbgl-render` is unchanged in the serial mode -- 24, 86, 5, 103 gross, the same four numbers the
+threaded mode gives.
 
 WS-1 landed in two pieces, because the transport and the thing that uses it fail differently. The
 first: `Ticket`, `DeferredFileSource` and the `Tickets` table in `tessella-storage`, and

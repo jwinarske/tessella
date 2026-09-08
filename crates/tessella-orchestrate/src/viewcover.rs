@@ -29,8 +29,8 @@
 //! rebuild the cover at gesture rate, and that requires remembering which level is currently
 //! held, which a pure function cannot.
 
+use alloc::collections::BTreeSet;
 use alloc::vec::Vec;
-use std::collections::BTreeSet;
 
 use tessella_tile::cover::{self, CoverError, TileCoord, ViewTransform, WorldCopies, ZoomLatch};
 use tessella_tile::renderables::{self, DataTileId, Pyramid};
