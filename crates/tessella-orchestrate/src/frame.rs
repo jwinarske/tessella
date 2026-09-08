@@ -1819,9 +1819,18 @@ fn place_symbols(
         if units.abs() > f64::EPSILON {
             #[allow(clippy::cast_possible_truncation)]
             let scale = (1.0 / units) as f32;
+            // The label plane back to the screen, which is mbgl's `getGlCoordMatrix`: undo the
+            // plane's own scale to reach tile units, then take the projection every anchor takes.
+            // Only the upright test reads it, and only because that test is a question about
+            // which way the label reads *on screen*.
+            let to_screen = {
+                let project = project_with(&plane, grid_padding);
+                move |point: (f32, f32)| project((point.0 / scale, point.1 / scale))
+            };
             without_room = held.symbols.write_line_positions(
                 &labels,
                 |point| (point.0 * scale, point.1 * scale),
+                to_screen,
                 layout.symbol.size,
                 &mut buffers,
             );

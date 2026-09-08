@@ -660,15 +660,17 @@ impl ViewSymbols {
     /// half of the same symbol. A shield whose number will not fit must not keep its shield: an
     /// empty box strung along a road is worse than nothing there, and it is what happens if only
     /// the text is hidden.
-    pub fn write_line_positions<P>(
+    pub fn write_line_positions<P, S>(
         &self,
         labels: &[FrameLabel<'_>],
         project: P,
+        to_screen: S,
         font_size: f32,
         buffers: &mut SymbolBuffers,
     ) -> alloc::vec::Vec<u32>
     where
         P: Fn((f32, f32)) -> (f32, f32),
+        S: Fn((f32, f32)) -> (f32, f32),
     {
         let mut without_room = alloc::vec::Vec::new();
         for label in labels {
@@ -717,6 +719,7 @@ impl ViewSymbols {
                 label.laid_out.segment,
                 &buffers.glyph_offsets[quads],
                 &offsets,
+                &to_screen,
             );
             let crate::project::Placement::Placed(glyphs) = placement else {
                 // No room on the line for this label at this anchor -- the road runs out before

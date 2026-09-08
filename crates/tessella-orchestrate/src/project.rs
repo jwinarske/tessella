@@ -215,23 +215,51 @@ pub fn place_glyphs_along_line(
 /// reads backwards, place it again walking the line the other way. Returns the placement and
 /// whether it was flipped.
 #[must_use]
-pub fn place_upright(
+pub fn place_upright<S>(
     line: &[(f32, f32)],
     anchor: (f32, f32),
     segment: usize,
     glyph_offsets: &[f32],
     offsets: &LineOffsets,
-) -> (Placement, bool) {
-    match place_glyphs_along_line(line, anchor, segment, glyph_offsets, offsets) {
-        Placement::NeedsFlipping => {
-            let flipped = LineOffsets {
-                flip: true,
-                ..*offsets
-            };
-            (
-                place_glyphs_along_line(line, anchor, segment, glyph_offsets, &flipped),
-                true,
-            )
+    to_screen: S,
+) -> (Placement, bool)
+where
+    S: Fn((f32, f32)) -> (f32, f32),
+{
+    // The upright test asks whether the label reads right to left, and mbgl asks it *on screen*:
+    //
+    //     const Point<float> firstPoint = project(firstAndLastGlyph->first.point, glCoordMatrix)...
+    //     const Point<float> lastPoint  = project(firstAndLastGlyph->second.point, glCoordMatrix)...
+    //     if (firstPoint.x > lastPoint.x) return PlacementResult::NeedsFlipping;
+    //
+    // Asked of the label-plane points instead it is the same question in the wrong space. For a
+    // label pitched with the map the label plane is the tile's, and the perspective divide between
+    // there and the screen can put the two ends in the other order -- 33 of 153 road labels at
+    // Seattle z14 pitch 45, drawn backwards, their glyph angles off by exactly pi. Flat the divide
+    // is uniform and cannot reorder anything, which is why only the pitched frame was wrong.
+    //
+    // So the walk is asked not to decide it, and it is decided here where the projection is.
+    let quiet = LineOffsets {
+        keep_upright: false,
+        ..*offsets
+    };
+    match place_glyphs_along_line(line, anchor, segment, glyph_offsets, &quiet) {
+        Placement::Placed(glyphs) if offsets.keep_upright && glyphs.len() > 1 => {
+            let first = to_screen(glyphs.first().expect("checked non-empty").point);
+            let last = to_screen(glyphs.last().expect("checked non-empty").point);
+            if first.0 > last.0 {
+                let flipped = LineOffsets {
+                    flip: true,
+                    keep_upright: false,
+                    ..*offsets
+                };
+                (
+                    place_glyphs_along_line(line, anchor, segment, glyph_offsets, &flipped),
+                    true,
+                )
+            } else {
+                (Placement::Placed(glyphs), false)
+            }
         }
         other => (other, false),
     }

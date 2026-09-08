@@ -118,6 +118,8 @@ fn flipping_makes_it_read_left_to_right() {
         1,
         &WORD,
         &LineOffsets::default(),
+        // These work in screen space already, so the projection is the identity.
+        |point| point,
     );
     assert!(flipped);
     let Placement::Placed(glyphs) = placement else {
@@ -147,6 +149,8 @@ fn an_upright_label_is_not_flipped() {
         1,
         &WORD,
         &LineOffsets::default(),
+        // These work in screen space already, so the projection is the identity.
+        |point| point,
     );
     assert!(!flipped);
     assert!(matches!(placement, Placement::Placed(_)));

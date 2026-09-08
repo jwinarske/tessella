@@ -552,6 +552,8 @@ fn draw_line_labels() {
             laid_out.segment,
             &buffers.glyph_offsets[quads],
             &LineOffsets::default(),
+            // These work in screen space already, so the projection is the identity.
+            |point| point,
         );
         let Placement::Placed(glyphs) = placement else {
             no_room += 1;
