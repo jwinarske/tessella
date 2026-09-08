@@ -7187,3 +7187,43 @@ mbgl's vertex shader transcribed. Both halves are faithful.
 
 What is left is what a pitched frame does to the collision *area* rather than to any one box:
 `viewport_padding`, the grid's size, and which anchors along a line are offered at all.
+
+### The pitched road labels: located, and the term we do not have
+
+Measured, not guessed. At Seattle z14 the road-label layer alone is 71 gross flat and 19,746 at
+pitch 45. The excess is text we draw where mbgl draws background, it is 55% concentrated in the
+top three tenths of the frame -- the far field -- and we put 20% more text pixels on screen than
+mbgl does at pitch against 1% more flat.
+
+Two candidates ruled out by reading rather than measurement, recorded so nobody re-reads them:
+
+- **Viewport padding matches.** `viewport_padding` is 100 flat and 200 pitched and the grid is the
+  viewport plus twice it, which is `findViewportPadding` and the `CollisionIndex` constructor to
+  the constant.
+- **The perspective ratio and the shader match.** `0.5 + 0.5 * cameraToCenterDistance / w` is
+  `projectAndGetPerspectiveRatio`, used for collision boundaries only, and `symbol_sdf.mat`'s
+  `clamp(0.5 + 0.5 * distance_ratio, 0.0, 4.0)` is mbgl's vertex shader.
+
+What we do not have is `CollisionIndex::approximateTileDistance`. mbgl decides which of a line
+label's collision circles are tested by comparing each circle's signed distance against
+`-firstTileDistance ..= lastTileDistance`, and those two are not the glyph offsets: they come from
+walking the line to the outermost glyphs and then
+
+    prevTileDistance + lastSegmentTile
+      + (incidenceStretch - 1) * lastSegmentTile * |sin(lastSegmentAngle)|
+
+with `incidenceStretch = pitchWithMap ? 1 : cameraToAnchorDistance / pitchFactor` and
+`pitchFactor = cos(pitch) * cameraToCenterDistance`. It is a *pitch-only* correction -- the whole
+term vanishes at pitch zero, which is exactly the shape of the defect -- and it exists because a
+label drawn perpendicular to the viewport covers more ground on an oblique tile than a flat one.
+
+Ours is `|glyph_offset * font_scale * perspective|` for each end: the right quantity from the
+wrong source. mbgl's `placeFirstAndLastGlyph` walks the line and returns a `TileDistance` per end
+carrying `prevTileDistance` and `lastSegmentViewportDistance` plus the segment angle; ours takes
+the unwalked offset and scales it. Flat the two agree closely enough to score 71 gross, and at
+pitch they do not.
+
+One caution for whoever writes it: mbgl passes `projectedAnchor.second` -- the perspective
+*ratio* -- into a parameter named `cameraToAnchorDistance`, so `incidenceStretch` is that ratio
+over `cos(pitch) * cameraToCenterDistance` and comes out far below one, making the term subtract.
+Transcribe it, do not correct it, and check the sign against a render before believing either.
