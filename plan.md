@@ -7251,7 +7251,20 @@ which is what a wrong model looks like rather than one needing tuning. Reverted.
 outside the reach is skipped and clears `previousCirclePlaced`, first test in the loop, as in
 `placeLineFeature`.
 
-So the far-field excess is upstream of which circles get tested. What has *not* been looked at:
-which anchors `get_anchors` produces for a pitched frame at all, and whether a label that fails to
-place is still holding its identity's fade open -- the excess is text drawn where mbgl draws
-none, and a fade that never closes would look exactly like that without any collision being wrong.
+So the far-field excess is upstream of which circles get tested.
+
+**Fades are ruled out too, and cheaply.** `render_probe` never calls `advance`, and
+`PlacementState::new` leaves `increment` at one, so every parity number on this page was measured
+with instant fades: a label that fails to place drops to zero the same frame. A fade held open
+cannot be what draws the extra text.
+
+That is four candidates eliminated with measurements -- the incidence term, `covered_by_label`'s
+sense, the viewport padding, the perspective ratio and shader -- and the useful thing to say about
+the fifth is that source reading has stopped paying. Both sides hide labels at pitch and mbgl
+hides more: ours goes 9,919 text pixels flat to 8,121 pitched, mbgl 9,859 to 6,765.
+
+The next step is the technique that has worked every other time here and has not been applied to
+this: print the same intermediate from both renderers and diff it. Concretely, one line per symbol
+at this camera -- anchor in tile units, text, placed or not -- out of mbgl's `Placement::placeBucket`
+and out of `place_symbols`, sorted and compared. That names the disagreeing labels instead of
+narrowing the space of mechanisms one revert at a time.
