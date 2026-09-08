@@ -7268,3 +7268,46 @@ this: print the same intermediate from both renderers and diff it. Concretely, o
 at this camera -- anchor in tile units, text, placed or not -- out of mbgl's `Placement::placeBucket`
 and out of `place_symbols`, sorted and compared. That names the disagreeing labels instead of
 narrowing the space of mechanisms one revert at a time.
+
+### Both ends printed and diffed, and two rules were missing
+
+The technique that was overdue. `mbgl-render` patched at `Placement::placeSymbol` and this side at
+`place_symbols`, each writing one line per symbol -- anchor in tile units, placed or not -- at
+Seattle z14 pitch 45 on the road-label layer alone.
+
+The first thing it said is what *is not* wrong. Both offer **388 symbols at the same 388 anchors,
+in the same order**: every position matches, median rank shift zero. So layout, anchor generation
+and placement order were never the problem, and the four mechanisms eliminated before this were
+eliminated for nothing more than being adjacent to the real one. mbgl placed 167 and this 211.
+
+Patching mbgl again to say *why* it refused split the eighty disagreements cleanly:
+
+| | count |
+| --- | --- |
+| ours placed, mbgl `hitTest` | 46 |
+| ours placed, mbgl `notInGrid` | 16 |
+| mbgl placed, ours not | 18 |
+
+Two rules were missing, and the second is the interesting one.
+
+**`isInsideGrid`.** A label with no part inside the padded viewport is not placed, whatever the
+grid holds. There was no such concept here.
+
+**An empty circle run is not placeable.** A label whose road runs out before a run can be built is
+offered as `Shape::Circles(vec![])` rather than `None`, deliberately, so that `text_optional` and
+`icon_optional` still see text -- that is what `5d87a53` fixed. But an empty run collides with
+nothing, so `place` placed every one of them unconditionally: every road too short to carry its own
+name kept its name. mbgl returns unplaced when `placeFirstAndLastGlyph` gives it nothing. The two
+meanings are `placeable` and `in_grid` now instead of one accident, and the test that guarded the
+first has been rewritten to assert both halves rather than only the half that was broken then.
+
+| Seattle | z12 | z13 | z14 | z15 | z16 |
+| --- | --- | --- | --- | --- | --- |
+| flat, before | 0.000% | 0.000% | 0.011% | 0.010% | 0.000% |
+| flat, after | 0.000% | 0.000% | **0.000%** | 0.010% | 0.000% |
+| pitch 45, before | 3.698% | 2.649% | 3.023% | 2.082% | 1.025% |
+| pitch 45, after | **0.998%** | **1.621%** | **2.576%** | 2.023% | 1.006% |
+
+The 46 `hitTest` disagreements are what is left: mbgl finds a collision where this does not, with
+the same symbols in the same order. That is now the whole of the pitched gap and it is a question
+about one comparison rather than about the shape of the pass.
