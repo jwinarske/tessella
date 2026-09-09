@@ -8071,9 +8071,19 @@ The archive table holds one boxed reader rather than a generic parameter or an e
 choice is per url at run time: a style may name a file and an origin in the same document. That
 costs a virtual call per range, of which a tile needs three.
 
-What is left of WS-4: `OpfsCache`. And the FFI still builds an `HttpFileSource` alone, so nothing
-routes `pmtiles://` yet -- which is the last step between this and the quad reading a planet off an
-origin instead of a disk.
+The FFI routes it now. One HTTP source, shared: the router's fallback fetches whole resources and
+the same transport reads byte ranges out of an archive, because two would mean two connection
+pools to one origin. The router goes *inside* the coalescing wrapper, which is the arrangement
+`Router` documents and §9.3's flatness counters depend on -- a router of coalescers gives each
+origin its own in-flight table, and four views over one cover stop costing one fetch.
+
+Proved through the C surface rather than at the seam: a style whose only source is
+`pmtiles://http://.../berlin_z15.pmtiles` resolves and *draws*, checked from the arena's own
+cursor, because resolving alone would only prove the manifest came out of the archive and the
+cursor proves a tile did. Load-bearing: with the route removed the map fails with "unknown scheme:
+pmtiles".
+
+What is left of WS-4: `OpfsCache`. A remote planet is now something the quad could name.
 
 The first gate was written down as `cargo check --workspace --target wasm32-unknown-unknown`
 asserting "the `no_std` discipline holds on a target with no threads, no clock and no filesystem".

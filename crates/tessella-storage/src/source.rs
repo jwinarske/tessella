@@ -210,6 +210,22 @@ impl<S: RangeFetch + ?Sized> RangeFetch for Arc<S> {
     }
 }
 
+/// A shared source is one too, so one transport can serve a router's fallback and a reader that
+/// needs it at the same time.
+///
+/// Without this a process ends up with two HTTP sources -- two connection pools, two sets of
+/// keep-alives -- because one of them had to be moved into the router and the other into whatever
+/// else wanted it.
+impl<S: FileSource + ?Sized> FileSource for Arc<S> {
+    fn fetch(&self, url: &str) -> Result<Response, FetchError> {
+        (**self).fetch(url)
+    }
+
+    fn fetch_conditional(&self, url: &str, etag: Option<&str>) -> Result<Response, FetchError> {
+        (**self).fetch_conditional(url, etag)
+    }
+}
+
 /// Wraps a source so concurrent requests for one URL become one request.
 ///
 /// # Not a cache, and what that costs
