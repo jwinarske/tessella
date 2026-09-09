@@ -8167,6 +8167,59 @@ Nothing loads these yet. The renderer keys materials by file stem through `famil
 `NONE` for both, so they sit in the directory and are skipped -- which is why the parity sweep is
 unmoved with them present. Selecting them is the next step.
 
+### Item 6: anchor the bend at the tile, and stop falling back to Mercator
+
+Deferred until items 3 through 5 have put a globe on screen, and written down now because it is the
+one place this globe could be better than the ones that exist rather than merely equal to them.
+
+**The wall.** `merc` is a position in `0..1` across the whole world and the consumer multiplies in
+32-bit float, so a tile unit stops moving the result at z12 -- measured, not estimated, and pinned
+by `the_bends_f32_placement_resolves_a_tile_unit_through_z11`. MapLibre GL JS switches its globe to
+Mercator around z12, which is the same wall from the other side. That fallback then needs a morph
+animation to hide the transition, which is the ugliest part of every globe that has one.
+
+**Why the wall is an artifact rather than a law.** Nothing about the bend needs world-scale
+numbers. It needs *where this tile is*, which is a large number, and *where this vertex is inside
+it*, which is a small one. Adding them before the trig is what destroys the small one. The fix is
+the standard anchored form: compute the large part once per tile in `f64` on the producer, and let
+the shader do arithmetic only on the small part, where `f32` has room to spare -- at z14 a tile
+spans 3.8e-4 radians and a tile unit is 4.7e-8 of a radian, which is comfortable against an ulp of
+1.2e-7 *once the offset is not riding on top of a 1.0*.
+
+**Two mechanisms, and the second is the interesting one.**
+
+*Exact, at any zoom.* Longitude is a rotation: `sphere_point(lon0 + d, lat)` is exactly
+`rotate_y(d) · sphere_point(lon0, lat)`, and `d` is small, so the rotation is well conditioned in
+`f32`. Latitude needs `latitude_of(y0 + dy)`, which is smooth, so the producer sends `lat0` and the
+first two derivatives at `y0` and the shader evaluates a short series in `dy`. No approximation in
+longitude and a bounded one in latitude.
+
+*Expansion, where the tile is small.* Past about z8 a tile subtends so little of the sphere that a
+second-order expansion of the whole bend about the tile's anchor is accurate to far below a pixel --
+and it removes the per-vertex trig entirely, which is four transcendentals a vertex gone. The
+happy accident is that the zoom where the expansion becomes exact enough is below the zoom where
+precision fails, so the two paths overlap rather than meet.
+
+Two paths chosen per tile is not the branch this page argued against for `fill_globe.mat`: that was
+a fork on every vertex of every flat map, this is a material selected once for a drawable, the way
+a pattern fill is already selected over a plain one.
+
+**What it costs, and the property it must not break.** The coefficients -- `lon0`, `lat0`, the
+latitude derivatives, the expansion terms -- are functions of the *tile address alone*. Not the
+camera. So they are computed once per tile and never on a zoom change, and §5.1's camera-free
+bucket survives, which is the property the quad is built on and the one a globe would be foolish to
+spend. The per-drawable cost is a handful of floats beside the matrix already there.
+
+**What it buys.** A globe that holds to street zoom, and therefore no Mercator fallback and no morph
+to hide one. As far as this page can tell, the vector-tile globes in the field all switch; not
+switching is a differentiator rather than a catch-up.
+
+**How it is checked, with still no oracle.** The exact chain is already pinned on the CPU by
+`the_point_under_the_camera_bends_to_the_middle_of_the_screen` and its neighbors. The anchored form
+is a second implementation of the same function, so it is checkable against the first to a bound, at
+every zoom, without rendering anything -- which is the strongest position any piece of this page has
+been in, and it is only available because the arithmetic was closed before the material was written.
+
 ## 19. wasm32 as a fourth target
 
 Build the producer for `wasm32-unknown-unknown` so a browser page draws the same capture stream a
