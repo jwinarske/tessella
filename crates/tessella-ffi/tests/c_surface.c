@@ -128,6 +128,78 @@ int main(void) {
     printf("ring_non_null %d\n", regions.ring != NULL ? 1 : 0);
     printf("ring_len_nonzero %d\n", regions.ring_len > 0 ? 1 : 0);
 
+    /* A hosted map: the caller fetches, and the map asks. This is the browser's arrangement
+     * driven from C, which is the only place the three calls can be checked as declared. */
+    {
+        static const char* const HOSTED_STYLE =
+            "{\"version\": 8, \"sources\": {\"v\": {\"type\": \"vector\","
+            " \"tiles\": [\"http://host.invalid/{z}/{x}/{y}.pbf\"],"
+            " \"minzoom\": 0, \"maxzoom\": 6}},"
+            " \"layers\": [{\"id\": \"w\", \"type\": \"fill\", \"source\": \"v\","
+            " \"source-layer\": \"water\"}]}";
+
+        /* The pooled map refuses the hosted calls, which is the only thing that tells a caller
+         * it created the wrong kind. Checked before the hosted map exists, so a pass here cannot
+         * be the hosted one answering by accident. */
+        uint64_t stray = 999;
+        const uint8_t* stray_url = NULL;
+        size_t stray_len = 0;
+        printf("take_on_pooled %d\n",
+               (int)tessella_take_request(map, &stray, &stray_url, &stray_len));
+        printf("answer_on_pooled %d\n", (int)tessella_answer(map, 1, 200, NULL, 0));
+
+        tessella_config hosted_config = config;
+        hosted_config.style_json = (const uint8_t*)HOSTED_STYLE;
+        hosted_config.style_json_len = strlen(HOSTED_STYLE);
+        tessella_map* hosted = NULL;
+        printf("create_hosted %d\n",
+               (int)tessella_create_hosted(&hosted_config, 51.505, -0.11, 3.0, &hosted));
+        printf("hosted_non_null %d\n", hosted != NULL ? 1 : 0);
+
+        int served = 0;
+        int urls_seen = 0;
+        int hosted_status = -1;
+        for (int spin = 0; spin < 400 && hosted != NULL; spin++) {
+            hosted_status = (int)tessella_tick(hosted);
+            if (hosted_status != TESSELLA_OK) {
+                break;
+            }
+            for (;;) {
+                uint64_t ticket = 0;
+                const uint8_t* url = NULL;
+                size_t url_len = 0;
+                if ((int)tessella_take_request(hosted, &ticket, &url, &url_len) != TESSELLA_OK) {
+                    hosted_status = -2;
+                    break;
+                }
+                /* Zero is what a map with nothing to fetch says, and it is the loop's exit. */
+                if (ticket == 0) {
+                    break;
+                }
+                if (url != NULL && url_len > 0) {
+                    urls_seen++;
+                }
+                /* Answered 404, which is an answer: the tile is outside this source's coverage
+                 * as far as the map is concerned, and the map draws around it. No fixture bytes
+                 * are needed to check that the loop itself turns. */
+                tessella_answer(hosted, ticket, 404, NULL, 0);
+                served++;
+            }
+            if (served > 0) {
+                break;
+            }
+        }
+        printf("hosted_status %d\n", hosted_status);
+        printf("hosted_served %d\n", served > 0 ? 1 : 0);
+        printf("hosted_urls %d\n", urls_seen == served ? 1 : 0);
+
+        int32_t hosted_readiness = -1;
+        printf("hosted_ready %d\n",
+               (int)tessella_status(hosted, &hosted_readiness, NULL, 0));
+        printf("hosted_readiness %d\n", (int)hosted_readiness);
+        tessella_destroy(hosted);
+    }
+
     tessella_destroy(map);
     /* Destroying null is a no-op, which is what lets a consumer tear down without a branch. */
     tessella_destroy(NULL);

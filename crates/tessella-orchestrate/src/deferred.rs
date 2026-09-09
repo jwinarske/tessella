@@ -24,7 +24,7 @@ use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use alloc::collections::VecDeque;
+use alloc::collections::{BTreeMap, VecDeque};
 use std::sync::{Mutex, PoisonError};
 
 use tessella_storage::deferred::{DeferredFileSource, Ticket, Tickets};
@@ -163,8 +163,16 @@ impl<S: FileSource + 'static> DeferredFileSource for PoolBacked<S> {
 /// the browser's, not this arrangement's.
 pub struct HostTransport {
     tickets: Tickets,
-    /// Issued and not yet handed to the host.
-    queue: Mutex<VecDeque<(Ticket, String)>>,
+    /// Issued and not yet handed to the host, in issue order.
+    queue: Mutex<VecDeque<Ticket>>,
+    /// Every unanswered request's URL, kept alive so a consumer across the ABI can read it where
+    /// it lies rather than being handed a copy it has nowhere to put.
+    ///
+    /// A browser reads it as a byte range in linear memory, which is the same arrangement
+    /// `tessella_regions` uses for the ring: the alternative is an allocator export and a copy on
+    /// both sides of it. Removed when the request is answered, failed or cancelled, which is what
+    /// bounds how long the pointer is good for.
+    urls: Mutex<BTreeMap<Ticket, String>>,
 }
 
 impl Default for HostTransport {
@@ -180,6 +188,7 @@ impl HostTransport {
         Self {
             tickets: Tickets::new(),
             queue: Mutex::new(VecDeque::new()),
+            urls: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -189,11 +198,46 @@ impl HostTransport {
     /// fetch it twice. In issue order: the first thing asked for is the first thing a host with
     /// one connection should go and get.
     pub fn take_requests(&self) -> Vec<(Ticket, String)> {
-        self.queue
+        let handed: Vec<Ticket> = self
+            .queue
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .drain(..)
+            .collect();
+        let urls = self.urls.lock().unwrap_or_else(PoisonError::into_inner);
+        handed
+            .into_iter()
+            .filter_map(|ticket| urls.get(&ticket).map(|url| (ticket, url.clone())))
             .collect()
+    }
+
+    /// Hands over one request, for a caller that reads the URL where it lies.
+    ///
+    /// [`Self::take_requests`] one at a time and without the copy, which is what a consumer across
+    /// the ABI wants: it gets the ticket, reads the URL out of this transport's memory, and comes
+    /// back for the next one. [`None`] when there is nothing to fetch.
+    pub fn next_request(&self) -> Option<Ticket> {
+        self.queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .pop_front()
+    }
+
+    /// Where a handed-out request's URL lies, and how long it is.
+    ///
+    /// The pointer is into this transport's own memory and is good until the ticket is answered,
+    /// failed or cancelled, or the transport is dropped. A caller that holds it past any of those
+    /// is holding a dangling pointer, which is why the three of them are the only things that
+    /// remove an entry.
+    ///
+    /// [`None`] for a ticket that was never issued or is no longer outstanding.
+    #[must_use]
+    pub fn url_of(&self, ticket: Ticket) -> Option<(*const u8, usize)> {
+        self.urls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&ticket)
+            .map(|url| (url.as_ptr(), url.len()))
     }
 
     /// How many requests are waiting to be handed over.
@@ -213,6 +257,7 @@ impl HostTransport {
     /// so a host that loses track of its own bookkeeping wastes a fetch rather than corrupting
     /// anything.
     pub fn answer(&self, ticket: Ticket, status: u16, body: Vec<u8>) {
+        self.forget(ticket);
         self.tickets.post(
             ticket,
             Ok(Arc::new(Response {
@@ -228,6 +273,7 @@ impl HostTransport {
     /// For a connection that never opened, not for an origin that said no -- that is
     /// [`Self::answer`] with the status it said it with.
     pub fn fail(&self, ticket: Ticket, url: &str, message: &str) {
+        self.forget(ticket);
         self.tickets.post(
             ticket,
             Err(FetchError::Transport {
@@ -235,6 +281,14 @@ impl HostTransport {
                 message: message.to_string(),
             }),
         );
+    }
+
+    /// Drops a request's URL, which is what ends the life of the pointer [`Self::url_of`] gave.
+    fn forget(&self, ticket: Ticket) {
+        self.urls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&ticket);
     }
 }
 
@@ -244,10 +298,14 @@ impl DeferredFileSource for HostTransport {
         // revalidation from the HTTP cache it is already sitting behind, and handing it a header
         // to set would be describing a policy it already has.
         let ticket = self.tickets.issue();
+        self.urls
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(ticket, url.to_string());
         self.queue
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push_back((ticket, url.to_string()));
+            .push_back(ticket);
         ticket
     }
 
@@ -257,10 +315,11 @@ impl DeferredFileSource for HostTransport {
 
     fn cancel(&self, ticket: Ticket) {
         self.tickets.cancel(ticket);
+        self.forget(ticket);
         self.queue
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .retain(|(queued, _)| *queued != ticket);
+            .retain(|queued| *queued != ticket);
     }
 
     fn outstanding(&self) -> usize {
