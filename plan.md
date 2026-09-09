@@ -8359,12 +8359,11 @@ with `camera::tile_to_clip` whatever the projection: sent flat, the bent mask be
 already-projected matrix a second time and cuts the stencil where the geometry is not. Every fill
 tested against it and failed, and the frame came back as bare background.
 
-**What this does not close.** The wedges are still there. Ruled out by experiment, each individually:
-the subdivider (identical with it disabled entirely), the fill outline (identical with its material
-removed), the triangulation (area preserved through holes, at every grid), the world-copy fold, and
-the mask itself (which now demonstrably clips, and clips something else). The flat path at the same
-camera is clean with either clip device alone. That is a long list of things it is not and no
-statement yet of what it is.
+**What this did not close.** The wedges outlived this section, and none of the things ruled out here
+were the cause: not the subdivider (identical with it disabled entirely), not the fill outline
+(identical with its material removed), not the triangulation (area preserved through holes, at every
+grid), not the world-copy fold, and not the mask (which demonstrably clips, and clips something
+else). The cause was in the consumer's index upload and is written up in the next section.
 
 ### A camera the sweep could not see, and what was hiding behind it
 
@@ -8379,19 +8378,39 @@ and wedges appeared out there. They looked like a bend artifact for most of a da
 *flat* renderer draws the same wedges at the same camera over a wide enough viewport, byte-identical
 on a checkout with no globe work in it at all.
 
-So the sweep gains a fifth camera, `z9 2400x900 p0`, and it **fails at 2866 gross**. That is the
-point of adding it. A guard that reports a real number is worth more than a sweep that cannot see
-the regime, and leaving the number in the open is what stops it being rediscovered a third time.
+So the sweep gains a fifth camera, `z9 2400x900 p0`. It opened at **2866 gross** and now runs at
+**153**, which is the same 0.007% band as the other four. A guard that reports a real number is
+worth more than a sweep that cannot see the regime, and leaving the number in the open is what
+stopped it being rediscovered a third time.
 
-What the 2866 is, as far as it has been narrowed: tile 9/274/168, screen box x 655..1678 y 498..885,
-concentrated on four rows around y=750. It is a *hole* in the patterned `parks` fill -- the imagery
-beneath shows through where the oracle has grass -- which was established by deleting the layer and
-watching the region get *more* of the underlying color, not less.
+**The cause: the consumer ignored `tsl_segment`.** §12.4 says indices are `u16`, so a bucket over
+65,535 vertices cannot address itself with one range -- the producer splits it, and each segment's
+indices are relative to that segment's `vertex_offset`. The ABI has carried those offsets since it
+was written. `FilamentRenderer::onGeometry` uploaded the index blob whole and issued
+`geometry(0, ..., 0, indexCount)`: one flat range, every index read as absolute.
 
-**What it is not**, each ruled out by experiment rather than by argument: the hole cap (`MAX_HOLES`
-raised to 100,000, still exactly 2866); the subdivider (identical with it disabled entirely); the
-fill outline (identical with its material removed); the clip mask; the scissor; the world-copy fold;
-and unmasked ancestors.
+For a single-segment bucket that is correct, because the base is zero. For a split one, segment 1's
+triangles are assembled from the *first* vertices of the buffer rather than its own. Both symptoms
+follow from the one mistake, which is why they looked like two bugs: the polygons that should have
+been drawn are missing -- the "hole" in the patterned `parks` fill -- and triangles built from
+unrelated vertices land somewhere else, as wedges across the map.
+
+The z9 landuse bucket here is 66,972 vertices in two segments, 1,477 past the split. At z14 and z16
+nothing comes near 65,535, so all four original cameras were structurally blind to it: the defect
+needs a dense layer at a low zoom, which is exactly the regime a 1024x768 street-zoom sweep excludes.
+The globe found it only because `cover_globe` asks for more tiles.
+
+The fix is `FilamentRenderer::uploadIndices`, which rebases a split bucket's indices into a `u32`
+buffer -- adding each segment's `vertex_offset` -- and leaves an unsplit one on its `u16` path
+untouched. Rebasing rather than one primitive per segment because Filament's `geometry` call takes
+an index range but no base vertex, so a second primitive would need a second vertex buffer; widening
+keeps one buffer, one primitive, one draw. A `rebased` counter reports how often it fires: 1 at this
+camera, 0 at z14, and the quad probe's image is byte-identical with the fix and without it.
+
+**What it was not**, each ruled out by experiment before the cause was found, and recorded so the
+list is not walked again: the hole cap (`MAX_HOLES` raised to 100,000, still exactly 2866); the
+subdivider (identical with it disabled entirely); the fill outline (identical with its material
+removed); the clip mask; the scissor; the world-copy fold; and unmasked ancestors.
 
 And one dead end worth recording because it was asserted here before it was checked: `earcutr` was
 not at fault. Those water features are LineStrings closed into a lasso, and a self-overlapping

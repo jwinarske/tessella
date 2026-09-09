@@ -480,10 +480,21 @@ fn structs() -> Vec<Struct> {
         c_struct!(
             Segment,
             "segment",
-            "A contiguous index range with its own vertex base.",
+            "A contiguous index range with its own vertex base. Indexes are u16, so a bucket over \
+             65,535 vertices is split into several of these; ADD `vertex_offset` TO EVERY INDEX in \
+             the range. Drawing the blob as one flat range is right only while there is one \
+             segment, and silently wrong past the split.",
             [
-                (vertex_offset, "uint32_t vertex_offset", "First vertex."),
-                (index_offset, "uint32_t index_offset", "First index."),
+                (
+                    vertex_offset,
+                    "uint32_t vertex_offset",
+                    "First vertex. Every index in this segment's range is relative to it."
+                ),
+                (
+                    index_offset,
+                    "uint32_t index_offset",
+                    "First index, into the whole buffer."
+                ),
                 (vertex_length, "uint32_t vertex_length", "Vertex count."),
                 (index_length, "uint32_t index_length", "Index count."),
             ]
