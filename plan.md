@@ -8147,11 +8147,22 @@ the whole of what this workstream bought. While resolution and glyphs were still
 had to carry a `FileSource` beside the transport, and a browser could not supply one however good
 its `fetch` was.
 
-**What is left before a browser draws.** The FFI still builds `HttpFileSource` -- `ureq` on
-`std::net` -- and wraps it in `PoolBacked`. A browser needs a `TileTransport` over `fetch()`
-instead, which is now a matter of writing one rather than of moving anything: the seam is there, and
-the type it has to satisfy has no `std::net` in it. After that there is something for a WebGL2
-consumer to consume.
+**The browser's transport, and why it does not call `fetch`.** §19.2 keeps `wasm-bindgen` out of
+the producer, so a transport that called the browser's `fetch` would need bindings, a glue module
+and a second description of the ABI to keep in step with the first. `HostTransport` does not call
+anything: it writes down what it needs, the host brings it back, and the ticket is what makes that
+safe across the boundary -- the host holds a `u64`, so a stale or invented one addresses nothing.
+
+Nothing about it is browser-specific, which is the point rather than an accident. A pool with no
+workers and a `HostTransport` *is* the browser's arrangement, and the suite drives a whole cold
+start through it: a style resolved from a manifest the test supplies and a tile built from bytes
+the test hands back, with no threads, no network and no timing. What a browser adds is `fetch` and
+a frame callback, neither of which is this arrangement's to get wrong.
+
+**What is left before a browser draws.** The exports. The FFI holds
+`Pooled<HttpFileSource>` by name, so a hosted map needs a transport it can select and three calls
+to drive it -- take the pending requests, answer one, fail one. After that there is something for a
+WebGL2 consumer to consume.
 
 ### WS-2, and what native got out of it
 
