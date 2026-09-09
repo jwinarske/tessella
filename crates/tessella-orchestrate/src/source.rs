@@ -19,13 +19,13 @@
 //! answered by [`TileSource::readiness`] rather than by a stall: a consumer that sees an empty
 //! map has something to read that says whether the style failed, and which.
 
+use crate::clock::Instant;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, PoisonError, RwLock};
-use web_time::Instant;
 
 use tessella_glyph::manager::FontStack;
 use tessella_glyph::pbf::Range;

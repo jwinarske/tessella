@@ -8177,10 +8177,37 @@ Driven from C in `c_surface.c`, which is where the declarations get checked as d
 hosted, tick, take a request, read the URL out of the map's memory, answer it, and read the
 readiness back.
 
-**What is left before a browser draws** is the consumer, and one thing under it: the FFI is a
-`staticlib`/`cdylib` built for the host. Producing a `.wasm` and loading it is the next question,
-and it is a build question rather than a design one now -- nothing in the producer reaches for a
-socket, a thread or a clock that a browser does not have.
+### The module, and two things only the module said
+
+`cargo build -p tessella-ffi --target wasm32-unknown-unknown --release` produces a module, and it
+exports the whole surface. Reading it found two faults that every green lane had been hiding, which
+is §19.3's caution about `cargo check` one level further down.
+
+**`web-time` brought `wasm-bindgen` in.** It reaches `performance` through `js-sys`, and `js-sys`
+*is* `wasm-bindgen`: the module carried 1,380 `__wbindgen_describe_*` exports. §19.2 rules that out
+in as many words, so WS-0's clock was the wrong answer and this is the correction. Nothing replaces
+it on wasm. The only clock that changes what is drawn is the fade clock, and the ABI already has
+the host supply that through `tessella_advance` -- a producer reading its own would disagree with
+the compositor driving it. What is left is the cold-start trace, a diagnostic no behaviour reads,
+which reports zero there; a browser wanting those numbers has `performance.now` and a tick to
+record it around, which measures what the consumer waited for rather than what the producer thinks
+it spent.
+
+**`ureq` was linked in.** It is `std::net`, it compiles for wasm32, and it cannot connect -- a
+megabyte behind `tessella_create`, an entry point that could only ever fail there. The dependency
+is target-gated now and `tessella_create` is `cfg`'d away with it, so a browser gets a link error
+rather than a map that never fetches. Hosted is the only kind of map that target has.
+
+Together: 1,380 stray exports down to two (`__data_end` and `__heap_base`), no `ureq` in the graph,
+and the code section 18% smaller. The remaining bulk of the file is the name section, which a
+consumer strips.
+
+Both are now gates rather than observations. `tools/wasm-abi` reads the built module's export
+section and checks every required name is there and no forbidden one is, and a second step greps
+the wasm dependency graph for `ureq`. The tool caught a bug in itself on its first run -- matching
+`tessella_create` loosely also matches `tessella_create_hosted` -- which is recorded in it.
+
+**What is left before a browser draws** is the consumer.
 
 ### WS-2, and what native got out of it
 
@@ -8260,8 +8287,9 @@ tile bytes are drain-gated, glyphs and style resolution still fetch directly on 
 pitched cover refills in more rounds.
 
 WS-0 is done: the target is in `rust-toolchain.toml` and the cross matrix, the `no_std` step sits
-beside it, `store_path` is behind a default-on `fs` feature, and `tessella-orchestrate` takes its
-clock from `web-time` -- `std::time` off wasm, `performance.now` on it.
+beside it, `store_path` is behind a default-on `fs` feature, and `tessella-orchestrate` has a clock
+that does not panic on wasm32. That last was `web-time` when WS-0 landed, and the artifact showed
+it was the wrong answer -- see below.
 
 ### 19.4 How it is tested, and why the oracle still applies
 

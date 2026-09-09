@@ -45,13 +45,13 @@
 //! deliberate: a producer that reports a number including the consumer's compositor cannot say
 //! whether a regression is its own.
 
+use crate::clock::Instant;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
 use core::time::Duration;
 use std::sync::Mutex;
-use web_time::Instant;
 
 use tessella_source::GeoJsonFeature;
 use tessella_source::mvt;

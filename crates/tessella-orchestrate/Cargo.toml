@@ -14,10 +14,6 @@ publish = false
 thiserror.workspace = true
 crossbeam.workspace = true
 log.workspace = true
-# A clock that exists on wasm32. `Instant::now` compiles for that target and panics when it runs,
-# which is the shape of every blocker here: nothing a `cargo check` lane can catch. Off wasm this
-# crate is a re-export of `std::time`, so it costs a native build nothing at all.
-web-time = "1"
 tessella-capture-abi.workspace = true
 tessella-glyph.workspace = true
 tessella-layout.workspace = true

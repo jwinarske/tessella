@@ -41,7 +41,6 @@
 //! rather than an idle one.
 
 use alloc::boxed::Box;
-use alloc::format;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
@@ -102,6 +101,10 @@ struct Queues {
 
 impl Queues {
     /// The highest-priority job available, if any.
+    ///
+    /// For a worker thread, and so only where there are any: a browser's pool has no threads and
+    /// takes its work through [`Pool::drain`] instead.
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     fn take(&mut self) -> Option<Task> {
         self.take_above(Priority::Prefetch)
     }
@@ -131,6 +134,9 @@ struct Inner {
 
 impl Inner {
     /// Runs jobs until the pool stops.
+    ///
+    /// A worker thread's whole life, and so absent where there are no threads to live it.
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     fn work(&self) {
         loop {
             let task = {
@@ -241,7 +247,7 @@ fn spawn(inner: &Arc<Inner>, workers: Workers) -> Vec<JoinHandle<()>> {
                 // Named so a profile or a core-affinity policy has something to match on.
                 // §5.4 wants these on the little cores; naming them is the part that does
                 // not need the RK3566 lane to land first.
-                .name(format!("tessella-decode-{index}"))
+                .name(alloc::format!("tessella-decode-{index}"))
                 .spawn(move || inner.work())
                 .expect("a worker thread")
         })
