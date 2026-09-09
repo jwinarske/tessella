@@ -162,7 +162,7 @@ mod over_http {
     use tessella_storage::pmtiles::{Archive, HttpRange};
 
     /// Serves one file, honouring `Range`. Answers `port` and runs until the test ends.
-    fn serve(bytes: Vec<u8>, honour_ranges: bool) -> u16 {
+    pub(crate) fn serve(bytes: Vec<u8>, honour_ranges: bool) -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").expect("binds");
         let port = listener.local_addr().expect("has an address").port();
         std::thread::spawn(move || {
@@ -240,5 +240,61 @@ mod over_http {
         let source = HttpFileSource::new(std::time::Duration::from_secs(30));
         let reader = HttpRange::new(&source, format!("http://127.0.0.1:{port}/x.pmtiles"));
         assert!(Archive::open(reader).is_err(), "a 200 was read as a range");
+    }
+}
+
+/// A `pmtiles://` url naming an origin rather than a path.
+///
+/// The scheme has always accepted `pmtiles://https://...` in principle and refused it in
+/// practice -- "a remote archive needs range requests, which are not built yet". They are now,
+/// and this is the whole point of them: a style names an archive on an origin and the archive is
+/// never downloaded.
+mod through_the_source {
+    use std::sync::Arc;
+
+    use tessella_storage::http::HttpFileSource;
+    use tessella_storage::pmtiles::source::PmtilesFileSource;
+    use tessella_storage::source::FileSource;
+
+    #[test]
+    fn a_style_can_name_an_archive_on_an_origin() {
+        let Some(bytes) = super::archive_bytes() else {
+            eprintln!("no archive on this machine; skipping");
+            return;
+        };
+        let port = super::over_http::serve(bytes, true);
+        let source = PmtilesFileSource::with_ranges(Arc::new(HttpFileSource::new(
+            std::time::Duration::from_secs(30),
+        )));
+
+        let url = format!("pmtiles://http://127.0.0.1:{port}/berlin_z15.pmtiles/14/8802/5373.mvt");
+        let response = source.fetch(&url).expect("the fetch succeeds");
+        assert_eq!(response.status, 200, "the tile was not served");
+        assert!(!response.body.is_empty(), "an empty tile came back");
+
+        // And the manifest, which is the other half a style asks for.
+        let manifest = format!("pmtiles://http://127.0.0.1:{port}/berlin_z15.pmtiles");
+        let response = source
+            .fetch(&manifest)
+            .expect("the manifest fetch succeeds");
+        assert_eq!(response.status, 200);
+        let doc: serde_json::Value =
+            serde_json::from_slice(&response.body).expect("the manifest is json");
+        assert!(doc.get("tiles").is_some(), "no tile template: {doc}");
+    }
+
+    #[test]
+    fn a_remote_archive_without_a_transport_says_which_it_is_missing() {
+        let source = PmtilesFileSource::new();
+        let error = source
+            .fetch("pmtiles://https://example.invalid/planet.pmtiles/1/0/0.mvt")
+            .expect_err("a remote archive with no transport should refuse");
+        let said = format!("{error}");
+        // The failure a caller can act on is "this source has no range transport", not "no such
+        // file `https://example.invalid/...`", which is what opening the url as a path would say.
+        assert!(
+            said.contains("with_ranges"),
+            "unhelpful about what is missing: {said}"
+        );
     }
 }

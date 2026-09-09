@@ -8061,8 +8061,19 @@ asked for is the failure the call exists to avoid. And a `200` is refused rather
 arrives is the *head* of the archive, not the bytes at the offset, so slicing it would serve the
 header as though it were a directory, which parses as something and draws as nothing.
 
-What is left of WS-4: `PmtilesFileSource` is `Archive<File>` throughout, so a style still cannot
-name a remote archive; and `OpfsCache`.
+A style can name one now. `pmtiles://https://origin/planet.pmtiles/14/8802/5373.mvt` parses as it
+always could -- the scheme has accepted that shape since it was written and refused it in practice
+-- and the refusal moved rather than disappearing: a source built without a range transport says
+so, naming the constructor that supplies one, because opening `https://...` as a *file* fails with
+something that reads like a missing file rather than a missing capability.
+
+The archive table holds one boxed reader rather than a generic parameter or an enum, because the
+choice is per url at run time: a style may name a file and an origin in the same document. That
+costs a virtual call per range, of which a tile needs three.
+
+What is left of WS-4: `OpfsCache`. And the FFI still builds an `HttpFileSource` alone, so nothing
+routes `pmtiles://` yet -- which is the last step between this and the quad reading a planet off an
+origin instead of a disk.
 
 The first gate was written down as `cargo check --workspace --target wasm32-unknown-unknown`
 asserting "the `no_std` discipline holds on a target with no threads, no clock and no filesystem".

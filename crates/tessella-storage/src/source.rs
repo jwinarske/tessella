@@ -203,6 +203,13 @@ impl<S: RangeFetch + ?Sized> RangeFetch for &S {
     }
 }
 
+/// And a shared one, which is what a source holding a transport for several archives has.
+impl<S: RangeFetch + ?Sized> RangeFetch for Arc<S> {
+    fn fetch_range(&self, url: &str, offset: u64, length: usize) -> Result<Response, FetchError> {
+        (**self).fetch_range(url, offset, length)
+    }
+}
+
 /// Wraps a source so concurrent requests for one URL become one request.
 ///
 /// # Not a cache, and what that costs
