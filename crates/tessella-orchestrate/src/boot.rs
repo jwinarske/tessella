@@ -839,6 +839,122 @@ pub fn resolve_sources<S: FileSource + 'static>(
     priority: Priority,
     started: Instant,
 ) -> Result<Sources, BootError> {
+    let plan = plan_resolution(style_text, started)?;
+
+    // Fetched together rather than one after another. A source described by a TileJSON URL costs
+    // a round trip to find out what it offers, and every one of those sat on the critical path in
+    // front of the first tile request — four sources on a 40 ms link was 160 ms before anything
+    // was asked for. They do not depend on each other, so §12.5's "issue the moment sources
+    // parse" starts here.
+    let answers: Vec<Mutex<Option<Answer>>> = plan.asks.iter().map(|_| Mutex::new(None)).collect();
+    let answers = Arc::new(answers);
+    let batch = pool.batch(priority);
+    for (index, ask) in plan.asks.iter().enumerate() {
+        let url = ask.url().to_string();
+        let files = Arc::clone(files);
+        let answers = Arc::clone(&answers);
+        batch.submit(move || {
+            let outcome = files
+                .fetch(&url)
+                .map_err(|error| error.to_string())
+                .map(|response| (*response).clone());
+            *answers[index]
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(outcome);
+        });
+    }
+    if let Err(panicked) = batch.wait() {
+        return Err(BootError::Panicked {
+            jobs: panicked.jobs,
+        });
+    }
+
+    // After the wait, not before it: taking a slot while the job that fills it is still running
+    // answers `None` for a response that arrives a microsecond later, and answers it *sometimes*,
+    // which is worse.
+    let answers: Vec<Option<Answer>> = answers
+        .iter()
+        .map(|slot| {
+            slot.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take()
+        })
+        .collect();
+    assemble(plan, &answers, started)
+}
+
+/// What one fetch produced, or why it did not.
+///
+/// A `String` rather than the transport's own error because the two callers have different ones:
+/// a blocking fetch fails with [`FetchError`](tessella_storage::source::FetchError) and a
+/// deferred one with whatever its transport reports, and neither difference survives into what
+/// the style did.
+pub(crate) type Answer = Result<Response, String>;
+
+/// One thing resolution has to fetch, and what its answer is for.
+pub(crate) enum Ask {
+    /// A TileJSON manifest for a vector or raster source.
+    Tiles {
+        name: String,
+        url: String,
+        source: tessella_style::TileSource,
+        raster: bool,
+    },
+    /// A GeoJSON document named by URL rather than written inline.
+    Geojson {
+        name: String,
+        url: String,
+        source: tessella_style::GeojsonSource,
+    },
+    /// Half of the sprite: its index, then its sheet. Both are needed and neither depends on the
+    /// other, which is why they are two asks rather than one job that does both.
+    SpriteIndex {
+        url: String,
+    },
+    SpriteImage {
+        url: String,
+    },
+}
+
+impl Ask {
+    fn url(&self) -> &str {
+        match self {
+            Self::Tiles { url, .. }
+            | Self::Geojson { url, .. }
+            | Self::SpriteIndex { url }
+            | Self::SpriteImage { url } => url,
+        }
+    }
+}
+
+/// A style read as far as it can be without asking anyone anything.
+pub(crate) struct ResolvePlan {
+    style: Style,
+    rejected_layers: Vec<tessella_style::RejectedLayer>,
+    style_parsed: Duration,
+    /// Sources that needed no fetch at all: templates listed inline, documents written inline.
+    ready: Vec<(String, Resolved)>,
+    /// What has to be fetched, in the order [`Answer`]s are expected in.
+    pub(crate) asks: Vec<Ask>,
+    /// The sprite's base URL, if the style names one and this build can decode a sheet.
+    sprite_base: Option<String>,
+}
+
+/// Reads a style as far as the network allows, and says what the network is needed for.
+///
+/// [`resolve_sources`] without the fetching. The whole point of splitting here is that the
+/// decision "this source needs a manifest and that one does not" is arithmetic over the document,
+/// and a caller that cannot block has to make it a round trip before it can act on it.
+///
+/// # Errors
+///
+/// [`BootError::Style`] when the document does not parse, and [`BootError::Source`] for a source
+/// that names neither templates nor a URL -- which is a fault in the style rather than in any
+/// answer, so it is found here.
+pub(crate) fn plan_resolution(
+    style_text: &str,
+    started: Instant,
+) -> Result<ResolvePlan, BootError> {
     let mut style =
         Style::parse(style_text).map_err(|error| BootError::Style(error.to_string()))?;
     // As mbgl's parser does, and before anything reads a layer: a document that names one thing
@@ -857,44 +973,28 @@ pub fn resolve_sources<S: FileSource + 'static>(
     wanted.sort_unstable();
     wanted.dedup();
 
-    // Resolved together rather than one after another. A source described by a TileJSON URL
-    // costs a round trip to find out what it offers, and every one of those sat on the critical
-    // path in front of the first tile request — four sources on a 40 ms link was 160 ms before
-    // anything was asked for. They do not depend on each other, so §12.5's "issue the moment
-    // sources parse" starts here.
-    let resolved: Arc<Mutex<Vec<(String, Resolved)>>> = Arc::new(Mutex::new(Vec::new()));
-    let failure: Arc<Mutex<Option<BootError>>> = Arc::new(Mutex::new(None));
-    let batch = pool.batch(priority);
+    let mut ready = Vec::new();
+    let mut asks = Vec::new();
 
     // The sprite goes in beside the manifests, not after them. §12.5 asks for the speculative
-    // fetches to be "issued the moment sources parse", and a sprite is the one that can be:
-    // it is addressed by the style alone, so nothing it needs is in a manifest and waiting for
-    // one would put a round trip on the critical path for nothing. Tiles cannot be issued that
-    // early — the manifest carries their templates — which is the asymmetry that makes this
-    // worth doing rather than an optimisation of the same shape everywhere.
+    // fetches to be "issued the moment sources parse", and a sprite is the one that can be: it is
+    // addressed by the style alone, so nothing it needs is in a manifest and waiting for one
+    // would put a round trip on the critical path for nothing. Tiles cannot be issued that early
+    // — the manifest carries their templates — which is the asymmetry that makes this worth doing
+    // rather than an optimisation of the same shape everywhere.
     #[cfg(feature = "image")]
-    let sprites: Arc<Mutex<Option<(tessella_glyph::sprite::Sprites, Duration)>>> =
-        Arc::new(Mutex::new(None));
-    #[cfg(feature = "image")]
-    if let Some(base) = style.sprite.clone() {
-        let files = Arc::clone(files);
-        let sprites = Arc::clone(&sprites);
-        batch.submit(move || {
-            // One device pixel per logical pixel. A caller drawing on a retina panel wants the
-            // `@2x` sheet, which is a view property this call does not carry — recorded rather
-            // than guessed, since guessing two would fetch four times the bytes on the majority
-            // of panels that are not.
-            let mut sheet = tessella_glyph::sprite::Sprites::new(base, 1.0);
-            // A sprite that does not answer costs the icons and not the map. Every other layer
-            // draws, and `Boot::sprites` is `None` — which is the same answer a style with no
-            // sprite gives, and the trace is what tells the two apart.
-            if sheet.fetch(files.inner()).is_ok() {
-                *sprites
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                    Some((sheet, started.elapsed()));
-            }
-        });
+    let sprite_base = style.sprite.clone();
+    // Without a decoder there is no sheet to fetch, so there is nothing to ask for either.
+    #[cfg(not(feature = "image"))]
+    let sprite_base: Option<String> = None;
+    if let Some(base) = &sprite_base {
+        // One device pixel per logical pixel. A caller drawing on a retina panel wants the `@2x`
+        // sheet, which is a view property this call does not carry — recorded rather than
+        // guessed, since guessing two would fetch four times the bytes on the majority of panels
+        // that are not.
+        let (index, image) = tessella_glyph::sprite::urls(base, 1.0);
+        asks.push(Ask::SpriteIndex { url: index });
+        asks.push(Ask::SpriteImage { url: image });
     }
 
     for name in wanted {
@@ -902,78 +1002,198 @@ pub fn resolve_sources<S: FileSource + 'static>(
             continue;
         };
         let name = name.to_string();
-        let files = Arc::clone(files);
-        let resolved = Arc::clone(&resolved);
-        let failure = Arc::clone(&failure);
-        batch.submit(move || {
-            let outcome = match &source {
-                Source::Vector(source) => tileset::resolve(source, files.inner())
-                    .map(|set| Resolved::Tiles(set, SourceKind::Vector))
-                    .map_err(|error| error.to_string()),
-                // The same manifest, the same templates: TileJSON does not distinguish, and a
-                // raster source is addressed exactly as a vector one is. What differs is the
-                // zoom its tiles are asked for at and what arrives in them.
-                Source::Raster(source) => tileset::resolve(source, files.inner())
-                    .map(|set| {
-                        let kind = SourceKind::Raster {
-                            tile_size: set.tile_size,
-                        };
-                        Resolved::Tiles(set, kind)
-                    })
-                    .map_err(|error| error.to_string()),
-                // One fetch for the whole document, or none at all if it is inline. The tiling
-                // is this side's, so there is nothing per-tile to ask for afterwards.
-                Source::Geojson(source) => {
-                    let clustering = clustering_for(source);
-                    tessella_storage::geojson::resolve(source, files.inner())
-                        .map_err(|error| error.to_string())
-                        .and_then(|document| {
-                            tessella_source::geojson::read(&document)
-                                .map_err(|error| error.to_string())
-                        })
-                        .map(|features| match clustering {
-                            Some(options) => Resolved::Clustered(alloc::sync::Arc::new(
-                                tessella_source::cluster::Clustered::new(features, options),
-                            )),
-                            None => Resolved::Document(alloc::sync::Arc::new(features)),
-                        })
+        match &source {
+            Source::Vector(tiles) | Source::Raster(tiles) => {
+                let raster = matches!(source, Source::Raster(_));
+                match tileset::plan(tiles) {
+                    Ok(tileset::Planned::Ready(set)) => {
+                        let kind = tile_kind(raster, &set);
+                        ready.push((name, Resolved::Tiles(set, kind)));
+                    }
+                    Ok(tileset::Planned::Manifest(url)) => asks.push(Ask::Tiles {
+                        name,
+                        url,
+                        source: tiles.clone(),
+                        raster,
+                    }),
+                    Err(error) => {
+                        return Err(BootError::Source {
+                            name,
+                            message: error.to_string(),
+                        });
+                    }
                 }
-                _ => return,
-            };
-            match outcome {
-                Ok(outcome) => resolved
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push((name, outcome)),
-                Err(message) => fail(&failure, BootError::Source { name, message }),
             }
-        });
-    }
-    if let Err(panicked) = batch.wait() {
-        return Err(BootError::Panicked {
-            jobs: panicked.jobs,
-        });
+            Source::Geojson(document) => match tessella_storage::geojson::origin(document) {
+                Ok(tessella_storage::geojson::Origin::Inline) => {
+                    let resolved = read_geojson(document, &document.data).map_err(|message| {
+                        BootError::Source {
+                            name: name.clone(),
+                            message,
+                        }
+                    })?;
+                    ready.push((name, resolved));
+                }
+                Ok(tessella_storage::geojson::Origin::Url(url)) => asks.push(Ask::Geojson {
+                    name,
+                    url: url.to_string(),
+                    source: document.clone(),
+                }),
+                Err(error) => {
+                    return Err(BootError::Source {
+                        name,
+                        message: error.to_string(),
+                    });
+                }
+            },
+            _ => {}
+        }
     }
 
-    // After the wait, not before it. The sprite job is in this batch, so taking its result
-    // first reads the slot while the job that fills it is still running — which answers `None`
-    // for a sheet that arrives a microsecond later, and answers it *sometimes*, which is worse.
-    #[cfg(feature = "image")]
-    let sprite_outcome = sprites
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .take();
-    // Without a decoder there is no sheet to have fetched, and the trace says so by saying
-    // nothing — the same answer a style with no sprite gives.
-    #[cfg(not(feature = "image"))]
-    let sprite_outcome: Option<((), Duration)> = None;
-    if let Some(error) = failure
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .take()
-    {
-        return Err(error);
+    Ok(ResolvePlan {
+        style,
+        rejected_layers,
+        style_parsed,
+        ready,
+        asks,
+        sprite_base,
+    })
+}
+
+/// The kind a resolved tileset is, which raster carries its tile size in.
+fn tile_kind(raster: bool, set: &TileSet) -> SourceKind {
+    if raster {
+        // The same manifest, the same templates: TileJSON does not distinguish, and a raster
+        // source is addressed exactly as a vector one is. What differs is the zoom its tiles are
+        // asked for at and what arrives in them.
+        SourceKind::Raster {
+            tile_size: set.tile_size,
+        }
+    } else {
+        SourceKind::Vector
     }
+}
+
+/// Reads a GeoJSON document into features, clustering it if the source asked.
+fn read_geojson(
+    source: &tessella_style::GeojsonSource,
+    document: &tessella_style::Value,
+) -> Result<Resolved, String> {
+    let features = tessella_source::geojson::read(document).map_err(|error| error.to_string())?;
+    Ok(match clustering_for(source) {
+        Some(options) => Resolved::Clustered(alloc::sync::Arc::new(
+            tessella_source::cluster::Clustered::new(features, options),
+        )),
+        None => Resolved::Document(alloc::sync::Arc::new(features)),
+    })
+}
+
+/// Builds the resolved sources from a plan and the answers its asks produced.
+///
+/// [`resolve_sources`] without the fetching. `answers` is in [`ResolvePlan::asks`] order, and a
+/// [`None`] is a request that was never answered -- which a blocking caller cannot produce and a
+/// deferred one can, if its transport was torn down mid-flight.
+///
+/// # Errors
+///
+/// [`BootError::Source`] for the first source whose answer did not resolve. A sprite that does
+/// not answer is not among them: it costs the icons and not the map, which is the same outcome a
+/// style with no sprite has.
+pub(crate) fn assemble(
+    plan: ResolvePlan,
+    answers: &[Option<Answer>],
+    started: Instant,
+) -> Result<Sources, BootError> {
+    let ResolvePlan {
+        style,
+        rejected_layers,
+        style_parsed,
+        ready,
+        asks,
+        sprite_base,
+    } = plan;
+
+    let mut resolved = ready;
+    let mut sprite_index: Option<Vec<u8>> = None;
+    let mut sprite_image: Option<Vec<u8>> = None;
+
+    for (ask, answer) in asks
+        .iter()
+        .zip(answers.iter().chain(core::iter::repeat(&None)))
+    {
+        let response = match answer {
+            Some(Ok(response)) => response,
+            // A sprite half that did not arrive costs the icons and not the map; a source that
+            // did not arrive is the map.
+            Some(Err(message)) => match ask {
+                Ask::SpriteIndex { .. } | Ask::SpriteImage { .. } => continue,
+                Ask::Tiles { name, .. } | Ask::Geojson { name, .. } => {
+                    return Err(BootError::Source {
+                        name: name.clone(),
+                        message: message.clone(),
+                    });
+                }
+            },
+            None => match ask {
+                Ask::SpriteIndex { .. } | Ask::SpriteImage { .. } => continue,
+                Ask::Tiles { name, .. } | Ask::Geojson { name, .. } => {
+                    return Err(BootError::Source {
+                        name: name.clone(),
+                        message: String::from("the request was never answered"),
+                    });
+                }
+            },
+        };
+
+        match ask {
+            Ask::Tiles {
+                name,
+                url,
+                source,
+                raster,
+            } => match tileset::accept(source, url, response) {
+                Ok(set) => {
+                    let kind = tile_kind(*raster, &set);
+                    resolved.push((name.clone(), Resolved::Tiles(set, kind)));
+                }
+                Err(error) => {
+                    return Err(BootError::Source {
+                        name: name.clone(),
+                        message: error.to_string(),
+                    });
+                }
+            },
+            Ask::Geojson { name, url, source } => {
+                let outcome = tessella_storage::geojson::accept(url, response)
+                    .map_err(|error| error.to_string())
+                    .and_then(|document| read_geojson(source, &document));
+                match outcome {
+                    Ok(resolution) => resolved.push((name.clone(), resolution)),
+                    Err(message) => {
+                        return Err(BootError::Source {
+                            name: name.clone(),
+                            message,
+                        });
+                    }
+                }
+            }
+            Ask::SpriteIndex { .. } => sprite_index = Some(response.body.clone()),
+            Ask::SpriteImage { .. } => sprite_image = Some(response.body.clone()),
+        }
+    }
+
+    #[cfg(feature = "image")]
+    let sprite_outcome = build_sprites(
+        sprite_base.as_deref(),
+        &sprite_index,
+        &sprite_image,
+        started,
+    );
+    #[cfg(not(feature = "image"))]
+    let sprite_outcome: Option<((), Duration)> = {
+        let _ = (&sprite_base, &sprite_index, &sprite_image);
+        None
+    };
 
     let mut sets: Vec<(String, TileSet, SourceKind)> = Vec::new();
     let mut documents: Vec<(String, alloc::sync::Arc<Vec<GeoJsonFeature>>)> = Vec::new();
@@ -981,20 +1201,15 @@ pub fn resolve_sources<S: FileSource + 'static>(
         String,
         alloc::sync::Arc<tessella_source::cluster::Clustered>,
     )> = Vec::new();
-    {
-        let mut held = resolved
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Sorted, because the order jobs finished in is whatever the scheduler decided and the
-        // cover below is built from these — a trace that reordered its tiles run to run would
-        // make two runs incomparable.
-        held.sort_by(|a, b| a.0.cmp(&b.0));
-        for (name, outcome) in held.drain(..) {
-            match outcome {
-                Resolved::Tiles(set, kind) => sets.push((name, set, kind)),
-                Resolved::Document(features) => documents.push((name, features)),
-                Resolved::Clustered(index) => clustered.push((name, index)),
-            }
+    // Sorted, because the order answers arrive in is whatever the transport decided and the cover
+    // is built from these — a trace that reordered its tiles run to run would make two runs
+    // incomparable.
+    resolved.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, outcome) in resolved {
+        match outcome {
+            Resolved::Tiles(set, kind) => sets.push((name, set, kind)),
+            Resolved::Document(features) => documents.push((name, features)),
+            Resolved::Clustered(index) => clustered.push((name, index)),
         }
     }
 
@@ -1010,6 +1225,24 @@ pub fn resolve_sources<S: FileSource + 'static>(
         style_parsed,
         sources_resolved,
     })
+}
+
+/// Cuts the sheet up, if both halves arrived.
+///
+/// A sprite that does not answer costs the icons and not the map. Every other layer draws and
+/// `sprite_outcome` is `None` — which is the same answer a style with no sprite gives, and the
+/// trace is what tells the two apart.
+#[cfg(feature = "image")]
+fn build_sprites(
+    base: Option<&str>,
+    index: &Option<Vec<u8>>,
+    image: &Option<Vec<u8>>,
+    started: Instant,
+) -> Option<(tessella_glyph::sprite::Sprites, Duration)> {
+    let (base, index, image) = (base?, index.as_ref()?, image.as_ref()?);
+    let mut sheet = tessella_glyph::sprite::Sprites::new(base.to_string(), 1.0);
+    sheet.load(index, image).ok()?;
+    Some((sheet, started.elapsed()))
 }
 
 /// Runs a cold start and reports how long each stage took.

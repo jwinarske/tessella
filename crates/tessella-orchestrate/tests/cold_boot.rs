@@ -876,3 +876,104 @@ fn where_a_cold_start_goes() {
         let _ = label;
     }
 }
+
+/// A source that names neither templates nor a URL fails before anything is fetched.
+///
+/// The property the plan/assemble split adds and the batch could not have: "this source is
+/// unaddressable" is arithmetic over the document, so it is known before the first request rather
+/// than by a job that ran and found out. A style with one broken source used to cost a round trip
+/// for every *other* source before reporting it.
+#[test]
+fn an_unaddressable_source_is_refused_without_a_fetch() {
+    /// Counts, and answers nothing useful -- it should never be asked.
+    struct Counting(Arc<AtomicUsize>);
+
+    impl FileSource for Counting {
+        fn fetch(&self, url: &str) -> Result<Response, FetchError> {
+            self.0.fetch_add(1, Ordering::AcqRel);
+            Err(FetchError::Transport {
+                url: url.to_string(),
+                message: "nothing should have been asked".to_string(),
+            })
+        }
+    }
+
+    let fetches = Arc::new(AtomicUsize::new(0));
+    let files = Arc::new(Coalescing::new(Counting(Arc::clone(&fetches))));
+    // `broken` has neither `tiles` nor `url`; `fine` would need a manifest, and must not be asked
+    // for one once the style is known to be unusable.
+    let style = r#"{"version": 8,
+        "sources": {
+          "broken": {"type": "vector"},
+          "fine": {"type": "vector", "url": "http://127.0.0.1:1/tiles.json"}},
+        "layers": [
+          {"id": "a", "type": "fill", "source": "broken", "source-layer": "w"},
+          {"id": "b", "type": "fill", "source": "fine", "source-layer": "w"}]}"#;
+
+    let outcome = tessella_orchestrate::boot::resolve_sources(
+        style,
+        &files,
+        Pool::shared(),
+        Priority::Foreground,
+        std::time::Instant::now(),
+    );
+
+    match outcome {
+        Err(BootError::Source { name, .. }) => assert_eq!(name, "broken"),
+        Err(other) => panic!("expected the broken source to be named, got {other:?}"),
+        Ok(_) => panic!("a style with an unaddressable source resolved"),
+    }
+    assert_eq!(
+        fetches.load(Ordering::Acquire),
+        0,
+        "a style that could not resolve still went to the network"
+    );
+}
+
+/// Which source is blamed does not depend on which fetch finished first.
+///
+/// The batch reported whichever job lost the race to a mutex, so a style with two dead sources
+/// named one of them and not reproducibly. Answers are read in ask order now, which is the
+/// document's order, so two runs blame the same source.
+#[test]
+fn two_failing_sources_blame_the_same_one_every_time() {
+    struct Dead;
+
+    impl FileSource for Dead {
+        fn fetch(&self, url: &str) -> Result<Response, FetchError> {
+            Err(FetchError::Transport {
+                url: url.to_string(),
+                message: "the link is down".to_string(),
+            })
+        }
+    }
+
+    let style = r#"{"version": 8,
+        "sources": {
+          "aaa": {"type": "vector", "url": "http://127.0.0.1:1/a.json"},
+          "zzz": {"type": "vector", "url": "http://127.0.0.1:1/z.json"}},
+        "layers": [
+          {"id": "a", "type": "fill", "source": "aaa", "source-layer": "w"},
+          {"id": "z", "type": "fill", "source": "zzz", "source-layer": "w"}]}"#;
+
+    let mut blamed = Vec::new();
+    for _ in 0..8 {
+        let files = Arc::new(Coalescing::new(Dead));
+        match tessella_orchestrate::boot::resolve_sources(
+            style,
+            &files,
+            Pool::shared(),
+            Priority::Foreground,
+            std::time::Instant::now(),
+        ) {
+            Err(BootError::Source { name, .. }) => blamed.push(name),
+            Err(other) => panic!("expected a source failure, got {other:?}"),
+            Ok(_) => panic!("a style over a dead origin resolved"),
+        }
+    }
+
+    assert!(
+        blamed.iter().all(|name| name == &blamed[0]),
+        "two runs blamed different sources: {blamed:?}"
+    );
+}

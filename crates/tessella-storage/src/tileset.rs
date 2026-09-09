@@ -19,7 +19,7 @@
 //! limit" would fetch tiles at zoom 30 from a source that stops at 14, and every one would be a
 //! 404 that looks like a server fault.
 
-use crate::source::{FetchError, FileSource};
+use crate::source::{FetchError, FileSource, Response};
 use crate::url::{Scheme, ZoomRange};
 
 /// Everything needed to address a source's tiles.
@@ -112,34 +112,75 @@ pub fn resolve(
     source: &tessella_style::TileSource,
     files: &dyn FileSource,
 ) -> Result<TileSet, ResolveError> {
+    match plan(source)? {
+        Planned::Ready(set) => Ok(set),
+        Planned::Manifest(url) => {
+            let response = files.fetch(&url)?;
+            accept(source, &url, &response)
+        }
+    }
+}
+
+/// What resolving a source will take.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Planned {
+    /// Nothing to ask anyone: the style listed its own templates.
+    Ready(TileSet),
+    /// A manifest to fetch, at this URL.
+    Manifest(String),
+}
+
+/// Decides whether a source needs a manifest, without fetching one.
+///
+/// [`resolve`] without the fetching, for a caller that does its own. Splitting here rather than
+/// inside the fetch is what keeps the "a style that lists its tiles costs no round trip" rule in
+/// one place: a deferred caller has to know that *before* it issues anything.
+///
+/// # Errors
+///
+/// [`ResolveError::Unaddressable`] for a source that names neither templates nor a URL.
+pub fn plan(source: &tessella_style::TileSource) -> Result<Planned, ResolveError> {
     let (zooms, scheme, tile_size) = describe(source);
 
     if let Some(templates) = &source.tiles
         && !templates.is_empty()
     {
-        return Ok(TileSet {
+        return Ok(Planned::Ready(TileSet {
             templates: templates.clone(),
             zooms,
             scheme,
             tile_size,
-        });
+        }));
     }
 
-    let Some(url) = &source.url else {
-        return Err(ResolveError::Unaddressable);
-    };
+    match &source.url {
+        Some(url) => Ok(Planned::Manifest(url.clone())),
+        None => Err(ResolveError::Unaddressable),
+    }
+}
 
-    let response = files.fetch(url)?;
+/// Reads a manifest the caller already has.
+///
+/// # Errors
+///
+/// [`ResolveError`] when the response is not `200`, does not parse, or lists no tiles.
+pub fn accept(
+    source: &tessella_style::TileSource,
+    url: &str,
+    response: &Response,
+) -> Result<TileSet, ResolveError> {
+    let (zooms, scheme, tile_size) = describe(source);
+
     if !response.is_ok() {
         return Err(ResolveError::Status {
-            url: url.clone(),
+            url: url.to_string(),
             status: response.status,
         });
     }
 
     let manifest: tessella_style::TileSource =
         serde_json::from_slice(&response.body).map_err(|error| ResolveError::Malformed {
-            url: url.clone(),
+            url: url.to_string(),
             message: error.to_string(),
         })?;
 
@@ -148,7 +189,7 @@ pub fn resolve(
         .tiles
         .filter(|tiles| !tiles.is_empty())
         .ok_or_else(|| ResolveError::Malformed {
-            url: url.clone(),
+            url: url.to_string(),
             message: "the manifest lists no tiles".into(),
         })?;
 

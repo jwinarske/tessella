@@ -8124,9 +8124,20 @@ codepoint. Beside it, the ffi `labels` test already distinguished glyphs arrivin
 arriving by region size -- 3,168 bytes against 224 -- which is exactly the regression this change
 could have caused, and it passes.
 
-Style resolution is what remains, and it is the larger one: `resolve_sources` issues N manifest
-fetches and a sprite as one batch and blocks on `batch.wait()`. Same shape as the glyphs -- a set
-of independent URLs, then a decode -- so the same split applies, over more pieces.
+Style resolution splits the same way, over more pieces. `tileset::resolve` becomes
+`plan` + `accept`, `geojson::resolve` becomes `origin` + `accept`, `Sprites` exposes the two URLs
+it would have fetched, and `resolve_sources` becomes `plan_resolution` + fetch + `assemble` with
+the batch and its parallelism unchanged.
+
+Two things fell out of it that are worth more than the refactor. A source naming neither templates
+nor a URL is now refused before the first request: that it is unaddressable is arithmetic over the
+document, and a style with one broken source used to cost a round trip for every *other* source
+before saying so. And which source gets blamed stopped depending on which fetch lost a race to a
+mutex -- answers are read in ask order, which is the document's order, so two runs blame the same
+one. Both are tests.
+
+What is left is the state machine: `TileSource` holding a plan while its asks are in flight, and
+`drain` assembling when they land. The pieces it needs all exist now.
 
 ### WS-2, and what native got out of it
 

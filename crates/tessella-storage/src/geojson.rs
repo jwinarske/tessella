@@ -27,7 +27,7 @@ use std::borrow::Cow;
 
 use tessella_style::{GeojsonSource, Value};
 
-use crate::source::FileSource;
+use crate::source::{FileSource, Response};
 
 /// Where a GeoJSON source's document comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -126,6 +126,18 @@ pub fn resolve<'a>(
             message: error.to_string(),
         })?;
 
+    accept(url, &response).map(Cow::Owned)
+}
+
+/// Reads a document the caller already has.
+///
+/// [`resolve`] without the fetching. A source whose data is inline never reaches this -- that is
+/// [`origin`]'s answer, and it is the reason a deferred caller asks that first.
+///
+/// # Errors
+///
+/// [`GeoJsonSourceError`] when the response is not `200`, is empty, or does not parse.
+pub fn accept(url: &str, response: &Response) -> Result<Value, GeoJsonSourceError> {
     if !response.is_ok() {
         return Err(GeoJsonSourceError::Status {
             url: url.to_string(),
@@ -138,10 +150,8 @@ pub fn resolve<'a>(
         });
     }
 
-    let document: Value =
-        serde_json::from_slice(&response.body).map_err(|error| GeoJsonSourceError::Malformed {
-            url: url.to_string(),
-            message: error.to_string(),
-        })?;
-    Ok(Cow::Owned(document))
+    serde_json::from_slice(&response.body).map_err(|error| GeoJsonSourceError::Malformed {
+        url: url.to_string(),
+        message: error.to_string(),
+    })
 }
