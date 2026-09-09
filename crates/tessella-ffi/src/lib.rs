@@ -84,7 +84,9 @@ use tessella_storage::deferred::{DeferredFileSource, Ticket};
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 use tessella_storage::http::HttpFileSource;
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-use tessella_storage::source::Coalescing;
+use tessella_storage::pmtiles::source::{self as pmtiles_source, PmtilesFileSource};
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+use tessella_storage::source::{Coalescing, RangeFetch, Router};
 use tessella_style::Style;
 use tessella_tile::camera;
 use tessella_tile::cover::{self, ViewTransform};
@@ -196,7 +198,7 @@ pub enum Transport {
     /// Absent on wasm32, where `ureq` is `std::net` and there are no sockets. Leaving it in would
     /// be a megabyte of dead weight behind an entry point that could only ever fail.
     #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-    Pooled(PoolBacked<Coalesced<HttpFileSource>>),
+    Pooled(PoolBacked<Coalesced<Router>>),
     /// Hosted: the consumer fetches, which is the only thing a browser can do.
     Hosted(HostTransport),
 }
@@ -351,9 +353,7 @@ pub unsafe extern "C" fn tessella_create(
     unsafe {
         create(config, latitude, longitude, zoom, out, || {
             Transport::Pooled(PoolBacked::new(
-                Arc::new(Coalesced(Arc::new(Coalescing::new(HttpFileSource::new(
-                    std::time::Duration::from_secs(30),
-                ))))),
+                Arc::new(Coalesced(Arc::new(Coalescing::new(origins())))),
                 Pool::shared(),
                 Priority::Background,
             ))
@@ -391,6 +391,29 @@ pub unsafe extern "C" fn tessella_create_hosted(
             Transport::Hosted(HostTransport::new())
         })
     }
+}
+
+/// Where a native map's bytes come from, by url.
+///
+/// One HTTP source, shared: the router's fallback fetches whole resources, and the same transport
+/// reads byte ranges out of a `pmtiles://` archive. Two would mean two connection pools to the
+/// same origin.
+///
+/// The router goes *inside* the coalescing wrapper rather than outside, which is the arrangement
+/// `Router` documents and §9.3's flatness counters depend on: a router of coalescers gives each
+/// origin its own in-flight table, and four views over one cover stop costing one fetch.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+fn origins() -> Router {
+    let http = Arc::new(HttpFileSource::new(std::time::Duration::from_secs(30)));
+    Router::new()
+        // An archive read where it lies. Without the range transport this would refuse every
+        // `pmtiles://https://` url naming the constructor it wanted, which is why it is handed
+        // the same source the fallback uses.
+        .route(
+            pmtiles_source::accepts,
+            PmtilesFileSource::with_ranges(Arc::clone(&http) as Arc<dyn RangeFetch>),
+        )
+        .otherwise(http)
 }
 
 /// The body both constructors share, differing only in where the bytes will come from.

@@ -33,7 +33,7 @@ tile-server = { path = "../../tools/tile-server" }
 # ever fail -- and `tessella_create` is `cfg`'d away there for the same reason. A hosted map is
 # the only kind a browser can have, and the caller does the fetching.
 [target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
-tessella-storage = { path = "../tessella-storage", features = ["http"] }
+tessella-storage = { path = "../tessella-storage", features = ["http", "pmtiles"] }
 
 [features]
 # A sprite sheet is a PNG, and decoding one is optional the same way it is in the orchestrator:
