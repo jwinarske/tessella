@@ -8366,6 +8366,40 @@ the mask itself (which now demonstrably clips, and clips something else). The fl
 camera is clean with either clip device alone. That is a long list of things it is not and no
 statement yet of what it is.
 
+### A camera the sweep could not see, and what was hiding behind it
+
+The visual-parity sweep has been four cameras: Berlin at z14 and z16, north-up and pitched, all at
+1024x768. Every parity number on this page -- 24 / 86 / 5 / 103 gross -- is those four. They are a
+good set and they have caught a great deal. What they cannot see is a *wide* viewport at a *low*
+zoom, and there was a defect living there.
+
+A globe is what found it, by accident rather than by design. `cover_globe` asks for two to six times
+the tiles a flat cover does, so a globe draws the periphery a 1024x768 flat camera never reaches --
+and wedges appeared out there. They looked like a bend artifact for most of a day. They are not: the
+*flat* renderer draws the same wedges at the same camera over a wide enough viewport, byte-identical
+on a checkout with no globe work in it at all.
+
+So the sweep gains a fifth camera, `z9 2400x900 p0`, and it **fails at 2866 gross**. That is the
+point of adding it. A guard that reports a real number is worth more than a sweep that cannot see
+the regime, and leaving the number in the open is what stops it being rediscovered a third time.
+
+What the 2866 is, as far as it has been narrowed: tile 9/274/168, screen box x 655..1678 y 498..885,
+concentrated on four rows around y=750. It is a *hole* in the patterned `parks` fill -- the imagery
+beneath shows through where the oracle has grass -- which was established by deleting the layer and
+watching the region get *more* of the underlying color, not less.
+
+**What it is not**, each ruled out by experiment rather than by argument: the hole cap (`MAX_HOLES`
+raised to 100,000, still exactly 2866); the subdivider (identical with it disabled entirely); the
+fill outline (identical with its material removed); the clip mask; the scissor; the world-copy fold;
+and unmasked ancestors.
+
+And one dead end worth recording because it was asserted here before it was checked: `earcutr` was
+not at fault. Those water features are LineStrings closed into a lasso, and a self-overlapping
+ring's shoelace area is not its covered area, so "the triangles cover 66% more than the ring" is not
+evidence of anything. Run on the same ring, mbgl's own `earcut.hpp` returns the same 47 triangles
+and the same 3,887,272 -- to the digit. The missing geometry-type check is deliberate and matches
+`FillBucket::addFeature`, as the comment at that call site already said.
+
 ## 19. wasm32 as a fourth target
 
 Build the producer for `wasm32-unknown-unknown` so a browser page draws the same capture stream a
