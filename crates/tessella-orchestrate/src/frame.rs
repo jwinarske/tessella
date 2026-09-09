@@ -2619,7 +2619,7 @@ fn write_layer_state(
             .copied()
             .filter(|coord| used.contains(&(coord.z, coord.x, coord.y)))
             .collect();
-        let set = stencil::clip_set(view, layer_index, &mine)
+        let set = stencil::clip_set(view, layer_index, &mine, projection)
             .map_err(|error| FrameError::Camera(alloc::format!("{error}")))?;
         stencil::write(producer, view_id, &set)?;
     }

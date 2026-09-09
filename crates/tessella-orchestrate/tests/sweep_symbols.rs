@@ -39,6 +39,7 @@ use tessella_style::{Source, Style};
 use tessella_tile::cover::ViewTransform;
 use tessella_tile::cover::WorldCopies;
 use tessella_tile::renderables::DataTileId;
+use tessella_tile::store::Surface;
 
 const GLYPHS: &[u8] = include_bytes!("../../../tests/glyph-fixtures/TestFont/0-255.pbf");
 
@@ -145,6 +146,7 @@ fn run(zooms: &[f64]) -> (Vec<Vec<Opacities>>, usize) {
                     ..*view
                 },
                 WorldCopies::Repeated,
+                Surface::Plane,
             )
             .expect("covers")
         })
@@ -157,7 +159,9 @@ fn run(zooms: &[f64]) -> (Vec<Vec<Opacities>>, usize) {
     for &zoom in zooms {
         for (which, (view, cover)) in base.iter().zip(&mut covers).enumerate() {
             let at = ViewTransform { zoom, ..*view };
-            cover.update(&at, WorldCopies::Repeated).expect("covers");
+            cover
+                .update(&at, WorldCopies::Repeated, Surface::Plane)
+                .expect("covers");
 
             let mut frame_labels: Vec<FrameLabel> = Vec::new();
             let mut texts: Vec<String> = Vec::new();

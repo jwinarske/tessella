@@ -284,9 +284,14 @@ fn the_stencil_matrix_is_per_view_and_is_not_the_drawable_matrix() {
         wrap: 0,
     };
     let masks = |view: &ViewTransform| {
-        tessella_orchestrate::stencil::clip_set(view, 0, core::slice::from_ref(&coord))
-            .expect("an unrotated view has a matrix")
-            .tiles[0]
+        tessella_orchestrate::stencil::clip_set(
+            view,
+            0,
+            core::slice::from_ref(&coord),
+            ProjectionMode::Mercator,
+        )
+        .expect("an unrotated view has a matrix")
+        .tiles[0]
             .matrix
     };
 

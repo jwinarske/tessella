@@ -44,6 +44,7 @@ use tessella_source::tiling::TilingOptions;
 use tessella_style::{Source, Style};
 use tessella_tile::cover::ViewTransform;
 use tessella_tile::cover::WorldCopies;
+use tessella_tile::store::Surface;
 
 const HERMETIC: &str = include_str!("../../tessella-style/tests/hermetic_style.json");
 
@@ -148,7 +149,8 @@ fn emit_view(
                 .contains(tessella_capture_abi::envelope::DrawFlags::ENABLE_STENCIL)
         });
         if tiled {
-            let set = stencil::clip_set(view, *layer_index, &tiles).expect("clips");
+            let set = stencil::clip_set(view, *layer_index, &tiles, ProjectionMode::Mercator)
+                .expect("clips");
             stencil::write(producer, view_id, &set).expect("the ring takes a clip set");
             emitted += 1;
         }
@@ -217,6 +219,7 @@ fn four_view_sweep_budget() {
                     ..*view
                 },
                 WorldCopies::Repeated,
+                Surface::Plane,
             )
             .expect("covers")
         })
@@ -227,7 +230,11 @@ fn four_view_sweep_budget() {
     for &zoom in &zooms {
         for (view, state) in base.iter().zip(&mut states) {
             state
-                .update(&ViewTransform { zoom, ..*view }, WorldCopies::Repeated)
+                .update(
+                    &ViewTransform { zoom, ..*view },
+                    WorldCopies::Repeated,
+                    Surface::Plane,
+                )
                 .expect("covers");
             for tile in state.tiles().to_vec() {
                 shared.tile(tile.z, tile.x, tile.y);
@@ -247,7 +254,9 @@ fn four_view_sweep_budget() {
         let mut envelopes = 0;
         for (index, (view, state)) in base.iter().zip(&mut states).enumerate() {
             let at = ViewTransform { zoom, ..*view };
-            state.update(&at, WorldCopies::Repeated).expect("covers");
+            state
+                .update(&at, WorldCopies::Repeated, Surface::Plane)
+                .expect("covers");
             envelopes += emit_view(
                 &mut shared,
                 &mut session,

@@ -120,7 +120,8 @@ fn emit_frame() -> Vec<EnvelopeKind> {
                 .contains(tessella_capture_abi::envelope::DrawFlags::ENABLE_STENCIL)
         });
         if tiled {
-            let set = stencil::clip_set(&view, *layer_index, &tiles).expect("clips");
+            let set = stencil::clip_set(&view, *layer_index, &tiles, ProjectionMode::Mercator)
+                .expect("clips");
             stencil::write(producer, view_id, &set).expect("writes");
         }
 
@@ -511,7 +512,7 @@ fn a_settled_frame_goes_quiet() {
         }
     }
     let mut sets = stencil::ClipSets::new();
-    let clip = stencil::clip_set(&view, 1, &tiles).expect("clips");
+    let clip = stencil::clip_set(&view, 1, &tiles, ProjectionMode::Mercator).expect("clips");
 
     draw_order.emit(producer, ViewId(0)).expect("emits");
     sets.emit(producer, ViewId(0), &clip).expect("emits");

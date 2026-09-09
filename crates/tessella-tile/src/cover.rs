@@ -136,6 +136,159 @@ pub fn cover(view: &ViewTransform) -> Result<Vec<TileCoord>, CoverError> {
     cover_with(view, WorldCopies::Repeated)
 }
 
+/// The cover a surface asks for at level `z`.
+///
+/// One place to choose, so the frame path, the background and the extra-zoom walk cannot end up
+/// asking different questions of the same camera -- which is how a globe came to draw the plane's
+/// four tiles and 28% of a wide pane black.
+///
+/// # Errors
+///
+/// [`CoverError`] as the underlying cover reports it.
+pub fn cover_on(
+    view: &ViewTransform,
+    z: u8,
+    copies: WorldCopies,
+    surface: crate::store::Surface,
+) -> Result<Vec<TileCoord>, CoverError> {
+    match surface {
+        crate::store::Surface::Plane => cover_at_with(view, z, copies),
+        // A globe folds by construction rather than by policy: every wrap of a tile bends to the
+        // same patch, so the walk cannot produce a second copy to fold.
+        crate::store::Surface::Sphere => cover_globe(view, z),
+    }
+}
+
+/// The tiles a *globe* shows at level `z`.
+///
+/// # Why a globe cannot use the flat cover
+///
+/// [`cover_at`] takes the viewport's half-width and half-height in tiles and reads off a rectangle.
+/// That is exact for a plane, where the screen *is* a rectangle of the world. A globe shows a
+/// spherical cap through a perspective frustum, and the two disagree -- by more the wider the
+/// viewport is, because the flat rectangle grows linearly with width while the cap the camera can
+/// see does not.
+///
+/// Measured on the quad's own panes, 960x350 at z9: both covers are the same four tiles, and the
+/// globe draws 28% of the frame black against the plane's 0%. At 600x600 the same camera is 2.8%.
+/// The tiles were never missing from the cover -- the cover was answering a different question.
+///
+/// # How this answers it instead
+///
+/// By asking the projection rather than deriving a rectangle from it. Starting at the tile under
+/// the camera -- which is visible by construction, and is the answer for a tile larger than the
+/// screen -- it walks outward and keeps every tile that puts a sample inside the frustum and in
+/// front of the horizon. A tile whose neighbours are all invisible ends the walk in that direction.
+///
+/// Sampling rather than solving: the bend is `sphere_point_from_mercator`, which has no closed-form
+/// inverse worth writing here, and the forward direction is already tested. The margin makes the
+/// answer conservative -- a tile just off screen is kept, which costs a fetch and never leaves a
+/// hole.
+///
+/// # Errors
+///
+/// [`CoverError::TooLarge`] when the walk reaches [`MAX_TILES`], which a globe can only do by
+/// being asked for a level far finer than the camera is at.
+pub fn cover_globe(view: &ViewTransform, z: u8) -> Result<Vec<TileCoord>, CoverError> {
+    use std::collections::VecDeque;
+
+    let z = z.min(MAX_ZOOM);
+    let across = i64::from(1u32 << z);
+    let settled = crate::camera::settled(view);
+    let matrix = crate::globe::clip_matrix(&settled);
+    let distance = crate::globe::camera_distance(settled.zoom, settled.height);
+    // The axis the camera looks down, which is the surface point it is over.
+    let toward = crate::globe::sphere_point(settled.longitude, settled.latitude);
+
+    // Just past the frustum, so a tile whose own samples all fall outside is still kept when it
+    // straddles an edge. Conservative in the direction that costs a tile rather than leaves a hole.
+    const MARGIN: f64 = 1.25;
+    // Samples a side. Enough to catch a tile clipping a corner of the screen; the tile under the
+    // camera is seeded rather than sampled, so the case this cannot see -- a tile larger than the
+    // frustum -- is the one case it does not have to.
+    const SAMPLES: i64 = 4;
+
+    let visible = |x: i64, y: i64| {
+        for row in 0..=SAMPLES {
+            for column in 0..=SAMPLES {
+                #[allow(clippy::cast_precision_loss)]
+                let at = |cell: i64, step: i64| cell as f64 + step as f64 / SAMPLES as f64;
+                #[allow(clippy::cast_precision_loss)]
+                let world = across as f64;
+                let point = crate::globe::sphere_point_from_mercator(
+                    at(x, column) / world,
+                    at(y, row) / world,
+                );
+                if !crate::globe::faces_camera(point, toward, distance) {
+                    continue;
+                }
+                if let Some(clip) = crate::globe::project_point(&matrix, point)
+                    && clip[0].abs() <= MARGIN
+                    && clip[1].abs() <= MARGIN
+                {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+
+    let centre = projection::tile_units(settled.longitude, settled.latitude, z);
+    #[allow(clippy::cast_possible_truncation)]
+    let seed = (
+        (centre[0].floor() as i64).rem_euclid(across),
+        centre[1].floor() as i64,
+    );
+
+    let mut seen: BTreeSet<(i64, i64)> = BTreeSet::new();
+    let mut queue: VecDeque<(i64, i64)> = VecDeque::new();
+    let mut tiles = Vec::new();
+    seen.insert(seed);
+    queue.push_back(seed);
+
+    while let Some((x, y)) = queue.pop_front() {
+        if y < 0 || y >= across {
+            // Latitude does not wrap: past a pole is empty space, not the other side of the world.
+            continue;
+        }
+        // The seed is kept without asking, because a tile larger than the frustum puts no sample
+        // inside it and is exactly the tile the camera is standing on.
+        if (x, y) != seed && !visible(x, y) {
+            continue;
+        }
+        if tiles.len() >= MAX_TILES {
+            return Err(CoverError::TooLarge {
+                tiles: tiles.len() as u64 + 1,
+            });
+        }
+        // Longitude wraps. A globe asks for one copy of the world, so the column is folded here
+        // rather than carried as a `wrap` the way a plane's is.
+        let column = x.rem_euclid(across);
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        tiles.push(TileCoord {
+            z,
+            x: column as u32,
+            y: y as u32,
+            wrap: 0,
+        });
+        for step in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            // Folded before it is remembered. Longitude wraps, so a walk that kept unfolded
+            // columns would circle the planet at low zoom and never meet its own tail -- it ran to
+            // MAX_TILES and returned nothing at z1 and z2, which is a cover error where the whole
+            // globe is visible.
+            let next = ((x + step.0).rem_euclid(across), y + step.1);
+            if seen.insert(next) {
+                queue.push_back(next);
+            }
+        }
+    }
+
+    // The fold can bring two columns onto one tile at low zoom, where the walk goes right round.
+    tiles.sort_unstable_by_key(|tile| (tile.y, tile.x));
+    tiles.dedup_by_key(|tile| (tile.y, tile.x));
+    Ok(tiles)
+}
+
 /// How many copies of the world a view draws.
 ///
 /// A parameter of the request rather than of the camera, because it is a property of the

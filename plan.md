@@ -8309,6 +8309,63 @@ about which tiles are wanted -- by about 15% of the frame between z4 and z10. §
 cover's *policy* (one world copy) and left its *extent* alone, which was right while nothing bent.
 A globe-aware cover is its own piece of work and belongs beside the anchored bend.
 
+### The cover was answering a different question
+
+A globe drew 28% of a quad pane black between z4 and z10, and the shape of it -- a smooth arc, not
+a ragged edge -- said tile boundary rather than missing data. It was neither. `cover_at` takes the
+viewport's half-width and half-height in tiles and reads off a rectangle, which is exact for a plane
+because the screen *is* a rectangle of the world. A globe shows a spherical cap through a
+perspective frustum, and the two disagree by more the wider the viewport is: the flat rectangle
+grows linearly with width and the cap does not.
+
+Measured at z9, both covers name the same four tiles. The globe simply displays more world than
+those four contain. On a 600x600 viewport the same camera is 2.8% black, which is why every headless
+check up to that point had looked fine -- the square case is the one where the two questions nearly
+coincide.
+
+`cover_globe` asks the projection instead of deriving a rectangle from it: start at the tile under
+the camera, which is visible by construction and is the whole answer for a tile larger than the
+screen, then walk outward keeping every tile that puts a sample inside the frustum and in front of
+the horizon. Sampling rather than solving, because the bend has no inverse worth writing and the
+forward direction is already tested; a margin past the frustum keeps a tile that straddles an edge,
+which costs a fetch and never leaves a hole.
+
+| tiles wanted, 960x350 | z1 | z2 | z4 | z6 | z9 | z13 | z15 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| flat | 4 | 3 | 3 | 3 | 4 | 6 | 4 |
+| globe | 4 | 10 | 19 | 15 | 8 | 10 | 8 |
+
+Black from z4 to z15 goes to zero. One bug on the way in, worth recording because it is the kind a
+BFS invites: the walk remembered *unfolded* columns, so at low zoom it circled the planet without
+meeting its own tail, ran to `MAX_TILES` and returned nothing at all at z1 and z2. Folded before it
+is remembered.
+
+### And a mask that could not be skipped
+
+Item 3 turned the stencil off under a globe and wrote down what that gave up. It gave up more than
+it said: with neither the mask nor the bounding-box scissor -- meaningless on a curved patch -- MVT
+geometry ran past its tile edge into the buffer that hides seams and painted across its neighbours,
+as wedges of water lying over the map.
+
+Those wedges cost most of a day to identify because they look like a bend artifact and are not. What
+settled it was switching the stencil and scissor off on a *flat* map at the same camera: the same
+wedges, in the same places. Either device alone suffices on a plane, which is why the flat path had
+never shown them.
+
+So a globe gets its mask back, bent -- `mask_globe.mat` is the fill's vertex stage verbatim over a
+consumer-generated grid, because a mask tracing a slightly different curve from the geometry it
+clips cuts a sliver off every tile edge or leaves one. And `clip_set` stopped building its matrix
+with `camera::tile_to_clip` whatever the projection: sent flat, the bent mask bends an
+already-projected matrix a second time and cuts the stencil where the geometry is not. Every fill
+tested against it and failed, and the frame came back as bare background.
+
+**What this does not close.** The wedges are still there. Ruled out by experiment, each individually:
+the subdivider (identical with it disabled entirely), the fill outline (identical with its material
+removed), the triangulation (area preserved through holes, at every grid), the world-copy fold, and
+the mask itself (which now demonstrably clips, and clips something else). The flat path at the same
+camera is clean with either clip device alone. That is a long list of things it is not and no
+statement yet of what it is.
+
 ## 19. wasm32 as a fourth target
 
 Build the producer for `wasm32-unknown-unknown` so a browser page draws the same capture stream a

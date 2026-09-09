@@ -34,6 +34,7 @@ use alloc::vec::Vec;
 
 use tessella_tile::cover::{self, CoverError, TileCoord, ViewTransform, WorldCopies, ZoomLatch};
 use tessella_tile::renderables::{self, DataTileId, Pyramid};
+use tessella_tile::store::Surface;
 
 /// Whether a frame's cover differs from the one before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -65,9 +66,13 @@ impl ViewCover {
     /// # Errors
     ///
     /// [`CoverError`] when the view is pitched, which cover does not yet handle.
-    pub fn new(view: &ViewTransform, copies: WorldCopies) -> Result<Self, CoverError> {
+    pub fn new(
+        view: &ViewTransform,
+        copies: WorldCopies,
+        surface: Surface,
+    ) -> Result<Self, CoverError> {
         let latch = ZoomLatch::new(view.zoom);
-        let tiles = cover::fold_copies(cover::cover(view)?, copies);
+        let tiles = cover::cover_on(view, view.tile_zoom(), copies, surface)?;
         Ok(Self {
             latch,
             entered: tiles.clone(),
@@ -87,6 +92,7 @@ impl ViewCover {
         &mut self,
         view: &ViewTransform,
         copies: WorldCopies,
+        surface: Surface,
     ) -> Result<Update, CoverError> {
         self.frames += 1;
         // The latch decides the level; the camera decides everything else about the footprint.
@@ -101,7 +107,7 @@ impl ViewCover {
         // Passed per frame rather than held, so a view switching between a plane and a globe
         // recomputes on the frame it switches: the comparison below sees a different cover and
         // reports `Changed`, which is the same path a pan takes and needs no other signal.
-        let tiles = cover::fold_copies(cover::cover(&latched)?, copies);
+        let tiles = cover::cover_on(&latched, latched.tile_zoom(), copies, surface)?;
 
         if tiles == self.tiles {
             self.entered.clear();
