@@ -577,8 +577,51 @@ pub fn scale(a: &Mat4, x: f64, y: f64, z: f64) -> Mat4 {
 /// one fetched tile draws on both sides of the antimeridian.
 #[must_use]
 pub fn matrix_for_tile(z: u8, x: u32, y: u32, wrap: i32, zoom: f64) -> Mat4 {
+    placement(z, x, y, wrap, world_size(zoom))
+}
+
+/// The tile-local to *normalized Mercator* matrix — the same placement over a unit world.
+///
+/// `x` and `y` come out in `0..1` across the whole map rather than in world pixels, which is the
+/// form [`crate::globe::sphere_point_from_mercator`] takes. That is the whole reason it exists: a
+/// globe bends tile geometry per vertex, and the bend is `mercator -> sphere -> clip`, so the step
+/// before it has to hand over a normalized position rather than a projected one.
+///
+/// Zoom is not a parameter and that is the difference that matters. [`matrix_for_tile`] scales by
+/// `world_size(zoom)`, so its output moves as the map zooms; this one is a pure function of the
+/// tile address. A sphere has one size however far the camera is from it — the zoom lives in
+/// [`crate::globe::clip_matrix`]'s camera distance instead — so a globe's per-tile matrix changes
+/// only when the tile does.
+///
+/// The wrap still multiplies into the x translation, as it does for the plane, so the arithmetic
+/// stays the same shape. On a sphere every wrap of a tile bends to the *same* patch, which is why
+/// §13.4 has a globe view ask for one world copy rather than filtering wraps out here.
+#[must_use]
+pub fn mercator_matrix_for_tile(z: u8, x: u32, y: u32, wrap: i32) -> Mat4 {
+    placement(z, x, y, wrap, 1.0)
+}
+
+/// A 2D point through a matrix, with no perspective divide.
+///
+/// What the Mercator step of a bend does: [`mercator_matrix_for_tile`] is affine, so `w` stays one
+/// and dividing by it would be arithmetic with no effect. The divide belongs at the end of the
+/// chain, in [`crate::globe::project_point`], and doing it twice is how a projection quietly stops
+/// being one.
+#[must_use]
+pub fn transform_point(matrix: &Mat4, point: [f64; 2]) -> [f64; 2] {
+    [
+        matrix[0] * point[0] + matrix[4] * point[1] + matrix[12],
+        matrix[1] * point[0] + matrix[5] * point[1] + matrix[13],
+    ]
+}
+
+/// Where a tile sits in a world `world` units across, scaled from its own extent.
+///
+/// One body for the plane and the sphere so the two cannot drift: they differ by the size of the
+/// world they place a tile in and by nothing else.
+fn placement(z: u8, x: u32, y: u32, wrap: i32, world: f64) -> Mat4 {
     let tile_scale = f64::from(1u32 << z.min(MAX_TILE_ZOOM));
-    let s = world_size(zoom) / tile_scale;
+    let s = world / tile_scale;
 
     let mut matrix: Mat4 = [
         1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,

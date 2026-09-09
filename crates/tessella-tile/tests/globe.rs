@@ -5,6 +5,7 @@
 //! antimeridian, and the horizon's tangent.
 
 use tessella_tile::camera;
+use tessella_tile::cover;
 use tessella_tile::globe;
 
 /// Everything the projection produces is on the unit sphere.
@@ -532,4 +533,179 @@ fn a_degenerate_viewport_still_gives_a_matrix() {
             "a {w}x{h} viewport produced a non-finite matrix"
         );
     }
+}
+
+// --- The bend, run end to end on the CPU ---------------------------------------------------
+//
+// plan.md §13.4's bend is a material, and a material is the first thing on that page that can only
+// be judged by eye. What can be settled before one exists is the arithmetic it will transcribe:
+// `tile-local -> normalized Mercator -> sphere -> clip` is three steps, all of them here, and a
+// shader that disagrees with these is wrong rather than merely different.
+
+/// One point through the whole bend, the way a vertex shader will run it.
+fn bend(
+    view: &cover::ViewTransform,
+    z: u8,
+    x: u32,
+    y: u32,
+    wrap: i32,
+    local: [f64; 2],
+) -> Option<[f64; 3]> {
+    let to_mercator = camera::mercator_matrix_for_tile(z, x, y, wrap);
+    let mercator = camera::transform_point(&to_mercator, local);
+    let point = globe::sphere_point_from_mercator(mercator[0], mercator[1]);
+    globe::project_point(&globe::clip_matrix(view), point)
+}
+
+/// The tile-local coordinates of a longitude and latitude inside a given tile.
+fn local_of(z: u8, x: u32, y: u32, longitude: f64, latitude: f64) -> [f64; 2] {
+    let across = f64::from(1u32 << z);
+    let world_x = (longitude + 180.0) / 360.0 * across;
+    let world_y = camera::mercator_fraction(latitude) * across;
+    [
+        (world_x - f64::from(x)) * camera::EXTENT,
+        (world_y - f64::from(y)) * camera::EXTENT,
+    ]
+}
+
+#[test]
+fn the_mercator_matrix_puts_a_tiles_corners_where_the_tile_is() {
+    // z2, column 1, row 2: the square `x in 0.25..0.5`, `y in 0.5..0.75` of the unit world.
+    let matrix = camera::mercator_matrix_for_tile(2, 1, 2, 0);
+    let corner = |local: [f64; 2]| camera::transform_point(&matrix, local);
+    let near =
+        |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).abs() < 1e-12 && (a[1] - b[1]).abs() < 1e-12;
+    assert!(near(corner([0.0, 0.0]), [0.25, 0.50]));
+    assert!(near(corner([camera::EXTENT, 0.0]), [0.50, 0.50]));
+    assert!(near(corner([0.0, camera::EXTENT]), [0.25, 0.75]));
+    assert!(near(corner([camera::EXTENT, camera::EXTENT]), [0.50, 0.75]));
+}
+
+/// The difference from [`camera::matrix_for_tile`] that the globe exists for.
+#[test]
+fn the_mercator_matrix_does_not_move_with_the_zoom() {
+    let at = |zoom: f64| camera::matrix_for_tile(5, 9, 12, 0, zoom);
+    assert_ne!(
+        at(5.0),
+        at(9.0),
+        "the plane's placement is scaled by the zoom"
+    );
+    // A sphere is one size however far away the camera is; the zoom lives in `clip_matrix`.
+    let mercator = camera::mercator_matrix_for_tile(5, 9, 12, 0);
+    assert_eq!(mercator, camera::mercator_matrix_for_tile(5, 9, 12, 0));
+}
+
+#[test]
+fn a_wrapped_tile_lands_one_world_over() {
+    let home = camera::transform_point(&camera::mercator_matrix_for_tile(3, 2, 4, 0), [0.0, 0.0]);
+    let east = camera::transform_point(&camera::mercator_matrix_for_tile(3, 2, 4, 1), [0.0, 0.0]);
+    let west = camera::transform_point(&camera::mercator_matrix_for_tile(3, 2, 4, -1), [0.0, 0.0]);
+    assert!((east[0] - home[0] - 1.0).abs() < 1e-12);
+    assert!((west[0] - home[0] + 1.0).abs() < 1e-12);
+    assert!((east[1] - home[1]).abs() < 1e-12);
+}
+
+/// The whole bend, closed: the point the camera is over lands in the middle of the screen.
+///
+/// This is the check the material is judged against before anything is drawn. It runs every step a
+/// vertex shader will run -- the per-tile matrix, the sphere, the globe camera -- against a camera
+/// that is not on the equator or the prime meridian, which is the pair of cases a hand check picks
+/// and the pair that hid two of the three sign errors in `clip_matrix`.
+#[test]
+fn the_point_under_the_camera_bends_to_the_middle_of_the_screen() {
+    for (longitude, latitude, zoom) in [
+        (-122.3321, 47.6062, 4.0), // Seattle
+        (139.7671, 35.6812, 6.0),  // Tokyo
+        (7.7345, 47.4839, 2.0),    // Liestal
+        (0.0, 0.0, 1.0), // the null island case, which must not be the only one that works
+    ] {
+        let view = cover::ViewTransform {
+            longitude,
+            latitude,
+            zoom,
+            width: 900.0,
+            height: 700.0,
+            bearing: 0.0,
+            pitch: 0.0,
+        };
+        let z = 4u8;
+        let across = f64::from(1u32 << z);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let x = ((longitude + 180.0) / 360.0 * across).floor() as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let y = (camera::mercator_fraction(latitude) * across).floor() as u32;
+
+        let local = local_of(z, x, y, longitude, latitude);
+        let clip = bend(&view, z, x, y, 0, local).expect("the center of the screen is in front");
+        assert!(
+            clip[0].abs() < 1e-9 && clip[1].abs() < 1e-9,
+            "({longitude}, {latitude}) bent to {clip:?} rather than the middle of the screen",
+        );
+    }
+}
+
+/// North is up after the bend, not just in the matrix.
+#[test]
+fn the_bend_keeps_north_up() {
+    let view = cover::ViewTransform {
+        longitude: 7.7345,
+        latitude: 47.4839,
+        zoom: 3.0,
+        width: 900.0,
+        height: 700.0,
+        bearing: 0.0,
+        pitch: 0.0,
+    };
+    let z = 4u8;
+    let across = f64::from(1u32 << z);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let x = ((view.longitude + 180.0) / 360.0 * across).floor() as u32;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let y = (camera::mercator_fraction(view.latitude) * across).floor() as u32;
+
+    let center = bend(
+        &view,
+        z,
+        x,
+        y,
+        0,
+        local_of(z, x, y, view.longitude, view.latitude),
+    )
+    .unwrap();
+    let north = bend(
+        &view,
+        z,
+        x,
+        y,
+        0,
+        local_of(z, x, y, view.longitude, view.latitude + 1.0),
+    )
+    .unwrap();
+    assert!(
+        north[1] > center[1],
+        "a degree north of the center landed at {north:?}, below {center:?}",
+    );
+}
+
+/// A tile on the far side of the planet is behind the horizon, and the two say so together.
+#[test]
+fn the_bend_and_the_horizon_agree_about_the_far_side() {
+    let view = cover::ViewTransform {
+        longitude: 0.0,
+        latitude: 0.0,
+        zoom: 1.0,
+        width: 900.0,
+        height: 700.0,
+        bearing: 0.0,
+        pitch: 0.0,
+    };
+    let distance = globe::camera_distance(view.zoom, view.height);
+    // The antipode of the camera: normalized Mercator x of 0.0 is longitude -180.
+    let point = globe::sphere_point_from_mercator(0.0, 0.5);
+    assert!(
+        !globe::faces_camera(point, [0.0, 0.0, 1.0], distance),
+        "the antipode faces the camera",
+    );
+    // It still projects -- a projection cannot express occlusion, which is why the cull exists.
+    assert!(globe::project_point(&globe::clip_matrix(&view), point).is_some());
 }
