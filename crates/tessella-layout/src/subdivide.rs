@@ -249,9 +249,19 @@ pub fn subdivide_ring(ring: &[Position], step: i32) -> Ring {
         for t in crossings(a, b, step) {
             let point = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
             let rounded = round(point);
-            // A crossing that rounds onto a vertex the ring already has is not a new vertex. Two
-            // grid lines meeting at a corner produce the same point twice for the same reason.
-            if rounded != *out.last().unwrap_or(&from) {
+            // A crossing is only a vertex if it is somewhere the ring does not already go. Two
+            // grid lines meeting at a corner give the same point twice, and a crossing within half
+            // a unit of either end of the segment rounds onto that end.
+            //
+            // A duplicate consecutive vertex is a zero-length edge, which earcut has no use for
+            // and which every downstream area test has to special-case. Checked against `to` as
+            // well as against the last emitted point, because a crossing within half a unit of the
+            // far end rounds onto it and the next window opens with that same point.
+            //
+            // This was written expecting it to be the cause of the wedges at z9.5 and it is not:
+            // they are unchanged by it. Kept because it is right on its own terms, and recorded as
+            // *not* the fix so the next person does not read it as one.
+            if rounded != *out.last().unwrap_or(&from) && rounded != to {
                 out.push(rounded);
             }
         }
@@ -362,14 +372,41 @@ fn fan(piece: &Convex, out: &mut Vec<[Position; 3]>) {
     }
 }
 
-/// Whether a triangle has no area once its vertices are integers.
+/// Whether a triangle is too thin to be geometry once its vertices are integers.
+///
+/// Not just zero area. A cut that grazes a corner leaves a piece a few hundredths of a unit thick
+/// and as long as the cell -- half a tile at the grids this runs at -- and rounding turns that into
+/// a triangle with one or two square units of area spanning four thousand. It draws as a hairline
+/// streak across the map in the fill's own color.
+///
+/// That is a real artifact and this removes it. It is *not* the cause of the thicker wedges seen on
+/// a globe around z9.5: those survive this, and survive the triangle clipper being switched off
+/// altogether, which places them in `subdivide_ring` rather than here. Recorded so the next reader
+/// does not take this for the fix.
+///
+/// The test is the triangle's *height* against its longest edge: twice the area is
+/// `|cross|`, so the height over that edge is `|cross| / length`, and anything under one unit is
+/// thinner than the integers it is expressed in. Such a triangle cannot be geometry -- whatever it
+/// came from was flattened by the rounding, not by this -- so dropping it removes an artifact
+/// rather than a feature.
 fn is_degenerate(triangle: &[Position; 3]) -> bool {
     let [a, b, c] = triangle;
     let abx = i64::from(b[0]) - i64::from(a[0]);
     let aby = i64::from(b[1]) - i64::from(a[1]);
     let acx = i64::from(c[0]) - i64::from(a[0]);
     let acy = i64::from(c[1]) - i64::from(a[1]);
-    abx * acy - aby * acx == 0
+    let twice_area = (abx * acy - aby * acx).abs();
+    if twice_area == 0 {
+        return true;
+    }
+    // The longest edge, squared. Compared squared so the whole test stays in integers: a height
+    // below one unit is `twice_area < length`, which is `twice_area² < length²`.
+    let bcx = i64::from(c[0]) - i64::from(b[0]);
+    let bcy = i64::from(c[1]) - i64::from(b[1]);
+    let longest = (abx * abx + aby * aby)
+        .max(acx * acx + acy * acy)
+        .max(bcx * bcx + bcy * bcy);
+    twice_area * twice_area < longest
 }
 
 /// One point back to the integers the vertex buffer carries.
