@@ -5,6 +5,7 @@
 //! that places it — which is the same division as every other layer, seen from the far side.
 
 use tessella_capture_abi::EnvelopeKind;
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::{
     AddReason, GeometryId, MeshAdd, MeshFormat, ViewId, WireRecord,
 };
@@ -251,13 +252,17 @@ fn a_mesh_uses_the_same_matrix_as_every_other_drawable() {
         pitch: 0.0,
     });
 
-    let entry = DrawableEntry::for_tile(&view, 14, 8189, 5447, 0, 3, 1).expect("an entry");
-    let placement = MeshPlacement::for_tile(&view, 14, 8189, 5447, 0, 3, 1).expect("a placement");
+    let entry = DrawableEntry::for_tile(&view, ProjectionMode::Mercator, 14, 8189, 5447, 0, 3, 1)
+        .expect("an entry");
+    let placement =
+        MeshPlacement::for_tile(&view, ProjectionMode::Mercator, 14, 8189, 5447, 0, 3, 1)
+            .expect("a placement");
 
     assert_eq!(placement.matrix, entry.matrix);
 
     // And the bias is genuinely in there: a different sublayer is a different matrix.
-    let deeper = MeshPlacement::for_tile(&view, 14, 8189, 5447, 0, 3, 2).expect("a placement");
+    let deeper = MeshPlacement::for_tile(&view, ProjectionMode::Mercator, 14, 8189, 5447, 0, 3, 2)
+        .expect("a placement");
     assert_ne!(
         deeper.matrix, placement.matrix,
         "the sublayer bias is not applied"

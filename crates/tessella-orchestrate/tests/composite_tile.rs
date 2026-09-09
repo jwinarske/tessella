@@ -25,6 +25,7 @@
 //! - Colours are mixed component-wise on premultiplied channels, with `a * (1 - t) + b * t`.
 //!   The algebraically equal `a + (b - a) * t` differs in the last bits and fails this diff.
 
+use tessella_capture_abi::ProjectionMode;
 use tessella_orchestrate::tile::{TileId, bucket_for, build_tile};
 use tessella_source::geojson;
 use tessella_source::tiling::TilingOptions;
@@ -364,6 +365,7 @@ fn the_fill_drawable_buffer_matches_the_oracle_at_a_fractional_zoom() {
             entries.push(
                 DrawableEntry::for_tile_with(
                     &view,
+                    ProjectionMode::Mercator,
                     tile.z,
                     tile.x,
                     tile.y,

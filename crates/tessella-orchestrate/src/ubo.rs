@@ -26,6 +26,7 @@
 use alloc::vec::Vec;
 
 use tessella_capture_abi::EnvelopeKind;
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::{Span, UboUpdate, ViewId, WireRecord};
 use tessella_capture_abi::generated::ubo_layouts;
 use tessella_capture_abi::generated::ubo_slots;
@@ -120,6 +121,61 @@ pub const SUBLAYERS: i32 = 3;
 /// the bias is visible in the matrix at all.
 pub const DEPTH_EPSILON: f32 = 1.0 / 2048.0;
 
+/// The tile-local matrix a drawable is placed by, for the projection the frame draws through.
+///
+/// Two different things depending on the surface, which is the whole of plan.md §13.4's producer
+/// half beyond the cover policy:
+///
+/// - **Mercator**: `proj_matrix * placement`, reaching clip space. The consumer multiplies a
+///   tile-local vertex through it and is done.
+/// - **Globe**: `mercator_matrix_for_tile` alone, reaching *normalized Mercator*. Clip space is
+///   two more steps -- the nonlinear bend onto the sphere, then `CameraUpdate::globe_matrix` --
+///   and neither belongs in a matrix: the first is a pair of trig calls per vertex and the second
+///   is per frame rather than per drawable.
+///
+/// # Where the depth offset goes
+///
+/// Coincident layers are separated by a bias on the projection's `[14]`, which under Mercator is
+/// baked into each tile's matrix here. A globe has nowhere to put it: `globe_matrix` is one matrix
+/// for the whole frame and the bias is per drawable.
+///
+/// So it rides in the placement matrix's own `[14]`, which is free. `mercator_matrix_for_tile`
+/// scales z by one and translates it by zero -- tile geometry is 2D and its z is always zero, so
+/// nothing reads that slot on the way in. The consumer applies it to the bent position's z after
+/// `globe_matrix`, which is the same arithmetic in the same place, moved from a matrix the
+/// producer could fold it into to one it cannot.
+///
+/// # Errors
+///
+/// [`camera::CameraError`] when the view has no area. A globe cannot produce one -- the placement
+/// is a pure function of the tile address -- and the signature keeps it so that a caller does not
+/// have to know which projection it is under.
+fn tile_matrix(
+    view: &ViewTransform,
+    projection: ProjectionMode,
+    z: u8,
+    x: u32,
+    y: u32,
+    wrap: i32,
+    depth: f32,
+) -> Result<camera::Mat4, camera::CameraError> {
+    match projection {
+        ProjectionMode::Mercator => {
+            let mut clip = camera::proj_matrix(view)?;
+            clip[14] -= f64::from(depth);
+            Ok(camera::multiply(
+                &clip,
+                &camera::matrix_for_tile(z, x, y, wrap, view.zoom),
+            ))
+        }
+        ProjectionMode::Globe => {
+            let mut placement = camera::mercator_matrix_for_tile(z, x, y, wrap);
+            placement[14] = -f64::from(depth);
+            Ok(placement)
+        }
+    }
+}
+
 /// How far a drawable's depth is nudged toward the viewer.
 ///
 /// # The same field name, two different numbers
@@ -168,8 +224,10 @@ impl DrawableEntry {
     /// # Errors
     ///
     /// [`camera::CameraError`] when the view has no area.
+    #[allow(clippy::too_many_arguments)]
     pub fn for_tile(
         view: &ViewTransform,
+        projection: ProjectionMode,
         z: u8,
         x: u32,
         y: u32,
@@ -179,6 +237,7 @@ impl DrawableEntry {
     ) -> Result<Self, camera::CameraError> {
         Self::for_tile_with(
             view,
+            projection,
             z,
             x,
             y,
@@ -202,6 +261,7 @@ impl DrawableEntry {
     #[allow(clippy::too_many_arguments)]
     pub fn for_tile_with(
         view: &ViewTransform,
+        projection: ProjectionMode,
         z: u8,
         x: u32,
         y: u32,
@@ -210,12 +270,15 @@ impl DrawableEntry {
         sub_layer_index: i32,
         interpolations: [f32; 2],
     ) -> Result<Self, camera::CameraError> {
-        let mut projection = camera::proj_matrix(view)?;
-        projection[14] -= f64::from(depth_offset(layer_index, sub_layer_index));
-        let matrix = camera::multiply(
-            &projection,
-            &camera::matrix_for_tile(z, x, y, wrap, view.zoom),
-        );
+        let matrix = tile_matrix(
+            view,
+            projection,
+            z,
+            x,
+            y,
+            wrap,
+            depth_offset(layer_index, sub_layer_index),
+        )?;
 
         #[allow(clippy::cast_possible_truncation)]
         Ok(Self {
@@ -280,15 +343,13 @@ impl DrawableEntry {
     /// [`camera::CameraError`] when the view has no area.
     pub fn for_tile_3d(
         view: &ViewTransform,
+        projection: ProjectionMode,
         z: u8,
         x: u32,
         y: u32,
         wrap: i32,
     ) -> Result<Self, camera::CameraError> {
-        let matrix = camera::multiply(
-            &camera::proj_matrix(view)?,
-            &camera::matrix_for_tile(z, x, y, wrap, view.zoom),
-        );
+        let matrix = tile_matrix(view, projection, z, x, y, wrap, 0.0)?;
 
         #[allow(clippy::cast_possible_truncation)]
         Ok(Self {
@@ -418,6 +479,7 @@ impl LineDrawableEntry {
     #[allow(clippy::too_many_arguments)]
     pub fn for_tile(
         view: &ViewTransform,
+        projection: ProjectionMode,
         z: u8,
         x: u32,
         y: u32,
@@ -426,12 +488,15 @@ impl LineDrawableEntry {
         sub_layer_index: i32,
         interpolations: [f32; 6],
     ) -> Result<Self, camera::CameraError> {
-        let mut projection = camera::proj_matrix(view)?;
-        projection[14] -= f64::from(depth_offset(layer_index, sub_layer_index));
-        let matrix = camera::multiply(
-            &projection,
-            &camera::matrix_for_tile(z, x, y, wrap, view.zoom),
-        );
+        let matrix = tile_matrix(
+            view,
+            projection,
+            z,
+            x,
+            y,
+            wrap,
+            depth_offset(layer_index, sub_layer_index),
+        )?;
 
         #[allow(clippy::cast_possible_truncation)]
         Ok(Self {
@@ -726,6 +791,7 @@ impl ExtrusionDrawableEntry {
     #[allow(clippy::too_many_arguments)]
     pub fn for_tile(
         view: &ViewTransform,
+        projection: ProjectionMode,
         z: u8,
         x: u32,
         y: u32,
@@ -735,7 +801,7 @@ impl ExtrusionDrawableEntry {
         // `for_tile_3d`, not `for_tile_with`: mbgl's `depthModeFor3D` has no sublayer term, and
         // applying the flat-layer one here separates this drawable's depth from the depth pass
         // that precedes it by more than the comparison tolerates.
-        let matrix = DrawableEntry::for_tile_3d(view, z, x, y, wrap)?.matrix;
+        let matrix = DrawableEntry::for_tile_3d(view, projection, z, x, y, wrap)?.matrix;
 
         let origin = PixelOrigin::of(view, z, x, y, wrap);
 
@@ -823,6 +889,7 @@ impl PatternDrawableEntry {
     #[allow(clippy::too_many_arguments)]
     pub fn for_tile(
         view: &ViewTransform,
+        projection: ProjectionMode,
         z: u8,
         x: u32,
         y: u32,
@@ -835,6 +902,7 @@ impl PatternDrawableEntry {
         // outline still has to sort above its triangles.
         let matrix = DrawableEntry::for_tile_with(
             view,
+            projection,
             z,
             x,
             y,
@@ -969,6 +1037,7 @@ impl CircleDrawableEntry {
     #[allow(clippy::too_many_arguments)]
     pub fn for_tile(
         view: &ViewTransform,
+        projection: ProjectionMode,
         z: u8,
         x: u32,
         y: u32,
@@ -978,12 +1047,15 @@ impl CircleDrawableEntry {
         extrude_scale: [f32; 2],
         interpolations: [f32; 7],
     ) -> Result<Self, camera::CameraError> {
-        let mut projection = camera::proj_matrix(view)?;
-        projection[14] -= f64::from(depth_offset(layer_index, sub_layer_index));
-        let matrix = camera::multiply(
-            &projection,
-            &camera::matrix_for_tile(z, x, y, wrap, view.zoom),
-        );
+        let matrix = tile_matrix(
+            view,
+            projection,
+            z,
+            x,
+            y,
+            wrap,
+            depth_offset(layer_index, sub_layer_index),
+        )?;
 
         #[allow(clippy::cast_possible_truncation)]
         Ok(Self {
@@ -1206,6 +1278,12 @@ impl SymbolDrawableEntry {
         alignments: Alignments,
         placement: Placement,
     ) -> Result<Self, camera::CameraError> {
+        // Symbols stay on the plane under either projection. plan.md §13.4 puts symbol
+        // placement on a sphere after the bend, and it is not a matrix swap: this path
+        // walks a label along the *projected* road point by point and aligns to pitch and
+        // rotation, all of which mean something different on a curved surface. A globe
+        // draws its labels flat and in the wrong places until that piece exists, which is
+        // visibly unfinished rather than subtly wrong.
         let mut projection = camera::proj_matrix(view)?;
         projection[14] -= f64::from(depth_offset(layer_index, sub_layer_index));
         let tile = camera::multiply(
@@ -1795,8 +1873,10 @@ impl MeshPlacement {
     /// # Errors
     ///
     /// [`camera::CameraError`] when the view has no area.
+    #[allow(clippy::too_many_arguments)]
     pub fn for_tile(
         view: &ViewTransform,
+        projection: ProjectionMode,
         z: u8,
         x: u32,
         y: u32,
@@ -1804,7 +1884,16 @@ impl MeshPlacement {
         layer_index: i32,
         sub_layer_index: i32,
     ) -> Result<Self, camera::CameraError> {
-        let entry = DrawableEntry::for_tile(view, z, x, y, wrap, layer_index, sub_layer_index)?;
+        let entry = DrawableEntry::for_tile(
+            view,
+            projection,
+            z,
+            x,
+            y,
+            wrap,
+            layer_index,
+            sub_layer_index,
+        )?;
         Ok(Self {
             matrix: entry.matrix,
         })

@@ -47,6 +47,7 @@ use tessella_storage::{fetch_zoom, tileset};
 use tessella_style::{Source, Style};
 use tessella_tile::cover::{self, ViewTransform};
 
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::generated::{ubo_layouts, ubo_slots};
 use tessella_orchestrate::ubo::{self, DrawableEntry, GlobalPaintParams, LineDrawableEntry};
 use tessella_style::property::Color;
@@ -524,7 +525,8 @@ fn fill_entries(layer: i32) -> Vec<DrawableEntry> {
     oracle_drawables(layer)
         .into_iter()
         .map(|(z, x, y, wrap, sub)| {
-            DrawableEntry::for_tile(&view, z, x, y, wrap, layer, sub).expect("an unrotated camera")
+            DrawableEntry::for_tile(&view, ProjectionMode::Mercator, z, x, y, wrap, layer, sub)
+                .expect("an unrotated camera")
         })
         .collect()
 }
@@ -670,8 +672,18 @@ fn the_live_line_drawable_buffer_matches_the_oracle() {
         .map(|(z, x, y, wrap, sub)| {
             // `line-width` is a constant here and `line-color` a `match` on a feature property,
             // so neither varies with zoom and every mix factor is zero.
-            LineDrawableEntry::for_tile(&view, z, x, y, wrap, 3, sub, [0.0; 6])
-                .expect("an unrotated camera")
+            LineDrawableEntry::for_tile(
+                &view,
+                ProjectionMode::Mercator,
+                z,
+                x,
+                y,
+                wrap,
+                3,
+                sub,
+                [0.0; 6],
+            )
+            .expect("an unrotated camera")
         })
         .collect();
 

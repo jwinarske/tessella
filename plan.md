@@ -8080,6 +8080,46 @@ producer cannot tell. That asymmetry is inherent -- the producer's whole contrib
 two matrices and a flag -- and it is worth writing down before someone reads a flat planet as a
 producer bug.
 
+### The per-tile matrix, and where a globe puts the depth bias
+
+The camera says *globe*; this is what a drawable is then placed by. Mercator keeps
+`proj_matrix * placement`, reaching clip space in one multiply. A globe carries
+`mercator_matrix_for_tile` alone and reaches normalized Mercator, because the two steps after it
+belong to neither a matrix nor a drawable: the bend onto the sphere is trig per vertex, and
+`globe_matrix` is per frame.
+
+One helper decides, and the five `ubo.rs` constructors call it rather than each spelling the
+multiply out -- which is also how the five stayed in agreement while the parameter was threaded
+through sixteen call sites.
+
+**The depth bias had nowhere obvious to go.** Coincident layers are separated by a nudge to element
+14 of the projection, per drawable, and under Mercator that folds into the tile's matrix on the way
+past. A globe has no such multiply: `globe_matrix` is one matrix for the whole frame and the nudge
+is per drawable, so folding it there would bias every layer in the frame by the last one's amount.
+
+It rides in the placement's own `[14]` instead, which is free. `mercator_matrix_for_tile` scales z
+by one and translates it by zero -- tile geometry is 2D and its z is always zero -- so nothing reads
+that slot on the way in, and the consumer applies it to the bent position's z after `globe_matrix`.
+The same arithmetic in the same place, moved from a matrix the producer could fold it into to one it
+cannot. The tests read the slot directly, because a consumer will.
+
+**Symbols stay on the plane under either projection**, and visibly so. §13.4 puts symbol placement
+on a sphere after the bend, and it is not a matrix swap: that path walks a label along the
+*projected* road point by point and aligns to pitch and rotation, all of which mean something else
+on a curved surface. A globe draws its labels flat and in the wrong places until that piece exists,
+which is unfinished rather than subtly wrong.
+
+**Two differences worth pinning rather than discovering.** A globe's per-tile matrix does not move
+with the zoom -- it is a pure function of the tile address, where the plane's is scaled by
+`world_size` -- so it is rewritten only when the tile changes. And an empty viewport fails on the
+plane and not on a globe: the plane's matrix *is* the camera and has no answer without one, while a
+globe's placement never consults it. Inventing a failure there would mean a globe refusing tiles a
+plane only refuses because of arithmetic it does not share. The viewport is guarded once, in
+`globe::clip_matrix`, which hands back a square frustum rather than a matrix of NaNs.
+
+The parity sweep is what says the plane did not move: 24 / 86 / 5 / 103, unchanged, over a hot path
+that now branches on every drawable.
+
 ## 19. wasm32 as a fourth target
 
 Build the producer for `wasm32-unknown-unknown` so a browser page draws the same capture stream a
