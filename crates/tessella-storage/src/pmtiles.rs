@@ -390,6 +390,74 @@ impl RangeReader for std::fs::File {
     }
 }
 
+/// An archive read over a transport that does byte ranges.
+///
+/// The whole point of the format: a directory walk and one tile are a handful of small reads out
+/// of something that may be gigabytes, so the archive is never fetched -- only the parts of it a
+/// tile needs. `Archive` does not know the difference, because [`RangeReader`] is all it asked
+/// for.
+pub struct HttpRange<S> {
+    source: S,
+    url: String,
+}
+
+impl<S> HttpRange<S> {
+    /// Reads the archive at `url` through `source`.
+    pub fn new(source: S, url: impl Into<String>) -> Self {
+        Self {
+            source,
+            url: url.into(),
+        }
+    }
+
+    /// The archive this reads.
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+}
+
+impl<S: crate::source::RangeFetch> RangeReader for HttpRange<S> {
+    fn read_at(&self, offset: u64, length: usize) -> Result<Vec<u8>, PmtilesError> {
+        let response = self
+            .source
+            .fetch_range(&self.url, offset, length)
+            .map_err(|error| PmtilesError::Io(format!("{error}")))?;
+
+        match response.status {
+            // The only answer that means "here is the range you asked for".
+            206 => {}
+            // The origin ignored `Range` and started sending the whole archive. Refused rather
+            // than sliced: the body was capped at the range's own length, so what arrived is the
+            // *first* `length` bytes of the file and not the bytes at `offset` -- slicing it
+            // would serve the head of the archive as though it were the middle.
+            200 => {
+                return Err(PmtilesError::Io(format!(
+                    "`{}` ignored the range request and answered 200; ranges are required to \
+                     read an archive in place",
+                    self.url
+                )));
+            }
+            // Asked for bytes past the end, which is what a truncated archive looks like from
+            // this side.
+            416 => return Err(PmtilesError::Truncated("range")),
+            status => {
+                return Err(PmtilesError::Io(format!(
+                    "`{}` answered {status} for a range request",
+                    self.url
+                )));
+            }
+        }
+
+        if response.body.len() != length {
+            // Short of what was asked for, which the directory walk cannot work with: every
+            // structure it reads is a fixed size and a partial one parses as something else.
+            return Err(PmtilesError::Truncated("range"));
+        }
+        Ok(response.body)
+    }
+}
+
 /// Inflates a gzip range, for the bomb test.
 ///
 /// The bound is on the private `decompress`, which is reached only through an archive — building
