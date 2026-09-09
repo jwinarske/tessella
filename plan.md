@@ -8111,7 +8111,7 @@ which is unfinished rather than subtly wrong.
 
 **Two differences worth pinning rather than discovering.** A globe's per-tile matrix does not move
 with the zoom -- it is a pure function of the tile address, where the plane's is scaled by
-`world_size` -- so it is rewritten only when the tile changes. And an empty viewport fails on the
+`world_size`. *(Amended below: the depth term is the one exception, and it had to become one.)* And an empty viewport fails on the
 plane and not on a globe: the plane's matrix *is* the camera and has no answer without one, while a
 globe's placement never consults it. Inventing a failure there would mean a globe refusing tiles a
 plane only refuses because of arithmetic it does not share. The viewport is guarded once, in
@@ -8265,6 +8265,49 @@ Above z10 none of this runs: `step_for_level` answers zero, `encode_background` 
 a tile takes the path it always did. That is the same zoom the bend's `f32` arithmetic stops
 resolving a tile unit at, and the agreement is arithmetic rather than luck -- both scale with the
 sphere's radius in pixels.
+
+### Two bugs the screen found that every test had passed
+
+Both were reported from a running quad rather than caught here, which is the point of writing them
+down: neither is subtle, and neither was reachable from a test that ran at one zoom.
+
+**The frustum bracketed the ball instead of the cap.** `clip_matrix` took near and far from
+`distance ∓ 1` with near floored at `0.01`. The far side of a sphere is never visible -- it is
+occluded, which is the whole reason `faces_camera` exists -- so half the depth range went to a
+hemisphere that cannot appear. Harmless at low zoom, and fatal above z10: the camera closes on the
+surface as the zoom rises, so at z14 it sits 0.000674 radii out while the floor still put near at
+0.005, *in front of the surface*. The clip-space z of the point under the camera went +0.002 at z10,
+-0.85 at z11, -13.9 at z14. The planet was black from z11 up.
+
+Near and far now bracket the visible cap: `distance - 1` to the horizon at `sqrt(distance² - 1)`.
+Every identity test on this page passed throughout, because they all run at one zoom and the clamp
+only binds past z10.
+
+**The depth nudge was absolute against a frustum that is not.** mbgl separates coincident layers by
+a fixed offset on the projection's element 14, which works because its depth range is a fixed depth.
+A globe's is not:
+
+| | z4 | z8 | z10 | z12 | z14 | z16 |
+| --- | --- | --- | --- | --- | --- | --- |
+| frustum span | 1.699 | 0.424 | 0.216 | 0.109 | 0.055 | 0.027 |
+| the nudge, as a fraction of it | 1.8% | 7.3% | 14.3% | 28.3% | **56%** | **112%** |
+
+At z14 the nudge is more than half the range and pushes its layer through the near plane; at z16 it
+is larger than the range. Scaled by `depth_range`'s span instead, it is the same fraction at every
+zoom.
+
+That costs one property this page claimed: a globe's per-tile matrix was a pure function of the tile
+address, and its `[14]` now follows the camera. §5.1 is untouched -- the *bucket* is still
+camera-free -- and the matrix lives in a per-drawable uniform block written every frame either way,
+as the plane's is. The claim above is amended rather than deleted, because the reasoning that
+produced it was right and the exception is worth seeing.
+
+**And one the same report found that is not fixed here.** At z4 the top of the frame is a smooth
+arc of nothing: the cover's northern edge, bent. The cover is still computed from the *flat*
+frustum, and a globe shows a spherical cap rather than a Mercator rectangle, so the two disagree
+about which tiles are wanted -- by about 15% of the frame between z4 and z10. §13.4 settled the
+cover's *policy* (one world copy) and left its *extent* alone, which was right while nothing bent.
+A globe-aware cover is its own piece of work and belongs beside the anchored bend.
 
 ## 19. wasm32 as a fourth target
 

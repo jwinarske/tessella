@@ -243,10 +243,24 @@ pub fn clip_matrix(view: &crate::cover::ViewTransform) -> crate::camera::Mat4 {
     // before the rotation rather than the picture after it, which moves the centre off screen.
     let flip = crate::camera::scale(&crate::camera::identity(), 1.0, -1.0, 1.0);
     let eye = crate::camera::multiply(&flip, &eye);
-    // Near and far bracket the ball: it spans `distance ∓ 1` and the margins keep a surface
-    // fragment off both planes.
-    let near = (distance - 1.0).max(0.01) * 0.5;
-    let far = (distance + 1.0) * 1.5;
+    // Near and far bracket the *visible cap*, not the ball.
+    //
+    // The cap runs from the nearest surface point, `distance - 1`, to the horizon, where the line
+    // of sight grazes the sphere at `sqrt(distance² - 1)`. Nothing beyond the horizon is ever
+    // drawn -- the sphere is in the way, which is what `faces_camera` says -- so bracketing the
+    // whole ball spends the depth range on a hemisphere that cannot appear.
+    //
+    // That waste is harmless at low zoom and fatal above z10. The camera closes on the surface as
+    // the zoom rises: at z14 it sits 0.000674 radii out while `(distance + 1) * 1.5` still asks
+    // for a far plane at three. Worse, a near floored at `0.01` overtakes the surface entirely --
+    // the old form clamped there and the clip-space z of the point under the camera went from
+    // +0.002 at z10 to -0.85 at z11 and -13.9 at z14, which is behind the near plane and clipped.
+    // The whole planet went black from z11 up, and every test here passed because they all run at
+    // a zoom where the clamp does not bind.
+    //
+    // The margins keep a surface fragment off both planes. The floor is against a camera on the
+    // surface rather than against a zoom, since `camera_distance` can answer exactly one.
+    let (near, far) = depth_range(view);
     #[allow(clippy::cast_possible_truncation)]
     let fov = f64::from(crate::camera::DEFAULT_FOV as f32);
     // A viewport with no width divides by zero inside `perspective` and hands back a matrix of
@@ -260,6 +274,25 @@ pub fn clip_matrix(view: &crate::cover::ViewTransform) -> crate::camera::Mat4 {
     };
     let projection = crate::camera::perspective(fov, aspect, near, far);
     crate::camera::multiply(&projection, &eye)
+}
+
+/// The near and far planes [`clip_matrix`] brackets the visible cap with.
+///
+/// Exposed because the depth bias has to be sized against it. mbgl separates coincident layers by
+/// a fixed nudge in clip space, which works while the frustum is a fixed depth -- and a globe's is
+/// not. The camera closes on the surface as the zoom rises, so the span here falls from 1.7 at z4
+/// to 0.055 at z14, by which point a bias of 0.031 is more than half of it and the layer it
+/// belongs to is pushed through the near plane. At z16 it is 112% of the span. A producer scales
+/// the nudge by this rather than sending it absolute.
+#[must_use]
+pub fn depth_range(view: &crate::cover::ViewTransform) -> (f64, f64) {
+    let distance = camera_distance(view.zoom, view.height);
+    // The cap runs from the nearest surface point to the horizon; nothing past the horizon is
+    // ever drawn, so bracketing the whole ball spends the range on a hemisphere that cannot
+    // appear -- and at high zoom spends nearly all of it.
+    let horizon = (distance * distance - 1.0).max(0.0).sqrt();
+    let near = ((distance - 1.0) * 0.5).max(f64::EPSILON);
+    (near, (horizon * 1.5).max(near * 2.0))
 }
 
 /// A point through a matrix, divided through by `w`, or `None` when it is behind the camera.

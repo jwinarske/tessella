@@ -37,6 +37,7 @@ use tessella_style::Value;
 use tessella_style::property::{Binding, Color, DefaultValue, ResolvedProperty};
 use tessella_tile::camera;
 use tessella_tile::cover::ViewTransform;
+use tessella_tile::globe;
 
 /// The layer index frame-wide buffers travel under.
 ///
@@ -170,7 +171,14 @@ fn tile_matrix(
         }
         ProjectionMode::Globe => {
             let mut placement = camera::mercator_matrix_for_tile(z, x, y, wrap);
-            placement[14] = -f64::from(depth);
+            // Scaled to the frustum, not absolute. mbgl's nudge is a fixed distance in clip space
+            // because its depth range is a fixed depth; a globe's is not -- the camera closes on
+            // the surface as the zoom rises, so the span falls from 1.7 at z4 to 0.055 at z14 and
+            // 0.027 at z16. Sent absolute, the nudge is 56% of the range at z14 and 112% at z16,
+            // and the layer it belongs to is pushed through the near plane. The whole planet went
+            // black from z14 up, and the frames below that were layers shuffled past each other.
+            let (near, far) = globe::depth_range(view);
+            placement[14] = -f64::from(depth) * (far - near);
             Ok(placement)
         }
     }
