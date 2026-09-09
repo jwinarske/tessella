@@ -120,6 +120,12 @@ jobs:
       # exercise live: instantiating from a network response, the browser's own `fetch`, and a
       # `WebAssembly.Memory` the engine manages. Firefox because `dump()` gives a plain text
       # channel out of the page; a screenshot would mean reading numbers out of an image.
+      # Mesa's software rasteriser, because the runner has no GPU and the browser test checks
+      # what the renderer drew rather than only what it read. Without it Firefox refuses a WebGL2
+      # context outright.
+      - name: a software gl for the browser
+        if: matrix.target == 'wasm32-unknown-unknown'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libgl1-mesa-dri libglx-mesa0
       - name: the consumer runs under a browser
         if: matrix.target == 'wasm32-unknown-unknown'
         run: node web/test/browser.mjs

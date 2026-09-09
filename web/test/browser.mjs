@@ -79,6 +79,11 @@ async function run(port) {
       // reach it rather than refusing WebGL outright.
       'user_pref("webgl.force-enabled", true);',
       'user_pref("gfx.webrender.software", true);',
+      // A software rasteriser is a "major performance caveat", and refusing the context over
+      // that is exactly what a headless runner does not want.
+      'user_pref("webgl.disable-fail-if-major-performance-caveat", true);',
+      'user_pref("webgl.enable-surface-texture", false);',
+      'user_pref("gfx.webrender.all", true);',
       "",
     ].join("\n"),
   );
@@ -92,7 +97,16 @@ async function run(port) {
         "--window-size=512,512",
         `http://127.0.0.1:${port}/web/test/browser.html`,
       ],
-      { env: { ...process.env, MOZ_HEADLESS: "1", LIBGL_ALWAYS_SOFTWARE: "1" } },
+      {
+        env: {
+          ...process.env,
+          MOZ_HEADLESS: "1",
+          // Mesa's software path, named rather than hoped for: a runner has no GPU, and
+          // llvmpipe is what it has instead.
+          LIBGL_ALWAYS_SOFTWARE: "1",
+          GALLIUM_DRIVER: "llvmpipe",
+        },
+      },
     );
 
     // Killed on the answer rather than waited on. Without `--screenshot` a browser has no reason
