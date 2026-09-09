@@ -102,6 +102,11 @@ test("a map draws from bytes the host fetched, read out of linear memory", async
   }
   assert.ok(vertices > 0, "geometry was published with no vertices in it");
   assert.ok(indexed > 0, "no index bytes were reachable through the slab table");
+  // Zero, and asserted rather than assumed. `tessella_pending` reports through a pointer and
+  // returns a status, so calling it as though it returned the count answers `1` for ever --
+  // `NullArgument` -- which is indistinguishable from a map with one thing stuck in flight. This
+  // is the assertion that tells the two apart.
+  assert.equal(map.pending, 0, "the map still reports work in flight after settling");
 
   map.destroy();
 });

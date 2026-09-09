@@ -144,6 +144,12 @@ try {
       process.exit(1);
     }
   }
+  // A settled map has nothing outstanding. Worth its own check because the failure it catches --
+  // reading a status where a count was meant -- reports a plausible number rather than an error.
+  if (result.pending !== 0) {
+    console.error(`browser: the map still reports ${result.pending} outstanding after settling`);
+    process.exit(1);
+  }
   console.log(
     `browser: ${result.records} records, ${result.geometry} geometry, ${result.vertices} vertices, ` +
       `${result.indexBytes} index bytes, ${result.asked} fetches, webgl2 ${result.webgl2}`,
