@@ -8233,6 +8233,53 @@ all read out of the producer's linear memory from JavaScript. That is the memory
 end, and it needed no browser, because what a browser adds is `fetch` and a canvas and neither is
 what would break.
 
+### MVT version 1 polygons, and a continent that was not there
+
+Found by looking at the browser page: North America was missing. It was not the WebGL consumer --
+`capture-render` drew the same tile the same way -- and against `mbgl-render` it measured **10.2%
+gross**, against 0.003-0.013% for every scene in the parity sweep. Nothing had measured it because
+the sweep is z14-z16 city tiles and this is a z0 world tile.
+
+The chain, and three suspects cleared on the way. Our MVT decoder agrees with an independent
+decoder exactly on ring counts, point counts and bounding boxes. `classify_rings` is mbgl's
+algorithm line for line. `signed_area` accumulates in `i64`, so a world-scale ring cannot overflow
+it. And `earcutr` is not at fault either: handed a synthetic polygon with 256 holes it triangulates
+fine.
+
+What it was handed was not synthetic. The tile's first water feature put a **four-point island** at
+the head of the ring list and 118 continent-sized rings behind it -- every one of which
+`classify_rings` attached as a *hole of the island*, and every one of which lies entirely outside
+it. earcut answers one triangle for that, correctly. The ocean then painted over both Americas.
+
+The cause is one line mbgl has and this did not:
+
+```cpp
+if (feature.getVersion() < 2 && feature.getType() == POLYGON) {
+    lines = fixupPolygons(*lines);   // wagyu union, even-odd fill
+}
+```
+
+**MVT version 1 never specified ring winding order**, so a v1 polygon's rings cannot be classified
+by signed area at all -- mbgl re-derives the structure with an even-odd union first. `fixup_polygons`
+is that repair, over `i_overlay`, gated on the same version. Our three fixtures: the z0 world tile
+is v1, the two city tiles are v2, which is exactly why the zoom sweep app has always drawn North
+America and this one tile never did.
+
+**10.199% to 2.913%**, and the map is right. The residual is coastline: 77% of the differing pixels
+lie within three pixels of the oracle's shoreline, which is 11,199 pixels long. It is what using a
+different clipper than wagyu costs -- intersections are rounded to integers each library's own way.
+Exact vertex parity would need wagyu itself.
+
+Two things measured and rejected. `keep_all_points` made it slightly *worse* (3.054%), so
+collinear simplification is not the source. Repairing only features whose winding looks unusable
+gained 0.09% -- not enough to buy a rule about which geometry to trust, and there is no
+well-formed v1 tile here to show it helping, so this repairs every v1 polygon as mbgl does.
+
+The cost lands only on v1 tiles: for v2 -- everything modern, including every scene in the parity
+sweep, which is unchanged at 24, 86, 5, 103 -- it is one integer comparison. `i_overlay` brings
+five small crates and 87 `unsafe` uses, almost all `get_unchecked` bounds elision; that is the
+price of the union, and worth stating in a repository that is `forbid(unsafe_code)` throughout.
+
 ### A browser drawing the map
 
 `web/gl.js` draws fills, and `web/index.html` is a page that shows one. Fills are the smallest

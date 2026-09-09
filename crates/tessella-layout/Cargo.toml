@@ -19,6 +19,7 @@ tessella-glyph.workspace = true
 tessella-style.workspace = true
 tessella-tile.workspace = true
 thiserror.workspace = true
+i_overlay = { version = "8.1.1", default-features = false }
 
 [dev-dependencies]
 tessella-capture-abi.workspace = true
