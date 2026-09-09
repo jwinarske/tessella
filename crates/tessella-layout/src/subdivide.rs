@@ -81,6 +81,39 @@ pub fn grid_step(extent: i32, segments: u32) -> i32 {
     (extent + segments - 1) / segments
 }
 
+/// The grid a tile of level `z` is built against, or zero where it needs none.
+///
+/// A function of the tile's *level*, never of the camera. §5.1 makes a bucket a function of
+/// `(tile, layer, tile zoom)` and camera-free, which is what lets one set of vertices serve four
+/// views at four different fractional zooms -- and what stops the sweep app rebuilding every
+/// bucket on every frame, since it changes zoom on every frame. Subdivision keyed to the camera
+/// would spend both.
+///
+/// So it is evaluated at the *top* of the level, `z + 1`, which is the worst case a tile of that
+/// level is ever drawn at: the chord bound then holds everywhere within the level rather than only
+/// at its floor. That costs up to 1.9x the vertices a per-frame-optimal choice would pick -- the
+/// sphere's radius in pixels doubles across a level and the segment count goes as its square root
+/// -- and buys a bucket that is built once.
+///
+/// Zero from z11 up, where `edge_segments` asks for a single segment an edge. That is the same
+/// zoom the bend's `f32` arithmetic stops resolving a tile unit at, and the agreement is
+/// arithmetic rather than luck: both scale with the sphere's radius in pixels.
+#[must_use]
+pub fn step_for_level(z: u8, extent: i32) -> i32 {
+    let segments = tessella_tile::globe::edge_segments(z, f64::from(z) + 1.0, DEFAULT_TOLERANCE);
+    if segments <= 1 {
+        return 0;
+    }
+    grid_step(extent, segments)
+}
+
+/// How far a chord may sit from the sphere, in pixels.
+///
+/// Half a pixel, which is what §13.4's subdivision table is derived at. Not a knob: a caller
+/// wanting another bound calls `globe::edge_segments` and `grid_step` itself, and this exists so
+/// the producer has one answer rather than a parameter every layer would pass the same value for.
+pub const DEFAULT_TOLERANCE: f64 = 0.5;
+
 /// Splits `triangles` so that no triangle spans more than one cell of a `step`-unit grid.
 ///
 /// The grid is anchored at the tile origin and runs through negative coordinates the same way,

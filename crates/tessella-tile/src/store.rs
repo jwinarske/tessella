@@ -67,6 +67,32 @@ pub struct TileKey {
     pub overscaled_z: u8,
     /// Style revision the entry was built against.
     pub style_rev: u64,
+    /// The surface the entry's buckets were split for.
+    ///
+    /// Part of the key for the reason `overscaled_z` is: a bucket is shareable only between views
+    /// that would build it identically, and a globe's are not a plane's. Fill geometry is split
+    /// against a grid so that bending it per vertex follows the sphere instead of chording through
+    /// it, and that split adds vertices a flat map neither needs nor wants -- the flat buffers are
+    /// byte-exact against mbgl's, and a subdivided one is not.
+    ///
+    /// Above z10 the two builds are identical, because the split asks for one cell an edge from
+    /// there up. Keyed anyway rather than conditionally: a key that is sometimes part of the
+    /// identity is one nobody can reason about, and the cost of the extra term is one comparison.
+    pub surface: Surface,
+}
+
+/// What a tile's geometry is going to be drawn on.
+///
+/// Not a camera property and not a style one: it decides how finely geometry has to be split, so
+/// it belongs to the build rather than to the view that asked for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+pub enum Surface {
+    /// A plane. Geometry is left exactly as the tessellator produced it.
+    #[default]
+    Plane,
+    /// A sphere. Fill geometry is split against a grid fine enough that a bent chord stays within
+    /// half a pixel of the surface.
+    Sphere,
 }
 
 impl TileKey {
@@ -80,7 +106,19 @@ impl TileKey {
             y,
             overscaled_z: z,
             style_rev,
+            surface: Surface::Plane,
         }
+    }
+
+    /// The same key for a different surface.
+    ///
+    /// A builder rather than a parameter on both constructors: the plane is what almost every
+    /// caller wants, and a positional `Surface` on `new` would be a term every call site carries
+    /// to say "the usual".
+    #[must_use]
+    pub fn on(mut self, surface: Surface) -> Self {
+        self.surface = surface;
+        self
     }
 
     /// A key for a tile standing in above its own zoom.
@@ -108,6 +146,7 @@ impl TileKey {
             y,
             overscaled_z,
             style_rev,
+            surface: Surface::Plane,
         }
     }
 }

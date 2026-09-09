@@ -26,6 +26,7 @@
 //! and any rule hardcoding "counter-clockwise is exterior" would be right in one coordinate
 //! system and silently wrong in the other, turning every hole into a separate filled polygon.
 
+use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
 use i_overlay::core::fill_rule::FillRule;
@@ -278,23 +279,55 @@ pub fn build_features(features: &[&[Ring]]) -> FillBucket {
 /// dropped ring with its neighbour's colour.
 #[must_use]
 pub fn build_features_tracked(features: &[&[Ring]]) -> (FillBucket, Vec<usize>) {
+    build_features_tracked_on(features, 0)
+}
+
+/// As [`build_features_tracked`], splitting against a `step`-unit grid.
+///
+/// `step` of zero is the flat path byte for byte. [`crate::subdivide::step_for_level`] is what a
+/// caller derives it from, and answers zero above z10 -- so this is the same function as the one
+/// above wherever a globe would not have bent the geometry noticeably anyway.
+#[must_use]
+pub fn build_features_tracked_on(features: &[&[Ring]], step: i32) -> (FillBucket, Vec<usize>) {
     let mut bucket = FillBucket::default();
     let mut ends = Vec::with_capacity(features.len());
 
     for rings in features {
-        build_polygons(&mut bucket, classify_rings(rings));
+        build_polygons_on(&mut bucket, classify_rings(rings), step);
         ends.push(bucket.vertices.len());
     }
 
     (bucket, ends)
 }
 
-fn build_polygons(bucket: &mut FillBucket, polygons: Vec<Vec<Ring>>) {
+/// As [`build_polygons`], splitting against a `step`-unit grid first.
+///
+/// `step` of zero is the flat path, byte for byte: a globe needs vertices where a plane needs
+/// none, and above z10 it needs none either -- `edge_segments` asks for one segment an edge from
+/// there up, which is the same zoom the bend's `f32` arithmetic stops resolving a tile unit at.
+/// Both scale with the sphere's radius in pixels, so the agreement is arithmetic rather than luck.
+///
+/// # Why the rings are cut as well as the triangles
+///
+/// A fill draws twice over one vertex buffer: earcut's triangles, and a line loop per ring. Cutting
+/// only the triangles leaves the outline running in straight chords between the ring's original
+/// corners while the fill beneath it follows the sphere, so the outline lifts off its own fill. The
+/// rings are cut first, which also seeds earcut with the boundary vertices the triangles will be
+/// cut at anyway.
+fn build_polygons_on(bucket: &mut FillBucket, polygons: Vec<Vec<Ring>>, step: i32) {
     for mut polygon in polygons {
         // Before anything is counted: the cap changes the vertex count as well as the
         // triangulation, and a segment sized against the uncapped count is a segment whose
         // length does not describe its own buffer.
         limit_holes(&mut polygon);
+        // Before the count, because the cuts are vertices and a segment sized against the uncut
+        // count is a segment whose length does not describe its own buffer -- the same reason
+        // `limit_holes` runs above it.
+        if step > 0 {
+            for ring in &mut polygon {
+                *ring = crate::subdivide::subdivide_ring(ring, step);
+            }
+        }
         let total_vertices: usize = polygon.iter().map(Vec::len).sum();
         if total_vertices == 0 {
             continue;
@@ -343,16 +376,78 @@ fn build_polygons(bucket: &mut FillBucket, polygons: Vec<Vec<Ring>>) {
 
         let triangles = earcutr::earcut(&flat, &holes, 2).unwrap_or_default();
 
+        if step <= 0 {
+            #[allow(clippy::cast_possible_truncation)]
+            for index in &triangles {
+                bucket.indices.push(base as u16 + *index as u16);
+            }
+            if let Some(segment) = bucket.segments.last_mut() {
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    segment.vertex_length += total_vertices as u32;
+                    segment.index_length += triangles.len() as u32;
+                }
+            }
+            continue;
+        }
+
+        // The interior. Ring cuts put vertices on the boundary; earcut then spans the inside with
+        // triangles as large as the polygon allows, and those are what chord through the planet.
+        let soup: Vec<[Position; 3]> = triangles
+            .chunks_exact(3)
+            .map(|corner| {
+                [
+                    bucket.vertices[start_vertices + corner[0]],
+                    bucket.vertices[start_vertices + corner[1]],
+                    bucket.vertices[start_vertices + corner[2]],
+                ]
+            })
+            .collect();
+        let split = crate::subdivide::subdivide_triangles(&soup, step);
+
+        // Back into a shared buffer. The map is seeded with the ring vertices already pushed, so a
+        // cut that landed on one reuses it rather than adding a duplicate -- which matters for more
+        // than size: the outline indexes those vertices, and a second copy at the same position
+        // would be a seam the fill and its outline disagree about.
+        let mut seen: BTreeMap<Position, u16> = BTreeMap::new();
         #[allow(clippy::cast_possible_truncation)]
-        for index in &triangles {
-            bucket.indices.push(base as u16 + *index as u16);
+        for (offset, point) in bucket.vertices[start_vertices..].iter().enumerate() {
+            seen.entry(*point).or_insert(base as u16 + offset as u16);
+        }
+        let mut added = 0usize;
+        let mut emitted = 0usize;
+        'triangles: for triangle in &split {
+            for point in triangle {
+                let index = match seen.get(point) {
+                    Some(index) => *index,
+                    None => {
+                        let next = base as usize + total_vertices + added;
+                        // A polygon that subdivides past what a u16 index can reach stops here
+                        // rather than wrapping. It cannot arise from the grids this is called with
+                        // -- z0's is 41 cells a side, so 42*42 vertices for a tile-covering ring --
+                        // and a wrap would be a triangle indexing another polygon's vertices, which
+                        // draws a shape from two features and looks like a decoder fault.
+                        if next > MAX_SEGMENT_VERTICES {
+                            break 'triangles;
+                        }
+                        #[allow(clippy::cast_possible_truncation)]
+                        let index = next as u16;
+                        seen.insert(*point, index);
+                        bucket.vertices.push(*point);
+                        added += 1;
+                        index
+                    }
+                };
+                bucket.indices.push(index);
+                emitted += 1;
+            }
         }
 
         if let Some(segment) = bucket.segments.last_mut() {
             #[allow(clippy::cast_possible_truncation)]
             {
-                segment.vertex_length += total_vertices as u32;
-                segment.index_length += triangles.len() as u32;
+                segment.vertex_length += (total_vertices + added) as u32;
+                segment.index_length += emitted as u32;
             }
         }
     }

@@ -29,6 +29,7 @@ use tessella_storage::deferred::{DeferredFileSource, Ticket, Tickets};
 use tessella_storage::http::HttpFileSource;
 use tessella_storage::source::{Coalescing, FetchError, FileSource, Response};
 use tessella_tile::cover::{TileCoord, ViewTransform};
+use tessella_tile::store::Surface;
 
 const FIXTURE: &[u8] = include_bytes!("../../../tests/mvt-fixtures/real-world-0-0-0.mvt");
 
@@ -206,7 +207,7 @@ fn wanting_schedules_rather_than_waits() {
         wrap: 0,
     }];
 
-    source.want(&view(0.0), &cover, &[]);
+    source.want(&view(0.0), &cover, &[], Surface::Plane);
 
     // Resolution runs on a worker, so this thread carried on. `Idle` is the one answer that
     // would mean the call did nothing at all.
@@ -241,12 +242,12 @@ fn tiles_arrive_and_are_not_refetched() {
     let tile = TileId::new(0, 0, 0);
 
     // The first want resolves; the second, once resolved, plans and submits.
-    source.want(&view(0.0), &cover, &[]);
+    source.want(&view(0.0), &cover, &[], Surface::Plane);
     assert!(
         settle(&source, || source.readiness() == Readiness::Ready),
         "never resolved"
     );
-    source.want(&view(0.0), &cover, &[]);
+    source.want(&view(0.0), &cover, &[], Surface::Plane);
 
     assert!(
         settle(&source, || source.buckets(tile).is_some()),
@@ -262,7 +263,7 @@ fn tiles_arrive_and_are_not_refetched() {
     // Ten more ticks over the same cover. Every one plans the same job, and every one must find
     // it already built -- this is what stops a settled camera from re-fetching its own view.
     for _ in 0..10 {
-        source.want(&view(0.0), &cover, &[]);
+        source.want(&view(0.0), &cover, &[], Surface::Plane);
     }
     std::thread::sleep(Duration::from_millis(200));
 
@@ -295,12 +296,12 @@ fn a_tile_lands_on_the_drain_and_not_before() {
     }];
     let tile = TileId::new(0, 0, 0);
 
-    source.want(&view(0.0), &cover, &[]);
+    source.want(&view(0.0), &cover, &[], Surface::Plane);
     assert!(
         settle(&source, || source.readiness() == Readiness::Ready),
         "never resolved"
     );
-    source.want(&view(0.0), &cover, &[]);
+    source.want(&view(0.0), &cover, &[], Surface::Plane);
 
     // Long enough for the fetch to have finished several times over. Without a drain the bytes
     // sit in the ticket table and the tile is not built.
@@ -344,13 +345,13 @@ fn a_failed_fetch_is_counted_and_the_tile_is_asked_for_again() {
         wrap: 0,
     }];
 
-    source.want(&view(0.0), &cover, &[]);
+    source.want(&view(0.0), &cover, &[], Surface::Plane);
     assert!(
         settle(&source, || source.readiness() == Readiness::Ready),
         "an inline source never resolved"
     );
 
-    source.want(&view(0.0), &cover, &[]);
+    source.want(&view(0.0), &cover, &[], Surface::Plane);
     assert!(
         settle(&source, || source.failures().0 > 0),
         "a refused connection was never counted as a failure"
@@ -363,7 +364,7 @@ fn a_failed_fetch_is_counted_and_the_tile_is_asked_for_again() {
         settle(&source, || source.outstanding() == 0),
         "the failed tile is still counted as in flight"
     );
-    source.want(&view(0.0), &cover, &[]);
+    source.want(&view(0.0), &cover, &[], Surface::Plane);
     assert!(
         settle(&source, || fetches.load(Ordering::Acquire) > after_first),
         "a tile whose fetch failed was never asked for again"
@@ -402,7 +403,7 @@ fn the_producer_runs_on_one_thread_when_the_pool_has_no_workers() {
         pool.drain(usize::MAX);
     };
 
-    source.want(&view(0.0), &cover, &[]);
+    source.want(&view(0.0), &cover, &[], Surface::Plane);
     // No worker exists, so nothing has happened yet -- not even the style resolution, which is
     // the first thing `want` queues.
     assert_eq!(source.readiness(), Readiness::Resolving);
@@ -411,7 +412,7 @@ fn the_producer_runs_on_one_thread_when_the_pool_has_no_workers() {
     let deadline = Instant::now() + Duration::from_secs(20);
     while source.buckets(tile).is_none() && Instant::now() < deadline {
         tick();
-        source.want(&view(0.0), &cover, &[]);
+        source.want(&view(0.0), &cover, &[], Surface::Plane);
     }
 
     assert_eq!(source.readiness(), Readiness::Ready, "never resolved");
@@ -516,12 +517,12 @@ fn tiles_arrive_over_a_transport_that_is_not_the_pool() {
     }];
     let tile = TileId::new(0, 0, 0);
 
-    source.want(&view(0.0), &cover, &[]);
+    source.want(&view(0.0), &cover, &[], Surface::Plane);
     assert!(
         settle(&source, || source.readiness() == Readiness::Ready),
         "an inline source never resolved"
     );
-    source.want(&view(0.0), &cover, &[]);
+    source.want(&view(0.0), &cover, &[], Surface::Plane);
 
     assert_eq!(
         manual.asked(),
@@ -592,7 +593,7 @@ fn a_map_resolves_and_draws_with_no_threads_and_a_host_doing_the_fetching() {
         pool.drain(usize::MAX);
         source.drain();
         pool.drain(usize::MAX);
-        source.want(&view(0.0), &cover, &[]);
+        source.want(&view(0.0), &cover, &[], Surface::Plane);
         for (ticket, url) in host.take_requests() {
             served.push(url.clone());
             if url.ends_with("tiles.json") {
@@ -685,7 +686,7 @@ fn a_source_that_cannot_resolve_reports_it() {
         wrap: 0,
     }];
 
-    source.want(&view(0.0), &cover, &[]);
+    source.want(&view(0.0), &cover, &[], Surface::Plane);
 
     assert!(
         settle(&source, || matches!(
@@ -767,7 +768,7 @@ fn resolving_a_style_counts_as_outstanding() {
         y: 0,
         wrap: 0,
     }];
-    source.want(&view(0.0), &cover, &[]);
+    source.want(&view(0.0), &cover, &[], Surface::Plane);
 
     assert!(
         settle(&source, || source.readiness() == Readiness::Resolving),

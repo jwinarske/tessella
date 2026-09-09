@@ -62,10 +62,11 @@ use tessella_storage::source::{Coalescing, FileSource, Response};
 use tessella_storage::tileset::{self, TileSet};
 use tessella_style::{LayerKind, RejectedLayer, Source, Style};
 use tessella_tile::cover::{self, ViewTransform};
+use tessella_tile::store::Surface;
 
 use crate::cache::TileCache;
 use crate::pool::{Pool, Priority};
-use crate::tile::{LayerBucket, TileId, build_mvt_tile, build_raster_tile, build_tile};
+use crate::tile::{LayerBucket, TileId, build_mvt_tile_on, build_raster_tile, build_tile};
 
 /// The tile zoom a source is covered at.
 ///
@@ -543,12 +544,12 @@ fn decode_and_build(
                 url: url.clone(),
                 message: error.to_string(),
             })?;
-            build_mvt_tile(style, &job.source, job.tile, &decoded).map_err(|error| {
-                BootError::Build {
+            build_mvt_tile_on(style, &job.source, job.tile, &decoded, job.key.surface).map_err(
+                |error| BootError::Build {
                     url: url.clone(),
                     message: error.to_string(),
-                }
-            })
+                },
+            )
         }
         Work::Raster { url } => {
             let response = body(job, fetched)?;
@@ -693,6 +694,7 @@ pub(crate) fn plan(
     view: &ViewTransform,
     cover: &[cover::TileCoord],
     style_rev: u64,
+    surface: Surface,
 ) -> Result<Vec<Job>, BootError> {
     let mut raster_covers: alloc::collections::BTreeMap<u8, Vec<cover::TileCoord>> =
         alloc::collections::BTreeMap::new();
@@ -738,7 +740,8 @@ pub(crate) fn plan(
                     id.y,
                     id.overscaled_z,
                     style_rev,
-                ),
+                )
+                .on(surface),
                 tile: id,
                 work: work(url),
             });
@@ -753,7 +756,8 @@ pub(crate) fn plan(
             jobs.push(Job {
                 cover: id,
                 source: name.clone(),
-                key: tessella_tile::store::TileKey::new(name.as_str(), id.z, id.x, id.y, style_rev),
+                key: tessella_tile::store::TileKey::new(name.as_str(), id.z, id.x, id.y, style_rev)
+                    .on(surface),
                 tile: id,
                 work: Work::Geojson {
                     features: alloc::sync::Arc::clone(features),
@@ -773,7 +777,8 @@ pub(crate) fn plan(
             jobs.push(Job {
                 cover: id,
                 source: name.clone(),
-                key: tessella_tile::store::TileKey::new(name.as_str(), id.z, id.x, id.y, style_rev),
+                key: tessella_tile::store::TileKey::new(name.as_str(), id.z, id.x, id.y, style_rev)
+                    .on(surface),
                 tile: id,
                 work: Work::Geojson {
                     features: alloc::sync::Arc::new(index.tile_features(id.z, id.x, id.y)),
@@ -1287,7 +1292,18 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
     // raster source needs one zoom more than a vector one to fill the same screen, so a single
     // cover would fetch imagery at half the resolution of the labels drawn over it.
     let cover = cover::cover(view).map_err(|_| BootError::Uncovered)?;
-    let jobs = plan(&sets, &documents, &clustered, view, &cover, style_rev)?;
+    // A cold start is a plane. A globe is a runtime toggle, so the first frame is drawn
+    // before anything could have asked for one -- and a boot that guessed otherwise would
+    // build every tile twice for the case nobody asked for.
+    let jobs = plan(
+        &sets,
+        &documents,
+        &clustered,
+        view,
+        &cover,
+        style_rev,
+        Surface::Plane,
+    )?;
 
     let cover_computed = started.elapsed();
 
