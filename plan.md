@@ -8083,7 +8083,24 @@ cursor, because resolving alone would only prove the manifest came out of the ar
 cursor proves a tile did. Load-bearing: with the route removed the map fails with "unknown scheme:
 pmtiles".
 
-What is left of WS-4: `OpfsCache`. A remote planet is now something the quad could name.
+What is left of WS-4: `OpfsCache`.
+
+### The quad, reading a planet off an origin
+
+Not a capability the quad *could* have -- one it has. `quad_probe` against
+`pmtiles://https://build.protomaps.com/20260904.pmtiles` draws Seattle, Tokyo, Liestal and
+Shanghai at z13, z15, z12 and z14: **all four quiescent and image-stable in nine seconds**, with
+22, 22, 12 and 12 primitives, and nothing on this disk. The style the quad was written against
+wanted a planet served from `127.0.0.1:8091`, and no planet is here; that is what the range reader
+removes.
+
+One thing it cost, and it is a build flag rather than a fault. A default build answers
+`TLS required, but transport is unsecured`, because `tls` is off by default for the reason
+`tessella-storage` states -- `rustls` brings `ring`, which is C and assembly, and the cross lane
+checks default features exactly so that it needs no cross C toolchain. Every archive worth reading
+is `https`, so a probe that reads one is built `--features tls`. Worth writing down because the
+failure names the cause exactly and still took a `tessella_status` call to see, which is what that
+call exists for: the alternative was four blank panes.
 
 The first gate was written down as `cargo check --workspace --target wasm32-unknown-unknown`
 asserting "the `no_std` discipline holds on a target with no threads, no clock and no filesystem".
