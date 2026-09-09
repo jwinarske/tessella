@@ -2626,7 +2626,7 @@ fn write_layer_state(
             // same for every frame. Counted off the bindings rather than assumed to be one, so
             // the buffer stays the length the drawables address it at whatever the cover did.
             let drawables: Vec<DrawableEntry> =
-                if crate::tile::background_covers_viewport(style, view.zoom) {
+                if crate::tile::background_covers_viewport(style, view.zoom, projection) {
                     matrices(0)
                         .map(|_| DrawableEntry::for_viewport(layer_index, 0))
                         .collect()

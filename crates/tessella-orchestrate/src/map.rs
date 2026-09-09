@@ -736,7 +736,7 @@ impl Map {
         // not move with the camera, so nothing about it is per tile.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let integer_zoom = self.view.zoom.floor().max(0.0) as u8;
-        if crate::tile::background_covers_viewport(&self.style, self.view.zoom) {
+        if crate::tile::background_covers_viewport(&self.style, self.view.zoom, self.projection) {
             let anchor = TileId::new(0, 0, 0);
             let built: Vec<LayerBucket> = crate::tile::build_sourceless(&self.style, anchor)
                 .unwrap_or_default()

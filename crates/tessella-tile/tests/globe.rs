@@ -709,3 +709,40 @@ fn the_bend_and_the_horizon_agree_about_the_far_side() {
     // It still projects -- a projection cannot express occlusion, which is why the cull exists.
     assert!(globe::project_point(&globe::clip_matrix(&view), point).is_some());
 }
+
+/// Where the bend's 32-bit arithmetic runs out, measured rather than asserted.
+///
+/// The consumer's vertex stage receives the placement as `f32` and multiplies in `f32`, so a
+/// tile-local step of one unit has to survive `scale * local + translate` against a translation of
+/// up to one whole world. One unit is `1 / (2^z * EXTENT)`; the ulp near the middle of `0..1` is
+/// about 6e-8. **z11 is the last zoom where a unit still moves the result, and z12 collapses it to
+/// zero.**
+///
+/// That is not a defect to fix here, and a wider float is not the fix: GLSL ES has no double, so
+/// past this the bend has to be re-anchored per tile rather than expressed in world coordinates.
+/// MapLibre GL JS switches its globe to Mercator around z12, which is the same boundary arrived at
+/// from the other side. The material comments quote this test.
+#[test]
+fn the_bends_f32_placement_resolves_a_tile_unit_through_z11() {
+    let resolves = |z: u8| {
+        let across = f64::from(1u32 << z);
+        // The worst case is a tile in the middle of the world, where the translation is largest.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let x = (across / 2.0) as u32;
+        let matrix = camera::mercator_matrix_for_tile(z, x, 0, 0);
+        #[allow(clippy::cast_possible_truncation)]
+        let (scale, translate) = (matrix[0] as f32, matrix[12] as f32);
+        let at = |local: f32| scale * local + translate;
+        at(1.0) - at(0.0) > 0.0
+    };
+    for z in 0..=11 {
+        assert!(
+            resolves(z),
+            "z{z} lost a tile unit before it was expected to"
+        );
+    }
+    assert!(
+        !resolves(12),
+        "z12 resolved a tile unit, so the boundary moved"
+    );
+}

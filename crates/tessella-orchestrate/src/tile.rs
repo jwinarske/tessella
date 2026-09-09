@@ -36,6 +36,7 @@ use crate::emit::PatternVertices;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
+use tessella_capture_abi::ProjectionMode;
 use tessella_layout::circle::CircleBucket;
 use tessella_layout::fill::{self, FillBucket, Position, Ring};
 use tessella_layout::fill_extrusion::{self, FillExtrusionBucket};
@@ -672,8 +673,18 @@ fn draws_from(layer: &tessella_style::Layer, source: &str) -> bool {
 /// so the unique case is the one that applies.
 ///
 /// The zoom is needed because `minzoom`/`maxzoom` decide whether the layer draws at all.
+///
+/// A globe never takes it. The quad is placed by a matrix that does not consult the camera --
+/// which is exactly right for something standing in for a clear, and is why it cannot be bent:
+/// there is no tile behind it whose Mercator span the vertex stage could turn into a patch of
+/// sphere. Bending everything else and leaving this flat draws a rectangle with a curved
+/// coastline on it, so a globe takes the per-tile path, where every quad is a tile and every
+/// tile has a placement.
 #[must_use]
-pub fn background_covers_viewport(style: &Style, zoom: f64) -> bool {
+pub fn background_covers_viewport(style: &Style, zoom: f64, projection: ProjectionMode) -> bool {
+    if projection == ProjectionMode::Globe {
+        return false;
+    }
     // A diagnostic escape hatch, read once: the viewport background is one quad over the whole
     // frame ordered by paint order, so it is the first suspect whenever everything under the
     // labels disappears. This is how that is tested without editing a style.

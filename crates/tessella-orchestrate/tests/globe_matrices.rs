@@ -180,3 +180,32 @@ fn an_empty_viewport_fails_where_it_is_the_cameras_to_fail() {
         "the viewport reached the placement"
     );
 }
+
+/// A globe draws its background per tile, never as one quad over the viewport.
+///
+/// The viewport quad is placed by a matrix that does not consult the camera, which is right for
+/// something standing in for a clear and is why it cannot be bent: there is no tile behind it
+/// whose Mercator span a vertex stage could turn into a patch of sphere. Left in, a globe draws a
+/// rectangle with a curved coastline on it.
+#[test]
+fn a_globe_refuses_the_viewport_background() {
+    const STYLE: &str = r##"{
+        "version": 8,
+        "sources": {},
+        "layers": [{ "id": "bg", "type": "background",
+                     "paint": { "background-color": "#f4f1ea" } }]
+    }"##;
+    let style = tessella_style::Style::parse(STYLE).expect("the style parses");
+    assert!(
+        tessella_orchestrate::tile::background_covers_viewport(
+            &style,
+            4.0,
+            ProjectionMode::Mercator
+        ),
+        "a plane with a background first layer takes the shortcut",
+    );
+    assert!(
+        !tessella_orchestrate::tile::background_covers_viewport(&style, 4.0, ProjectionMode::Globe),
+        "a globe took the viewport shortcut, which cannot be bent",
+    );
+}

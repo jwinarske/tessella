@@ -8120,6 +8120,53 @@ plane only refuses because of arithmetic it does not share. The viewport is guar
 The parity sweep is what says the plane did not move: 24 / 86 / 5 / 103, unchanged, over a hot path
 that now branches on every drawable.
 
+### The bend, written down, and the zoom it stops working at
+
+`fill_globe.mat` and `background_globe.mat` are the vertex hook: `tile-local -> normalized
+Mercator -> sphere -> clip`, with the producer supplying the first step as `matrix` and the last as
+`globeMatrix`. The middle is a transcription of `globe::sphere_point_from_mercator` and not a second
+derivation of it -- that module pins the whole chain on the CPU, so a disagreement here is a
+transcription error rather than an open question. That is the point of having done the arithmetic
+first.
+
+**Separate materials, not a branch.** A Mercator fill's matrix reaches clip space and a globe's
+reaches normalized Mercator, so the two differ in what a vertex *is*. A uniform branch would put
+that fork on every vertex of every flat map ever drawn to serve a mode most never enter, and would
+leave the Mercator path no longer byte-identical to what the parity sweep passed.
+
+The depth bias arrives free. The input z is zero, so the only thing reaching `merc.z` through the
+placement multiply is that matrix's own `[3][2]` -- exactly where the producer parked the nudge a
+globe has no per-drawable projection to fold in. The shader adds it to clip z after the bend.
+
+**The background is the planet.** Every other layer draws on top of it, so it decides whether a
+globe reads as a sphere at all: bend everything else and leave this flat and the map is a rectangle
+with curved rivers on it. So `background_covers_viewport` now refuses under `Globe`. That shortcut
+is one quad over the frame placed by a matrix that does not consult the camera -- right for
+something standing in for a clear, and unbendable for the same reason: there is no tile behind it
+whose Mercator span a vertex stage could turn into a patch of sphere.
+
+**Where it stops working, measured rather than estimated.** `merc` is a position in `0..1` across
+the whole world in 32-bit float, and the consumer multiplies in 32-bit float. One tile unit is
+`1 / (2^z * EXTENT)` against an ulp near 6e-8. Walking the zooms:
+
+| | z4 | z6 | z8 | z10 | z11 | z12 |
+| --- | --- | --- | --- | --- | --- | --- |
+| headroom over the ulp | 128x | 32x | 8x | 2x | 1x | — |
+| a tile unit still moves the result | yes | yes | yes | yes | **yes** | **no** |
+
+z11 is the last that resolves and z12 collapses to zero. MapLibre GL JS switches its globe to
+Mercator around z12, which is the same boundary arrived at from the other side, and finding it
+independently is the closest thing to an oracle this page has had. Past it the bend has to be
+re-anchored per tile; a wider float is not the fix, GLSL ES having no double.
+
+One `PI` is worth recording because it cost a compile: Filament's shader prelude already defines
+it, so a `const float PI` of one's own expands to `const float 3.14159...` and is a syntax error
+rather than a shadowing warning.
+
+Nothing loads these yet. The renderer keys materials by file stem through `familyOf`, which returns
+`NONE` for both, so they sit in the directory and are skipped -- which is why the parity sweep is
+unmoved with them present. Selecting them is the next step.
+
 ## 19. wasm32 as a fourth target
 
 Build the producer for `wasm32-unknown-unknown` so a browser page draws the same capture stream a
