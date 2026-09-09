@@ -15,6 +15,7 @@
 -->
 <script type="module">
   import { TessellaMap } from "../map.js";
+  import { FillRenderer } from "../gl.js";
   import { geometryAdd } from "../ring.js";
   import { KIND } from "../abi.js";
 
@@ -72,8 +73,37 @@
       indexBytes += (map.slabs.resolve(add.indexes) ?? []).length;
     }
 
+    // The pixels, not just the records. Drawn into an offscreen canvas and read back through
+    // GL, because what is being checked is what the renderer produced -- a screenshot would be
+    // the compositor's view of it, and headless it is captured at load, before any of this ran.
+    const canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 256;
+    const gl = canvas.getContext("webgl2", { preserveDrawingBuffer: true });
+    let painted = null;
+    if (gl) {
+      const renderer = new FillRenderer(gl);
+      renderer.background = [0.043, 0.051, 0.063, 1];
+      for (const record of seen) {
+        renderer.absorb(map, [record]);
+      }
+      const drawn = renderer.draw(256, 256);
+      const pixels = new Uint8Array(256 * 256 * 4);
+      gl.readPixels(0, 0, 256, 256, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      let water = 0;
+      let ground = 0;
+      for (let i = 0; i < pixels.length; i += 4) {
+        // The style's fill is #3050c0 and its background #101418, so the blue channel separates
+        // them without needing an exact match through whatever blending happened at the edges.
+        if (pixels[i + 2] > 100) water++;
+        else ground++;
+      }
+      painted = { drawn, water, ground };
+    }
+
     report({
       ok: true,
+      painted,
       pending: map.pending,
       webgl2: !!document.createElement("canvas").getContext("webgl2"),
       asked: asked.length,
