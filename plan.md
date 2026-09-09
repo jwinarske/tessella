@@ -7962,6 +7962,52 @@ What this does not cover is the bend, which does not exist yet. A shader has its
 each of these -- an unbounded loop is a hung GPU, and a NaN vertex is a whole draw call gone -- and
 none of the checks above will reach it.
 
+### Applying the subdivision, and the vertex counts that came back
+
+§13.4 leaves the bend to the consumer's material and says the producer emits ordinary Mercator
+placement. That is true of *where* a vertex goes and silent about how many there are. A bend moves
+vertices and interpolates between them, so earcut's output -- whose triangles are as large as the
+polygon allows, one of them covering the Pacific in a low-zoom water layer -- bends into a flat
+sheet chording through the inside of the planet. Three corners land on the surface and nothing
+between them does.
+
+So `layout::subdivide` splits geometry against a grid before it is handed over. The grid is global
+and anchored at the tile origin, which is the whole of why it works: a cut point depends only on
+the edge and the line, so two triangles sharing an edge cut it in the same places without being
+told they are neighbors. Subdividing each triangle against its own bounds instead would put a
+vertex part-way along a neighbor's edge -- invisible while the map is flat, and a crack in the
+planet the moment both are bent, because the neighbor's edge stays a chord while this one follows
+the sphere.
+
+**The checks are structural, because there is still no oracle.** Area survives the split to a
+bound; every output triangle fits in one cell, which is what holds the chord error to what
+`edge_segments` solved for; no vertex lands inside another's edge; and a ring is cut where a
+triangle is, so a fill's outline does not lift off the fill once both are bent. The T-junction
+assertion was checked against a mesh built with one in it rather than trusted to be watching.
+
+The counts come back as the derivation predicted, which is the one place this page gets an
+independent check on anything:
+
+| segments an edge | 1 | 2 | 4 | 6 | 8 | 11 | 15 | 21 | 29 | 128 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| triangles | 2 | 8 | 32 | 72 | 128 | 242 | 450 | 882 | 1682 | 32768 |
+| vertices | 4 | 9 | 25 | 49 | 81 | 144 | 256 | 484 | 900 | 16641 |
+
+Those are `(n+1)²` exactly, and the row is the one §13.4's subdivision table gives for z0 through
+z6 -- 29 segments and 900 vertices at z0, 21 and 484 at z1, 11 and 144 at z3. The bound and the
+mesh were derived separately and agree.
+
+Rounding is the one place this is approximate. Clipping runs in `f64` and rounds once at the end
+to the `i16` the vertex buffer carries, so a cut lands up to half a tile unit from the grid line
+it was solved for. That is below the half-pixel tolerance at any zoom where a tile unit is smaller
+than a pixel, and it does not cost the T-junction property: the same edge and the same line give
+the same intersection whichever triangle asks, so both round to the same integer.
+
+Nothing calls this yet. Wiring it into `FillBucket` is its own step and not a small one -- the
+subdivided soup has to be deduplicated back into a shared vertex buffer, and `outline_indices` has
+to walk the subdivided ring rather than the original -- and it is worth doing against a bend that
+exists, so the two can be looked at together. What is left of §13.4 is that bend, then symbols.
+
 ## 19. wasm32 as a fourth target
 
 Build the producer for `wasm32-unknown-unknown` so a browser page draws the same capture stream a
