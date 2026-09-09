@@ -8220,6 +8220,52 @@ is a second implementation of the same function, so it is checkable against the 
 every zoom, without rendering anything -- which is the strongest position any piece of this page has
 been in, and it is only available because the arithmetic was closed before the material was written.
 
+### Wiring the subdivision, and the octagon becoming a circle
+
+§13.4's last producer piece. The measurement is the result, so it goes first: at zoom one over an
+800-pixel viewport the drawn planet filled **0.894** of the disc `asin(1/d)` says it should subtend,
+which is an inscribed octagon to three decimal places. With the geometry split it fills **1.002**.
+The silhouette was polygonal because the geometry was, and both numbers came out of the same probe
+against the same camera.
+
+**Where the split is decided.** `subdivide::step_for_level` takes the tile's *level* and never the
+camera. §5.1 makes a bucket a function of `(tile, layer, tile zoom)` and camera-free, which is what
+lets one set of vertices serve four views at four fractional zooms -- and what stops the sweep app
+rebuilding every bucket on every frame, since it changes zoom on every frame. Measured, the
+granularity varies 1.5-1.9x *within* a level, so a camera-keyed split would spend both properties.
+Evaluated at the top of the level instead, `z + 1`, so the chord bound holds everywhere inside it.
+
+**Why the surface joined the key rather than being switched on.** Subdividing unconditionally
+failed two goldens: `fill_buffers_are_byte_identical_to_the_oracle` at z5, 2,356 vertices against
+1,985. Byte-exactness against mbgl is what the flat path is *for*, so `TileKey` gains a `Surface`
+beside `overscaled_z` -- whose own doc already says a term joins the key when two views would not
+build the bucket identically. A globe pane and a flat one share the fetch and not the buffers.
+
+It could not be a field on the source: one `TileSource` serves every map in the process, so the
+surface belongs to whoever is asking and travels in the key. It could not be a field on the map
+either, because the map is not what plans the jobs. It is a parameter of `want`.
+
+**The background is the planet.** Every other layer draws on top of it, so four corners bent onto a
+sphere is what made the earlier renders read as a polyhedron with a map on it. `encode_background`
+emits an `n x n` grid, and `cells` of one is mbgl's four vertices in the order its six indices
+expect -- which is what the goldens hash, so the flat path is unchanged by construction rather than
+by test.
+
+That one cost an hour to a bug worth recording: the segment carried the grid's counts and
+`geometry_add` was still handed `QUAD.len()`, so the consumer saw four vertices of nine hundred.
+The planet drew as one pixel. Two places said how long the buffer was and only one of them was
+updated, which is the shape of mistake a single count would have made impossible.
+
+**What is left in the picture.** A notch at the north pole, because Mercator clamps at ±85° and a
+sphere has surface above it -- a globe wants a cap, and the producer has nothing to put there. And
+thin streaks over Canada from sliver triangles at that same clamp. Both are the projection's edge
+rather than the bend's, and both are visible in the render rather than argued about.
+
+Above z10 none of this runs: `step_for_level` answers zero, `encode_background` emits the quad, and
+a tile takes the path it always did. That is the same zoom the bend's `f32` arithmetic stops
+resolving a tile unit at, and the agreement is arithmetic rather than luck -- both scale with the
+sphere's radius in pixels.
+
 ## 19. wasm32 as a fourth target
 
 Build the producer for `wasm32-unknown-unknown` so a browser page draws the same capture stream a

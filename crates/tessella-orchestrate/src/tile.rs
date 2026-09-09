@@ -43,6 +43,7 @@ use tessella_layout::fill_extrusion::{self, FillExtrusionBucket};
 use tessella_layout::line::{LineBucket, LineCap, LineJoin, LineOptions};
 use tessella_layout::paint::{BinderError, PaintBinder};
 use tessella_layout::raster::RasterBucket;
+use tessella_layout::subdivide;
 use tessella_layout::symbol_layout::SymbolLayout;
 use tessella_source::clip::{
     clip_line_to_box, clip_points_to_box, clip_ring_to_box, round_to_tile_units,
@@ -52,7 +53,7 @@ use tessella_source::tiling::{EXTENT, TilingOptions};
 use tessella_style::property::{ResolvedProperty, paint_specs, resolve_paint};
 use tessella_style::{Filter, LayerKind, Style};
 use tessella_tile::projection;
-use tessella_tile::store::{Lookup, TileKey, TileStore};
+use tessella_tile::store::{Lookup, Surface, TileKey, TileStore};
 
 /// The tile being built.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -299,6 +300,43 @@ pub fn build_tile_with_patterns(
     options: TilingOptions,
     patterns: Option<&dyn PatternLookup>,
 ) -> Result<Vec<LayerBucket>, TileError> {
+    build_tile_on_with_patterns(
+        style,
+        source,
+        tile,
+        features,
+        options,
+        patterns,
+        Surface::Plane,
+    )
+}
+
+/// As [`build_tile_with_patterns`], for a named surface.
+///
+/// A GeoJSON source is split the same way an MVT one is and for the same reason: the geometry is
+/// the same shape by the time it reaches the tessellator, and a line of GeoJSON coastline chords
+/// through a globe exactly as a vector-tile one does.
+///
+/// # Errors
+///
+/// [`TileError`] when a layer's filter or paint properties do not compile.
+#[allow(clippy::too_many_arguments)]
+pub fn build_tile_on_with_patterns(
+    style: &Style,
+    source: &str,
+    tile: TileId,
+    features: &[GeoJsonFeature],
+    options: TilingOptions,
+    patterns: Option<&dyn PatternLookup>,
+    surface: Surface,
+) -> Result<Vec<LayerBucket>, TileError> {
+    // The grid this tile's fills are split against, derived once. Zero on a plane -- which is the
+    // flat path byte for byte, and what the oracle diff compares -- and zero on a sphere above
+    // z10, where `edge_segments` asks for a single segment an edge.
+    let fill_step = match surface {
+        Surface::Plane => 0,
+        Surface::Sphere => subdivide::step_for_level(tile.bucket_zoom(), EXTENT),
+    };
     let (lo, hi) = options.clip_range();
     let (lo, hi) = (f64::from(lo), f64::from(hi));
     let mut buckets = Vec::new();
@@ -451,7 +489,7 @@ pub fn build_tile_with_patterns(
                     }
                 }
                 let borrowed: Vec<&[Ring]> = per_feature.iter().map(Vec::as_slice).collect();
-                let (content, ends) = build_fill_content(layer, &paint, &borrowed);
+                let (content, ends) = build_fill_content(layer, &paint, &borrowed, fill_step);
                 for (feature, end) in kept.iter().zip(&ends) {
                     binder
                         .push(*end, &paint, *feature)
@@ -785,6 +823,7 @@ fn build_fill_content(
     layer: &tessella_style::Layer,
     paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
     rings: &[&[Ring]],
+    step: i32,
 ) -> (Content, Vec<usize>) {
     if layer.kind == LayerKind::FillExtrusion {
         // A data-driven opacity cannot be resolved to one number here, and mbgl does not try:
@@ -802,7 +841,14 @@ fn build_fill_content(
         let (bucket, ends) = fill_extrusion::build_features_tracked(rings, opaque, patterned);
         return (Content::Fill3d(bucket), ends);
     }
-    let (bucket, ends) = fill::build_features_tracked(rings);
+    // Split against the grid a globe would bend this level's tiles on. Unconditional, and it
+    // costs a flat map nothing worth measuring: `step_for_level` answers zero from z11 up, so
+    // every tile at the zooms a map is usually read at takes the same path it always did, and
+    // below that a tile-covering ring is at most 42 vertices a side. Keyed to the tile's level and
+    // not the camera, so §5.1's bucket stays camera-free and one set of vertices still serves a
+    // globe view and a flat one at once -- which is the alternative this avoids: a bucket keyed by
+    // surface, built twice, in an app that shows both.
+    let (bucket, ends) = fill::build_features_tracked_on(rings, step);
     (Content::Fill(bucket), ends)
 }
 
@@ -896,6 +942,27 @@ pub fn build_mvt_tile(
     build_mvt_tile_with_patterns(style, source, tile, decoded, None)
 }
 
+/// As [`build_mvt_tile`], for a named surface.
+///
+/// [`Surface::Plane`] is this function's other name: the buffers are the ones the oracle diff
+/// compares, byte for byte. [`Surface::Sphere`] splits fill geometry against a grid so that
+/// bending it per vertex follows the sphere rather than chording through it -- which is a
+/// different vertex buffer, and the reason the surface is part of a tile's key rather than a
+/// parameter of drawing it.
+///
+/// # Errors
+///
+/// [`TileError`] when a layer's filter or paint properties do not compile.
+pub fn build_mvt_tile_on(
+    style: &Style,
+    source: &str,
+    tile: TileId,
+    decoded: &tessella_source::mvt::Tile,
+    surface: Surface,
+) -> Result<Vec<LayerBucket>, TileError> {
+    build_mvt_tile_on_with_patterns(style, source, tile, decoded, None, surface)
+}
+
 /// As [`build_mvt_tile`], resolving each feature's pattern through `patterns`.
 ///
 /// # Errors
@@ -908,6 +975,29 @@ pub fn build_mvt_tile_with_patterns(
     decoded: &tessella_source::mvt::Tile,
     patterns: Option<&dyn PatternLookup>,
 ) -> Result<Vec<LayerBucket>, TileError> {
+    build_mvt_tile_on_with_patterns(style, source, tile, decoded, patterns, Surface::Plane)
+}
+
+/// As [`build_mvt_tile_with_patterns`], for a named surface.
+///
+/// # Errors
+///
+/// [`TileError`] when a layer's filter or paint properties do not compile.
+pub fn build_mvt_tile_on_with_patterns(
+    style: &Style,
+    source: &str,
+    tile: TileId,
+    decoded: &tessella_source::mvt::Tile,
+    patterns: Option<&dyn PatternLookup>,
+    surface: Surface,
+) -> Result<Vec<LayerBucket>, TileError> {
+    // The grid this tile's fills are split against, derived once. Zero on a plane -- which is
+    // the flat path byte for byte, and what the oracle diff compares -- and zero on a sphere
+    // above z10, where `edge_segments` asks for a single segment an edge.
+    let fill_step = match surface {
+        Surface::Plane => 0,
+        Surface::Sphere => subdivide::step_for_level(tile.bucket_zoom(), EXTENT),
+    };
     let mut buckets = Vec::new();
 
     // Filters are evaluated at the tile's own zoom, as mbgl's layouts do — `zoom` there is
@@ -1002,7 +1092,7 @@ pub fn build_mvt_tile_with_patterns(
                     }
                 }
                 let borrowed: Vec<&[Ring]> = per_feature.iter().map(Vec::as_slice).collect();
-                let (content, ends) = build_fill_content(layer, &paint, &borrowed);
+                let (content, ends) = build_fill_content(layer, &paint, &borrowed, fill_step);
                 let borrowed_features: Vec<&dyn tessella_style::expression::Feature> = kept
                     .iter()
                     .map(|feature| feature as &dyn tessella_style::expression::Feature)
@@ -1509,6 +1599,13 @@ pub struct TileBuilder {
     store: TileStore<Vec<LayerBucket>>,
     style_rev: u64,
     builds: u64,
+    /// The surface every key this builder makes names.
+    ///
+    /// A field rather than an argument on `key`: it is a property of the map, one map has one
+    /// projection, and threading it through every call site would be three arguments saying the
+    /// same thing. In the key rather than beside it because a plane's buckets and a sphere's are
+    /// not interchangeable -- the plane's are byte-exact against mbgl and a split one is not.
+    surface: Surface,
 }
 
 impl TileBuilder {
@@ -1519,7 +1616,23 @@ impl TileBuilder {
             store: TileStore::new(capacity),
             style_rev,
             builds: 0,
+            surface: Surface::Plane,
         }
+    }
+
+    /// Sets the surface this builder's tiles are built for.
+    ///
+    /// Keys change with it, so the tiles already built stay in the store under the old surface
+    /// rather than being wrong under the new one: a projection switch rebuilds rather than
+    /// reinterprets, and the old entries age out of the LRU as any superseded tile does.
+    pub const fn build_for(&mut self, surface: Surface) {
+        self.surface = surface;
+    }
+
+    /// The surface this builder's tiles are built for.
+    #[must_use]
+    pub const fn surface(&self) -> Surface {
+        self.surface
     }
 
     /// The key a tile occupies in the store.
@@ -1540,6 +1653,7 @@ impl TileBuilder {
             tile.overscaled_z,
             self.style_rev,
         )
+        .on(self.surface)
     }
 
     /// Builds a tile, or returns the one already built.

@@ -91,6 +91,7 @@ use tessella_storage::source::{Coalescing, RangeFetch, Router};
 use tessella_style::Style;
 use tessella_tile::camera;
 use tessella_tile::cover::{self, ViewTransform};
+use tessella_tile::store::Surface;
 
 /// The texture the sprite atlas is uploaded as.
 ///
@@ -816,9 +817,19 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
         // not depend on that, and a consumer that has fallen behind is the last one that should
         // also be made to wait for its tiles.
         let view = *state.map.view();
-        state
-            .source
-            .want(&view, state.map.wanted(), state.map.speculative());
+        state.source.want(
+            &view,
+            state.map.wanted(),
+            state.map.speculative(),
+            // The map's own projection, not the source's: one source serves every map in the
+            // process, so the surface a tile is split for belongs to whoever asked for it and
+            // travels in the key. A globe pane and a flat one beside it share the fetch and
+            // not the buckets.
+            match state.map.projection() {
+                ProjectionMode::Mercator => Surface::Plane,
+                ProjectionMode::Globe => Surface::Sphere,
+            },
+        );
         outcome
     })
 }

@@ -841,6 +841,16 @@ fn emit_group(
             continue;
         };
 
+        // The grid a background is split into on this tile. One on a plane, and one on a globe
+        // above z10 -- so the flat path emits mbgl's four-vertex quad, which is what the goldens
+        // hash, and a globe gets the surface it is drawn on.
+        let background_cells = match projection {
+            ProjectionMode::Mercator => 1,
+            ProjectionMode::Globe => buckets
+                .get(tile_index)
+                .map_or(1, |(id, _)| cells_for_level(id.bucket_zoom())),
+        };
+
         // A bucket's bytes go into the arena once, however many drawables it produces.
         //
         // Two of the seven kinds produce two: a fill's triangles and its outline, and a
@@ -900,6 +910,7 @@ fn emit_group(
                         stacks: &stacks,
                         prepared: &prepared,
                         key: (tile_index, bucket_index),
+                        background_cells,
                     },
                 ) else {
                     continue;
@@ -1308,6 +1319,28 @@ struct Encoding<'a> {
     prepared: &'a BTreeMap<(usize, usize), PreparedSymbols>,
     /// Which bucket this is, to address `prepared` with.
     key: (usize, usize),
+    /// How many cells a background's quad is split into, per side.
+    ///
+    /// One on a plane, which is mbgl's four-vertex quad and what the goldens hash. On a globe it
+    /// is the planet's own surface -- every other layer draws on top of it -- so four corners bent
+    /// onto a sphere is what makes a globe read as a polyhedron rather than a ball.
+    background_cells: u32,
+}
+
+/// How many cells a tile of `z` splits into per side, for a background's grid.
+///
+/// The same grid `layout::subdivide::step_for_level` gives a fill, expressed as a count because a
+/// grid is generated from one rather than clipped against one. One where no split is wanted, which
+/// is a plane at any zoom and a globe above z10.
+fn cells_for_level(z: u8) -> u32 {
+    let step = tessella_layout::subdivide::step_for_level(z, tessella_tile::camera::EXTENT as i32);
+    if step <= 0 {
+        return 1;
+    }
+    #[allow(clippy::cast_sign_loss)]
+    {
+        ((tessella_tile::camera::EXTENT as i32 + step - 1) / step) as u32
+    }
 }
 
 /// How long a fade takes, in milliseconds.
@@ -2281,6 +2314,7 @@ fn encode_parts(
         stacks,
         prepared,
         key,
+        background_cells,
     } = context;
     let bind = |family: &[BuiltIn], shader: BuiltIn| {
         let ids = attribute_ids(family);
@@ -2487,7 +2521,12 @@ fn encode_parts(
                         .is_some()
                 })
                 .map(|patterns| patterns.texture);
-            Some(emit::encode_background(arena, PLACEHOLDER, atlas))
+            Some(emit::encode_background_on(
+                arena,
+                PLACEHOLDER,
+                atlas,
+                background_cells,
+            ))
         }
     }?;
     let mut parts = alloc::vec![encoded];

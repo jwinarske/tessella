@@ -1630,14 +1630,76 @@ pub fn encode_background(
     geometry: GeometryId,
     pattern_atlas: Option<TextureId>,
 ) -> Encoded {
+    encode_background_on(arena, geometry, pattern_atlas, 0)
+}
+
+/// As [`encode_background`], as a `cells` x `cells` grid rather than a quad.
+///
+/// # Why a background is the one that has to be a grid
+///
+/// A background is the planet's own surface: every other layer draws on top of it, so it is what
+/// decides whether a globe reads as a sphere rather than as a polyhedron with a map on it. Four
+/// corners bent onto a sphere is a flat sheet through the inside of it, and at zoom one that is
+/// visible as an octagon -- measured at 0.894 of the disc the camera says the planet should
+/// subtend, against 0.900 for a regular octagon.
+///
+/// `cells` of zero or one is [`encode_background`] exactly: mbgl's four vertices in the order its
+/// six indices expect, which is what the goldens hash.
+#[must_use]
+pub fn encode_background_on(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    pattern_atlas: Option<TextureId>,
+    cells: u32,
+) -> Encoded {
     /// The tile extent, which is the quad's far corner.
     const EXTENT: i16 = 8192;
     // mbgl's static tile quad, in tile units: the corners in the order its indices expect.
     const QUAD: [[i16; 2]; 4] = [[0, 0], [EXTENT, 0], [0, EXTENT], [EXTENT, EXTENT]];
     const INDICES: [u16; 6] = [0, 1, 2, 1, 2, 3];
 
-    let vertices = arena.alloc(&as_bytes_i16(&QUAD));
-    let indexes = arena.alloc(&as_bytes_u16(&INDICES));
+    let (grid, grid_indices) = if cells > 1 {
+        let side = cells + 1;
+        let mut points: Vec<[i16; 2]> = Vec::with_capacity((side * side) as usize);
+        for row in 0..side {
+            for column in 0..side {
+                // Rounded from the exact fraction rather than stepped by a truncated width, so the
+                // last row and column land on the tile's edge instead of short of it -- a gap
+                // there is a seam between neighbouring patches once both are bent.
+                let at = |n: u32| {
+                    #[allow(clippy::cast_possible_truncation)]
+                    {
+                        ((i64::from(n) * i64::from(EXTENT)) / i64::from(cells)) as i16
+                    }
+                };
+                points.push([at(column), at(row)]);
+            }
+        }
+        let mut indices: Vec<u16> = Vec::with_capacity((cells * cells * 6) as usize);
+        for row in 0..cells {
+            for column in 0..cells {
+                #[allow(clippy::cast_possible_truncation)]
+                let corner = (row * side + column) as u16;
+                #[allow(clippy::cast_possible_truncation)]
+                let below = corner + side as u16;
+                // The same winding as `INDICES` above, per cell.
+                indices.extend_from_slice(&[
+                    corner,
+                    corner + 1,
+                    below,
+                    corner + 1,
+                    below,
+                    below + 1,
+                ]);
+            }
+        }
+        (points, indices)
+    } else {
+        (QUAD.to_vec(), INDICES.to_vec())
+    };
+
+    let vertices = arena.alloc(&as_bytes_i16(&grid));
+    let indexes = arena.alloc(&as_bytes_u16(&grid_indices));
 
     let position = AttributeDesc {
         attr_id: POSITION_ATTRIBUTE,
@@ -1656,15 +1718,17 @@ pub fn encode_background(
     let segment = Segment {
         vertex_offset: 0,
         index_offset: 0,
-        vertex_length: QUAD.len() as u32,
-        index_length: INDICES.len() as u32,
+        #[allow(clippy::cast_possible_truncation)]
+        vertex_length: grid.len() as u32,
+        #[allow(clippy::cast_possible_truncation)]
+        index_length: grid_indices.len() as u32,
     };
 
     geometry_add(
         geometry,
         0,
         indexes,
-        QUAD.len(),
+        grid.len(),
         &[position],
         &[segment],
         if pattern_atlas.is_some() {

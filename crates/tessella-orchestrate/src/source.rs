@@ -32,6 +32,7 @@ use tessella_glyph::pbf::Range;
 use tessella_storage::deferred::Ticket;
 use tessella_storage::source::{Coalescing, FetchError, FileSource, Response};
 use tessella_tile::cover::{TileCoord, ViewTransform};
+use tessella_tile::store::Surface;
 use tessella_tile::store::TileKey;
 
 use crate::boot::{self, BootError, Sources};
@@ -418,6 +419,7 @@ impl<D: TileTransport + 'static> TileSource<D> {
         view: &ViewTransform,
         coords: &[TileCoord],
         speculative: &[TileCoord],
+        surface: Surface,
     ) {
         let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         match inner.readiness {
@@ -436,7 +438,7 @@ impl<D: TileTransport + 'static> TileSource<D> {
                     return;
                 };
                 drop(inner);
-                self.dispatch(&sources, view, coords, speculative);
+                self.dispatch(&sources, view, coords, speculative, surface);
                 self.want_glyphs(&sources);
             }
         }
@@ -883,6 +885,7 @@ impl<D: TileTransport + 'static> TileSource<D> {
         view: &ViewTransform,
         coords: &[TileCoord],
         speculative: &[TileCoord],
+        surface: Surface,
     ) {
         let Ok(jobs) = boot::plan(
             &sources.sets,
@@ -891,6 +894,7 @@ impl<D: TileTransport + 'static> TileSource<D> {
             view,
             coords,
             self.style_rev,
+            surface,
         ) else {
             // Planning is arithmetic and fails only when a cover cannot be computed -- which a
             // raster source can do on its own, at its own zoom, without anything being wrong with
