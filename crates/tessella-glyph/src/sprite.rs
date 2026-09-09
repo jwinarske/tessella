@@ -541,7 +541,7 @@ impl Sprites {
         if self.sheet.is_some() {
             return Ok(false);
         }
-        let (index_url, image_url) = urls(&self.base, self.pixel_ratio);
+        let (index_url, image_url) = self.urls();
 
         let image = files
             .fetch(&image_url)
@@ -552,6 +552,15 @@ impl Sprites {
 
         self.load(&json.body, &image.body)?;
         Ok(true)
+    }
+
+    /// The index and the sheet this sheet would fetch, in that order.
+    ///
+    /// [`Self::fetch`] without the fetching, for a caller with its own transport. Both are needed
+    /// and neither depends on the other, so a caller that can issue them together should.
+    #[must_use]
+    pub fn urls(&self) -> (String, String) {
+        urls(&self.base, self.pixel_ratio)
     }
 
     /// Reads an index and a sheet that a caller already has.
