@@ -452,6 +452,26 @@ fn build_polygons_on(bucket: &mut FillBucket, polygons: Vec<Vec<Ring>>, step: i3
                 segment.index_length += emitted as u32;
             }
         }
+        // The outline's segment covers the same vertices, which `FillBucket` states as an
+        // invariant and the consumer relies on: one vertex buffer, one offset, two index buffers
+        // over it. The interior vertices this split appended are indexed only by the triangles,
+        // but they are inside the range, so the two segments have to agree about how long it is.
+        //
+        // Left unextended, the fill's segment said 654 vertices at z8 and the outline's said 609,
+        // and the outline drew from a base the fill had moved past -- long thin triangles fanning
+        // across the map in the fill's own color, which is what a wrong vertex offset looks like
+        // rather than anything about the bend.
+        //
+        // Safe to add at the end: the rings were pushed and indexed before any interior vertex
+        // existed, and `outline_indices` reads this field as the base for the *next* ring.
+        if added > 0
+            && let Some(segment) = bucket.line_segments.last_mut()
+        {
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                segment.vertex_length += added as u32;
+            }
+        }
     }
 }
 
