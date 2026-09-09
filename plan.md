@@ -8040,6 +8040,30 @@ consumer and the one that matters for the flutter_scene seam.
 WS-0 through WS-3 is "a browser draws a map from the same records". WS-4 is parity. WS-5 is
 performance and needs its own toolchain decision.
 
+### WS-4, first half: an archive read where it lies
+
+`RangeFetch` is a second transport trait beside `FileSource`, not a method on it. A range breaks
+both properties `FileSource` is built around: two callers asking for different parts of one
+archive share a URL and must not share an answer, so `Coalescing` would dedupe them into one, and
+a cache keyed on the URL would hand the second caller the first one's bytes. As a separate trait,
+a wrapper that cannot do ranges simply does not implement it; as a defaulted method, a wrapper
+that forgot to forward would quietly serve whole files where ranges were asked for.
+
+`HttpRange` turns one into a `RangeReader`, which is all `Archive` ever wanted -- so the directory
+walk and the inflate are untouched, and the archive does not know whether it is a file or an
+origin. Measured on the 93 MB Berlin archive: **one tile costs three ranges and 79,540 bytes**, a
+thousandfold less than fetching the archive.
+
+Two things the HTTP side has to get right, and both are tested over a real socket rather than a
+fake. The status is read *before* the body, because an origin that ignores `Range` answers `200`
+with the whole archive and a planet is gigabytes -- reading it to discover it is not what was
+asked for is the failure the call exists to avoid. And a `200` is refused rather than sliced: what
+arrives is the *head* of the archive, not the bytes at the offset, so slicing it would serve the
+header as though it were a directory, which parses as something and draws as nothing.
+
+What is left of WS-4: `PmtilesFileSource` is `Archive<File>` throughout, so a style still cannot
+name a remote archive; and `OpfsCache`.
+
 The first gate was written down as `cargo check --workspace --target wasm32-unknown-unknown`
 asserting "the `no_std` discipline holds on a target with no threads, no clock and no filesystem".
 Measured, that is wrong, and the correction is worth keeping because it sets what the rest of this

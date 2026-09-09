@@ -163,6 +163,46 @@ pub trait FileSource: Send + Sync {
     }
 }
 
+/// Somewhere a *part* of a resource can be fetched from.
+///
+/// # Why this is not on `FileSource`
+///
+/// [`FileSource::fetch`] is addressed by URL and nothing else, which is what lets `Coalescing`
+/// dedupe by URL and a cache key on one. A range breaks both: two callers asking for different
+/// parts of one archive share a URL and must not share an answer, and a cache keyed on the URL
+/// would hand the second caller the first one's bytes.
+///
+/// So it is a separate trait, implemented by the transports that can actually do it, rather than
+/// a defaulted method every wrapper would have to remember to forward. A wrapper that forgot
+/// would not fail to compile -- it would quietly serve whole files where ranges were asked for,
+/// which is the failure this arrangement makes impossible to write.
+///
+/// What wants it is `pmtiles`: an archive is read by walking a directory and then reading one
+/// tile, which is a handful of small reads out of something that may be gigabytes. Fetching the
+/// archive to read a tile from it is not a slower version of that; it is a different program.
+pub trait RangeFetch: Send + Sync {
+    /// Fetches `length` bytes starting at `offset`.
+    ///
+    /// # Errors
+    ///
+    /// [`FetchError`] when the transport failed. A status is a *response*, as it is for
+    /// [`FileSource::fetch`]: `206` is the answer, `200` means the origin ignored the range, and
+    /// `416` means it was asked for bytes past the end.
+    fn fetch_range(&self, url: &str, offset: u64, length: usize) -> Result<Response, FetchError>;
+}
+
+/// A borrowed range source is one too, so a reader can hold a reference rather than the transport.
+///
+/// The transport outlives the archive in every arrangement here -- one HTTP source serves many
+/// archives -- so making `pmtiles::HttpRange` own it would mean a clone per archive of something
+/// that is not meant to be cloned. Named rather than linked: that module is behind a feature, and
+/// a link into it does not resolve for a build without one.
+impl<S: RangeFetch + ?Sized> RangeFetch for &S {
+    fn fetch_range(&self, url: &str, offset: u64, length: usize) -> Result<Response, FetchError> {
+        (**self).fetch_range(url, offset, length)
+    }
+}
+
 /// Wraps a source so concurrent requests for one URL become one request.
 ///
 /// # Not a cache, and what that costs

@@ -199,3 +199,67 @@ impl FileSource for HttpFileSource {
         })
     }
 }
+
+impl crate::source::RangeFetch for HttpFileSource {
+    fn fetch_range(&self, url: &str, offset: u64, length: usize) -> Result<Response, FetchError> {
+        let transport = |message: String| FetchError::Transport {
+            url: url.to_string(),
+            message,
+        };
+        if length == 0 {
+            // An empty range is not a request. HTTP has no spelling for it -- `bytes=n-(n-1)` is
+            // malformed -- and the caller wanted nothing, so it gets nothing.
+            return Ok(Response {
+                status: 206,
+                ..Response::default()
+            });
+        }
+
+        // Inclusive on both ends, which is what HTTP means by a byte range and the one place an
+        // off-by-one costs a byte off every read rather than failing.
+        let last = offset + length as u64 - 1;
+        let mut response = match self
+            .agent
+            .get(url)
+            .header("Range", &format!("bytes={offset}-{last}"))
+            .call()
+        {
+            Ok(response) => response,
+            Err(ureq::Error::StatusCode(status)) => {
+                return Ok(Response {
+                    status,
+                    ..Response::default()
+                });
+            }
+            Err(error) => return Err(transport(error.to_string())),
+        };
+
+        let status = response.status().as_u16();
+        // The status before the body, and the body only for the one status that means "here is
+        // the range". An origin that ignores `Range` answers `200` with the entire archive, and a
+        // planet is gigabytes -- reading it to discover it is not what was asked for is the whole
+        // failure this call exists to avoid. The caller gets the status and decides.
+        if status != 206 {
+            return Ok(Response {
+                status,
+                ..Response::default()
+            });
+        }
+
+        // One over what was asked for, because the limit is a *ceiling on what may arrive* and an
+        // origin answering exactly the range would sit on it. The extra byte is what turns "the
+        // range, exactly" into a pass and "more than the range" into an error.
+        let body = response
+            .body_mut()
+            .with_config()
+            .limit(length as u64 + 1)
+            .read_to_vec()
+            .map_err(|error| transport(error.to_string()))?;
+
+        Ok(Response {
+            status,
+            body,
+            ..Response::default()
+        })
+    }
+}
