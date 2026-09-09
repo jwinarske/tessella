@@ -4,6 +4,7 @@
 //! extrusion layer builds from a vector tile at all, that it becomes the right number of
 //! drawables, and that its properties land at mbgl's offsets.
 
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::DrawFlags;
 use tessella_orchestrate::tile::{TileId, build_mvt_tile};
 use tessella_orchestrate::ubo::fill_extrusion_props_from_paint;
@@ -302,8 +303,16 @@ fn the_drawable_block_is_an_extrusions_own() {
         bearing: 0.0,
         pitch: 0.0,
     });
-    let entry = ExtrusionDrawableEntry::for_tile(&view, 14, 8802, 5373, 0, [0.0, 0.0, 0.0])
-        .expect("an entry");
+    let entry = ExtrusionDrawableEntry::for_tile(
+        &view,
+        ProjectionMode::Mercator,
+        14,
+        8802,
+        5373,
+        0,
+        [0.0, 0.0, 0.0],
+    )
+    .expect("an entry");
 
     // No sublayer nudge, which nothing pinned before and which the picture depends on.
     //
@@ -315,6 +324,7 @@ fn the_drawable_block_is_an_extrusions_own() {
     // symptom is whole triangles of building where neither surface won the comparison.
     let flat = tessella_orchestrate::ubo::DrawableEntry::for_tile_with(
         &view,
+        ProjectionMode::Mercator,
         14,
         8802,
         5373,
@@ -330,9 +340,16 @@ fn the_drawable_block_is_an_extrusions_own() {
     );
     assert_eq!(
         entry.matrix,
-        tessella_orchestrate::ubo::DrawableEntry::for_tile_3d(&view, 14, 8802, 5373, 0)
-            .expect("a 3d entry")
-            .matrix,
+        tessella_orchestrate::ubo::DrawableEntry::for_tile_3d(
+            &view,
+            ProjectionMode::Mercator,
+            14,
+            8802,
+            5373,
+            0
+        )
+        .expect("a 3d entry")
+        .matrix,
         "an extrusion's matrix is the unnudged one"
     );
 

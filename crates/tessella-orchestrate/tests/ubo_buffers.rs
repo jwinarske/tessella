@@ -14,6 +14,7 @@
 
 use std::collections::BTreeMap;
 
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::generated::{ubo_layouts, ubo_slots};
 use tessella_orchestrate::ubo::{self, DrawableEntry, GlobalPaintParams};
 use tessella_style::property::Color;
@@ -95,6 +96,7 @@ fn cover_entries(layer_index: i32, sub_layer_index: i32) -> Vec<DrawableEntry> {
         .map(|tile| {
             DrawableEntry::for_tile(
                 &view,
+                ProjectionMode::Mercator,
                 tile.z,
                 tile.x,
                 tile.y,
@@ -289,7 +291,14 @@ fn the_line_drawable_buffer_matches_the_oracle() {
         .into_iter()
         .map(|tile| {
             ubo::LineDrawableEntry::for_tile(
-                &view, tile.z, tile.x, tile.y, tile.wrap, 3, 0,
+                &view,
+                ProjectionMode::Mercator,
+                tile.z,
+                tile.x,
+                tile.y,
+                tile.wrap,
+                3,
+                0,
                 // Nothing in the hermetic style's line paint varies with zoom.
                 [0.0; 6],
             )
@@ -422,6 +431,7 @@ fn the_circle_drawable_buffer_matches_the_oracle() {
     // The tile the point falls in.
     let entry = ubo::CircleDrawableEntry::for_tile(
         &view,
+        ProjectionMode::Mercator,
         13,
         4093,
         2724,

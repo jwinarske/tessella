@@ -14,6 +14,7 @@
 
 use std::collections::BTreeMap;
 
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::{OrderEpoch, ViewId};
 use tessella_capture_abi::ring::Ring;
 use tessella_capture_abi::{CameraMode, EnvelopeKind};
@@ -144,6 +145,7 @@ fn emit_frame() -> Vec<EnvelopeKind> {
                 .map(|tile| {
                     DrawableEntry::for_tile_with(
                         &view,
+                        ProjectionMode::Mercator,
                         tile.z,
                         tile.x,
                         tile.y,
@@ -231,6 +233,7 @@ fn emit_frame() -> Vec<EnvelopeKind> {
                     .map(|tile| {
                         ubo::LineDrawableEntry::for_tile(
                             &view,
+                            ProjectionMode::Mercator,
                             tile.z,
                             tile.x,
                             tile.y,
@@ -284,6 +287,7 @@ fn emit_frame() -> Vec<EnvelopeKind> {
                     .map(|tile| {
                         ubo::CircleDrawableEntry::for_tile(
                             &view,
+                            ProjectionMode::Mercator,
                             tile.z,
                             tile.x,
                             tile.y,

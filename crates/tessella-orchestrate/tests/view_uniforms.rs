@@ -33,6 +33,7 @@
 
 use std::collections::BTreeMap;
 
+use tessella_capture_abi::ProjectionMode;
 use tessella_orchestrate::sweep;
 use tessella_orchestrate::tile::{TileId as BuildTile, build_tile};
 use tessella_orchestrate::ubo::{DrawableEntry, GlobalPaintParams};
@@ -95,9 +96,18 @@ fn geometry_of(tile: BuildTile) -> Vec<tessella_orchestrate::tile::LayerBucket> 
 
 /// The drawable matrix for a tile under a view, at the layer the hermetic style's fill uses.
 fn matrix_of(view: &ViewTransform, tile: BuildTile) -> [f32; 16] {
-    DrawableEntry::for_tile(view, tile.z, tile.x, tile.y, 0, 0, 0)
-        .expect("an unrotated view has a matrix")
-        .matrix
+    DrawableEntry::for_tile(
+        view,
+        ProjectionMode::Mercator,
+        tile.z,
+        tile.x,
+        tile.y,
+        0,
+        0,
+        0,
+    )
+    .expect("an unrotated view has a matrix")
+    .matrix
 }
 
 /// A tile in four views at four cameras: one set of vertices, four different matrices.

@@ -2545,6 +2545,7 @@ fn write_layer_state(
     tiles: &[TileCoord],
 ) -> Result<(), FrameError> {
     let Frame {
+        projection,
         style,
         view,
         view_id,
@@ -2605,6 +2606,7 @@ fn write_layer_state(
             .filter_map(|tile| {
                 DrawableEntry::for_tile_with(
                     view,
+                    projection,
                     tile.z,
                     tile.x,
                     tile.y,
@@ -2694,6 +2696,7 @@ fn write_layer_state(
                         matrices(sub).filter_map(move |tile| {
                             ubo::PatternDrawableEntry::for_tile(
                                 view,
+                                projection,
                                 tile.z,
                                 tile.x,
                                 tile.y,
@@ -2768,6 +2771,7 @@ fn write_layer_state(
                 .filter_map(|tile| {
                     ubo::LineDrawableEntry::for_tile(
                         view,
+                        projection,
                         tile.z,
                         tile.x,
                         tile.y,
@@ -2843,6 +2847,7 @@ fn write_layer_state(
                 .filter_map(|tile| {
                     ubo::CircleDrawableEntry::for_tile(
                         view,
+                        projection,
                         tile.z,
                         tile.x,
                         tile.y,
@@ -2897,6 +2902,7 @@ fn write_layer_state(
                     .filter_map(|tile| {
                         ubo::ExtrusionDrawableEntry::for_tile(
                             view,
+                            projection,
                             tile.z,
                             tile.x,
                             tile.y,
@@ -3082,6 +3088,7 @@ fn write_layer_state(
                 .filter_map(|tile| {
                     DrawableEntry::for_tile(
                         view,
+                        projection,
                         tile.z,
                         tile.x,
                         tile.y,

@@ -30,6 +30,7 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use tessella_capture_abi::CameraMode;
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::ViewId;
 use tessella_capture_abi::ring::Ring;
 use tessella_orchestrate::order::{self, DrawOrder};
@@ -160,6 +161,7 @@ fn emit_view(
             .map(|tile| {
                 DrawableEntry::for_tile(
                     view,
+                    ProjectionMode::Mercator,
                     tile.z,
                     tile.x,
                     tile.y,
