@@ -173,15 +173,33 @@ struct Inner {
     /// Tiles submitted and not yet landed, so a camera that keeps moving over the same gap asks
     /// for it once rather than once per tick.
     inflight: BTreeSet<TileKey>,
+    /// The style's manifests, while they are in flight.
+    ///
+    /// Resolution goes through the same transport tiles and glyphs do, so the same thing is true
+    /// of it: the request returns without bytes and [`TileSource::drain`] is what comes back for
+    /// the answer.
+    resolving: Option<Resolving>,
+}
+
+/// A style part-way through resolving.
+struct Resolving {
+    /// What the document said, and what it needs fetched.
+    plan: boot::ResolvePlan,
+    /// Asked for and not answered, by the index its answer belongs at.
+    outstanding: BTreeMap<Ticket, usize>,
+    /// Answers so far, in ask order.
+    answers: Vec<Option<boot::Answer>>,
+    /// When resolution started, which the timings in `Sources` are measured against.
+    started: Instant,
 }
 
 /// Clears a tile from the in-flight set on the way out of its build, however that happens.
-struct Clearing<S: FileSource + 'static, D: TileTransport + 'static> {
-    source: Arc<TileSource<S, D>>,
+struct Clearing<D: TileTransport + 'static> {
+    source: Arc<TileSource<D>>,
     key: TileKey,
 }
 
-impl<S: FileSource + 'static, D: TileTransport + 'static> Drop for Clearing<S, D> {
+impl<D: TileTransport + 'static> Drop for Clearing<D> {
     fn drop(&mut self) {
         self.source.finish(&self.key);
     }
@@ -202,15 +220,13 @@ struct InFlight {
 ///
 /// Process-scoped and shared: one of these serves every view, so a tile wanted by two of them is
 /// fetched once, built once, and held once.
-pub struct TileSource<S, D = PoolBacked<Coalesced<S>>> {
+pub struct TileSource<D> {
     style_text: String,
-    files: Arc<Coalescing<S>>,
-    /// The tile path's transport, which asks for bytes rather than waiting for them.
+    /// Everything this source fetches: manifests, the sprite, glyph ranges and tiles.
     ///
-    /// Wraps the same coalescing store `files` is, so two views wanting one URL still cost one
-    /// fetch -- the deduplication is by URL inside `Coalescing` and does not care which side of
-    /// the trait asked. Style resolution and glyphs keep using `files` directly: both run inside
-    /// a single pool job already and have nothing to gain from being torn in half.
+    /// One transport rather than a blocking source beside it. That is the whole of what the wasm
+    /// work bought -- while style resolution and glyphs were still blocking, this type had to
+    /// carry a `FileSource` as well, and a browser could not supply one.
     deferred: Arc<D>,
     /// Tiles whose bytes have been asked for and have not arrived.
     ///
@@ -268,7 +284,10 @@ impl<S: FileSource> FileSource for Coalesced<S> {
 /// own would only make that more convincing than it deserves to be.
 static DISCARDED: AtomicUsize = AtomicUsize::new(0);
 
-impl<S: FileSource + 'static> TileSource<S, PoolBacked<Coalesced<S>>> {
+/// A source over the process pool and the coalescing store, which is the native arrangement.
+pub type Pooled<S> = TileSource<PoolBacked<Coalesced<S>>>;
+
+impl<S: FileSource + 'static> Pooled<S> {
     /// Holds a style and the process-scoped things a build needs. Fetches nothing.
     ///
     /// Nothing happens until the first [`Self::want`], which is what makes creating a map cheap:
@@ -294,11 +313,11 @@ impl<S: FileSource + 'static> TileSource<S, PoolBacked<Coalesced<S>>> {
             pool,
             Priority::Background,
         ));
-        Self::with_transport(style_text, files, deferred, cache, pool, style_rev)
+        TileSource::with_transport(style_text, deferred, cache, pool, style_rev)
     }
 }
 
-impl<S: FileSource + 'static, D: TileTransport + 'static> TileSource<S, D> {
+impl<D: TileTransport + 'static> TileSource<D> {
     /// As [`new`](TileSource::new), with the tile transport supplied.
     ///
     /// The seam DR-23 exists for. Tiles reach this source through whatever answers
@@ -306,12 +325,11 @@ impl<S: FileSource + 'static, D: TileTransport + 'static> TileSource<S, D> {
     /// shape to everything above -- and a test can be a third, deciding exactly when a tile's
     /// bytes land without a network to arrange it.
     ///
-    /// `files` is still the blocking source, because style resolution and glyphs still use it.
-    /// Both are one pool job that fetches and finishes, so neither has been torn in half yet, and
-    /// until they are a browser cannot resolve a style however good its transport is.
+    /// Everything the source fetches goes through it: manifests, the sprite, glyph ranges and
+    /// tiles. There is no blocking source beside it any more, which is what makes a browser's
+    /// `fetch` sufficient rather than merely present.
     pub fn with_transport(
         style_text: String,
-        files: Arc<Coalescing<S>>,
         deferred: Arc<D>,
         cache: Arc<TileCache<BootError>>,
         pool: &'static Pool,
@@ -319,7 +337,6 @@ impl<S: FileSource + 'static, D: TileTransport + 'static> TileSource<S, D> {
     ) -> Arc<Self> {
         Arc::new(Self {
             style_text,
-            files,
             deferred,
             pending: Mutex::new(BTreeMap::new()),
             cache,
@@ -329,6 +346,7 @@ impl<S: FileSource + 'static, D: TileTransport + 'static> TileSource<S, D> {
                 readiness: Readiness::Idle,
                 sources: None,
                 inflight: BTreeSet::new(),
+                resolving: None,
             }),
             landed: RwLock::new(Landed::default()),
             glyphs: Mutex::new(Glyphs::default()),
@@ -722,21 +740,132 @@ impl<S: FileSource + 'static, D: TileTransport + 'static> TileSource<S, D> {
     /// inside a pool job: the batch it waits on runs work itself rather than blocking, which is
     /// what keeps a full pool from deadlocking on a job that waits for its own batch.
     fn resolve(self: Arc<Self>) {
-        let outcome = boot::resolve_sources(
-            &self.style_text,
-            &self.files,
-            self.pool,
-            Priority::Foreground,
-            Instant::now(),
-        );
-        let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-        match outcome {
-            Ok(sources) => {
-                inner.sources = Some(Arc::new(sources));
-                inner.readiness = Readiness::Ready;
+        let started = Instant::now();
+        let plan = match boot::plan_resolution(&self.style_text, started) {
+            Ok(plan) => plan,
+            // A style that will not parse, or a source that names nowhere to fetch from. Neither
+            // needs a request to find out, which is the point of planning first.
+            Err(error) => {
+                self.inner
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .readiness = Readiness::Failed(error.to_string());
+                return;
             }
-            Err(error) => inner.readiness = Readiness::Failed(error.to_string()),
+        };
+
+        // Issued before the state is stored, and outside `inner`, for the reason `dispatch`
+        // issues outside `pending`: `request_at` takes the ticket table, and `drain` takes these
+        // locks before it polls.
+        let mut outstanding = BTreeMap::new();
+        for (index, ask) in plan.asks.iter().enumerate() {
+            // Foreground, because nothing else can start until these answer: a tile's URL comes
+            // from a manifest, so every request the map will ever make is behind these.
+            let ticket = self
+                .deferred
+                .request_at(Priority::Foreground, ask.url(), None);
+            outstanding.insert(ticket, index);
         }
+
+        let answers = alloc::vec![None; plan.asks.len()];
+        let waiting = outstanding.is_empty();
+        self.inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .resolving = Some(Resolving {
+            plan,
+            outstanding,
+            answers,
+            started,
+        });
+        // A style whose sources are all inline asks for nothing at all, so nothing will ever
+        // arrive to drive the assembly. It happens on the fixtures this suite is built from and
+        // on any style with `tiles` listed inline, which is most of them.
+        if waiting {
+            self.finish_resolving();
+        }
+    }
+
+    /// Collects whatever the transport has answered for the manifests in flight.
+    fn drain_resolution(self: &Arc<Self>) {
+        let outstanding: Vec<Ticket> = {
+            let held = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            match &held.resolving {
+                Some(resolving) => resolving.outstanding.keys().copied().collect(),
+                None => return,
+            }
+        };
+
+        let mut answers = Vec::new();
+        for ticket in outstanding {
+            if let Some(outcome) = self.deferred.poll(ticket) {
+                answers.push((ticket, outcome));
+            }
+        }
+        if answers.is_empty() {
+            return;
+        }
+
+        let done = {
+            let mut held = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            let Some(resolving) = held.resolving.as_mut() else {
+                return;
+            };
+            for (ticket, outcome) in answers {
+                let Some(index) = resolving.outstanding.remove(&ticket) else {
+                    continue;
+                };
+                resolving.answers[index] = Some(match outcome {
+                    Ok(response) => Ok((*response).clone()),
+                    Err(error) => Err(error.to_string()),
+                });
+            }
+            resolving.outstanding.is_empty()
+        };
+
+        if done {
+            self.finish_resolving();
+        }
+    }
+
+    /// Builds the resolved sources from answers that have all arrived.
+    ///
+    /// On a worker rather than on the draining thread: assembling means parsing every manifest and
+    /// cutting up a sprite sheet, which is real work and was on a worker before the fetches were
+    /// split out of it.
+    fn finish_resolving(self: &Arc<Self>) {
+        let Some(resolving) = self
+            .inner
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .resolving
+            .take()
+        else {
+            return;
+        };
+        let this = Arc::clone(self);
+        self.pool.submit(Priority::Foreground, move || {
+            let Resolving {
+                plan,
+                answers,
+                started,
+                ..
+            } = resolving;
+            let outcome = boot::assemble(plan, &answers, started);
+            let mut inner = this.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            match outcome {
+                Ok(sources) => {
+                    inner.sources = Some(Arc::new(sources));
+                    inner.readiness = Readiness::Ready;
+                }
+                Err(error) => inner.readiness = Readiness::Failed(error.to_string()),
+            }
+            drop(inner);
+            // A resolved style is a change nothing else would report: no tile has landed and the
+            // camera has not moved, so a damage gate reading only those would stay idle holding a
+            // map that is finally able to draw.
+            this.generation.fetch_add(1, Ordering::AcqRel);
+        });
     }
 
     /// Plans `coords` and submits what is missing.
@@ -969,6 +1098,7 @@ impl<S: FileSource + 'static, D: TileTransport + 'static> TileSource<S, D> {
     ///
     /// Cheap when nothing has arrived: one lock, a walk of the tickets outstanding, and no work.
     pub fn drain(self: &Arc<Self>) {
+        self.drain_resolution();
         self.drain_glyphs();
 
         // Snapshotted rather than walked under the lock, because polling takes the ticket
@@ -1028,7 +1158,7 @@ impl<S: FileSource + 'static, D: TileTransport + 'static> TileSource<S, D> {
     }
 }
 
-impl<S: FileSource + 'static, D: TileTransport + 'static> Tiles for Arc<TileSource<S, D>> {
+impl<D: TileTransport + 'static> Tiles for Arc<TileSource<D>> {
     fn buckets(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
         self.landed
             .read()

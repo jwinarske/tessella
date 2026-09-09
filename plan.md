@@ -8136,8 +8136,22 @@ before saying so. And which source gets blamed stopped depending on which fetch 
 mutex -- answers are read in ask order, which is the document's order, so two runs blame the same
 one. Both are tests.
 
-What is left is the state machine: `TileSource` holding a plan while its asks are in flight, and
-`drain` assembling when they land. The pieces it needs all exist now.
+The state machine that drives it is the same three stages the glyph fetch uses: plan on a worker,
+issue, assemble on a worker when the answers are in. A style whose sources are all inline asks for
+nothing, so nothing would ever arrive to drive the assembly -- it goes straight from planning to
+assembling, which is most of the fixtures in this suite and most styles in the wild.
+
+With that, `TileSource` stopped needing a blocking `FileSource` at all, and the type says so: it is
+`TileSource<D>` over its transport alone, with `Pooled<S>` naming the native arrangement. That is
+the whole of what this workstream bought. While resolution and glyphs were still blocking, the type
+had to carry a `FileSource` beside the transport, and a browser could not supply one however good
+its `fetch` was.
+
+**What is left before a browser draws.** The FFI still builds `HttpFileSource` -- `ureq` on
+`std::net` -- and wraps it in `PoolBacked`. A browser needs a `TileTransport` over `fetch()`
+instead, which is now a matter of writing one rather than of moving anything: the seam is there, and
+the type it has to satisfy has no `std::net` in it. After that there is something for a WebGL2
+consumer to consume.
 
 ### WS-2, and what native got out of it
 

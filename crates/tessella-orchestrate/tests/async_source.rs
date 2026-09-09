@@ -23,7 +23,7 @@ use tessella_orchestrate::cache::TileCache;
 use tessella_orchestrate::deferred::TileTransport;
 use tessella_orchestrate::map::Tiles;
 use tessella_orchestrate::pool::Pool;
-use tessella_orchestrate::source::{Readiness, TileSource};
+use tessella_orchestrate::source::{Pooled, Readiness, TileSource};
 use tessella_orchestrate::tile::TileId;
 use tessella_storage::deferred::{DeferredFileSource, Ticket, Tickets};
 use tessella_storage::http::HttpFileSource;
@@ -97,7 +97,7 @@ fn source_over_pool(
     document: String,
     pool: &'static Pool,
 ) -> (
-    Arc<TileSource<Counted>>,
+    Arc<Pooled<Counted>>,
     Arc<AtomicUsize>,
     Arc<Coalescing<Counted>>,
 ) {
@@ -115,7 +115,7 @@ fn source_over_pool(
 fn source_over_with(
     document: String,
 ) -> (
-    Arc<TileSource<Counted>>,
+    Arc<Pooled<Counted>>,
     Arc<AtomicUsize>,
     Arc<Coalescing<Counted>>,
 ) {
@@ -133,7 +133,7 @@ fn source_over_with(
 fn source_over(
     origin: &str,
 ) -> (
-    Arc<TileSource<Counted>>,
+    Arc<Pooled<Counted>>,
     Arc<AtomicUsize>,
     Arc<Coalescing<Counted>>,
 ) {
@@ -146,8 +146,8 @@ fn source_over(
 /// a ticket rather than with bytes, so nothing lands until someone comes back for it -- a loop
 /// that only polled `done` would wait out its full deadline on tiles whose bodies had arrived
 /// long before.
-fn settle<S: FileSource + 'static, D: TileTransport + 'static>(
-    source: &Arc<TileSource<S, D>>,
+fn settle<D: TileTransport + 'static>(
+    source: &Arc<TileSource<D>>,
     mut done: impl FnMut() -> bool,
 ) -> bool {
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -490,31 +490,19 @@ impl DeferredFileSource for Manual {
 // The default: one queue, and no class to put a request in. Exactly the shape a browser has.
 impl TileTransport for Manual {}
 
-/// A source that would fail if the tile path ever reached for it.
-struct Unused;
-
-impl FileSource for Unused {
-    fn fetch(&self, url: &str) -> Result<Response, FetchError> {
-        Err(FetchError::Transport {
-            url: url.to_string(),
-            message: "the blocking source should not have been asked".to_string(),
-        })
-    }
-}
-
-/// Tiles arrive over whatever answers the transport trait, and only when it answers.
+/// A whole source over one transport, with no blocking file source anywhere.
 ///
-/// The seam DR-23 exists for, tested without a network. The style declares its tiles inline, so
-/// resolution needs no fetch and the only thing that reaches for bytes is the tile path -- which
-/// here reaches a transport the test controls completely.
+/// The seam DR-23 exists for, and the statement that it is finished: this builds a `TileSource`
+/// from a transport alone. There is no `FileSource` in the call, because there is nowhere left
+/// for one to go -- manifests, glyph ranges and tiles all come through the same trait now.
+/// The style declares its tiles inline, so resolution needs no request and the only thing that
+/// reaches for bytes is the tile path, which reaches a transport the test controls completely.
 #[test]
 fn tiles_arrive_over_a_transport_that_is_not_the_pool() {
     let manual = Arc::new(Manual::default());
-    let files = Arc::new(Coalescing::new(Unused));
     let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
     let source = TileSource::with_transport(
         style("http://tiles.invalid"),
-        files,
         Arc::clone(&manual),
         cache,
         Pool::shared(),

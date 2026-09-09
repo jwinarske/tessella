@@ -69,7 +69,7 @@ use tessella_capture_abi::ring::{self, Producer, region_size};
 use tessella_orchestrate::cache::TileCache;
 use tessella_orchestrate::map::{Map, SpriteAtlas, Tick};
 use tessella_orchestrate::pool::Pool;
-use tessella_orchestrate::source::{Readiness, TileSource};
+use tessella_orchestrate::source::{Pooled, Readiness, TileSource};
 use tessella_storage::http::HttpFileSource;
 use tessella_storage::source::Coalescing;
 use tessella_style::Style;
@@ -185,7 +185,7 @@ pub struct MapState {
     producer: Producer,
     /// Where tiles come from. Shared between views by construction, so a tile two maps want is
     /// fetched once and built once.
-    source: Arc<TileSource<HttpFileSource>>,
+    source: Arc<Pooled<HttpFileSource>>,
     /// What the source had landed when this map last drew.
     ///
     /// A tile arriving on a worker does not move the camera, so the damage gate would call the
