@@ -109,6 +109,13 @@ jobs:
           set -eu
           cargo build -p tessella-ffi --target ${{ matrix.target }} --release
           cargo run -p wasm-abi -- target/${{ matrix.target }}/release/tessella_ffi.wasm
+      # The consumer, against the module CI just built. Node rather than a browser because what is
+      # being checked is the memory view -- instantiate, drive the fetch loop, and read geometry
+      # and slab handles out of `memory.buffer`. A browser adds `fetch` and a canvas to that, and
+      # neither is what would break.
+      - name: a javascript consumer reads the stream
+        if: matrix.target == 'wasm32-unknown-unknown'
+        run: node --test "web/test/*.test.mjs"
       # `ureq` is `std::net`. It compiles for wasm32, so only the dependency graph says whether it
       # is there.
       - name: no sockets in the wasm graph

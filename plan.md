@@ -8207,7 +8207,33 @@ section and checks every required name is there and no forbidden one is, and a s
 the wasm dependency graph for `ureq`. The tool caught a bug in itself on its first run -- matching
 `tessella_create` loosely also matches `tessella_create_hosted` -- which is recorded in it.
 
-**What is left before a browser draws** is the consumer.
+### The consumer, and what it is allowed to know
+
+Written as plain ES modules with JSDoc types: no npm, no lockfile and no build step in a Rust
+repository, and `tsc --checkJs` will read the annotations for anyone who wants it. The plan said
+TypeScript; what it wanted was a typed consumer, and a toolchain is a supply chain rather than a
+type system.
+
+The offsets are the part that matters. JavaScript has no `offsetof` and no `static_assert`, so a
+consumer that wrote its own would be the one description of the stream that nothing checks -- and
+the one language where a mistake is a silent misread rather than a compile error. So `abi-header`
+emits `web/abi.js` beside the C header, from the same `size_of`/`offset_of!` call, and `--check`
+covers both.
+
+`web/ring.js` walks the ring and resolves slab handles; `web/map.js` instantiates the module with
+*no imports at all* -- there is nothing to import, which is what keeping wasm-bindgen out buys --
+creates a hosted map, and runs the fetch loop. Two things it has to know that a native consumer
+does not: `memory.buffer` is *replaced* when the memory grows, so every view over the old one is
+detached and views are rebuilt rather than held; and the producer exports no allocator, so the
+consumer carves scratch below `__heap_base` for the config, the style and one body at a time.
+
+Proved under Node against the module CI builds and the fixtures the Rust suite uses: 5
+`GEOMETRY_ADD` records, 16,616 vertices, and 52,772 index bytes reached through the slab table --
+all read out of the producer's linear memory from JavaScript. That is the memory-view story end to
+end, and it needed no browser, because what a browser adds is `fetch` and a canvas and neither is
+what would break.
+
+**What is left** is the drawing: a WebGL2 pass over those buffers, and a page to put it on.
 
 ### WS-2, and what native got out of it
 
