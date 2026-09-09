@@ -28,6 +28,12 @@
 
 use alloc::vec::Vec;
 
+use i_overlay::core::fill_rule::FillRule;
+use i_overlay::core::overlay::IntOverlayOptions;
+use i_overlay::core::simplify::Simplify;
+use i_overlay::i_float::int::point::IntPoint;
+use i_overlay::i_shape::int::shape::IntContour;
+
 /// A tile-local position, in the integer units the vertex buffer carries.
 pub type Position = [i16; 2];
 
@@ -99,6 +105,57 @@ pub fn signed_area(ring: &[Position]) -> i64 {
         j = i;
     }
     sum
+}
+
+/// Re-derives a polygon's structure when its winding cannot be trusted.
+///
+/// # Why this exists
+///
+/// MVT version 1 never specified ring winding order, so a v1 polygon's rings cannot be sorted
+/// into exteriors and holes by their signed area -- which is the only thing [`classify_rings`]
+/// knows how to do. mbgl handles this by running v1 polygon geometry through wagyu as an
+/// even-odd union before classifying it (`fixupPolygons`, gated on `getVersion() < 2`), and this
+/// is the same repair.
+///
+/// The cost of not doing it is not subtle. A real z0 world tile put a four-point island at the
+/// head of a feature and 118 continent-sized rings behind it, all of which became "holes" of the
+/// island and none of which lie inside it. earcut answers one triangle for that, correctly, and
+/// the ocean paints over both Americas -- ten percent of the frame against the oracle.
+///
+/// # What comes back
+///
+/// A flat ring list in the same shape a v2 tile would have carried: each polygon's exterior
+/// followed by its holes, wound consistently, so [`classify_rings`] regroups it without knowing
+/// a repair happened. That is mbgl's arrangement too, and it keeps one path through the builder
+/// rather than two.
+#[must_use]
+pub fn fixup_polygons(rings: &[Ring]) -> Vec<Ring> {
+    let contours: Vec<IntContour<i32>> = rings
+        .iter()
+        .map(|ring| {
+            ring.iter()
+                .map(|point| IntPoint::new(i32::from(point[0]), i32::from(point[1])))
+                .collect()
+        })
+        .collect();
+
+    let mut out: Vec<Ring> = Vec::new();
+    for shape in contours.simplify(FillRule::EvenOdd, IntOverlayOptions::default()) {
+        for contour in shape {
+            // Back to the tile's own integer width. The union can only introduce points where
+            // edges cross, which is inside the input's own bounds, so nothing here can leave the
+            // range the rings arrived in.
+            #[allow(clippy::cast_possible_truncation)]
+            let ring: Ring = contour
+                .iter()
+                .map(|point| [point.x as i16, point.y as i16])
+                .collect();
+            if !ring.is_empty() {
+                out.push(ring);
+            }
+        }
+    }
+    out
 }
 
 /// Groups rings into polygons by winding.

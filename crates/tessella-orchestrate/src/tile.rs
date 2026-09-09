@@ -968,6 +968,22 @@ pub fn build_mvt_tile_with_patterns(
                                 rings.push(ring);
                             }
                         }
+                        // MVT version 1 left ring winding unspecified, so the exterior-and-holes
+                        // structure has to be re-derived rather than read. mbgl gates the same
+                        // repair on the same version, and skipping it on a v1 world tile costs
+                        // both Americas.
+                        // MVT version 1 left ring winding unspecified, so the exterior-and-holes
+                        // structure has to be re-derived rather than read. mbgl gates the same
+                        // repair on the same version, and skipping it on a v1 world tile costs
+                        // both Americas.
+                        //
+                        // Every v1 polygon, as mbgl does, rather than only the ones that look
+                        // broken. Repairing selectively was measured and gained 0.09% of a z0
+                        // world frame -- not enough to buy a rule about which geometry to trust,
+                        // and there is no well-formed v1 tile here to show it helping.
+                        if named.version < 2 {
+                            rings = fill::fixup_polygons(&rings);
+                        }
                         if !rings.is_empty() {
                             per_feature.push(rings);
                             kept.push(feature);
