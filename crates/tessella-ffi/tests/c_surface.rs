@@ -180,6 +180,12 @@ fn the_c_header_describes_the_library_it_claims_to() {
         0,
         "the plane's cover policy was refused",
     );
+    check("projection_globe", 0, "the globe projection was refused");
+    check(
+        "projection_mercator",
+        0,
+        "switching back to the plane was refused",
+    );
     check("tick_first", 0, "the first tick failed");
     check("tick_second", 0, "the second tick failed");
     check("status", 0, "the status call failed");
@@ -201,6 +207,11 @@ fn the_c_header_describes_the_library_it_claims_to() {
         "world_copies_null",
         2,
         "setting the cover policy on a null handle was not rejected",
+    );
+    check(
+        "projection_null",
+        2,
+        "setting the projection on a null handle was not rejected",
     );
     check(
         "viewport_null",

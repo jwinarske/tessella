@@ -23,6 +23,7 @@
 
 use std::collections::BTreeMap;
 
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::{TileId as WireTileId, ViewId};
 use tessella_capture_abi::reverse::ReverseChannel;
 use tessella_capture_abi::ring::Ring;
@@ -99,6 +100,7 @@ fn emit(scene: &Scene) -> (Session, u64) {
         &mut frame::SymbolCache::default(),
         &mut frame::PlacementState::new(),
         &Frame {
+            projection: ProjectionMode::Mercator,
             style: &scene.style,
             view: &scene.view,
             view_id: ViewId(0),

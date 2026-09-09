@@ -5,7 +5,7 @@
 //! The obvious structure for latest-wins is a shared-memory table with one slot per key,
 //! overwritten in place. It is the wrong one here, and the reason is payload size. Slot storage
 //! has to be sized up front, and these payloads span three orders of magnitude: a
-//! [`CameraUpdate`](crate::envelope::CameraUpdate) is 272 fixed bytes, while an
+//! [`CameraUpdate`](crate::envelope::CameraUpdate) is 400 fixed bytes, while an
 //! [`OrderUpdate`](crate::envelope::OrderUpdate) can carry thousands of entries and a
 //! [`TextureUpdate`](crate::envelope::TextureUpdate) an atlas region. Sizing every slot for its
 //! worst case wastes the region; sizing for the common case makes the worst case unrepresentable.

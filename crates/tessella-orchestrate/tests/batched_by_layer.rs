@@ -25,6 +25,7 @@
 use std::collections::BTreeMap;
 
 use tessella_capture_abi::EnvelopeKind;
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::{
     AttributeDesc, GeometryAdd, OrderEntry, OrderUpdate, ViewId, WireRecord,
 };
@@ -112,6 +113,7 @@ fn frame_stream() -> (BTreeMap<u64, Binding>, Vec<OrderEntry>) {
         producer,
         &mut arena,
         &Frame {
+            projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
             view_id: ViewId(0),

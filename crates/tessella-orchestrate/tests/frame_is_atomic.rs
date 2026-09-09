@@ -20,6 +20,7 @@
 //! behind. R4 calls this backpressure under stall.
 
 use tessella_capture_abi::EnvelopeKind;
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::ViewId;
 use tessella_capture_abi::ring::{self, region_size};
 use tessella_orchestrate::SlabArena;
@@ -97,6 +98,7 @@ fn a_frame_that_will_not_fit_leaves_nothing_behind() {
         &mut producer,
         &mut arena,
         &Frame {
+            projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
             view_id: ViewId(0),
@@ -147,6 +149,7 @@ fn the_retry_after_a_full_ring_is_a_whole_frame() {
             producer,
             arena,
             &Frame {
+                projection: ProjectionMode::Mercator,
                 style: &style,
                 view: &view,
                 view_id: ViewId(0),

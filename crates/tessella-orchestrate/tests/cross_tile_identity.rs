@@ -22,6 +22,7 @@
 //!
 //! So these drive whole frames and read the identities the index actually issued.
 
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::ViewId;
 use tessella_capture_abi::ring::Ring;
 use tessella_glyph::fonts::Fonts;
@@ -145,6 +146,7 @@ fn emit(
         layouts,
         placement,
         &Frame {
+            projection: ProjectionMode::Mercator,
             style: &scene.style,
             view: &scene.view,
             view_id: ViewId(0),

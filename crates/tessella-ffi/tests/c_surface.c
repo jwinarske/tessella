@@ -80,6 +80,12 @@ int main(void) {
            (int)tessella_set_world_copies(map, TESSELLA_WORLD_COPIES_REPEATED));
     printf("world_copies_null %d\n",
            (int)tessella_set_world_copies(NULL, TESSELLA_WORLD_COPIES_ONE));
+    printf("projection_globe %d\n",
+           (int)tessella_set_projection(map, TESSELLA_PROJECTION_GLOBE));
+    printf("projection_mercator %d\n",
+           (int)tessella_set_projection(map, TESSELLA_PROJECTION_MERCATOR));
+    printf("projection_null %d\n",
+           (int)tessella_set_projection(NULL, TESSELLA_PROJECTION_GLOBE));
 
     printf("tick_first %d\n", (int)tessella_tick(map));
     printf("tick_second %d\n", (int)tessella_tick(map));

@@ -23,15 +23,16 @@
 //! changes is which side is authoritative, and [`CameraBlock::for_mode`] is where that is
 //! decided rather than being left to a reader of the stream to infer.
 
-use tessella_capture_abi::CameraMode;
 use tessella_capture_abi::EnvelopeKind;
 use tessella_capture_abi::envelope::{
     CameraUpdate, Light as AbiLight, OrderEpoch, ViewId, WireRecord,
 };
 use tessella_capture_abi::ring::{Full, Producer};
+use tessella_capture_abi::{CameraMode, ProjectionMode};
 use tessella_style::light::{Anchor, Light};
 use tessella_tile::camera::{self, CameraError};
 use tessella_tile::cover::ViewTransform;
+use tessella_tile::globe;
 
 /// A camera block, before it goes on the wire.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -65,6 +66,10 @@ impl CameraBlock {
         Ok(Self {
             record: CameraUpdate {
                 proj_matrix,
+                // The plane by default. `on_projection` is what fills it, because the globe's
+                // matrix is a function of the settled camera and there is no point computing one
+                // for every view that will never ask for it.
+                globe_matrix: [0.0; 16],
                 center_zoom0: camera::center_zoom0(&settled),
                 bearing: settled.bearing,
                 pitch: settled.pitch,
@@ -93,7 +98,8 @@ impl CameraBlock {
                 // 0.98828125. Carried as measured rather than recomputed, because the formula
                 // counts layer groups this frontend does not model.
                 depth_range_size: DEFAULT_DEPTH_RANGE,
-                _pad: 0,
+                projection: ProjectionMode::Mercator as u8,
+                _pad: [0; 3],
             },
         })
     }
@@ -110,6 +116,27 @@ impl CameraBlock {
             self.record.proj_matrix = [0.0; 16];
             self.record.center_zoom0 = [0.0; 2];
         }
+        self
+    }
+
+    /// Sets the surface this view draws on, filling the matching matrix.
+    ///
+    /// Under [`ProjectionMode::Globe`] this carries `globe::clip_matrix` -- the sphere-to-clip
+    /// step of the bend -- and leaves `proj_matrix` alone. The two are different spaces rather
+    /// than two spellings of one, and a consumer reads whichever `projection` names: overwriting
+    /// `proj_matrix` would let a consumer that ignored the flag draw a plausible wrong picture
+    /// instead of failing.
+    ///
+    /// The camera is settled first, for the reason [`Self::new`] settles it: a map does not store
+    /// the center it is handed, and a globe matrix built from the unsettled one is correct to a
+    /// part in 10^14 and not bit-exact against a capture.
+    #[must_use]
+    pub fn on_projection(mut self, projection: ProjectionMode, view: &ViewTransform) -> Self {
+        self.record.projection = projection as u8;
+        self.record.globe_matrix = match projection {
+            ProjectionMode::Mercator => [0.0; 16],
+            ProjectionMode::Globe => globe::clip_matrix(&camera::settled(view)),
+        };
         self
     }
 

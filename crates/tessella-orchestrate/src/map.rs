@@ -38,6 +38,7 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::ViewId;
 use tessella_capture_abi::ring::Producer;
 use tessella_glyph::fonts::Fonts;
@@ -178,6 +179,13 @@ pub struct Map {
     /// to six of the cheapest tiles on the map between z1 and z2.5 and none outside, which does
     /// not pay for a spherical cull on this side and is one dot product per tile on the other.
     copies: WorldCopies,
+    /// The surface the tiles are drawn on (plan.md §13.4).
+    ///
+    /// Beside `copies` and for the same reason: a camera does not know what its tiles will be
+    /// drawn on. The two are set independently, but a globe wants `WorldCopies::One` -- every
+    /// wrap of a tile bends to the same patch, so a globe drawing a repeated cover draws that
+    /// patch twice and z-fights with itself.
+    projection: ProjectionMode,
     /// How many ancestor levels to ask for alongside the ideal cover.
     prefetch: u8,
     /// The zoom the previous frame drew at, for the prefetch's velocity.
@@ -249,6 +257,7 @@ impl Map {
             wanted: Vec::new(),
             uncovered: 0,
             copies: WorldCopies::Repeated,
+            projection: ProjectionMode::Mercator,
             prefetch: DEFAULT_PREFETCH,
             last_zoom: None,
             speculative: Vec::new(),
@@ -390,6 +399,25 @@ impl Map {
     #[must_use]
     pub const fn copies(&self) -> WorldCopies {
         self.copies
+    }
+
+    /// Sets the projection the tiles are drawn through.
+    ///
+    /// A toggle rather than a mode a map is created in, for the reason `draw_on` is: MapLibre
+    /// switches projection at runtime and so does this. Nothing invalidates -- the camera block
+    /// is rebuilt every frame and carries the new matrix on the next one.
+    ///
+    /// Does not touch `copies`. A globe almost always wants `WorldCopies::One` alongside, but
+    /// tying the two together would make one setting silently move another, and the cover policy
+    /// is measurable on its own where the projection is not.
+    pub const fn project_on(&mut self, projection: ProjectionMode) {
+        self.projection = projection;
+    }
+
+    /// The projection the tiles are being drawn through.
+    #[must_use]
+    pub const fn projection(&self) -> ProjectionMode {
+        self.projection
     }
 
     /// Reports that a source has new tiles, so the next tick emits.
@@ -789,6 +817,7 @@ impl Map {
             &mut self.layouts,
             &mut self.placement,
             &Frame {
+                projection: self.projection,
                 style: &self.style,
                 view: &self.view,
                 view_id: self.view_id,

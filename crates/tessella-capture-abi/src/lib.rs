@@ -73,11 +73,12 @@ pub use generated::shader_attributes::{ShaderAttribute, attributes, declared_for
 
 /// Revision of the capture-stream ABI this crate implements.
 ///
-/// Rev 1 is the C++ `FrameDiff` stream in `include/mbgl/capture/frame_diff.hpp`. Rev 2 is
-/// this one: explicit ownership (§2.1), the geometry/view namespace split (§5.3), and
-/// `FrameOrder` split into [`EnvelopeKind::CameraUpdate`] and [`EnvelopeKind::OrderUpdate`]
-/// (§6.3). See DR-4.
-pub const ABI_REV: u32 = 2;
+/// Rev 1 is the C++ `FrameDiff` stream in `include/mbgl/capture/frame_diff.hpp`. Rev 2 added
+/// explicit ownership (§2.1), the geometry/view namespace split (§5.3), and `FrameOrder` split
+/// into [`EnvelopeKind::CameraUpdate`] and [`EnvelopeKind::OrderUpdate`] (§6.3). Rev 3 is this
+/// one: [`ProjectionMode`] and the globe's sphere-to-clip matrix on the camera (§13.4), which
+/// grows [`envelope::CameraUpdate`] and so is a break rather than an addition. See DR-4.
+pub const ABI_REV: u32 = 3;
 
 /// The envelopes carried on the ring, one variant per row of the §4 coalescing table.
 ///
@@ -224,6 +225,26 @@ pub enum CameraMode {
     Consumer = 1,
 }
 
+/// The surface a view draws its tiles on (plan.md §13.4).
+///
+/// A toggle rather than a mode a map is created in: MapLibre switches projection at runtime and
+/// so does this. Nothing invalidates when it changes -- the cover is recomputed every frame, so
+/// the frame after the switch reports `Changed` by the path a pan takes.
+///
+/// What it changes on the wire is which projection is authoritative. Under [`Self::Mercator`]
+/// `proj_matrix` is the whole of it and `globe_matrix` is zero. Under [`Self::Globe`] the bend is
+/// `tile-local -> normalized Mercator -> sphere -> clip`, and `globe_matrix` is that last step;
+/// the middle one is nonlinear and belongs to the consumer's vertex stage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[repr(u8)]
+pub enum ProjectionMode {
+    /// The plane. `proj_matrix` is world-to-clip and `globe_matrix` is zero.
+    #[default]
+    Mercator = 0,
+    /// The sphere. `globe_matrix` takes a point on the unit sphere to clip space.
+    Globe = 1,
+}
+
 /// Uniform transport mode (DR-16, resolves R-12).
 ///
 /// There is one path. The per-drawable-buffer variant of rev 1 is gone, and no fallback
@@ -248,6 +269,20 @@ impl CameraMode {
         match value {
             0 => Some(Self::Producer),
             1 => Some(Self::Consumer),
+            _ => None,
+        }
+    }
+}
+
+impl ProjectionMode {
+    /// Converts a wire discriminant into a [`ProjectionMode`], rejecting unknown values.
+    ///
+    /// See the crate-level note on ingress validation.
+    #[must_use]
+    pub const fn from_repr(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Mercator),
+            1 => Some(Self::Globe),
             _ => None,
         }
     }

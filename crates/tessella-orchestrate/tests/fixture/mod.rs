@@ -10,6 +10,7 @@
 
 #![allow(dead_code, unreachable_pub)]
 
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::{Extent, GeometryId, Rect16, TextureId, ViewId};
 use tessella_capture_abi::generated::mbgl_enums::TexturePixelType;
 use tessella_capture_abi::ring::{self, region_size};
@@ -83,6 +84,7 @@ pub fn emit_frame() -> (Vec<u8>, Vec<u8>, frame::Emitted) {
         &mut producer,
         &mut arena,
         &Frame {
+            projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
             view_id: ViewId(0),

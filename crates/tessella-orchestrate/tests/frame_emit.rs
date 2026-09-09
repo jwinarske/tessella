@@ -6,7 +6,8 @@
 //! in step with the first. This exercises the module instead.
 
 use tessella_capture_abi::EnvelopeKind;
-use tessella_capture_abi::envelope::ViewId;
+use tessella_capture_abi::ProjectionMode;
+use tessella_capture_abi::envelope::{CameraUpdate, ViewId, WireRecord as _};
 use tessella_capture_abi::ring::Ring;
 use tessella_orchestrate::SlabArena;
 use tessella_orchestrate::frame::{self, Frame};
@@ -68,6 +69,7 @@ fn emit_frame() -> (Vec<EnvelopeKind>, frame::Emitted, usize) {
         producer,
         &mut arena,
         &Frame {
+            projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
             view_id: ViewId(0),
@@ -257,6 +259,7 @@ fn a_symbol_layer_carries_its_quads_and_its_atlas() {
         producer,
         &mut arena,
         &Frame {
+            projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
             view_id: ViewId(0),
@@ -375,6 +378,7 @@ fn a_raster_layer_carries_its_quad_and_its_picture() {
         producer,
         &mut arena,
         &Frame {
+            projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
             view_id: ViewId(0),
@@ -452,4 +456,80 @@ fn read_texture_refs(payload: &[u8], add: tessella_capture_abi::envelope::Geomet
                 .map(|reference| reference.texture.0)
         })
         .collect()
+}
+
+/// The projection a frame is given reaches the camera on the ring (plan.md §13.4).
+///
+/// The block's own tests cover what `on_projection` computes. What this covers is that the frame
+/// path passes it at all: the field was threaded through `Frame`, and a parameter that is accepted
+/// and dropped looks exactly like one that works until a consumer draws a flat planet.
+#[test]
+fn the_frames_projection_reaches_the_camera_record() {
+    for (projection, globe_expected) in [
+        (ProjectionMode::Mercator, false),
+        (ProjectionMode::Globe, true),
+    ] {
+        let camera = emit_with_projection(projection);
+        assert_eq!(
+            camera.projection, projection as u8,
+            "the frame asked for {projection:?} and the wire said {}",
+            camera.projection,
+        );
+        assert_eq!(
+            camera.globe_matrix != [0.0; 16],
+            globe_expected,
+            "{projection:?} produced the wrong globe matrix",
+        );
+        // The plane's matrix is authoritative either way: a globe still reports it, so a consumer
+        // that switches back does not need a new camera to have arrived first.
+        assert_ne!(camera.proj_matrix, [0.0; 16]);
+    }
+}
+
+/// One frame, and the camera record it wrote.
+fn emit_with_projection(projection: ProjectionMode) -> CameraUpdate {
+    let style = Style::parse(STYLE).expect("the style parses");
+    let view = view();
+    let tiles = cover::cover(&view).expect("covers");
+    let decoded = Tile::decode(REAL_TILE).expect("the fixture decodes");
+
+    let mut buckets = Vec::new();
+    for tile in &tiles {
+        let id = TileId::new(tile.z, tile.x, tile.y);
+        let mut built = build_mvt_tile(&style, "src", id, &decoded).expect("the tile builds");
+        built.extend(build_sourceless(&style, id).expect("the background builds"));
+        built.sort_by_key(|bucket| bucket.layer_index);
+        buckets.push((id, built));
+    }
+
+    let mut ring = Ring::new(1 << 22);
+    let (producer, consumer) = ring.split();
+    let mut arena = SlabArena::new();
+    frame::emit(
+        producer,
+        &mut arena,
+        &Frame {
+            projection,
+            style: &style,
+            view: &view,
+            view_id: ViewId(0),
+            tiles: &tiles,
+            buckets: &buckets,
+            origins: &[],
+            light: &Light::default(),
+            fonts: None,
+            patterns: None,
+        },
+    )
+    .expect("the frame emits");
+
+    let mut camera = None;
+    while let Some(record) = consumer.peek() {
+        if record.kind == EnvelopeKind::CameraUpdate {
+            camera = CameraUpdate::from_bytes(record.record);
+        }
+        let consumed = record.consumed();
+        consumer.advance(consumed);
+    }
+    camera.expect("a camera reached the ring")
 }

@@ -8042,6 +8042,44 @@ So the material is now a transcription of arithmetic that is already pinned, and
 confirm it rather than to discover it. That is a weaker claim than parity and a stronger one than
 §13.4 expected to be able to make here.
 
+### The globe on the wire, and why it is rev 3 rather than an addition
+
+The bend's arithmetic is settled; what was missing is a way to say a view wants it. `ProjectionMode`
+is that -- `Mercator` or `Globe`, a toggle rather than a mode a map is created in, because MapLibre
+switches projection at runtime and so does this. Nothing invalidates: the camera block is rebuilt
+every frame, so the frame after the switch carries the new matrix by the path a pan takes.
+
+`CameraUpdate` grows a `globe_matrix` beside `proj_matrix` rather than overwriting it. The two are
+different spaces -- world-to-clip and unit-sphere-to-clip -- and a field that means one thing or
+another depending on a flag is how a consumer that ignores the flag draws a plausible wrong picture
+instead of failing. Both are always populated for the projection that owns them, so a consumer
+switching back needs no new camera to have arrived first.
+
+That is a **break, not an addition**: the new matrix sits between the projection and the center and
+moves every field after it by 128 bytes, and the record goes from 272 to 400. Hence `ABI_REV` 3.
+`field_offsets_are_pinned` failed the moment it landed, which is the test working -- a field sliding
+under a consumer built against rev 2 is exactly what that pin exists to make loud.
+
+The producer's part stops there. `Map::project_on` and `tessella_set_projection` set it, `Frame`
+carries it beside the camera -- for the reason `Map::copies` sits beside rather than on it, that
+what tiles are drawn on is not something a camera knows -- and `CameraBlock::on_projection` fills
+the matrix from the *settled* camera, the same settling `proj_matrix` gets and for the same reason.
+
+It deliberately does **not** touch `WorldCopies`. A globe almost always wants `One` alongside it,
+and tying the two together would make one setting silently move another; the cover policy is
+measurable on its own where the projection is not.
+
+What is not here, and is the next step: the per-tile matrices still carry `proj_matrix * placement`
+under either projection. A globe wants `mercator_matrix_for_tile` instead, so the material receives
+a normalized Mercator position to bend rather than an already-projected one. That threads a
+parameter through five `ubo.rs` constructors and sixteen call sites in the hot path the parity sweep
+guards, which is why it is its own change rather than the tail of this one.
+
+A consumer that sets `Globe` and draws nothing different has not implemented the bend, and the
+producer cannot tell. That asymmetry is inherent -- the producer's whole contribution to a globe is
+two matrices and a flag -- and it is worth writing down before someone reads a flat planet as a
+producer bug.
+
 ## 19. wasm32 as a fourth target
 
 Build the producer for `wasm32-unknown-unknown` so a browser page draws the same capture stream a

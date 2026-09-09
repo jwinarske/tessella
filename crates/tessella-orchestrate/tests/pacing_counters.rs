@@ -11,6 +11,7 @@
 //! work done in bursts with the part idle between them. §12.8 says so — "sustained-idle-then-
 //! burst beats constant medium load" — and until now nothing measured it.
 
+use tessella_capture_abi::ProjectionMode;
 use tessella_orchestrate::pacing::{Demand, Idle, Pacer, Tick};
 
 /// A tick with nothing to send.
@@ -306,6 +307,7 @@ mod against_a_ring {
                 &mut frame::SymbolCache::default(),
                 &mut frame::PlacementState::new(),
                 &Frame {
+                    projection: ProjectionMode::Mercator,
                     style: &scene.style,
                     view: &scene.view,
                     view_id: ViewId(0),
