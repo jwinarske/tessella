@@ -33,8 +33,8 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::sync::{Arc, Mutex};
 
-use crate::pmtiles::{Archive, PmtilesError, TileType};
-use crate::source::{FetchError, FileSource, Response};
+use crate::pmtiles::{Archive, HttpRange, PmtilesError, RangeReader, TileType};
+use crate::source::{FetchError, FileSource, RangeFetch, Response};
 
 /// The scheme an archive is named by.
 pub const PROTOCOL: &str = "pmtiles://";
@@ -92,14 +92,6 @@ fn parse(url: &str) -> Result<Request<'_>, FetchError> {
     // mbgl writes the inner url with a scheme of its own — `pmtiles://file:///path` — and a
     // bare path is the ordinary way to write it by hand. Both mean the same file.
     let inner = inner.strip_prefix("file://").unwrap_or(inner);
-    if inner.starts_with("http://") || inner.starts_with("https://") {
-        // Honest refusal rather than a confusing open failure. Reading a remote archive is a
-        // `RangeReader` over §12.6's range requests, which is the same shape as the file reader
-        // and is not built yet; treating the url as a path would fail with `no such file`.
-        return Err(refuse(
-            "a remote archive needs range requests, which are not built yet",
-        ));
-    }
     if inner.is_empty() {
         return Err(refuse("no archive path"));
     }
@@ -109,23 +101,88 @@ fn parse(url: &str) -> Result<Request<'_>, FetchError> {
     })
 }
 
-/// Reads tiles and manifests out of `.pmtiles` archives on local storage.
-#[derive(Debug, Default)]
+/// Whatever an archive is being read out of.
+///
+/// One boxed reader rather than a generic parameter or an enum, because the choice is made per
+/// URL at run time: a style may name a file and an origin in the same document, and both end up
+/// in the same table. The indirection costs a virtual call per range, of which a tile needs
+/// three.
+struct Reader(Box<dyn RangeReader + Send + Sync>);
+
+impl RangeReader for Reader {
+    fn read_at(&self, offset: u64, length: usize) -> Result<Vec<u8>, PmtilesError> {
+        self.0.read_at(offset, length)
+    }
+}
+
+/// Reads tiles and manifests out of `.pmtiles` archives, on local storage or over HTTP.
+#[derive(Default)]
 pub struct PmtilesFileSource {
-    /// Archives held open by path, so that the header and root directory are read once rather
-    /// than per tile.
-    open: Mutex<HashMap<String, Arc<Archive<File>>>>,
+    /// Archives held open by path or url, so that the header and root directory are read once
+    /// rather than per tile.
+    open: Mutex<HashMap<String, Arc<Archive<Reader>>>>,
+    /// What reads a remote archive, when one is named.
+    ///
+    /// Absent by default, which keeps a source that only ever sees files from depending on a
+    /// transport it will not use -- and makes a `pmtiles://https://` url refuse with the reason
+    /// rather than fail to open a file by that name.
+    ranges: Option<Arc<dyn RangeFetch>>,
+}
+
+impl core::fmt::Debug for PmtilesFileSource {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("PmtilesFileSource")
+            .field(
+                "open",
+                &self.open.lock().map(|held| held.len()).unwrap_or(0),
+            )
+            .field("ranges", &self.ranges.is_some())
+            .finish()
+    }
 }
 
 impl PmtilesFileSource {
-    /// A source with nothing open yet.
+    /// A source with nothing open yet, reading local archives only.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// A source that can also read archives an origin serves by byte range.
+    ///
+    /// The whole point of the format is that an archive is read where it lies: a directory walk
+    /// and one tile are a handful of small reads out of something that may be gigabytes. With
+    /// this, a style can name `pmtiles://https://origin/planet.pmtiles` and the planet is never
+    /// downloaded.
+    #[must_use]
+    pub fn with_ranges(ranges: Arc<dyn RangeFetch>) -> Self {
+        Self {
+            open: Mutex::new(HashMap::new()),
+            ranges: Some(ranges),
+        }
+    }
+
+    /// Opens whatever `at` names, as a file or as an origin.
+    fn reader(&self, at: &str) -> Result<Reader, PmtilesError> {
+        if at.starts_with("http://") || at.starts_with("https://") {
+            let Some(ranges) = self.ranges.clone() else {
+                // Named rather than guessed at: without a transport this cannot read a remote
+                // archive at all, and opening a *file* called `https://...` fails with something
+                // that reads like a missing file rather than a missing capability.
+                return Err(PmtilesError::Io(format!(
+                    "`{at}` is a remote archive and this source has no range transport; build it \
+                     with `PmtilesFileSource::with_ranges`"
+                )));
+            };
+            return Ok(Reader(Box::new(HttpRange::new(ranges, at.to_owned()))));
+        }
+        let file = File::open(at).map_err(|error| PmtilesError::Io(error.to_string()))?;
+        Ok(Reader(Box::new(file)))
+    }
+
     /// The archive at `path`, opening it if it is not already held.
-    fn archive(&self, path: &str) -> Result<Arc<Archive<File>>, PmtilesError> {
+    fn archive(&self, path: &str) -> Result<Arc<Archive<Reader>>, PmtilesError> {
         // Two locks rather than one held across the open: a slow open — a cold page cache, a
         // network filesystem — would otherwise block every other archive's tiles behind it.
         // The cost is that two threads racing on the same new path both open it and one's work
@@ -133,8 +190,7 @@ impl PmtilesFileSource {
         if let Some(held) = self.open.lock().expect("archive table").get(path) {
             return Ok(Arc::clone(held));
         }
-        let file = File::open(path).map_err(|error| PmtilesError::Io(error.to_string()))?;
-        let archive = Arc::new(Archive::open(file)?);
+        let archive = Arc::new(Archive::open(self.reader(path)?)?);
         let mut table = self.open.lock().expect("archive table");
         if let Some(held) = table.get(path) {
             return Ok(Arc::clone(held));
@@ -282,11 +338,26 @@ mod tests {
         );
     }
 
-    /// A remote archive is a range reader that is not built. Saying so beats failing later with
-    /// `no such file or directory: https:`.
+    /// A remote archive parses like any other, and the origin stays in the address.
+    ///
+    /// This used to be a refusal -- "a remote archive needs range requests, which are not built
+    /// yet" -- and the refusal moved rather than disappearing: what a source without a range
+    /// transport cannot do is *open* one, which it says with the constructor that would fix it.
+    /// Parsing was never the place for it, because the url is perfectly well formed.
     #[test]
-    fn refuses_a_remote_archive_clearly() {
-        let error = parse("pmtiles://https://example.com/x.pmtiles").expect_err("refused");
-        assert!(format!("{error}").contains("range requests"), "{error}");
+    fn a_remote_archive_parses_like_any_other() {
+        assert_eq!(
+            parse("pmtiles://https://example.com/x.pmtiles"),
+            Ok(Request::Manifest("https://example.com/x.pmtiles"))
+        );
+        assert_eq!(
+            parse("pmtiles://https://example.com/x.pmtiles/14/8802/5373.mvt"),
+            Ok(Request::Tile(
+                "https://example.com/x.pmtiles",
+                14,
+                8802,
+                5373
+            ))
+        );
     }
 }
