@@ -8008,6 +8008,40 @@ subdivided soup has to be deduplicated back into a shared vertex buffer, and `ou
 to walk the subdivided ring rather than the original -- and it is worth doing against a bend that
 exists, so the two can be looked at together. What is left of §13.4 is that bend, then symbols.
 
+### Closing the bend on the CPU, before the material exists
+
+The bend is `tile-local -> normalized Mercator -> sphere -> clip`, and only the middle step is
+nonlinear. §13.4 calls the bend the first thing on this page judged by eye; that is true of the
+*picture* and not of the arithmetic, and the arithmetic is three steps of which two were already
+here.
+
+`camera::mercator_matrix_for_tile` is the missing one. It is `matrix_for_tile` over a unit world
+rather than one `world_size(zoom)` across -- the same body, called with a different size, so the
+two cannot drift. The difference that matters is that **zoom is not a parameter**: the plane's
+placement scales with the zoom, and a sphere is one size however far the camera is from it, so the
+zoom lives in `globe::clip_matrix`'s camera distance instead and a globe's per-tile matrix changes
+only when the tile does.
+
+With it, the whole chain runs on the CPU and the test is an end-to-end one rather than another
+identity: **the point the camera is over bends to the middle of the screen**, checked at Seattle,
+Tokyo, Liestal and null island. Null island is in the list and is not the interesting case -- a
+camera on the equator or the prime meridian is exactly what a hand check picks, and it is what hid
+two of the three sign errors `clip_matrix` shipped with.
+
+Two more hold the orientation and the occlusion: a degree north of the center lands above it after
+the bend, not merely in the matrix; and the antipode is behind the horizon while still projecting
+inside the frustum, which is `faces_camera` and `project_point` agreeing about the thing a
+projection cannot express.
+
+Both were checked by breaking them. A shifted Mercator origin of 0.001 -- a third of a degree of
+longitude -- moves the center 0.012 in clip space and fails; a negated `y` in the Mercator step
+fails three. Written down because a test that passes the first time it is run has not yet been
+shown to be watching anything.
+
+So the material is now a transcription of arithmetic that is already pinned, and the eye is left to
+confirm it rather than to discover it. That is a weaker claim than parity and a stronger one than
+§13.4 expected to be able to make here.
+
 ## 19. wasm32 as a fourth target
 
 Build the producer for `wasm32-unknown-unknown` so a browser page draws the same capture stream a
