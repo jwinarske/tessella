@@ -8159,10 +8159,28 @@ start through it: a style resolved from a manifest the test supplies and a tile 
 the test hands back, with no threads, no network and no timing. What a browser adds is `fetch` and
 a frame callback, neither of which is this arrangement's to get wrong.
 
-**What is left before a browser draws.** The exports. The FFI holds
-`Pooled<HttpFileSource>` by name, so a hosted map needs a transport it can select and three calls
-to drive it -- take the pending requests, answer one, fail one. After that there is something for a
-WebGL2 consumer to consume.
+**The exports.** `tessella_create_hosted` makes a map that fetches nothing, and three calls drive
+it: `tessella_take_request`, `tessella_answer`, `tessella_fail_request`. The FFI's transport is an
+enum of the two arrangements rather than a `dyn` or a second map type -- there are exactly two of
+them and they are genuinely different, so naming both costs a match and keeps the job path free of
+a virtual call, which is DR-24's reasoning for `Pool` applied one level up.
+
+The URL comes back as a byte range in the map's own memory, which is the arrangement
+`tessella_regions` already uses for the ring: the alternative is an allocator export and a copy on
+each side of it. It is good until the ticket is answered, failed, or the map is destroyed, which is
+what bounds it. Ticket `0` means "nothing to fetch" and is a settled map's answer rather than an
+error, since zero is never issued. A hosted call on a pooled map answers `NotHosted` rather than
+"nothing to fetch", because a caller that created the wrong kind would otherwise loop for ever on
+a map that was never going to ask for anything.
+
+Driven from C in `c_surface.c`, which is where the declarations get checked as declared: create
+hosted, tick, take a request, read the URL out of the map's memory, answer it, and read the
+readiness back.
+
+**What is left before a browser draws** is the consumer, and one thing under it: the FFI is a
+`staticlib`/`cdylib` built for the host. Producing a `.wasm` and loading it is the next question,
+and it is a build question rather than a design one now -- nothing in the producer reaches for a
+socket, a thread or a clock that a browser does not have.
 
 ### WS-2, and what native got out of it
 
