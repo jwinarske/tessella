@@ -2614,11 +2614,54 @@ fn write_layer_state(
             .filter_map(|binding| binding.tile)
             .map(|tile| (tile.z, tile.x, tile.y))
             .collect();
-        let mine: Vec<TileCoord> = tiles
+        let mut mine: Vec<TileCoord> = Vec::new();
+        let mut named: alloc::collections::BTreeSet<(u8, u32, u32, i32)> =
+            alloc::collections::BTreeSet::new();
+        for coord in tiles
             .iter()
             .copied()
             .filter(|coord| used.contains(&(coord.z, coord.x, coord.y)))
-            .collect();
+        {
+            if named.insert((coord.z, coord.x, coord.y, coord.wrap)) {
+                mine.push(coord);
+            }
+        }
+        // And the tiles this layer draws that the cover does not name.
+        //
+        // An ancestor stands in while a finer tile loads -- the cover asks for z9 and a z6 is
+        // drawn under it until z9 arrives -- and it is not in `tiles`, because the cover is the
+        // ideal set rather than the drawn one. Masked only by the intersection above, it got no
+        // mask at all, `referenceFor` found nothing, and nothing stopped it: a z6 water polygon
+        // bent at a z9 camera covers the whole viewport, and it painted straight over the children
+        // that had replaced it. On a globe that reads as wedges of water lying across the map, and
+        // as a river's coarse generalization flickering over its fine one while the zoom moves.
+        //
+        // The whole arrangement depends on the parent being masked: masks are drawn coarse to
+        // fine so a child's overwrites its parent's, and a drawable testing equal to its own
+        // reference then draws only where nothing finer replaced it. A parent with no mask is the
+        // one case that breaks it.
+        //
+        // The wrap comes from a cover tile this one is an ancestor of, since `TileId` does not
+        // carry one and an ancestor sits on the same copy of the world as its children.
+        for &(z, x, y) in &used {
+            if tiles
+                .iter()
+                .any(|coord| coord.z == z && coord.x == x && coord.y == y)
+            {
+                continue;
+            }
+            let wrap = tiles
+                .iter()
+                .find(|coord| {
+                    coord.z >= z
+                        && (coord.x >> (coord.z - z)) == x
+                        && (coord.y >> (coord.z - z)) == y
+                })
+                .map_or(0, |coord| coord.wrap);
+            if named.insert((z, x, y, wrap)) {
+                mine.push(TileCoord { z, x, y, wrap });
+            }
+        }
         let set = stencil::clip_set(view, layer_index, &mine, projection)
             .map_err(|error| FrameError::Camera(alloc::format!("{error}")))?;
         stencil::write(producer, view_id, &set)?;
