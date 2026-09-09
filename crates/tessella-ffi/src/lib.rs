@@ -56,6 +56,12 @@ pub enum Status {
     RegionFull = 7,
     /// Something failed in a way this ABI has no more specific word for. The producer logs it.
     Failed = 6,
+    /// A hosted call was made on a map that fetches for itself.
+    ///
+    /// Distinct from [`Self::Failed`] because it is a fixable mistake with an obvious fix: the
+    /// map wanted [`tessella_create_hosted`]. A map created either way is otherwise identical, so
+    /// there is nothing else that would tell a caller which one it has.
+    NotHosted = 8,
 }
 
 extern crate alloc;
@@ -67,9 +73,11 @@ use std::time::Duration;
 use tessella_capture_abi::envelope::ViewId;
 use tessella_capture_abi::ring::{self, Producer, region_size};
 use tessella_orchestrate::cache::TileCache;
+use tessella_orchestrate::deferred::{HostTransport, PoolBacked, TileTransport};
 use tessella_orchestrate::map::{Map, SpriteAtlas, Tick};
-use tessella_orchestrate::pool::Pool;
-use tessella_orchestrate::source::{Pooled, Readiness, TileSource};
+use tessella_orchestrate::pool::{Pool, Priority};
+use tessella_orchestrate::source::{Coalesced, Readiness, TileSource};
+use tessella_storage::deferred::{DeferredFileSource, Ticket};
 use tessella_storage::http::HttpFileSource;
 use tessella_storage::source::Coalescing;
 use tessella_style::Style;
@@ -171,6 +179,70 @@ pub const SLAB_SLOTS: usize = 4096;
 /// `Producer`'s pointer into it survives this struct being moved -- the heap allocation does not
 /// move when the `Vec` does.
 ///
+/// Where a map's bytes come from.
+///
+/// An enum rather than a `dyn` or a second map type. The two arrangements are genuinely different
+/// -- one blocks on a worker, the other writes down what it needs and waits to be told -- and
+/// there are exactly two of them, so naming both costs a match and keeps the job path free of a
+/// virtual call. The same reasoning DR-24 gives for `Pool`.
+pub enum Transport {
+    /// Native: a blocking source, waited on where waiting is cheap.
+    Pooled(PoolBacked<Coalesced<HttpFileSource>>),
+    /// Hosted: the consumer fetches, which is the only thing a browser can do.
+    Hosted(HostTransport),
+}
+
+impl DeferredFileSource for Transport {
+    fn request(&self, url: &str, etag: Option<&str>) -> Ticket {
+        match self {
+            Self::Pooled(transport) => transport.request(url, etag),
+            Self::Hosted(transport) => transport.request(url, etag),
+        }
+    }
+
+    fn poll(&self, ticket: Ticket) -> Option<tessella_storage::source::Fetched> {
+        match self {
+            Self::Pooled(transport) => transport.poll(ticket),
+            Self::Hosted(transport) => transport.poll(ticket),
+        }
+    }
+
+    fn cancel(&self, ticket: Ticket) {
+        match self {
+            Self::Pooled(transport) => transport.cancel(ticket),
+            Self::Hosted(transport) => transport.cancel(ticket),
+        }
+    }
+
+    fn outstanding(&self) -> usize {
+        match self {
+            Self::Pooled(transport) => transport.outstanding(),
+            Self::Hosted(transport) => transport.outstanding(),
+        }
+    }
+}
+
+impl TileTransport for Transport {
+    fn request_at(&self, priority: Priority, url: &str, etag: Option<&str>) -> Ticket {
+        match self {
+            Self::Pooled(transport) => transport.request_at(priority, url, etag),
+            // One queue, so the class has nowhere to go. Not dropped on the floor: the default
+            // is what a transport with one queue means by it.
+            Self::Hosted(transport) => transport.request_at(priority, url, etag),
+        }
+    }
+}
+
+impl Transport {
+    /// The hosted half, for the calls that only make sense on one.
+    fn hosted(&self) -> Option<&HostTransport> {
+        match self {
+            Self::Hosted(transport) => Some(transport),
+            Self::Pooled(_) => None,
+        }
+    }
+}
+
 /// The tiles come from a [`TileSource`], which is where every blocking thing now lives: §16
 /// closed on Fluorite's answer that no blocking call is acceptable on the thread that will make
 /// it, so `create` parses the style and nothing else, and the network starts on the first tick.
@@ -185,7 +257,7 @@ pub struct MapState {
     producer: Producer,
     /// Where tiles come from. Shared between views by construction, so a tile two maps want is
     /// fetched once and built once.
-    source: Arc<Pooled<HttpFileSource>>,
+    source: Arc<TileSource<Transport>>,
     /// What the source had landed when this map last drew.
     ///
     /// A tile arriving on a worker does not move the camera, so the damage gate would call the
@@ -259,6 +331,65 @@ pub unsafe extern "C" fn tessella_create(
     zoom: f64,
     out: *mut MapHandle,
 ) -> Status {
+    // SAFETY: the caller's contract, unchanged, and passed straight through.
+    unsafe {
+        create(config, latitude, longitude, zoom, out, || {
+            Transport::Pooled(PoolBacked::new(
+                Arc::new(Coalesced(Arc::new(Coalescing::new(HttpFileSource::new(
+                    Duration::from_secs(30),
+                ))))),
+                Pool::shared(),
+                Priority::Background,
+            ))
+        })
+    }
+}
+
+/// Creates a map whose fetching the caller does.
+///
+/// As [`tessella_create`], but nothing is fetched by the map. It writes down what it needs and
+/// the caller brings it back through [`tessella_take_request`] and [`tessella_answer`].
+///
+/// For a browser, where there is no other option: `std::net` has no sockets there and blocking on
+/// the thread that draws is not available either. It is not only for a browser -- a host with its
+/// own connection pool, its own cache, or its own idea of when a fetch is allowed uses the same
+/// three calls, and a test uses them to drive a map with no network at all.
+///
+/// The map still needs ticking. A hosted map with nobody calling [`tessella_tick`] asks for
+/// nothing, because it is the tick that notices what has arrived and decides what to want next.
+///
+/// # Safety
+///
+/// As [`tessella_create`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_create_hosted(
+    config: *const Config,
+    latitude: f64,
+    longitude: f64,
+    zoom: f64,
+    out: *mut MapHandle,
+) -> Status {
+    // SAFETY: the caller's contract, unchanged, and passed straight through.
+    unsafe {
+        create(config, latitude, longitude, zoom, out, || {
+            Transport::Hosted(HostTransport::new())
+        })
+    }
+}
+
+/// The body both constructors share, differing only in where the bytes will come from.
+///
+/// # Safety
+///
+/// As [`tessella_create`].
+unsafe fn create(
+    config: *const Config,
+    latitude: f64,
+    longitude: f64,
+    zoom: f64,
+    out: *mut MapHandle,
+    transport: impl FnOnce() -> Transport,
+) -> Status {
     guarded(move || {
         if config.is_null() || out.is_null() {
             return Status::NullArgument;
@@ -320,11 +451,9 @@ pub unsafe extern "C" fn tessella_create(
         };
         let arena = tessella_orchestrate::emit::SlabArena::in_region(mapping, SLAB_SLOTS);
 
-        let files = Arc::new(Coalescing::new(HttpFileSource::new(Duration::from_secs(
-            30,
-        ))));
         let cache = Arc::new(TileCache::new(64));
-        let source = TileSource::new(style_text, files, cache, Pool::shared(), 1);
+        let source =
+            TileSource::with_transport(style_text, Arc::new(transport()), cache, Pool::shared(), 1);
 
         let state = Box::new(MapState {
             map: Map::with_arena(style, view, ViewId(0), arena),
@@ -711,6 +840,144 @@ pub unsafe extern "C" fn tessella_status(
                 *reason.add(end) = 0;
             }
         }
+        Status::Ok
+    })
+}
+
+/// Takes the next thing a hosted map wants fetched.
+///
+/// Answers ticket `0` when there is nothing to fetch, which is not an error: it is what a settled
+/// map says, and it is the condition a caller loops until. Zero is never a real ticket, so there
+/// is no other value to confuse it with.
+///
+/// The URL is a byte range in the map's own memory -- the same arrangement [`tessella_regions`]
+/// uses for the ring, and for the same reason: the alternative is an allocator export and a copy
+/// on each side of it. It stays valid until the ticket is answered, failed, or the map is
+/// destroyed. A caller that holds it past any of those holds a dangling pointer.
+///
+/// [`Status::NotHosted`] for a map created by [`tessella_create`], which fetches for itself.
+///
+/// # Safety
+///
+/// `map` must be live, and the three out pointers valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_take_request(
+    map: MapHandle,
+    out_ticket: *mut u64,
+    out_url: *mut *const u8,
+    out_url_len: *mut usize,
+) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_ref() }) else {
+            return Status::NoSuchMap;
+        };
+        if out_ticket.is_null() || out_url.is_null() || out_url_len.is_null() {
+            return Status::NullArgument;
+        }
+        let Some(hosted) = state.source.transport().hosted() else {
+            return Status::NotHosted;
+        };
+
+        // Written before anything else, so a caller that ignores the status still reads "nothing
+        // to fetch" rather than whatever was in its variables.
+        unsafe {
+            *out_ticket = 0;
+            *out_url = core::ptr::null();
+            *out_url_len = 0;
+        }
+
+        // A queued ticket whose URL has gone is one that was answered or cancelled between being
+        // queued and being asked for. Skipped rather than reported: nobody wants it fetched.
+        while let Some(ticket) = hosted.next_request() {
+            if let Some((url, len)) = hosted.url_of(ticket) {
+                unsafe {
+                    *out_ticket = ticket.into_raw();
+                    *out_url = url;
+                    *out_url_len = len;
+                }
+                break;
+            }
+        }
+        Status::Ok
+    })
+}
+
+/// Answers a request with what the caller fetched.
+///
+/// `status` is the origin's. A `404` is an answer rather than a failure -- an absent tile is an
+/// edge of a source's coverage, which the map draws around, and reporting it as a broken fetch
+/// would make a hole look like a fault. [`tessella_fail_request`] is for a fetch that did not
+/// happen at all.
+///
+/// A ticket that was cancelled, already answered, or never issued is ignored and answers
+/// [`Status::Ok`]: a caller that has lost track of its own bookkeeping has wasted a fetch, which
+/// is not something the map can fix by refusing.
+///
+/// # Safety
+///
+/// `map` must be live, and `body` either null or valid for reads of `body_len` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_answer(
+    map: MapHandle,
+    ticket: u64,
+    status: u16,
+    body: *const u8,
+    body_len: usize,
+) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_ref() }) else {
+            return Status::NoSuchMap;
+        };
+        let Some(hosted) = state.source.transport().hosted() else {
+            return Status::NotHosted;
+        };
+        // An empty body is legitimate -- a tile with no features is a valid, empty tile -- so a
+        // null pointer with a zero length is a real answer rather than a missing argument.
+        let bytes = if body.is_null() {
+            if body_len != 0 {
+                return Status::NullArgument;
+            }
+            Vec::new()
+        } else {
+            // SAFETY: the caller guarantees `body_len` readable bytes at `body`. Copied rather
+            // than borrowed: the map holds it past this call and the caller's buffer is the
+            // caller's.
+            unsafe { core::slice::from_raw_parts(body, body_len) }.to_vec()
+        };
+        hosted.answer(Ticket::from_raw(ticket), status, bytes);
+        Status::Ok
+    })
+}
+
+/// Answers a request the caller could not fetch at all.
+///
+/// For a connection that never opened, not for an origin that said no -- that is
+/// [`tessella_answer`] with the status it said it with. The map treats it as it treats any
+/// transport failure: the tile is a hole, counted and named by [`tessella_status`], and the next
+/// tick may ask again.
+///
+/// # Safety
+///
+/// `map` must be live.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_fail_request(map: MapHandle, ticket: u64) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_ref() }) else {
+            return Status::NoSuchMap;
+        };
+        let Some(hosted) = state.source.transport().hosted() else {
+            return Status::NotHosted;
+        };
+        let ticket = Ticket::from_raw(ticket);
+        // Named with the URL the map asked for, where it is still known, so the reason a consumer
+        // reads back says which fetch it was about.
+        let url = hosted.url_of(ticket).map_or(String::new(), |(ptr, len)| {
+            // SAFETY: the transport owns these bytes and they are a `String`'s, so they are UTF-8
+            // and readable for `len` while this call holds no other reference into the table.
+            unsafe { core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr, len)) }
+                .to_string()
+        });
+        hosted.fail(ticket, &url, "the host could not fetch it");
         Status::Ok
     })
 }

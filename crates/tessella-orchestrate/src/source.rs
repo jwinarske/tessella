@@ -481,6 +481,14 @@ impl<D: TileTransport + 'static> TileSource<D> {
         resolving + tiles + glyphs
     }
 
+    /// The transport this source fetches through.
+    ///
+    /// For a consumer that has to drive it -- a host-fetched map has calls of its own, and they
+    /// need somewhere to reach the transport from the handle the consumer holds.
+    pub fn transport(&self) -> &D {
+        &self.deferred
+    }
+
     /// What the style resolved to, once it has.
     ///
     /// The sprite sheet rides along here rather than through an accessor of its own: it is part of

@@ -72,7 +72,12 @@ typedef enum tessella_result {
      * not clear by draining: the arena bump allocates, so space a swept slab left is recovered
      * only once everything above it has gone. The frame compacts and the next tick retries; a
      * map reporting this every tick needs a larger slab_capacity. */
-    TESSELLA_REGION_FULL = 7
+    TESSELLA_REGION_FULL = 7,
+    /* A hosted call was made on a map that fetches for itself. Distinct from TESSELLA_FAILED
+     * because it is a fixable mistake with an obvious fix: the map wanted
+     * tessella_create_hosted. A map created either way is otherwise identical, so nothing else
+     * would tell a caller which one it has. */
+    TESSELLA_NOT_HOSTED = 8
 } tessella_result;
 
 /* How far along a map's sources are.
@@ -176,6 +181,63 @@ tessella_result tessella_create(const tessella_config* config,
                                 double longitude,
                                 double zoom,
                                 tessella_map** out);
+
+/* Creates a map whose fetching the caller does.
+ *
+ * As tessella_create, but nothing is fetched by the map. It writes down what it needs and the
+ * caller brings it back through tessella_take_request and tessella_answer.
+ *
+ * For a browser, where there is no other option: no sockets, and no blocking on the thread that
+ * draws. Not only for a browser -- a host with its own connection pool, its own cache, or its own
+ * idea of when a fetch is allowed uses the same three calls, and a test uses them to drive a map
+ * with no network at all.
+ *
+ * The map still needs ticking. A hosted map with nobody calling tessella_tick asks for nothing:
+ * the tick is what notices what has arrived and decides what to want next. */
+tessella_result tessella_create_hosted(const tessella_config* config,
+                                       double latitude,
+                                       double longitude,
+                                       double zoom,
+                                       tessella_map** out);
+
+/* Takes the next thing a hosted map wants fetched.
+ *
+ * Answers ticket 0 when there is nothing to fetch, which is not an error: it is what a settled
+ * map says, and it is the condition a caller loops until. Zero is never a real ticket.
+ *
+ * The URL is a byte range in the map's own memory -- the same arrangement tessella_regions uses
+ * for the ring, and for the same reason: the alternative is an allocator export and a copy on
+ * each side of it. It stays valid until the ticket is answered, failed, or the map is destroyed.
+ * A caller that holds it past any of those holds a dangling pointer.
+ *
+ * TESSELLA_NOT_HOSTED for a map created by tessella_create, which fetches for itself. */
+tessella_result tessella_take_request(tessella_map* map,
+                                      uint64_t* out_ticket,
+                                      const uint8_t** out_url,
+                                      size_t* out_url_len);
+
+/* Answers a request with what the caller fetched.
+ *
+ * `status` is the origin's. A 404 is an answer rather than a failure -- an absent tile is an edge
+ * of a source's coverage, which the map draws around, and reporting it as a broken fetch would
+ * make a hole look like a fault. tessella_fail_request is for a fetch that did not happen at all.
+ *
+ * A ticket that was cancelled, already answered, or never issued is ignored and answers
+ * TESSELLA_OK: a caller that has lost track of its own bookkeeping has wasted a fetch, which is
+ * not something the map can fix by refusing. An empty body is legitimate -- a tile with no
+ * features is a valid, empty tile -- so a null pointer with a zero length is a real answer. */
+tessella_result tessella_answer(tessella_map* map,
+                                uint64_t ticket,
+                                uint16_t status,
+                                const uint8_t* body,
+                                size_t body_len);
+
+/* Answers a request the caller could not fetch at all.
+ *
+ * For a connection that never opened, not for an origin that said no -- that is tessella_answer
+ * with the status it said it with. The map treats it as any transport failure: the tile is a
+ * hole, counted and named by tessella_status, and the next tick may ask again. */
+tessella_result tessella_fail_request(tessella_map* map, uint64_t ticket);
 
 /* Moves the camera.
  *

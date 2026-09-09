@@ -125,6 +125,40 @@ fn the_c_header_describes_the_library_it_claims_to() {
 
     // TESSELLA_OK is 0, and every one of these is a call that must succeed.
     check("create", 0, "a valid style did not create");
+    // 8 is TESSELLA_NOT_HOSTED. A map that fetches for itself must say so rather than quietly
+    // answering "nothing to fetch", which a caller would loop on for ever.
+    check("take_on_pooled", 8, "a pooled map accepted a hosted call");
+    check("answer_on_pooled", 8, "a pooled map accepted an answer");
+    check("create_hosted", 0, "a hosted map did not create");
+    check(
+        "hosted_non_null",
+        1,
+        "create_hosted returned OK without a handle",
+    );
+    check(
+        "hosted_status",
+        0,
+        "the hosted tick loop did not run cleanly",
+    );
+    check("hosted_served", 1, "a hosted map never asked for anything");
+    check(
+        "hosted_urls",
+        1,
+        "a request came back without a URL to fetch",
+    );
+    check(
+        "hosted_ready",
+        0,
+        "a hosted map would not report its readiness",
+    );
+    // 2 is TESSELLA_READY. The source lists its tiles inline, so resolution needs no fetch and
+    // the map is ready before the first request goes out -- which is what makes the requests
+    // that follow tiles rather than manifests.
+    check(
+        "hosted_readiness",
+        2,
+        "a hosted map with an inline source did not resolve",
+    );
     check("handle_non_null", 1, "create returned OK without a handle");
     check("set_camera", 0, "the camera did not move");
     // Both directions, because the switch is a toggle a consumer flips at runtime rather than a
