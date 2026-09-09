@@ -8233,7 +8233,36 @@ all read out of the producer's linear memory from JavaScript. That is the memory
 end, and it needed no browser, because what a browser adds is `fetch` and a canvas and neither is
 what would break.
 
-**What is left** is the drawing: a WebGL2 pass over those buffers, and a page to put it on.
+### A browser drawing the map
+
+`web/gl.js` draws fills, and `web/index.html` is a page that shows one. Fills are the smallest
+thing that is a *map* rather than a demonstration -- water, land, parks and buildings are fills --
+and drawing them exercises the whole arrangement: the draw order, the per-drawable matrix, the
+layer's evaluated paint, and vertex buffers built straight out of the producer's linear memory.
+
+The consumer decides nothing. `tsl_order_update` *is* the draw list: every drawable in the order it
+should be drawn, with the buffer slot its matrix lives at. That is what the record stream is for --
+the hard decisions were made where the style was.
+
+Verified rather than eyeballed, and verified through GL rather than through a compositor: the page
+reads its own framebuffer back with `readPixels` and reports a color histogram, which headless
+Firefox hands out through `dump()`. Over the z0 fixture at 512x512: 637,467 pixels of `47,111,176`,
+which is the style's `#2f6fb0` fill-color, 287,528 of the background, and 2,638 of antialiased edge
+between them. A screenshot would have been the compositor's opinion of the canvas, and on a
+headless browser it is taken at load, before an async module has run at all.
+
+**Two faults the renderer found**, both because it was the first thing to need those fields.
+`tsl_geometry_add.attrs` is a *span into the payload*, not a slab handle -- eight bytes against
+twelve, both starting with a small integer, so reading one as the other stayed quiet until
+something resolved it. And every concurrent fetch wrote into the same scratch block, so two
+answers in flight would hand the producer each other's bytes; with one tile it looks like it
+works. Answers are written one at a time now, and a body larger than the reservation is refused
+rather than written over the producer's heap.
+
+**One loose end, unexplained.** `tessella_pending` does not reach zero on this path even after the
+only tile has landed and drawn -- one thing stays counted as in flight, with a single URL fetched
+once. The page settles on quiescence instead, which is what the render probe does anyway, but the
+count is wrong and the reason is not yet known.
 
 ### WS-2, and what native got out of it
 

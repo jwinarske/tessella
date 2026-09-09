@@ -1,7 +1,7 @@
 // Reading the capture stream out of a `WebAssembly.Memory`.
 //
 // The whole point of the arrangement: the producer writes geometry into its own linear memory and
-// the consumer reads it there. Nothing is serialised, nothing is copied to make it reachable, and
+// the consumer reads it there. Nothing is serialized, nothing is copied to make it reachable, and
 // on wasm "its own linear memory" is `memory.buffer` -- an ArrayBuffer this side already has.
 //
 // Every offset comes from `abi.js`, which is generated from the Rust types by the same call that
@@ -50,6 +50,15 @@ class Memory {
   bytes(offset, length) {
     return new Uint8Array(this.memory.buffer, offset, length).slice();
   }
+}
+
+/** A range inside a record's payload, as `tsl_span` describes one. */
+function span(view, at) {
+  const SPAN = LAYOUT.tsl_span;
+  return {
+    offset: view.getUint32(at + SPAN.at.offset, true),
+    count: view.getUint32(at + SPAN.at.count, true),
+  };
 }
 
 /** A reference into the slab region, as `tsl_slab_ref` describes one. */
@@ -226,7 +235,34 @@ export function geometryAdd(memory, record) {
     id: view.getBigUint64(record.fixedAt + add.at.geometry, true),
     vertexCount: view.getUint32(record.fixedAt + add.at.vertex_count, true),
     indexes: slabRef(view, record.fixedAt + add.at.indexes),
-    attrs: slabRef(view, record.fixedAt + add.at.attrs),
+    // A span into this record's payload, not a slab handle. The two are eight and twelve bytes
+    // and both start with a small integer, so reading one as the other is quiet until something
+    // resolves it -- which is exactly what happened before a renderer needed the attributes.
+    attrs: span(view, record.fixedAt + add.at.attrs),
     builtinShader: view.getUint32(record.fixedAt + add.at.builtin_shader, true),
   };
+}
+
+/**
+ * The vertex attributes a geometry declares, read out of its payload.
+ *
+ * Each names a slab holding the bytes and how to step through them, so a consumer binds a buffer
+ * rather than copying vertices anywhere.
+ */
+export function attributes(memory, record, add) {
+  const DESC = LAYOUT.tsl_attribute_desc;
+  const view = new DataView(memory.buffer);
+  const out = [];
+  for (let i = 0; i < add.attrs.count; i++) {
+    const at = record.payloadAt + add.attrs.offset + i * DESC.size;
+    out.push({
+      id: view.getUint32(at + DESC.at.attr_id, true),
+      source: slabRef(view, at + DESC.at.source),
+      offset: view.getUint32(at + DESC.at.offset, true),
+      vertexOffset: view.getUint32(at + DESC.at.vertex_offset, true),
+      stride: view.getUint32(at + DESC.at.stride, true),
+      dataType: view.getUint8(at + DESC.at.data_type),
+    });
+  }
+  return out;
 }

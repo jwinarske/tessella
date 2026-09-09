@@ -116,6 +116,13 @@ jobs:
       - name: a javascript consumer reads the stream
         if: matrix.target == 'wasm32-unknown-unknown'
         run: node --test "web/test/*.test.mjs"
+      # And the same consumer under a real browser engine, which is where the parts Node cannot
+      # exercise live: instantiating from a network response, the browser's own `fetch`, and a
+      # `WebAssembly.Memory` the engine manages. Firefox because `dump()` gives a plain text
+      # channel out of the page; a screenshot would mean reading numbers out of an image.
+      - name: the consumer runs under a browser
+        if: matrix.target == 'wasm32-unknown-unknown'
+        run: node web/test/browser.mjs
       # `ureq` is `std::net`. It compiles for wasm32, so only the dependency graph says whether it
       # is there.
       - name: no sockets in the wasm graph

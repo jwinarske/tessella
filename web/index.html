@@ -1,0 +1,107 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tessella</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #0b0d10; color: #c8cdd4;
+               font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #map { display: block; width: 100vw; height: 100vh; }
+  #status { position: fixed; left: 12px; bottom: 12px; padding: 6px 10px;
+            background: #0b0d10cc; border: 1px solid #232833; border-radius: 4px;
+            white-space: pre; }
+</style>
+<canvas id="map"></canvas>
+<div id="status">starting</div>
+<script type="module">
+  import { TessellaMap } from "./map.js";
+  import { FillRenderer } from "./gl.js";
+
+  const canvas = document.getElementById("map");
+  const status = document.getElementById("status");
+  const say = (text) => {
+    status.textContent = text;
+    if (typeof dump === "function") dump("RESULT " + text + "\n");
+  };
+
+  // A style whose tiles this page can actually reach. The fixture is one z0 tile, which is the
+  // whole world at the coarsest zoom -- enough to be a map rather than a demonstration.
+  const STYLE = JSON.stringify({
+    version: 8,
+    sources: {
+      v: {
+        type: "vector",
+        tiles: [new URL("../tests/mvt-fixtures/real-world-0-0-0.mvt", location.href).href],
+        minzoom: 0,
+        maxzoom: 0,
+      },
+    },
+    layers: [
+      { id: "bg", type: "background", paint: { "background-color": "#0b0d10" } },
+      {
+        id: "water",
+        type: "fill",
+        source: "v",
+        "source-layer": "water",
+        paint: { "fill-color": "#2f6fb0" },
+      },
+    ],
+  });
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.round(canvas.clientWidth * dpr) || 512;
+  const height = Math.round(canvas.clientHeight * dpr) || 512;
+  canvas.width = width;
+  canvas.height = height;
+
+  const gl = canvas.getContext("webgl2", { preserveDrawingBuffer: true, antialias: true });
+  if (!gl) {
+    say("no webgl2");
+    throw new Error("no webgl2");
+  }
+
+  try {
+    const module = await (await fetch("../target/wasm32-unknown-unknown/release/tessella_ffi.wasm"))
+      .arrayBuffer();
+    const map = await TessellaMap.create(module, STYLE, { zoom: 0, width, height });
+    const renderer = new FillRenderer(gl);
+    renderer.background = [0.043, 0.051, 0.063, 1];
+
+    const fetchOne = async (url) => {
+      const response = await fetch(url);
+      return { status: response.status, body: new Uint8Array(await response.arrayBuffer()) };
+    };
+
+    let drawn = 0;
+    let frames = 0;
+    let quiet = 0;
+    // Settled on quiescence -- the producer has stopped publishing -- rather than on a fixed
+    // count, because what has arrived decides what is drawn. Not on `pending`, which does not
+    // reach zero on this path even once every tile has landed and drawn; that is a real loose end
+    // and not one this page should wait out.
+    for (; frames < 400; frames++) {
+      const records = await map.tick(fetchOne);
+      renderer.absorb(map, records);
+      drawn = renderer.draw(width, height);
+      quiet = records.length === 0 ? quiet + 1 : 0;
+      if (drawn > 0 && quiet >= 10) break;
+    }
+    // Read back rather than screenshotted. What is wanted is what GL produced, and a screenshot
+    // is the compositor's opinion of it -- which on a headless browser is taken at load, before
+    // any of this has run.
+    const pixels = new Uint8Array(width * height * 4);
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    const tally = new Map();
+    for (let i = 0; i < pixels.length; i += 4) {
+      const key = `${pixels[i]},${pixels[i + 1]},${pixels[i + 2]}`;
+      tally.set(key, (tally.get(key) ?? 0) + 1);
+    }
+    const ranked = [...tally].sort((a, b) => b[1] - a[1]).slice(0, 3);
+    say(
+      `${drawn} drawables, ${renderer.geometry.size} geometries, ${frames + 1} frames, ` +
+        `colors ${ranked.map(([c, n]) => `${c}x${n}`).join(" ")}`,
+    );
+  } catch (error) {
+    say(`failed: ${error && error.stack ? error.stack : error}`);
+  }
+</script>

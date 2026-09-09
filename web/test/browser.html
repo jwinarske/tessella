@@ -1,0 +1,88 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>tessella consumer, under a browser</title>
+<body>
+<!--
+  The same consumer the Node test drives, in a real browser engine with the browser's own `fetch`.
+
+  What this is checking is not the drawing -- there is none yet -- but the half of the story that
+  is browser-specific and cannot be checked anywhere else: instantiating the module from a
+  network response, a real `fetch` answering the map's requests, and reading geometry out of a
+  `WebAssembly.Memory` that the engine, not Node, is managing.
+
+  Results leave through `dump()`, which writes to the browser's stdout. A screenshot would mean
+  reading numbers out of an image; this is the same answer as text.
+-->
+<script type="module">
+  import { TessellaMap } from "../map.js";
+  import { geometryAdd } from "../ring.js";
+  import { KIND } from "../abi.js";
+
+  const report = (result) => dump("RESULT " + JSON.stringify(result) + "\n");
+
+  const STYLE = JSON.stringify({
+    version: 8,
+    sources: {
+      v: {
+        type: "vector",
+        tiles: [new URL("/tests/mvt-fixtures/real-world-0-0-0.mvt", location.href).href],
+        minzoom: 0,
+        maxzoom: 6,
+      },
+    },
+    layers: [
+      { id: "bg", type: "background", paint: { "background-color": "#101418" } },
+      {
+        id: "water",
+        type: "fill",
+        source: "v",
+        "source-layer": "water",
+        paint: { "fill-color": "#3050c0" },
+      },
+    ],
+  });
+
+  try {
+    const module = await (await fetch("/target/wasm32-unknown-unknown/release/tessella_ffi.wasm"))
+      .arrayBuffer();
+    const map = await TessellaMap.create(module, STYLE, { width: 512, height: 512 });
+
+    // The browser's own fetch, which is the point: the producer asks, this answers, and nothing
+    // in between knows it is a browser.
+    const asked = [];
+    const fetchOne = async (url) => {
+      asked.push(url);
+      const response = await fetch(url);
+      return { status: response.status, body: new Uint8Array(await response.arrayBuffer()) };
+    };
+
+    const seen = [];
+    for (let frame = 0; frame < 400; frame++) {
+      seen.push(...(await map.tick(fetchOne)));
+      if (seen.some((record) => record.kind === KIND.GEOMETRY_ADD) && map.pending === 0) {
+        break;
+      }
+    }
+
+    let vertices = 0;
+    let indexBytes = 0;
+    for (const record of seen.filter((r) => r.kind === KIND.GEOMETRY_ADD)) {
+      const add = geometryAdd(map.memory, record);
+      vertices += add.vertexCount;
+      indexBytes += (map.slabs.resolve(add.indexes) ?? []).length;
+    }
+
+    report({
+      ok: true,
+      webgl2: !!document.createElement("canvas").getContext("webgl2"),
+      asked: asked.length,
+      records: seen.length,
+      geometry: seen.filter((r) => r.kind === KIND.GEOMETRY_ADD).length,
+      vertices,
+      indexBytes,
+    });
+    map.destroy();
+  } catch (error) {
+    report({ ok: false, error: String(error && error.stack ? error.stack : error) });
+  }
+</script>
