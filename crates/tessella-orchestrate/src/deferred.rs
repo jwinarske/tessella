@@ -20,11 +20,15 @@
 //! [`PoolBacked`] instead: [`PoolBacked::request_at`] names a class, and the trait's `request`
 //! uses the one the source was built with.
 
-use alloc::string::ToString;
+use alloc::string::{String, ToString};
 use alloc::sync::Arc;
+use alloc::vec::Vec;
+
+use alloc::collections::VecDeque;
+use std::sync::{Mutex, PoisonError};
 
 use tessella_storage::deferred::{DeferredFileSource, Ticket, Tickets};
-use tessella_storage::source::{Fetched, FileSource};
+use tessella_storage::source::{FetchError, Fetched, FileSource, Response};
 
 use crate::pool::{Pool, Priority};
 
@@ -137,3 +141,133 @@ impl<S: FileSource + 'static> DeferredFileSource for PoolBacked<S> {
         self.tickets.open()
     }
 }
+
+/// A transport whose fetching is done by whoever is driving the map.
+///
+/// # Why the producer does not call `fetch` itself
+///
+/// §19.2 keeps `wasm-bindgen` out of the producer: the exports are `#[no_mangle] extern "C"` and
+/// the header stays the single description of the surface. A producer that called the browser's
+/// `fetch` would need bindings, a JS glue module and a second description of the ABI to keep in
+/// step with the first.
+///
+/// So it does not call anything. It writes down what it needs and the host brings it back. The
+/// ticket is what makes that safe across the boundary: the host holds a `u64`, not a pointer, so
+/// a stale or invented one addresses nothing (see [`DeferredFileSource`]).
+///
+/// # It is not a wasm type
+///
+/// Nothing here is browser-specific, which is the point rather than an accident. A Rust test can
+/// be the host, and one is: the suite drives a whole `TileSource` through this, answering every
+/// request by hand, with no browser and no network. Whatever the browser does differently is then
+/// the browser's, not this arrangement's.
+pub struct HostTransport {
+    tickets: Tickets,
+    /// Issued and not yet handed to the host.
+    queue: Mutex<VecDeque<(Ticket, String)>>,
+}
+
+impl Default for HostTransport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HostTransport {
+    /// A transport with nothing asked for yet.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            tickets: Tickets::new(),
+            queue: Mutex::new(VecDeque::new()),
+        }
+    }
+
+    /// Takes the requests the host has not been given yet.
+    ///
+    /// Drained rather than read, because a host that was handed the same request twice would
+    /// fetch it twice. In issue order: the first thing asked for is the first thing a host with
+    /// one connection should go and get.
+    pub fn take_requests(&self) -> Vec<(Ticket, String)> {
+        self.queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .drain(..)
+            .collect()
+    }
+
+    /// How many requests are waiting to be handed over.
+    #[must_use]
+    pub fn queued(&self) -> usize {
+        self.queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .len()
+    }
+
+    /// Answers a request with what the host fetched.
+    ///
+    /// `status` is the origin's, and a 404 is a *response* rather than a failure -- the tile path
+    /// reads an absent tile as an edge of coverage, which is not the same thing as a fetch that
+    /// did not happen. A ticket that was cancelled, already answered, or never issued is ignored,
+    /// so a host that loses track of its own bookkeeping wastes a fetch rather than corrupting
+    /// anything.
+    pub fn answer(&self, ticket: Ticket, status: u16, body: Vec<u8>) {
+        self.tickets.post(
+            ticket,
+            Ok(Arc::new(Response {
+                status,
+                body,
+                ..Response::default()
+            })),
+        );
+    }
+
+    /// Answers a request that the host could not fetch at all.
+    ///
+    /// For a connection that never opened, not for an origin that said no -- that is
+    /// [`Self::answer`] with the status it said it with.
+    pub fn fail(&self, ticket: Ticket, url: &str, message: &str) {
+        self.tickets.post(
+            ticket,
+            Err(FetchError::Transport {
+                url: url.to_string(),
+                message: message.to_string(),
+            }),
+        );
+    }
+}
+
+impl DeferredFileSource for HostTransport {
+    fn request(&self, url: &str, _etag: Option<&str>) -> Ticket {
+        // The etag is dropped rather than passed on. A host fetching through the browser gets
+        // revalidation from the HTTP cache it is already sitting behind, and handing it a header
+        // to set would be describing a policy it already has.
+        let ticket = self.tickets.issue();
+        self.queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push_back((ticket, url.to_string()));
+        ticket
+    }
+
+    fn poll(&self, ticket: Ticket) -> Option<Fetched> {
+        self.tickets.take(ticket)
+    }
+
+    fn cancel(&self, ticket: Ticket) {
+        self.tickets.cancel(ticket);
+        self.queue
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .retain(|(queued, _)| *queued != ticket);
+    }
+
+    fn outstanding(&self) -> usize {
+        self.tickets.open()
+    }
+}
+
+// One queue, and no class to put a request in. The shape §5.4's priorities do not apply to, which
+// is why the default is the whole answer here rather than a stub.
+impl TileTransport for HostTransport {}

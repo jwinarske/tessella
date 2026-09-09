@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use tessella_orchestrate::boot::BootError;
 use tessella_orchestrate::boot::Workers;
 use tessella_orchestrate::cache::TileCache;
-use tessella_orchestrate::deferred::TileTransport;
+use tessella_orchestrate::deferred::{HostTransport, TileTransport};
 use tessella_orchestrate::map::Tiles;
 use tessella_orchestrate::pool::Pool;
 use tessella_orchestrate::source::{Pooled, Readiness, TileSource};
@@ -549,6 +549,125 @@ fn tiles_arrive_over_a_transport_that_is_not_the_pool() {
         "the tile never landed from bytes the transport supplied"
     );
     assert_eq!(source.outstanding(), 0);
+}
+
+/// The browser's arrangement, driven by a test: no threads, and a host that does the fetching.
+///
+/// A pool with no workers and a [`HostTransport`] is exactly what a browser has -- nothing to
+/// spawn, and no way for the producer to fetch anything itself. Every request is answered here by
+/// hand, so the whole cold start runs with no network, no threads and no timing: the style is
+/// resolved from a manifest the test supplies, and the tile is built from bytes the test hands
+/// back. What a browser would add is `fetch` and a frame callback, neither of which is this
+/// arrangement's to get wrong.
+#[test]
+fn a_map_resolves_and_draws_with_no_threads_and_a_host_doing_the_fetching() {
+    const MANIFEST: &str = r#"{"tiles": ["http://host.invalid/{z}/{x}/{y}.pbf"],
+                               "minzoom": 0, "maxzoom": 14}"#;
+
+    // Leaked because a source holds its pool for `'static`, and a pool with no threads has
+    // nothing to join.
+    let pool: &'static Pool = Box::leak(Box::new(Pool::new(Workers::none())));
+    let host = Arc::new(HostTransport::new());
+    let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
+    // `r##` rather than `r#`, because a colour literal ends a `r#"` string at its `"#`.
+    let style = r##"{"version": 8,
+        "sources": {"v": {"type": "vector", "url": "http://host.invalid/tiles.json"}},
+        "layers": [
+          {"id": "bg", "type": "background", "paint": {"background-color": "#000000"}},
+          {"id": "water", "type": "fill", "source": "v", "source-layer": "water",
+           "paint": {"fill-color": "#3050c0"}}]}"##;
+    let source = TileSource::with_transport(style.to_string(), Arc::clone(&host), cache, pool, 1);
+    let cover = [TileCoord {
+        z: 0,
+        x: 0,
+        y: 0,
+        wrap: 0,
+    }];
+    let tile = TileId::new(0, 0, 0);
+
+    let mut served = Vec::new();
+    // One tick, as the FFI drives it in this mode: run what is queued, drain the transport, run
+    // what that queued -- then be the host and answer whatever was asked for.
+    let mut tick = || {
+        pool.drain(usize::MAX);
+        source.drain();
+        pool.drain(usize::MAX);
+        source.want(&view(0.0), &cover, &[]);
+        for (ticket, url) in host.take_requests() {
+            served.push(url.clone());
+            if url.ends_with("tiles.json") {
+                host.answer(ticket, 200, MANIFEST.as_bytes().to_vec());
+            } else if url.ends_with(".pbf") {
+                host.answer(ticket, 200, FIXTURE.to_vec());
+            } else {
+                // Nothing else should be asked for; answering 404 makes a surprise visible as a
+                // missing tile rather than as a hang.
+                host.answer(ticket, 404, Vec::new());
+            }
+        }
+    };
+
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while source.buckets(tile).is_none() && Instant::now() < deadline {
+        tick();
+    }
+
+    assert_eq!(
+        source.readiness(),
+        Readiness::Ready,
+        "the style never resolved"
+    );
+    assert!(
+        source.buckets(tile).is_some(),
+        "no tile was built; the host was asked for {served:?}"
+    );
+    assert!(
+        served.iter().any(|url| url.ends_with("tiles.json")),
+        "the manifest was never asked for: {served:?}"
+    );
+    assert!(
+        served.iter().any(|url| url.ends_with("/0/0/0.pbf")),
+        "the tile was never asked for: {served:?}"
+    );
+    assert_eq!(
+        source.failures().0,
+        0,
+        "something failed: {:?}",
+        source.failures().1
+    );
+}
+
+/// A cancelled request is taken off the queue as well as out of the table.
+///
+/// The host would otherwise be handed a URL nobody wants and fetch it, which on a metered
+/// connection is the difference between a view closing and a view closing quietly.
+#[test]
+fn cancelling_takes_the_request_off_the_hosts_queue() {
+    let host = HostTransport::new();
+    let first = host.request("http://host.invalid/a", None);
+    let second = host.request("http://host.invalid/b", None);
+    assert_eq!(host.queued(), 2);
+
+    host.cancel(first);
+    assert_eq!(host.queued(), 1);
+    assert_eq!(host.outstanding(), 1);
+
+    let handed = host.take_requests();
+    assert_eq!(handed.len(), 1);
+    assert_eq!(handed[0].0, second);
+    // Drained rather than read: a host handed the same request twice would fetch it twice.
+    assert!(host.take_requests().is_empty());
+}
+
+/// An origin that says no is a response, not a failed fetch.
+#[test]
+fn a_404_from_the_host_is_an_answer() {
+    let host = HostTransport::new();
+    let ticket = host.request("http://host.invalid/missing.pbf", None);
+    host.answer(ticket, 404, Vec::new());
+
+    let landed = host.poll(ticket).expect("answered").expect("not a failure");
+    assert_eq!(landed.status, 404);
 }
 
 /// A style whose sources cannot resolve says so, rather than staying blank and quiet.
