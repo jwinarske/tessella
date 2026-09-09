@@ -25,7 +25,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tessella_storage::source::{FetchError, FileSource};
+use tessella_storage::source::{FetchError, FileSource, Response};
 use tessella_storage::url::percent_encode;
 
 use crate::pbf::{self, Glyph, GlyphError, Range};
@@ -182,14 +182,9 @@ impl GlyphManager {
         range: Range,
         files: &dyn FileSource,
     ) -> Result<(), LoadError> {
-        if self
-            .entries
-            .get(stack)
-            .is_some_and(|entry| entry.settled.contains(&range))
-        {
+        if self.settled(stack, range) {
             return Ok(());
         }
-
         let url = self.url_for(stack, range);
         self.requests += 1;
         let response = files.fetch(&url).map_err(|source| LoadError::Fetch {
@@ -197,7 +192,34 @@ impl GlyphManager {
             range: range.to_string(),
             source,
         })?;
+        self.accept(stack, range, &response)
+    }
 
+    /// Whether this range has already been answered for, one way or the other.
+    ///
+    /// Public because a caller that fetches for itself has to ask before it asks the network.
+    #[must_use]
+    pub fn settled(&self, stack: &FontStack, range: Range) -> bool {
+        self.entries
+            .get(stack)
+            .is_some_and(|entry| entry.settled.contains(&range))
+    }
+
+    /// Records a range from bytes the caller already has.
+    ///
+    /// [`Self::load_range`] without the fetch. Split out for the same reason the tile build was:
+    /// a caller that cannot block has to ask for the bytes, get on with its tick, and come back.
+    /// The decode and the bookkeeping are written once and both callers reach them.
+    ///
+    /// # Errors
+    ///
+    /// [`LoadError`] when the response is neither absent nor a parseable range.
+    pub fn accept(
+        &mut self,
+        stack: &FontStack,
+        range: Range,
+        response: &Response,
+    ) -> Result<(), LoadError> {
         // An origin with nothing for this range settles it glyphless: the font genuinely does
         // not serve those codepoints, and asking again on the next tile costs a round trip to
         // be told so again.

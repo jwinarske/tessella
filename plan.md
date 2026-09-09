@@ -8106,12 +8106,27 @@ Proved with a transport that shares no code with `PoolBacked` at all: a tile lan
 test posts, at a moment the test chooses, with no network and no sleep.
 
 **What still blocks a browser**, stated plainly because the seam existing is easy to mistake for
-the job being done. Only tile bytes are deferred. Style resolution (`boot::resolve_sources`) and
-the glyph fetch both still run as one blocking pool job over `Coalescing<S>`, and the FFI's source
-is `HttpFileSource`, which is `ureq` on `std::net` -- it compiles for wasm32 and cannot connect.
-So in a browser nothing would resolve, and a source that never resolves never asks for a tile,
-however good its tile transport is. Those two are the next piece, and they come before the WebGL2
-consumer: a consumer with nothing to consume proves nothing.
+the job being done. Only tile bytes were deferred; style resolution and the glyph fetch each ran as
+one blocking pool job over `Coalescing<S>`, and the FFI's source is `HttpFileSource`, which is
+`ureq` on `std::net` -- it compiles for wasm32 and cannot connect. So in a browser nothing would
+resolve, and a source that never resolves never asks for a tile however good its tile transport is.
+
+Glyphs are done. `GlyphManager::load_range` split at the fetch the same way `build_job` did:
+`accept` records a range from bytes the caller has, `load_range` is the fetch plus `accept`, and
+`Fonts` grew `wanted`/`accept`/`packed` beside `fetch`. The ranges go through the same transport
+tiles do, at `Foreground` -- the rank the fetch had when it was one blocking job -- and are
+accepted together rather than one at a time, because an atlas packed from a half-loaded stack has
+shelf slots for the glyphs it had and nowhere to put the rest.
+
+The equivalence is a test rather than an argument: fetching, and asking-then-accepting, ask the
+origin the same URLs in the same order and produce the same rectangles and metrics for every
+codepoint. Beside it, the ffi `labels` test already distinguished glyphs arriving from glyphs not
+arriving by region size -- 3,168 bytes against 224 -- which is exactly the regression this change
+could have caused, and it passes.
+
+Style resolution is what remains, and it is the larger one: `resolve_sources` issues N manifest
+fetches and a sprite as one batch and blocks on `batch.wait()`. Same shape as the glyphs -- a set
+of independent URLs, then a decode -- so the same split applies, over more pieces.
 
 ### WS-2, and what native got out of it
 

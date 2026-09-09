@@ -291,3 +291,81 @@ fn packing_dirties_the_atlas_once() {
     fonts.fetch(&wants("xyz"), &Origin::new()).expect("answers");
     assert!(!fonts.take_dirty(&stack).is_empty());
 }
+
+/// Fetching, and doing it in two halves, produce the same store.
+///
+/// The property the split has to have and cannot be assumed to: a caller that asks for the URLs,
+/// gets the bytes some other way, and hands them back must end up with exactly what `fetch` would
+/// have built. Compared through the atlas rather than through the manager's bookkeeping, because
+/// the atlas is what a bucket builder actually reads -- the rectangle for every codepoint asked
+/// for, and none for the ones not.
+#[test]
+fn asking_and_accepting_builds_what_fetching_builds() {
+    let dependencies: Dependencies = BTreeMap::from([(
+        vec!["TestFont".to_string()],
+        BTreeSet::from_iter("Hello, glyphs".chars().map(|c| c as u32)),
+    )]);
+
+    let blocking = Origin::new();
+    let mut fetched = Fonts::new("http://origin.invalid/{fontstack}/{range}.pbf".to_string());
+    fetched
+        .fetch(&dependencies, &blocking)
+        .expect("the fixture loads");
+
+    // The deferred half: ask what is wanted, answer it from the same origin by hand, accept.
+    let deferred_origin = Origin::new();
+    let mut accepted = Fonts::new("http://origin.invalid/{fontstack}/{range}.pbf".to_string());
+    let asks = accepted.wanted(&dependencies);
+    assert!(!asks.is_empty(), "nothing was asked for");
+    for (stack, range, url) in &asks {
+        let response = deferred_origin.fetch(url).expect("the fixture answers");
+        accepted
+            .accept(stack, *range, &response)
+            .expect("the fixture parses");
+    }
+    accepted.packed(&dependencies);
+
+    assert_eq!(
+        blocking.asked(),
+        deferred_origin.asked(),
+        "the two paths asked the origin different things"
+    );
+
+    let stack = FontStack(vec!["TestFont".to_string()]);
+    let one = fetched.stack(&stack.0);
+    let other = accepted.stack(&stack.0);
+    for codepoint in "Hello, glyphs".chars().map(|c| c as u32) {
+        assert_eq!(
+            one.rect(codepoint).is_some(),
+            other.rect(codepoint).is_some(),
+            "codepoint {codepoint} is packed in one path and not the other"
+        );
+        assert_eq!(
+            one.metrics(codepoint).map(|m| m.0.advance),
+            other.metrics(codepoint).map(|m| m.0.advance),
+            "codepoint {codepoint} has different metrics in the two paths"
+        );
+    }
+}
+
+/// Asking twice for what is already held asks the origin for nothing.
+#[test]
+fn a_range_already_accepted_is_not_asked_for_again() {
+    let dependencies: Dependencies = BTreeMap::from([(
+        vec!["TestFont".to_string()],
+        BTreeSet::from_iter("abc".chars().map(|c| c as u32)),
+    )]);
+    let origin = Origin::new();
+    let mut fonts = Fonts::new("http://origin.invalid/{fontstack}/{range}.pbf".to_string());
+
+    for (stack, range, url) in fonts.wanted(&dependencies) {
+        let response = origin.fetch(&url).expect("the fixture answers");
+        fonts.accept(&stack, range, &response).expect("parses");
+    }
+    fonts.packed(&dependencies);
+
+    assert!(
+        fonts.wanted(&dependencies).is_empty(),
+        "a settled range was asked for a second time"
+    );
+}

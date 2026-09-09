@@ -28,11 +28,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use tessella_storage::FileSource;
+use tessella_storage::source::Response;
 
 use crate::Glyphs;
 use crate::atlas::{Atlas, Rect};
 use crate::manager::{FontStack, GlyphManager, LoadError};
-use crate::pbf::Metrics;
+use crate::pbf::{Metrics, Range};
 
 /// The width and height a glyph atlas starts at.
 ///
@@ -104,6 +105,49 @@ impl Fonts {
             self.pack(&stack, codepoints);
         }
         Ok(fetched)
+    }
+
+    /// Every range these dependencies need that is not already held, and where to get it.
+    ///
+    /// [`Self::fetch`] without the fetching, for a caller that does its own. The answer is
+    /// ordered and deduplicated, so two callers asking the same question issue the same requests
+    /// in the same order -- which is what lets a deferred fetch be compared with a blocking one.
+    #[must_use]
+    pub fn wanted(&self, dependencies: &Dependencies) -> Vec<(FontStack, Range, String)> {
+        let mut asks = Vec::new();
+        for (fonts, codepoints) in dependencies {
+            let stack = FontStack(fonts.clone());
+            for range in self.manager.owed(&stack, codepoints.iter().copied()) {
+                let url = self.manager.url_for(&stack, range);
+                asks.push((stack.clone(), range, url));
+            }
+        }
+        asks
+    }
+
+    /// Records one range from bytes the caller already has.
+    ///
+    /// # Errors
+    ///
+    /// [`LoadError`] when the response is neither absent nor a parseable range.
+    pub fn accept(
+        &mut self,
+        stack: &FontStack,
+        range: Range,
+        response: &Response,
+    ) -> Result<(), LoadError> {
+        self.manager.accept(stack, range, response)
+    }
+
+    /// Packs what these dependencies asked for, once their ranges are in.
+    ///
+    /// The other half of [`Self::fetch`], and it must run after the ranges land rather than as
+    /// each one does: an atlas packed from a half-loaded stack has shelf slots for the glyphs it
+    /// had and nowhere to put the rest.
+    pub fn packed(&mut self, dependencies: &Dependencies) {
+        for (fonts, codepoints) in dependencies {
+            self.pack(&FontStack(fonts.clone()), codepoints);
+        }
     }
 
     /// Packs the codepoints this stack was asked for and does not already have a rectangle for.
