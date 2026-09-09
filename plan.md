@@ -8233,6 +8233,27 @@ all read out of the producer's linear memory from JavaScript. That is the memory
 end, and it needed no browser, because what a browser adds is `fetch` and a canvas and neither is
 what would break.
 
+### What gates the pixels, and what does not
+
+The browser test read geometry out of linear memory and stopped there, so `gl.js` could bind
+nothing at all and every lane would stay green -- the same shape of gap the MVT v1 bug lived in,
+one level up. It draws the frame now and reads it back through GL, asserting against two failures
+that have to be impossible: a frame of pure background is what a renderer that binds nothing
+produces, and a frame of pure water is what one that ignores the holes produces. Verified by
+making the renderer draw zero indices and watching it report `0 water and 65536 background`.
+
+**It does not run on CI, and that is worth stating rather than implying.** A GitHub runner has
+Firefox but no GPU. Installing `libgl1-mesa-dri` and naming `llvmpipe` did not get a WebGL2
+context out of it either -- the browser there is snap-confined and does not see the host's
+drivers. Two attempts was enough to stop guessing. So the drawing is checked wherever a GL exists,
+locally on this machine, and the harness prints `PIXELS NOT CHECKED` where one does not, which is
+neither a red lane over the runner's graphics stack nor a quiet pass implying the renderer was
+looked at.
+
+What *does* gate this bug class on every push is the geometry-level test beside it: a polygon that
+will not triangulate produces triangles far out of proportion to the points it was built from, and
+that needs no browser and no oracle.
+
 ### MVT version 1 polygons, and a continent that was not there
 
 Found by looking at the browser page: North America was missing. It was not the WebGL consumer --

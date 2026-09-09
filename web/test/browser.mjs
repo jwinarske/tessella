@@ -162,25 +162,29 @@ try {
       process.exit(1);
     }
   }
-  // The pixels. This is the only thing in the whole suite that checks the renderer draws rather
-  // than that the records arrive, so it is worth being specific: a frame of pure background is
-  // what a renderer that binds nothing produces, and a frame of pure water is what one that
-  // ignores the holes produces. Both have to be wrong.
-  if (!result.painted) {
-    console.error("browser: no webgl2, so the drawing is not being checked here");
-    process.exit(1);
-  }
-  const { drawn, water, ground } = result.painted;
-  if (drawn < 1) {
-    console.error(`browser: the renderer drew ${drawn} drawables`);
-    process.exit(1);
-  }
-  const total = water + ground;
-  if (water < total / 10 || ground < total / 10) {
-    console.error(
-      `browser: the frame is ${water} water and ${ground} background pixels; one of them is missing`,
-    );
-    process.exit(1);
+  // The pixels, where there is a GL to draw them with.
+  //
+  // There is not, on a GitHub runner: it has Firefox but no GPU, and installing Mesa and naming
+  // llvmpipe did not get a WebGL2 context out of it either -- the browser there is snap-confined
+  // and does not see the host's drivers. So this checks the drawing wherever a GL exists and says
+  // so when one does not, rather than failing a lane over the runner's graphics stack or, worse,
+  // passing quietly and implying the renderer was checked.
+  if (result.painted) {
+    const { drawn, water, ground } = result.painted;
+    if (drawn < 1) {
+      console.error(`browser: the renderer drew ${drawn} drawables`);
+      process.exit(1);
+    }
+    // Two failures have to be impossible: a frame of pure background is what a renderer that
+    // binds nothing produces, and a frame of pure water is what one that ignores the holes
+    // produces -- which is the bug the MVT v1 repair fixed, seen from the other end.
+    const total = water + ground;
+    if (water < total / 10 || ground < total / 10) {
+      console.error(
+        `browser: the frame is ${water} water and ${ground} background pixels; one is missing`,
+      );
+      process.exit(1);
+    }
   }
 
   // A settled map has nothing outstanding. Worth its own check because the failure it catches --
@@ -192,8 +196,10 @@ try {
   console.log(
     `browser: ${result.records} records, ${result.geometry} geometry, ${result.vertices} vertices, ` +
       `${result.indexBytes} index bytes, ${result.asked} fetches, ` +
-      `${result.painted.drawn} drawables, ${result.painted.water} water px, ` +
-      `${result.painted.ground} background px`,
+      (result.painted
+        ? `${result.painted.drawn} drawables, ${result.painted.water} water px, ` +
+          `${result.painted.ground} background px`
+        : "PIXELS NOT CHECKED: no webgl2 here"),
   );
 } finally {
   server.close();
