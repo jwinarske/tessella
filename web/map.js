@@ -17,6 +17,18 @@ const OK = 0;
 const DEFAULT_RING_BYTES = 1 << 22;
 
 /**
+ * The largest body this consumer will hand over, and the largest style it will take.
+ *
+ * Not a guess at what is reasonable but a bound on what is *safe*: the scratch block below the
+ * module's heap is a fixed reservation, and a body larger than it would be written straight over
+ * the producer's heap. Every byte here came off a network from an origin that is not a trusted
+ * party, so the size is checked rather than hoped for -- `tessella-storage` caps a resource at ten
+ * mebibytes for the same reason, and this is the reservation that cap fits inside.
+ */
+const MAX_BODY_BYTES = 16 << 20;
+const MAX_STYLE_BYTES = (1 << 20) - 4096;
+
+/**
  * A live map.
  *
  * Not a renderer. This gets records out of the producer and leaves drawing to whatever wants
@@ -69,6 +81,9 @@ export class TessellaMap {
     // the producer will never allocate over.
     const scratch = scratchAt(wasm);
     const styleBytes = new TextEncoder().encode(style);
+    if (styleBytes.length > MAX_STYLE_BYTES) {
+      throw new Error(`the style is ${styleBytes.length} bytes; the most this can pass is ${MAX_STYLE_BYTES}`);
+    }
     new Uint8Array(wasm.memory.buffer, scratch.style, styleBytes.length).set(styleBytes);
 
     const config = new DataView(wasm.memory.buffer, scratch.config, 40);
@@ -163,21 +178,36 @@ export class TessellaMap {
 
     // Fetched together. They do not depend on each other, and a browser will happily have six of
     // them in the air, which is most of what makes a cold start quick.
-    await Promise.all(
+    const answers = await Promise.all(
       asked.map(async ([ticket, url]) => {
-        let answer;
         try {
-          answer = await fetchOne(url);
+          return [ticket, await fetchOne(url)];
         } catch {
-          this.wasm.tessella_fail_request(this.handle, ticket);
-          return;
+          return [ticket, null];
         }
-        const body = answer.body ?? new Uint8Array(0);
-        const into = scratchAt(this.wasm).body;
-        new Uint8Array(this.memory.buffer, into, body.length).set(body);
-        this.wasm.tessella_answer(this.handle, ticket, answer.status, into, body.length);
       }),
     );
+
+    // Handed over one at a time, *after* the fetches. There is one scratch buffer, so two
+    // concurrent answers writing into it would each hand the producer the other's bytes -- which
+    // with one tile in flight looks like it works and with two is a tile drawn from a manifest.
+    for (const [ticket, answer] of answers) {
+      if (answer === null) {
+        this.wasm.tessella_fail_request(this.handle, ticket);
+        continue;
+      }
+      const body = answer.body ?? new Uint8Array(0);
+      // Refused rather than truncated. A body this side cannot hold is a fetch that did not
+      // happen as far as the map is concerned, and truncating one would hand the producer a tile
+      // that decodes to something the origin never sent.
+      if (body.length > MAX_BODY_BYTES) {
+        this.wasm.tessella_fail_request(this.handle, ticket);
+        continue;
+      }
+      const into = scratchAt(this.wasm).body;
+      new Uint8Array(this.memory.buffer, into, body.length).set(body);
+      this.wasm.tessella_answer(this.handle, ticket, answer.status, into, body.length);
+    }
   }
 
   /** Releases the map. */

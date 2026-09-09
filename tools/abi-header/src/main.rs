@@ -199,6 +199,104 @@ fn generate_js() -> String {
 
     writeln!(
         w,
+        "/** Shader families, as `tsl_geometry_add.builtin_shader` names them. */"
+    )
+    .unwrap();
+    writeln!(w, "export const BUILTIN = Object.freeze({{").unwrap();
+    for builtin in BuiltIn::ALL {
+        writeln!(
+            w,
+            "  {}: {},",
+            screaming(&format!("{builtin:?}")),
+            builtin as i64
+        )
+        .unwrap();
+    }
+    writeln!(w, "}});").unwrap();
+    writeln!(w).unwrap();
+
+    writeln!(
+        w,
+        "/** Vertex attribute types, as `tsl_attribute_desc.data_type` names them. */"
+    )
+    .unwrap();
+    writeln!(w, "export const ATTRIBUTE_TYPE = Object.freeze({{").unwrap();
+    for kind in AttributeDataType::ALL {
+        writeln!(w, "  {}: {},", screaming(&format!("{kind:?}")), kind as i64).unwrap();
+    }
+    writeln!(w, "}});").unwrap();
+    writeln!(w).unwrap();
+
+    writeln!(w, "/**").unwrap();
+    writeln!(w, " * Uniform buffer slot ids.").unwrap();
+    writeln!(w, " *").unwrap();
+    for line in wrap(
+        "A `tsl_ubo_update` names the slot it writes and nothing else says what that slot is. \
+         Values overlap by design -- each layer family numbers its own blocks from the same base \
+         -- so a slot means nothing without the shader it belongs to.",
+        94,
+    ) {
+        writeln!(w, " * {line}").unwrap();
+    }
+    writeln!(w, " */").unwrap();
+    writeln!(w, "export const UBO = Object.freeze({{").unwrap();
+    for (name, value) in ubo_slots::SLOTS {
+        writeln!(w, "  {}: {value},", screaming(name)).unwrap();
+    }
+    writeln!(w, "}});").unwrap();
+    writeln!(w).unwrap();
+
+    writeln!(w, "/**").unwrap();
+    writeln!(
+        w,
+        " * How far apart a consolidated drawable buffer's entries are."
+    )
+    .unwrap();
+    writeln!(w, " *").unwrap();
+    for line in wrap(
+        "A layer writes one buffer holding an entry per drawable, and `tsl_order_entry.ubo_index` \
+         is the entry's index. The stride is the *union* over the family's variants, not the size \
+         of any one of them, so indexing by anything else walks off the array.",
+        94,
+    ) {
+        writeln!(w, " * {line}").unwrap();
+    }
+    writeln!(w, " */").unwrap();
+    writeln!(w, "export const STRIDE = Object.freeze({{").unwrap();
+    for union in ubo_layouts::UNIONS {
+        writeln!(w, "  {}: {},", screaming(union.name), union.stride).unwrap();
+    }
+    writeln!(w, "}});").unwrap();
+    writeln!(w).unwrap();
+
+    writeln!(w, "/**").unwrap();
+    writeln!(w, " * Uniform block layouts.").unwrap();
+    writeln!(w, " *").unwrap();
+    for line in wrap(
+        "One entry per block mbgl declares. `size` is the block's stride -- what separates \
+         consecutive blocks in a consolidated buffer -- which is not the field extent when a \
+         block's fields end mid-alignment.",
+        94,
+    ) {
+        writeln!(w, " * {line}").unwrap();
+    }
+    writeln!(w, " */").unwrap();
+    writeln!(w, "export const BLOCK = Object.freeze({{").unwrap();
+    for layout in ubo_layouts::LAYOUTS {
+        writeln!(w, "  {}: {{", layout.name).unwrap();
+        writeln!(w, "    size: {}, align: {},", layout.size, layout.align).unwrap();
+        writeln!(w, "    at: {{").unwrap();
+        for field in layout.fields {
+            writeln!(w, "      {}: {},", field.name, field.offset).unwrap();
+        }
+        writeln!(w, "    }},").unwrap();
+        writeln!(w, "  }},").unwrap();
+    }
+    writeln!(w, "}});").unwrap();
+    writeln!(w).unwrap();
+
+    writeln!(
+        w,
         "/** Every struct's width, alignment and field offsets, in bytes. */"
     )
     .unwrap();
@@ -1325,7 +1423,7 @@ fn ubo_declarator(field: &ubo_layouts::UboField) -> String {
 ///
 /// The mirror reads these. A consumer that only forwarded the bytes would still need the size to
 /// know how many to forward, and every consumer that does anything with a uniform -- picks the
-/// matrix out of a consolidated buffer, reads a layer's evaluated colour -- needs the offsets.
+/// matrix out of a consolidated buffer, reads a layer's evaluated color -- needs the offsets.
 /// Emitting them is what lets a mirror stop including mbgl's shader headers, which is the point
 /// of having one flat header at all.
 ///
