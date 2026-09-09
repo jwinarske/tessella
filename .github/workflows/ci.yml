@@ -99,6 +99,27 @@ jobs:
       # What does assert it is building the crates that claim `no_std` without `std` at all. The
       # list comes from the marker itself rather than a copy, so a new crate is covered the day it
       # declares one, and there are no exceptions: a crate that carries the marker honours it.
+      # The module itself, because nothing else describes it. `cargo check` for this target is a
+      # weaker gate than it looks -- it passed while the module carried 1,380
+      # `__wbindgen_describe_*` exports, which §19.2 rules out, and a megabyte of `ureq` behind an
+      # entry point that could never connect. Both were invisible until something read the wasm.
+      - name: the wasm module exports the ABI and nothing else
+        if: matrix.target == 'wasm32-unknown-unknown'
+        run: |
+          set -eu
+          cargo build -p tessella-ffi --target ${{ matrix.target }} --release
+          cargo run -p wasm-abi -- target/${{ matrix.target }}/release/tessella_ffi.wasm
+      # `ureq` is `std::net`. It compiles for wasm32, so only the dependency graph says whether it
+      # is there.
+      - name: no sockets in the wasm graph
+        if: matrix.target == 'wasm32-unknown-unknown'
+        run: |
+          set -eu
+          if cargo tree -p tessella-ffi --target ${{ matrix.target }} -e normal | grep -q ureq; then
+            echo "ureq is in the wasm dependency graph"
+            exit 1
+          fi
+
       - name: the no_std crates build without std
         if: matrix.target == 'wasm32-unknown-unknown'
         run: |

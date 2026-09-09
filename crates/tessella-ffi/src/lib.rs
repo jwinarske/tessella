@@ -68,17 +68,22 @@ extern crate alloc;
 
 use alloc::sync::Arc;
 use std::ffi::c_char;
-use std::time::Duration;
 
 use tessella_capture_abi::envelope::ViewId;
 use tessella_capture_abi::ring::{self, Producer, region_size};
 use tessella_orchestrate::cache::TileCache;
-use tessella_orchestrate::deferred::{HostTransport, PoolBacked, TileTransport};
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+use tessella_orchestrate::deferred::PoolBacked;
+use tessella_orchestrate::deferred::{HostTransport, TileTransport};
 use tessella_orchestrate::map::{Map, SpriteAtlas, Tick};
 use tessella_orchestrate::pool::{Pool, Priority};
-use tessella_orchestrate::source::{Coalesced, Readiness, TileSource};
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+use tessella_orchestrate::source::Coalesced;
+use tessella_orchestrate::source::{Readiness, TileSource};
 use tessella_storage::deferred::{DeferredFileSource, Ticket};
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 use tessella_storage::http::HttpFileSource;
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 use tessella_storage::source::Coalescing;
 use tessella_style::Style;
 use tessella_tile::camera;
@@ -187,6 +192,10 @@ pub const SLAB_SLOTS: usize = 4096;
 /// virtual call. The same reasoning DR-24 gives for `Pool`.
 pub enum Transport {
     /// Native: a blocking source, waited on where waiting is cheap.
+    ///
+    /// Absent on wasm32, where `ureq` is `std::net` and there are no sockets. Leaving it in would
+    /// be a megabyte of dead weight behind an entry point that could only ever fail.
+    #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
     Pooled(PoolBacked<Coalesced<HttpFileSource>>),
     /// Hosted: the consumer fetches, which is the only thing a browser can do.
     Hosted(HostTransport),
@@ -195,6 +204,7 @@ pub enum Transport {
 impl DeferredFileSource for Transport {
     fn request(&self, url: &str, etag: Option<&str>) -> Ticket {
         match self {
+            #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
             Self::Pooled(transport) => transport.request(url, etag),
             Self::Hosted(transport) => transport.request(url, etag),
         }
@@ -202,6 +212,7 @@ impl DeferredFileSource for Transport {
 
     fn poll(&self, ticket: Ticket) -> Option<tessella_storage::source::Fetched> {
         match self {
+            #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
             Self::Pooled(transport) => transport.poll(ticket),
             Self::Hosted(transport) => transport.poll(ticket),
         }
@@ -209,6 +220,7 @@ impl DeferredFileSource for Transport {
 
     fn cancel(&self, ticket: Ticket) {
         match self {
+            #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
             Self::Pooled(transport) => transport.cancel(ticket),
             Self::Hosted(transport) => transport.cancel(ticket),
         }
@@ -216,6 +228,7 @@ impl DeferredFileSource for Transport {
 
     fn outstanding(&self) -> usize {
         match self {
+            #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
             Self::Pooled(transport) => transport.outstanding(),
             Self::Hosted(transport) => transport.outstanding(),
         }
@@ -225,6 +238,7 @@ impl DeferredFileSource for Transport {
 impl TileTransport for Transport {
     fn request_at(&self, priority: Priority, url: &str, etag: Option<&str>) -> Ticket {
         match self {
+            #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
             Self::Pooled(transport) => transport.request_at(priority, url, etag),
             // One queue, so the class has nowhere to go. Not dropped on the floor: the default
             // is what a transport with one queue means by it.
@@ -238,6 +252,7 @@ impl Transport {
     fn hosted(&self) -> Option<&HostTransport> {
         match self {
             Self::Hosted(transport) => Some(transport),
+            #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
             Self::Pooled(_) => None,
         }
     }
@@ -323,6 +338,7 @@ unsafe fn borrowed(text: *const u8, len: usize) -> Option<String> {
 ///
 /// `config` and `out` must be valid pointers, and `config.style_json` either null or valid for
 /// reads of `config.style_json_len` bytes.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tessella_create(
     config: *const Config,
@@ -336,7 +352,7 @@ pub unsafe extern "C" fn tessella_create(
         create(config, latitude, longitude, zoom, out, || {
             Transport::Pooled(PoolBacked::new(
                 Arc::new(Coalesced(Arc::new(Coalescing::new(HttpFileSource::new(
-                    Duration::from_secs(30),
+                    std::time::Duration::from_secs(30),
                 ))))),
                 Pool::shared(),
                 Priority::Background,

@@ -20,13 +20,20 @@ tessella-capture-abi = { path = "../tessella-capture-abi" }
 tessella-glyph = { path = "../tessella-glyph" }
 tessella-orchestrate = { path = "../tessella-orchestrate" }
 
-tessella-storage = { path = "../tessella-storage", features = ["http"] }
+tessella-storage = { path = "../tessella-storage" }
 tessella-style = { path = "../tessella-style" }
 tessella-tile = { path = "../tessella-tile" }
 
 [dev-dependencies]
 tessella-capture-abi = { path = "../tessella-capture-abi" }
 tile-server = { path = "../../tools/tile-server" }
+
+# `ureq` is `std::net`, which a browser does not have. It compiles for wasm32 and cannot connect,
+# so on that target it would be a megabyte of dead weight behind an entry point that could only
+# ever fail -- and `tessella_create` is `cfg`'d away there for the same reason. A hosted map is
+# the only kind a browser can have, and the caller does the fetching.
+[target.'cfg(not(all(target_family = "wasm", target_os = "unknown")))'.dependencies]
+tessella-storage = { path = "../tessella-storage", features = ["http"] }
 
 [features]
 # A sprite sheet is a PNG, and decoding one is optional the same way it is in the orchestrator:
