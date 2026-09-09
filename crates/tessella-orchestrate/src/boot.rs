@@ -917,7 +917,8 @@ pub(crate) enum Ask {
 }
 
 impl Ask {
-    fn url(&self) -> &str {
+    /// Where its answer comes from.
+    pub(crate) fn url(&self) -> &str {
         match self {
             Self::Tiles { url, .. }
             | Self::Geojson { url, .. }
