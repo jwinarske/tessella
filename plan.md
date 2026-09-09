@@ -8286,10 +8286,29 @@ is that repair, over `i_overlay`, gated on the same version. Our three fixtures:
 is v1, the two city tiles are v2, which is exactly why the zoom sweep app has always drawn North
 America and this one tile never did.
 
-**10.199% to 2.913%**, and the map is right. The residual is coastline: 77% of the differing pixels
-lie within three pixels of the oracle's shoreline, which is 11,199 pixels long. It is what using a
-different clipper than wagyu costs -- intersections are rounded to integers each library's own way.
-Exact vertex parity would need wagyu itself.
+**10.199% to 0.729%**, and the map is right. What is left is antialiasing and nothing else:
+1,904 of the 1,912 differing pixels lie within *one* pixel of the oracle's shoreline, the water
+area differs by 73 pixels out of 160,463, and the differences form 537 fragments of which the
+largest is 42 pixels. A z0 world tile carries 11,199 pixels of coastline, and half a pixel of
+coverage between `#2f6fb0` and `#0b0d10` clears a 48-per-channel threshold easily.
+
+**Two numbers here were wrong before this, and both were measurement rather than code.** The first
+reading said 2.913% and blamed the clipper -- "exact vertex parity would need wagyu itself". Both
+halves were false.
+
+The clipper was cleared by running the *same rings* through both. wagyu is vendored header-only in
+the mbgl checkout, so `fixupPolygons` lifts out into forty lines of C++; fed the rings this build
+feeds `i_overlay`, it gives 249 rings and 4,159 points against 236 and 3,895. Different, so the two
+clippers genuinely disagree -- but substituting wagyu's own output into this pipeline and rendering
+measured **3.299%, worse than `i_overlay`'s 3.001%**. A port would have bought nothing, and several
+hundred lines were nearly spent on the strength of an inference.
+
+The rest was the instrument. `capture-render` is a *tool*, not the consumer: every parity figure in
+this document comes from `render_probe`, which is Filament through Fluorite. Measuring the z0 tile
+with `capture-render` compared two rasterisers as well as two geometries and inflated the number
+four-fold -- 3.001% against the 0.729% the consumer actually draws. **A parity figure is only a
+parity figure when `render_probe` produced it**, and the 10.2% above is `capture-render`'s too, so
+it overstates the fault it found by about the same factor.
 
 Two things measured and rejected. `keep_all_points` made it slightly *worse* (3.054%), so
 collinear simplification is not the source. Repairing only features whose winding looks unusable
