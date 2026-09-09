@@ -59,6 +59,7 @@ use std::os::unix::io::AsRawFd as _;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
 
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::ViewId;
 use tessella_capture_abi::mapping::Mapping;
 use tessella_capture_abi::ring::{self, region_size};
@@ -307,6 +308,7 @@ fn a_consumer_in_another_process_reads_a_live_stream() {
                 &mut frame::SymbolCache::default(),
                 &mut frame::PlacementState::new(),
                 &Frame {
+                    projection: ProjectionMode::Mercator,
                     style: &scene.style,
                     view: &scene.view,
                     view_id: ViewId(0),
@@ -396,6 +398,7 @@ fn a_ring_too_small_for_a_frame_never_becomes_writable() {
                 &mut frame::SymbolCache::default(),
                 &mut frame::PlacementState::new(),
                 &Frame {
+                    projection: ProjectionMode::Mercator,
                     style: &scene.style,
                     view: &scene.view,
                     view_id: ViewId(0),

@@ -33,6 +33,7 @@ const REQUIRED: &[&str] = &[
     "tessella_pending",
     "tessella_regions",
     "tessella_set_camera",
+    "tessella_set_projection",
     "tessella_set_viewport",
     "tessella_set_world_copies",
     "tessella_status",

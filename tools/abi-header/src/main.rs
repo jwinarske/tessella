@@ -835,6 +835,14 @@ fn structs() -> Vec<Struct> {
                     "World-to-clip, column-major."
                 ),
                 (
+                    globe_matrix,
+                    "double globe_matrix[16]",
+                    "Unit-sphere-to-clip, column-major. Zero unless projection is TSL_PROJECTION_MODE_GLOBE.\n\n\
+                     The last step of a globe's bend and the only linear one: geometry goes \
+                     tile-local -> normalized Mercator -> sphere -> clip, and the middle step is \
+                     trig the consumer's vertex stage supplies."
+                ),
+                (
                     center_zoom0,
                     "double center_zoom0[2]",
                     "Map center at zoom zero. Scale-free."
@@ -864,7 +872,14 @@ fn structs() -> Vec<Struct> {
                     "Draw-order index where the opaque pass ends."
                 ),
                 (depth_range_size, "float depth_range_size", "Depth range."),
-                (_pad, "uint32_t _pad", "Must be zero."),
+                (
+                    projection,
+                    "uint8_t projection",
+                    "tsl_projection_mode: which of the two matrices above is authoritative. \
+                     Refuse a value this build does not know rather than falling back to the \
+                     plane, which draws a flat map where a round one was asked for."
+                ),
+                (_pad, "uint8_t _pad[3]", "Must be zero."),
             ]
         ),
         c_struct!(
@@ -1145,6 +1160,14 @@ fn generate() -> String {
         "camera_mode",
         "Which side owns a view's camera. Declared per view at tsl_view_declare.",
         &[("PRODUCER".to_string(), 0), ("CONSUMER".to_string(), 1)],
+    );
+    emit_enum(
+        w,
+        "projection_mode",
+        "The surface a view draws its tiles on. A toggle rather than a mode a map is created \
+         in. Under MERCATOR proj_matrix is the whole projection; under GLOBE the bend is \
+         tile-local -> normalized Mercator -> sphere -> clip and globe_matrix is its last step.",
+        &[("MERCATOR".to_string(), 0), ("GLOBE".to_string(), 1)],
     );
     emit_enum(
         w,

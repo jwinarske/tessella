@@ -69,6 +69,7 @@ extern crate alloc;
 use alloc::sync::Arc;
 use std::ffi::c_char;
 
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::ViewId;
 use tessella_capture_abi::ring::{self, Producer, region_size};
 use tessella_orchestrate::cache::TileCache;
@@ -646,6 +647,53 @@ pub unsafe extern "C" fn tessella_set_world_copies(map: MapHandle, copies: World
         state.map.draw_on(match copies {
             WorldCopies::Repeated => cover::WorldCopies::Repeated,
             WorldCopies::One => cover::WorldCopies::One,
+        });
+        Status::Ok
+    })
+}
+
+/// The surface a map projects its tiles through.
+///
+/// Mirrors `tsl_projection_mode` on the wire. A toggle rather than a mode a map is created in:
+/// MapLibre switches projection at runtime and so does this.
+#[repr(i32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Projection {
+    /// The plane. The camera's `proj_matrix` is the whole projection.
+    Mercator = 0,
+    /// The sphere. The camera carries a `globe_matrix` and the consumer's vertex stage supplies
+    /// the nonlinear step between them.
+    Globe = 1,
+}
+
+/// Sets the projection a map draws through.
+///
+/// Does not emit and needs no invalidation: the camera block is rebuilt every frame, so the next
+/// one carries the new matrix by the same path a pan takes.
+///
+/// This does *not* change [`tessella_set_world_copies`]. A globe almost always wants
+/// [`WorldCopies::One`] alongside it — every wrap of a tile bends to the same patch, so a globe
+/// drawing a repeated cover draws that patch twice and z-fights with itself — but one call
+/// silently moving another setting is worse than two calls, and the cover policy is measurable on
+/// its own where the projection is not.
+///
+/// Under [`Projection::Globe`] the consumer's vertex stage owes the bend: `tile-local ->
+/// normalized Mercator -> sphere -> clip`, of which the camera carries the last step. A consumer
+/// that sets this and draws nothing different has not implemented it, and the producer cannot
+/// tell.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_set_projection(map: MapHandle, projection: Projection) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_mut() }) else {
+            return Status::NoSuchMap;
+        };
+        state.map.project_on(match projection {
+            Projection::Mercator => ProjectionMode::Mercator,
+            Projection::Globe => ProjectionMode::Globe,
         });
         Status::Ok
     })

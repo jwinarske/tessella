@@ -309,6 +309,35 @@ typedef enum tessella_world_copies {
  * subdivides, which removes the draw as well as the tile. */
 tessella_result tessella_set_world_copies(tessella_map* map, tessella_world_copies copies);
 
+/* The surface a map projects its tiles through.
+ *
+ * Mirrors tsl_projection_mode on the capture stream. A toggle rather than a mode a map is created
+ * in: MapLibre switches projection at runtime and so does this. */
+typedef enum tessella_projection {
+    /* The plane. The camera's proj_matrix is the whole projection. */
+    TESSELLA_PROJECTION_MERCATOR = 0,
+    /* The sphere. The camera carries a globe_matrix and the consumer's vertex stage supplies the
+     * nonlinear step between them. */
+    TESSELLA_PROJECTION_GLOBE = 1
+} tessella_projection;
+
+/* Sets the projection a map draws through.
+ *
+ * Does not emit and needs no invalidation: the camera block is rebuilt every frame, so the next
+ * one carries the new matrix by the same path a pan takes.
+ *
+ * This does not change tessella_set_world_copies. A globe almost always wants
+ * TESSELLA_WORLD_COPIES_ONE alongside it -- every wrap of a tile bends to the same patch, so a
+ * globe drawing a repeated cover draws that patch twice and z-fights with itself -- but one call
+ * silently moving another setting is worse than two calls, and the cover policy is measurable on
+ * its own where the projection is not.
+ *
+ * Under TESSELLA_PROJECTION_GLOBE the consumer's vertex stage owes the bend: tile-local ->
+ * normalized Mercator -> sphere -> clip, of which tsl_camera_update.globe_matrix is the last step.
+ * A consumer that sets this and draws nothing different has not implemented it, and the producer
+ * cannot tell. */
+tessella_result tessella_set_projection(tessella_map* map, tessella_projection projection);
+
 /* Emits a frame, if anything changed, and asks for what the next one needs.
  *
  * Returns TESSELLA_OK whether or not a frame was emitted: a settled map sending nothing is the

@@ -797,6 +797,18 @@ pub struct CameraUpdate {
     /// World-to-clip, column-major, f64 because the world coordinates it multiplies are large
     /// enough at high zoom that the precision matters.
     pub proj_matrix: [f64; 16],
+    /// Unit-sphere-to-clip, column-major. Zero unless `projection` is
+    /// [`ProjectionMode::Globe`](crate::ProjectionMode::Globe).
+    ///
+    /// The last step of the bend, and the only linear one: a globe draws tile geometry through
+    /// `tile-local -> normalized Mercator -> sphere -> clip`, and the middle step is a pair of
+    /// trig calls per vertex that no matrix expresses. So the producer sends the two matrices and
+    /// the consumer's vertex stage supplies what is between them.
+    ///
+    /// Separate from `proj_matrix` rather than overwriting it: the two are different spaces, and
+    /// a field that means one thing or another depending on a mode is how a consumer draws a
+    /// plausible wrong picture instead of failing.
+    pub globe_matrix: [f64; 16],
     /// Map center at zoom zero. Scale-free.
     pub center_zoom0: [f64; 2],
     /// Bearing in degrees.
@@ -822,8 +834,14 @@ pub struct CameraUpdate {
     pub opaque_pass_cutoff: u32,
     /// Depth range.
     pub depth_range_size: f32,
+    /// The surface this view draws on, as a [`ProjectionMode`](crate::ProjectionMode).
+    ///
+    /// Says which of the two matrices above is authoritative. A consumer that does not know a
+    /// value must refuse the camera rather than fall back to the plane: falling back draws a flat
+    /// map where a round one was asked for, which looks like a bug in the style.
+    pub projection: u8,
     /// Padding. Must be zero.
-    pub _pad: u32,
+    pub _pad: [u8; 3],
 }
 
 impl AttributeDesc {
@@ -1000,7 +1018,7 @@ const _: () = {
     layout!(OrderEntry, 32, 8);
     layout!(OrderUpdate, 24, 8);
     layout!(Light, 72, 8);
-    layout!(CameraUpdate, 272, 8);
+    layout!(CameraUpdate, 400, 8);
 
     // Nothing read in place out of the payload region may need more alignment than the
     // producer gives that region.
@@ -1043,11 +1061,17 @@ mod tests {
         assert_eq!(offset_of!(ViewUse, layer_index), 12);
         assert_eq!(offset_of!(ViewUse, sub_layer_index), 16);
 
+        // Rev 3 inserted `globe_matrix` between the projection and the center, which moved
+        // everything after it by 128 bytes. That is the break the revision is for, and this test
+        // failing on the day it landed is the test working: an ABI addition that slid a field
+        // under a consumer built against rev 2 would otherwise be silent.
         assert_eq!(offset_of!(CameraUpdate, proj_matrix), 0);
-        assert_eq!(offset_of!(CameraUpdate, center_zoom0), 128);
-        assert_eq!(offset_of!(CameraUpdate, bearing), 144);
-        assert_eq!(offset_of!(CameraUpdate, pitch), 152);
-        assert_eq!(offset_of!(CameraUpdate, pixels_per_meter), 160);
+        assert_eq!(offset_of!(CameraUpdate, globe_matrix), 128);
+        assert_eq!(offset_of!(CameraUpdate, center_zoom0), 256);
+        assert_eq!(offset_of!(CameraUpdate, bearing), 272);
+        assert_eq!(offset_of!(CameraUpdate, pitch), 280);
+        assert_eq!(offset_of!(CameraUpdate, pixels_per_meter), 288);
+        assert_eq!(offset_of!(CameraUpdate, projection), 396);
     }
 
     /// The reserved bytes are the whole reason DR-18 lands before the freeze rather than

@@ -16,6 +16,7 @@
 
 use std::collections::BTreeMap;
 
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::ViewId;
 use tessella_capture_abi::ring::{self, Ring, region_size};
 use tessella_orchestrate::SlabArena;
@@ -93,6 +94,7 @@ fn emit_frame_for(
         &mut frame::SymbolCache::default(),
         &mut frame::PlacementState::new(),
         &Frame {
+            projection: ProjectionMode::Mercator,
             style: &scene.style,
             view: &scene.view,
             view_id,
@@ -260,6 +262,7 @@ fn a_failed_frame_retires_nothing_and_announces_nothing() {
     let light = Light::default();
     fn frame_of<'a>(scene: &'a Scene, light: &'a Light) -> Frame<'a> {
         Frame {
+            projection: ProjectionMode::Mercator,
             style: &scene.style,
             view: &scene.view,
             view_id: ViewId(0),
@@ -491,6 +494,7 @@ fn a_frame_touches_only_its_own_view() {
                 &mut frame::SymbolCache::default(),
                 &mut frame::PlacementState::new(),
                 &Frame {
+                    projection: ProjectionMode::Mercator,
                     style: &scene.style,
                     view: &scene.view,
                     view_id,
@@ -619,6 +623,7 @@ fn a_parked_view_writes_no_bytes_at_all() {
     let mut session = Session::new();
     let light = Light::default();
     let frame = Frame {
+        projection: ProjectionMode::Mercator,
         style: &scene.style,
         view: &scene.view,
         view_id: ViewId(0),
@@ -758,6 +763,7 @@ fn a_displaced_drawable_is_announced_again() {
 mod teardown {
     use super::{Scene, scene};
     use std::collections::BTreeMap;
+    use tessella_capture_abi::ProjectionMode;
     use tessella_capture_abi::envelope::ViewId;
     use tessella_capture_abi::ring::Ring;
     use tessella_orchestrate::SlabArena;
@@ -767,6 +773,7 @@ mod teardown {
 
     fn frame_of<'a>(scene: &'a Scene, view: ViewId, light: &'a Light) -> Frame<'a> {
         Frame {
+            projection: ProjectionMode::Mercator,
             style: &scene.style,
             view: &scene.view,
             view_id: view,
@@ -917,6 +924,7 @@ mod teardown {
 mod under_fault {
     use super::{Scene, scene};
     use std::collections::BTreeMap;
+    use tessella_capture_abi::ProjectionMode;
     use tessella_capture_abi::envelope::{GeometryId, ViewId};
     use tessella_capture_abi::ring::Ring;
     use tessella_orchestrate::SlabArena;
@@ -985,6 +993,7 @@ mod under_fault {
             &mut frame::SymbolCache::default(),
             &mut frame::PlacementState::new(),
             &Frame {
+                projection: ProjectionMode::Mercator,
                 style: &scene.style,
                 view: &scene.view,
                 view_id: view,

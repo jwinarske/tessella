@@ -153,6 +153,7 @@ fn a_patterned_extrusion_takes_the_instanced_pattern_shader() {
 /// one geometry and silently wrong the moment it had two.
 mod through_a_frame {
     use std::collections::BTreeMap;
+    use tessella_capture_abi::ProjectionMode;
 
     use tessella_capture_abi::EnvelopeKind;
     use tessella_capture_abi::envelope::{GeometryAdd, ViewId, WireRecord as _};
@@ -205,6 +206,7 @@ mod through_a_frame {
             producer,
             &mut arena,
             &Frame {
+                projection: ProjectionMode::Mercator,
                 style: &style,
                 view: &view,
                 view_id: ViewId(0),

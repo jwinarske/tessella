@@ -4,11 +4,13 @@
 //! scale-free center, bearing, pitch, `pixelsPerMeter`, the light, and the depth range. Nothing
 //! here is a tolerance — the dump carries bit patterns and so does this.
 
-use tessella_capture_abi::envelope::{OrderEpoch, ViewId};
-use tessella_capture_abi::{CameraMode, EnvelopeKind};
+use tessella_capture_abi::envelope::{CameraUpdate, OrderEpoch, ViewId, WireRecord};
+use tessella_capture_abi::{CameraMode, EnvelopeKind, ProjectionMode};
 use tessella_orchestrate::camera::CameraBlock;
 use tessella_style::light::Light;
+use tessella_tile::camera;
 use tessella_tile::cover::ViewTransform;
+use tessella_tile::globe;
 
 const DUMP: &str = include_str!("../../../tests/golden/hermetic_style.dump");
 
@@ -183,4 +185,98 @@ fn the_block_writes_one_envelope() {
         record.record.len(),
         core::mem::size_of::<tessella_capture_abi::envelope::CameraUpdate>()
     );
+}
+
+// --- The globe's half of the block (plan.md §13.4) ------------------------------------------
+//
+// There is no oracle here: MapLibre Native has no globe, so the dump above says nothing about any
+// of it. What is checkable is that the two projections stay separate, that the flag and the matrix
+// agree, and that the matrix on the wire is the one `globe::clip_matrix` computes rather than
+// something rebuilt beside it.
+
+#[test]
+fn a_mercator_camera_carries_no_globe_matrix() {
+    let block = CameraBlock::new(&probe(), &Light::default(), OrderEpoch(1), 0, 0)
+        .expect("the probe camera builds");
+    assert_eq!(block.record.projection, ProjectionMode::Mercator as u8);
+    assert_eq!(block.record.globe_matrix, [0.0; 16]);
+    assert_ne!(block.record.proj_matrix, [0.0; 16]);
+}
+
+/// The default, so a caller that never asks for a globe cannot accidentally get one.
+#[test]
+fn the_plane_is_what_a_block_is_born_as() {
+    let block = CameraBlock::new(&probe(), &Light::default(), OrderEpoch(1), 0, 0).unwrap();
+    assert_eq!(
+        ProjectionMode::from_repr(block.record.projection),
+        Some(ProjectionMode::Mercator),
+    );
+}
+
+#[test]
+fn a_globe_camera_carries_the_matrix_clip_matrix_computes() {
+    let view = probe();
+    let block = CameraBlock::new(&view, &Light::default(), OrderEpoch(1), 0, 0)
+        .unwrap()
+        .on_projection(ProjectionMode::Globe, &view);
+    assert_eq!(block.record.projection, ProjectionMode::Globe as u8);
+    // The settled camera, not the one handed in: a map does not store the center it is given, and
+    // a matrix built from the unsettled one is correct to a part in 10^14 and not bit-exact.
+    let want = globe::clip_matrix(&camera::settled(&view));
+    assert_eq!(block.record.globe_matrix, want);
+}
+
+/// The plane's matrix is left alone, so a consumer that ignores the flag fails rather than
+/// drawing a plausible wrong picture.
+#[test]
+fn switching_projection_does_not_disturb_the_other_matrix() {
+    let view = probe();
+    let flat = CameraBlock::new(&view, &Light::default(), OrderEpoch(1), 0, 0).unwrap();
+    let round = flat.on_projection(ProjectionMode::Globe, &view);
+    assert_eq!(round.record.proj_matrix, flat.record.proj_matrix);
+    assert_ne!(round.record.globe_matrix, [0.0; 16]);
+}
+
+#[test]
+fn switching_back_to_the_plane_clears_the_globe_matrix() {
+    let view = probe();
+    let block = CameraBlock::new(&view, &Light::default(), OrderEpoch(1), 0, 0)
+        .unwrap()
+        .on_projection(ProjectionMode::Globe, &view)
+        .on_projection(ProjectionMode::Mercator, &view);
+    assert_eq!(block.record.projection, ProjectionMode::Mercator as u8);
+    assert_eq!(
+        block.record.globe_matrix, [0.0; 16],
+        "a stale globe matrix outlived the projection that produced it",
+    );
+}
+
+/// The whole point of the field: it moves when the camera does.
+#[test]
+fn the_globe_matrix_follows_the_camera() {
+    let here = probe();
+    let mut there = probe();
+    there.longitude += 40.0;
+    let at = |view: &ViewTransform| {
+        CameraBlock::new(view, &Light::default(), OrderEpoch(1), 0, 0)
+            .unwrap()
+            .on_projection(ProjectionMode::Globe, view)
+            .record
+            .globe_matrix
+    };
+    assert_ne!(at(&here), at(&there));
+}
+
+/// A record is what a consumer reads, so the flag has to survive the trip through bytes.
+#[test]
+fn the_projection_survives_the_wire() {
+    let view = probe();
+    let block = CameraBlock::new(&view, &Light::default(), OrderEpoch(1), 0, 0)
+        .unwrap()
+        .on_projection(ProjectionMode::Globe, &view);
+    let bytes = block.record.as_bytes();
+    assert_eq!(bytes.len(), core::mem::size_of::<CameraUpdate>());
+    assert_eq!(bytes.len(), 400);
+    // The padding is protocol: a consumer is entitled to read it as zero.
+    assert_eq!(block.record._pad, [0; 3]);
 }

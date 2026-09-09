@@ -16,6 +16,7 @@
 use std::collections::BTreeMap;
 
 use tessella_capture_abi::EnvelopeKind;
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::{GeometryAdd, TextureId, ViewId, WireRecord as _};
 use tessella_capture_abi::ring::Ring;
 use tessella_glyph::atlas::Rect;
@@ -66,6 +67,7 @@ fn emit_with(sprites: Option<&Patterns<'_>>) -> (BTreeMap<i32, usize>, u32) {
         producer,
         &mut arena,
         &Frame {
+            projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
             view_id: ViewId(0),
@@ -228,6 +230,7 @@ fn the_atlas_is_uploaded_and_the_placements_are_written() {
         producer,
         &mut arena,
         &Frame {
+            projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
             view_id: ViewId(0),
@@ -383,6 +386,7 @@ fn an_extrusion_pattern_binds_its_own_shader() {
         producer,
         &mut arena,
         &Frame {
+            projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
             view_id: ViewId(0),

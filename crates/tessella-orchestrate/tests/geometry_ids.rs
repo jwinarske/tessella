@@ -14,6 +14,7 @@
 use std::collections::BTreeMap;
 
 use tessella_capture_abi::EnvelopeKind;
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::{GeometryAdd, ViewId, WireRecord as _};
 use tessella_capture_abi::ring::Ring;
 use tessella_orchestrate::SlabArena;
@@ -61,6 +62,7 @@ fn emit_at(longitude: f64) -> (Vec<u64>, Vec<String>) {
         producer,
         &mut arena,
         &Frame {
+            projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
             view_id: ViewId(0),
@@ -174,6 +176,7 @@ fn nothing_is_released_because_nothing_is_retained() {
         producer,
         &mut arena,
         &Frame {
+            projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
             view_id: ViewId(0),
@@ -254,6 +257,7 @@ fn a_wrapped_tile_is_not_its_own_copy() {
         producer,
         &mut arena,
         &Frame {
+            projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
             view_id: ViewId(0),

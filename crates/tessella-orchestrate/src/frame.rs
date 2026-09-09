@@ -25,7 +25,7 @@ use alloc::vec::Vec;
 use tessella_capture_abi::envelope::{OrderEpoch, ViewId};
 use tessella_capture_abi::generated::{ubo_layouts, ubo_slots};
 use tessella_capture_abi::ring::{Full, Producer};
-use tessella_capture_abi::{BuiltIn, CameraMode, declared_for};
+use tessella_capture_abi::{BuiltIn, CameraMode, ProjectionMode, declared_for};
 use tessella_glyph::fonts::Fonts;
 use tessella_glyph::sprite::IconPosition;
 use tessella_layout::symbol_bucket::SymbolBuffers;
@@ -143,6 +143,11 @@ pub struct Frame<'a> {
     pub style: &'a Style,
     /// The camera.
     pub view: &'a ViewTransform,
+    /// The surface this frame draws its tiles on (plan.md §13.4).
+    ///
+    /// Beside the camera rather than on it: what the tiles are drawn on is not something a
+    /// camera knows, which is the same argument `Map::copies` is held under.
+    pub projection: ProjectionMode,
     /// Which view this is.
     pub view_id: ViewId,
     /// The cover, for the clip masks.
@@ -551,6 +556,7 @@ fn emit_group(
     // whether it did.
     let opened_at = producer.head();
     let Frame {
+        projection,
         style,
         view,
         view_id,
@@ -1125,6 +1131,7 @@ fn emit_group(
 
     CameraBlock::new(view, light, order.epoch, 0, draw_order.opaque_cutoff())
         .map_err(|error| FrameError::Camera(alloc::format!("{error}")))?
+        .on_projection(projection, view)
         .for_view(view_id)
         .write(producer)?;
 

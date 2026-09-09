@@ -21,6 +21,7 @@
 //! altogether.
 
 use tessella_capture_abi::EnvelopeKind;
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::{GeometryAdd, ViewId, WireRecord as _};
 use tessella_capture_abi::ring::Ring;
 use tessella_glyph::fonts::Fonts;
@@ -96,6 +97,7 @@ fn emit(
         layouts,
         &mut frame::PlacementState::new(),
         &Frame {
+            projection: ProjectionMode::Mercator,
             style,
             view,
             view_id: ViewId(0),

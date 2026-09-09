@@ -344,6 +344,7 @@ fn run() -> Result<String, String> {
             producer,
             &mut arena,
             &Frame {
+                projection: tessella_capture_abi::ProjectionMode::Mercator,
                 style: &style,
                 view: &args.view,
                 view_id: ViewId(0),
