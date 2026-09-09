@@ -56,6 +56,10 @@ function serve() {
     response.writeHead(200, {
       "content-type": TYPES[path.slice(dot)] ?? "application/octet-stream",
       "content-length": size,
+      // Freshness, because the cache stores only what an origin said it may. A server that says
+      // nothing is a server whose responses are served once and forgotten, which is correct and
+      // would make the cache check below vacuous.
+      "cache-control": "max-age=60",
     });
     createReadStream(path).pipe(response);
   });
@@ -187,6 +191,20 @@ try {
     }
   }
 
+  // The cache, which only a browser can exercise: OPFS is not in Node, and the fallback there is
+  // a Map, which proves nothing about the file system.
+  if (result.cache) {
+    if (!result.cache.opfs) {
+      console.error("browser: no OPFS, so the cache is not being checked here");
+    } else if (!result.cache.hit) {
+      console.error("browser: a second read of the same url went to the origin again");
+      process.exit(1);
+    } else if (!result.cache.sameBytes) {
+      console.error("browser: the cached body differed from the fetched one");
+      process.exit(1);
+    }
+  }
+
   // A settled map has nothing outstanding. Worth its own check because the failure it catches --
   // reading a status where a count was meant -- reports a plausible number rather than an error.
   if (result.pending !== 0) {
@@ -199,7 +217,8 @@ try {
       (result.painted
         ? `${result.painted.drawn} drawables, ${result.painted.water} water px, ` +
           `${result.painted.ground} background px`
-        : "PIXELS NOT CHECKED: no webgl2 here"),
+        : "PIXELS NOT CHECKED: no webgl2 here") +
+      (result.cache?.opfs ? `, opfs ${result.cache.hit ? "hit" : "MISS"}` : ", no opfs"),
   );
 } finally {
   server.close();

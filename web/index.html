@@ -16,6 +16,7 @@
 <script type="module">
   import { TessellaMap } from "./map.js";
   import { FillRenderer } from "./gl.js";
+  import { caching, OpfsStore } from "./cache.js";
 
   const canvas = document.getElementById("map");
   const status = document.getElementById("status");
@@ -69,8 +70,20 @@
 
     const fetchOne = async (url) => {
       const response = await fetch(url);
-      return { status: response.status, body: new Uint8Array(await response.arrayBuffer()) };
+      // The headers come back too. The producer has no use for them -- `tessella_answer` carries
+      // a status and bytes -- but the cache reads the origin's own freshness out of them, which
+      // is the one thing it cannot get from inside the module.
+      return {
+        status: response.status,
+        body: new Uint8Array(await response.arrayBuffer()),
+        headers: response.headers,
+      };
     };
+
+    // Cached where the browser has somewhere to put it. Only what the origin said may be kept is
+    // kept, so a server that sends no freshness simply gets fetched from every time.
+    const store = await OpfsStore.open();
+    const fetchCached = store ? caching(fetchOne, store) : fetchOne;
 
     let drawn = 0;
     let frames = 0;
@@ -78,7 +91,7 @@
     // tick. Waiting for records to stop instead cannot tell a producer that has finished from one
     // blocked on a fetch, which is the distinction this call was added to make.
     for (; frames < 400; frames++) {
-      renderer.absorb(map, await map.tick(fetchOne));
+      renderer.absorb(map, await map.tick(fetchCached));
       drawn = renderer.draw(width, height);
       if (drawn > 0 && map.pending === 0) break;
     }
@@ -95,6 +108,7 @@
     const ranked = [...tally].sort((a, b) => b[1] - a[1]).slice(0, 3);
     say(
       `${drawn} drawables, ${renderer.geometry.size} geometries, ${frames + 1} frames, ` +
+        `${store ? "opfs" : "no cache"}, ` +
         `colors ${ranked.map(([c, n]) => `${c}x${n}`).join(" ")}`,
     );
   } catch (error) {

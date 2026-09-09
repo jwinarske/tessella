@@ -8083,7 +8083,33 @@ cursor, because resolving alone would only prove the manifest came out of the ar
 cursor proves a tile did. Load-bearing: with the route removed the map fails with "unknown scheme:
 pmtiles".
 
-What is left of WS-4: `OpfsCache`.
+### WS-4's other half: the cache, and where its boundary went
+
+§19.2 puts the web's cache "at the same boundary `CachingFileSource` already uses". That boundary
+moved, and the plan was written before it did. On this target the producer holds no `FileSource`
+at all -- `TileSource` is generic over a transport, the browser's is the host-driven one, and the
+fetching happens in the consumer. There is no longer anywhere in the Rust to put a
+`CachingFileSource`, and OPFS could not be reached from there in any case: it is asynchronous and
+needs the bindings §19.2 rules out.
+
+So the cache is `web/cache.js`, wrapping `fetchOne`. That *is* the same boundary -- between "want
+these bytes" and "go and get them" -- correctly located after DR-23 moved fetching to the host.
+
+Being out here makes it better rather than merely possible. `tessella_answer` carries a status and
+bytes and no headers, so a cache inside the producer would have no `Cache-Control` to reason about
+and would have to invent an expiry. The consumer holds the real `Response`, so the origin's own
+freshness is what decides: `max-age` first, then `Expires`, `no-store` honored, and **a response
+that states no freshness is served and forgotten** -- guessing a lifetime for a resource that did
+not state one is how a map draws last week's tiles.
+
+Two details that are about being wrong safely. Entries are framed with their own length, because
+an OPFS write is not atomic and a tab closed mid-write leaves a short file -- without the frame
+that is a tile with its end cut off, which decodes as something. And an unreadable entry is a
+miss, not an error, because to a caller those are the same instruction: go and fetch it.
+
+Nine tests for the rules, in Node against a `MemoryStore` where expiry is injectable, and the
+round trip through the real file system in the browser test -- which is the half a `Map` cannot
+stand in for. It reports `opfs hit`.
 
 ### The quad, reading a planet off an origin
 
@@ -8119,7 +8145,7 @@ grows a `std::` path, which is the property the paragraph above wanted. Runtime 
 runtime; it belongs to WS-3's consumer, not to a check lane.
 
 Building the gate turned up one thing worth recording. `tessella-orchestrate` carried
-`#![cfg_attr(not(test), no_std)]` and did not honour it: `source.rs` reached for `std::sync`
+`#![cfg_attr(not(test), no_std)]` and did not honor it: `source.rs` reached for `std::sync`
 unguarded, so `--no-default-features` failed to resolve `std` there, and it was the gate's one
 named exception. WS-2 closed it, and more cheaply than expected -- no `no_std` lock was needed.
 Nothing else in the crate refers to `crate::source`, so the module goes behind the `std` feature
