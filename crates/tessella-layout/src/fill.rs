@@ -394,7 +394,9 @@ fn build_polygons_on(bucket: &mut FillBucket, polygons: Vec<Vec<Ring>>, step: i3
         // The interior. Ring cuts put vertices on the boundary; earcut then spans the inside with
         // triangles as large as the polygon allows, and those are what chord through the planet.
         let soup: Vec<[Position; 3]> = triangles
-            .chunks_exact(3)
+            .as_chunks::<3>()
+            .0
+            .iter()
             .map(|corner| {
                 [
                     bucket.vertices[start_vertices + corner[0]],
