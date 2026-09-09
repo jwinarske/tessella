@@ -126,9 +126,20 @@ export class TessellaMap {
     return this.wasm.tessella_set_camera(this.handle, latitude, longitude, zoom, bearing, pitch);
   }
 
-  /** How much work is still in flight. Zero means nothing further is coming without a tick. */
+  /**
+   * How much work is still in flight. Zero means nothing further is coming without a tick.
+   *
+   * The count comes back through a pointer and the return is a status, like every other call
+   * here. Reading the return as the count instead is a mistake that answers `1` for ever --
+   * `NullArgument`, because the out pointer was `undefined` -- which looks exactly like a map
+   * with one thing permanently outstanding. It cost an afternoon of looking for a stuck tile.
+   */
   get pending() {
-    return this.wasm.tessella_pending(this.handle);
+    const at = scratchAt(this.wasm).pending;
+    if (this.wasm.tessella_pending(this.handle, at) !== OK) {
+      throw new Error("tessella_pending refused");
+    }
+    return Number(new DataView(this.memory.buffer).getBigUint64(at, true));
   }
 
   /**
@@ -242,6 +253,7 @@ function scratchAt(wasm) {
     out: base + SCRATCH.out,
     regions: base + SCRATCH.regions,
     ticket: base + SCRATCH.ticket,
+    pending: base + SCRATCH.pending,
     url: base + SCRATCH.url,
     urlLen: base + SCRATCH.urlLen,
     style: base + SCRATCH.style,
@@ -255,6 +267,7 @@ const SCRATCH = Object.freeze({
   out: 64,
   regions: 128,
   ticket: 192,
+  pending: 384,
   url: 256,
   urlLen: 320,
   style: 4096,

@@ -8259,10 +8259,25 @@ answers in flight would hand the producer each other's bytes; with one tile it l
 works. Answers are written one at a time now, and a body larger than the reservation is refused
 rather than written over the producer's heap.
 
-**One loose end, unexplained.** `tessella_pending` does not reach zero on this path even after the
-only tile has landed and drawn -- one thing stays counted as in flight, with a single URL fetched
-once. The page settles on quiescence instead, which is what the render probe does anyway, but the
-count is wrong and the reason is not yet known.
+**The loose end, explained, and it was the consumer's.** `tessella_pending` appeared never to reach
+zero -- one thing stuck in flight after the only tile had landed and drawn. It was not the
+producer. The call reports its count *through a pointer* and returns a status, like every other
+call on the surface, and the JavaScript read the return value as the count. `Status::NullArgument`
+is 1, so it answered "one outstanding" for ever, including before anything had been asked for --
+which is the observation that gave it away, since a map that has fetched nothing cannot have a
+stuck tile.
+
+Worth recording as a *kind* of fault rather than a typo. `web/abi.js` is generated, so the offsets
+a consumer reads cannot drift; nothing generates the function signatures, and JavaScript will call
+a two-argument import with one and hand back whatever it gets. The C header declares them and a C
+compiler checks; the browser has neither. The guard is a test that asserts a settled map reports
+zero, in both the Node and browser consumers, because the failure produces a plausible number
+rather than an error.
+
+The page settles on `pending` now, which is what it is for -- waiting for records to stop cannot
+tell a producer that has finished from one blocked on a fetch, which is the distinction the call
+was added to make. Three frames to a drawn map, against thirteen when it was waiting out
+quiescence.
 
 ### WS-2, and what native got out of it
 

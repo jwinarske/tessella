@@ -74,6 +74,7 @@
 
     report({
       ok: true,
+      pending: map.pending,
       webgl2: !!document.createElement("canvas").getContext("webgl2"),
       asked: asked.length,
       records: seen.length,

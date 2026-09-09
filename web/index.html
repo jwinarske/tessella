@@ -74,17 +74,13 @@
 
     let drawn = 0;
     let frames = 0;
-    let quiet = 0;
-    // Settled on quiescence -- the producer has stopped publishing -- rather than on a fixed
-    // count, because what has arrived decides what is drawn. Not on `pending`, which does not
-    // reach zero on this path even once every tile has landed and drawn; that is a real loose end
-    // and not one this page should wait out.
+    // Settled on `pending`, which is what it is for: nothing further is coming without another
+    // tick. Waiting for records to stop instead cannot tell a producer that has finished from one
+    // blocked on a fetch, which is the distinction this call was added to make.
     for (; frames < 400; frames++) {
-      const records = await map.tick(fetchOne);
-      renderer.absorb(map, records);
+      renderer.absorb(map, await map.tick(fetchOne));
       drawn = renderer.draw(width, height);
-      quiet = records.length === 0 ? quiet + 1 : 0;
-      if (drawn > 0 && quiet >= 10) break;
+      if (drawn > 0 && map.pending === 0) break;
     }
     // Read back rather than screenshotted. What is wanted is what GL produced, and a screenshot
     // is the compositor's opinion of it -- which on a headless browser is taken at load, before
