@@ -23,6 +23,7 @@ use std::collections::BTreeSet;
 
 use tessella_orchestrate::viewcover::{Update, ViewCover};
 use tessella_tile::cover::{TileCoord, ViewTransform, WorldCopies};
+use tessella_tile::store::Surface;
 
 fn at(zoom: f64, longitude: f64) -> ViewTransform {
     ViewTransform {
@@ -44,8 +45,10 @@ fn a_globe_cover_holds_no_copies() {
     // less than one world, there are no copies to fold, and the zoom would assert nothing. That
     // is §13.4's shape — the copies are concentrated below z2 rather than spread over a sweep.
     for zoom in [0.0, 1.0] {
-        let flat = ViewCover::new(&at(zoom, 0.0), WorldCopies::Repeated).expect("covers");
-        let globe = ViewCover::new(&at(zoom, 0.0), WorldCopies::One).expect("covers");
+        let flat =
+            ViewCover::new(&at(zoom, 0.0), WorldCopies::Repeated, Surface::Plane).expect("covers");
+        let globe =
+            ViewCover::new(&at(zoom, 0.0), WorldCopies::One, Surface::Plane).expect("covers");
 
         assert!(
             globe.tiles().iter().all(|tile| tile.wrap == 0),
@@ -86,8 +89,9 @@ fn a_globe_cover_holds_no_copies() {
 /// globe must still be given those patches.
 #[test]
 fn a_view_on_the_antimeridian_keeps_its_western_half() {
-    let flat = ViewCover::new(&at(2.0, 180.0), WorldCopies::Repeated).expect("covers");
-    let globe = ViewCover::new(&at(2.0, 180.0), WorldCopies::One).expect("covers");
+    let flat =
+        ViewCover::new(&at(2.0, 180.0), WorldCopies::Repeated, Surface::Plane).expect("covers");
+    let globe = ViewCover::new(&at(2.0, 180.0), WorldCopies::One, Surface::Plane).expect("covers");
 
     let wanted: BTreeSet<(u8, u32, u32)> = flat
         .tiles()
@@ -120,11 +124,13 @@ fn a_view_on_the_antimeridian_keeps_its_western_half() {
 #[test]
 fn changing_the_surface_moves_the_cover() {
     let view = at(1.0, 0.0);
-    let mut state = ViewCover::new(&view, WorldCopies::Repeated).expect("covers");
+    let mut state = ViewCover::new(&view, WorldCopies::Repeated, Surface::Plane).expect("covers");
     let flat: Vec<TileCoord> = state.tiles().to_vec();
 
     assert_eq!(
-        state.update(&view, WorldCopies::One).expect("covers"),
+        state
+            .update(&view, WorldCopies::One, Surface::Plane)
+            .expect("covers"),
         Update::Changed,
         "the surface changed and the cover did not"
     );
@@ -135,12 +141,16 @@ fn changing_the_surface_moves_the_cover() {
     );
 
     assert_eq!(
-        state.update(&view, WorldCopies::One).expect("covers"),
+        state
+            .update(&view, WorldCopies::One, Surface::Plane)
+            .expect("covers"),
         Update::Unchanged,
         "a settled globe view is not settled"
     );
     assert_eq!(
-        state.update(&view, WorldCopies::Repeated).expect("covers"),
+        state
+            .update(&view, WorldCopies::Repeated, Surface::Plane)
+            .expect("covers"),
         Update::Changed,
         "switching back did not move the cover"
     );

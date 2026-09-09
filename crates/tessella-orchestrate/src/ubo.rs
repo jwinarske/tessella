@@ -151,7 +151,7 @@ pub const DEPTH_EPSILON: f32 = 1.0 / 2048.0;
 /// [`camera::CameraError`] when the view has no area. A globe cannot produce one -- the placement
 /// is a pure function of the tile address -- and the signature keeps it so that a caller does not
 /// have to know which projection it is under.
-fn tile_matrix(
+pub fn tile_matrix(
     view: &ViewTransform,
     projection: ProjectionMode,
     z: u8,

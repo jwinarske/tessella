@@ -30,6 +30,7 @@ use tessella_orchestrate::viewcover::ViewCover;
 use tessella_tile::cover::ViewTransform;
 use tessella_tile::cover::WorldCopies;
 use tessella_tile::renderables::{DataTileId, Necessity, Pyramid, RenderTileId, TileState};
+use tessella_tile::store::Surface;
 
 /// How many frames a fetch takes. Long enough that a crossing is visibly mid-flight for several
 /// frames, which is where a hole would appear.
@@ -175,6 +176,7 @@ fn run(zooms: &[f64]) -> Run {
                     ..*view
                 },
                 WorldCopies::Repeated,
+                Surface::Plane,
             )
             .expect("covers")
         })
@@ -190,7 +192,9 @@ fn run(zooms: &[f64]) -> Run {
 
         for (view, state) in base.iter().zip(&mut covers_state) {
             let at = ViewTransform { zoom, ..*view };
-            state.update(&at, WorldCopies::Repeated).expect("covers");
+            state
+                .update(&at, WorldCopies::Repeated, Surface::Plane)
+                .expect("covers");
 
             fleet.drawn.clear();
             state.draw(&mut fleet, 0..=16);
@@ -309,6 +313,7 @@ fn only_the_ideal_tiles_are_fetched() {
                     ..*view
                 },
                 WorldCopies::Repeated,
+                Surface::Plane,
             )
             .expect("covers")
         })
@@ -316,7 +321,11 @@ fn only_the_ideal_tiles_are_fetched() {
     for &zoom in &zooms {
         for (view, state) in base.iter().zip(&mut states) {
             state
-                .update(&ViewTransform { zoom, ..*view }, WorldCopies::Repeated)
+                .update(
+                    &ViewTransform { zoom, ..*view },
+                    WorldCopies::Repeated,
+                    Surface::Plane,
+                )
                 .expect("covers");
             wanted.extend(state.tiles().iter().map(|t| (t.z, t.x, t.y, t.wrap)));
         }

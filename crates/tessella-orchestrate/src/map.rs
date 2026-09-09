@@ -48,6 +48,7 @@ use tessella_style::crossfade::ZoomHistory;
 use tessella_style::light::Light;
 use tessella_tile::cover::{TileCoord, ViewTransform, WorldCopies};
 use tessella_tile::renderables::{DataTileId, Necessity, Pyramid, RenderTileId, TileState};
+use tessella_tile::store::Surface;
 
 use crate::SlabArena;
 use crate::damage::DamageTracker;
@@ -420,6 +421,19 @@ impl Map {
         self.projection
     }
 
+    /// The surface that projection draws on.
+    ///
+    /// The two are the same fact in the two vocabularies either side of the seam: a `ProjectionMode`
+    /// is what a caller asks for and what travels on the wire, and a `Surface` is what a cover and
+    /// a bucket are keyed by.
+    #[must_use]
+    pub const fn surface(&self) -> Surface {
+        match self.projection {
+            ProjectionMode::Mercator => Surface::Plane,
+            ProjectionMode::Globe => Surface::Sphere,
+        }
+    }
+
     /// Reports that a source has new tiles, so the next tick emits.
     ///
     /// Called by whatever owns the fetching. The map does not poll: a tick that asked every
@@ -559,12 +573,15 @@ impl Map {
         // measurement is why round that way: the cover costs 0.10 µs and predicting when it
         // moves costs more than it saves, while what it gates — substitution, retain, release,
         // rebuilt bindings — is where the frame's money goes.
+        // Read before the cover is borrowed mutably: it is a field of `self` and the cover is
+        // another.
+        let surface = self.surface();
         let moved = match &mut self.cover {
             Some(cover) => cover
-                .update(&self.view, self.copies)
+                .update(&self.view, self.copies, surface)
                 .unwrap_or(Update::Unchanged),
             None => {
-                self.cover = ViewCover::new(&self.view, self.copies).ok();
+                self.cover = ViewCover::new(&self.view, self.copies, surface).ok();
                 Update::Changed
             }
         };
@@ -672,7 +689,9 @@ impl Map {
         // `served` carries over, so a tile already drawn by the walk above is not drawn twice; a
         // second draw is the same geometry under the same matrix, blended again.
         for z in tiles.extra_zooms(&self.view) {
-            let Ok(extra) = tessella_tile::cover::cover_at_with(&self.view, z, self.copies) else {
+            let Ok(extra) =
+                tessella_tile::cover::cover_on(&self.view, z, self.copies, self.surface())
+            else {
                 continue;
             };
             for entry in &extra {
@@ -754,7 +773,7 @@ impl Map {
                 });
             }
         } else if let Ok(background) =
-            tessella_tile::cover::cover_at_with(&self.view, integer_zoom, self.copies)
+            tessella_tile::cover::cover_on(&self.view, integer_zoom, self.copies, self.surface())
         {
             for entry in &background {
                 let cover = TileId::new(entry.z, entry.x, entry.y);

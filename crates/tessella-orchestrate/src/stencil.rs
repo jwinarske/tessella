@@ -28,9 +28,10 @@
 use alloc::vec::Vec;
 
 use tessella_capture_abi::EnvelopeKind;
+use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::{Span, StencilTile, StencilTiles, TileId, ViewId, WireRecord};
 use tessella_capture_abi::ring::{Full, Producer};
-use tessella_tile::camera::{self, CameraError};
+use tessella_tile::camera::CameraError;
 use tessella_tile::cover::{TileCoord, ViewTransform};
 
 /// A layer's clip set: which tiles it clips against, and where each one sits.
@@ -57,10 +58,20 @@ pub fn clip_set(
     view: &ViewTransform,
     layer_index: i32,
     cover: &[TileCoord],
+    projection: ProjectionMode,
 ) -> Result<ClipSet, CameraError> {
     let mut tiles = Vec::with_capacity(cover.len());
     for coord in cover {
-        let matrix = camera::tile_to_clip(view, coord.z, coord.x, coord.y, coord.wrap)?;
+        // The same matrix the drawables this clips are placed by, which under a globe reaches
+        // normalized Mercator rather than clip space. Sent flat, the consumer's bent mask bends an
+        // already-projected matrix a second time and cuts the stencil somewhere the geometry is
+        // not: every fill tested against it and failed, and the planet came back as bare
+        // background.
+        //
+        // No depth nudge. A mask writes the stencil and never the depth buffer, so the term that
+        // separates coincident layers has nothing to separate here.
+        let matrix =
+            crate::ubo::tile_matrix(view, projection, coord.z, coord.x, coord.y, coord.wrap, 0.0)?;
         #[allow(clippy::cast_possible_truncation)]
         let narrowed = core::array::from_fn(|index| matrix[index] as f32);
         #[allow(clippy::cast_possible_truncation)]

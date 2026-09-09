@@ -7,6 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use tessella_capture_abi::ProjectionMode;
 use tessella_orchestrate::stencil;
 use tessella_tile::cover::{self, ViewTransform};
 
@@ -66,7 +67,8 @@ fn oracle_sets() -> BTreeMap<i32, BTreeMap<(u32, u32), u64>> {
 fn my_set(layer: i32) -> BTreeMap<(u32, u32), u64> {
     let view = probe();
     let tiles = cover::cover(&view).expect("covers");
-    let set = stencil::clip_set(&view, layer, &tiles).expect("an unrotated camera");
+    let set = stencil::clip_set(&view, layer, &tiles, ProjectionMode::Mercator)
+        .expect("an unrotated camera");
     set.tiles
         .iter()
         .map(|tile| {
@@ -141,7 +143,8 @@ fn an_unchanged_clip_set_writes_no_bytes() {
 
     let view = probe();
     let tiles = cover::cover(&view).expect("covers");
-    let set = stencil::clip_set(&view, 1, &tiles).expect("an unrotated camera");
+    let set =
+        stencil::clip_set(&view, 1, &tiles, ProjectionMode::Mercator).expect("an unrotated camera");
 
     let mut ring = Ring::new(1 << 16);
     let (producer, _consumer) = ring.split();
@@ -170,16 +173,26 @@ fn a_moved_camera_changes_the_clip_set() {
     let mut sets = stencil::ClipSets::new();
 
     let view = probe();
-    let first = stencil::clip_set(&view, 1, &cover::cover(&view).expect("covers"))
-        .expect("an unrotated camera");
+    let first = stencil::clip_set(
+        &view,
+        1,
+        &cover::cover(&view).expect("covers"),
+        ProjectionMode::Mercator,
+    )
+    .expect("an unrotated camera");
     assert!(sets.emit(producer, ViewId(0), &first).expect("emits"));
 
     let moved = ViewTransform {
         longitude: view.longitude + 0.02,
         ..view
     };
-    let second = stencil::clip_set(&moved, 1, &cover::cover(&moved).expect("covers"))
-        .expect("an unrotated camera");
+    let second = stencil::clip_set(
+        &moved,
+        1,
+        &cover::cover(&moved).expect("covers"),
+        ProjectionMode::Mercator,
+    )
+    .expect("an unrotated camera");
     assert_ne!(first.tiles, second.tiles, "the placement moved");
     assert!(
         sets.emit(producer, ViewId(0), &second).expect("emits"),
