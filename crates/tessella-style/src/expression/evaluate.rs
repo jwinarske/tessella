@@ -356,6 +356,16 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
             ]))
         }
         Expr::TypeOf(inner) => Ok(Value::String(spec_type_name(&evaluate(inner, context)?))),
+        Expr::IsSupportedScript(inner) => {
+            let value = evaluate(inner, context)?;
+            let Some(text) = value.as_str() else {
+                return Err(EvaluationError::Type {
+                    expected: "string",
+                    got: value.type_name(),
+                });
+            };
+            Ok(Value::Bool(crate::script::is_supported(text)))
+        }
         // Always fails, which is the point: it is how a style says a branch should not be
         // reachable. The message is the style's, so it is evaluated rather than quoted.
         Expr::Error(inner) => Err(EvaluationError::Custom(string_of(evaluate(

@@ -913,6 +913,11 @@ pub enum Expr {
     ToRgba(Box<Expr>),
     /// `["typeof", v]`: the spec's name for a value's type.
     TypeOf(Box<Expr>),
+    /// `["is-supported-script", s]`: whether the string needs shaping this build does not do.
+    ///
+    /// See [`crate::script`]. A style asks it to choose between a name in its own script and a
+    /// transliterated one, so the answer decides which label is drawn rather than how.
+    IsSupportedScript(Box<Expr>),
     /// `["error", message]`: an expression that always fails.
     Error(Box<Expr>),
     /// `["upcase", s]` and `["downcase", s]`: a string's case, folded.
@@ -1384,6 +1389,7 @@ impl Expr {
             Self::Format { .. } => Type::Formatted,
             Self::Length(_) | Self::IndexOf { .. } => Type::Number,
             Self::CaseFold { .. } | Self::TypeOf(_) => Type::String,
+            Self::IsSupportedScript(_) => Type::Boolean,
             // An element of an array whose type is not known statically, which is what makes
             // `["at", …]` usable in a comparison the checker cannot otherwise admit.
             Self::At { .. } => Type::Value,
@@ -1689,7 +1695,10 @@ fn children(expr: &Expr) -> Vec<&Expr> {
             .collect(),
         Expr::Not(inner) | Expr::Length(inner) => alloc::vec![&**inner],
         Expr::CaseFold { arg, .. } => alloc::vec![&**arg],
-        Expr::ToRgba(inner) | Expr::TypeOf(inner) | Expr::Error(inner) => alloc::vec![&**inner],
+        Expr::ToRgba(inner)
+        | Expr::TypeOf(inner)
+        | Expr::Error(inner)
+        | Expr::IsSupportedScript(inner) => alloc::vec![&**inner],
         Expr::At { index, array } => alloc::vec![&**index, &**array],
         Expr::Split { input, delimiter } => alloc::vec![&**input, &**delimiter],
         Expr::Get { key, object } | Expr::Has { key, object } => {
@@ -1814,7 +1823,10 @@ fn classify(expr: &Expr) -> Dependency {
         }),
         Expr::Length(inner) => classify(inner),
         Expr::CaseFold { arg, .. } => classify(arg),
-        Expr::ToRgba(inner) | Expr::TypeOf(inner) | Expr::Error(inner) => classify(inner),
+        Expr::ToRgba(inner)
+        | Expr::TypeOf(inner)
+        | Expr::Error(inner)
+        | Expr::IsSupportedScript(inner) => classify(inner),
         Expr::At { index, array } => classify(index).join(classify(array)),
         Expr::Split { input, delimiter } => classify(input).join(classify(delimiter)),
         Expr::Concat(args) => join_all(args),

@@ -35,6 +35,7 @@ pub mod filter;
 pub mod generated;
 pub mod light;
 pub mod property;
+pub mod script;
 pub mod value;
 
 pub use document::{
