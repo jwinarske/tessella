@@ -1238,6 +1238,7 @@ mod symbol_ubos {
 /// point label draws correctly with either one wrong, because the walk between them is what a
 /// *line* label needs.
 mod symbol_drawable_ubo {
+    use tessella_capture_abi::ProjectionMode;
     use tessella_capture_abi::generated::ubo_layouts::SYMBOL_DRAWABLE_UBO;
     use tessella_layout::symbol_layout::{Alignment, Alignments, Placement};
     use tessella_orchestrate::ubo::{self, SymbolDrawableEntry};
@@ -1293,6 +1294,7 @@ mod symbol_drawable_ubo {
                     true,
                     VIEWPORT,
                     Placement::Point,
+                    ProjectionMode::Mercator,
                 )
                 .expect("the probe has a viewport")
             })
@@ -1327,6 +1329,7 @@ mod symbol_drawable_ubo {
             true,
             VIEWPORT,
             Placement::Point,
+            ProjectionMode::Mercator,
         )
         .expect("a viewport");
         let second = SymbolDrawableEntry::for_tile(
@@ -1343,6 +1346,7 @@ mod symbol_drawable_ubo {
             true,
             VIEWPORT,
             Placement::Point,
+            ProjectionMode::Mercator,
         )
         .expect("a viewport");
 
