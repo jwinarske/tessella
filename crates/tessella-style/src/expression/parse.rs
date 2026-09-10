@@ -221,6 +221,12 @@ fn parse_rooted(
             expect_arity(operator, args, 1, 1)?;
             Ok(Expr::TypeOf(Box::new(parse_in(&args[0], scope)?)))
         }
+        "is-supported-script" => {
+            expect_arity(operator, args, 1, 1)?;
+            Ok(Expr::IsSupportedScript(Box::new(parse_in(
+                &args[0], scope,
+            )?)))
+        }
         "error" => {
             expect_arity(operator, args, 1, 1)?;
             Ok(Expr::Error(Box::new(parse_in(&args[0], scope)?)))
