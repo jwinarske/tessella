@@ -6654,19 +6654,30 @@ was. `tessella_advance` is the missing input: the elapsed milliseconds a fade is
 A map that is never told keeps the still-picture behaviour, so every capture and every probe is
 untouched.
 
-### The zoom gives way, not the centre
+### The center gives way, not the zoom
 
-`camera::constrained` followed mbgl's decomposition: a zoom floor from the frustum's extent, then
-the centre clamped into what is left. Correct, and the wrong trade for a map somebody is aiming.
-At zoom zero in a short pitched viewport a camera on Seattle cannot have all three of its centre,
-its zoom and no off-world strip, and mbgl gives up the centre -- so the map slides south and the
-city leaves the screen, which is what was reported after the strip itself was fixed.
+`camera::constrained` is mbgl's decomposition: a zoom floor from the frustum's extent, then the
+center clamped into what is left. Only the extents are ours -- `constrain` reads the viewport's
+height as the ground it covers, which is false under pitch, and the frustum is what that is
+actually worth. Flat, the two are the same arithmetic.
 
-Folding the latitude into the floor gives up the zoom instead: a request to zoom out further than
-the world allows stops a little short. That is the failure nobody notices. It is stricter than mbgl
-away from the equator, where a short side has less world to cover, and identical to it flat on the
-equator -- which is what the flat test's control now uses, since Seattle's latitude is exactly
-where the two diverge.
+**This gave up the zoom instead for a while, and it was wrong.** The argument was that at zoom zero
+in a short pitched viewport a camera on Seattle cannot have all three of its center, its zoom and
+no off-world strip; mbgl gives up the center and the city leaves the screen, so folding the
+latitude into the floor -- `world >= north / fraction` -- would give up the zoom and let the map
+stay where it was put.
+
+What that costs is the picture. Shanghai at z1 over 1200x900 came back at **zoom 1.105**, a 7.6%
+scale nobody asked for, and **20% of the frame** differed from `mbgl-render`. The reason it is
+worse than it sounds: the excess is a function of the *latitude*, so panning north changes the zoom
+-- and the zoom picks the tile level, so geometry generalizes differently under a map nobody has
+zoomed. Rivers that "change shape when you zoom, either direction" were partly this.
+
+Measured after removing the two extra floor terms, everything else unchanged: that camera goes from
+**216,202 gross pixels to 1**, z0 to 0, and the Berlin sweep does not move.
+
+A zoom-out that stops short is indeed the failure nobody notices. A zoom that drifts with the
+latitude is not.
 
 ### Placement cadence: a real difference from mbgl, and why adopting it naively fails
 
@@ -8412,12 +8423,50 @@ list is not walked again: the hole cap (`MAX_HOLES` raised to 100,000, still exa
 subdivider (identical with it disabled entirely); the fill outline (identical with its material
 removed); the clip mask; the scissor; the world-copy fold; and unmasked ancestors.
 
-And one dead end worth recording because it was asserted here before it was checked: `earcutr` was
-not at fault. Those water features are LineStrings closed into a lasso, and a self-overlapping
-ring's shoelace area is not its covered area, so "the triangles cover 66% more than the ring" is not
-evidence of anything. Run on the same ring, mbgl's own `earcut.hpp` returns the same 47 triangles
-and the same 3,887,272 -- to the digit. The missing geometry-type check is deliberate and matches
-`FillBucket::addFeature`, as the comment at that call site already said.
+One thing was cleared here and should not have been. `earcutr` *was* at fault, and the check that
+seemed to exonerate it was a single-ring feature -- 47 triangles and 3,887,272 doubled area, the
+same to the digit as `earcut.hpp`. That case agrees. Others do not, and the next section is where
+they were found.
+
+What was right about it: those water features really are LineStrings closed into a lasso, a
+self-overlapping ring's shoelace area really is not its covered area, and the missing geometry-type
+check really is deliberate -- mbgl fills a LineString too, which a fill layer pointed at a
+LineString-only source layer shows outright. None of that was the wedge.
+
+### The wedges: `earcutr` hashes above forty points and `earcut.hpp` above eighty
+
+Shanghai, z12, tile 12/3430/1674. The `water` layer's feature 20 is a LineString of thirteen lines;
+`classify_rings` -- which is mbgl's, line for line -- groups them into five polygons, and one of
+those is five rings and forty-five points. Handed that group:
+
+| | triangles | doubled area |
+| --- | --- | --- |
+| `earcut.hpp` | 12 | 3,092,779 |
+| `earcutr` 0.5.0 | 13 | 4,169,329 |
+
+The thirteenth spans ground no ring covers. That is the wedge, and it is one line:
+
+```rust
+// earcutr, linked_list()
+if vertices.len() < 80 { ll.usehash = false }
+```
+
+`vertices` is the flat coordinate array, two values per point, so this compares twice the point
+count against a threshold that counts points. `earcut.hpp` sets `threshold = 80`, subtracts each
+ring's point count and hashes when it goes negative -- above eighty *points*. The Rust reads as
+above forty, and every polygon of 41 to 80 points takes the branch the C++ does not.
+
+Hashed and unhashed ear-finding agree wherever a valid triangulation exists. On geometry where none
+does -- a self-intersecting ring, or an open line a fill closes into a lasso -- they pick different
+ears and the answers differ by whole triangles. Real tiles are full of both, which is why this
+surfaced as rivers that changed shape rather than as anything that looked like a triangulation bug.
+
+Corrected in `vendor/earcutr`, whose `PATCH.md` carries the diff and the provenance; upstream's own
+suite passes against it, all thirty-seven. The camera at the top of this section, Shanghai water at
+z12 over 1200x900, went from **6,282 gross pixels to 1**.
+
+*Not* reported upstream yet -- that is <https://github.com/frewsxcv/earcutr/> and somebody's call
+to make.
 
 ## 19. wasm32 as a fourth target
 
@@ -8809,8 +8858,9 @@ the sweep is z14-z16 city tiles and this is a z0 world tile.
 The chain, and three suspects cleared on the way. Our MVT decoder agrees with an independent
 decoder exactly on ring counts, point counts and bounding boxes. `classify_rings` is mbgl's
 algorithm line for line. `signed_area` accumulates in `i64`, so a world-scale ring cannot overflow
-it. And `earcutr` is not at fault either: handed a synthetic polygon with 256 holes it triangulates
-fine.
+it. And `earcutr` was cleared here on a synthetic polygon with 256 holes, which it triangulates
+fine -- correctly for *this* bug, but not the exoneration it was later taken for; see §18's wedges,
+where it turned out to diverge from `earcut.hpp` between forty and eighty points.
 
 What it was handed was not synthetic. The tile's first water feature put a **four-point island** at
 the head of the ring list and 118 continent-sized rings behind it -- every one of which

@@ -177,7 +177,7 @@ pub fn world_size(zoom: f64) -> f64 {
 ///
 /// # The camera orbits; it does not hover
 ///
-/// mbgl moves the camera *back along its own forward direction* by the centre distance:
+/// mbgl moves the camera *back along its own forward direction* by the center distance:
 ///
 /// ```text
 /// const vec3 forward = camera.forward();
@@ -187,7 +187,7 @@ pub fn world_size(zoom: f64) -> f64 {
 ///
 /// This used to return `[dx, dy, distance]`, which is that expression only when `forward` is
 /// `(0, 0, -1)` — a camera looking straight down. At any pitch the camera stayed directly over
-/// the centre while the view rotated beneath it, so the map swung out of frame: at a pitch of
+/// the center while the view rotated beneath it, so the map swung out of frame: at a pitch of
 /// fifty-five degrees a tile projected several viewports away and mirrored in x.
 ///
 /// Nothing caught it because nothing looked. The unrotated path is checked against the golden
@@ -472,23 +472,23 @@ pub fn proj_matrix(view: &ViewTransform) -> Result<Mat4, CameraError> {
 
     // How far the frustum reaches, which is the whole of what pitch changes about it.
     //
-    // Tilting the camera puts the top of the screen further away than its centre, and the far
-    // plane has to reach whatever is up there or the horizon is clipped away. `tan_above_centre`
+    // Tilting the camera puts the top of the screen further away than its center, and the far
+    // plane has to reach whatever is up there or the horizon is clipped away. `tan_above_center`
     // is that reach in the units mbgl uses — one unit is one horizontal pixel at the map's
-    // centre — and multiplying it by the pitch's tangent gives the fraction of the distance the
+    // center — and multiplying it by the pitch's tangent gives the fraction of the distance the
     // top edge adds.
     //
     // The clamp to 0.99 is what stops it diverging. At ninety degrees the top of the screen is
     // the horizon, which is infinitely far, so a pitch approaching it asks for every tile there
     // is; `MAX_PITCH` bounds the angle and this bounds the arithmetic.
     let limited_pitch = pitch_radians(view);
-    // With no centre offset, no roll and no camera altitude, which is what this build's views
+    // With no center offset, no roll and no camera altitude, which is what this build's views
     // are. Each of those is a term mbgl carries and none of them is expressible here yet.
-    let tan_above_centre = 2.0 * (DEFAULT_FOV / 2.0).tan() * 0.5;
-    let tan_multiple = (tan_above_centre * limited_pitch.tan()).clamp(0.0, 0.99);
+    let tan_above_center = 2.0 * (DEFAULT_FOV / 2.0).tan() * 0.5;
+    let tan_multiple = (tan_above_center * limited_pitch.tan()).clamp(0.0, 0.99);
     let furthest = distance / (1.0 - tan_multiple);
     // A one-percent margin, so a fragment at exactly the far distance does not fail the depth
-    // test. With no pitch `tan_multiple` is zero and this is the centre distance, which is what
+    // test. With no pitch `tan_multiple` is zero and this is the center distance, which is what
     // the unrotated path computed before pitch existed.
     let far_z = furthest * 1.01;
     let near_z = 1.0;
@@ -729,21 +729,24 @@ pub fn settled_center(longitude: f64, latitude: f64, zoom: f64) -> [f64; 2] {
 /// alone. mbgl leaves that gap open and a pitched map at a low zoom shows the strip past the
 /// pole. Applying mbgl's own stated rule to the frustum it actually has is what this does.
 ///
-/// The two extents are the ground distance from the centre to each screen edge, in world pixels.
-/// The camera looks at the centre from `camera_to_center_distance` away at `pitch` off vertical,
-/// so its height above the ground is `d * cos(pitch)` and the centre sits `h * tan(pitch)` from
+/// The two extents are the ground distance from the center to each screen edge, in world pixels.
+/// The camera looks at the center from `camera_to_center_distance` away at `pitch` off vertical,
+/// so its height above the ground is `d * cos(pitch)` and the center sits `h * tan(pitch)` from
 /// the nadir. An edge is the same with `pitch ± fov / 2`, which makes each extent
 /// `h * (tan(pitch ± fov / 2) - tan(pitch))` and neither of them a function of the zoom.
 ///
-/// The zoom is what gives way. mbgl clamps the *centre* instead, keeping the requested zoom and
-/// sliding the map until the world covers the viewport -- which at a low zoom takes the place the
-/// camera was aimed at off the screen entirely. Something has to give, since a short pitched
-/// viewport at zoom zero cannot have the requested centre, the requested zoom and no off-world
-/// strip at once; a zoom-out that stops a little short is the one nobody notices. The centre is
-/// still clamped afterwards, for the case the floor cannot reach.
+/// The center is what gives way, as it does in mbgl: the world is floored at `north + south` so
+/// the frustum fits at all, and then the center slides until it does. Only the extents differ
+/// from the oracle, and only where the oracle is wrong.
 ///
-/// At pitch zero and on the equator the two decompositions agree, and both reduce to `constrain`'s
-/// own `scale >= height / tileSize`.
+/// At pitch zero this is `constrain` to the pixel: the extents are `height / 2` each, the floor
+/// is `scale >= height / tileSize`, and the center clamp is mbgl's own.
+///
+/// The zoom used to give way instead -- the world was also floored at `north / fraction`, keeping
+/// the requested center by zooming in past what was asked. That kept the map where it was put and
+/// broke everything else: a Shanghai camera at z1 over a 900-pixel viewport came out at zoom
+/// 1.105, and since the excess is a function of the latitude, panning north silently changed the
+/// zoom and the tile level under a map nobody had zoomed.
 ///
 /// A viewport with no height, or a pitch that puts a screen edge at or past the horizon, has no
 /// finite answer and is returned unchanged: [`MAX_PITCH`] is the clamp that keeps that from
@@ -761,38 +764,33 @@ pub fn constrained(view: &ViewTransform) -> ViewTransform {
     }
     let distance = camera_to_center_distance(view.height);
     let above = distance * pitch.cos();
-    let centre = above * pitch.tan();
-    let north = above * (pitch + half_fov).tan() - centre;
-    let south = centre - above * (pitch - half_fov).tan();
+    let center = above * pitch.tan();
+    let north = above * (pitch + half_fov).tan() - center;
+    let south = center - above * (pitch - half_fov).tan();
 
-    // The zoom gives way, not the centre. mbgl splits this the other way -- a floor of
-    // `north + south` on its own, then the centre clamped into what is left -- and the split is
-    // the better decomposition in the abstract, since folding the latitude into the floor makes a
-    // map near a pole zoom itself out further than a map on the equator.
+    // The center gives way, not the zoom, which is mbgl's own split: a floor of `north + south`
+    // on the world, then the center clamped into whatever that leaves. Only the extents are this
+    // crate's -- mbgl reads the viewport's height as the ground it covers, and the frustum above
+    // is what that is actually worth under pitch.
     //
-    // It is the wrong trade for a map somebody is aiming. At zoom zero in a short viewport under
-    // pitch, a camera on Seattle cannot have all three of its centre, its zoom and no off-world
-    // strip; something gives. mbgl gives the centre, so the map slides south and the city the
-    // camera was pointed at leaves the screen. Giving the zoom instead means a request to zoom
-    // out further than the world allows stops a little short, which is the failure nobody
-    // notices: the map stays where it was put.
+    // This clamped the *zoom* until it was measured. Folding the latitude into the floor as well
+    // -- `world >= north / fraction` -- keeps the requested center by zooming in past what was
+    // asked for, and the argument for it was that a map should stay where it was put. What it
+    // costs is the whole picture: at z1 over a 900-pixel viewport a camera on Shanghai came out
+    // at zoom 1.105, a 7.6% scale the caller never asked for, and 20% of the frame differed from
+    // the oracle. Worse, the excess is a function of the latitude, so panning north changed the
+    // zoom and the tile level under a map nobody had zoomed -- which is what "the geometry moves
+    // when I zoom" turned out to be.
     //
-    // At pitch zero and on the equator the two agree, and both reduce to `constrain`'s own
-    // `scale >= height / tileSize`.
+    // At pitch zero this is `constrain` to the pixel, and above it the extents are better.
     let fraction = mercator_fraction(view.latitude);
-    let mut world = world_size(view.zoom).max(north + south);
-    if fraction > f64::EPSILON {
-        world = world.max(north / fraction);
-    }
-    if 1.0 - fraction > f64::EPSILON {
-        world = world.max(south / (1.0 - fraction));
-    }
+    let world = world_size(view.zoom).max(north + south);
     if !world.is_finite() || world <= 0.0 {
         return *view;
     }
     let zoom = (world / projection::TILE_SIZE).log2();
 
-    // And the centre back inside the world, now that the zoom admits it. Expressed in the same
+    // And the center back inside the world, now that the zoom admits it. Expressed in the same
     // pixels the extents are: the fraction that keeps the north edge covered, and the one that
     // keeps the south edge covered, with the original between them where it already fits.
     let low = north / world;

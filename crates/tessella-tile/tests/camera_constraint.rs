@@ -81,9 +81,9 @@ fn a_pitched_camera_is_pulled_back_inside_the_world() {
     let half_fov = camera::DEFAULT_FOV / 2.0;
     let pitch = out.pitch.to_radians();
     let above = camera::camera_to_center_distance(out.height) * pitch.cos();
-    let centre = above * pitch.tan();
-    let north = above * (pitch + half_fov).tan() - centre;
-    let south = centre - above * (pitch - half_fov).tan();
+    let center = above * pitch.tan();
+    let north = above * (pitch + half_fov).tan() - center;
+    let south = center - above * (pitch - half_fov).tan();
 
     let world = camera::world_size(out.zoom);
     let from_north = world * mercator_fraction(out.latitude);
@@ -103,10 +103,8 @@ fn a_pitched_camera_is_pulled_back_inside_the_world() {
     // do. That is the control -- it shows the pitched case above was constrained for its pitch and
     // not merely because this viewport is constrained at every camera.
     //
-    // Not at Seattle's latitude, which is where this differs from mbgl and deliberately: because
-    // the zoom gives way rather than the centre, a camera off the equator has less world on its
-    // short side and the floor rises to cover it. mbgl would keep the zoom and slide the centre
-    // south instead. See `camera::constrained`.
+    // On the equator, where the center needs no clamping either, so the only thing that could
+    // have moved this camera is the pitch. See `camera::constrained`.
     let flat = constrained(&view(0.0, 0.0, 0.0, 359.0));
     assert!(
         (flat.zoom - 0.0).abs() < 1e-12,
@@ -125,4 +123,46 @@ fn a_camera_with_no_ground_under_its_edge_is_left_alone() {
         (constrained(&empty).zoom - empty.zoom).abs() < 1e-12,
         "a viewport with no height was given a constraint"
     );
+}
+
+/// The zoom is kept and the center moves, which is the half of `constrain` mbgl is the oracle for.
+///
+/// This clamped the zoom instead until it was measured against `mbgl-render`. A Shanghai camera at
+/// z1 over 1200x900 came back at zoom 1.105 -- a 7.6% scale nobody asked for, and 20% of the frame
+/// different from the oracle. The give is real either way; what matters is that it is the same give
+/// mbgl makes, because the zoom decides the tile level and a zoom that drifts with the latitude
+/// changes the geometry under a map nobody has zoomed.
+#[test]
+fn a_camera_over_the_pole_keeps_its_zoom_and_gives_up_its_center() {
+    // z1 puts 1024 pixels of world under a 900-pixel viewport, so the center has 62 to move in.
+    let held = view(1.0, 31.2304, 0.0, 900.0);
+    let out = constrained(&held);
+
+    assert!(
+        (out.zoom - held.zoom).abs() < 1e-12,
+        "the zoom moved to {}, and the caller asked for {}",
+        out.zoom,
+        held.zoom
+    );
+    assert!(
+        out.latitude < held.latitude,
+        "the center did not slide south, so nothing gave"
+    );
+
+    // And it stops exactly where the viewport's edge meets the world's, which is mbgl's clamp:
+    // `height / 2` from the north edge at pitch zero.
+    let world = camera::world_size(out.zoom);
+    let from_north = world * mercator_fraction(out.latitude);
+    assert!(
+        (from_north - held.height / 2.0).abs() < 1e-6,
+        "clamped to {from_north} from the north edge, not {}",
+        held.height / 2.0
+    );
+
+    // A shorter viewport at the same camera has room and is not touched at all -- so the clamp
+    // above is the viewport's doing and not something this latitude always gets.
+    let short = view(1.0, 31.2304, 0.0, 400.0);
+    let out = constrained(&short);
+    assert!((out.zoom - short.zoom).abs() < 1e-12);
+    assert!((out.latitude - short.latitude).abs() < 1e-12);
 }
