@@ -371,15 +371,23 @@ pub struct AttributeDesc {
 
 /// One draw segment: a contiguous index range with its own vertex base.
 ///
+/// **A consumer must add `vertex_offset` to every index in the range.** Indexes are u16, so a
+/// bucket over 65,535 vertices cannot address itself with one range and is split here; each
+/// segment's indexes are relative to *its* base, not to the buffer. A consumer that draws the
+/// blob as one flat range is right only while there is one segment, and silently wrong past the
+/// split -- it assembles the later segments' triangles from the first vertices, so the geometry
+/// that should have been drawn goes missing and unrelated triangles appear elsewhere. That cost
+/// a week of hunting the wrong half of the renderer; see plan.md §18.
+///
 /// Rev 1 used `size_t`. These are tile-bounded counts, so 32 bits is not a narrowing that can
 /// bite: §12.4 puts indexes at u16 with a u32 spill per segment, and a segment that overflowed
 /// a u32 vertex base would have overflowed a tile long before.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(C)]
 pub struct Segment {
-    /// First vertex.
+    /// First vertex. Every index in this segment's range is relative to it.
     pub vertex_offset: u32,
-    /// First index.
+    /// First index, into the whole index buffer.
     pub index_offset: u32,
     /// Vertex count.
     pub vertex_length: u32,

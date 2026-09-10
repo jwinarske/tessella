@@ -1681,14 +1681,17 @@ TSL_ASSERT(offsetof(tsl_attribute_desc, declared_data_type) == 33, "tsl_attribut
 TSL_ASSERT(offsetof(tsl_attribute_desc, _pad) == 34, "tsl_attribute_desc._pad moved");
 
 /*
- * A contiguous index range with its own vertex base.
+ * A contiguous index range with its own vertex base. Indexes are u16, so a bucket over 65,535
+ * vertices is split into several of these; ADD `vertex_offset` TO EVERY INDEX in the range.
+ * Drawing the blob as one flat range is right only while there is one segment, and silently
+ * wrong past the split.
  *
  * Mirrors `Segment`.
  */
 typedef struct tsl_segment {
-    /* First vertex. */
+    /* First vertex. Every index in this segment's range is relative to it. */
     uint32_t vertex_offset;
-    /* First index. */
+    /* First index, into the whole buffer. */
     uint32_t index_offset;
     /* Vertex count. */
     uint32_t vertex_length;
