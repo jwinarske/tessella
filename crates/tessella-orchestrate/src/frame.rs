@@ -1592,7 +1592,7 @@ fn place_symbols(
     patterns: Option<&Patterns<'_>>,
     style: &tessella_style::Style,
     view: &ViewTransform,
-    projection: ProjectionMode,
+    frame_projection: ProjectionMode,
     placement: &core::cell::RefCell<&mut PlacementState>,
 ) -> BTreeMap<(usize, usize), PreparedSymbols> {
     let empty;
@@ -1705,7 +1705,7 @@ fn place_symbols(
         // it. Placement is a question about boxes a dozen pixels across, so the top of that range
         // is where this stops being good enough and the exact expansion has to be carried through
         // as a closure rather than a matrix.
-        let to_clip = if projection == ProjectionMode::Globe {
+        let to_clip = if frame_projection == ProjectionMode::Globe {
             tessella_tile::globe::anchored_matrix(view, tile.z, tile.x, tile.y, wrap)
         } else {
             match tessella_tile::camera::tile_to_clip(view, tile.z, tile.x, tile.y, wrap) {
@@ -1885,13 +1885,38 @@ fn place_symbols(
                 let project = project_with(&plane, grid_padding);
                 move |point: (f32, f32)| project((point.0 / scale, point.1 / scale))
             };
-            without_room = held.symbols.write_line_positions(
-                &labels,
-                |point| (point.0 * scale, point.1 * scale),
-                to_screen,
-                layout.symbol.size,
-                &mut buffers,
-            );
+            // The plane the walk steps in has to be the plane the shader offsets in.
+            //
+            // A plane's along-line label lies on the ground, so both are the tile's own scaled
+            // space and `scale` is the whole of it. A globe's cannot: `coord_matrix` gets a
+            // ground-lying label back to clip through the tile's *plane* matrix, which on a sphere
+            // is not the ground -- so `SymbolDrawableEntry` stands these upright there, and the
+            // walk has to step in screen space to match. Stepping in the scaled tile space while
+            // the shader read screen space is what put Berlin's street names in a heap on the left
+            // of the frame instead of along their roads.
+            //
+            // Unpadded, unlike the projector placement competes in: the padding exists so a label
+            // off the left edge keeps a real position in the grid, and it is not part of the space
+            // the shader offsets in.
+            let bent = frame_projection == ProjectionMode::Globe;
+            let to_plane_screen = project_with(&plane, 0.0);
+            without_room = if bent {
+                held.symbols.write_line_positions(
+                    &labels,
+                    &to_plane_screen,
+                    |point| point,
+                    layout.symbol.size,
+                    &mut buffers,
+                )
+            } else {
+                held.symbols.write_line_positions(
+                    &labels,
+                    |point| (point.0 * scale, point.1 * scale),
+                    to_screen,
+                    layout.symbol.size,
+                    &mut buffers,
+                )
+            };
         }
         let offered: Vec<crate::symbols::FrameLabel<'_>> = labels.to_vec();
         held.symbols.frame_in(
@@ -3213,6 +3238,7 @@ fn write_layer_state(
                         sub != 1,
                         alignments,
                         placement,
+                        projection,
                     )
                     .ok()
                 })

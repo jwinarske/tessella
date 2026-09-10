@@ -1286,13 +1286,12 @@ impl SymbolDrawableEntry {
         is_text: bool,
         alignments: Alignments,
         placement: Placement,
+        surface: ProjectionMode,
     ) -> Result<Self, camera::CameraError> {
-        // Symbols stay on the plane under either projection. plan.md §13.4 puts symbol
-        // placement on a sphere after the bend, and it is not a matrix swap: this path
-        // walks a label along the *projected* road point by point and aligns to pitch and
-        // rotation, all of which mean something different on a curved surface. A globe
-        // draws its labels flat and in the wrong places until that piece exists, which is
-        // visibly unfinished rather than subtly wrong.
+        // The matrices here are the plane's under either projection, and a globe uses only some
+        // of them: the consumer bends the anchor itself from `globe_ubo`, so `matrix` and the
+        // viewport `label_plane_matrix` never reach an anchored symbol. `coord_matrix` does, and
+        // it is the one that has to be right.
         let mut projection = camera::proj_matrix(view)?;
         projection[14] -= f64::from(depth_offset(layer_index, sub_layer_index));
         let tile = camera::multiply(
@@ -1300,8 +1299,20 @@ impl SymbolDrawableEntry {
             &camera::matrix_for_tile(z, x, y, wrap, view.zoom),
         );
 
-        let pitch_with_map = alignments.pitch == Alignment::Map;
-        let rotate_with_map = alignments.rotation == Alignment::Map;
+        // A label pitched with the map lies flat on the ground, and its `coord_matrix` is built
+        // from the tile's own *plane* matrix to get it back to clip. On a sphere the ground is not
+        // a plane and that matrix takes the label wherever Mercator would have put it -- which for
+        // a line-placed label is off the screen entirely: 36 renderables submitted at Berlin z13
+        // and not one dark pixel in the frame.
+        //
+        // `symbol-placement: line` defaults its rotation to the map and its pitch follows, so this
+        // is every street name rather than an unusual case. A globe stands them upright instead,
+        // which is what GL JS's globe does below a steep pitch and is a label that reads rather
+        // than one that is absent. Laying them on the sphere is the tangent-frame work §13.4
+        // describes, and is not a matrix swap.
+        let bent = surface == ProjectionMode::Globe;
+        let pitch_with_map = !bent && alignments.pitch == Alignment::Map;
+        let rotate_with_map = !bent && alignments.rotation == Alignment::Map;
         let along_line = alignments.along_line(placement);
 
         // The identity for a label walked along a line. The projection does the walk itself,

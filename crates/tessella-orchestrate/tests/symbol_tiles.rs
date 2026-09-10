@@ -1002,6 +1002,7 @@ fn a_stated_alignment_overrides_the_default() {
 /// The alignments decide which matrices a drawable carries and who turns the symbol.
 #[test]
 fn the_alignments_decide_the_drawables_matrices() {
+    use tessella_capture_abi::ProjectionMode;
     use tessella_layout::symbol_layout::{Alignment, Alignments, Placement};
     use tessella_orchestrate::ubo::SymbolDrawableEntry;
     use tessella_tile::cover::ViewTransform;
@@ -1033,6 +1034,7 @@ fn the_alignments_decide_the_drawables_matrices() {
             true,
             alignments,
             placement,
+            ProjectionMode::Mercator,
         )
         .expect("a viewport")
     };
