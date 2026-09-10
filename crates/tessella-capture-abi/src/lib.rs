@@ -67,6 +67,8 @@ pub mod ring;
 /// `cargo run -p mbgl-codegen -- --mbgl <maplibre-native>` when the pin moves, and
 /// `--check` to confirm the committed file is current.
 pub mod generated;
+/// The anchored bend's per-drawable block, which mbgl has no counterpart for.
+pub mod globe_ubo;
 
 pub use generated::mbgl_enums::{AttributeDataType, BuiltIn, RenderPass, TexturePixelType};
 pub use generated::shader_attributes::{ShaderAttribute, attributes, declared_for};
