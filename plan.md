@@ -8257,6 +8257,103 @@ Also worth having measured: the cost. Six `vec4` coefficients is twenty-four flo
 placement matrix is sixteen, and it *replaces* that matrix rather than joining it, so a globe
 drawable's uniform block grows by eight floats and loses four transcendentals a vertex.
 
+### Item 6 landed, and what it took besides the bend
+
+The expansion itself went in as designed. What cost the time was everything that had been reading
+the *other* curve, and the pattern is worth stating once because it recurred four times: a globe has
+two ways to place a vertex, and anything that clips, masks or measures geometry has to use the same
+one the geometry used. A mismatch is not a small error -- it is a sliver, and a sliver is fatal to
+anything thin.
+
+**The outline.** `fill-outline-color` defaults to `fill-color`, so an outline on the wrong curve is
+not a line out of place, it is a fringe of fill lying beside the edge. Monterey z13 against the
+oracle: 1.047% with the outline on the trig bend, 0.489% with the outline not drawn at all, 0.010%
+with it on the expansion.
+
+**The mask.** Same mismatch, and the thing that made it visible was a road: a pixel or two is a
+hairline off a fill and the whole of a three-pixel line. Seattle z14 had a clean gap across the
+street grid along a tile row. The mask's own record carries a placement matrix and nothing else, but
+it needed no new one -- every batch of the frame is queued in `pending_` by `endFrame`, so the
+coefficients were already in hand and simply being read after the masks rather than before.
+
+That one closed the residual this section had been carrying:
+
+| Monterey, background and water | before | after | stencil off |
+| --- | --- | --- | --- |
+| z13 | 0.010% | 0.005% | 0.014% |
+| z15 | 0.358% | **0.001%** | 0.003% |
+
+The mask is now worth pixels rather than costing them. Across five cities at z15, four measure
+0.000% against the oracle and the fifth 0.001%.
+
+**Lines came free, and were the reason for the whole shape of this.** A line's quad is extruded
+sideways in *clip* space -- `line.mat` places the center with a matrix and adds the same matrix
+applied to a direction, so only the linear part lands. The trig bend has no linear part, which is
+why there was never a `line_globe.mat` and why a globe drew no roads at all. The expansion's first
+derivatives are that Jacobian outright, so a bent line is easier to draw this way than the other.
+
+### Two margins that were never checked against the coarsest case
+
+Both low-zoom defects in this section were the same mistake, and neither was in the bend.
+
+**The crossover has to bind every family, including one with nowhere else to go.** A family with
+only an anchored package -- lines -- was taking the expansion at every zoom, on the reasoning that
+below the crossover the alternative is not drawing at all. That reasoning is wrong. A quadratic
+about a tile's center is only as good as the arc the tile subtends, and a z0 tile subtends the whole
+sphere: the expansion there is not a worse approximation, it is a wrong one. Roads at z0 landed as a
+lattice across the planet. The same omission in the *mask* took fourteen thousand pixels of ocean
+out of z1 in straight-edged wedges.
+
+**A flat quad on a sphere sags, and the shell has to be under the sag.** The depth shell sat a
+thousandth of a radius beneath the surface. The mask grid is flat quads, and a cell spanning an arc
+sags by `1 - cos(arc / 2)`:
+
+| | degrees per cell at z0 | sag, radii |
+| --- | --- | --- |
+| mask grid, 48 cells | 7.50 | 0.00214 |
+| fill subdivision, 41 cells | 8.78 | 0.00293 |
+| old shell margin | | 0.00100 |
+
+So the middle of every cell fell behind the shell, failed depth and wrote no stencil, leaving the
+corners and a lattice through them. The margin is 0.01 now, 3.4x the worse of the two. z0 cream
+pixels: 13,097 before, 2,281 after, against 2,335 with the stencil off -- the mask clips overhang
+and costs nothing, which is what it is for.
+
+### Labels on a globe: what the code already knew
+
+Symbols were deferred here on the grounds that placement needs the sphere in the collision pass.
+That was wrong, and the module said so: `SymbolFrame::frame_in` takes the projection as a *closure*
+because "labels compete for screen, not for ground". What was actually wrong was one line --
+`place_symbols` called `tile_to_clip` whatever the projection, so a globe placed every label as
+though the world were flat.
+
+Three things had to follow.
+
+**`w` is not only a divisor.** The symbol path reads it as the distance from the camera to the
+anchor and divides `camera_to_center_distance` by it, to size the type and the box it competes
+with. `clip_matrix` measures that in sphere radii, so it arrived at 0.0011 where a plane's is 1152.
+The ratio is a million, `perspective_ratio` pins to its clamp of four, and every label collides with
+every other: 12 glyph quads drawn where a plane draws 1384. `globe::clip_w_scale` normalizes it at
+the point under the camera -- one number for the frame, because a per-tile normalization would leave
+neighboring tiles disagreeing about how far away they are, which is the thing `w` exists to say.
+The layer bias goes on *before* that scale; applied after, it is divided by the larger `w` and a
+layer separation quietly becomes nothing.
+
+**A walked label arrives already projected.** The producer sends the identity as
+`label_plane_matrix` to say so -- the walk steps along the *projected* road point by point. Put
+through the expansion as though it were tile-local, every street name left the screen: 1199 glyph
+quads drawn and not one dark pixel in the frame.
+
+**And a label pitched with the map has no ground to lie on.** `coord_matrix` gets such a label back
+to clip through the tile's plane matrix, which on a sphere is not the ground. `symbol-placement:
+line` defaults its rotation to the map and its pitch follows, so that is every street name. A globe
+stands them upright, as GL JS's does below a steep pitch -- and the *walk* has to step in screen
+space to match, or the two disagree and the names come out in a heap.
+
+Laying labels on the sphere is still open, and is the tangent-frame work rather than a matrix swap.
+So is placement's own accuracy: it competes through `anchored_matrix`, the expansion's linear part,
+which is 0.04 px out at z14 and 11 px at z6.
+
 ### Wiring the subdivision, and the octagon becoming a circle
 
 §13.4's last producer piece. The measurement is the result, so it goes first: at zoom one over an
