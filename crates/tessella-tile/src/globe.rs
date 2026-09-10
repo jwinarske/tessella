@@ -464,3 +464,70 @@ pub fn anchored_bend(
         d_uv: apply(s_uv, 0.0),
     }
 }
+
+/// The anchored bend's linear part, as a matrix a caller can use where a plane's would go.
+///
+/// [`anchored_bend`] is a quadratic and most of the symbol path takes a `Mat4` -- the label plane,
+/// the perspective ratio, the screen projection placement competes in. Dropping the second-order
+/// term gives an affine map that is exactly right at the tile's center and degrades outward, which
+/// is what those callers can use unchanged.
+///
+/// Accurate enough for *placement*, which is a question about where a label's box lands against its
+/// neighbours', and not for drawing: a glyph drawn through this would sit where the quadratic term
+/// says it should not. The material evaluates the full expansion.
+///
+/// The columns are the derivatives and the translation is the anchor with the tile's center taken
+/// back out, so `M * (u, v, 0, 1)` is `anchor + d_u (u - cu) + d_v (v - cv)`.
+#[must_use]
+pub fn anchored_matrix(
+    view: &crate::cover::ViewTransform,
+    z: u8,
+    x: u32,
+    y: u32,
+    wrap: i32,
+) -> crate::camera::Mat4 {
+    let bend = anchored_bend(view, z, x, y, wrap);
+    let half = crate::camera::EXTENT / 2.0;
+    let mut out = [0.0; 16];
+    for row in 0..4 {
+        out[row] = bend.d_u[row];
+        out[4 + row] = bend.d_v[row];
+        out[8 + row] = 0.0;
+        out[12 + row] = bend.anchor[row] - bend.d_u[row] * half - bend.d_v[row] * half;
+    }
+
+    let scale = clip_w_scale(view);
+    for value in &mut out {
+        *value *= scale;
+    }
+    out
+}
+
+/// What to multiply a globe's clip coordinates by so `w` means what a plane's `w` means.
+///
+/// A projective coordinate is scale-invariant in `x / w`, so this moves nothing on screen. It
+/// matters because `w` is not only a divisor: the symbol path reads it as the distance from the
+/// camera to the anchor and divides `camera_to_center_distance` by it to decide how much
+/// perspective shrank a label -- both to size the type and to size the box it competes with.
+///
+/// [`clip_matrix`] measures that distance in sphere radii, so `w` arrives at 0.0011 where a
+/// plane's is 1152. The ratio is then a million, `perspective_ratio` pins to its clamp of four,
+/// and two things follow: every collision box is four times its size, so every label in the frame
+/// collides with every other -- 12 glyph quads drawn against a plane's 1384 at the same camera --
+/// and the type that does survive is drawn four times too large.
+///
+/// Taken at the point under the camera, so it is one number for the frame rather than one per
+/// tile: a per-tile normalisation would leave neighbouring tiles disagreeing about how far away
+/// they are, which is the thing `w` exists to say.
+#[must_use]
+pub fn clip_w_scale(view: &crate::cover::ViewTransform) -> f64 {
+    let reference = crate::camera::camera_to_center_distance(view.height);
+    let under = sphere_point(view.longitude, view.latitude);
+    let clip = clip_matrix(view);
+    let point = [under[0], under[1], under[2], 1.0];
+    let centre_w: f64 = (0..4).map(|c| clip[c * 4 + 3] * point[c]).sum();
+    if centre_w.abs() <= f64::EPSILON {
+        return 1.0;
+    }
+    reference / centre_w
+}

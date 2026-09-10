@@ -2093,8 +2093,13 @@ pub fn globe_bend_block(
     let (near, far) = globe::depth_range(view);
     let bias = -f64::from(depth_offset(layer_index, sub_layer_index)) * (far - near);
 
+    // The bias goes on before the scale, not after. Scaling every coefficient multiplies `w` too,
+    // and the offset that reaches NDC is `bias / w` -- so a bias added afterwards would be divided
+    // by the larger `w` and land smaller by exactly that factor, which is a layer separation
+    // quietly reduced to nothing.
+    let scale = globe::clip_w_scale(view);
     #[allow(clippy::cast_possible_truncation)]
-    let row = |v: [f64; 4]| -> [f32; 4] { core::array::from_fn(|i| v[i] as f32) };
+    let row = |v: [f64; 4]| -> [f32; 4] { core::array::from_fn(|i| (v[i] * scale) as f32) };
     let mut anchor = bend.anchor;
     anchor[2] += bias;
     GlobeBendUbo {

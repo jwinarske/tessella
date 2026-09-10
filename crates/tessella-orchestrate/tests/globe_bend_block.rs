@@ -33,8 +33,11 @@ fn the_block_carries_the_expansion() {
     let bend = globe::anchored_bend(&view(), z, x, y, wrap);
     let block = ubo::globe_bend_block(&view(), z, x, y, wrap, 0, 0);
 
+    // Scaled by `clip_w_scale`, which is what puts `w` in the units the symbol path reads it in.
+    // A projective coordinate is scale-invariant in `x / w`, so this is not a change of position.
+    let scale = globe::clip_w_scale(&view());
     #[allow(clippy::cast_possible_truncation)]
-    let want = |v: [f64; 4]| -> [f32; 4] { core::array::from_fn(|i| v[i] as f32) };
+    let want = |v: [f64; 4]| -> [f32; 4] { core::array::from_fn(|i| (v[i] * scale) as f32) };
     assert_eq!(block.d_u, want(bend.d_u));
     assert_eq!(block.d_v, want(bend.d_v));
     assert_eq!(block.d_uu, want(bend.d_uu));
@@ -44,6 +47,29 @@ fn the_block_carries_the_expansion() {
     assert_eq!(block.anchor[0], want(bend.anchor)[0]);
     assert_eq!(block.anchor[1], want(bend.anchor)[1]);
     assert_eq!(block.anchor[3], want(bend.anchor)[3]);
+}
+
+/// `w` arrives in the units a plane's `w` is in, which is what the symbol path reads it as.
+///
+/// It is the distance from the camera to the anchor, and `perspective_ratio` divides
+/// `camera_to_center_distance` by it. `clip_matrix` measures that in sphere radii, so unscaled it
+/// arrives near 0.001 against a plane's 1152 -- a ratio of a million, which pins the clamp at four
+/// and makes every collision box four times its size. Every label in the frame then collides with
+/// every other: 12 glyph quads drawn where a plane draws 1384.
+#[test]
+fn the_blocks_w_is_a_distance_a_plane_would_recognise() {
+    let (z, x, y, wrap) = TILE;
+    let view = view();
+    let block = ubo::globe_bend_block(&view, z, x, y, wrap, 0, 0);
+    let reference = camera::camera_to_center_distance(view.height);
+
+    // At the tile's own centre the offsets are zero, so the anchor's `w` is the whole of it.
+    let at_centre = f64::from(block.anchor[3]);
+    let ratio = at_centre / reference;
+    assert!(
+        (0.5..2.0).contains(&ratio),
+        "w is {at_centre} where a plane's is about {reference}, a ratio of {ratio}"
+    );
 }
 
 /// The bias is the direct bend's, scaled to the same frustum, moved from the placement into `z`.
@@ -61,9 +87,12 @@ fn the_depth_bias_lands_in_the_anchor() {
     let mut moved = 0;
     for (layer, sub) in [(0, 0), (3, 1), (40, 0)] {
         let block = ubo::globe_bend_block(&view(), z, x, y, wrap, layer, sub);
+        // The bias goes on before the scale: the offset that reaches NDC is `bias / w`, and
+        // scaling multiplies `w` too, so a bias added afterwards would land smaller by exactly
+        // that factor -- a layer separation quietly reduced to nothing.
         let bias = -f64::from(depth_offset(layer, sub)) * (far - near);
         #[allow(clippy::cast_possible_truncation)]
-        let want = (bend.anchor[2] + bias) as f32;
+        let want = ((bend.anchor[2] + bias) * globe::clip_w_scale(&view())) as f32;
         assert_eq!(block.anchor[2], want, "layer {layer}/{sub}");
         if layer > 0 {
             moved += 1;

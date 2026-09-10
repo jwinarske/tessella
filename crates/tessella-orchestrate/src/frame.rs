@@ -813,6 +813,7 @@ fn emit_group(
         patterns,
         style,
         view,
+        frame.projection,
         &placement,
     );
 
@@ -1591,6 +1592,7 @@ fn place_symbols(
     patterns: Option<&Patterns<'_>>,
     style: &tessella_style::Style,
     view: &ViewTransform,
+    projection: ProjectionMode,
     placement: &core::cell::RefCell<&mut PlacementState>,
 ) -> BTreeMap<(usize, usize), PreparedSymbols> {
     let empty;
@@ -1692,9 +1694,24 @@ fn place_symbols(
             continue;
         };
         let wrap = tiles.get(tile_index).map_or(0, |coord| coord.wrap);
-        let Ok(to_clip) = tessella_tile::camera::tile_to_clip(view, tile.z, tile.x, tile.y, wrap)
-        else {
-            continue;
+        // Labels compete for *screen*, so the projection they are placed through has to be the
+        // one the map is drawn with. This took `tile_to_clip` whatever the projection, which on a
+        // globe placed every label as though the world were flat -- two towns colliding because
+        // Mercator puts them side by side when the sphere has one behind the other.
+        //
+        // A globe gets the anchored bend's linear part, which is a matrix where the bend is not.
+        // That is exact at the tile's center and drifts outward -- 0.04 px at z14, 0.7 at z10, and
+        // 11 at z6, where a tile subtends enough sphere that a straight line is a poor account of
+        // it. Placement is a question about boxes a dozen pixels across, so the top of that range
+        // is where this stops being good enough and the exact expansion has to be carried through
+        // as a closure rather than a matrix.
+        let to_clip = if projection == ProjectionMode::Globe {
+            tessella_tile::globe::anchored_matrix(view, tile.z, tile.x, tile.y, wrap)
+        } else {
+            match tessella_tile::camera::tile_to_clip(view, tile.z, tile.x, tile.y, wrap) {
+                Ok(matrix) => matrix,
+                Err(_) => continue,
+            }
         };
 
         // Laid out once per bucket and held, not once per frame: none of shaping, bidi, glyph
@@ -3210,6 +3227,38 @@ fn write_layer_state(
                 ubo_slots::ID_SYMBOL_DRAWABLE_UBO,
                 &buffer,
             )?;
+
+            // The anchored bend, for a globe. A symbol needs only its *anchor* bent: the glyph
+            // quad is built in screen pixels around that point and is the same size wherever the
+            // tile is, so the corner offsets never touch the sphere. Same six coefficients a fill
+            // and a line take, and the same order as the buffer above.
+            //
+            // Sub-layers zero and one, text then icon, matching `entries`.
+            if projection == ProjectionMode::Globe {
+                let bend: Vec<GlobeBendUbo> = [0, 1]
+                    .into_iter()
+                    .flat_map(|sub| {
+                        matrices(sub).map(move |tile| {
+                            ubo::globe_bend_block(
+                                view,
+                                tile.z,
+                                tile.x,
+                                tile.y,
+                                i32::from(tile.wrap),
+                                layer_index,
+                                sub,
+                            )
+                        })
+                    })
+                    .collect();
+                ubo::write(
+                    producer,
+                    view_id,
+                    layer_index,
+                    tessella_capture_abi::globe_ubo::ID_GLOBE_BEND_UBO,
+                    &ubo::pack_globe_bend_buffer(&bend),
+                )?;
+            }
 
             let gamma = ubo::symbol_gamma_scale(view, alignments.pitch);
             let tile_props = ubo::pack_symbol_tile_props(entries.len(), true, false, gamma);
