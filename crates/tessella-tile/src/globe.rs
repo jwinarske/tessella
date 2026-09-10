@@ -238,6 +238,12 @@ pub fn chord_error(z: u8, zoom: f64, segments: u32) -> f64 {
 #[must_use]
 pub fn clip_matrix(view: &crate::cover::ViewTransform) -> crate::camera::Mat4 {
     let distance = camera_distance(view.zoom, view.latitude, view.height);
+    // The plane's own two angles, unnegated. Named here rather than written into the composition
+    // so that a sign is one line to find -- both were wrong once, and each presents differently:
+    // a wrong bearing turns the map the other way, a wrong pitch mirrors the foreshortening while
+    // still tilting in the right direction, which reads as a rigid shift of the whole picture.
+    let pitch = crate::camera::pitch_radians(view);
+    let bearing = crate::camera::bearing_radians(view);
     // Turn (longitude, latitude) onto the +z axis, which is where the camera is.
     // Longitude first, then latitude -- and that means writing them the other way round, because
     // these post-multiply: `rotate_y(rotate_x(I, lat), lon)` is `Rx · Ry`, which applies `Ry` to
@@ -247,15 +253,42 @@ pub fn clip_matrix(view: &crate::cover::ViewTransform) -> crate::camera::Mat4 {
         &crate::camera::rotate_x(&crate::camera::identity(), -view.latitude.to_radians()),
         -view.longitude.to_radians(),
     );
-    // Then back the camera off along z. The sphere is a unit ball, so the distance is in radii.
+    // Then the camera, in the order GL JS's `VerticalPerspectiveTransform` composes it:
     //
-    // `T * R`, not `R * T`: the camera pulls back along the axis the rotation has already put the
-    // target on, and `translate_in_place` post-multiplies, which would translate in the turned
-    // frame instead. Composed the wrong way round the target lands behind the camera and every
-    // projection returns nothing, which is what the centring test said first.
+    //     T(0, 0, -standoff) . Rx(pitch) . Rz(bearing) . T(0, 0, -1) . turned
+    //
+    // # Why the pull-back is split in two
+    //
+    // The obvious form backs the camera off by the whole `distance` and rotates about the
+    // sphere's centre. That is a planet on a turntable, and it is not what a map does: pitching
+    // would swing the point under the camera off the screen, and at street zoom -- where the
+    // visible cap is a few hundred metres across and the camera is 0.0007 radii above it -- it
+    // would swing it into the next country.
+    //
+    // A map pitches about the point under the camera. So the surface point comes to the origin
+    // first, by the unit translate; the rotations happen there; and only then does the camera
+    // stand off by what is left, which is `distance - 1` and is exactly
+    // `camera_to_center_distance` in radii. That is also what makes a globe and a plane agree at
+    // the zoom they are meant to be interchangeable at, since the plane pitches about its centre
+    // too.
+    //
+    // Both angles keep the plane's sign, which is not obvious in advance: `flip` below negates y
+    // after all of this, and a rotation composed here is seen through that negation. What settles
+    // it is `a_pitched_globe_agrees_with_a_pitched_plane` rather than an argument -- there is no
+    // globe oracle, `mbgl-render` having no globe, and the plane at street zoom is the nearest
+    // thing to one.
+    let mut to_surface = crate::camera::identity();
+    crate::camera::translate_in_place(&mut to_surface, 0.0, 0.0, -1.0);
+    let on_surface = crate::camera::multiply(&to_surface, &turned);
+    // `rotate_*` post-multiplies, so this reads left to right as the matrix product and right to
+    // left as what happens to a point: bearing first, then pitch.
+    let aimed = crate::camera::rotate_z(
+        &crate::camera::rotate_x(&crate::camera::identity(), pitch),
+        bearing,
+    );
     let mut back = crate::camera::identity();
-    crate::camera::translate_in_place(&mut back, 0.0, 0.0, -distance);
-    let eye = crate::camera::multiply(&back, &turned);
+    crate::camera::translate_in_place(&mut back, 0.0, 0.0, -(distance - 1.0));
+    let eye = crate::camera::multiply(&back, &crate::camera::multiply(&aimed, &on_surface));
     // `sphere_point`'s `y` points *down* -- GL JS's convention, kept because everything downstream
     // of it there assumes the sign -- and clip space has `y` up. One of the two has to give, and it
     // gives here rather than in the projection so that `sphere_point` stays the thing GL JS
