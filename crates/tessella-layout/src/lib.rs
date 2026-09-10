@@ -40,4 +40,4 @@ pub mod symbol_layout;
 pub use circle::CircleBucket;
 pub use fill::{FillBucket, Segment};
 pub use line::{ClipDistances, LineBucket, LineCap, LineJoin, LineOptions, LineVertex};
-pub use paint::{BinderError, PaintBinder, Slot};
+pub use paint::{BinderError, PaintBinder, PaintValues, Slot};

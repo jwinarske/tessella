@@ -422,7 +422,17 @@ pub fn build_tile_on_with_patterns(
                             .collect(),
                     };
 
-                    layout.push(layer, bucket_zoom, feature, &rings);
+                    // Evaluated here, where the feature is, and written when `build_symbols`
+                    // has decided the vertex order. Absent paint is empty rather than an error:
+                    // the binder has no slot for a property the layer does not drive.
+                    let paint_values =
+                        binder
+                            .evaluate(&paint, feature)
+                            .map_err(|source| TileError::Binder {
+                                layer: layer.id.clone(),
+                                source,
+                            })?;
+                    layout.push(layer, bucket_zoom, feature, &rings, paint_values);
                 }
 
                 // A road is rarely one feature; joining its segments before anything is placed
@@ -1206,7 +1216,13 @@ pub fn build_mvt_tile_on_with_patterns(
                             })
                             .collect();
 
-                        layout.push(layer, bucket_zoom, &feature, &rings);
+                        let paint_values = binder.evaluate(&paint, &feature).map_err(|source| {
+                            TileError::Binder {
+                                layer: layer.id.clone(),
+                                source,
+                            }
+                        })?;
+                        layout.push(layer, bucket_zoom, &feature, &rings, paint_values);
                     }
                 }
                 layout.merge_lines();

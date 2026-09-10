@@ -1512,6 +1512,8 @@ struct PreparedSymbols {
     buffers: SymbolBuffers,
     /// The sprites, when the layer resolved any.
     icons: Option<SymbolBuffers>,
+    /// The data-driven paint for both, carried through from the cached layout.
+    paint: SymbolPaintSlabs,
 }
 
 /// How a layer competes for space, as its style states it.
@@ -1726,10 +1728,17 @@ fn place_symbols(
                 // was ever offered to the grid, and every anchor along a road kept its shield.
                 let icons =
                     patterns.map(|patterns| layout.lay_out_icons(patterns.positions, &laid));
+                let paint = SymbolPaintSlabs {
+                    text: symbol_paint(bucket, layout, buffers.vertices.len(), &laid),
+                    icons: icons.as_ref().map_or_else(Vec::new, |(shaped, placed)| {
+                        symbol_paint(bucket, layout, shaped.vertices.len(), placed)
+                    }),
+                };
                 Laid {
                     buffers,
                     laid,
                     icons,
+                    paint,
                 }
             },
         );
@@ -2088,7 +2097,14 @@ fn place_symbols(
             Some(shaped)
         });
 
-        prepared.insert(key, PreparedSymbols { buffers, icons });
+        prepared.insert(
+            key,
+            PreparedSymbols {
+                buffers,
+                icons,
+                paint: shaped.paint.clone(),
+            },
+        );
     }
     prepared
 }
@@ -2114,6 +2130,63 @@ pub struct Laid {
     buffers: SymbolBuffers,
     laid: Vec<tessella_layout::symbol_bucket::LaidOut>,
     icons: Option<(SymbolBuffers, Vec<tessella_layout::symbol_bucket::LaidOut>)>,
+    /// The data-driven paint, one entry per vertex, for the glyphs and for the icons.
+    ///
+    /// Cached with the rest for the same reason: it is a function of the feature and the bucket
+    /// zoom, and of neither the camera nor the placement. What makes it belong *here* rather
+    /// than with the bucket is the vertex order -- a label's paint has to be written against the
+    /// quads `lay_out` built, and nothing before it knows how many there are.
+    paint: SymbolPaintSlabs,
+}
+
+/// The interleaved paint for a symbol bucket's two halves.
+#[derive(Debug, Clone, Default)]
+struct SymbolPaintSlabs {
+    /// One entry per glyph vertex.
+    text: Vec<u8>,
+    /// One entry per icon vertex.
+    icons: Vec<u8>,
+}
+
+/// One symbol buffer's data-driven paint, written against the order its quads were built in.
+///
+/// # Why this is not `PaintBinder::push`
+///
+/// Every other family pushes a feature's paint straight after adding its geometry, because the
+/// vertex count is known there. A symbol's is not: the quads come from glyphs, which arrive after
+/// the tile is decoded, so the feature is long out of scope by the time there is a count. The
+/// values were taken at tile build -- `Pending::paint` -- and this is where they are written.
+///
+/// Sorted by vertex start rather than taken in instance order. A line-placed label is one pending
+/// and an instance per anchor, and `lay_out` appends them in an order that is its own; writing
+/// them in instance order would give one anchor's quads another anchor's colour, which draws.
+fn symbol_paint(
+    bucket: &LayerBucket,
+    layout: &tessella_layout::symbol_layout::SymbolLayout,
+    vertices: usize,
+    instances: &[tessella_layout::symbol_bucket::LaidOut],
+) -> Vec<u8> {
+    let stride = bucket.binder.stride();
+    if stride == 0 || vertices == 0 {
+        return Vec::new();
+    }
+    let mut binder = bucket.binder.clone();
+    let mut order: Vec<&tessella_layout::symbol_bucket::LaidOut> = instances.iter().collect();
+    order.sort_by_key(|instance| instance.vertices.start);
+    for instance in order {
+        let Some(pending) = layout.pending.get(instance.pending) else {
+            continue;
+        };
+        // An error here is a property that would not encode, which is the layer's paint being
+        // wrong rather than this label's. The vertices are left at whatever the previous label
+        // wrote, which is the same fallback a feature that produced no geometry already gets.
+        let _ = binder.push_values(instance.vertices.end, &bucket.paint, &pending.paint);
+    }
+    let mut data = binder.data().to_vec();
+    // Topped up rather than trusted to reach: a quad no instance claims would otherwise leave the
+    // buffer short of the vertex count, and a short attribute buffer is read past its end.
+    data.resize(vertices * stride, 0);
+    data
 }
 
 /// Symbol layout, kept between the frames that draw it.
@@ -2468,10 +2541,23 @@ fn encode_parts(
             // same screen whatever layer or tile each came from -- and this walk visits one
             // bucket at a time, in painter order, which is both too narrow a view and the wrong
             // order to decide in.
-            let PreparedSymbols { buffers, icons } = prepared.get(&key)?;
+            let PreparedSymbols {
+                buffers,
+                icons,
+                paint,
+            } = prepared.get(&key)?;
             let (buffers, icons) = (buffers, icons.as_ref());
             let ids = attribute_ids(SYMBOL_FAMILY);
             let key = permutation_key(&bucket.paint, &ids);
+            // The two halves bind through different shaders, so each gets the layout of its own.
+            let text_layout = crate::binder::symbol_layout(&bucket.binder, &ids, true, |attr_id| {
+                declared_for(BuiltIn::SymbolSDFShader, attr_id).map(|a| (a.binding, a.declared))
+            });
+            let icon_layout =
+                crate::binder::symbol_layout(&bucket.binder, &ids, false, |attr_id| {
+                    declared_for(BuiltIn::SymbolIconShader, attr_id)
+                        .map(|a| (a.binding, a.declared))
+                });
             // Text is always SDF. An icon may be either, and the flag is already packed into
             // each vertex's size field, so this only decides which shader is named — unless the
             // label draws a sprite inline, which needs the shader that samples both atlases.
@@ -2500,6 +2586,10 @@ fn encode_parts(
                 sprites,
                 // Glyphs are always sampled linearly, whatever the icons do.
                 tessella_capture_abi::envelope::TextureFilter::Linear,
+                &emit::SymbolPaint {
+                    bytes: &paint.text,
+                    layout: &text_layout,
+                },
             );
 
             match icons {
@@ -2544,6 +2634,10 @@ fn encode_parts(
                             sheet,
                             None,
                             filter,
+                            &emit::SymbolPaint {
+                                bytes: &paint.icons,
+                                layout: &icon_layout,
+                            },
                         ),
                     ]);
                 }

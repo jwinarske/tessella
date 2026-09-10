@@ -468,6 +468,13 @@ pub struct Pending {
     pub anchoring: Anchoring,
     /// How *this feature's* icon is drawn.
     pub icon_options: IconOptions,
+    /// This feature's data-driven paint, evaluated but not yet written.
+    ///
+    /// Held rather than written because a symbol's vertices do not exist yet: glyphs arrive after
+    /// the tile is decoded, so the count `PaintBinder::push` wants cannot be known where the
+    /// feature is in scope. `build_symbols` decides the vertex order and the orchestrator writes
+    /// these against it. Empty for a layer whose paint is entirely the layer's.
+    pub paint: crate::PaintValues,
     /// How *this feature's* text is set.
     ///
     /// The layer's, unless a layout property is data-driven — `text-size` is the one styles
@@ -593,12 +600,14 @@ impl SymbolLayout {
     ///
     /// A feature whose `text-field` resolves to nothing is not recorded, which is what makes an
     /// unnamed road produce no symbol rather than a label reading `{name}`.
+    #[allow(clippy::needless_pass_by_value)]
     pub fn push(
         &mut self,
         layer: &Layer,
         zoom: f64,
         feature: &dyn Feature,
         rings: &[Vec<(f32, f32)>],
+        paint: crate::PaintValues,
     ) {
         let label = symbol::label(layer, zoom, feature);
         let icon = symbol::icon_image(layer, zoom, feature);
@@ -647,6 +656,7 @@ impl SymbolLayout {
                 anchoring: Anchoring::Line(lines),
                 symbol: text_options(layer, zoom, Some(feature)),
                 icon_options: icon_options(layer, zoom, Some(feature)),
+                paint,
             });
             return;
         }
@@ -674,6 +684,9 @@ impl SymbolLayout {
                     anchoring,
                     symbol: text_options(layer, zoom, Some(feature)),
                     icon_options: icon_options(layer, zoom, Some(feature)),
+                    // One feature can anchor several times -- a road named along its length is
+                    // one feature and several pendings -- and each of them carries the paint.
+                    paint: paint.clone(),
                 });
             }
         }

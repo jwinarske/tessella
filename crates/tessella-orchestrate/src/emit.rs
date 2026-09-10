@@ -1385,6 +1385,17 @@ const EXTRUSION_STRIDE: u32 = 8;
 /// Builds the descriptor run shared by every encoder: the fixed attributes this bucket's struct
 /// supplies, then whatever the paint binder made data-driven.
 ///
+/// One symbol drawable's data-driven paint, and how to describe it.
+///
+/// A pair rather than two arguments because they are meaningless apart: the bytes are laid out at
+/// the layout's stride and offsets, and either one alone describes nothing.
+pub struct SymbolPaint<'a> {
+    /// The interleaved buffer, one entry per vertex, or empty when the layer's paint is uniform.
+    pub bytes: &'a [u8],
+    /// What is in it, and where the shader binds each of them.
+    pub layout: &'a VertexLayout,
+}
+
 /// The split is not cosmetic. The fixed ones come from the bucket's own vertex struct and their
 /// offsets are properties of that struct; the data-driven ones come from a separate interleaved
 /// buffer whose stride the binder decides, and pointing them at the vertex buffer — or the
@@ -2031,6 +2042,7 @@ pub fn encode_symbol(
     atlas: TextureId,
     sprites: Option<TextureId>,
     filter: TextureFilter,
+    paint: &SymbolPaint<'_>,
 ) -> Encoded {
     let vertex_bytes = as_symbol_bytes(&buffers.vertices);
     let index_bytes = as_bytes_u16(&buffers.indices);
@@ -2102,6 +2114,28 @@ pub fn encode_symbol(
             _pad: [0; 2],
         },
     ];
+
+    // And the data-driven paint, in its own interleaved buffer at the binder's stride. Appended
+    // rather than folded into the five above because those come from three different slabs -- the
+    // symbol vertex struct, the per-frame positions and the per-frame opacities -- which is why
+    // this cannot go through `descriptors`.
+    let mut descriptors = descriptors;
+    if !paint.bytes.is_empty() && paint.layout.stride != 0 {
+        let interleaved_paint = arena.alloc(paint.bytes);
+        for attribute in &paint.layout.attributes {
+            descriptors.push(AttributeDesc {
+                attr_id: attribute.attr_id,
+                binding: attribute.binding,
+                source: interleaved_paint,
+                offset: attribute.offset,
+                vertex_offset: 0,
+                stride: paint.layout.stride,
+                data_type: attribute.supplied as u8,
+                declared_data_type: attribute.declared as u8,
+                _pad: [0; 2],
+            });
+        }
+    }
 
     let mut payload = Vec::new();
     let attrs = push_span(&mut payload, &descriptors);

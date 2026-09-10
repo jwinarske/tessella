@@ -37,6 +37,8 @@ fn layout(features: &[(&str, &[(i32, i32)])]) -> SymbolLayout {
             ]),
             symbol: SymbolOptions::default(),
             icon_options: IconOptions::default(),
+            // Merging is about geometry; these features drive no paint.
+            paint: tessella_layout::PaintValues::default(),
         })
         .collect();
 

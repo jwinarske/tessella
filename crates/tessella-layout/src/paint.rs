@@ -230,9 +230,27 @@ impl PaintBinder {
         if self.stride == 0 || vertex_count <= self.vertex_count() {
             return Ok(());
         }
+        let values = self.evaluate(resolved, feature)?;
+        self.push_values(vertex_count, resolved, &values)
+    }
 
-        self.scratch.clear();
-        self.scratch.resize(self.stride, 0);
+    /// One feature's values, evaluated but not yet written.
+    ///
+    /// The half of [`Self::push`] that needs the feature, split out for the one family whose
+    /// vertices do not exist when its features do. A symbol's quads are built from glyphs that
+    /// arrive after the tile is decoded, so the count [`Self::push`] wants cannot be known where
+    /// the feature is in scope; the values are taken here and written later, against the order
+    /// the layout laid its labels out in.
+    ///
+    /// # Errors
+    ///
+    /// [`BinderError::Evaluate`] when a property does not evaluate for this feature.
+    pub fn evaluate(
+        &self,
+        resolved: &BTreeMap<&'static str, ResolvedProperty>,
+        feature: &dyn Feature,
+    ) -> Result<PaintValues, BinderError> {
+        let mut values = Vec::with_capacity(self.slots.len());
         for slot in &self.slots {
             let property = resolved
                 .get(slot.name)
@@ -246,19 +264,46 @@ impl PaintBinder {
                         message: alloc::format!("{error}"),
                     })
             };
-
             // A source-only property is evaluated with no zoom at all, not with the bucket's:
             // it does not read one, and offering it would let a mis-classified expression
             // silently start depending on it. A composite property is evaluated at both ends
             // of the range instead.
-            let out = &mut self.scratch[slot.offset..slot.offset + slot.width];
             if slot.interpolated {
-                let min = at(Some(self.zoom))?;
-                let max = at(Some(self.zoom + 1.0))?;
-                encode(slot, &min, Some(&max), out, &property.spec.default)?;
+                values.push((at(Some(self.zoom))?, Some(at(Some(self.zoom + 1.0))?)));
             } else {
-                encode(slot, &at(None)?, None, out, &property.spec.default)?;
+                values.push((at(None)?, None));
             }
+        }
+        Ok(PaintValues { values })
+    }
+
+    /// Writes already-evaluated values for every vertex up to `vertex_count`.
+    ///
+    /// The other half of [`Self::push`]. `values` must have come from this binder's
+    /// [`Self::evaluate`]: the entries are positional, one per slot in slot order.
+    ///
+    /// # Errors
+    ///
+    /// [`BinderError::Type`] when a value will not fit the slot it was evaluated for.
+    pub fn push_values(
+        &mut self,
+        vertex_count: usize,
+        resolved: &BTreeMap<&'static str, ResolvedProperty>,
+        values: &PaintValues,
+    ) -> Result<(), BinderError> {
+        if self.stride == 0 || vertex_count <= self.vertex_count() {
+            return Ok(());
+        }
+        debug_assert_eq!(values.values.len(), self.slots.len(), "one value per slot");
+
+        self.scratch.clear();
+        self.scratch.resize(self.stride, 0);
+        for (slot, (min, max)) in self.slots.iter().zip(&values.values) {
+            let property = resolved
+                .get(slot.name)
+                .expect("a slot exists only for a resolved property");
+            let out = &mut self.scratch[slot.offset..slot.offset + slot.width];
+            encode(slot, min, max.as_ref(), out, &property.spec.default)?;
         }
 
         let start = self.vertex_count();
@@ -267,6 +312,25 @@ impl PaintBinder {
             self.data.extend_from_slice(&self.scratch);
         }
         Ok(())
+    }
+}
+
+/// One feature's paint, evaluated and waiting for the vertices it belongs to.
+///
+/// Positional against the binder that produced it: entry `i` is slot `i`, and the second half of
+/// each pair is the upper zoom endpoint for an interpolated slot. Opaque because the pairing is
+/// the invariant -- a `Vec` a caller could reorder is a buffer of the right length holding the
+/// wrong properties, which draws rather than fails.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PaintValues {
+    values: Vec<(Value, Option<Value>)>,
+}
+
+impl PaintValues {
+    /// Whether there is nothing to write, which is every layer whose paint is entirely uniform.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
     }
 }
 
