@@ -2913,6 +2913,36 @@ fn write_layer_state(
                 &buffer,
             )?;
 
+            // The anchored bend, as a fill's. A line needs it for more than precision: its quad is
+            // extruded sideways in *clip* space, and the direct bend has no linear part to extrude
+            // along -- it goes tile-local straight to a sphere position through trig. The
+            // expansion's first derivatives are that Jacobian outright, so a bent line is easier
+            // to draw this way than the other, not harder.
+            //
+            // Sub-layer zero only: a line has one, where a fill has its triangles and its outline.
+            if projection == ProjectionMode::Globe {
+                let bend: Vec<GlobeBendUbo> = matrices(0)
+                    .map(|tile| {
+                        ubo::globe_bend_block(
+                            view,
+                            tile.z,
+                            tile.x,
+                            tile.y,
+                            i32::from(tile.wrap),
+                            layer_index,
+                            0,
+                        )
+                    })
+                    .collect();
+                ubo::write(
+                    producer,
+                    view_id,
+                    layer_index,
+                    tessella_capture_abi::globe_ubo::ID_GLOBE_BEND_UBO,
+                    &ubo::pack_globe_bend_buffer(&bend),
+                )?;
+            }
+
             // A line's pattern block is wider than a fill's — it carries the scale and the
             // fade — so it is packed by its own function, not by the fill's with a different
             // stride. The union's stride is the line's sixty-four either way.
