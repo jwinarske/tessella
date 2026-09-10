@@ -165,7 +165,12 @@ int main(void) {
         int served = 0;
         int urls_seen = 0;
         int hosted_status = -1;
-        for (int spin = 0; spin < 400 && hosted != NULL; spin++) {
+        /* Paced, and for the reason the readiness loop above is: a map is progressive, and the
+         * source this one has to ask about resolves on a worker. Four hundred ticks with nothing
+         * between them run to completion in microseconds and the worker never gets scheduled --
+         * which passes on an idle machine and fails on a loaded CI runner, where it did. A
+         * millisecond a spin gives the same two seconds the pooled loop above allows itself. */
+        for (int spin = 0; spin < 2000 && hosted != NULL; spin++) {
             hosted_status = (int)tessella_tick(hosted);
             if (hosted_status != TESSELLA_OK) {
                 break;
@@ -193,6 +198,12 @@ int main(void) {
             }
             if (served > 0) {
                 break;
+            }
+            {
+                struct timespec pause;
+                pause.tv_sec = 0;
+                pause.tv_nsec = 1000000L; /* a millisecond */
+                nanosleep(&pause, NULL);
             }
         }
         printf("hosted_status %d\n", hosted_status);
