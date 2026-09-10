@@ -3286,7 +3286,11 @@ fn write_layer_state(
                 )?;
             }
 
-            let gamma = ubo::symbol_gamma_scale(view, alignments.pitch);
+            // The alignment the drawable is actually rendered with, not the one asked for: on a
+            // globe these cancel against `coord_matrix`, and only one of them being switched is
+            // an SDF edge a thousand times too sharp.
+            let gamma =
+                ubo::symbol_gamma_scale(view, ubo::effective_pitch(alignments.pitch, projection));
             let tile_props = ubo::pack_symbol_tile_props(entries.len(), true, false, gamma);
             ubo::write(
                 producer,
