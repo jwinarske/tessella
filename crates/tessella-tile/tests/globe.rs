@@ -893,3 +893,179 @@ fn the_anchor_is_the_middle_of_its_tile() {
         assert!((centered[index] - got).abs() < 1e-15);
     }
 }
+
+/// The pitch and bearing a globe camera takes, settled against the plane's.
+///
+/// # There is no globe oracle, and this is the nearest thing to one
+///
+/// `mbgl-render` has no globe, so nothing outside this tree can say where a pitched globe puts a
+/// point. What can say it is the plane: above `kAnchoredFromZoom` the two projections are meant
+/// to be interchangeable -- that is the whole premise of the anchored bend and of `clip_w_scale`
+/// -- so at street zoom a point a few hundred metres from the centre has to land in the same
+/// place under both, whatever the camera is doing. A sign error in either angle moves it by
+/// hundreds of pixels, and a rotation about the wrong pivot moves it off the screen.
+///
+/// Written as a sweep rather than one camera because a single pitch with a single bearing admits
+/// three of the four sign combinations: at bearing zero the bearing's sign does not show, and a
+/// point due north of the centre is unmoved by it at any pitch.
+mod pitched_globe {
+    use tessella_tile::{camera, cover, globe};
+
+    /// Screen pixels for a clip point, which is what the two projections have in common.
+    fn screen(clip: [f64; 3], view: &cover::ViewTransform) -> [f64; 2] {
+        [
+            (clip[0] * 0.5 + 0.5) * view.width,
+            (0.5 - clip[1] * 0.5) * view.height,
+        ]
+    }
+
+    /// A longitude and latitude through the plane, in screen pixels.
+    fn on_plane(view: &cover::ViewTransform, longitude: f64, latitude: f64) -> Option<[f64; 2]> {
+        let matrix = camera::proj_matrix(view).expect("a viewport");
+        let world = camera::world_size(view.zoom);
+        let point = [
+            (longitude + 180.0) / 360.0 * world,
+            camera::mercator_fraction(latitude) * world,
+            0.0,
+        ];
+        globe::project_point(&matrix, point).map(|clip| screen(clip, view))
+    }
+
+    /// The same point through the sphere, in screen pixels.
+    fn on_globe(view: &cover::ViewTransform, longitude: f64, latitude: f64) -> Option<[f64; 2]> {
+        let point = globe::sphere_point(longitude, latitude);
+        globe::project_point(&globe::clip_matrix(view), point).map(|clip| screen(clip, view))
+    }
+
+    #[test]
+    fn a_pitched_globe_agrees_with_a_pitched_plane() {
+        // Street zoom, where the two projections are meant to be interchangeable. The offsets are
+        // a few hundred metres, which at z15 is most of the screen and is where a sign error is
+        // largest rather than smallest.
+        let (longitude, latitude) = (13.405, 52.52);
+        let offsets = [
+            (0.0, 0.0),
+            (0.004, 0.0),
+            (-0.004, 0.0),
+            (0.0, 0.002),
+            (0.0, -0.002),
+            (0.003, 0.002),
+        ];
+        let mut worst = 0.0f64;
+        for pitch in [0.0, 15.0, 30.0, 45.0, 60.0] {
+            for bearing in [0.0, 45.0, 90.0, 180.0, 270.0] {
+                let view = cover::ViewTransform {
+                    longitude,
+                    latitude,
+                    zoom: 15.0,
+                    width: 1024.0,
+                    height: 768.0,
+                    bearing,
+                    pitch,
+                };
+                for (dlon, dlat) in offsets {
+                    let plane = on_plane(&view, longitude + dlon, latitude + dlat)
+                        .expect("in front of the plane's camera");
+                    let globe = on_globe(&view, longitude + dlon, latitude + dlat)
+                        .expect("in front of the globe's camera");
+                    let apart =
+                        ((plane[0] - globe[0]).powi(2) + (plane[1] - globe[1]).powi(2)).sqrt();
+                    // A twentieth of a pixel. A wrong sign in either angle is hundreds, and a
+                    // rotation about the sphere's centre rather than the surface point is
+                    // thousands, so the bound is not what catches those -- what it catches is a
+                    // term that is *nearly* right. What is left at this bound is the difference
+                    // between a sphere and a Mercator plane over the offsets, which is the one
+                    // disagreement that is supposed to be here.
+                    assert!(
+                        apart < 0.05,
+                        "pitch {pitch} bearing {bearing} offset {dlon},{dlat}: \
+                         plane {plane:?} globe {globe:?}, {apart:.4} px apart"
+                    );
+                    worst = worst.max(apart);
+                }
+            }
+        }
+        assert!(worst < 0.05, "worst {worst:.4} px");
+    }
+
+    /// The centre stays the centre, which is what pivoting on the surface point buys.
+    ///
+    /// Rotating about the sphere's centre instead passes every check that only looks at the
+    /// unpitched camera and fails this one at every pitch: the point under the camera swings away
+    /// by the angle times the radius, which at street zoom is most of a continent.
+    #[test]
+    fn the_centre_holds_under_any_pitch_or_bearing() {
+        for zoom in [1.0, 4.0, 9.0, 14.0] {
+            for pitch in [0.0, 30.0, 60.0] {
+                for bearing in [0.0, 90.0, 210.0] {
+                    let view = cover::ViewTransform {
+                        longitude: 7.7345,
+                        latitude: 47.4839,
+                        zoom,
+                        width: 900.0,
+                        height: 700.0,
+                        bearing,
+                        pitch,
+                    };
+                    let point = globe::sphere_point(view.longitude, view.latitude);
+                    let clip = globe::project_point(&globe::clip_matrix(&view), point)
+                        .expect("the centre is in front of the camera");
+                    assert!(
+                        clip[0].abs() < 1e-9 && clip[1].abs() < 1e-9,
+                        "zoom {zoom} pitch {pitch} bearing {bearing}: centre at {clip:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// An unpitched, unrotated globe is exactly what it was before the camera gained either.
+    ///
+    /// The composition splits the pull-back in two so the rotations can pivot on the surface, and
+    /// at zero angles the halves have to come back together *exactly* rather than nearly: every
+    /// parity number the globe has was measured on this camera, and a matrix that differed in the
+    /// last bit would move a z15 vertex by a fifth of a pixel.
+    ///
+    /// Compared against the old composition rebuilt here rather than against a recorded triple,
+    /// because a recorded triple only says the code agrees with itself on the day it was written.
+    #[test]
+    fn the_flat_on_camera_is_untouched() {
+        for (longitude, latitude, zoom) in [
+            (-122.3321, 47.6062, 6.0),
+            (139.7671, 35.6812, 11.0),
+            (0.0, 0.0, 1.0),
+            (7.7345, 47.4839, 15.0),
+        ] {
+            let view = cover::ViewTransform {
+                longitude,
+                latitude,
+                zoom,
+                width: 900.0,
+                height: 700.0,
+                bearing: 0.0,
+                pitch: 0.0,
+            };
+            // The old composition: one pull-back from the sphere's centre, no rotations between.
+            let distance = globe::camera_distance(view.zoom, view.latitude, view.height);
+            let turned = camera::rotate_y(
+                &camera::rotate_x(&camera::identity(), -view.latitude.to_radians()),
+                -view.longitude.to_radians(),
+            );
+            let mut back = camera::identity();
+            camera::translate_in_place(&mut back, 0.0, 0.0, -distance);
+            let eye = camera::scale(&camera::identity(), 1.0, -1.0, 1.0);
+            let eye = camera::multiply(&eye, &camera::multiply(&back, &turned));
+            let (near, far) = globe::depth_range(&view);
+            #[allow(clippy::cast_possible_truncation)]
+            let fov = f64::from(camera::DEFAULT_FOV as f32);
+            let projection = camera::perspective(fov, view.width / view.height, near, far);
+            let expected = camera::multiply(&projection, &eye);
+
+            let actual = globe::clip_matrix(&view);
+            assert_eq!(
+                actual, expected,
+                "zoom {zoom} at {longitude},{latitude}: the split pull-back did not recombine"
+            );
+        }
+    }
+}
