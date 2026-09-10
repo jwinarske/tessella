@@ -8231,6 +8231,32 @@ is a second implementation of the same function, so it is checkable against the 
 every zoom, without rendering anything -- which is the strongest position any piece of this page has
 been in, and it is only available because the arithmetic was closed before the material was written.
 
+**Checked, and the numbers are these.** Run without rendering anything, as the paragraph above says
+it can be: the coefficients evaluated at a tile's center in f64, rounded once as the wire would
+carry them, then the expansion evaluated in f32 the way a shader would, against the exact f64 chain.
+Worst screen error over a 17x17 walk of one tile, Monterey, 1024x768.
+
+| | z6 | z9 | z11 | z12 | z13 | z14 | z15 | z16 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| direct bend | 0.000 | 0.002 | 0.007 | 0.017 | 0.033 | 0.068 | 0.130 | 0.269 |
+| anchored, 2nd order | 0.325 | 0.005 | **0.0003** | 0.0002 | 0.0001 | 0.0001 | 0.0001 | 0.0001 |
+
+The overlap this section predicted is there and is wide: the expansion is under a hundredth of a
+pixel from z9 up, and the direct bend does not reach that until z11. Anywhere in z9..z11 is a safe
+place to switch, and the two paths never both fail. Below it the expansion is what breaks -- a z6
+tile subtends too much sphere for a quadratic, at a third of a pixel -- which is why this is a
+material selected per tile rather than a replacement.
+
+One caveat on the top row, because it flatters the direct path. This simulation rounds f64 trig to
+f32; it cannot model a GPU's `exp` and `atan`, which carry a few ulp of their own. The rendered
+globe says the real figure is far worse -- **1.98% of the frame at Monterey z14** against the oracle,
+in paired bands a pixel or two wide along every water edge, where z11 measures 0.13%. The anchored
+form has no trig in the shader at all, so it does not have that term to be wrong about.
+
+Also worth having measured: the cost. Six `vec4` coefficients is twenty-four floats where the
+placement matrix is sixteen, and it *replaces* that matrix rather than joining it, so a globe
+drawable's uniform block grows by eight floats and loses four transcendentals a vertex.
+
 ### Wiring the subdivision, and the octagon becoming a circle
 
 §13.4's last producer piece. The measurement is the result, so it goes first: at zoom one over an

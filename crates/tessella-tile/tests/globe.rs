@@ -141,7 +141,7 @@ fn the_horizon_is_where_the_tangent_grazes() {
 fn the_camera_backs_off_as_the_zoom_falls() {
     let mut previous = f64::INFINITY;
     for zoom in 0..12 {
-        let distance = globe::camera_distance(f64::from(zoom), 700.0);
+        let distance = globe::camera_distance(f64::from(zoom), 0.0, 700.0);
         assert!(
             distance > 1.0,
             "the camera is outside the surface at z{zoom}"
@@ -237,7 +237,7 @@ fn horizon_counts() {
             })
             .count();
         // The same question asked three ways, because the answer depends entirely on which.
-        let distance = globe::camera_distance(view.zoom, view.height);
+        let distance = globe::camera_distance(view.zoom, view.latitude, view.height);
         let toward = globe::sphere_point(view.longitude, view.latitude);
         let centre_behind = tiles
             .iter()
@@ -440,7 +440,7 @@ fn the_antipode_projects_in_front_but_faces_away() {
     let view = globe_view(-122.3321, 47.6062, 1.0);
     let matrix = globe::clip_matrix(&view);
     let toward = globe::sphere_point(view.longitude, view.latitude);
-    let distance = globe::camera_distance(view.zoom, view.height);
+    let distance = globe::camera_distance(view.zoom, view.latitude, view.height);
 
     let near = globe::sphere_point(view.longitude, view.latitude);
     let far = globe::sphere_point(view.longitude + 180.0, -view.latitude);
@@ -470,7 +470,7 @@ fn what_faces_the_camera_projects_in_front_of_it() {
         let view = globe_view(-122.3321, 47.6062, zoom);
         let matrix = globe::clip_matrix(&view);
         let toward = globe::sphere_point(view.longitude, view.latitude);
-        let distance = globe::camera_distance(view.zoom, view.height);
+        let distance = globe::camera_distance(view.zoom, view.latitude, view.height);
         for lon in (-180..180).step_by(15) {
             for lat in (-80..81).step_by(20) {
                 let p = globe::sphere_point(f64::from(lon), f64::from(lat));
@@ -699,7 +699,7 @@ fn the_bend_and_the_horizon_agree_about_the_far_side() {
         bearing: 0.0,
         pitch: 0.0,
     };
-    let distance = globe::camera_distance(view.zoom, view.height);
+    let distance = globe::camera_distance(view.zoom, view.latitude, view.height);
     // The antipode of the camera: normalized Mercator x of 0.0 is longitude -180.
     let point = globe::sphere_point_from_mercator(0.0, 0.5);
     assert!(
@@ -745,4 +745,151 @@ fn the_bends_f32_placement_resolves_a_tile_unit_through_z11() {
         !resolves(12),
         "z12 resolved a tile unit, so the boundary moved"
     );
+}
+
+/// One zoom is one scale, under either projection.
+///
+/// `world_size(zoom)` is the equator. Mercator stretches every other latitude by `1 / cos` to keep
+/// its angles, so a globe whose radius came straight from `world_size / 2pi` draws `cos(latitude)`
+/// of the scale the same zoom gives a plane -- 0.68 at Basel, 0.66 at Bellingham. Measured against
+/// the flat path before it was fixed: 0.67582, and `cos(47.4839 deg)` is 0.67580.
+///
+/// Two things made that worse than a constant error. It is a function of the *latitude*, so panning
+/// north rescales a map nobody zoomed and the tile level goes with it; and it means a map cannot
+/// switch between the two projections without the picture jumping by half again.
+#[test]
+fn a_globe_and_a_plane_draw_one_zoom_at_one_scale() {
+    for latitude in [0.0_f64, 31.24, 47.4839, 48.7519, 70.0] {
+        for zoom in [4.0_f64, 8.0, 12.0] {
+            let view = cover::ViewTransform {
+                longitude: -122.4787,
+                latitude,
+                zoom,
+                width: 1024.0,
+                height: 768.0,
+                bearing: 0.0,
+                pitch: 0.0,
+            };
+            let settled = camera::settled(&view);
+            let clip = globe::clip_matrix(&settled);
+
+            // A degree of longitude either side of the center, on the sphere and on the plane.
+            let step = 0.01;
+            let on_screen = |longitude: f64| {
+                let point = globe::sphere_point(longitude, settled.latitude);
+                let ndc = globe::project_point(&clip, point).expect("in front of the camera");
+                (ndc[0] + 1.0) / 2.0 * view.width
+            };
+            let bent = on_screen(settled.longitude + step) - on_screen(settled.longitude - step);
+            let flat = 2.0 * step / 360.0 * camera::world_size(zoom);
+
+            let ratio = bent / flat;
+            assert!(
+                (ratio - 1.0).abs() < 2e-3,
+                "at {latitude} deg, z{zoom}: a globe draws {ratio:.5} of the plane's scale"
+            );
+        }
+    }
+}
+
+/// The anchored expansion agrees with the exact bend, and by a bound that tightens with the zoom.
+///
+/// A second implementation of the same function, checked against the first without rendering
+/// anything -- which is the whole reason the arithmetic was closed before any material was written.
+/// The coefficients are analytic, and an analytic derivative is exactly the kind of thing that is
+/// wrong in one term and right in the rest, so this walks a grid over the tile rather than sampling
+/// the center it was expanded about.
+#[test]
+fn the_anchored_bend_reproduces_the_exact_one() {
+    // Worst screen error a quadratic can leave, per zoom. A tile subtends less sphere as the zoom
+    // rises, so the third-order term this drops falls with it. Below z9 the expansion is the wrong
+    // tool -- a z6 tile is a third of a pixel out -- and that is why it is chosen per tile.
+    for (zoom, bound) in [(9.0_f64, 0.02), (11.0, 0.001), (13.0, 0.001), (16.0, 0.001)] {
+        let (width, height) = (1024.0_f64, 768.0_f64);
+        let view = camera::settled(&cover::ViewTransform {
+            longitude: -121.8947,
+            latitude: 36.6002,
+            zoom,
+            width,
+            height,
+            bearing: 0.0,
+            pitch: 0.0,
+        });
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let z = zoom.floor() as u8;
+        let scale = f64::from(1u32 << z);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let x = ((view.longitude + 180.0) / 360.0 * scale).floor() as u32;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let y = (camera::mercator_fraction(view.latitude) * scale).floor() as u32;
+
+        let clip = globe::clip_matrix(&view);
+        let placement = camera::mercator_matrix_for_tile(z, x, y, 0);
+        let bend = globe::anchored_bend(&view, z, x, y, 0);
+
+        let extent = camera::EXTENT;
+        let screen = |c: [f64; 4]| {
+            (
+                (c[0] / c[3] + 1.0) / 2.0 * width,
+                (1.0 - c[1] / c[3]) / 2.0 * height,
+            )
+        };
+        let mut worst: f64 = 0.0;
+        for i in 0..=8 {
+            for j in 0..=8 {
+                let (u, v) = (extent * f64::from(i) / 8.0, extent * f64::from(j) / 8.0);
+                let point = globe::sphere_point_from_mercator(
+                    placement[0] * u + placement[12],
+                    placement[5] * v + placement[13],
+                );
+                let exact: [f64; 4] = core::array::from_fn(|r| {
+                    let p = [point[0], point[1], point[2], 1.0];
+                    (0..4).map(|c| clip[c * 4 + r] * p[c]).sum()
+                });
+                let (ex, ey) = screen(exact);
+                let (gx, gy) = screen(bend.at(u - extent / 2.0, v - extent / 2.0));
+                worst = worst.max(((gx - ex).powi(2) + (gy - ey).powi(2)).sqrt());
+            }
+        }
+        assert!(
+            worst < bound,
+            "z{zoom}: the expansion is {worst} screen pixels from the exact bend, over {bound}"
+        );
+    }
+}
+
+/// The anchor really is the tile's center, which is what makes every other term small.
+#[test]
+fn the_anchor_is_the_middle_of_its_tile() {
+    let view = camera::settled(&cover::ViewTransform {
+        longitude: -121.8947,
+        latitude: 36.6002,
+        zoom: 12.0,
+        width: 1024.0,
+        height: 768.0,
+        bearing: 0.0,
+        pitch: 0.0,
+    });
+    let (z, x, y) = (12_u8, 655_u32, 1582_u32);
+    let bend = globe::anchored_bend(&view, z, x, y, 0);
+    let placement = camera::mercator_matrix_for_tile(z, x, y, 0);
+    let extent = camera::EXTENT;
+    let point = globe::sphere_point_from_mercator(
+        placement[0] * extent / 2.0 + placement[12],
+        placement[5] * extent / 2.0 + placement[13],
+    );
+    let clip = globe::clip_matrix(&view);
+    let want: [f64; 4] = core::array::from_fn(|r| {
+        let p = [point[0], point[1], point[2], 1.0];
+        (0..4).map(|c| clip[c * 4 + r] * p[c]).sum()
+    });
+    let centered = bend.at(0.0, 0.0);
+    for (index, (&got, &expected)) in bend.anchor.iter().zip(want.iter()).enumerate() {
+        assert!(
+            (got - expected).abs() < 1e-12,
+            "slot {index}: anchor {got} is not the tile's center {expected}"
+        );
+        // And at zero offset the expansion is the anchor, by construction.
+        assert!((centered[index] - got).abs() < 1e-15);
+    }
 }

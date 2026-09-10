@@ -30,6 +30,7 @@ use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::{Span, UboUpdate, ViewId, WireRecord};
 use tessella_capture_abi::generated::ubo_layouts;
 use tessella_capture_abi::generated::ubo_slots;
+use tessella_capture_abi::globe_ubo::GlobeBendUbo;
 use tessella_capture_abi::ring::{Full, Producer};
 use tessella_layout::raster::{self, RasterColour};
 use tessella_layout::symbol_layout::{Alignment, Alignments, Placement};
@@ -2068,4 +2069,54 @@ fn push_f32s(out: &mut Vec<u8>, values: &[f32]) {
 
 fn push_color(out: &mut Vec<u8>, color: Color) {
     push_f32s(out, &[color.r, color.g, color.b, color.a]);
+}
+
+/// Builds the anchored bend's block for a tile, depth bias included.
+///
+/// The direct bend puts the layer's depth nudge in the placement's `[14]` and lets the shader carry
+/// it out to clip `z`. There is no placement here -- the coefficients *are* clip space -- so the
+/// nudge is added to the anchor's `z` instead, which is the same arithmetic one step earlier.
+///
+/// Scaled to the frustum for the reason [`tile_matrix`] gives: a globe's depth span falls from 1.7
+/// at z4 to 0.055 at z14, so an absolute nudge is most of the range up there.
+#[must_use]
+pub fn globe_bend_block(
+    view: &ViewTransform,
+    z: u8,
+    x: u32,
+    y: u32,
+    wrap: i32,
+    layer_index: i32,
+    sub_layer_index: i32,
+) -> GlobeBendUbo {
+    let bend = globe::anchored_bend(view, z, x, y, wrap);
+    let (near, far) = globe::depth_range(view);
+    let bias = -f64::from(depth_offset(layer_index, sub_layer_index)) * (far - near);
+
+    #[allow(clippy::cast_possible_truncation)]
+    let row = |v: [f64; 4]| -> [f32; 4] { core::array::from_fn(|i| v[i] as f32) };
+    let mut anchor = bend.anchor;
+    anchor[2] += bias;
+    GlobeBendUbo {
+        anchor: row(anchor),
+        d_u: row(bend.d_u),
+        d_v: row(bend.d_v),
+        d_uu: row(bend.d_uu),
+        d_vv: row(bend.d_vv),
+        d_uv: row(bend.d_uv),
+    }
+}
+
+/// Packs a layer's anchored-bend blocks, one per drawable, in the order the drawables were sent.
+///
+/// The same shape as [`pack_drawable_buffer`]: the consumer indexes it by the drawable's own UBO
+/// index, so a gap would put every later drawable on its neighbour's tile.
+#[must_use]
+pub fn pack_globe_bend_buffer(blocks: &[GlobeBendUbo]) -> Vec<u8> {
+    let stride = GlobeBendUbo::STRIDE as usize;
+    let mut out = Vec::with_capacity(blocks.len() * stride);
+    for block in blocks {
+        out.extend_from_slice(&block.to_bytes());
+    }
+    out
 }

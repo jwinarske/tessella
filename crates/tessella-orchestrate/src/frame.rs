@@ -24,6 +24,7 @@ use alloc::vec::Vec;
 
 use tessella_capture_abi::envelope::{OrderEpoch, ViewId};
 use tessella_capture_abi::generated::{ubo_layouts, ubo_slots};
+use tessella_capture_abi::globe_ubo::GlobeBendUbo;
 use tessella_capture_abi::ring::{Full, Producer};
 use tessella_capture_abi::{BuiltIn, CameraMode, ProjectionMode, declared_for};
 use tessella_glyph::fonts::Fonts;
@@ -2816,6 +2817,43 @@ fn write_layer_state(
                 ubo::drawable_slot(),
                 &buffer,
             )?;
+
+            // The anchored bend, for a globe and only for one. plan.md §18 item 6: the direct bend
+            // forms a unit-sphere position in `f32` and lets the clip matrix amplify it, and that
+            // matrix scales the sphere to 1,663,008 pixels at z14 -- so one ulp is a fifth of a
+            // pixel and the four transcendentals a vertex each cost a few. This carries the same
+            // function expanded about each tile's center, already in clip space, so the shader adds
+            // small to small and does no trig at all.
+            //
+            // Same order as the drawable buffer above, because the consumer indexes both by the
+            // drawable's own UBO index. A plane writes nothing here: the slot is tessella's, no
+            // Mercator material declares it, and a buffer nobody reads is a buffer nobody should
+            // have paid to pack.
+            if projection == ProjectionMode::Globe {
+                let bend: Vec<GlobeBendUbo> = [1, 2]
+                    .into_iter()
+                    .flat_map(|sub| {
+                        matrices(sub).map(move |tile| {
+                            ubo::globe_bend_block(
+                                view,
+                                tile.z,
+                                tile.x,
+                                tile.y,
+                                i32::from(tile.wrap),
+                                layer_index,
+                                sub,
+                            )
+                        })
+                    })
+                    .collect();
+                ubo::write(
+                    producer,
+                    view_id,
+                    layer_index,
+                    tessella_capture_abi::globe_ubo::ID_GLOBE_BEND_UBO,
+                    &ubo::pack_globe_bend_buffer(&bend),
+                )?;
+            }
 
             // Where the pattern's two images sit, when the layer has one. The buffer is the
             // same length either way — `FillPatternTilePropsUBO` is the union's stride, and a

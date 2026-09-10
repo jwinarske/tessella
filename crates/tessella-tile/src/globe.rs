@@ -53,20 +53,42 @@ pub fn sphere_point_from_mercator(x: f64, y: f64) -> [f64; 3] {
     sphere_point(longitude, latitude)
 }
 
-/// How far from the sphere's centre a camera sits, in sphere radii, for a viewport `height` tall.
+/// How far from the sphere's center a camera sits, in sphere radii, for a viewport `height` tall.
 ///
 /// One radius is the surface, so this is always greater than one: at zoom zero the world is a small
 /// ball a long way off, and the camera closes on the surface as the zoom rises. The height is not
 /// optional -- `camera_to_center_distance` is proportional to it, and passing a stand-in put the
 /// camera 1.018 radii out at z0, where the visible cap is ten degrees wide and the cull removed the
 /// entire world. The test that counts what the cull removes is what found that.
+///
+/// # Why the latitude is here
+///
+/// `world_size(zoom)` is the *equator*. Mercator stretches everything else to keep its angles, by
+/// `1 / cos(latitude)` locally, so one zoom is one scale only on the equator -- and a globe whose
+/// radius came straight from `world_size / 2π` draws `cos(latitude)` of the scale the same zoom
+/// gives a plane. Measured against the flat path: 0.6758, and `cos(47.4839°)` is 0.6758.
+///
+/// That is not a rounding difference, it is a third of the map, and it *moves with the latitude* --
+/// so panning north rescales a map nobody zoomed and the tile level goes with it. Dividing the
+/// radius by `cos(latitude)` is what makes one zoom mean one scale under both projections, and what
+/// lets a map switch between them without the picture jumping 1.48x.
+///
+/// Clamped at the Mercator limit, where `cos` is 0.086 rather than zero: past it there is no
+/// Mercator scale to match, and the pole itself would divide by nothing.
 #[must_use]
-pub fn camera_distance(zoom: f64, height: f64) -> f64 {
+pub fn camera_distance(zoom: f64, latitude: f64, height: f64) -> f64 {
     // The world spans `world_size(zoom)` pixels and the sphere's circumference is the same world,
     // so the radius in pixels is `world_size / 2π`. A camera `camera_to_center_distance` pixels
     // from the centre of the screen therefore sits that many radii out.
-    let radius = crate::camera::world_size(zoom) / (2.0 * core::f64::consts::PI);
-    if radius <= 0.0 {
+    let stretch = latitude
+        .clamp(
+            -crate::projection::LATITUDE_MAX,
+            crate::projection::LATITUDE_MAX,
+        )
+        .to_radians()
+        .cos();
+    let radius = crate::camera::world_size(zoom) / (2.0 * core::f64::consts::PI) / stretch;
+    if radius <= 0.0 || !radius.is_finite() {
         return f64::INFINITY;
     }
     1.0 + crate::camera::camera_to_center_distance(height) / radius
@@ -121,7 +143,7 @@ pub fn tile_faces_camera(
     height: f64,
 ) -> bool {
     let toward = sphere_point(longitude, latitude);
-    let distance = camera_distance(zoom, height);
+    let distance = camera_distance(zoom, latitude, height);
     let span = 1.0 / tiles_across(z);
     #[allow(clippy::cast_lossless)]
     let (x0, y0) = (f64::from(x) * span, f64::from(y) * span);
@@ -215,7 +237,7 @@ pub fn chord_error(z: u8, zoom: f64, segments: u32) -> f64 {
 /// turn away lands off it in the direction it should.
 #[must_use]
 pub fn clip_matrix(view: &crate::cover::ViewTransform) -> crate::camera::Mat4 {
-    let distance = camera_distance(view.zoom, view.height);
+    let distance = camera_distance(view.zoom, view.latitude, view.height);
     // Turn (longitude, latitude) onto the +z axis, which is where the camera is.
     // Longitude first, then latitude -- and that means writing them the other way round, because
     // these post-multiply: `rotate_y(rotate_x(I, lat), lon)` is `Rx · Ry`, which applies `Ry` to
@@ -286,7 +308,7 @@ pub fn clip_matrix(view: &crate::cover::ViewTransform) -> crate::camera::Mat4 {
 /// the nudge by this rather than sending it absolute.
 #[must_use]
 pub fn depth_range(view: &crate::cover::ViewTransform) -> (f64, f64) {
-    let distance = camera_distance(view.zoom, view.height);
+    let distance = camera_distance(view.zoom, view.latitude, view.height);
     // The cap runs from the nearest surface point to the horizon; nothing past the horizon is
     // ever drawn, so bracketing the whole ball spends the range on a hemisphere that cannot
     // appear -- and at high zoom spends nearly all of it.
@@ -312,4 +334,133 @@ pub fn project_point(matrix: &crate::camera::Mat4, point: [f64; 3]) -> Option<[f
         return None;
     }
     Some([out[0] / out[3], out[1] / out[3], out[2] / out[3]])
+}
+
+/// The bend expanded about a tile's center, so a shader never forms a number near one.
+///
+/// # Why this exists
+///
+/// The direct bend computes a unit-sphere position and lets [`clip_matrix`] amplify it. That
+/// matrix grows with the zoom -- the sphere's radius is 1,663,008 screen pixels at z14 -- so one
+/// `f32` ulp of the sphere position is a fifth of a pixel there, and the four transcendentals a
+/// vertex each cost a few ulp of their own. Measured against the oracle, that is 1.98% of the frame
+/// at Monterey z14 in bands a pixel or two wide along every edge, where z11 measures 0.13%.
+///
+/// Nothing about the bend needs world-scale numbers. It needs *where this tile is*, which is large,
+/// and *where this vertex is inside it*, which is small; adding them before the trig is what
+/// destroys the small one. So the large part is evaluated here, in `f64`, and what crosses the wire
+/// is already in clip space:
+///
+/// ```text
+/// clip(du, dv) = anchor + d_u du + d_v dv + (d_uu du^2 + d_vv dv^2) / 2 + d_uv du dv
+/// ```
+///
+/// with `du`, `dv` measured in tile units from the tile's center. Every coefficient is small
+/// except the anchor, and the anchor is a *difference of large numbers* that `f64` takes and `f32`
+/// would lose -- which is exactly the cancellation this moves off the GPU.
+///
+/// # Where it holds
+///
+/// A quadratic is only as good as the arc the tile subtends. Checked against the exact chain over
+/// a tile, worst screen error: 0.325 px at z6, 0.005 at z9, 0.0003 at z11, and 0.0001 from z13 up.
+/// The direct bend is the better of the two below about z10 and the worse above it, and both are
+/// far under a pixel between z9 and z11 -- so there is a wide overlap to switch in, and no zoom
+/// where neither works. See plan.md §18 item 6.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AnchoredBend {
+    /// Clip position of the tile's center.
+    pub anchor: [f64; 4],
+    /// First derivatives with respect to tile-local x and y.
+    pub d_u: [f64; 4],
+    /// See [`Self::d_u`].
+    pub d_v: [f64; 4],
+    /// Second derivatives. `d_uv` is the mixed term, which is not zero: longitude and latitude
+    /// share `cos(latitude)` in the sphere point.
+    pub d_uu: [f64; 4],
+    /// See [`Self::d_uu`].
+    pub d_vv: [f64; 4],
+    /// See [`Self::d_uu`].
+    pub d_uv: [f64; 4],
+}
+
+impl AnchoredBend {
+    /// The expansion at a tile-local offset from the center, in tile units.
+    #[must_use]
+    pub fn at(&self, du: f64, dv: f64) -> [f64; 4] {
+        core::array::from_fn(|i| {
+            self.anchor[i]
+                + self.d_u[i] * du
+                + self.d_v[i] * dv
+                + 0.5 * (self.d_uu[i] * du * du + self.d_vv[i] * dv * dv)
+                + self.d_uv[i] * du * dv
+        })
+    }
+}
+
+/// Builds [`AnchoredBend`] for a tile under a view.
+///
+/// Analytic rather than by finite difference: the Mercator inverse is the Gudermannian, whose
+/// derivative is `cos(latitude)` outright, so there is no step size to choose and no cancellation
+/// to manage.
+#[must_use]
+pub fn anchored_bend(
+    view: &crate::cover::ViewTransform,
+    z: u8,
+    x: u32,
+    y: u32,
+    wrap: i32,
+) -> AnchoredBend {
+    use core::f64::consts::PI;
+
+    let clip = clip_matrix(view);
+    let placement = crate::camera::mercator_matrix_for_tile(z, x, y, wrap);
+    let extent = crate::camera::EXTENT;
+    let (u0, v0) = (extent / 2.0, extent / 2.0);
+
+    // Tile units to normalized Mercator, and the center of the tile in it.
+    let (a, b) = (placement[0], placement[5]);
+    let mx = a * u0 + placement[12];
+    let my = b * v0 + placement[13];
+
+    // Longitude is linear in `mx`; latitude is the Gudermannian of `my`.
+    let longitude = 2.0 * PI * mx - PI;
+    let latitude = crate::camera::latitude_of(my.clamp(0.0, 1.0)).to_radians();
+    let (sin_lon, cos_lon) = longitude.sin_cos();
+    let (sin_lat, cos_lat) = latitude.sin_cos();
+
+    // d(longitude)/du and the two latitude derivatives, carried into tile units.
+    let lon_u = 2.0 * PI * a;
+    let lat_v = -2.0 * PI * cos_lat * b;
+    let lat_vv = -4.0 * PI * PI * sin_lat * cos_lat * b * b;
+
+    // The sphere point and its partials in (longitude, latitude), y negated as `sphere_point` has
+    // it -- GL JS's convention, which `clip_matrix` carries the compensating flip for.
+    let point = [cos_lat * sin_lon, -sin_lat, cos_lat * cos_lon];
+    let d_lon = [cos_lat * cos_lon, 0.0, -cos_lat * sin_lon];
+    let d_lat = [-sin_lat * sin_lon, -cos_lat, -sin_lat * cos_lon];
+    let d_lon_lon = [-cos_lat * sin_lon, 0.0, -cos_lat * cos_lon];
+    let d_lat_lat = [-cos_lat * sin_lon, sin_lat, -cos_lat * cos_lon];
+    let d_lon_lat = [-sin_lat * cos_lon, 0.0, sin_lat * sin_lon];
+
+    // Chain rule into tile units.
+    let s_u: [f64; 3] = core::array::from_fn(|i| d_lon[i] * lon_u);
+    let s_v: [f64; 3] = core::array::from_fn(|i| d_lat[i] * lat_v);
+    let s_uu: [f64; 3] = core::array::from_fn(|i| d_lon_lon[i] * lon_u * lon_u);
+    let s_vv: [f64; 3] = core::array::from_fn(|i| d_lat_lat[i] * lat_v * lat_v + d_lat[i] * lat_vv);
+    let s_uv: [f64; 3] = core::array::from_fn(|i| d_lon_lat[i] * lon_u * lat_v);
+
+    // Into clip space. The position carries a `w` of one and every derivative a `w` of zero,
+    // because differentiating a constant is what that is.
+    let apply = |v: [f64; 3], w: f64| -> [f64; 4] {
+        let p = [v[0], v[1], v[2], w];
+        core::array::from_fn(|r| (0..4).map(|c| clip[c * 4 + r] * p[c]).sum())
+    };
+    AnchoredBend {
+        anchor: apply(point, 1.0),
+        d_u: apply(s_u, 0.0),
+        d_v: apply(s_v, 0.0),
+        d_uu: apply(s_uu, 0.0),
+        d_vv: apply(s_vv, 0.0),
+        d_uv: apply(s_uv, 0.0),
+    }
 }

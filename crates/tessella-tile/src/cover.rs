@@ -196,7 +196,7 @@ pub fn cover_globe(view: &ViewTransform, z: u8) -> Result<Vec<TileCoord>, CoverE
     let across = i64::from(1u32 << z);
     let settled = crate::camera::settled(view);
     let matrix = crate::globe::clip_matrix(&settled);
-    let distance = crate::globe::camera_distance(settled.zoom, settled.height);
+    let distance = crate::globe::camera_distance(settled.zoom, settled.latitude, settled.height);
     // The axis the camera looks down, which is the surface point it is over.
     let toward = crate::globe::sphere_point(settled.longitude, settled.latitude);
 
