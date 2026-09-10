@@ -1310,9 +1310,8 @@ impl SymbolDrawableEntry {
         // which is what GL JS's globe does below a steep pitch and is a label that reads rather
         // than one that is absent. Laying them on the sphere is the tangent-frame work §13.4
         // describes, and is not a matrix swap.
-        let bent = surface == ProjectionMode::Globe;
-        let pitch_with_map = !bent && alignments.pitch == Alignment::Map;
-        let rotate_with_map = !bent && alignments.rotation == Alignment::Map;
+        let pitch_with_map = effective_pitch(alignments.pitch, surface) == Alignment::Map;
+        let rotate_with_map = effective_rotation(alignments.rotation, surface) == Alignment::Map;
         let along_line = alignments.along_line(placement);
 
         // The identity for a label walked along a line. The projection does the walk itself,
@@ -1386,6 +1385,46 @@ pub fn symbol_gamma_scale(view: &ViewTransform, pitch: Alignment) -> f32 {
                 as f32
         }
         Alignment::Viewport => 1.0,
+    }
+}
+
+/// The pitch alignment a symbol is actually drawn with, which on a globe is not the one the style
+/// asked for.
+///
+/// A label pitched with the map lies on the ground, and `coord_matrix` returns it to clip through
+/// the tile's plane matrix. On a sphere there is no such plane, so a globe stands these upright --
+/// see [`SymbolDrawableEntry::for_tile`].
+///
+/// It has to be asked once and used everywhere, because two places read it and they cancel against
+/// each other. `symbol_gamma_scale` answers `cos(pitch) * camera_to_center_distance` for a
+/// map-pitched label -- 1152 at pitch zero -- and the on-map `coord_matrix` puts the same figure
+/// into the fragment's `clip.w`; the shader divides by one and multiplies by the other, so the SDF
+/// edge lands where it should. Switch the matrix and not the gamma and the two stop cancelling:
+/// the smoothstep narrows by a factor of a thousand, which is a hard step rather than an edge, and
+/// street names come out aliased and thin.
+#[must_use]
+pub const fn effective_pitch(pitch: Alignment, projection: ProjectionMode) -> Alignment {
+    match projection {
+        ProjectionMode::Globe => Alignment::Viewport,
+        ProjectionMode::Mercator => pitch,
+    }
+}
+
+/// The rotation alignment a symbol is drawn with, which on a globe is not the one the style asked
+/// for.
+///
+/// Same reason as [`effective_pitch`]: the shader turns the quad by the map bearing on top of
+/// whatever the label plane already did, and a globe walks its line labels in screen space, where
+/// the bearing is already in the angles. Turning them again double-counts it.
+///
+/// This is the drawable flag only. `Alignments::along_line` reads the style's own value, and a
+/// line label that stopped being along-line would lose the identity label plane the walk depends
+/// on.
+#[must_use]
+pub const fn effective_rotation(rotation: Alignment, projection: ProjectionMode) -> Alignment {
+    match projection {
+        ProjectionMode::Globe => Alignment::Viewport,
+        ProjectionMode::Mercator => rotation,
     }
 }
 

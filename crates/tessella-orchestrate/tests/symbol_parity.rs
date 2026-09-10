@@ -1306,6 +1306,71 @@ mod symbol_drawable_ubo {
         assert_eq!(&blocks(&mine), expected);
     }
 
+    /// The gamma and the drawable flag are one decision, and a globe has to switch both.
+    ///
+    /// The shader divides the SDF ramp by `tileGammaScale` and multiplies it by the fragment's
+    /// `clip.w`. For a map-pitched label the on-map coordinate matrix puts the same figure into
+    /// `clip.w` that `symbol_gamma_scale` returns, so the two cancel and the ramp comes out the
+    /// width it was laid out for. A globe stands its labels upright and uses the viewport matrix,
+    /// which makes `clip.w` one; leave the gamma at its map value and the ramp narrows by three
+    /// orders of magnitude, which is a hard step rather than an antialiased edge -- street names
+    /// render aliased and thin.
+    ///
+    /// So this checks the pairing rather than either value: whatever `for_tile` puts in the
+    /// drawable flag, `symbol_gamma_scale` is asked the same question.
+    #[test]
+    fn the_gamma_follows_the_alignment_the_drawable_is_given() {
+        const MAP: Alignments = Alignments {
+            rotation: Alignment::Map,
+            pitch: Alignment::Map,
+        };
+        let view = probe();
+        for surface in [ProjectionMode::Mercator, ProjectionMode::Globe] {
+            let entry = SymbolDrawableEntry::for_tile(
+                &view,
+                13,
+                4093,
+                2723,
+                0,
+                1,
+                0,
+                [512.0, 512.0],
+                [0.0, 0.0],
+                16.0,
+                true,
+                MAP,
+                Placement::Line,
+                surface,
+            )
+            .expect("a viewport");
+            let effective = ubo::effective_pitch(MAP.pitch, surface);
+            assert_eq!(
+                entry.pitch_with_map,
+                effective == Alignment::Map,
+                "{surface:?}: the drawable flag and the effective alignment disagree"
+            );
+            // `rotate_symbol` is mbgl's `rotateInShader`, which is a different question --
+            // whether the *quad* turns -- and reads the style's own alignments. It is false here
+            // under either surface because the placement is along a line.
+            assert!(
+                !entry.rotate_symbol,
+                "{surface:?}: an along-line label turns by its walk"
+            );
+            let gamma = ubo::symbol_gamma_scale(&view, effective);
+            if entry.pitch_with_map {
+                assert!(
+                    gamma > 1000.0,
+                    "a map-pitched label cancels a camera distance, not one"
+                );
+            } else {
+                assert!(
+                    (gamma - 1.0).abs() < f32::EPSILON,
+                    "an upright label has no clip.w to cancel, so its gamma is one, not {gamma}"
+                );
+            }
+        }
+    }
+
     /// The coordinate matrix carries no tile, so both entries share it.
     ///
     /// Stated separately because the buffer comparison sorts its blocks and would pass if the
