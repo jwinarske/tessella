@@ -60,8 +60,18 @@ struct Field {
     name: &'static str,
     /// Byte offset, taken from the Rust type.
     offset: usize,
+    /// Bytes the field itself occupies, taken from the Rust type.
+    ///
+    /// Not inferable from the offsets: the last field's extent to the end of the struct is its
+    /// size *plus* any tail padding, and tail padding is the hole `WireRecord` forbids.
+    size: usize,
     /// Documentation, wrapped by the emitter.
     doc: &'static str,
+}
+
+/// The size of the field a projection names, without a value to project from.
+const fn field_size<T, F>(_: fn(&T) -> &F) -> usize {
+    size_of::<F>()
 }
 
 /// One generated struct.
@@ -91,6 +101,7 @@ macro_rules! c_struct {
                     declarator: $decl,
                     name: stringify!($field),
                     offset: std::mem::offset_of!($rust, $field),
+                    size: field_size(|s: &$rust| &s.$field),
                     doc: $fdoc,
                 } ),*
             ],
@@ -115,6 +126,17 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // Refused before anything is written. A struct with a hole in it is one whose padding the
+    // producer sends uninitialized, and a header describing it would be a header for a stream
+    // that differs from run to run.
+    let holes: Vec<String> = structs().iter().filter_map(hole).collect();
+    if !holes.is_empty() {
+        for message in holes {
+            eprintln!("{message}");
+        }
+        return ExitCode::FAILURE;
+    }
+
     let outputs = [
         (OUTPUT, workspace.join(OUTPUT), generate()),
         (JS_OUTPUT, workspace.join(JS_OUTPUT), generate_js()),
@@ -323,6 +345,42 @@ fn workspace_root() -> Result<PathBuf, String> {
         .nth(2)
         .map(Path::to_path_buf)
         .ok_or_else(|| format!("cannot find workspace root above {manifest}"))
+}
+
+/// Where a struct's fields fail to tile it, if they do.
+///
+/// A gap between one field's end and the next one's start is padding the C compiler would have
+/// to reproduce by luck, and a gap after the last field is tail padding that
+/// `WireRecord::as_bytes` copies to the ring uninitialized. Every wire struct pads explicitly, so
+/// the fields tile the struct exactly.
+///
+/// Each field's size is its own `size_of`, not the distance to the next offset. The distance
+/// makes the last field reach the end of the struct by definition, which is how `tsl_view_use`
+/// and then `tsl_texture_update` each shipped four bytes of tail padding past an earlier form of
+/// this check.
+fn hole(item: &Struct) -> Option<String> {
+    let mut covered = 0;
+    for field in &item.fields {
+        if field.offset < covered {
+            return Some(format!(
+                "{}: {} overlaps the field before it",
+                item.c_name, field.name
+            ));
+        }
+        if field.offset > covered {
+            return Some(format!(
+                "{}: {} leaves a hole at {covered}",
+                item.c_name, field.name
+            ));
+        }
+        covered = field.offset + field.size;
+    }
+    (!item.fields.is_empty() && covered != item.size).then(|| {
+        format!(
+            "{}: the fields end at {covered} and the struct at {}, so the rest is tail padding",
+            item.c_name, item.size
+        )
+    })
 }
 
 fn structs() -> Vec<Struct> {
@@ -730,7 +788,7 @@ fn structs() -> Vec<Struct> {
                     "uint8_t rect_count",
                     "Meaningful entries in rects; zero means whole texture."
                 ),
-                (_pad, "uint8_t _pad[2]", "Must be zero."),
+                (_pad, "uint8_t _pad[6]", "Must be zero."),
             ]
         ),
         c_struct!(
@@ -1663,54 +1721,39 @@ mod tests {
         }
     }
 
-    /// No struct has a hole its field table does not account for.
-    ///
-    /// A gap between the end of one field and the start of the next is padding the C compiler
-    /// would have to reproduce by luck. Every wire struct here pads explicitly, so the fields
-    /// tile the struct exactly — and a future one that forgets should fail here rather than on
-    /// a consumer reading a field four bytes late.
+    /// No struct has a hole its field table does not account for. `hole` says why that matters
+    /// and why a field's size is its own rather than the distance to the next one.
     #[test]
     fn fields_tile_their_struct_without_gaps() {
         for item in structs() {
-            let Some(first) = item.fields.first() else {
-                continue;
-            };
-            assert_eq!(
-                first.offset, 0,
-                "{} starts at {}",
-                item.c_name, first.offset
-            );
-
-            // The declared size must be reachable: the last field's offset plus its own size is
-            // the struct's size, and the only way to know that size here is the next offset, so
-            // this checks the run rather than each step.
-            let mut covered = 0;
-            for field in &item.fields {
-                assert!(
-                    field.offset >= covered,
-                    "{}: {} overlaps the field before it",
-                    item.c_name,
-                    field.name
-                );
+            if let Some(first) = item.fields.first() {
                 assert_eq!(
-                    field.offset, covered,
-                    "{}: {} leaves a hole at {covered}",
-                    item.c_name, field.name
+                    first.offset, 0,
+                    "{} starts at {}",
+                    item.c_name, first.offset
                 );
-                covered = field.offset + field_size(field, &item);
             }
-            assert_eq!(covered, item.size, "{} does not tile", item.c_name);
+            assert_eq!(hole(&item), None);
         }
     }
 
-    /// The size a field occupies, from the gap to the next one or the end of the struct.
-    fn field_size(field: &Field, item: &Struct) -> usize {
-        item.fields
-            .iter()
-            .map(|other| other.offset)
-            .filter(|offset| *offset > field.offset)
-            .min()
-            .unwrap_or(item.size)
-            - field.offset
+    /// And the check catches tail padding, which is the case the offsets alone cannot see.
+    #[test]
+    fn tail_padding_is_a_hole() {
+        let item = Struct {
+            c_name: "tsl_padded".to_string(),
+            rust_name: "Padded",
+            size: 8,
+            align: 4,
+            doc: "",
+            fields: vec![Field {
+                declarator: "uint16_t a",
+                name: "a",
+                offset: 0,
+                size: 2,
+                doc: "",
+            }],
+        };
+        assert!(hole(&item).is_some_and(|message| message.contains("tail padding")));
     }
 }

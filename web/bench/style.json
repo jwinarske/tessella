@@ -1,0 +1,43 @@
+{
+  "version": 8,
+  "name": "four-view-sweep",
+  "sources": {
+    "fixture": {
+      "type": "vector",
+      "tiles": ["http://tiles.invalid/{z}/{x}/{y}.pbf"],
+      "minzoom": 0,
+      "maxzoom": 14
+    }
+  },
+  "layers": [
+    { "id": "bg", "type": "background", "paint": { "background-color": "#ff00ff" } },
+    {
+      "id": "earth",
+      "type": "fill",
+      "source": "fixture",
+      "source-layer": "earth",
+      "paint": { "fill-color": "#1d2a22" }
+    },
+    {
+      "id": "landuse",
+      "type": "fill",
+      "source": "fixture",
+      "source-layer": "landuse",
+      "paint": { "fill-color": "#2f4f3a" }
+    },
+    {
+      "id": "water",
+      "type": "fill",
+      "source": "fixture",
+      "source-layer": "water",
+      "paint": { "fill-color": "#2f6fb0" }
+    },
+    {
+      "id": "buildings",
+      "type": "fill",
+      "source": "fixture",
+      "source-layer": "buildings",
+      "paint": { "fill-color": "#8a8f99" }
+    }
+  ]
+}

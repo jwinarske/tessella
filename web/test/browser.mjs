@@ -10,144 +10,16 @@
 //
 //   node web/test/browser.mjs
 
-import { spawn } from "node:child_process";
-import { createServer } from "node:http";
-import { createReadStream, statSync } from "node:fs";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, normalize } from "node:path";
-import { fileURLToPath } from "node:url";
+import { serve, firefox } from "./firefox.mjs";
 
-const root = fileURLToPath(new URL("../..", import.meta.url));
-
-/** The last of a browser's output, which is where its complaint is. */
-function tail(text) {
-  return text.split("\n").slice(-40).join("\n");
-}
-
-/** Enough of a content type for the three things this serves. */
-const TYPES = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "text/javascript; charset=utf-8",
-  ".mjs": "text/javascript; charset=utf-8",
-  ".wasm": "application/wasm",
-  ".mvt": "application/vnd.mapbox-vector-tile",
-};
-
-/** Serves the repository, read-only, on a port the caller is told. */
-function serve() {
-  const server = createServer((request, response) => {
-    // Resolved against the root and checked, because a test server that can be walked out of is
-    // still a server that can be walked out of.
-    const asked = normalize(decodeURIComponent(new URL(request.url, "http://x").pathname));
-    const path = join(root, asked);
-    if (!path.startsWith(root)) {
-      response.writeHead(403).end();
-      return;
-    }
-    let size;
-    try {
-      size = statSync(path).size;
-    } catch {
-      response.writeHead(404).end();
-      return;
-    }
-    const dot = path.lastIndexOf(".");
-    response.writeHead(200, {
-      "content-type": TYPES[path.slice(dot)] ?? "application/octet-stream",
-      "content-length": size,
-      // Freshness, because the cache stores only what an origin said it may. A server that says
-      // nothing is a server whose responses are served once and forgotten, which is correct and
-      // would make the cache check below vacuous.
-      "cache-control": "max-age=60",
-    });
-    createReadStream(path).pipe(response);
+/** Runs the page and returns what it reported. */
+function run(port) {
+  return firefox(`http://127.0.0.1:${port}/web/test/browser.html`, {
+    until: (out) => {
+      const line = out.split("\n").find((l) => l.startsWith("RESULT "));
+      return line ? JSON.parse(line.slice("RESULT ".length)) : undefined;
+    },
   });
-  return new Promise((resolve) => {
-    server.listen(0, "127.0.0.1", () => resolve({ server, port: server.address().port }));
-  });
-}
-
-/** Runs the page and returns whatever it dumped. */
-async function run(port) {
-  const profile = await mkdtemp(join(tmpdir(), "tessella-ff-"));
-  // `dump` is off by default, and it is the channel the page reports through.
-  // `dump` is the channel the page reports through, and the slow-script watchdog would otherwise
-  // stop a module that awaits four hundred ticks before it finished the first one.
-  await writeFile(
-    join(profile, "user.js"),
-    [
-      'user_pref("browser.dom.window.dump.enabled", true);',
-      'user_pref("dom.max_script_run_time", 0);',
-      // A runner with no GPU still has Mesa's software rasteriser; these are what let Firefox
-      // reach it rather than refusing WebGL outright.
-      'user_pref("webgl.force-enabled", true);',
-      'user_pref("gfx.webrender.software", true);',
-      // A software rasteriser is a "major performance caveat", and refusing the context over
-      // that is exactly what a headless runner does not want.
-      'user_pref("webgl.disable-fail-if-major-performance-caveat", true);',
-      'user_pref("webgl.enable-surface-texture", false);',
-      'user_pref("gfx.webrender.all", true);',
-      "",
-    ].join("\n"),
-  );
-  try {
-    const firefox = spawn(
-      process.env.FIREFOX ?? "firefox",
-      [
-        "--profile", profile,
-        "--no-remote",
-        "--headless",
-        "--window-size=512,512",
-        `http://127.0.0.1:${port}/web/test/browser.html`,
-      ],
-      {
-        env: {
-          ...process.env,
-          MOZ_HEADLESS: "1",
-          // Mesa's software path, named rather than hoped for: a runner has no GPU, and
-          // llvmpipe is what it has instead.
-          LIBGL_ALWAYS_SOFTWARE: "1",
-          GALLIUM_DRIVER: "llvmpipe",
-        },
-      },
-    );
-
-    // Killed on the answer rather than waited on. Without `--screenshot` a browser has no reason
-    // to exit, and with it the page is torn down at load -- which is before an async module that
-    // drives four hundred ticks has finished its first one.
-    let out = "";
-    const done = new Promise((resolve, reject) => {
-      const bell = setTimeout(() => {
-        firefox.kill("SIGKILL");
-        reject(new Error(`the browser did not report within two minutes:\n${tail(out)}`));
-      }, 120_000);
-      const watch = (chunk) => {
-        out += chunk;
-        const line = out.split("\n").find((l) => l.startsWith("RESULT "));
-        if (line) {
-          clearTimeout(bell);
-          firefox.kill("SIGKILL");
-          resolve(JSON.parse(line.slice("RESULT ".length)));
-        }
-      };
-      firefox.stdout.on("data", watch);
-      firefox.stderr.on("data", watch);
-      firefox.on("error", reject);
-      firefox.on("exit", () => {
-        clearTimeout(bell);
-        const line = out.split("\n").find((l) => l.startsWith("RESULT "));
-        if (line) {
-          resolve(JSON.parse(line.slice("RESULT ".length)));
-        } else {
-          reject(new Error(`the page reported nothing:\n${tail(out)}`));
-        }
-      });
-    });
-    return await done;
-  } finally {
-    await rm(profile, { recursive: true, force: true });
-  }
 }
 
 const { server, port } = await serve();

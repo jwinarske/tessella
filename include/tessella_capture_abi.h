@@ -1990,7 +1990,7 @@ typedef struct tsl_texture_update {
     /* Meaningful entries in rects; zero means whole texture. */
     uint8_t rect_count;
     /* Must be zero. */
-    uint8_t _pad[2];
+    uint8_t _pad[6];
 } tsl_texture_update;
 
 TSL_ASSERT(sizeof(tsl_texture_update) == 64, "tsl_texture_update size differs from the Rust definition");

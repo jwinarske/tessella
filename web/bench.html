@@ -1,0 +1,145 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tessella four-view sweep</title>
+<!--
+  The four-view zoom sweep, z8 -> z16 -> z8, against the module native uses.
+
+  This page owns the DOM and nothing else. The canvas is handed to a worker, which runs the
+  producer, the fetch loop and the consumer, and reports a line per frame and a summary at the
+  end. Lines leave through `dump()` where the browser has it (Firefox, with the pref the harness
+  sets) and the console otherwise.
+
+  Parameters, all optional:
+    clock=A|B      A: fixed step, fetches awaited, reproducible. B: wall clock. Default B.
+    steps=N        frames each way; the sweep is 2N-1 frames. Default 33, as the native bench.
+    tickMs=X       clock A's step. Default 16.667.
+    trace=0|1      fingerprint each map's frame for the native diff. Default on for A.
+    ring=MiB       each map's ring. Default 4.
+    slab=MiB       each map's slab region. Default the producer's own.
+    grow=0|1       grow the memory under the consumer before the sweep. Default 1.
+    tiles=URL      the tile origin. Default this origin's /bench-tiles. Another origin has to
+                   allow CORS, since the page is cross-origin isolated when served for timing.
+    module=PATH    the module, from this origin. Default the release build.
+
+  `node web/test/bench.mjs --serve` serves this page with the tile route beside it.
+-->
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; background: #0b0d10; color: #c8cdd4;
+               font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  main { padding: 12px 16px; }
+  canvas { display: block; width: 100%; max-width: 1280px; aspect-ratio: 4 / 3;
+           background: #000; }
+  #status { margin: 10px 0; white-space: pre-wrap; }
+  table { border-collapse: collapse; margin-top: 8px; }
+  td, th { text-align: left; padding: 2px 12px 2px 0; vertical-align: top; }
+  .pass { color: #7ccf8a; } .fail { color: #ef6b6b; } .info { color: #8a93a0; }
+</style>
+<main>
+  <canvas id="views" width="1280" height="960"></canvas>
+  <div id="status">starting</div>
+  <table id="gates"></table>
+</main>
+<script type="module">
+  import { evaluate, absent } from "./bench/gates.js";
+
+  const params = new URLSearchParams(location.search);
+  // The module is code, so it comes from this origin or not at all: a link naming another one is
+  // a link that runs somebody else's module under this page's name.
+  const sameOrigin = (path) => {
+    const url = new URL(path, location.href);
+    if (url.origin !== location.origin) {
+      throw new Error(`the module must come from ${location.origin}, not ${url.origin}`);
+    }
+    return url.href;
+  };
+  const number = (name, fallback) => (params.has(name) ? Number(params.get(name)) : fallback);
+  const clock = params.get("clock") === "A" ? "A" : "B";
+  const config = {
+    clock,
+    steps: number("steps", 33),
+    tickMs: number("tickMs", 16.667),
+    trace: params.has("trace") ? params.get("trace") === "1" : clock === "A",
+    moduleUrl: sameOrigin(
+      params.get("module") ?? "../target/wasm32-unknown-unknown/release/tessella_ffi.wasm",
+    ),
+    styleUrl: new URL("./bench/style.json", location.href).href,
+    tileOrigin: params.get("tiles") ?? new URL("/bench-tiles", location.href).href,
+    // Fixed, and sent once. dpr 1: the panes are 640x480 device pixels whatever the display.
+    pane: { width: 640, height: 480 },
+    ringBytes: number("ring", 4) * (1 << 20),
+    slabBytes: number("slab", 0) * (1 << 20),
+    samples: [32, 24],
+    maxSettle: 600,
+    grow: params.get("grow") !== "0",
+    // A frame whose records are printed one by one, as `sweep_trace --records` prints them.
+    records: !params.has("records")
+      ? null
+      : params.get("records") === "all"
+        ? "all"
+        : Number(params.get("records")),
+  };
+
+  const status = document.getElementById("status");
+  const emit = (line) => {
+    if (typeof dump === "function") {
+      dump(line + "\n");
+    } else {
+      console.log(line);
+    }
+  };
+
+  const canvas = document.getElementById("views");
+  const offscreen = canvas.transferControlToOffscreen ? canvas.transferControlToOffscreen() : null;
+  const worker = new Worker(new URL("./bench.worker.js", import.meta.url), { type: "module" });
+  let frames = 0;
+  worker.onmessage = ({ data }) => {
+    if (data.type === "line") {
+      emit(data.line);
+      if (data.line.startsWith("FRAME ")) {
+        frames++;
+        if (frames % 8 === 0) status.textContent = `clock ${clock}: frame ${frames}`;
+      }
+    } else if (data.type === "done") {
+      emit("REPORT " + JSON.stringify(data.report));
+      show(data.report);
+      emit("DONE");
+    } else if (data.type === "error") {
+      emit("ERROR " + JSON.stringify(data.error));
+      status.textContent = `failed: ${data.error}`;
+      emit("DONE");
+    }
+  };
+  worker.onerror = (event) => {
+    emit("ERROR " + JSON.stringify(String(event.message ?? event)));
+    emit("DONE");
+  };
+  worker.postMessage({ type: "start", canvas: offscreen, config }, offscreen ? [offscreen] : []);
+
+  function show(report) {
+    const t = report.timings;
+    status.textContent =
+      `clock ${report.clock}, ${report.frames} sweep frames ` +
+      `after ${report.settle_frames} to settle, ` +
+      `${report.pacing} pacing\n` +
+      `frame cpu p50 ${t.frame_cpu_ms.p50} p99 ${t.frame_cpu_ms.p99} ` +
+      `max ${t.frame_cpu_ms.max} ms ` +
+      `(ticks p99 ${t.tick_ms_sum.p99}, absorb ${t.absorb_ms.p99}, draw ${t.draw_ms.p99})\n` +
+      `fetches ${report.fetch.origin_fetches} for ${report.fetch.distinct_urls} urls, ` +
+      `${report.fetch.tickets} tickets, ${report.fetch.coalesced} coalesced; ` +
+      `peak ${report.mem_pages_peak} pages\n` +
+      absent(report).join("\n");
+    const table = document.getElementById("gates");
+    table.innerHTML = "<tr><th>property</th><th>statement</th><th>value</th><th></th></tr>";
+    for (const row of evaluate(report)) {
+      const tr = table.insertRow();
+      tr.insertCell().textContent = row.property;
+      tr.insertCell().textContent = row.statement;
+      tr.insertCell().textContent = JSON.stringify(row.value);
+      const verdict = tr.insertCell();
+      verdict.textContent = row.pass === null ? "reported" : row.pass ? "pass" : "FAIL";
+      verdict.className = row.pass === null ? "info" : row.pass ? "pass" : "fail";
+    }
+  }
+</script>

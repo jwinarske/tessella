@@ -170,7 +170,8 @@ export class Ring {
    * Publishes `tail` at the end, which is what gives the producer its space back. A consumer that
    * never published it would run a fixed-size ring into a wall.
    *
-   * @returns {{kind: number, fixedAt: number, payloadAt: number, payloadLen: number}[]}
+   * @returns {{kind: number, fixedAt: number, recordLen: number, payloadAt: number,
+   *            payloadLen: number}[]}
    */
   drain() {
     if (this.revision !== ABI_REV) {
@@ -211,6 +212,7 @@ export class Ring {
       out.push({
         kind,
         fixedAt: at + HEADER.size,
+        recordLen,
         payloadAt: at + HEADER.size + body,
         payloadLen,
       });

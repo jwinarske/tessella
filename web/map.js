@@ -58,12 +58,28 @@ export class TessellaMap {
    * @param {BufferSource} moduleBytes  the compiled `.wasm`
    * @param {string} style              the style document, as JSON
    * @param {{latitude?: number, longitude?: number, zoom?: number,
-   *          width?: number, height?: number, ringBytes?: number}} [options]
+   *          width?: number, height?: number, ringBytes?: number, slabBytes?: number}} [options]
    */
   static async create(moduleBytes, style, options = {}) {
     // No imports. A producer that needed any would need bindings to generate them, which is what
     // keeping wasm-bindgen out of it buys.
     const { instance } = await WebAssembly.instantiate(moduleBytes, {});
+    return TessellaMap.hosted(instance, style, options);
+  }
+
+  /**
+   * Creates a hosted map in an instance that already exists.
+   *
+   * Several maps can live in one instance: each has its own ring, slab region and fetch table,
+   * and they share the instance's memory, its pool and its scratch block. The scratch block is
+   * why every call below is synchronous from write to return -- a second map writing into it
+   * between the two would hand the first one the other's bytes.
+   *
+   * @param {WebAssembly.Instance} instance
+   * @param {string} style
+   * @param {Parameters<typeof TessellaMap.create>[2]} [options]
+   */
+  static hosted(instance, style, options = {}) {
     const wasm = instance.exports;
 
     const {
@@ -73,6 +89,7 @@ export class TessellaMap {
       width = 1024,
       height = 768,
       ringBytes = DEFAULT_RING_BYTES,
+      slabBytes = 0,
     } = options;
 
     // The producer has no allocator export, so the config and the style go somewhere this side
@@ -92,7 +109,7 @@ export class TessellaMap {
     config.setUint32(8, width, true);
     config.setUint32(12, height, true);
     config.setUint32(16, ringBytes, true); // ring_capacity
-    config.setUint32(20, 0, true); // slab_capacity: the default
+    config.setUint32(20, slabBytes, true); // slab_capacity: zero is the producer's default
 
     const out = scratch.out;
     const status = wasm.tessella_create_hosted(scratch.config, latitude, longitude, zoom, out);
@@ -124,6 +141,22 @@ export class TessellaMap {
   /** Moves the camera. */
   setCamera(latitude, longitude, zoom, bearing = 0, pitch = 0) {
     return this.wasm.tessella_set_camera(this.handle, latitude, longitude, zoom, bearing, pitch);
+  }
+
+  /** Tells the map how much time has passed. The only clock it has. */
+  advance(elapsedMillis) {
+    return this.wasm.tessella_advance(this.handle, elapsedMillis);
+  }
+
+  /**
+   * Emits a frame, and answers the status rather than throwing on it.
+   *
+   * `tick` throws on anything but success, which is right for a caller that has no use for the
+   * difference. A caller counting how often the ring was full does -- that status is the consumer
+   * being behind, not the map failing.
+   */
+  step() {
+    return this.wasm.tessella_tick(this.handle);
   }
 
   /**
@@ -162,6 +195,38 @@ export class TessellaMap {
 
   /** Answers everything the map asked for on this tick. */
   async #serve(fetchOne) {
+    const asked = this.takeRequests();
+
+    // Fetched together. They do not depend on each other, and a browser will happily have six of
+    // them in the air, which is most of what makes a cold start quick.
+    const answers = await Promise.all(
+      asked.map(async ([ticket, url]) => {
+        try {
+          return [ticket, await fetchOne(url)];
+        } catch {
+          return [ticket, null];
+        }
+      }),
+    );
+
+    // Handed over one at a time, *after* the fetches. There is one scratch buffer, so two
+    // concurrent answers writing into it would each hand the producer the other's bytes -- which
+    // with one tile in flight looks like it works and with two is a tile drawn from a manifest.
+    for (const [ticket, answer] of answers) {
+      if (answer === null) {
+        this.fail(ticket);
+      } else {
+        this.answer(ticket, answer.status, answer.body ?? new Uint8Array(0));
+      }
+    }
+  }
+
+  /**
+   * Everything the map wants fetched, as `[ticket, url]` pairs, in the order it asked.
+   *
+   * @returns {[bigint, string][]}
+   */
+  takeRequests() {
     const scratch = scratchAt(this.wasm);
     const asked = [];
     for (;;) {
@@ -186,39 +251,31 @@ export class TessellaMap {
       const len = view.getUint32(scratch.urlLen, true);
       asked.push([ticket, this.decoder.decode(new Uint8Array(this.memory.buffer, at, len))]);
     }
+    return asked;
+  }
 
-    // Fetched together. They do not depend on each other, and a browser will happily have six of
-    // them in the air, which is most of what makes a cold start quick.
-    const answers = await Promise.all(
-      asked.map(async ([ticket, url]) => {
-        try {
-          return [ticket, await fetchOne(url)];
-        } catch {
-          return [ticket, null];
-        }
-      }),
-    );
-
-    // Handed over one at a time, *after* the fetches. There is one scratch buffer, so two
-    // concurrent answers writing into it would each hand the producer the other's bytes -- which
-    // with one tile in flight looks like it works and with two is a tile drawn from a manifest.
-    for (const [ticket, answer] of answers) {
-      if (answer === null) {
-        this.wasm.tessella_fail_request(this.handle, ticket);
-        continue;
-      }
-      const body = answer.body ?? new Uint8Array(0);
-      // Refused rather than truncated. A body this side cannot hold is a fetch that did not
-      // happen as far as the map is concerned, and truncating one would hand the producer a tile
-      // that decodes to something the origin never sent.
-      if (body.length > MAX_BODY_BYTES) {
-        this.wasm.tessella_fail_request(this.handle, ticket);
-        continue;
-      }
-      const into = scratchAt(this.wasm).body;
-      new Uint8Array(this.memory.buffer, into, body.length).set(body);
-      this.wasm.tessella_answer(this.handle, ticket, answer.status, into, body.length);
+  /**
+   * Hands a fetched body to the ticket that asked for it.
+   *
+   * Synchronous from the copy to the call, and that is the whole of what keeps the one scratch
+   * block safe: nothing else can run between the body landing in it and the producer taking its
+   * own copy.
+   */
+  answer(ticket, status, body = new Uint8Array(0)) {
+    // Refused rather than truncated. A body this side cannot hold is a fetch that did not happen
+    // as far as the map is concerned, and truncating one would hand the producer a tile that
+    // decodes to something the origin never sent.
+    if (body.length > MAX_BODY_BYTES) {
+      return this.fail(ticket);
     }
+    const into = scratchAt(this.wasm).body;
+    new Uint8Array(this.memory.buffer, into, body.length).set(body);
+    return this.wasm.tessella_answer(this.handle, ticket, status, into, body.length);
+  }
+
+  /** Says a ticket's fetch did not happen at all. */
+  fail(ticket) {
+    return this.wasm.tessella_fail_request(this.handle, ticket);
   }
 
   /** Releases the map. */
