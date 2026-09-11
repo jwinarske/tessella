@@ -10,11 +10,10 @@
 //     -> take requests -> draw four panes
 //
 // Timed in four parts: each map's tick, the consumer's drain and absorb, and the draw calls. The
-// module has one pool and every tick drains all of it, so a job another map queued can land in
-// this map's time; in practice a map's builds are queued by its own source drain and run by the
-// drain straight after, inside the same tick, and the four times come out close to even. On one
-// thread what the frame spends is their sum. A maximum would be the cost only if four producers
-// ran at once, and here they cannot.
+// maps share built tiles, so the first to reach a new tile in a frame builds it and the others
+// find it built: the ticks are uneven by design, and the first map's carries most of a crossing.
+// On one thread what the frame spends is their sum. A maximum would be the cost only if four
+// producers ran at once, and here they cannot.
 //
 // # Two clocks
 //
