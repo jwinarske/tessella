@@ -361,9 +361,9 @@ mod radial_offset {
         assert!((x.hypot(y + BASELINE) - OFFSET).abs() < 1e-4);
     }
 
-    /// A centred label is not moved, whatever the offset.
+    /// A centered label is not moved, whatever the offset.
     #[test]
-    fn the_centre_does_not_move() {
+    fn the_center_does_not_move() {
         assert!(near(radial_offset(Anchor::Center, OFFSET), [0.0, 0.0]));
     }
 
@@ -383,5 +383,98 @@ mod radial_offset {
             radial_offset(Anchor::Top, -10.0),
             radial_offset(Anchor::Top, 0.0)
         );
+    }
+}
+
+/// `text-offset` under a variable anchor: a vector, and the anchor chooses its signs.
+///
+/// The sibling of [`radial_offset`]'s tests. mbgl's `evaluateVariableOffset` takes whichever form
+/// the style wrote -- a distance to point, or a vector to sign -- and the branch between them is
+/// which property the style *named*, not what it evaluated to.
+mod variable_offset {
+    use tessella_glyph::shaping::{Anchor, radial_offset, variable_offset};
+
+    const BASELINE: f32 = 7.0;
+
+    fn near(a: [f32; 2], b: [f32; 2]) -> bool {
+        (a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4
+    }
+
+    /// The radial form is `radial_offset`, unchanged, whatever is in the second component.
+    #[test]
+    fn the_radial_form_defers_to_radial_offset() {
+        for anchor in [
+            Anchor::Left,
+            Anchor::TopRight,
+            Anchor::Bottom,
+            Anchor::Center,
+        ] {
+            assert!(near(
+                variable_offset(anchor, [24.0, 99.0], true),
+                radial_offset(anchor, 24.0)
+            ));
+        }
+    }
+
+    /// The vector form keeps both components and lets the anchor point them.
+    #[test]
+    fn the_vector_form_is_signed_by_the_anchor() {
+        assert!(near(
+            variable_offset(Anchor::Left, [10.0, 4.0], false),
+            [10.0, 0.0]
+        ));
+        assert!(near(
+            variable_offset(Anchor::Right, [10.0, 4.0], false),
+            [-10.0, 0.0]
+        ));
+        // A vertical anchor takes the y and the baseline shift, and drops the x.
+        assert!(near(
+            variable_offset(Anchor::Top, [10.0, 4.0], false),
+            [0.0, 4.0 - BASELINE]
+        ));
+        assert!(near(
+            variable_offset(Anchor::Bottom, [10.0, 4.0], false),
+            [0.0, -4.0 + BASELINE]
+        ));
+        // A corner takes both.
+        assert!(near(
+            variable_offset(Anchor::TopLeft, [10.0, 4.0], false),
+            [10.0, 4.0 - BASELINE]
+        ));
+        assert!(near(
+            variable_offset(Anchor::BottomRight, [10.0, 4.0], false),
+            [-10.0, -4.0 + BASELINE]
+        ));
+    }
+
+    /// A negative offset does not flip the label to the other side.
+    ///
+    /// mbgl takes the magnitudes first, so `[-1, 0]` on a `left` anchor puts the label to the
+    /// *right* of the point, exactly as `[1, 0]` does. The anchor owns the direction and the
+    /// style owns only the distance -- which is the same division the radial form makes, arrived
+    /// at differently.
+    #[test]
+    fn the_sign_is_the_anchors_and_not_the_styles() {
+        assert_eq!(
+            variable_offset(Anchor::Left, [-10.0, -4.0], false),
+            variable_offset(Anchor::Left, [10.0, 4.0], false)
+        );
+        assert_eq!(
+            variable_offset(Anchor::TopRight, [-10.0, -4.0], false),
+            variable_offset(Anchor::TopRight, [10.0, 4.0], false)
+        );
+    }
+
+    /// A centered anchor is not moved by either form.
+    #[test]
+    fn the_center_does_not_move() {
+        assert!(near(
+            variable_offset(Anchor::Center, [10.0, 4.0], false),
+            [0.0, 0.0]
+        ));
+        assert!(near(
+            variable_offset(Anchor::Center, [24.0, 0.0], true),
+            [0.0, 0.0]
+        ));
     }
 }

@@ -51,8 +51,13 @@ pub struct FrameLabel<'a> {
     /// and up to nine entries copied per label per frame is the sort of cost that only looks
     /// small.
     pub variable: &'a [tessella_layout::symbol_layout::VariableAnchor],
-    /// `text-radial-offset` for this label, in shaping units, scaling `variable`'s directions.
-    pub radial: f32,
+    /// The offset this label's variable anchor points, in shaping units, and which form it is.
+    ///
+    /// See `SymbolOptions::variable_offset`: a radial distance the anchor gives a direction, or a
+    /// vector whose signs it gives.
+    pub variable_offset: [f32; 2],
+    /// Whether [`Self::variable_offset`] is a radial distance rather than a vector.
+    pub variable_radial: bool,
     /// The line it follows, in tile units, or empty when it is point-placed.
     ///
     /// A borrow rather than a copy: a street tile has thousands of these and the geometry is
@@ -352,14 +357,20 @@ impl ViewSymbols {
                     let height = (extent.bottom - extent.top) * box_scale
                         + text_padding.top
                         + text_padding.bottom;
-                    let radial = label.radial * options.font_scale * label.perspective;
+                    // Shaping units to screen pixels, which is what the box terms are in.
+                    let scale = options.font_scale * label.perspective;
                     label
                         .variable
                         .iter()
                         .map(|entry| {
+                            let pointed = tessella_glyph::shaping::variable_offset(
+                                entry.anchor,
+                                label.variable_offset,
+                                label.variable_radial,
+                            );
                             (
-                                -(entry.alignment.0 - 0.5) * width + entry.offset[0] * radial,
-                                -(entry.alignment.1 - 0.5) * height + entry.offset[1] * radial,
+                                -(entry.alignment.0 - 0.5) * width + pointed[0] * scale,
+                                -(entry.alignment.1 - 0.5) * height + pointed[1] * scale,
                             )
                         })
                         .collect()

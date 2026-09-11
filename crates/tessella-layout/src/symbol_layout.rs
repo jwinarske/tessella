@@ -304,10 +304,7 @@ fn variable_anchors(layer: &Layer, zoom: f64) -> Vec<VariableAnchor> {
             let anchor = anchor_of(Some(entry));
             VariableAnchor {
                 alignment: anchor.alignment(),
-                // At unit distance. The label's own `text-radial-offset` scales it, and a radial
-                // offset is a distance rather than a vector -- which is the whole reason the two
-                // are separable.
-                offset: tessella_glyph::shaping::radial_offset(anchor, 1.0),
+                anchor,
             }
         })
         .collect()
@@ -368,14 +365,21 @@ fn text_options(layer: &Layer, zoom: f64, feature: Option<&dyn Feature>) -> Symb
                 .map(|offset| [offset[0] * ONE_EM, offset[1] * ONE_EM])
                 .unwrap_or([0.0, 0.0])
         },
-        // The distance the anchors' directions are scaled by, in shaping units. Zero for a layer
-        // with no variable anchors, which is also what a layer that writes them without a radial
-        // offset gets -- and is what mbgl reads for it.
-        radial_offset: if variable.is_some() {
-            number("text-radial-offset").unwrap_or(0.0) * ONE_EM
+        // The offset a variable anchor points, in shaping units. mbgl branches on whether the
+        // style *wrote* `text-radial-offset`, not on its value: a layer writing both takes the
+        // radial one, and a layer writing only `text-offset` takes that. Reading the radial alone
+        // left the second case with no offset at all, so its labels sat on their own points --
+        // which against the oracle is four percent of a POI layer.
+        variable_offset: if variable.is_none() {
+            [0.0, 0.0]
+        } else if layer.layout.contains_key("text-radial-offset") {
+            [number("text-radial-offset").unwrap_or(0.0) * ONE_EM, 0.0]
         } else {
-            0.0
+            pair("text-offset")
+                .map(|offset| [offset[0] * ONE_EM, offset[1] * ONE_EM])
+                .unwrap_or([0.0, 0.0])
         },
+        variable_radial: variable.is_some() && layer.layout.contains_key("text-radial-offset"),
         // The anchor `auto` asks is the variable one where there is one, because that is the
         // anchor the label is actually placed at.
         justify: justify_of(
@@ -589,8 +593,8 @@ pub struct Pending {
 pub struct VariableAnchor {
     /// How far along the box's width and height the point sits, from `Anchor::alignment`.
     pub alignment: (f32, f32),
-    /// `evaluateRadialOffset` for this anchor, in shaping units.
-    pub offset: [f32; 2],
+    /// The anchor itself, for `shaping::variable_offset` to point the label with.
+    pub anchor: tessella_glyph::shaping::Anchor,
 }
 
 /// A symbol layer's contribution to one tile, before glyphs.

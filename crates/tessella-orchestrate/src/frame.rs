@@ -2085,7 +2085,8 @@ fn place_symbols(
                             laid_out: icon.clone(),
                             // Opacity only; an icon does not take the text's variable anchor.
                             variable: &[],
-                            radial: 0.0,
+                            variable_offset: [0.0, 0.0],
+                            variable_radial: false,
                             icon: None,
                             line: &[],
                             // Opacity only; this pairing never reaches placement.
@@ -2370,10 +2371,14 @@ fn frame_labels<'a>(
             // The layer's, and this label's own distance along them. Both are needed to say where
             // an alternative would put the box, and neither is knowable from the instance alone.
             variable: layout.variable_anchors.as_slice(),
-            radial: layout
+            variable_offset: layout
                 .pending
                 .get(instance.pending)
-                .map_or(0.0, |pending| pending.symbol.radial_offset),
+                .map_or([0.0, 0.0], |pending| pending.symbol.variable_offset),
+            variable_radial: layout
+                .pending
+                .get(instance.pending)
+                .is_some_and(|pending| pending.symbol.variable_radial),
             // Its icon's box, so the pair is decided together: `text-optional` and
             // `icon-optional` are about exactly this, and a shield that cannot have its number
             // should not keep its shield.
