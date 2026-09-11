@@ -2464,12 +2464,9 @@ fn part_of(content: &Content, sub_layer_index: i32) -> usize {
         Content::Fill3d(_) => sub % 2,
         // The encoder returns the glyphs then the sprites, and the glyphs are drawn by one or
         // two drawables: the halo pass and the fill pass share a geometry, as an extrusion's
-        // depth and colour passes do. So the sprites are whatever comes after the text passes
-        // this layer has. See `order::bindings_for` for the numbering.
-        Content::Symbol(layout) => {
-            let text = i32::from(layout.text_passes.halo) + i32::from(layout.text_passes.fill);
-            usize::from(sub_layer_index >= text)
-        }
+        // depth and colour passes do. The sprites are drawn under both and so take the first
+        // index, which is mbgl's "text over icons". See `order::bindings_for` for the numbering.
+        Content::Symbol(layout) => usize::from(layout.has_icons() && sub_layer_index == 0),
         _ => 0,
     }
 }
@@ -3500,6 +3497,20 @@ fn write_layer_state(
                         .and_then(tessella_style::Value::as_array)
                         .is_none()
                 });
+            // How many drawables a tile at each zoom was given, which is what says whether the
+            // layer resolved any sprites -- see `kind`. Taken before `bindings` is shadowed by
+            // the size-binding map below.
+            let parts_at: BTreeMap<u8, i32> = bindings.iter().fold(
+                BTreeMap::new(),
+                |mut counted: BTreeMap<u8, i32>, binding| {
+                    if let Some(tile) = binding.tile {
+                        let highest = counted.entry(tile.z).or_default();
+                        *highest = (*highest).max(binding.sub_layer_index + 1);
+                    }
+                    counted
+                },
+            );
+
             // How each half's size reaches the shader, per tile zoom.
             //
             // Per zoom because a composite size is sampled at the stops enclosing the *tile's*
@@ -3524,19 +3535,28 @@ fn write_layer_state(
             }
 
             // Which half a sub-layer draws and whether it is the halo pass, for a tile at this
-            // zoom. `order::bindings_for` packs the indices -- the letters take zero, the halo
-            // the next one when the layer has one -- so the mapping is read back the same way it
-            // was written, from the layer's own passes at the tile's zoom.
+            // zoom. `order::bindings_for` packs the indices -- sprites first, then the halo, then
+            // the letters -- so the mapping is read back the same way it was written.
+            //
+            // Whether the layer has sprites is not a property of the *layer*: it is whether the
+            // bucket resolved any, which this side does not hold. It is recovered from the
+            // bindings instead, by counting how many sub-layers a tile at this zoom was given
+            // against how many text passes the layer has. One more than the text passes is the
+            // sprite half, and it can only be at zero.
             let kind = |sub: i32, z: u8| -> Kind {
                 let passes = tessella_layout::symbol_layout::passes(layer, "text", f64::from(z));
-                let halo_at = i32::from(passes.fill);
-                if passes.fill && sub == 0 {
-                    Kind::TextFill
-                } else if passes.halo && sub == halo_at {
-                    Kind::TextHalo
-                } else {
-                    Kind::IconFill
+                let text = i32::from(passes.fill) + i32::from(passes.halo);
+                let mut at = 0;
+                if parts_at.get(&z).copied().unwrap_or_default() > text {
+                    if sub == at {
+                        return Kind::IconFill;
+                    }
+                    at += 1;
                 }
+                if passes.halo && sub == at {
+                    return Kind::TextHalo;
+                }
+                Kind::TextFill
             };
 
             // Both halves, in sub-layer order, the way a fill packs its triangles and its
