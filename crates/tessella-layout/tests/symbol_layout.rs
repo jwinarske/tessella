@@ -249,3 +249,65 @@ fn no_labels_is_an_empty_buffer() {
     assert!(buffers.is_empty());
     assert!(laid.is_empty());
 }
+
+/// An icon-only symbol contributes no font stack.
+///
+/// The frame publishes one glyph atlas per stack and numbers them by position, so an empty
+/// stack would take a texture id nothing could ever upload to — there are no glyphs to pack.
+/// A bucket names *one* atlas, the first of its stacks, so a bucket whose first symbol happened
+/// to be icon-only named that id for all of its text as well, and the consumer skipped the
+/// drawable entire.
+///
+/// In the Protomaps POI layer at Berlin z15 that was one tile of two: `missing atlas id=3
+/// tile=15/17604/10747`, and the two labels in it drew nowhere while every other tile's drew.
+#[test]
+fn an_icon_only_symbol_contributes_no_font_stack() {
+    use tessella_layout::symbol_layout::SymbolLayout;
+    use tessella_style::expression::Feature;
+    use tessella_style::{Layer, Value};
+
+    struct Poi(Option<&'static str>);
+    impl Feature for Poi {
+        fn property(&self, key: &str) -> Option<Value> {
+            match key {
+                "name" => self.0.map(|name| Value::String(name.to_string())),
+                "kind" => Some(Value::String("cafe".to_string())),
+                _ => None,
+            }
+        }
+        fn geometry_type(&self) -> &str {
+            "Point"
+        }
+    }
+
+    let layer: Layer = serde_json::from_str(
+        r#"{"id": "pois", "type": "symbol", "source": "s",
+            "layout": {"text-field": ["get", "name"], "text-font": ["Noto Sans Regular"],
+                       "icon-image": ["get", "kind"]}}"#,
+    )
+    .expect("a layer");
+
+    let mut layout = SymbolLayout::new(&layer, 15.0, 1.0);
+    let rings = vec![vec![(100.0, 100.0)]];
+    // The icon-only one first, which is the order that used to decide the whole bucket's atlas.
+    for feature in [Poi(None), Poi(Some("Kaffee"))] {
+        layout.push(
+            &layer,
+            15.0,
+            &feature,
+            &rings,
+            tessella_layout::PaintValues::default(),
+        );
+    }
+
+    assert_eq!(layout.pending.len(), 2, "both symbols are laid out");
+    assert!(
+        layout.pending[0].fonts.is_empty(),
+        "the icon-only one carries no fonts"
+    );
+    assert_eq!(
+        layout.stacks(),
+        [["Noto Sans Regular".to_string()]],
+        "and contributes no stack, so the bucket names the atlas its text is in"
+    );
+}

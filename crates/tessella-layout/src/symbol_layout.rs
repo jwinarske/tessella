@@ -1277,10 +1277,26 @@ impl SymbolLayout {
     ///
     /// Usually one. `text-font` is evaluated per feature, so a data-driven one gives a layer
     /// several — which is why laying out takes the whole store rather than one stack's glyphs.
+    ///
+    /// # The empty stack is not one of them
+    ///
+    /// A symbol with an icon and no text carries no fonts, and it used to contribute its empty
+    /// stack here like any other. Two things then went wrong together. The frame publishes one
+    /// glyph atlas per stack and numbers them by position, so an empty stack took a texture id
+    /// that nothing could ever upload to — there are no glyphs to pack. And a bucket names *one*
+    /// atlas, the first of its stacks, so a bucket whose first symbol happened to be icon-only
+    /// named that id for all of its text as well.
+    ///
+    /// The consumer then found no texture and skipped the drawable entire. In the Protomaps POI
+    /// layer at Berlin z15 that was one tile of two: `missing atlas id=3 tile=15/17604/10747`,
+    /// and the two labels in it drew nowhere while every other tile's drew correctly.
     #[must_use]
     pub fn stacks(&self) -> Vec<Vec<String>> {
         let mut out: Vec<Vec<String>> = Vec::new();
         for pending in &self.pending {
+            if pending.fonts.is_empty() {
+                continue;
+            }
             if !out.contains(&pending.fonts) {
                 out.push(pending.fonts.clone());
             }
