@@ -180,7 +180,11 @@ pub fn tile_matrix(
             // and the layer it belongs to is pushed through the near plane. The whole planet went
             // black from z14 up, and the frames below that were layers shuffled past each other.
             let (near, far) = globe::depth_range(view);
-            placement[14] = -f64::from(depth) * (far - near);
+            // Scaled like the clip matrix, because this reaches `z` *after* it. The material adds
+            // this straight onto a clip vector that `globe::clip_matrix` has already scaled, and
+            // an unscaled bias there is one divided by the larger `w` -- a layer separation
+            // quietly reduced by a factor of sixty thousand.
+            placement[14] = -f64::from(depth) * (far - near) * globe::clip_w_scale(view);
             Ok(placement)
         }
     }
@@ -1636,7 +1640,16 @@ impl SymbolDrawableEntry {
 
         #[allow(clippy::cast_possible_truncation)]
         Ok(Self {
-            matrix: core::array::from_fn(|index| tile[index] as f32),
+            // A globe's `matrix` is the *placement*, not the plane's tile-to-clip: the consumer
+            // bends a tile-local point through it to normalized Mercator and takes the sphere
+            // from there, which is what `fill`'s globe matrix is and what the direct-bend
+            // symbol material walks. Nothing on a globe reads the plane's version -- the
+            // anchored form takes the expansion instead -- so this is a slot a globe was
+            // leaving unused rather than a value it was overwriting.
+            matrix: core::array::from_fn(|index| match surface {
+                ProjectionMode::Globe => camera::mercator_matrix_for_tile(z, x, y, wrap)[index],
+                ProjectionMode::Mercator => tile[index],
+            } as f32),
             label_plane_matrix: core::array::from_fn(|index| plane[index] as f32),
             coord_matrix: core::array::from_fn(|index| coord[index] as f32),
             texsize,
@@ -2449,15 +2462,15 @@ pub fn globe_bend_block(
     let (near, far) = globe::depth_range(view);
     let bias = -f64::from(depth_offset(layer_index, sub_layer_index)) * (far - near);
 
-    // The bias goes on before the scale, not after. Scaling every coefficient multiplies `w` too,
-    // and the offset that reaches NDC is `bias / w` -- so a bias added afterwards would be divided
-    // by the larger `w` and land smaller by exactly that factor, which is a layer separation
-    // quietly reduced to nothing.
+    // The rows arrive scaled: `anchored_bend` walks `globe::clip_matrix`, which carries the `w`
+    // convention. What does not is the bias, which is added here rather than multiplied through --
+    // the offset that reaches NDC is `bias / w`, so an unscaled one lands smaller by exactly the
+    // scale, which is a layer separation quietly reduced to nothing.
     let scale = globe::clip_w_scale(view);
     #[allow(clippy::cast_possible_truncation)]
-    let row = |v: [f64; 4]| -> [f32; 4] { core::array::from_fn(|i| (v[i] * scale) as f32) };
+    let row = |v: [f64; 4]| -> [f32; 4] { core::array::from_fn(|i| v[i] as f32) };
     let mut anchor = bend.anchor;
-    anchor[2] += bias;
+    anchor[2] += bias * scale;
     GlobeBendUbo {
         anchor: row(anchor),
         d_u: row(bend.d_u),

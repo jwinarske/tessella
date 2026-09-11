@@ -1059,7 +1059,15 @@ mod pitched_globe {
             #[allow(clippy::cast_possible_truncation)]
             let fov = f64::from(camera::DEFAULT_FOV as f32);
             let projection = camera::perspective(fov, view.width / view.height, near, far);
-            let expected = camera::multiply(&projection, &eye);
+            let mut expected = camera::multiply(&projection, &eye);
+            // `clip_matrix` carries `clip_w_scale`, which is a uniform scale of the whole matrix
+            // and moves nothing on screen -- see its own doc. The composition above is the bare
+            // projection, so the reference takes the same scale to be comparable element by
+            // element rather than projectively.
+            let scale = globe::clip_w_scale(&view);
+            for value in &mut expected {
+                *value *= scale;
+            }
 
             let actual = globe::clip_matrix(&view);
             assert_eq!(
