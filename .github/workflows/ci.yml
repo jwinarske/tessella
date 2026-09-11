@@ -123,6 +123,17 @@ jobs:
       - name: the consumer runs under a browser
         if: matrix.target == 'wasm32-unknown-unknown'
         run: node web/test/browser.mjs
+      # The four-view zoom sweep under the same browser, four hosted maps in one instance, held to
+      # what it must never do: leave a view uncovered or blank, fill a ring, fetch a tile twice, or
+      # produce a stream that differs from the native serial producer's over the same style,
+      # cameras and tile -- every record and slab byte, frame by frame, with the camera's
+      # libm-derived doubles held to a few ulps. None of that needs a GPU, which this runner lacks:
+      # the pixel check says it did not run, and the frame budget is reported rather than gated,
+      # since a budget means something only on a named machine. The native half is a release build
+      # of `examples/sweep_trace.rs`, run with `TESSELLA_WORKERS=0`.
+      - name: the four-view sweep holds under a browser
+        if: matrix.target == 'wasm32-unknown-unknown'
+        run: node web/test/bench.mjs
       # `ureq` is `std::net`. It compiles for wasm32, so only the dependency graph says whether it
       # is there.
       - name: no sockets in the wasm graph
