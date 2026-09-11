@@ -175,7 +175,11 @@ TESSELLA_ASSERT(sizeof(tessella_map_regions) == 4 * sizeof(void*),
  * that instead.
  *
  * The camera starts where `tessella_set_camera` would put it; a caller that wants somewhere else
- * calls that before the first tick rather than covering a view it will not draw. */
+ * calls that before the first tick rather than covering a view it will not draw.
+ *
+ * Maps created with the same style share what they build: a tile one of them has built is not
+ * fetched or built again for another, which is what keeps four views of one style from costing
+ * four times one. */
 tessella_result tessella_create(const tessella_config* config,
                                 double latitude,
                                 double longitude,
@@ -193,7 +197,12 @@ tessella_result tessella_create(const tessella_config* config,
  * with no network at all.
  *
  * The map still needs ticking. A hosted map with nobody calling tessella_tick asks for nothing:
- * the tick is what notices what has arrived and decides what to want next. */
+ * the tick is what notices what has arrived and decides what to want next.
+ *
+ * Hosted maps created with the same style share what they build: a tile one of them has built is
+ * not fetched or built again for another. So a URL is taken to answer the same bytes to every one
+ * of them, and a host that answers two of them differently gets whichever answer was built first
+ * for both. Maps that fetch for themselves share among themselves and never with these. */
 tessella_result tessella_create_hosted(const tessella_config* config,
                                        double latitude,
                                        double longitude,

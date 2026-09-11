@@ -28,6 +28,12 @@ tessella-tile = { path = "../tessella-tile" }
 tessella-capture-abi = { path = "../tessella-capture-abi" }
 tile-server = { path = "../../tools/tile-server" }
 
+# Sets `TESSELLA_WORKERS` before anything else runs, which only a `main` of its own can do: the
+# pool reads it once, and the libtest harness has threads going before the first test starts.
+[[test]]
+name = "shared_tiles"
+harness = false
+
 # `ureq` is `std::net`, which a browser does not have. It compiles for wasm32 and cannot connect,
 # so on that target it would be a megabyte of dead weight behind an entry point that could only
 # ever fail -- and `tessella_create` is `cfg`'d away there for the same reason. A hosted map is

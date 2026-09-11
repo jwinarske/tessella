@@ -66,12 +66,16 @@ pub enum Status {
 
 extern crate alloc;
 
-use alloc::sync::Arc;
+use alloc::collections::BTreeMap;
+use alloc::string::String;
+use alloc::sync::{Arc, Weak};
 use std::ffi::c_char;
+use std::sync::{Mutex, PoisonError};
 
 use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::ViewId;
 use tessella_capture_abi::ring::{self, Producer, region_size};
+use tessella_orchestrate::boot::BootError;
 use tessella_orchestrate::cache::TileCache;
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
 use tessella_orchestrate::deferred::PoolBacked;
@@ -338,6 +342,10 @@ unsafe fn borrowed(text: *const u8, len: usize) -> Option<String> {
 /// The camera starts where [`tessella_set_camera`] would put it; a caller that wants somewhere
 /// else calls that before the first tick rather than covering a view it will not draw.
 ///
+/// Maps created with the same style share what they build: a tile one of them has built is not
+/// fetched or built again for another, which is what keeps four views of one style from costing
+/// four times one.
+///
 /// # Safety
 ///
 /// `config` and `out` must be valid pointers, and `config.style_json` either null or valid for
@@ -375,6 +383,11 @@ pub unsafe extern "C" fn tessella_create(
 ///
 /// The map still needs ticking. A hosted map with nobody calling [`tessella_tick`] asks for
 /// nothing, because it is the tick that notices what has arrived and decides what to want next.
+///
+/// Hosted maps created with the same style share what they build: a tile one of them has built
+/// is not fetched or built again for another. So a URL is taken to answer the same bytes to every
+/// one of them, and a host that answers two of them differently gets whichever answer was built
+/// first for both. Maps that fetch for themselves share among themselves and never with these.
 ///
 /// # Safety
 ///
@@ -492,9 +505,10 @@ unsafe fn create(
         };
         let arena = tessella_orchestrate::emit::SlabArena::in_region(mapping, SLAB_SLOTS);
 
-        let cache = Arc::new(TileCache::new(64));
+        let transport = transport();
+        let cache = shared_cache(transport.hosted().is_some(), &style_text);
         let source =
-            TileSource::with_transport(style_text, Arc::new(transport()), cache, Pool::shared(), 1);
+            TileSource::with_transport(style_text, Arc::new(transport), cache, Pool::shared(), 1);
 
         let state = Box::new(MapState {
             map: Map::with_arena(style, view, ViewId(0), arena),
@@ -508,6 +522,61 @@ unsafe fn create(
         unsafe { *out = Box::into_raw(state) };
         Status::Ok
     })
+}
+
+/// Tiles a cache holds beyond those some map is drawing.
+///
+/// Per style rather than per map: a cache is shared by every map on its style, and the store caps
+/// what nobody is using across all of them at once.
+const CACHED_TILES: usize = 64;
+
+/// The built-tile cache for a style, shared by every live map in the process that has it.
+///
+/// A tile's buckets are a function of the style, the tile, its bytes and the surface it is split
+/// for, and nothing else about the map that asked -- the surface is in the key, so a globe pane
+/// and a flat one beside it share the fetch and not the buckets. Four views of one style over
+/// overlapping covers therefore want the same buckets, and a cache per map built each of them
+/// once per map. Measured on four overlapping views sweeping z8 to z16 and back, that was 157
+/// builds for 40 tiles, and three quarters of every tick's work.
+///
+/// Keyed by the style's *text*. Every key in a cache carries the map's style revision, and each
+/// map's is 1, so a cache shared between two different styles would hand one the other's
+/// buckets; the text is what makes that impossible rather than unlikely. Two documents that
+/// differ only in whitespace get a cache each, which costs builds and nothing else.
+///
+/// And by whether the map fetches for itself. Sharing assumes a URL answers the same bytes to
+/// every map that asks, which holds for a network. A host is free to answer two of its maps
+/// differently, and while that is its own business among its own maps, it is not a map that
+/// fetches for itself.
+///
+/// A cache lives exactly as long as some map uses it: the table holds it weakly, so the last map
+/// on a style takes its tiles with it, and a later map on the same style starts cold.
+fn shared_cache(hosted: bool, style_text: &str) -> Arc<TileCache<BootError>> {
+    let mut caches = CACHES.lock().unwrap_or_else(PoisonError::into_inner);
+    forget_unused(&mut caches);
+    let key = (hosted, String::from(style_text));
+    // Upgraded rather than assumed live: the last map on a style can be destroyed on another
+    // thread between the sweep and here, and nothing holds the table while it is.
+    if let Some(cache) = caches.get(&key).and_then(Weak::upgrade) {
+        return cache;
+    }
+    let cache = Arc::new(TileCache::new(CACHED_TILES));
+    caches.insert(key, Arc::downgrade(&cache));
+    cache
+}
+
+/// Every style's cache, held weakly, by whether its maps are hosted and by the style's text.
+type Caches = BTreeMap<(bool, String), Weak<TileCache<BootError>>>;
+static CACHES: Mutex<Caches> = Mutex::new(BTreeMap::new());
+
+/// Drops the entries for styles no live map has.
+///
+/// The tiles went with the last map; what is left is the key, and the key is the whole style
+/// document, which can be a megabyte. Swept when a map is created and when one is destroyed, so a
+/// process that stops creating maps does not keep every style it ever had. An entry whose last map
+/// is still finishing a build on a worker survives the destroy and goes at the next sweep.
+fn forget_unused(caches: &mut Caches) {
+    caches.retain(|_, cache| cache.strong_count() > 0);
 }
 
 /// Moves the camera.
@@ -1129,5 +1198,7 @@ pub unsafe extern "C" fn tessella_destroy(map: MapHandle) {
     // is caught and swallowed rather than allowed out.
     let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         drop(unsafe { Box::from_raw(map) });
+        // It may have been the last map on its style.
+        forget_unused(&mut CACHES.lock().unwrap_or_else(PoisonError::into_inner));
     }));
 }

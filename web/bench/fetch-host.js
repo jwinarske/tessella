@@ -1,14 +1,15 @@
 // Fetching for several hosted maps at once, and never fetching the same thing twice.
 //
-// Four maps whose views overlap ask for the same tiles, each through its own ticket. Each map
-// has its own fetch table and its own tile cache, so nothing inside the producer can see that the
-// other three asked -- which makes this the only place four views can share a fetch. One URL in
-// flight answers every ticket that names it, from whichever map; one that has landed is answered
-// out of the cache in front of the origin.
+// Four maps whose views overlap ask for the same tiles, each through its own ticket. They share
+// built tiles -- a map that wants a tile another has already built draws it without asking -- but
+// four maps reaching the same new tile in the same frame each ask before any of them has it, and
+// each map's fetch table is its own. So this is where those four requests become one fetch. One
+// URL in flight answers every ticket that names it, from whichever map; one that has landed is
+// answered out of the cache in front of the origin.
 //
-// That is flatness at the fetch level and only there. Each map still decodes and builds what it
-// was handed, and whether four views built a shared tile once is not something four independent
-// maps can show. The report says so rather than letting this number stand for both.
+// That is flatness at the fetch level. Whether the four maps then built the tile once is the
+// producer's to say, and no count of builds crosses the ABI, so the report says it is not
+// measured rather than letting this number stand for both.
 //
 // # One body at a time
 //

@@ -84,7 +84,7 @@ export function absent(report) {
   }
   lines.push("GPU TIME NOT MEASURED");
   lines.push("FLATNESS: fetch-level only");
-  lines.push("BUILD-LEVEL FLATNESS: NOT MEASURED (four independent maps)");
+  lines.push("BUILD-LEVEL FLATNESS: NOT MEASURED (no build count crosses the ABI)");
   lines.push("SYMBOL POPS: NOT MEASURED (fills only)");
   return lines;
 }
