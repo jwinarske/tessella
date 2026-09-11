@@ -2401,23 +2401,28 @@ fn push_span<T: WireRecord>(payload: &mut Vec<u8>, items: &[T]) -> Span {
 
 /// Positions as the slab carries them: pairs of little-endian `i16`, written in place.
 ///
-/// Per value into a destination already the right size, which has no capacity to check and
-/// compiles to a straight copy where the target is little-endian -- which is every target this
-/// builds for, and the reason the wire format is little-endian.
+/// A pair is its two components in order, so the pairs are written as the flat run of `i16`
+/// they already are in memory.
 fn alloc_i16x2(arena: &mut SlabArena, values: &[[i16; 2]]) -> SlabRef {
-    arena.alloc_with(values.len() * 4, |out| {
-        for (bytes, [x, y]) in out.chunks_exact_mut(4).zip(values) {
-            bytes[..2].copy_from_slice(&x.to_le_bytes());
-            bytes[2..].copy_from_slice(&y.to_le_bytes());
+    let values = values.as_flattened();
+    arena.alloc_with(values.len() * 2, |out| {
+        for (bytes, value) in out.as_chunks_mut::<2>().0.iter_mut().zip(values) {
+            *bytes = value.to_le_bytes();
         }
     })
 }
 
 /// Indices, as little-endian `u16`, written in place.
+///
+/// Per value into a destination already the right size, taken as fixed-size chunks: no capacity
+/// to check, no bounds to check, and one array assignment per value. That is a loop the compiler
+/// turns into a straight copy where the target is little-endian -- which is every target this
+/// builds for, and the reason the wire format is little-endian. Splitting a value's bytes and
+/// reassembling them costs that, which is why a pair is flattened rather than written by parts.
 fn alloc_u16(arena: &mut SlabArena, values: &[u16]) -> SlabRef {
     arena.alloc_with(values.len() * 2, |out| {
-        for (bytes, value) in out.chunks_exact_mut(2).zip(values) {
-            bytes.copy_from_slice(&value.to_le_bytes());
+        for (bytes, value) in out.as_chunks_mut::<2>().0.iter_mut().zip(values) {
+            *bytes = value.to_le_bytes();
         }
     })
 }
@@ -2462,22 +2467,16 @@ fn as_raster_bytes(values: &[RasterVertex]) -> Vec<u8> {
     out
 }
 
-/// Three little-endian `f32` per value, written in place.
+/// Three little-endian `f32` per value, written in place as the flat run they are.
 fn alloc_f32x3(arena: &mut SlabArena, values: &[[f32; 3]]) -> SlabRef {
-    arena.alloc_with(values.len() * 12, |out| {
-        for (bytes, value) in out.chunks_exact_mut(12).zip(values) {
-            for (slot, component) in bytes.chunks_exact_mut(4).zip(value) {
-                slot.copy_from_slice(&component.to_le_bytes());
-            }
-        }
-    })
+    alloc_f32(arena, values.as_flattened())
 }
 
 /// Little-endian `f32`, written in place.
 fn alloc_f32(arena: &mut SlabArena, values: &[f32]) -> SlabRef {
     arena.alloc_with(values.len() * 4, |out| {
-        for (bytes, value) in out.chunks_exact_mut(4).zip(values) {
-            bytes.copy_from_slice(&value.to_le_bytes());
+        for (bytes, value) in out.as_chunks_mut::<4>().0.iter_mut().zip(values) {
+            *bytes = value.to_le_bytes();
         }
     })
 }
