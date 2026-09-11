@@ -122,6 +122,77 @@ fn icon_options(
     }
 }
 
+/// Whether a symbol layer draws a halo pass and a fill pass, for one of its two halves.
+///
+/// mbgl's `textPropertyValues` and `iconPropertyValues`, transcribed including their fallbacks:
+///
+/// ```text
+/// hasHalo = haloColor.constantOr(black).a > 0 && haloWidth.constantOr(1) != 0
+/// hasFill = color.constantOr(black).a > 0
+/// ```
+///
+/// The fallbacks are the point and they are not the spec's defaults. `constantOr` answers with
+/// the value it is given when the property varies per feature, and mbgl passes *opaque black*
+/// and a width of *one* -- so a data-driven halo always haloes, where the spec's own defaults
+/// (transparent black, width zero) would say it never does. A property that varies with zoom
+/// alone has been evaluated by then and answers for itself.
+///
+/// Read from the layer rather than from resolved paint so [`SymbolLayout`] can settle it once:
+/// how many drawables a symbol layer becomes is asked in two places, and the two must not be
+/// able to disagree.
+///
+/// `prefix` is `"text"` or `"icon"`.
+#[must_use]
+pub fn passes(layer: &Layer, prefix: &str, zoom: f64) -> Passes {
+    // A paint property's value at this zoom, or `None` when it varies per feature -- which is
+    // exactly the case `constantOr` answers with its argument for.
+    let constant = |key: &str| -> Option<Option<Value>> {
+        match layer.paint.get(key)? {
+            tessella_style::PropertyValue::Literal(literal) => Some(Some(literal.clone())),
+            tessella_style::PropertyValue::Expression(raw) => {
+                let Ok(expression) = tessella_style::Expression::parse(raw.value()) else {
+                    return Some(None);
+                };
+                if expression.dependency().needs_feature() {
+                    return Some(None);
+                }
+                Some(expression.evaluate(Some(zoom), None).ok())
+            }
+        }
+    };
+    // `absent` is what the *spec* default's alpha says, which is where the two rules meet: mbgl
+    // evaluates the property first and only then reaches for `constantOr`, so a layer that never
+    // set the property gets the spec's value and not the fallback.
+    let opaque = |key: &str, absent: bool| -> bool {
+        match constant(key) {
+            None => absent,
+            // Not constant, so mbgl's `constantOr(black)` answers black, whose alpha is one.
+            Some(None) => true,
+            Some(Some(value)) => {
+                tessella_style::property::as_color(&value).is_ok_and(|color| color.a > 0.0)
+            }
+        }
+    };
+    let wide = match constant(&alloc::format!("{prefix}-halo-width")) {
+        None => false,
+        Some(None) => true,
+        Some(Some(value)) => value.as_number().is_some_and(|width| width != 0.0),
+    };
+    Passes {
+        halo: opaque(&alloc::format!("{prefix}-halo-color"), false) && wide,
+        fill: opaque(&alloc::format!("{prefix}-color"), true),
+    }
+}
+
+/// Which of a symbol half's two passes a layer draws.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Passes {
+    /// The halo, which draws underneath the letters.
+    pub halo: bool,
+    /// The letters themselves.
+    pub fill: bool,
+}
+
 /// Clips a line to the tile box, the way mbgl clips one before placing anchors.
 ///
 /// # Why a line is clipped at all
@@ -666,6 +737,13 @@ pub struct SymbolLayout {
     pub text_size: SizeBinding,
     /// The same for `icon-size`.
     pub icon_size: SizeBinding,
+    /// Which passes this layer's text draws: the halo, the letters, or both.
+    ///
+    /// A halo is a *second drawable over the same geometry*, drawn underneath, so this is what
+    /// decides how many drawables a symbol layer becomes. Settled here because that count is
+    /// asked in two places -- the binding walk and the encoder -- and the two must not be able
+    /// to disagree.
+    pub text_passes: Passes,
     /// How it follows a line, when it does.
     pub line: LineOptions,
     /// Where the labels sit.
@@ -697,6 +775,7 @@ impl SymbolLayout {
         // `text-size`'s spec default is sixteen pixels; `icon-size`'s is a multiplier of one.
         let text_size = SizeBinding::of(layer, "text-size", zoom, 16.0);
         let icon_size = SizeBinding::of(layer, "icon-size", zoom, 1.0);
+        let text_passes = passes(layer, "text", zoom);
         let symbol = text_options(layer, zoom, None, &text_size);
         let placement = Placement::of(layer, zoom);
 
@@ -729,6 +808,7 @@ impl SymbolLayout {
             symbol,
             text_size,
             icon_size,
+            text_passes,
             line: LineOptions {
                 symbol,
                 // Into tile units, which is what this field holds and what `get_anchors` walks.

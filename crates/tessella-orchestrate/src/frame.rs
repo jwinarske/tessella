@@ -2457,10 +2457,31 @@ fn part_of(content: &Content, sub_layer_index: i32) -> usize {
     match content {
         Content::Fill(_) => sub.saturating_sub(1),
         Content::Fill3d(_) => sub % 2,
-        // Zero is the glyphs and one the sprites, in the order the encoder returns them.
-        Content::Symbol(_) => sub,
+        // The encoder returns the glyphs then the sprites, and the glyphs are drawn by one or
+        // two drawables: the halo pass and the fill pass share a geometry, as an extrusion's
+        // depth and colour passes do. So the sprites are whatever comes after the text passes
+        // this layer has. See `order::bindings_for` for the numbering.
+        Content::Symbol(layout) => {
+            let text = i32::from(layout.text_passes.halo) + i32::from(layout.text_passes.fill);
+            usize::from(sub_layer_index >= text)
+        }
         _ => 0,
     }
+}
+
+/// What one of a symbol layer's drawables draws.
+///
+/// The sub-layer index alone does not say: `order::bindings_for` packs the indices, so which one
+/// the letters take depends on whether the layer haloes. See the `kind` closure in the symbol
+/// arm of `write_layer_state`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// The letters themselves.
+    TextFill,
+    /// The halo, which draws underneath them.
+    TextHalo,
+    /// The sprites, over both.
+    IconFill,
 }
 
 /// The id every part is encoded with, before the caller stamps each drawable's own.
@@ -3454,6 +3475,22 @@ fn write_layer_state(
                 });
             }
 
+            // Which half a sub-layer draws and whether it is the halo pass, for a tile at this
+            // zoom. `order::bindings_for` packs the indices -- the letters take zero, the halo
+            // the next one when the layer has one -- so the mapping is read back the same way it
+            // was written, from the layer's own passes at the tile's zoom.
+            let kind = |sub: i32, z: u8| -> Kind {
+                let passes = tessella_layout::symbol_layout::passes(layer, "text", f64::from(z));
+                let halo_at = i32::from(passes.fill);
+                if passes.fill && sub == 0 {
+                    Kind::TextFill
+                } else if passes.halo && sub == halo_at {
+                    Kind::TextHalo
+                } else {
+                    Kind::IconFill
+                }
+            };
+
             // Both halves, in sub-layer order, the way a fill packs its triangles and its
             // outline. A symbol layer that draws sprites has two drawables per tile and each
             // needs its own matrix slot: packing only the glyphs left the icon drawable pointing
@@ -3463,6 +3500,7 @@ fn write_layer_state(
             let entry = |sub_layer_index: i32| {
                 let sub = sub_layer_index;
                 matrices(sub).filter_map(move |tile| {
+                    let is_icon = kind(sub, tile.z) == Kind::IconFill;
                     ubo::SymbolDrawableEntry::for_tile(
                         view,
                         tile.z,
@@ -3485,11 +3523,11 @@ fn write_layer_state(
                                 zoom_constant: true,
                                 feature_constant: true,
                                 size_t: 0.0,
-                                size: if sub == 1 { 1.0 } else { 16.0 },
+                                size: if is_icon { 1.0 } else { 16.0 },
                             },
-                            |pair| pair[usize::from(sub == 1)].at_zoom(zoom),
+                            |pair| pair[usize::from(is_icon)].at_zoom(zoom),
                         ),
-                        sub != 1,
+                        !is_icon,
                         alignments,
                         placement,
                         projection,
@@ -3504,12 +3542,19 @@ fn write_layer_state(
                         // pixels away. It reads as the icon simply being absent, and the layer's
                         // gross-pixel count barely moves, because what is missing is a handful of
                         // sprites against a screen of labels.
-                        variable_anchors && sub != 1,
+                        variable_anchors && !is_icon,
                     )
                     .ok()
                 })
             };
-            let entries: Vec<ubo::SymbolDrawableEntry> = entry(0).chain(entry(1)).collect();
+            // Which sub-layers this layer actually emitted, read off the bindings rather than
+            // re-derived: `order::bindings_for` decides, and a second opinion here would be a
+            // drawable buffer indexed differently from the drawables that address it.
+            let subs: Vec<i32> = (0..3)
+                .filter(|&sub| matrices(sub).next().is_some())
+                .collect();
+            let entries: Vec<ubo::SymbolDrawableEntry> =
+                subs.iter().copied().flat_map(entry).collect();
             let buffer =
                 ubo::pack_symbol_drawable_buffer(&entries, ubo_layouts::SYMBOL_DRAWABLE_UBO.stride);
             ubo::write(
@@ -3525,10 +3570,12 @@ fn write_layer_state(
             // tile is, so the corner offsets never touch the sphere. Same six coefficients a fill
             // and a line take, and the same order as the buffer above.
             //
-            // Sub-layers zero and one, text then icon, matching `entries`.
+            // The same sub-layers in the same order as `entries`, because the consumer indexes
+            // both by the drawable's own UBO index.
             if projection == ProjectionMode::Globe {
-                let bend: Vec<GlobeBendUbo> = [0, 1]
-                    .into_iter()
+                let bend: Vec<GlobeBendUbo> = subs
+                    .iter()
+                    .copied()
                     .flat_map(|sub| {
                         matrices(sub).map(move |tile| {
                             ubo::globe_bend_block(
@@ -3557,7 +3604,21 @@ fn write_layer_state(
             // an SDF edge a thousand times too sharp.
             let gamma =
                 ubo::symbol_gamma_scale(view, ubo::effective_pitch(alignments.pitch, projection));
-            let tile_props = ubo::pack_symbol_tile_props(entries.len(), true, false, gamma);
+            // Per sub-layer, not per layer: which half a drawable draws and whether it is the
+            // halo pass are what the consumer reads out of this block to choose the paint, and
+            // the three drawables of a haloed layer answer differently.
+            let mut tile_props = Vec::new();
+            for &sub in &subs {
+                for tile in matrices(sub) {
+                    let kind = kind(sub, tile.z);
+                    tile_props.extend(ubo::pack_symbol_tile_props(
+                        1,
+                        kind != Kind::IconFill,
+                        kind == Kind::TextHalo,
+                        gamma,
+                    ));
+                }
+            }
             ubo::write(
                 producer,
                 view_id,

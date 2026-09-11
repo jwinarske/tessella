@@ -11,7 +11,7 @@
 use tessella_layout::size::SizeBinding;
 use tessella_layout::symbol_bucket::{IconOptions, LineOptions, SymbolOptions};
 use tessella_layout::symbol_layout::{
-    Alignment, Alignments, Anchoring, Pending, Placement, SymbolLayout,
+    Alignment, Alignments, Anchoring, Passes, Pending, Placement, SymbolLayout,
 };
 
 /// A layout holding the given `(text, line)` features, line-placed.
@@ -52,6 +52,11 @@ fn layout(features: &[(&str, &[(i32, i32)])]) -> SymbolLayout {
         // Merging is about geometry; the size these labels draw at never enters it.
         text_size: SizeBinding::Constant(16.0),
         icon_size: SizeBinding::Constant(1.0),
+        // Merging is about geometry; whether the letters carry a halo never enters it.
+        text_passes: Passes {
+            halo: false,
+            fill: true,
+        },
         line: LineOptions::default(),
         placement: Placement::Line,
         text_alignments: Alignments {
