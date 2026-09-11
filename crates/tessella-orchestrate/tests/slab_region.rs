@@ -460,6 +460,37 @@ mod in_region {
         );
     }
 
+    /// Bytes written in place land where the reference says, and a refusal writes nothing.
+    ///
+    /// `alloc_with` hands the caller the destination instead of taking a finished buffer, so the
+    /// promise `alloc` keeps by not copying is one it keeps here by not calling back: an encoder
+    /// told to fill bytes that are not there would write past the region.
+    #[test]
+    fn bytes_written_in_place_land_where_the_reference_says() {
+        let mut bytes = vec![0u8; 1024];
+        let mut arena = arena(&mut bytes);
+
+        let written = arena.alloc_with(48, |out| {
+            assert_eq!(out.len(), 48, "handed exactly what was asked for");
+            out.fill(0xEE);
+        });
+        let mut called = false;
+        let empty = arena.alloc_with(0, |_| called = true);
+        assert!(!called, "nothing to write, so nothing was asked to");
+        assert_eq!(empty.length, 0);
+
+        let refused = arena.alloc_with(4096, |_| called = true);
+        assert!(
+            !called,
+            "a refused allocation must not be handed anywhere to write"
+        );
+        assert!(arena.is_full());
+        assert_eq!(refused.length, 0, "a refusal names no bytes");
+
+        arena.seal();
+        assert_eq!(arena.resolve(written).expect("still there"), &[0xEEu8; 48]);
+    }
+
     /// A rolled-back frame leaves the region as it found it.
     #[test]
     fn a_rewind_gives_the_bytes_back() {
