@@ -500,11 +500,36 @@ impl SlabArena {
     }
 
     /// Storage for a slab about to be opened.
+    ///
+    /// # The region's cursor is aligned here, not only within a slab
+    ///
+    /// [`SLAB_ALIGN`] says every allocation starts eight-aligned *within its slab*, and that is
+    /// only worth anything if the slab itself starts aligned too: a consumer binds
+    /// `slabStart + ref.offset`, so an odd slab start makes every aligned reference in it odd.
+    /// The packed path has always held that -- `pack()` lays each slab out rounded -- and the
+    /// region path did not: it bumped its cursor by exactly the bytes written, so a slab of
+    /// thirteen bytes left the next one starting thirteen along.
+    ///
+    /// Two things went wrong with that, and the second is why it had to be the allocator that
+    /// changed rather than the reader. The consumer's aligned loads were not: the comment on
+    /// `SLAB_ALIGN` calls an unaligned vertex buffer "a fault on some of the targets §16
+    /// cross-compiles for". And `compact_region` and `region_waste` both measure a slab as
+    /// `length.next_multiple_of(8)`, which is what the allocator *should* have reserved -- so
+    /// compaction packed every slab a few bytes higher than the allocator had, the destination
+    /// eventually passed the source, and a slab was copied over bytes belonging to one not yet
+    /// moved. A `debug_assert!` caught the ordering; in release the check is compiled out and
+    /// the corruption is silent. It reached thousands of panics a second under the quad's zoom
+    /// sweep and never once in the single-view probe, which does not compact.
+    ///
+    /// The bytes skipped are not written. Nothing names them -- a slab is found through its
+    /// table entry and a reference is an offset into the slab -- and writing them would mean
+    /// bounds-checking a region the caller may have filled exactly.
     fn open_bytes(&mut self, id: u32, hint: usize) -> Bytes {
         match &mut self.backing {
             Backing::Owned => Bytes::Owned(Vec::with_capacity(hint)),
             Backing::Region { cursor, .. } => {
                 let _ = id;
+                *cursor = cursor.next_multiple_of(SLAB_ALIGN);
                 Bytes::Region(*cursor, 0)
             }
         }

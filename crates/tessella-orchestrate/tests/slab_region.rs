@@ -377,6 +377,7 @@ fn a_handle_survives_a_sweep() {
 /// ordering then comes free from the ring, whose commit is a releasing store made after every
 /// byte here.
 mod in_region {
+    use tessella_capture_abi::envelope::{SlabEntry, SlabRegion, WireRecord as _};
     use tessella_capture_abi::mapping::Mapping;
     use tessella_orchestrate::SlabArena;
 
@@ -413,6 +414,96 @@ mod in_region {
 
         // And `pack` hands back what is already there rather than building it again.
         assert_eq!(&arena.pack()[..], &region[..arena.pack().len()]);
+    }
+
+    /// A slab in a *region* starts eight-aligned, as one in a packed arena does.
+    ///
+    /// `SLAB_ALIGN` says "every allocation starts eight-aligned within its slab", and a
+    /// reference aligned within a slab is only aligned in the region if the slab itself is --
+    /// the consumer binds `slabStart + ref.offset` as a vertex buffer of `i16` pairs or of
+    /// floats, which the comment calls "a fault on some of the targets section 16
+    /// cross-compiles for".
+    ///
+    /// The packed path has been checked since it was written; the region path never was, and it
+    /// bumps its cursor by exactly the bytes written. So a slab of thirteen bytes left the next
+    /// one starting thirteen bytes along.
+    #[test]
+    fn a_region_slab_starts_aligned() {
+        let mut bytes = vec![0u8; 1 << 16];
+        let mut arena = arena(&mut bytes);
+
+        // Lengths deliberately not multiples of eight, one slab each.
+        for length in [1usize, 3, 7, 13, 31] {
+            arena.alloc(&vec![0xa5; length]);
+            arena.seal();
+        }
+
+        let region = arena.region().expect("an arena over a region has one");
+        let header = SlabRegion::from_bytes(region).expect("a header");
+        for index in 0..header.count {
+            let at = size_of::<SlabRegion>() + index as usize * size_of::<SlabEntry>();
+            let entry = SlabEntry::from_bytes(&region[at..]).expect("an entry");
+            if entry.length == 0 {
+                continue;
+            }
+            assert_eq!(
+                entry.offset % 8,
+                0,
+                "slab {index} begins at {}, which is not eight-aligned",
+                entry.offset
+            );
+        }
+    }
+
+    /// Compaction never moves a slab up, and never loses a byte.
+    ///
+    /// It packs at `length.next_multiple_of(8)` per slab while the allocator bumped by exactly
+    /// the bytes written, so the compacted positions drift *upward* by up to seven bytes a slab.
+    /// Enough slabs of odd length and the drift outruns what the sweep freed: the destination
+    /// passes the source, and `copy_within` then writes a slab over bytes belonging to one that
+    /// has not been copied yet.
+    ///
+    /// A `debug_assert!` catches the first half of that, which is why it surfaced as thousands
+    /// of panics a second under the quad's zoom sweep and not at all in release -- where the
+    /// check is compiled out and the corruption is silent. So this asserts the *contents*
+    /// afterwards rather than the ordering: that is the property either build has to keep.
+    #[test]
+    fn compaction_never_moves_a_slab_up() {
+        let mut bytes = vec![0u8; 1 << 16];
+        let mut arena = arena(&mut bytes);
+
+        // A row of odd-length slabs, each with its own filler, and the first released so the
+        // sweep frees a little -- less than the drift the rounding introduces over the rest.
+        let mut references = Vec::new();
+        for index in 0..7u8 {
+            let reference = arena.alloc(&[0xa0 + index; 13]);
+            arena.seal();
+            arena.retain(reference);
+            references.push(reference);
+        }
+        arena.release(references[0]);
+        arena.sweep();
+        arena.compact_region();
+
+        for (index, reference) in references.iter().enumerate().skip(1) {
+            #[allow(clippy::cast_possible_truncation)]
+            let filler = 0xa0 + index as u8;
+            assert_eq!(
+                arena
+                    .resolve(*reference)
+                    .expect("the handle still resolves"),
+                &[filler; 13][..],
+                "slab {} was overwritten by the compaction",
+                reference.slab
+            );
+            assert_eq!(
+                super::resolve(arena.region().expect("a region"), *reference)
+                    .expect("and resolves across the mapping"),
+                &[filler; 13][..],
+                "slab {}'s table entry disagrees with its bytes",
+                reference.slab
+            );
+        }
     }
 
     /// A swept slot's entry empties, so a handle nobody should hold refuses.
