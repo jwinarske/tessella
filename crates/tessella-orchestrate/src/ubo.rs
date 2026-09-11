@@ -471,6 +471,44 @@ pub fn fill_outline_triangulates(
     constant("fill-outline-color") && constant("fill-opacity")
 }
 
+/// Whether a fill layer draws an outline at all.
+///
+/// mbgl's `doOutline`, from `render_fill_layer.cpp`:
+///
+/// ```text
+/// doOutline = evaluated.get<FillAntialias>() &&
+///             (unevaluated.get<FillPattern>().isUndefined() ||
+///              unevaluated.get<FillOutlineColor>().isUndefined())
+/// ```
+///
+/// Two rules in one expression. `fill-antialias` is the plain one: a fill's outline is its
+/// antialiasing, so turning the antialiasing off is turning the outline off, and the layer draws
+/// one drawable rather than two.
+///
+/// The second is stranger and is mbgl's own comment -- "Outline does not default to fill in the
+/// pattern case". A patterned fill whose outline colour the style *did* write asks for a colour
+/// the pattern shaders have no uniform for, and rather than draw it in the wrong colour mbgl
+/// draws no outline. A patterned fill that wrote no outline colour still gets one, because then
+/// the outline is the pattern itself.
+///
+/// Both halves of the second rule read the style's own keys rather than the resolved map, which
+/// is what `unevaluated` means: the question is what the style wrote, not what it evaluates to.
+///
+/// The antialias is read at zoom zero for the reason [`uniform_opacity`] gives -- it decides how
+/// many drawables a layer becomes rather than what colour it is, and that is settled where the
+/// bucket is built. It is data-constant in the spec, so the only thing this misses is a style
+/// that animates it with the camera.
+#[must_use]
+pub fn fill_draws_outline(
+    layer: &tessella_style::Layer,
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+) -> bool {
+    let antialias = uniform_number(paint, "fill-antialias", 0.0) != 0.0;
+    antialias
+        && (!layer.paint.contains_key("fill-pattern")
+            || !layer.paint.contains_key("fill-outline-color"))
+}
+
 /// One triangulated fill-outline drawable's entry.
 ///
 /// `FillOutlineTriangulatedDrawableUBO`: the matrix and the ratio, and nothing else. The ratio

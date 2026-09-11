@@ -2779,6 +2779,12 @@ fn encode_parts(
         let Content::Fill(fill) = &bucket.content else {
             return Some(parts);
         };
+        // A layer that draws no outline carries no outline geometry, which is `doOutline` read
+        // back off the bucket. `bindings_for` asks the same question, and has to: a drawable
+        // here with no binding there is a record naming a view that never bound it.
+        if fill.line_indices.is_empty() && fill.outline.indices.is_empty() {
+            return Some(parts);
+        }
         // A backend that cannot widen a line draws the outline as a polyline instead, where the
         // layer's paint lets it -- see `ubo::fill_outline_triangulates`. Its own vertices, so
         // none of the fill's buffers are shared into it.
