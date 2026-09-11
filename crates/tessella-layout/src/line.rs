@@ -478,9 +478,15 @@ impl LineBucket {
         }
 
         let start_vertex = self.vertices.len();
+        // Two vertices a point and about two triangles with them, which is what a straight run
+        // costs; joins and caps add to it and the Vec grows from there. Reserved rather than
+        // grown from nothing, because a ring is thousands of points and every doubling copies
+        // all of them again.
+        let points = len - first;
+        self.vertices.reserve(2 * points);
         let mut out = Gen {
             vertices: &mut self.vertices,
-            triangles: Vec::new(),
+            triangles: Vec::with_capacity(2 * points),
             start_vertex,
             e1: -1,
             e2: -1,
@@ -771,6 +777,8 @@ impl LineBucket {
         let segment = self.segments.last_mut().expect("just ensured");
         let base = segment.vertex_length as u16;
 
+        // Three a triangle, and how many there are is known now rather than guessed.
+        self.indices.reserve(triangles.len() * 3);
         for t in &triangles {
             self.indices.push(base + t.0);
             self.indices.push(base + t.1);

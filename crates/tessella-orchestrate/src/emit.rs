@@ -1614,14 +1614,7 @@ pub fn encode_line(
         dash_atlas,
         pattern_vertices,
     } = draw;
-    let mut vertex_bytes = Vec::with_capacity(bucket.vertices.len() * LINE_STRIDE as usize);
-    for vertex in &bucket.vertices {
-        vertex_bytes.extend_from_slice(&vertex.pos_normal[0].to_le_bytes());
-        vertex_bytes.extend_from_slice(&vertex.pos_normal[1].to_le_bytes());
-        vertex_bytes.extend_from_slice(&vertex.data);
-    }
-
-    let vertices = arena.alloc(&vertex_bytes);
+    let vertices = alloc_line_vertices(arena, &bucket.vertices);
     let indexes = alloc_u16(arena, &bucket.indices);
     let interleaved = arena.alloc(attributes);
 
@@ -1687,13 +1680,7 @@ pub fn encode_fill_outline_triangulated(
     permutation_key: u64,
 ) -> Encoded {
     let outline = &bucket.outline;
-    let mut vertex_bytes = Vec::with_capacity(outline.vertices.len() * LINE_STRIDE as usize);
-    for vertex in &outline.vertices {
-        vertex_bytes.extend_from_slice(&vertex.pos_normal[0].to_le_bytes());
-        vertex_bytes.extend_from_slice(&vertex.pos_normal[1].to_le_bytes());
-        vertex_bytes.extend_from_slice(&vertex.data);
-    }
-    let vertices = arena.alloc(&vertex_bytes);
+    let vertices = alloc_line_vertices(arena, &outline.vertices);
     let indexes = alloc_u16(arena, &outline.indices);
 
     let descriptors = [
@@ -2521,6 +2508,25 @@ fn alloc_u16(arena: &mut SlabArena, values: &[u16]) -> SlabRef {
     arena.alloc_with(values.len() * 2, |out| {
         for (bytes, value) in out.as_chunks_mut::<2>().0.iter_mut().zip(values) {
             *bytes = value.to_le_bytes();
+        }
+    })
+}
+
+/// A line's vertices as the slab carries them: the position pair, then the four data bytes.
+///
+/// [`alloc_u16`]'s reasoning, for a vertex that is not one repeated type. Building the run in a
+/// `Vec` first cost an allocation, a capacity check per field and a second copy of every vertex,
+/// and a fill's outline is now the larger half of building one.
+fn alloc_line_vertices(
+    arena: &mut SlabArena,
+    values: &[tessella_layout::line::LineVertex],
+) -> SlabRef {
+    const STRIDE: usize = LINE_STRIDE as usize;
+    arena.alloc_with(values.len() * STRIDE, |out| {
+        for (bytes, vertex) in out.as_chunks_mut::<STRIDE>().0.iter_mut().zip(values) {
+            bytes[0..2].copy_from_slice(&vertex.pos_normal[0].to_le_bytes());
+            bytes[2..4].copy_from_slice(&vertex.pos_normal[1].to_le_bytes());
+            bytes[4..8].copy_from_slice(&vertex.data);
         }
     })
 }
