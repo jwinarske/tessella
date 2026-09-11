@@ -37,10 +37,11 @@ use crate::anchors::EXTENT;
 /// With [`EXTENT`] this is mbgl's `tilePixelRatio`: how many tile units make a pixel, and so the
 /// factor between anything a style states in pixels and the space a tile's geometry lives in.
 const TILE_SIZE: f32 = 512.0;
+use crate::size::SizeBinding;
 use crate::symbol::{self, GlyphDependencies};
 use crate::symbol_bucket::{
-    IconLabel, IconOptions, Label, LaidOut, LineLabel, LineOptions, SymbolBuffers, SymbolOptions,
-    build_icons, build_line_symbols, build_symbols,
+    IconLabel, IconOptions, Label, LaidOut, LineLabel, LineOptions, SizeRange, SymbolBuffers,
+    SymbolOptions, build_icons, build_line_symbols, build_symbols,
 };
 
 /// One layout property, evaluated at a zoom with no feature.
@@ -59,7 +60,12 @@ use tessella_style::property::layout_value;
 /// `icon-size` is a *multiplier* and defaults to one, unlike `text-size` which names a size in
 /// pixels and defaults to sixteen. Reading one as the other draws every marker sixteen times too
 /// large, which is why they do not share this function.
-fn icon_options(layer: &Layer, zoom: f64, feature: Option<&dyn Feature>) -> IconOptions {
+fn icon_options(
+    layer: &Layer,
+    zoom: f64,
+    feature: Option<&dyn Feature>,
+    binding: &SizeBinding,
+) -> IconOptions {
     #[allow(clippy::cast_possible_truncation)]
     let number = |key: &str| {
         layout_value(layer, key, zoom, feature)
@@ -94,6 +100,9 @@ fn icon_options(layer: &Layer, zoom: f64, feature: Option<&dyn Feature>) -> Icon
 
     IconOptions {
         size: number("icon-size").unwrap_or(1.0),
+        vertex_size: feature.map_or(SizeRange { min: 0.0, max: 0.0 }, |feature| {
+            binding.vertex_size(feature, 1.0)
+        }),
         text_fit: match layout_value(layer, "icon-text-fit", zoom, feature)
             .as_ref()
             .and_then(Value::as_str)
@@ -326,7 +335,12 @@ fn first_variable_anchor(
 /// two features of one layer can be set differently. Evaluating without a feature gives the
 /// layer's own values, which is what a layout is constructed with and what a layer with no
 /// data-driven property resolves to for every feature.
-fn text_options(layer: &Layer, zoom: f64, feature: Option<&dyn Feature>) -> SymbolOptions {
+fn text_options(
+    layer: &Layer,
+    zoom: f64,
+    feature: Option<&dyn Feature>,
+    binding: &SizeBinding,
+) -> SymbolOptions {
     #[allow(clippy::cast_possible_truncation)]
     let number = |key: &str| {
         layout_value(layer, key, zoom, feature)
@@ -351,6 +365,13 @@ fn text_options(layer: &Layer, zoom: f64, feature: Option<&dyn Feature>) -> Symb
     let plain = anchor_of(layout_value(layer, "text-anchor", zoom, feature).as_ref());
     SymbolOptions {
         size: number("text-size").unwrap_or(16.0),
+        // What the *vertex* carries, which is not the same question as what the layer's size is:
+        // the shader reads one or the other and the binder decides which. Zero with no feature in
+        // hand, because the layer-wide options are the ones a layer with no per-feature size
+        // uses, and that layer's shader reads the uniform.
+        vertex_size: feature.map_or(SizeRange { min: 0.0, max: 0.0 }, |feature| {
+            binding.vertex_size(feature, 16.0)
+        }),
         // Both of these were unread, and the pair of them is how a style puts a name under the
         // marker it names. Without them a POI label sat on top of its own icon.
         anchor: if variable.is_some() {
@@ -638,6 +659,13 @@ pub struct SymbolLayout {
     pub pending: Vec<Pending>,
     /// How the text is set.
     pub symbol: SymbolOptions,
+    /// How `text-size` reaches the shader: as a uniform, or out of the vertex.
+    ///
+    /// Held on the layout rather than on each label because the *classification* is the layer's
+    /// -- every label in it reads its size the same way -- while the size itself may not be.
+    pub text_size: SizeBinding,
+    /// The same for `icon-size`.
+    pub icon_size: SizeBinding,
     /// How it follows a line, when it does.
     pub line: LineOptions,
     /// Where the labels sit.
@@ -666,7 +694,10 @@ impl SymbolLayout {
                 .map(|value| value as f32)
         };
 
-        let symbol = text_options(layer, zoom, None);
+        // `text-size`'s spec default is sixteen pixels; `icon-size`'s is a multiplier of one.
+        let text_size = SizeBinding::of(layer, "text-size", zoom, 16.0);
+        let icon_size = SizeBinding::of(layer, "icon-size", zoom, 1.0);
+        let symbol = text_options(layer, zoom, None, &text_size);
         let placement = Placement::of(layer, zoom);
 
         // How many tile units a pixel is on this tile. mbgl's `tilePixelRatio`, and the factor
@@ -696,6 +727,8 @@ impl SymbolLayout {
             icons_need_linear,
             variable_anchors: variable_anchors(layer, zoom),
             symbol,
+            text_size,
+            icon_size,
             line: LineOptions {
                 symbol,
                 // Into tile units, which is what this field holds and what `get_anchors` walks.
@@ -780,8 +813,8 @@ impl SymbolLayout {
                 icon,
                 fonts,
                 anchoring: Anchoring::Line(lines),
-                symbol: text_options(layer, zoom, Some(feature)),
-                icon_options: icon_options(layer, zoom, Some(feature)),
+                symbol: text_options(layer, zoom, Some(feature), &self.text_size),
+                icon_options: icon_options(layer, zoom, Some(feature), &self.icon_size),
                 paint,
             });
             return;
@@ -808,8 +841,8 @@ impl SymbolLayout {
                     icon: icon.clone(),
                     fonts: fonts.clone(),
                     anchoring,
-                    symbol: text_options(layer, zoom, Some(feature)),
-                    icon_options: icon_options(layer, zoom, Some(feature)),
+                    symbol: text_options(layer, zoom, Some(feature), &self.text_size),
+                    icon_options: icon_options(layer, zoom, Some(feature), &self.icon_size),
                     // One feature can anchor several times -- a road named along its length is
                     // one feature and several pendings -- and each of them carries the paint.
                     paint: paint.clone(),

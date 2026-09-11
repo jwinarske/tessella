@@ -16,6 +16,20 @@ use tessella_source::mvt::Tile;
 use tessella_storage::source::{FetchError, FileSource, Response};
 use tessella_style::Style;
 
+/// A size that is the same at every zoom for every feature, which is what these styles set.
+///
+/// The drawable takes a `SizeBinding`'s answer rather than a number now; a literal
+/// `text-size` resolves to exactly this, and spelling it here keeps the call sites reading as
+/// they did.
+fn constant_size(size: f32) -> tessella_layout::size::EvaluatedSize {
+    tessella_layout::size::EvaluatedSize {
+        zoom_constant: true,
+        feature_constant: true,
+        size_t: 0.0,
+        size,
+    }
+}
+
 const STREETS: &[u8] = include_bytes!("../../../tests/mvt-fixtures/streets-10-163-395.mvt");
 const GLYPHS: &[u8] = include_bytes!("../../../tests/glyph-fixtures/TestFont/0-255.pbf");
 
@@ -1030,7 +1044,7 @@ fn the_alignments_decide_the_drawables_matrices() {
             0,
             [512.0, 512.0],
             [0.0, 0.0],
-            16.0,
+            constant_size(16.0),
             true,
             alignments,
             placement,

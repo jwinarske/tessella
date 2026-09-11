@@ -1444,7 +1444,7 @@ impl SymbolDrawableEntry {
         sub_layer_index: i32,
         texsize: [f32; 2],
         texsize_icon: [f32; 2],
-        size: f32,
+        size: tessella_layout::size::EvaluatedSize,
         is_text: bool,
         alignments: Alignments,
         placement: Placement,
@@ -1518,13 +1518,16 @@ impl SymbolDrawableEntry {
             is_text,
             rotate_symbol: alignments.rotate_in_shader(placement),
             pitch_with_map,
-            // A constant `text-size` is constant in both senses, which is the common case and
-            // the only one this build produces.
-            is_size_zoom_constant: true,
-            is_size_feature_constant: true,
+            // Which of the shader's three size branches this drawable takes. Both flags were
+            // hardcoded true, so every label read the uniform -- and the uniform is the layer's
+            // size with no feature in hand, which for a size that varies per feature cannot be
+            // evaluated at all and fell back to the spec's sixteen. A capital was set at the
+            // size of a village. See `tessella_layout::size::SizeBinding`.
+            is_size_zoom_constant: size.zoom_constant,
+            is_size_feature_constant: size.feature_constant,
             is_offset: false,
-            size_t: 0.0,
-            size,
+            size_t: size.size_t,
+            size: size.size,
             interpolations: [0.0; 5],
         })
     }

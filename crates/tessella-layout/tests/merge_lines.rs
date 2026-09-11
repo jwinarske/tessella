@@ -8,6 +8,7 @@
 //! mbgl leaves a merged-away feature with an empty geometry and skips it later. This drops it,
 //! so the expectation is stated as "these lines survive" rather than "these slots are empty".
 
+use tessella_layout::size::SizeBinding;
 use tessella_layout::symbol_bucket::{IconOptions, LineOptions, SymbolOptions};
 use tessella_layout::symbol_layout::{
     Alignment, Alignments, Anchoring, Pending, Placement, SymbolLayout,
@@ -48,6 +49,9 @@ fn layout(features: &[(&str, &[(i32, i32)])]) -> SymbolLayout {
         variable_anchors: Vec::new(),
         pending,
         symbol: SymbolOptions::default(),
+        // Merging is about geometry; the size these labels draw at never enters it.
+        text_size: SizeBinding::Constant(16.0),
+        icon_size: SizeBinding::Constant(1.0),
         line: LineOptions::default(),
         placement: Placement::Line,
         text_alignments: Alignments {

@@ -29,6 +29,20 @@ use tessella_glyph::atlas::Atlas;
 use tessella_glyph::pbf::{self, Glyph, Metrics, Range};
 use tessella_layout::symbol_bucket::{Glyphs, Label, SymbolBuffers, SymbolOptions, build_symbols};
 
+/// A size that is the same at every zoom for every feature, which is what these styles set.
+///
+/// The drawable takes a `SizeBinding`'s answer rather than a number now; a literal
+/// `text-size` resolves to exactly this, and spelling it here keeps the call sites reading as
+/// they did.
+fn constant_size(size: f32) -> tessella_layout::size::EvaluatedSize {
+    tessella_layout::size::EvaluatedSize {
+        zoom_constant: true,
+        feature_constant: true,
+        size_t: 0.0,
+        size,
+    }
+}
+
 /// A layer whose paint is entirely the layer's, which is what every fixture here is.
 ///
 /// The empty layout rather than `None`: `encode_symbol` describes what it is given, and what it is
@@ -1262,6 +1276,7 @@ mod symbol_drawable_ubo {
     use tessella_orchestrate::ubo::{self, SymbolDrawableEntry};
     use tessella_tile::cover::ViewTransform;
 
+    use super::constant_size;
     use super::symbol_ubos::{blocks, oracle};
 
     fn probe() -> ViewTransform {
@@ -1305,7 +1320,7 @@ mod symbol_drawable_ubo {
                     // size is zero — which is a value the oracle carries rather than a
                     // placeholder, and is why it is passed rather than defaulted.
                     [0.0, 0.0],
-                    16.0,
+                    constant_size(16.0),
                     // The capture's style names neither alignment, and its placement is point,
                     // so `auto` resolves to viewport for both — which is the branch the golden
                     // pins and the reason it still holds now the other exists.
@@ -1355,7 +1370,7 @@ mod symbol_drawable_ubo {
                 0,
                 [512.0, 512.0],
                 [0.0, 0.0],
-                16.0,
+                constant_size(16.0),
                 true,
                 MAP,
                 Placement::Line,
@@ -1410,7 +1425,7 @@ mod symbol_drawable_ubo {
             0,
             [512.0, 512.0],
             [0.0, 0.0],
-            16.0,
+            constant_size(16.0),
             true,
             VIEWPORT,
             Placement::Point,
@@ -1428,7 +1443,7 @@ mod symbol_drawable_ubo {
             0,
             [512.0, 512.0],
             [0.0, 0.0],
-            16.0,
+            constant_size(16.0),
             true,
             VIEWPORT,
             Placement::Point,

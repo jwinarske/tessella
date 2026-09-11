@@ -307,6 +307,12 @@ pub struct Label {
 pub struct SymbolOptions {
     /// `text-size`, in pixels.
     pub size: f32,
+    /// What this feature's vertices carry as their size, from the layer's size binder.
+    ///
+    /// Zero for a layer whose size the shader reads from a uniform, which is every layer whose
+    /// `text-size` does not vary per feature -- and is mbgl's own `{0, 0}` rather than a
+    /// placeholder. See [`crate::size::SizeBinding`].
+    pub vertex_size: SizeRange,
     /// `text-max-width`, in ems. Zero never wraps.
     pub max_width_ems: f32,
     /// `text-letter-spacing`, in pixels.
@@ -358,6 +364,7 @@ impl Default for SymbolOptions {
     fn default() -> Self {
         Self {
             size: 16.0,
+            vertex_size: SizeRange { min: 0.0, max: 0.0 },
             max_width_ems: 10.0,
             letter_spacing: 0.0,
             line_height_ems: 1.2,
@@ -595,7 +602,12 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
         /// the two calls: where the horizontal half ends is a *count of emitted quads*, and
         /// `glyph_quads` drops a glyph whose rectangle is not in the atlas yet, so it cannot be
         /// derived from the shaping.
-        fn emit(buffers: &mut SymbolBuffers, anchor: (f32, f32), quads: &[quads::Quad], size: f32) {
+        fn emit(
+            buffers: &mut SymbolBuffers,
+            anchor: (f32, f32),
+            quads: &[quads::Quad],
+            size: SizeRange,
+        ) {
             for quad in quads {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 buffers.add_quad(
@@ -608,7 +620,7 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
                         quad.tex.width as u16,
                         quad.tex.height as u16,
                     ),
-                    SizeRange::constant(size),
+                    size,
                     quad.sdf,
                     1.0,
                 );
@@ -620,7 +632,7 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
             &mut buffers,
             label.anchor,
             &quads::glyph_quads(&shaping, placed, &horizontal),
-            options.size,
+            options.vertex_size,
         );
         let vertices = buffers.vertices.len();
 
@@ -641,7 +653,7 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
                 &mut buffers,
                 label.anchor,
                 &quads::glyph_quads(&shaped, placed, &horizontal),
-                options.size,
+                options.vertex_size,
             );
             Some(Vertical {
                 at: vertices,
@@ -949,7 +961,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                         quad.tex.width as u16,
                         quad.tex.height as u16,
                     ),
-                    SizeRange::constant(options.symbol.size),
+                    options.symbol.vertex_size,
                     quad.sdf,
                     1.0,
                 );
@@ -968,7 +980,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                             quad.tex.width as u16,
                             quad.tex.height as u16,
                         ),
-                        SizeRange::constant(options.symbol.size),
+                        options.symbol.vertex_size,
                         quad.sdf,
                         1.0,
                     );
@@ -1019,6 +1031,11 @@ pub struct IconLabel {
 pub struct IconOptions {
     /// `icon-size`, a *multiplier* rather than a pixel size — the sprite already has one.
     pub size: f32,
+    /// What this feature's icon vertices carry as their size, from the layer's size binder.
+    ///
+    /// Zero where the shader reads a uniform instead, as a label's is. See
+    /// [`crate::size::SizeBinding`].
+    pub vertex_size: SizeRange,
     /// `icon-offset`, in logical pixels.
     pub offset: [f32; 2],
     /// `icon-rotate`, in radians.
@@ -1039,6 +1056,7 @@ impl Default for IconOptions {
             // drew it; `text-size` names a size outright. Treating icon-size like text-size draws
             // every marker sixteen times too large.
             size: 1.0,
+            vertex_size: SizeRange { min: 0.0, max: 0.0 },
             offset: [0.0, 0.0],
             rotate: 0.0,
             anchor: tessella_glyph::shaping::Anchor::Center,
@@ -1133,7 +1151,7 @@ pub fn build_icons(
                 quad.tex.width as u16,
                 quad.tex.height as u16,
             ),
-            SizeRange::constant(label.options.size),
+            label.options.vertex_size,
             // The sprite decides, not the layer. A shield drawn as a distance field is
             // recolourable by `icon-color`; a photographic icon is not, and putting a plain
             // image through the SDF shader draws its alpha as a coverage ramp.
