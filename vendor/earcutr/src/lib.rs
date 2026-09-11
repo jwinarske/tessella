@@ -1,5 +1,5 @@
 use itertools::Itertools;
-use std::{cmp, iter, ops};
+use std::{iter, ops};
 
 static DIM: usize = 2;
 static NULL: usize = 0;
@@ -37,27 +37,6 @@ impl std::error::Error for Error {}
 struct Coord<T: Float> {
     x: T,
     y: T,
-}
-
-impl<T: Float> Coord<T> {
-    // z-order of a point given coords and inverse of the longer side of
-    // data bbox
-    #[inline(always)]
-    fn zorder(&self, invsize: T) -> Result<i32, Error> {
-        // coords are transformed into non-negative 15-bit integer range
-        // stored in two 32bit ints, which are combined into a single 64 bit int.
-        let x: i64 = num_traits::cast::<T, i64>(self.x * invsize).ok_or(Error::Unknown)?;
-        let y: i64 = num_traits::cast::<T, i64>(self.y * invsize).ok_or(Error::Unknown)?;
-        let mut xy: i64 = x << 32 | y;
-
-        // todo ... big endian?
-        xy = (xy | (xy << 8)) & 0x00FF00FF00FF00FF;
-        xy = (xy | (xy << 4)) & 0x0F0F0F0F0F0F0F0F;
-        xy = (xy | (xy << 2)) & 0x3333333333333333;
-        xy = (xy | (xy << 1)) & 0x5555555555555555;
-
-        Ok(((xy >> 32) | (xy << 1)) as i32)
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -171,8 +150,32 @@ macro_rules! prevref {
 }
 
 impl<T: Float> LinkedLists<T> {
-    fn iter(&self, r: ops::Range<LinkedListNodeIndex>) -> NodeIterator<T> {
-        NodeIterator::new(self, r.start, r.end)
+    // z-order of a point given coords and size of the data bounding box
+    //
+    // tessella: `earcut.hpp`'s `zOrder`, expression for expression -- `32767 * (x - min) * inv_size`
+    // on the untranslated coordinate, truncated to a 32-bit integer, and each coordinate's bits
+    // spread on its own. Upstream translated every point by the minimum up front and scaled by
+    // `32767 / size`, which rounds differently. See PATCH.md.
+    #[inline(always)]
+    fn zorder(&self, x: T, y: T) -> i32 {
+        let scale = num_traits::cast::<f64, T>(32767.0).unwrap();
+        let quantize = |v: T, min: T| -> i32 {
+            num_traits::cast::<T, f64>(scale * (v - min) * self.invsize).map_or(0, |v| v as i32)
+        };
+        let mut x = quantize(x, self.min.x);
+        let mut y = quantize(y, self.min.y);
+
+        x = (x | (x << 8)) & 0x00FF00FF;
+        x = (x | (x << 4)) & 0x0F0F0F0F;
+        x = (x | (x << 2)) & 0x33333333;
+        x = (x | (x << 1)) & 0x55555555;
+
+        y = (y | (y << 8)) & 0x00FF00FF;
+        y = (y | (y << 4)) & 0x0F0F0F0F;
+        y = (y | (y << 2)) & 0x33333333;
+        y = (y | (y << 1)) & 0x55555555;
+
+        x | (y << 1)
     }
 
     fn iter_pairs(&self, r: ops::Range<LinkedListNodeIndex>) -> NodePairIterator<T> {
@@ -247,11 +250,11 @@ impl<T: Float> LinkedLists<T> {
 
     // interlink polygon nodes in z-order
     fn index_curve(&mut self, start: LinkedListNodeIndex) -> Result<(), Error> {
-        let invsize = self.invsize;
         let mut p = start;
         loop {
             if self.nodes[p].z == 0 {
-                self.nodes[p].z = self.nodes[p].coord.zorder(invsize)?;
+                let coord = self.nodes[p].coord;
+                self.nodes[p].z = self.zorder(coord.x, coord.y);
             }
             self.nodes[p].prevz_idx = self.nodes[p].prev_linked_list_node_index;
             self.nodes[p].nextz_idx = self.nodes[p].next_linked_list_node_index;
@@ -356,7 +359,7 @@ impl<T: Float> LinkedLists<T> {
         start: VerticesIndex,
         end: VerticesIndex,
         clockwise: bool,
-    ) -> Result<(LinkedListNodeIndex, LinkedListNodeIndex), Error> {
+    ) -> Result<LinkedListNodeIndex, Error> {
         if start > vertices.len() || end > vertices.len() || vertices.is_empty() {
             return Err(Error::Unknown);
         }
@@ -369,90 +372,56 @@ impl<T: Float> LinkedLists<T> {
             return Err(Error::Unknown);
         }
 
+        // tessella: the ring and nothing else. Upstream also kept a bounding box here, for the
+        // z-order hash, reading hole coordinates at ring-relative indices into the whole array;
+        // `earcut.hpp` takes the box from the outer ring once the holes are bridged into it, and
+        // so does `earcut` now. The hole's leftmost point is `get_leftmost`'s. See PATCH.md.
         let mut lastidx = None;
-        let mut leftmost_idx = None;
-        let mut contour_minx = T::max_value();
 
         let clockwise_iter = vertices.0[start..end].iter().copied().enumerate();
 
-        let mut iter_body = |x_index: usize, x: T, y_index: usize, y: T| {
+        let mut insert = |x_index: usize, x: T, y: T| {
             lastidx = Some(self.insert_node((start + x_index) / DIM, Coord { x, y }, lastidx));
-            if contour_minx > x {
-                contour_minx = x;
-                leftmost_idx = lastidx;
-            };
-            if self.usehash {
-                self.min.y = vertices.0[y_index].min(self.min.y);
-                self.max.x = vertices.0[x_index].max(self.max.x);
-                self.max.y = vertices.0[y_index].max(self.max.y);
-            }
         };
 
         if clockwise == (vertices.signed_area(start, end) > T::zero()) {
-            for ((x_index, x), (y_index, y)) in clockwise_iter.tuples() {
-                iter_body(x_index, x, y_index, y);
+            for ((x_index, x), (_, y)) in clockwise_iter.tuples() {
+                insert(x_index, x, y);
             }
         } else {
-            for ((y_index, y), (x_index, x)) in clockwise_iter.rev().tuples() {
-                iter_body(x_index, x, y_index, y);
+            for ((_, y), (x_index, x)) in clockwise_iter.rev().tuples() {
+                insert(x_index, x, y);
             }
         }
-
-        self.min.x = contour_minx.min(self.min.x);
 
         if self.nodes[lastidx.unwrap()].xy_eq(*nextref!(self, lastidx.unwrap())) {
             self.remove_node(lastidx.unwrap());
             lastidx = Some(self.nodes[lastidx.unwrap()].next_linked_list_node_index);
         }
-        Ok((lastidx.unwrap(), leftmost_idx.unwrap()))
+        Ok(lastidx.unwrap())
     }
 
     // check if a diagonal between two polygon nodes is valid (lies in
     // polygon interior)
+    //
+    // tessella: `earcut.hpp`'s `isValidDiagonal`, which also refuses a diagonal that creates
+    // opposite-facing sectors and accepts the zero-length one between two coincident convex
+    // vertices. Upstream had neither. See PATCH.md.
     fn is_valid_diagonal(&self, a: &LinkedListNode<T>, b: &LinkedListNode<T>) -> bool {
-        next!(self, a.idx).vertices_index != b.vertices_index
-            && prev!(self, a.idx).vertices_index != b.vertices_index
+        let zero = T::zero();
+        let (ap, an) = (prev!(self, a.idx), next!(self, a.idx));
+        let (bp, bn) = (prev!(self, b.idx), next!(self, b.idx));
+        an.vertices_index != b.vertices_index
+            && ap.vertices_index != b.vertices_index
             && !intersects_polygon(self, *a, *b)
-            && locally_inside(self, a, b)
-            && locally_inside(self, b, a)
-            && middle_inside(self, a, b)
-    }
-}
-
-struct NodeIterator<'a, T: Float> {
-    cur: LinkedListNodeIndex,
-    end: LinkedListNodeIndex,
-    ll: &'a LinkedLists<T>,
-    pending_result: Option<&'a LinkedListNode<T>>,
-}
-
-impl<'a, T: Float> NodeIterator<'a, T> {
-    fn new(
-        ll: &LinkedLists<T>,
-        start: LinkedListNodeIndex,
-        end: LinkedListNodeIndex,
-    ) -> NodeIterator<T> {
-        NodeIterator {
-            pending_result: Some(&ll.nodes[start]),
-            cur: start,
-            end,
-            ll,
-        }
-    }
-}
-
-impl<'a, T: Float> Iterator for NodeIterator<'a, T> {
-    type Item = &'a LinkedListNode<T>;
-    fn next(&mut self) -> Option<Self::Item> {
-        self.cur = self.ll.nodes[self.cur].next_linked_list_node_index;
-        let cur_result = self.pending_result;
-        self.pending_result = if self.cur == self.end {
-            // only one branch, saves time
-            None
-        } else {
-            Some(&self.ll.nodes[self.cur])
-        };
-        cur_result
+            && ((locally_inside(self, a, b)
+                && locally_inside(self, b, a)
+                && middle_inside(self, a, b)
+                && (coord_area(ap.coord, a.coord, bp.coord) != zero
+                    || coord_area(a.coord, bp.coord, b.coord) != zero))
+                || (a.xy_eq(*b)
+                    && coord_area(ap.coord, a.coord, an.coord) > zero
+                    && coord_area(bp.coord, b.coord, bn.coord) > zero))
     }
 }
 
@@ -511,7 +480,12 @@ fn eliminate_holes<T: Float>(
     {
         let vertices_hole_start_index = vertices_hole_start_index?;
         let vertices_hole_end_index = vertices_hole_end_index?;
-        let (list, leftmost_idx) = ll.add_contour(
+        // tessella: a ring with no points is `linkedList`'s null, which `earcut.hpp` skips.
+        // Upstream refused the whole polygon for it.
+        if vertices_hole_start_index == vertices_hole_end_index {
+            continue;
+        }
+        let list = ll.add_contour(
             vertices,
             vertices_hole_start_index,
             vertices_hole_end_index,
@@ -520,15 +494,15 @@ fn eliminate_holes<T: Float>(
         if list == ll.nodes[list].next_linked_list_node_index {
             ll.nodes[list].is_steiner_point = true;
         }
-        queue.push(ll.nodes[leftmost_idx]);
+        queue.push(ll.nodes[get_leftmost(ll, list)]);
     }
 
-    queue.sort_by(|a, b| {
-        a.coord
-            .x
-            .partial_cmp(&b.coord.x)
-            .unwrap_or(cmp::Ordering::Equal)
-    });
+    // tessella: in the order `earcut.hpp`'s `std::sort` leaves them, which is not the order a
+    // stable sort leaves them in when two holes' leftmost points share an x. See `cpp_sort`.
+    cpp_sort(
+        &mut queue,
+        &|a: &LinkedListNode<T>, b: &LinkedListNode<T>| a.coord.x < b.coord.x,
+    );
 
     // process holes from left to right
     for node in queue {
@@ -539,13 +513,221 @@ fn eliminate_holes<T: Float>(
     Ok(outer_node)
 } // elim holes
 
-// minx, miny and invsize are later used to transform coords
-// into integers for z-order calculation
-fn calc_invsize<T: Float>(min: Coord<T>, max: Coord<T>) -> T {
-    let invsize = (max.x - min.x).max(max.y - min.y);
-    match invsize.is_zero() {
-        true => T::zero(),
-        false => num_traits::cast::<f64, T>(32767.0).unwrap() / invsize,
+// `std::sort` as libstdc++ implements it, for the one call `earcut.hpp` makes.
+//
+// tessella: `eliminateHoles` sorts the holes by the x of their leftmost points with `std::sort`,
+// which is not stable, so holes whose points share an x come out in whatever order the library's
+// sort leaves them -- and the order holes are bridged in is the triangulation. The oracle is
+// built against libstdc++, whose sort is an introsort: median-of-three quicksort down to runs of
+// sixteen, heapsort if it recurses too deep, then one insertion sort over the whole. Up to sixteen
+// holes that is a plain insertion sort, and stable; above it, ties land where the partitioning
+// puts them. This is that algorithm, step for step, so they land in the same places. See PATCH.md.
+const CPP_SORT_THRESHOLD: usize = 16;
+
+fn cpp_sort<E: Copy>(v: &mut [E], less: &impl Fn(&E, &E) -> bool) {
+    let n = v.len();
+    if n < 2 {
+        return;
+    }
+    // `std::__lg(n) * 2`.
+    let depth = 2 * (usize::BITS - 1 - n.leading_zeros()) as usize;
+    cpp_introsort_loop(v, 0, n, depth, less);
+    cpp_final_insertion_sort(v, 0, n, less);
+}
+
+fn cpp_introsort_loop<E: Copy>(
+    v: &mut [E],
+    first: usize,
+    mut last: usize,
+    mut depth: usize,
+    less: &impl Fn(&E, &E) -> bool,
+) {
+    while last - first > CPP_SORT_THRESHOLD {
+        if depth == 0 {
+            // `std::__partial_sort(first, last, last)`: a heap of the whole range, then sorted.
+            cpp_make_heap(&mut v[first..last], less);
+            cpp_sort_heap(&mut v[first..last], less);
+            return;
+        }
+        depth -= 1;
+        let cut = cpp_unguarded_partition_pivot(v, first, last, less);
+        cpp_introsort_loop(v, cut, last, depth, less);
+        last = cut;
+    }
+}
+
+fn cpp_unguarded_partition_pivot<E: Copy>(
+    v: &mut [E],
+    first: usize,
+    last: usize,
+    less: &impl Fn(&E, &E) -> bool,
+) -> usize {
+    let mid = first + (last - first) / 2;
+    // `std::__move_median_to_first(first, first + 1, mid, last - 1)`.
+    let (a, b, c) = (first + 1, mid, last - 1);
+    let median = if less(&v[a], &v[b]) {
+        if less(&v[b], &v[c]) {
+            b
+        } else if less(&v[a], &v[c]) {
+            c
+        } else {
+            a
+        }
+    } else if less(&v[a], &v[c]) {
+        a
+    } else if less(&v[b], &v[c]) {
+        c
+    } else {
+        b
+    };
+    v.swap(first, median);
+    // `std::__unguarded_partition(first + 1, last, first)`.
+    let (mut lo, mut hi) = (first + 1, last);
+    loop {
+        while less(&v[lo], &v[first]) {
+            lo += 1;
+        }
+        hi -= 1;
+        while less(&v[first], &v[hi]) {
+            hi -= 1;
+        }
+        if lo >= hi {
+            return lo;
+        }
+        v.swap(lo, hi);
+        lo += 1;
+    }
+}
+
+fn cpp_final_insertion_sort<E: Copy>(
+    v: &mut [E],
+    first: usize,
+    last: usize,
+    less: &impl Fn(&E, &E) -> bool,
+) {
+    if last - first > CPP_SORT_THRESHOLD {
+        cpp_insertion_sort(v, first, first + CPP_SORT_THRESHOLD, less);
+        // `std::__unguarded_insertion_sort`: the first sixteen hold the minimum, so no bound.
+        for i in first + CPP_SORT_THRESHOLD..last {
+            cpp_unguarded_linear_insert(v, i, less);
+        }
+    } else {
+        cpp_insertion_sort(v, first, last, less);
+    }
+}
+
+fn cpp_insertion_sort<E: Copy>(
+    v: &mut [E],
+    first: usize,
+    last: usize,
+    less: &impl Fn(&E, &E) -> bool,
+) {
+    if first == last {
+        return;
+    }
+    for i in first + 1..last {
+        if less(&v[i], &v[first]) {
+            let value = v[i];
+            v.copy_within(first..i, first + 1);
+            v[first] = value;
+        } else {
+            cpp_unguarded_linear_insert(v, i, less);
+        }
+    }
+}
+
+fn cpp_unguarded_linear_insert<E: Copy>(
+    v: &mut [E],
+    mut last: usize,
+    less: &impl Fn(&E, &E) -> bool,
+) {
+    let value = v[last];
+    while less(&value, &v[last - 1]) {
+        v[last] = v[last - 1];
+        last -= 1;
+    }
+    v[last] = value;
+}
+
+// `std::__make_heap`.
+fn cpp_make_heap<E: Copy>(v: &mut [E], less: &impl Fn(&E, &E) -> bool) {
+    let len = v.len() as isize;
+    if len < 2 {
+        return;
+    }
+    let mut parent = (len - 2) / 2;
+    loop {
+        let value = v[parent as usize];
+        cpp_adjust_heap(v, parent, len, value, less);
+        if parent == 0 {
+            return;
+        }
+        parent -= 1;
+    }
+}
+
+// `std::__sort_heap`.
+fn cpp_sort_heap<E: Copy>(v: &mut [E], less: &impl Fn(&E, &E) -> bool) {
+    let mut last = v.len() as isize;
+    while last > 1 {
+        last -= 1;
+        // `std::__pop_heap(first, last, last)`.
+        let value = v[last as usize];
+        v[last as usize] = v[0];
+        cpp_adjust_heap(v, 0, last, value, less);
+    }
+}
+
+// `std::__adjust_heap`, and the `std::__push_heap` it ends in. Signed, as the library's
+// difference type is: `(hole - 1) / 2` at the root is zero there, not a wrapped index.
+fn cpp_adjust_heap<E: Copy>(
+    v: &mut [E],
+    mut hole: isize,
+    len: isize,
+    value: E,
+    less: &impl Fn(&E, &E) -> bool,
+) {
+    let top = hole;
+    let mut second = hole;
+    while second < (len - 1) / 2 {
+        second = 2 * (second + 1);
+        if less(&v[second as usize], &v[(second - 1) as usize]) {
+            second -= 1;
+        }
+        v[hole as usize] = v[second as usize];
+        hole = second;
+    }
+    if len & 1 == 0 && second == (len - 2) / 2 {
+        second = 2 * (second + 1);
+        v[hole as usize] = v[(second - 1) as usize];
+        hole = second - 1;
+    }
+    let mut parent = (hole - 1) / 2;
+    while hole > top && less(&v[parent as usize], &value) {
+        v[hole as usize] = v[parent as usize];
+        hole = parent;
+        parent = (hole - 1) / 2;
+    }
+    v[hole as usize] = value;
+}
+
+// find the leftmost node of a polygon ring
+//
+// tessella: `earcut.hpp`'s `getLeftmost`: least x, and least y among those, walking from the node
+// `linkedList` returned. Upstream took the first point of least x in insertion order, which picks
+// a different bridge wherever a hole has a vertical left edge. See PATCH.md.
+fn get_leftmost<T: Float>(ll: &LinkedLists<T>, start: LinkedListNodeIndex) -> LinkedListNodeIndex {
+    let mut p = start;
+    let mut leftmost = start;
+    loop {
+        let (pc, lc) = (ll.nodes[p].coord, ll.nodes[leftmost].coord);
+        if pc.x < lc.x || (pc.x == lc.x && pc.y < lc.y) {
+            leftmost = p;
+        }
+        p = ll.nodes[p].next_linked_list_node_index;
+        if p == start {
+            return leftmost;
+        }
     }
 }
 
@@ -592,7 +774,9 @@ fn earcut_linked_hashed<const PASS: usize, T: Float>(
         let tmp = filter_points(ll, next_idx, None);
         earcut_linked_hashed::<1, T>(ll, tmp, triangle_indices)?;
     } else if PASS == 1 {
-        ear_idx = cure_local_intersections(ll, next_idx, triangle_indices);
+        // tessella: filtered first, as `earcut.hpp`'s pass 1 is.
+        let filtered = filter_points(ll, next_idx, None);
+        ear_idx = cure_local_intersections(ll, filtered, triangle_indices);
         earcut_linked_hashed::<2, T>(ll, ear_idx, triangle_indices)?;
     } else if PASS == 2 {
         split_earcut(ll, next_idx, triangle_indices)?;
@@ -638,7 +822,9 @@ fn earcut_linked_unhashed<const PASS: usize, T: Float>(
         let tmp = filter_points(ll, next_idx, None);
         earcut_linked_unhashed::<1, T>(ll, tmp, triangles)?;
     } else if PASS == 1 {
-        ear_idx = cure_local_intersections(ll, next_idx, triangles);
+        // tessella: filtered first, as `earcut.hpp`'s pass 1 is.
+        let filtered = filter_points(ll, next_idx, None);
+        ear_idx = cure_local_intersections(ll, filtered, triangles);
         earcut_linked_unhashed::<2, T>(ll, ear_idx, triangles)?;
     } else if PASS == 2 {
         split_earcut(ll, next_idx, triangles)?;
@@ -672,10 +858,12 @@ impl NodeIndexTriangle {
 
     // check whether a polygon node forms a valid ear with adjacent nodes
     //
-    // tessella: the triangle's corners are read once rather than copied out of the list for every
-    // point tested, and the ring is walked by index. The walk is `NodeIterator`'s -- the node after
-    // `next` first and unconditionally, then on up to `prev` -- and the arithmetic is the same
-    // expressions in the same order, so the answer is the same bit for bit. See PATCH.md.
+    // tessella: `earcut.hpp`'s `isEar`. The triangle's corners are read once and the ring is walked
+    // by index from the node after `next`, stopping *before* testing `prev` -- so on a ring of
+    // three nothing is tested and the ear is taken. Upstream tested its first node
+    // unconditionally, which on a ring of three is `prev`, whose own triangle is this one rotated:
+    // its area rounds to the other sign often enough on non-integer coordinates to refuse the last
+    // ear of a polygon. See PATCH.md.
     fn is_ear<T: Float>(self, ll: &LinkedLists<T>) -> bool {
         let zero = T::zero();
         let a = ll.nodes[self.0].coord;
@@ -686,7 +874,7 @@ impl NodeIndexTriangle {
         }
         let end = ll.nodes[self.0].idx;
         let mut p = ll.nodes[self.2].next_linked_list_node_index;
-        loop {
+        while p != end {
             let node = &ll.nodes[p];
             if point_in_triangle(a, b, c, node.coord)
                 && coord_area(
@@ -698,10 +886,8 @@ impl NodeIndexTriangle {
                 return false;
             }
             p = node.next_linked_list_node_index;
-            if p == end {
-                return true;
-            }
         }
+        true
     }
 }
 
@@ -740,16 +926,8 @@ impl<T: Float> NodeTriangle<T> {
         let bbox_minx = prev.coord.x.min(ear.coord.x.min(next.coord.x));
         let bbox_miny = prev.coord.y.min(ear.coord.y.min(next.coord.y));
         // z-order range for the current triangle bbox;
-        let min_z = Coord {
-            x: bbox_minx,
-            y: bbox_miny,
-        }
-        .zorder(ll.invsize)?;
-        let max_z = Coord {
-            x: bbox_maxx,
-            y: bbox_maxy,
-        }
-        .zorder(ll.invsize)?;
+        let min_z = ll.zorder(bbox_minx, bbox_miny);
+        let max_z = ll.zorder(bbox_maxx, bbox_maxy);
 
         let mut p = ear.prevz_idx;
         let mut n = ear.nextz_idx;
@@ -884,9 +1062,8 @@ fn filter_points<T: Float>(
             }
             again = true;
         } else {
-            if p == ll.nodes[p].next_linked_list_node_index {
-                break NULL;
-            }
+            // tessella: no early NULL for a ring of one steiner point; `earcut.hpp` walks on and
+            // returns `end`, which is where the walk below stops.
             p = ll.nodes[p].next_linked_list_node_index;
         }
         if !again && p == end {
@@ -917,7 +1094,7 @@ fn linked_list<T: Float>(
     if vertices.len() / DIM <= 80 {
         ll.usehash = false;
     };
-    let (last_idx, _) = ll.add_contour(vertices, start, end, clockwise)?;
+    let last_idx = ll.add_contour(vertices, start, end, clockwise)?;
     Ok((ll, last_idx))
 }
 
@@ -971,22 +1148,43 @@ pub fn earcut<T: Float>(
     if ll.nodes.len() == 1 || DIM != dims {
         return Ok(triangles.0);
     }
+    // tessella: an outer ring of one or two points has nothing to triangulate, and `earcut.hpp`
+    // stops here, before its holes are bridged in. Upstream bridged them and triangulated those.
+    if ll.nodes[outer_node].prev_linked_list_node_index
+        == ll.nodes[outer_node].next_linked_list_node_index
+    {
+        return Ok(triangles.0);
+    }
 
     let outer_node = eliminate_holes(&mut ll, &vertices, hole_indices, outer_node)?;
 
     if ll.usehash {
-        ll.invsize = calc_invsize(ll.min, ll.max);
-
-        // translate all points so min is 0,0. prevents subtraction inside
-        // zorder. also note invsize does not depend on translation in space
-        // if one were translating in a space with an even spaced grid of points.
-        // floating point space is not evenly spaced, but it is close enough for
-        // this hash algorithm
-        let (mx, my) = (ll.min.x, ll.min.y);
-        ll.nodes.iter_mut().for_each(|n| {
-            n.coord.x = n.coord.x - mx;
-            n.coord.y = n.coord.y - my;
-        });
+        // tessella: `earcut.hpp`'s box -- the outer ring's, walked once the holes are bridged into
+        // it -- and its `inv_size`, the reciprocal of the longer side. The coordinates are left
+        // where they are: `zorder` subtracts the minimum itself, as the C++ does, so every area and
+        // containment test sees the points the caller gave. See PATCH.md.
+        let first = ll.nodes[outer_node].coord;
+        let (mut min, mut max) = (first, first);
+        let mut p = ll.nodes[outer_node].next_linked_list_node_index;
+        loop {
+            let c = ll.nodes[p].coord;
+            min.x = cpp_min(min.x, c.x);
+            min.y = cpp_min(min.y, c.y);
+            max.x = cpp_max(max.x, c.x);
+            max.y = cpp_max(max.y, c.y);
+            p = ll.nodes[p].next_linked_list_node_index;
+            if p == outer_node {
+                break;
+            }
+        }
+        let size = cpp_max(max.x - min.x, max.y - min.y);
+        ll.min = min;
+        ll.max = max;
+        ll.invsize = if size != T::zero() {
+            T::one() / size
+        } else {
+            T::zero()
+        };
         earcut_linked_hashed::<0, T>(&mut ll, outer_node, &mut triangles)?;
     } else {
         earcut_linked_unhashed::<0, T>(&mut ll, outer_node, &mut triangles)?;
@@ -1031,14 +1229,15 @@ fn cure_local_intersections<T: Float>(
         let a = ll.nodes[p].prev_linked_list_node_index;
         let b = next!(ll, p).next_linked_list_node_index;
 
+        // tessella: `earcut.hpp`'s `intersects`, which counts touching and collinear-overlapping
+        // segments; upstream's `pseudo_intersects` counted only proper crossings. See PATCH.md.
         if !ll.nodes[a].xy_eq(ll.nodes[b])
-            && pseudo_intersects(
-                ll.nodes[a],
-                ll.nodes[p],
-                *nextref!(ll, p),
-                ll.nodes[b],
+            && intersects(
+                ll.nodes[a].coord,
+                ll.nodes[p].coord,
+                nextref!(ll, p).coord,
+                ll.nodes[b].coord,
             )
-			// prev next a, prev next b
             && locally_inside(ll, &ll.nodes[a], &ll.nodes[b])
             && locally_inside(ll, &ll.nodes[b], &ll.nodes[a])
         {
@@ -1062,7 +1261,8 @@ fn cure_local_intersections<T: Float>(
         }
     }
 
-    p
+    // tessella: filtered on the way out, as `earcut.hpp` returns `filterPoints(p)`.
+    filter_points(ll, p, None)
 }
 
 // try splitting polygon into two and triangulate them independently
@@ -1089,8 +1289,16 @@ fn split_earcut<T: Float>(
                 c = filter_points(ll, c, Some(cn));
 
                 // run earcut on each half
-                earcut_linked_hashed::<0, T>(ll, a, triangles)?;
-                earcut_linked_hashed::<0, T>(ll, c, triangles)?;
+                //
+                // tessella: in the mode the polygon is in. Upstream always ran the hashed loop,
+                // which for an unhashed polygon searched a z-order that was never built.
+                if ll.usehash {
+                    earcut_linked_hashed::<0, T>(ll, a, triangles)?;
+                    earcut_linked_hashed::<0, T>(ll, c, triangles)?;
+                } else {
+                    earcut_linked_unhashed::<0, T>(ll, a, triangles)?;
+                    earcut_linked_unhashed::<0, T>(ll, c, triangles)?;
+                }
                 return Ok(());
             }
             b = ll.nodes[b].next_linked_list_node_index;
@@ -1109,75 +1317,89 @@ fn find_hole_bridge<T: Float>(
     hole: LinkedListNodeIndex,
     outer_node: LinkedListNodeIndex,
 ) -> LinkedListNodeIndex {
+    // tessella: `earcut.hpp`'s `findHoleBridge`, statement for statement. Upstream followed an
+    // older `earcut.js`: it answered `m.prev` where a hole touches an outer segment, began its
+    // second pass after `m` from a finite minimum, and broke ties on x alone. Each of those can
+    // pick a different bridge, and a different bridge is different triangles. See PATCH.md.
     let mut p = outer_node;
     let hx = ll.nodes[hole].coord.x;
     let hy = ll.nodes[hole].coord.y;
     let mut qx = T::neg_infinity();
-    let mut m: Option<LinkedListNodeIndex> = None;
+    let mut m = NULL;
 
-    // find a segment intersected by a ray from the hole's leftmost
-    // point to the left; segment's endpoint with lesser x will be
-    // potential connection point
-    let calcx = |p: &LinkedListNode<T>| {
-        p.coord.x
-            + (hy - p.coord.y) * (next!(ll, p.idx).coord.x - p.coord.x)
-                / (next!(ll, p.idx).coord.y - p.coord.y)
-    };
-    for (p, n) in ll
-        .iter_pairs(p..outer_node)
-        .filter(|(p, n)| hy <= p.coord.y && hy >= n.coord.y)
-        .filter(|(p, n)| n.coord.y != p.coord.y)
-        .filter(|(p, _)| calcx(p) <= hx)
-    {
-        if qx < calcx(p) {
-            qx = calcx(p);
-            if qx == hx && hy == p.coord.y {
-                return p.idx;
-            } else if qx == hx && hy == n.coord.y {
-                return p.next_linked_list_node_index;
+    // find a segment intersected by a ray from the hole's leftmost Vertex to the left;
+    // segment's endpoint with lesser x will be potential connection Vertex
+    loop {
+        let (pc, next) = (ll.nodes[p].coord, ll.nodes[p].next_linked_list_node_index);
+        let nc = ll.nodes[next].coord;
+        if hy <= pc.y && hy >= nc.y && nc.y != pc.y {
+            let x = pc.x + (hy - pc.y) * (nc.x - pc.x) / (nc.y - pc.y);
+            if x <= hx && x > qx {
+                qx = x;
+                if x == hx {
+                    if hy == pc.y {
+                        return p;
+                    }
+                    if hy == nc.y {
+                        return next;
+                    }
+                }
+                m = if pc.x < nc.x { p } else { next };
             }
-            m = Some(if p.coord.x < n.coord.x { p.idx } else { n.idx });
+        }
+        p = next;
+        if p == outer_node {
+            break;
         }
     }
 
-    let m = match m {
-        Some(m) => m,
-        None => return NULL,
-    };
-
-    // hole touches outer segment; pick lower endpoint
-    if hx == qx {
-        return prev!(ll, m).idx;
+    if m == NULL {
+        return NULL;
     }
 
-    // look for points inside the triangle of hole point, segment
-    // intersection and endpoint; if there are no points found, we have
-    // a valid connection; otherwise choose the point of the minimum
-    // angle with the ray as connection point
+    if hx == qx {
+        return m; // hole touches outer segment; pick leftmost endpoint
+    }
 
-    let mp = LinkedListNode::new(0, ll.nodes[m].coord, 0);
-    p = next!(ll, m).idx;
-    let x1 = if hy < mp.coord.y { hx } else { qx };
-    let x2 = if hy < mp.coord.y { qx } else { hx };
-    let n1 = LinkedListNode::new(0, Coord { x: x1, y: hy }, 0);
-    let n2 = LinkedListNode::new(0, Coord { x: x2, y: hy }, 0);
-    let two = num_traits::cast::<f64, T>(2.).unwrap();
+    // look for points inside the triangle of hole Vertex, segment intersection and endpoint;
+    // if there are no points found, we have a valid connection;
+    // otherwise choose the Vertex of the minimum angle with the ray as connection Vertex
+    let stop = m;
+    let mut tan_min = T::infinity();
+    let mc = ll.nodes[m].coord;
+    let (mx, my) = (mc.x, mc.y);
+    let a = Coord {
+        x: if hy < my { hx } else { qx },
+        y: hy,
+    };
+    let c = Coord {
+        x: if hy < my { qx } else { hx },
+        y: hy,
+    };
 
-    let calctan = |p: &LinkedListNode<T>| (hy - p.coord.y).abs() / (hx - p.coord.x); // tangential
-    ll.iter(p..m)
-        .filter(|p| hx > p.coord.x && p.coord.x >= mp.coord.x)
-        .filter(|p| NodeTriangle(n1, mp, n2).contains_point(**p))
-        .fold((m, T::max_value() / two), |(m, tan_min), p| {
-            if ((calctan(p) < tan_min)
-                || (calctan(p) == tan_min && p.coord.x > ll.nodes[m].coord.x))
-                && locally_inside(ll, p, &ll.nodes[hole])
+    p = m;
+    loop {
+        let pc = ll.nodes[p].coord;
+        if hx >= pc.x && pc.x >= mx && hx != pc.x && point_in_triangle(a, mc, c, pc) {
+            let tan_cur = (hy - pc.y).abs() / (hx - pc.x); // tangential
+
+            if locally_inside(ll, &ll.nodes[p], &ll.nodes[hole])
+                && (tan_cur < tan_min
+                    || (tan_cur == tan_min
+                        && (pc.x > ll.nodes[m].coord.x || sector_contains_sector(ll, m, p))))
             {
-                (p.idx, calctan(p))
-            } else {
-                (m, tan_min)
+                m = p;
+                tan_min = tan_cur;
             }
-        })
-        .0
+        }
+
+        p = ll.nodes[p].next_linked_list_node_index;
+        if p == stop {
+            break;
+        }
+    }
+
+    m
 }
 
 /* check if two segments cross over each other. note this is different
@@ -1210,19 +1432,70 @@ detection for endpoint detection.
     p2 q1
 */
 
-fn pseudo_intersects<T: Float>(
-    p1: LinkedListNode<T>,
-    q1: LinkedListNode<T>,
-    p2: LinkedListNode<T>,
-    q2: LinkedListNode<T>,
-) -> bool {
-    if (p1.xy_eq(p2) && q1.xy_eq(q2)) || (p1.xy_eq(q2) && q1.xy_eq(p2)) {
-        return true;
-    }
-    let zero = T::zero();
+// check if two segments intersect
+//
+// tessella: `earcut.hpp`'s `intersects`: the general case by orientation signs, and the four
+// collinear cases by `on_segment`, so segments that touch or overlap count as intersecting.
+// Upstream's `pseudo_intersects` counted proper crossings, and coincident segments. See PATCH.md.
+fn intersects<T: Float>(p1: Coord<T>, q1: Coord<T>, p2: Coord<T>, q2: Coord<T>) -> bool {
+    let o1 = sign(coord_area(p1, q1, p2));
+    let o2 = sign(coord_area(p1, q1, q2));
+    let o3 = sign(coord_area(p2, q2, p1));
+    let o4 = sign(coord_area(p2, q2, q1));
 
-    (NodeTriangle(p1, q1, p2).area() > zero) != (NodeTriangle(p1, q1, q2).area() > zero)
-        && (NodeTriangle(p2, q2, p1).area() > zero) != (NodeTriangle(p2, q2, q1).area() > zero)
+    if o1 != o2 && o3 != o4 {
+        return true; // general case
+    }
+
+    (o1 == 0 && on_segment(p1, p2, q1)) // p1, q1 and p2 are collinear and p2 lies on p1q1
+        || (o2 == 0 && on_segment(p1, q2, q1)) // p1, q1 and q2 are collinear and q2 lies on p1q1
+        || (o3 == 0 && on_segment(p2, p1, q2)) // p2, q2 and p1 are collinear and p1 lies on p2q2
+        || (o4 == 0 && on_segment(p2, q1, q2)) // p2, q2 and q1 are collinear and q1 lies on p2q2
+}
+
+// for collinear points p, q, r, check if point q lies on segment pr
+fn on_segment<T: Float>(p: Coord<T>, q: Coord<T>, r: Coord<T>) -> bool {
+    q.x <= cpp_max(p.x, r.x)
+        && q.x >= cpp_min(p.x, r.x)
+        && q.y <= cpp_max(p.y, r.y)
+        && q.y >= cpp_min(p.y, r.y)
+}
+
+// `earcut.hpp`'s `sign`: -1, 0 or 1.
+fn sign<T: Float>(value: T) -> i32 {
+    i32::from(T::zero() < value) - i32::from(value < T::zero())
+}
+
+// `std::min` and `std::max` as `earcut.hpp` calls them, which on a tie answer the first argument.
+fn cpp_min<T: Float>(a: T, b: T) -> T {
+    if b < a {
+        b
+    } else {
+        a
+    }
+}
+
+fn cpp_max<T: Float>(a: T, b: T) -> T {
+    if a < b {
+        b
+    } else {
+        a
+    }
+}
+
+// whether sector in vertex m contains sector in vertex p in the same coordinates
+//
+// tessella: `earcut.hpp`'s `sectorContainsSector`, which `find_hole_bridge` breaks ties with.
+fn sector_contains_sector<T: Float>(
+    ll: &LinkedLists<T>,
+    m: LinkedListNodeIndex,
+    p: LinkedListNodeIndex,
+) -> bool {
+    let zero = T::zero();
+    let (mp, mc, mn) = (prev!(ll, m).coord, ll.nodes[m].coord, next!(ll, m).coord);
+    let (pp, pn) = (prev!(ll, p).coord, next!(ll, p).coord);
+    (coord_area(mp, mc, pp) < zero || coord_area(pp, mc, mn) < zero)
+        && (coord_area(mp, mc, pn) < zero || coord_area(pn, mc, mn) < zero)
 }
 
 // check if a polygon diagonal intersects any polygon segments
@@ -1236,7 +1509,7 @@ fn intersects_polygon<T: Float>(
             && n.vertices_index != a.vertices_index
             && p.vertices_index != b.vertices_index
             && n.vertices_index != b.vertices_index
-            && pseudo_intersects(*p, *n, a, b)
+            && intersects(p.coord, n.coord, a.coord, b.coord)
     })
 }
 

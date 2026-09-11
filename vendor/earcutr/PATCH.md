@@ -1,8 +1,13 @@
-# earcutr 0.5.0, with two corrections and a faster search for the same ears
+# earcutr 0.5.0, brought to `earcut.hpp`'s behavior
 
-Vendored rather than depended on, for a one-line divergence from `earcut.hpp`. §9.1 diffs this
-crate's output against mbgl's pixel for pixel, and mbgl calls `earcut.hpp`; a triangulation that
-is merely *valid* is not enough here, it has to be the same one.
+Vendored rather than depended on, for a one-line divergence from `earcut.hpp` at first and for
+the rest of them since. §9.1 diffs this crate's output against mbgl's pixel for pixel, and mbgl
+calls `earcut.hpp`; a triangulation that is merely *valid* is not enough here, it has to be the
+same one.
+
+It now is. On every polygon it has been measured against -- 48,139 of them, described below -- it
+emits `earcut.hpp`'s triangles in `earcut.hpp`'s order, index for index. The reference is the
+`earcut.hpp` in maplibre-native's `vendor/earcut.hpp`, at revision `0d0897a`.
 
 ## The hashing threshold
 
@@ -38,9 +43,9 @@ sweeping a real tile. Four changes make it cheaper without changing a single tri
 marked `tessella:` in `src/lib.rs`.
 
 - `is_ear` read its triangle out of the list for every point it tested, copying three whole
-  nodes each time. It reads the three corners once and walks the ring by index, the way
-  `NodeIterator` walks it: the node after `next` first and unconditionally, then on up to `prev`.
-  On a ring of three that is the whole ring, as upstream has it.
+  nodes each time. It reads the three corners once and walks the ring by index. (It kept
+  upstream's walk, which tested its first node unconditionally; the port of `earcut.hpp` below
+  replaced that with the C++ loop.)
 - The area and point-in-triangle arithmetic moved into `coord_area` and `point_in_triangle`,
   which take coordinates rather than nodes. `NodeTriangle::area` and `contains_point` now call
   them, so every caller uses one copy of the expressions: the same operations in the same order.
@@ -61,8 +66,9 @@ identical output for every one. The corpus was every polygon of every vector til
 raw, at the fill layer's 8192 extent, and clipped and scaled into each quadrant of three
 overzoom levels, plus 36,504 synthetic rings: simple, holed, self-intersecting, repeated-point,
 collinear and lasso shapes, on both sides of the hashing threshold.
-`crates/tessella-layout/tests/earcut_pinned.rs` keeps the fixture half of that as a hash taken
-before these changes. A later change that alters any of those triangulations fails there.
+`crates/tessella-layout/tests/earcut_pinned.rs` kept the fixture half of that as a hash taken
+before these changes, so a later change that altered one of those triangulations would fail there.
+The port below altered 18 of them on purpose, and the hash it pins now is `earcut.hpp`'s.
 
 ## A hole with no bridge is left out
 
@@ -86,21 +92,79 @@ What else it changed: nothing that terminated before. On 48,139 polygons, and on
 built to have no bridge, the only output that differs from the previous build is output the
 previous build never produced.
 
-## Where this still differs from `earcut.hpp`
+## The rest of `earcut.hpp`
 
-Hole bridging. `find_hole_bridge` follows an older `earcut.js` than mbgl's `earcut.hpp` does. When
-the hole touches an outer segment it picks `m.prev` where the C++ picks `m`. Its second pass starts
-after `m` rather than at it, starts from a finite minimum, and breaks ties without
-`sectorContainsSector`. Each of these can pick a different bridge. The result is still a valid
-triangulation, but not the same triangles.
+Upstream earcutr follows an older `earcut.js` than the `earcut.hpp` mbgl calls. Where the two
+differ, this crate now does what `earcut.hpp` does. Each change is marked `tessella:` in
+`src/lib.rs`.
 
-Measured against maplibre-native's vendored `earcut.hpp` on the 5,030 fill polygons of the
-fixture tiles: 5,007 are identical index for index, 5,012 have the same triangles in another order,
-and 18 have different triangles, 17 of them with holes. Correcting it changes those 18, so it is a
-parity change to make against the oracle, and not one to fold into another.
+- **Bridging a hole.** `find_hole_bridge` is `findHoleBridge`, statement for statement. Upstream
+  answered `m.prev` where a hole touches an outer segment, where the C++ answers `m`. Its second
+  pass began after `m`, from a finite minimum, and broke ties on x alone. The C++ begins at `m`,
+  from infinity, and breaks ties with `sectorContainsSector`, which is ported too.
+- **Where a hole starts.** A hole is bridged from `getLeftmost`'s point: the least x, then the
+  least y among those, walking from the node `linkedList` returned. Upstream took the first point
+  of least x in insertion order.
+- **The order holes are bridged in.** `eliminateHoles` sorts them by that point's x with
+  `std::sort`, which is not stable. `cpp_sort` is libstdc++'s `std::sort`, step for step:
+  median-of-three introsort down to runs of sixteen, heapsort past the depth limit, and a final
+  insertion sort. Up to sixteen holes that is a stable insertion sort. Above it, holes whose points
+  share an x land where the partitioning puts them, and clipping to a tile edge makes that common.
+  Checked against libstdc++ on 20,000 arrays of up to 1,999 elements with heavy ties, and the heap
+  path against `std::partial_sort`, with the same order every time.
+- **The z-order hash.** The bounding box is the outer ring's, taken once the holes are bridged into
+  it, and `inv_size` is the reciprocal of its longer side. `zorder` is `zOrder`:
+  `32767 * (x - min) * inv_size` on the untranslated coordinate, truncated to 32 bits. Upstream
+  built the box while reading the rings, reading hole coordinates at ring-relative indices into the
+  whole array. It then translated every point by its minimum and scaled by `32767 / size`, so every
+  later area test ran on translated coordinates.
+- **Is it an ear.** `is_ear` stops before testing `prev`, as `isEar` does, so a ring of three has
+  nothing to test. Upstream tested its first node unconditionally. On a ring of three that is
+  `prev`, whose own triangle is the ear's rotated, and on non-integer coordinates its area rounds
+  to the other sign often enough to refuse the last ear of a polygon.
+- **Segment intersection.** `intersects` is `earcut.hpp`'s: orientation signs for the general case,
+  and `on_segment` for the four collinear ones. Upstream's `pseudo_intersects` counted only proper
+  crossings and coincident segments.
+- **Splitting.** `is_valid_diagonal` is `isValidDiagonal`, which also refuses a diagonal that
+  creates opposite-facing sectors and accepts the zero-length one between two coincident convex
+  vertices. `split_earcut` runs the half-polygons in the mode the polygon is in. Upstream always ran
+  the hashed loop, over a z-order an unhashed polygon never built.
+- **Curing.** Pass 1 filters points before `cure_local_intersections` and filters its result, as
+  `earcutLinked` does.
+- **Small things.** A ring of one steiner point gets no early NULL from `filter_points`. An outer
+  ring of one or two points returns before its holes are bridged in. A hole ring with no points is
+  skipped, as `linkedList`'s null is, rather than failing the polygon.
+
+What that did, measured against `earcut.hpp` over the corpus the speed-up was checked on:
+
+| | before | after |
+|---|---|---|
+| identical, index for index | 45,760 | **48,139** |
+| the same triangles, in another order | 241 | 0 |
+| different triangles | 2,138 | **0** |
+
+The fixture tiles' 5,030 fill polygons are all identical. Before, 18 of them had different
+triangles and 5 had the same triangles in another order; `earcut_pinned` now pins
+`earcut.hpp`'s own hash for them. On 2,000 polygons built to have no bridge -- holes left of or
+outside the ring, collapsed to a point, full of repeated points -- every one matches. It is also
+cheaper: without a box to keep per vertex, `earcut` fell from 338 to 278 million instructions on
+the four-view sweep.
+
+## Where it could still differ
+
+- **Another standard library.** `cpp_sort` is libstdc++'s sort, because the oracle is built with
+  it. An mbgl built against libc++ or MSVC's library orders tied holes differently, but only when
+  there are more than sixteen of them.
+- **Another `earcut.hpp`.** The reference is revision `0d0897a`. Later revisions changed how holes
+  are eliminated. If the oracle's mbgl moves to one, measure again against that revision.
+- **Out-of-range z-order.** `zorder` saturates a value outside the 32-bit range, where
+  `static_cast<int32_t>` is undefined. That needs a point outside the box the z-order is taken over,
+  and every point the hash is asked about lies inside it.
 
 ## Provenance
 
 Upstream is <https://github.com/frewsxcv/earcutr/> at 0.5.0, ISC, `LICENSE` kept beside this file.
+The behavior it was brought to is that of `earcut.hpp` (ISC, © Mapbox), as vendored by
+maplibre-native at revision `0d0897a`.
 `src/tests.rs` and the `tests/` fixtures are not vendored; the suite was run against the patch
 before vendoring and all 37 pass, `test_water_huge` and the rest of the earcut fixtures included.
