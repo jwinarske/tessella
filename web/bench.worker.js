@@ -74,11 +74,15 @@ async function run(canvas, config) {
     samples,
     maxSettle,
     grow,
+    dpr,
+    quiet,
+    sweep: sweeping,
   } = config;
 
   const moduleBytes = await (await fetch(moduleUrl)).arrayBuffer();
   const style = await (await fetch(styleUrl)).text();
   const coverageLayer = JSON.parse(style).layers.findIndex((layer) => layer.id === "earth");
+  const setupStarted = performance.now();
 
   // One instance, four maps. The pool, the memory and the scratch block are the instance's; the
   // rings, slab regions and fetch tables are each map's.
@@ -106,13 +110,18 @@ async function run(canvas, config) {
         return renderer;
       })
     : null;
-  // Pane 0 top left, reading order after it. GL's origin is the bottom left.
+  // Pane 0 top left, reading order after it. GL's origin is the bottom left. A pane is `dpr`
+  // device pixels for each of the map's on a side: the producer is told 640x480 whatever the
+  // ratio, so what the ratio changes is the fill rate and nothing that crosses the ABI.
   const panes = views.map((_, i) => ({
-    x: (i % 2) * pane.width,
-    y: (1 - Math.floor(i / 2)) * pane.height,
-    width: pane.width,
-    height: pane.height,
+    x: (i % 2) * pane.width * dpr,
+    y: (1 - Math.floor(i / 2)) * pane.height * dpr,
+    width: pane.width * dpr,
+    height: pane.height * dpr,
   }));
+  // Compiling the module and creating the four maps and their renderers: before the first frame,
+  // and so before the settle clock starts.
+  const setupMs = performance.now() - setupStarted;
 
   // The style names an origin that does not exist, so the native driver can use the same
   // document byte for byte. The host puts the real one in.
@@ -130,6 +139,8 @@ async function run(canvas, config) {
 
   const lines = [];
   let lastStart = null;
+  /** When the first frame began: where the settle clock starts. */
+  let t0 = null;
 
   /** One frame. Returns its counters. */
   async function frame(index, phase, zoom) {
@@ -138,6 +149,9 @@ async function run(canvas, config) {
     const rafInterval = lastStart === null ? null : started - lastStart;
     const elapsed = clock === "A" || lastStart === null ? tickMs : started - lastStart;
     lastStart = started;
+    if (t0 === null) {
+      t0 = started;
+    }
 
     host.deliver(maps);
     for (const map of maps) {
@@ -238,9 +252,11 @@ async function run(canvas, config) {
   // settle number rather than a failure.
   let index = 0;
   let settleFrames = null;
+  let quietAt = null;
   for (; index < maxSettle; index++) {
     const { records, pending } = await frame(index, "settle", SWEEP_LOW);
     if (records === 0 && pending.every((p) => p === 0) && !host.busy) {
+      quietAt = performance.now();
       settleFrames = index + 1;
       index++;
       break;
@@ -249,6 +265,24 @@ async function run(canvas, config) {
   if (settleFrames === null) {
     throw new Error(`the four maps did not settle within ${maxSettle} frames`);
   }
+
+  // The quiet tail: frames with nothing left to do, run on so a caller can take what a frame of
+  // them costs out of the wall clock. Frames are paced by the display, so how many it took to
+  // settle is not how long it took; two runs with different tails give the pace, and what is left
+  // over is the settle. Nothing here is gated -- a quiet frame that is not quiet is reported as
+  // the records it emitted, which is what says the measurement does not hold.
+  let tailRecords = 0;
+  for (let q = 0; q < quiet; q++) {
+    tailRecords += (await frame(index++, "quiet", SWEEP_LOW)).records;
+  }
+  const settle = {
+    frames: settleFrames,
+    quiet_frames: quiet,
+    tail_records: tailRecords,
+    setup_ms: round(setupMs),
+    first_quiet_ms: round(quietAt - t0),
+    wall_ms: round(performance.now() - t0),
+  };
 
   // The memory grows under the consumer before the sweep starts. `memory.buffer` is replaced when
   // it does, and any view held across it is detached -- so a consumer that kept one fails the
@@ -260,7 +294,7 @@ async function run(canvas, config) {
     growth = { before, after: memory.buffer.byteLength >> 16 };
   }
 
-  const zooms = sweepZooms(steps);
+  const zooms = sweeping ? sweepZooms(steps) : [];
   for (const zoom of zooms) {
     await frame(index++, "sweep", zoom);
   }
@@ -282,7 +316,7 @@ async function run(canvas, config) {
       }
       return count;
     });
-    pixels = { holes, panePixels: pane.width * pane.height };
+    pixels = { holes, panePixels: panes[0].width * panes[0].height };
   }
 
   const sweep = lines.filter((line) => line.phase === "sweep");
@@ -293,6 +327,7 @@ async function run(canvas, config) {
     tick_ms_step: clock === "A" ? tickMs : null,
     frames: sweep.length,
     settle_frames: settleFrames,
+    settle,
     pacing,
     webgl2: !!gl,
     scene: {
@@ -302,6 +337,8 @@ async function run(canvas, config) {
       views,
       zooms,
       pane,
+      dpr,
+      pane_device_pixels: { width: panes[0].width, height: panes[0].height },
       ring_bytes: ringBytes,
       slab_bytes: slabBytes || "default",
     },

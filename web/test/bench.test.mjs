@@ -303,6 +303,31 @@ test("the gates fail what they are for and name what is not measured", () => {
   assert.ok(absent(report).some((line) => line.startsWith("SYMBOL POPS: NOT MEASURED")));
 });
 
+test("a run with no sweep frames is reported rather than crashed on", () => {
+  // What the settle protocol asks for: a cold start, its quiet tail, and no sweep at all. Every
+  // percentile summary is null then, and both the page and the harness read them.
+  const report = {
+    clock: "B",
+    frames: 0,
+    settle_frames: 4,
+    settle: { frames: 4, quiet_frames: 10, tail_records: 0, first_quiet_ms: 92, wall_ms: 250 },
+    timings: { frame_cpu_ms: null, tick_ms_sum: null, absorb_ms: null, draw_ms: null },
+    uncovered_frames: 0,
+    ring_full: 0,
+    region_full: 0,
+    blank: 0,
+    tick_errors: 0,
+    fetch: { origin_fetches: 12, distinct_urls: 12, failed: 0 },
+    pixels: null,
+  };
+  const rows = Object.fromEntries(evaluate(report).map((row) => [row.property, row]));
+  // Nothing to take a percentile of is not a budget failure.
+  assert.equal(rows["frame budget"].pass, null);
+  assert.equal(rows["frame budget"].value, null);
+  assert.equal(rows.coverage.pass, true);
+  assert.ok(absent(report).length > 0);
+});
+
 test("four hosted maps share one instance, and each draws its own view of the sweep's scene", async () => {
   const module = await readFile(`${root}target/wasm32-unknown-unknown/release/tessella_ffi.wasm`);
   const tile = await readFile(`${root}tests/mvt-fixtures/protomaps-berlin-14-8802-5373.mvt`);
