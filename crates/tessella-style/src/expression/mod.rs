@@ -1217,6 +1217,57 @@ impl Expression {
             };
         }
 
+        // A property the spec types as a string gets its result *coerced* rather than asserted,
+        // which is mbgl's `parseLayerPropertyExpression`: it passes
+        // `TypeAnnotationOption::coerce` when the expected type is `String` and leaves every
+        // other type to the default assertion. So `["get", "p"]` on a feature without `p` is the
+        // empty string for a string-typed property, where an assertion would have been an error.
+        //
+        // Only where the style wrote something. An unwritten property is parsed from its spec
+        // default, and a defaultless one's default is null -- coercing that would turn every
+        // unset `fill-pattern` into an image named "" rather than no image at all. mbgl never
+        // reaches this for an unset property because it does not parse one.
+        //
+        // Properties only, not filters, which is why this reads `zoom_placement`: mbgl's other
+        // entry point is `parseExpression` and it annotates nothing.
+        //
+        // Every other type is *asserted* rather than coerced, and only where the expression's
+        // type is not known statically -- mbgl's `actual == type::Value`. An assertion is a
+        // runtime check with no conversion, so `["get", "height"]` on a feature whose height is
+        // a string becomes an error where it used to be the property's default, silently.
+        if zoom_placement && !matches!(root, Expr::Literal(Value::Null)) {
+            let actual = root.result_type();
+            root = match spec.expected {
+                Some(Type::String) if actual != Type::String => Expr::Cast {
+                    to: CastKind::String,
+                    args: alloc::vec![root],
+                },
+                Some(kind @ (Type::Number | Type::Boolean | Type::Object))
+                    if actual == Type::Value =>
+                {
+                    Expr::Assert {
+                        kind: match kind {
+                            Type::Number => AssertKind::Number,
+                            Type::Boolean => AssertKind::Boolean,
+                            _ => AssertKind::Object,
+                        },
+                        args: alloc::vec![root],
+                    }
+                }
+                Some(Type::Array(array)) if actual == Type::Value => Expr::AssertArray {
+                    item: array.element.map(|scalar| match scalar {
+                        Scalar::Number => AssertKind::Number,
+                        Scalar::String => AssertKind::String,
+                        Scalar::Boolean => AssertKind::Boolean,
+                    }),
+                    length: array.length.map(|length| length as usize),
+                    value: Box::new(root),
+                    fallback: None,
+                },
+                _ => root,
+            };
+        }
+
         // The declared type against the produced one, which is the spec's own check and the one
         // that turns "this style is wrong" from a rendering surprise into a load error. Only
         // where a property *declares* a type: `parse` with no spec has nothing to check against,
@@ -1373,6 +1424,18 @@ impl Expression {
     }
 }
 
+/// The one type a set of branch outputs has, or [`Type::Value`] when they do not agree.
+///
+/// mbgl unifies them at parse time and refuses the expression when they cannot be, so agreeing
+/// is the ordinary case; answering `Value` for the rest is the honest reading rather than a
+/// claim this does not derive.
+fn unify(mut kinds: impl Iterator<Item = Type>) -> Type {
+    match kinds.next() {
+        Some(first) if kinds.all(|kind| kind == first) => first,
+        _ => Type::Value,
+    }
+}
+
 impl Expr {
     /// What this expression is known to produce, or [`Type::Value`] when it cannot be known.
     ///
@@ -1414,6 +1477,32 @@ impl Expr {
             // An element of an array whose type is not known statically, which is what makes
             // `["at", …]` usable in a comparison the checker cannot otherwise admit.
             Self::At { .. } => Type::Value,
+            // A curve is its outputs' type, when they agree. mbgl unifies them at parse time and
+            // refuses a curve whose outputs do not, so agreeing is the ordinary case and `Value`
+            // here is the honest answer for the rest.
+            //
+            // This is load-bearing beyond the checker: `parse_rooted` annotates a property whose
+            // expression's type is not known statically, and a curve reported as `Value` would be
+            // wrapped -- which puts the zoom curve one level down where `zoom_curve` cannot find
+            // it, and every zoom-interpolated paint property loses its interpolation factor.
+            // mbgl is not exposed to that because its `Interpolate` carries the unified type.
+            Self::Interpolate { stops, .. } | Self::Step { stops, .. } => {
+                unify(stops.iter().map(|(_, output)| output.result_type()))
+            }
+            // A branch is its branches' type on the same terms, and for the same reason: a curve
+            // whose stops are `match` expressions is the ordinary way a style writes a paint
+            // property that varies with both zoom and feature.
+            Self::Match { arms, fallback, .. } => unify(
+                arms.iter()
+                    .map(|(_, output)| output.result_type())
+                    .chain(core::iter::once(fallback.result_type())),
+            ),
+            Self::Case { branches, fallback } => unify(
+                branches
+                    .iter()
+                    .map(|(_, output)| output.result_type())
+                    .chain(core::iter::once(fallback.result_type())),
+            ),
             // A split is any number of strings; `to-rgba` is exactly four numbers.
             Self::Split { .. } => Type::Array(ArrayType::of(Scalar::String)),
             Self::ToRgba(_) => Type::Array(ArrayType {

@@ -13,6 +13,8 @@ any/short-circuiting
 array/basic
 array/default-value
 array/implicit-1
+array/implicit-2
+array/implicit-3
 array/item-type
 array/item-type-and-length
 asin/basic
@@ -25,6 +27,7 @@ case/precedence
 ceil/basic
 coalesce/basic
 coalesce/error
+coalesce/inference
 coalesce/null
 collator/accent-equals-de
 collator/accent-lt-en
@@ -97,6 +100,9 @@ image/coalesce
 image/compound
 in/assert-array
 in/assert-string
+in/basic-array
+in/basic-string
+in/invalid-haystack
 in/invalid-needle
 index-of/assert-array
 index-of/assert-string
@@ -299,6 +305,7 @@ to-rgba/zero
 to-string/2-ary
 to-string/basic
 to-string/color
+to-string/implicit
 typecheck/array-invalid-item
 typecheck/array-item-subtyping
 typecheck/array-length-subtyping

@@ -1014,7 +1014,13 @@ fn expression_spec(spec: &PropertySpec) -> expression::PropertySpec {
     }
 }
 
-fn default_value(spec: &PropertySpec) -> Value {
+/// The value a property takes when nothing else supplies one.
+///
+/// Public because the paint binder needs it per feature, not only per style: mbgl's
+/// `PropertyExpression::evaluate` falls back to the property's default when the expression fails
+/// *or* when the result will not type, and the first half of that is a per-feature decision.
+#[must_use]
+pub fn default_value(spec: &PropertySpec) -> Value {
     match spec.default {
         // A default color goes back through the same string path a style would take, so the
         // default and an explicitly written equivalent produce the same value rather than two

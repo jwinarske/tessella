@@ -50,7 +50,7 @@
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 
-use tessella_style::expression::Feature;
+use tessella_style::expression::{EvaluationError, Feature};
 use tessella_style::property::{
     DefaultValue, PropertyKind, PropertySpec, ResolvedProperty, as_color,
 };
@@ -255,14 +255,30 @@ impl PaintBinder {
             let property = resolved
                 .get(slot.name)
                 .expect("a slot exists only for a resolved property");
-            let at = |zoom: Option<f64>| {
-                property
-                    .expression
-                    .evaluate(zoom, Some(feature))
-                    .map_err(|error| BinderError::Evaluate {
-                        name: slot.name,
-                        message: alloc::format!("{error}"),
-                    })
+            // An expression that fails for one feature takes that feature's default, not the
+            // tile's life. mbgl's `PropertyExpression::evaluate` returns the default "when the
+            // expression fails *or* when `fromExpressionValue` cannot type the result", and
+            // `encode` below already implements the second half -- this is the first.
+            //
+            // It is ordinary rather than exceptional. A style types `fill-extrusion-height` as a
+            // number and writes `["get", "height"]`; the property boundary asserts the type, and
+            // most features in a real extract carry no height. Failing the tile for that took
+            // every layer of it with the one that asked.
+            //
+            // The structural errors are not swallowed: a missing zoom, camera or feature says
+            // the caller evaluated an expression it had misclassified (DR-11), which is this
+            // side's bug and not the data's, and a default would hide it for good.
+            let at = |zoom: Option<f64>| match property.expression.evaluate(zoom, Some(feature)) {
+                Ok(value) => Ok(value),
+                Err(
+                    error @ (EvaluationError::MissingZoom
+                    | EvaluationError::MissingCamera
+                    | EvaluationError::MissingFeature),
+                ) => Err(BinderError::Evaluate {
+                    name: slot.name,
+                    message: alloc::format!("{error}"),
+                }),
+                Err(_) => Ok(tessella_style::property::default_value(&property.spec)),
             };
             // A source-only property is evaluated with no zoom at all, not with the bucket's:
             // it does not read one, and offering it would let a mis-classified expression
