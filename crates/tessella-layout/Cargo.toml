@@ -23,6 +23,8 @@ i_overlay = { version = "8.1.1", default-features = false }
 
 [dev-dependencies]
 tessella-capture-abi.workspace = true
+# The fixture tiles `earcut_pinned` triangulates are MVT, and this is what decodes them.
+tessella-source.workspace = true
 serde_json.workspace = true
 
 [lints]

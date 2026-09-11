@@ -130,13 +130,21 @@ impl<'a, T: Float> Vertices<'a, T> {
         self.0.len()
     }
 
+    // tessella: each point paired with the one before it, cyclically from the last, and the terms
+    // summed in point order -- what upstream's `cycle().skip().step_by()` chain did, as a loop.
+    // The same terms in the same order, so the same sum to the bit. `start` and `end` bound whole
+    // points: `earcut` refuses an odd-length array and hole starts are point indices.
     fn signed_area(&self, start: VerticesIndex, end: VerticesIndex) -> T {
-        let i = (start..end).step_by(DIM);
-        let j = (start..end).cycle().skip((end - DIM) - start).step_by(DIM);
-        let zero = T::zero();
-        i.zip(j).fold(zero, |s, (i, j)| {
-            s + (self.0[j] - self.0[i]) * (self.0[i + 1] + self.0[j + 1])
-        })
+        let v = self.0;
+        let mut sum = T::zero();
+        let mut j = end - DIM;
+        let mut i = start;
+        while i < end {
+            sum = sum + (v[j] - v[i]) * (v[i + 1] + v[j + 1]);
+            j = i;
+            i += DIM;
+        }
+        sum
     }
 }
 
@@ -655,22 +663,37 @@ impl NodeIndexTriangle {
         NodeTriangle(self.prev_node(ll), self.ear_node(ll), self.next_node(ll))
     }
 
-    fn area<T: Float>(self, ll: &LinkedLists<T>) -> T {
-        self.node_triangle(ll).area()
-    }
-
     // check whether a polygon node forms a valid ear with adjacent nodes
+    //
+    // tessella: the triangle's corners are read once rather than copied out of the list for every
+    // point tested, and the ring is walked by index. The walk is `NodeIterator`'s -- the node after
+    // `next` first and unconditionally, then on up to `prev` -- and the arithmetic is the same
+    // expressions in the same order, so the answer is the same bit for bit. See PATCH.md.
     fn is_ear<T: Float>(self, ll: &LinkedLists<T>) -> bool {
         let zero = T::zero();
-        match self.area(ll) >= zero {
-            true => false, // reflex, cant be ear
-            false => !ll
-                .iter(self.next_node(ll).next_linked_list_node_index..self.prev_node(ll).idx)
-                .any(|p| {
-                    self.node_triangle(ll).contains_point(*p)
-                        && (NodeTriangle(*prevref!(ll, p.idx), *p, *nextref!(ll, p.idx)).area()
-                            >= zero)
-                }),
+        let a = ll.nodes[self.0].coord;
+        let b = ll.nodes[self.1].coord;
+        let c = ll.nodes[self.2].coord;
+        if coord_area(a, b, c) >= zero {
+            return false; // reflex, cant be ear
+        }
+        let end = ll.nodes[self.0].idx;
+        let mut p = ll.nodes[self.2].next_linked_list_node_index;
+        loop {
+            let node = &ll.nodes[p];
+            if point_in_triangle(a, b, c, node.coord)
+                && coord_area(
+                    ll.nodes[node.prev_linked_list_node_index].coord,
+                    node.coord,
+                    ll.nodes[node.next_linked_list_node_index].coord,
+                ) >= zero
+            {
+                return false;
+            }
+            p = node.next_linked_list_node_index;
+            if p == end {
+                return true;
+            }
         }
     }
 }
@@ -688,27 +711,12 @@ impl<T: Float> NodeTriangle<T> {
     }
 
     fn area(&self) -> T {
-        let p = self.0;
-        let q = self.1;
-        let r = self.2;
-        // signed area of a parallelogram
-        (q.coord.y - p.coord.y) * (r.coord.x - q.coord.x)
-            - (q.coord.x - p.coord.x) * (r.coord.y - q.coord.y)
+        coord_area(self.0.coord, self.1.coord, self.2.coord)
     }
 
     // check if a point lies within a convex triangle
     fn contains_point(&self, p: LinkedListNode<T>) -> bool {
-        let zero = T::zero();
-
-        ((self.2.coord.x - p.coord.x) * (self.0.coord.y - p.coord.y)
-            - (self.0.coord.x - p.coord.x) * (self.2.coord.y - p.coord.y)
-            >= zero)
-            && ((self.0.coord.x - p.coord.x) * (self.1.coord.y - p.coord.y)
-                - (self.1.coord.x - p.coord.x) * (self.0.coord.y - p.coord.y)
-                >= zero)
-            && ((self.1.coord.x - p.coord.x) * (self.2.coord.y - p.coord.y)
-                - (self.2.coord.x - p.coord.x) * (self.1.coord.y - p.coord.y)
-                >= zero)
+        point_in_triangle(self.0.coord, self.1.coord, self.2.coord, p.coord)
     }
 
     #[inline(always)]
@@ -798,6 +806,27 @@ impl<T: Float> NodeTriangle<T> {
     }
 }
 
+// signed area of a parallelogram
+//
+// tessella: `NodeTriangle::area`'s expression, on coordinates, so a caller holding coordinates need
+// not copy whole nodes to ask. The same operations in the same order: Rust does not contract a
+// multiply and add into one rounding unless asked, so the result is the same bits.
+#[inline(always)]
+fn coord_area<T: Float>(p: Coord<T>, q: Coord<T>, r: Coord<T>) -> T {
+    (q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y)
+}
+
+// check if a point lies within a convex triangle
+//
+// tessella: `NodeTriangle::contains_point`'s expression, on coordinates, as `coord_area` is.
+#[inline(always)]
+fn point_in_triangle<T: Float>(a: Coord<T>, b: Coord<T>, c: Coord<T>, p: Coord<T>) -> bool {
+    let zero = T::zero();
+    ((c.x - p.x) * (a.y - p.y) - (a.x - p.x) * (c.y - p.y) >= zero)
+        && ((a.x - p.x) * (b.y - p.y) - (b.x - p.x) * (a.y - p.y) >= zero)
+        && ((b.x - p.x) * (c.y - p.y) - (c.x - p.x) * (b.y - p.y) >= zero)
+}
+
 // helper for is_ear_hashed. needs manual inline (rust 2018)
 #[inline(always)]
 fn earcheck<T: Float>(
@@ -861,13 +890,18 @@ fn filter_points<T: Float>(
 
 // create a circular doubly linked list from polygon points in the
 // specified winding order
+//
+// tessella: `nodes` is how many the list will hold, so it is allocated once. Upstream reserved one
+// per point and then pushed the NULL node as well, which reallocated and copied every list at least
+// once, and a hole's bridge adds two more.
 fn linked_list<T: Float>(
     vertices: &Vertices<T>,
     start: usize,
     end: usize,
     clockwise: bool,
+    nodes: usize,
 ) -> Result<(LinkedLists<T>, LinkedListNodeIndex), Error> {
-    let mut ll: LinkedLists<T> = LinkedLists::new(vertices.len() / DIM);
+    let mut ll: LinkedLists<T> = LinkedLists::new(nodes);
     // Point count, not the length of the flat coordinate array. earcut.hpp counts points --
     // `threshold = 80` decremented by each ring's size, `hashing = threshold < 0` -- so it hashes
     // above eighty *points*. Comparing `vertices.len()` against the same eighty compares twice
@@ -921,8 +955,12 @@ pub fn earcut<T: Float>(
     };
 
     let vertices = Vertices(vertices);
-    let (mut ll, outer_node) = linked_list(&vertices, 0, outer_len, true)?;
-    let mut triangles = FinalTriangleIndices(Vec::with_capacity(vertices.len() / DIM));
+    // tessella: sized for what they will hold -- the NULL node, one node per point and two per
+    // hole's bridge; and three indices per triangle, of which a polygon has about one per node.
+    // Upstream reserved a third of the triangles, and grew the rest.
+    let nodes = 1 + vertices.len() / DIM + 2 * hole_indices.len();
+    let (mut ll, outer_node) = linked_list(&vertices, 0, outer_len, true, nodes)?;
+    let mut triangles = FinalTriangleIndices(Vec::with_capacity(3 * nodes));
     if ll.nodes.len() == 1 || DIM != dims {
         return Ok(triangles.0);
     }
