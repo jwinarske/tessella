@@ -227,7 +227,25 @@ fn run_case(case: &Value) -> Result<(), String> {
             .and_then(Value::as_number);
         let feature = suite_feature(pair.and_then(|pair| pair.get(1)));
 
-        let got = parsed.evaluate(zoom, feature.as_ref().map(|f| f as &dyn Feature));
+        // The sprites this input says exist. `["image", …]` reports on them and `coalesce` skips
+        // one that is absent, so a case that omits the key is not the same as one that lists
+        // nothing: absent means the caller does not know and every image is available, which is
+        // what every case here that does not mention images relies on.
+        let images: Option<Vec<String>> = globals
+            .and_then(|g| g.get("availableImages"))
+            .and_then(Value::as_array)
+            .map(|names| {
+                names
+                    .iter()
+                    .filter_map(|name| name.as_str().map(ToString::to_string))
+                    .collect()
+            });
+        let got = parsed.evaluate_in(
+            zoom,
+            None,
+            feature.as_ref().map(|f| f as &dyn Feature),
+            images.as_deref(),
+        );
         let wants_error = want.get("error").is_some();
 
         match (got, wants_error) {
@@ -288,6 +306,14 @@ fn values_match(got: &Value, want: &Value) -> bool {
         (Value::Array(a), Value::Array(b)) => {
             a.len() == b.len() && a.iter().zip(b).all(|(x, y)| values_match(x, y))
         }
+        // Objects recurse for the same reason arrays do, and it is not only tidiness: a formatted
+        // value is an object of sections, and the color inside one is spelled differently from a
+        // color on its own. Comparing objects with `==` never reached the arm below it.
+        (Value::Object(a), Value::Object(b)) => {
+            a.len() == b.len()
+                && a.iter()
+                    .all(|(key, x)| b.get(key).is_some_and(|y| values_match(x, y)))
+        }
         // The suite's expectations are JSON, and JSON has no colour: the spec writes a colour
         // result as its four channels. That is a spelling of the same value, so the comparison
         // unwraps it rather than the evaluator giving colours back as arrays to suit a test
@@ -301,6 +327,22 @@ fn values_match(got: &Value, want: &Value) -> bool {
             ),
             want,
         ),
+        // And the *other* spelling, which is the same value again. A color on its own comes back
+        // as four channels; one inside a formatted section comes back as an object keyed `r`,
+        // `g`, `b` and `a`. The suite writes whichever the position calls for, so the comparison
+        // accepts both rather than the evaluator carrying two representations.
+        (Value::Color(color), Value::Object(fields)) if fields.len() == 4 => [
+            ("r", color.r),
+            ("g", color.g),
+            ("b", color.b),
+            ("a", color.a),
+        ]
+        .into_iter()
+        .all(|(key, channel)| {
+            fields
+                .get(key)
+                .is_some_and(|value| values_match(&Value::Number(f64::from(channel)), value))
+        }),
         _ => got == want,
     }
 }

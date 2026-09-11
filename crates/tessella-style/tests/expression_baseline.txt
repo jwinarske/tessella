@@ -63,8 +63,10 @@ equal/object
 equal/string
 equal/value
 floor/basic
+format/basic
 format/coercion
 format/data-driven-font
+format/image-sections
 format/implicit
 format/implicit-coerce
 format/implicit-omit
@@ -90,6 +92,9 @@ greater_or_equal/string-and-value
 greater_or_equal/value
 has/basic
 id/basic
+image/basic
+image/coalesce
+image/compound
 in/assert-array
 in/assert-string
 in/invalid-needle
