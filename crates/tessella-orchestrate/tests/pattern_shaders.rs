@@ -14,6 +14,7 @@
 //! sprite sheet that is slow to arrive look like a style error.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use tessella_capture_abi::EnvelopeKind;
 use tessella_capture_abi::ProjectionMode;
@@ -57,7 +58,7 @@ fn emit_with(sprites: Option<&Patterns<'_>>) -> (BTreeMap<i32, usize>, u32) {
         let mut built = build_mvt_tile(&style, "s", id, &decoded).expect("builds");
         built.extend(build_sourceless(&style, id).expect("background"));
         built.sort_by_key(|bucket| bucket.layer_index);
-        buckets.push((id, built));
+        buckets.push((id, Arc::new(built)));
     }
 
     let mut arena = SlabArena::new();
@@ -220,7 +221,7 @@ fn the_atlas_is_uploaded_and_the_placements_are_written() {
         let mut built = build_mvt_tile(&style, "s", id, &decoded).expect("builds");
         built.extend(build_sourceless(&style, id).expect("background"));
         built.sort_by_key(|bucket| bucket.layer_index);
-        buckets.push((id, built));
+        buckets.push((id, Arc::new(built)));
     }
 
     let mut arena = SlabArena::new();
@@ -376,7 +377,7 @@ fn an_extrusion_pattern_binds_its_own_shader() {
         let mut built = build_mvt_tile(&style, "s", id, &decoded).expect("builds");
         built.extend(build_sourceless(&style, id).expect("background"));
         built.sort_by_key(|bucket| bucket.layer_index);
-        buckets.push((id, built));
+        buckets.push((id, Arc::new(built)));
     }
 
     let mut arena = SlabArena::new();

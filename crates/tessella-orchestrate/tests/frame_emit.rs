@@ -5,6 +5,7 @@
 //! and a tool that wanted to would have had to write a second copy of the ordering rules to keep
 //! in step with the first. This exercises the module instead.
 
+use std::sync::Arc;
 use tessella_capture_abi::EnvelopeKind;
 use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::{CameraUpdate, ViewId, WireRecord as _};
@@ -59,7 +60,7 @@ fn emit_frame() -> (Vec<EnvelopeKind>, frame::Emitted, usize) {
         let mut built = build_mvt_tile(&style, "src", id, &decoded).expect("the tile builds");
         built.extend(build_sourceless(&style, id).expect("the background builds"));
         built.sort_by_key(|bucket| bucket.layer_index);
-        buckets.push((id, built));
+        buckets.push((id, Arc::new(built)));
     }
 
     let mut ring = Ring::new(1 << 22);
@@ -236,14 +237,14 @@ fn a_symbol_layer_carries_its_quads_and_its_atlas() {
     for tile in &tiles {
         let id = TileId::new(tile.z, tile.x, tile.y);
         let built = build_mvt_tile(&style, "src", id, &decoded).expect("the tile builds");
-        buckets.push((id, built));
+        buckets.push((id, Arc::new(built)));
     }
 
     // The round trip between the two phases of shaping: the buckets say which glyphs they want,
     // and only once those are here can the quads be made.
     let mut fonts = Fonts::new("glyphs://{fontstack}/{range}.pbf");
     for (_, tile_buckets) in &buckets {
-        for bucket in tile_buckets {
+        for bucket in tile_buckets.iter() {
             if let Some(layout) = bucket.content.as_symbol() {
                 fonts
                     .fetch(&layout.dependencies(), &Fixture)
@@ -368,7 +369,7 @@ fn a_raster_layer_carries_its_quad_and_its_picture() {
             &[tessella_tile::mask::WHOLE_TILE],
         )
         .expect("the raster tile builds");
-        buckets.push((id, built));
+        buckets.push((id, Arc::new(built)));
     }
 
     let mut ring = Ring::new(1 << 22);
@@ -499,7 +500,7 @@ fn emit_with_projection(projection: ProjectionMode) -> CameraUpdate {
         let mut built = build_mvt_tile(&style, "src", id, &decoded).expect("the tile builds");
         built.extend(build_sourceless(&style, id).expect("the background builds"));
         built.sort_by_key(|bucket| bucket.layer_index);
-        buckets.push((id, built));
+        buckets.push((id, Arc::new(built)));
     }
 
     let mut ring = Ring::new(1 << 22);

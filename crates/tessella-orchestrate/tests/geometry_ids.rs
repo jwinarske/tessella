@@ -12,6 +12,7 @@
 //! producer — if the lifecycle is built, these assertions fail and the prose comes with them.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use tessella_capture_abi::EnvelopeKind;
 use tessella_capture_abi::ProjectionMode;
@@ -52,7 +53,7 @@ fn emit_at(longitude: f64) -> (Vec<u64>, Vec<String>) {
         let mut built = build_mvt_tile(&style, "s", id, &decoded).expect("builds");
         built.extend(build_sourceless(&style, id).expect("background"));
         built.sort_by_key(|bucket| bucket.layer_index);
-        buckets.push((id, built));
+        buckets.push((id, Arc::new(built)));
     }
 
     let mut arena = SlabArena::new();
@@ -166,7 +167,7 @@ fn nothing_is_released_because_nothing_is_retained() {
         let mut built = build_mvt_tile(&style, "s", id, &decoded).expect("builds");
         built.extend(build_sourceless(&style, id).expect("background"));
         built.sort_by_key(|bucket| bucket.layer_index);
-        buckets.push((id, built));
+        buckets.push((id, Arc::new(built)));
     }
 
     let mut arena = SlabArena::new();
@@ -247,7 +248,7 @@ fn a_wrapped_tile_is_not_its_own_copy() {
         let mut built = build_mvt_tile(&style, "s", id, &decoded).expect("builds");
         built.extend(build_sourceless(&style, id).expect("background"));
         built.sort_by_key(|bucket| bucket.layer_index);
-        buckets.push((id, built));
+        buckets.push((id, Arc::new(built)));
     }
 
     let mut arena = SlabArena::new();

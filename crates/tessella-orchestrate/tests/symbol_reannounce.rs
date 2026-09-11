@@ -20,6 +20,7 @@
 //! test that only asserts the symbol comes back would pass just as well with retention broken
 //! altogether.
 
+use std::sync::Arc;
 use tessella_capture_abi::EnvelopeKind;
 use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::{GeometryAdd, ViewId, WireRecord as _};
@@ -83,7 +84,7 @@ fn emit(
     style: &Style,
     view: &ViewTransform,
     tiles: &[cover::TileCoord],
-    buckets: &[(TileId, Vec<LayerBucket>)],
+    buckets: &[(TileId, Arc<Vec<LayerBucket>>)],
     fonts: &Fonts,
     arena: &mut SlabArena,
     layouts: &mut frame::SymbolCache,
@@ -144,12 +145,12 @@ fn a_camera_move_re_announces_the_labels_and_nothing_else() {
     for tile in &tiles {
         let id = TileId::new(tile.z, tile.x, tile.y);
         let built = build_mvt_tile(&style, "src", id, &decoded).expect("the tile builds");
-        buckets.push((id, built));
+        buckets.push((id, Arc::new(built)));
     }
 
     let mut fonts = Fonts::new("glyphs://{fontstack}/{range}.pbf");
     for (_, tile_buckets) in &buckets {
-        for bucket in tile_buckets {
+        for bucket in tile_buckets.iter() {
             if let Some(layout) = bucket.content.as_symbol() {
                 fonts
                     .fetch(&layout.dependencies(), &Fixture)

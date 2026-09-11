@@ -22,6 +22,7 @@
 //! side — the reverse channel has carried the acked position since DR-10.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::{TileId as WireTileId, ViewId};
@@ -56,7 +57,7 @@ struct Scene {
     style: Style,
     view: ViewTransform,
     tiles: Vec<cover::TileCoord>,
-    buckets: Vec<(TileId, Vec<LayerBucket>)>,
+    buckets: Vec<(TileId, Arc<Vec<LayerBucket>>)>,
 }
 
 fn scene() -> Scene {
@@ -78,7 +79,7 @@ fn scene() -> Scene {
         let mut built = build_mvt_tile(&style, "src", id, &decoded).expect("the tile builds");
         built.extend(build_sourceless(&style, id).expect("the background builds"));
         built.sort_by_key(|bucket| bucket.layer_index);
-        buckets.push((id, built));
+        buckets.push((id, Arc::new(built)));
     }
     Scene {
         style,

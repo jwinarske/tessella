@@ -10,6 +10,7 @@
 
 #![allow(dead_code, unreachable_pub)]
 
+use std::sync::Arc;
 use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::{Extent, GeometryId, Rect16, TextureId, ViewId};
 use tessella_capture_abi::generated::mbgl_enums::TexturePixelType;
@@ -69,7 +70,7 @@ pub fn emit_frame() -> (Vec<u8>, Vec<u8>, frame::Emitted) {
         let mut built = build_mvt_tile(&style, "src", id, &decoded).expect("the tile builds");
         built.extend(build_sourceless(&style, id).expect("the background builds"));
         built.sort_by_key(|bucket| bucket.layer_index);
-        buckets.push((id, built));
+        buckets.push((id, Arc::new(built)));
     }
 
     // Eight-aligned by construction, which `init` requires.

@@ -11,6 +11,7 @@
 //! work done in bursts with the part idle between them. §12.8 says so — "sustained-idle-then-
 //! burst beats constant medium load" — and until now nothing measured it.
 
+use std::sync::Arc;
 use tessella_capture_abi::ProjectionMode;
 use tessella_orchestrate::pacing::{Demand, Idle, Pacer, Tick};
 
@@ -239,7 +240,7 @@ mod against_a_ring {
         style: Style,
         view: ViewTransform,
         tiles: Vec<cover::TileCoord>,
-        buckets: Vec<(TileId, Vec<LayerBucket>)>,
+        buckets: Vec<(TileId, Arc<Vec<LayerBucket>>)>,
     }
 
     fn scene(longitude: f64) -> Scene {
@@ -261,7 +262,7 @@ mod against_a_ring {
             let mut built = build_mvt_tile(&style, "src", id, &decoded).expect("the tile builds");
             built.extend(build_sourceless(&style, id).expect("the background builds"));
             built.sort_by_key(|bucket| bucket.layer_index);
-            buckets.push((id, built));
+            buckets.push((id, Arc::new(built)));
         }
         Scene {
             style,

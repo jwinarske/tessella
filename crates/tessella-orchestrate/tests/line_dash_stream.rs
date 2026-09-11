@@ -11,6 +11,7 @@
 //! the §9.1 metric does not see: at threshold 48 the ten dashed layers of a real basemap scored
 //! 0.000% while drawing 6,304 more pixels than the oracle.
 
+use std::sync::Arc;
 use tessella_capture_abi::envelope::{GeometryAdd, TextureRef, TextureUpdate, WireRecord as _};
 use tessella_capture_abi::ring::Ring;
 use tessella_capture_abi::{BuiltIn, EnvelopeKind, ProjectionMode};
@@ -63,7 +64,7 @@ fn emit() -> Sent {
         let mut built = build_mvt_tile(&style, "src", id, &decoded).expect("the tile builds");
         built.extend(build_sourceless(&style, id).expect("the sourceless layers build"));
         built.sort_by_key(|bucket| bucket.layer_index);
-        buckets.push((id, built));
+        buckets.push((id, Arc::new(built)));
     }
 
     let mut ring = Ring::new(1 << 22);
@@ -154,7 +155,7 @@ fn the_atlas_goes_up_before_anything_names_it() {
         let id = TileId::new(tile.z, tile.x, tile.y);
         let mut built = build_mvt_tile(&style, "src", id, &decoded).expect("the tile builds");
         built.sort_by_key(|bucket| bucket.layer_index);
-        buckets.push((id, built));
+        buckets.push((id, Arc::new(built)));
     }
     let mut ring = Ring::new(1 << 22);
     let (producer, consumer) = ring.split();

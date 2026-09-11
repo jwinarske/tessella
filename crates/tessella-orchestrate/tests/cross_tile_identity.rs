@@ -22,6 +22,7 @@
 //!
 //! So these drive whole frames and read the identities the index actually issued.
 
+use std::sync::Arc;
 use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::ViewId;
 use tessella_capture_abi::ring::Ring;
@@ -74,7 +75,7 @@ struct Scene {
     style: Style,
     view: ViewTransform,
     tiles: Vec<cover::TileCoord>,
-    buckets: Vec<(TileId, Vec<LayerBucket>)>,
+    buckets: Vec<(TileId, Arc<Vec<LayerBucket>>)>,
     origins: Vec<Option<std::sync::Arc<Vec<LayerBucket>>>>,
     fonts: Fonts,
 }
@@ -101,7 +102,7 @@ fn scene(ids: &[TileId]) -> Scene {
     for id in ids {
         let built = build_mvt_tile(&style, "src", *id, &decoded).expect("the tile builds");
         origins.push(Some(std::sync::Arc::new(built.clone())));
-        buckets.push((*id, built));
+        buckets.push((*id, Arc::new(built)));
         tiles.push(cover::TileCoord {
             z: id.z,
             x: id.x,
@@ -112,7 +113,7 @@ fn scene(ids: &[TileId]) -> Scene {
 
     let mut fonts = Fonts::new("glyphs://{fontstack}/{range}.pbf");
     for (_, tile_buckets) in &buckets {
-        for bucket in tile_buckets {
+        for bucket in tile_buckets.iter() {
             if let Some(layout) = bucket.content.as_symbol() {
                 fonts
                     .fetch(&layout.dependencies(), &Fixture)
@@ -306,7 +307,8 @@ fn a_re_parsed_tile_keeps_its_labels_identities() {
     scene.origins = scene
         .buckets
         .iter()
-        .map(|(_, built)| Some(std::sync::Arc::new(built.clone())))
+        // A copy of the list, not of the `Arc`: the point is a new allocation of the same buckets.
+        .map(|(_, built)| Some(std::sync::Arc::new(Vec::clone(built))))
         .collect();
 
     emit(
@@ -334,7 +336,7 @@ fn the_scene_exercises_line_labels() {
     let mut lines = 0;
     let mut points = 0;
     for (_, tile_buckets) in &scene.buckets {
-        for bucket in tile_buckets {
+        for bucket in tile_buckets.iter() {
             let Some(layout) = bucket.content.as_symbol() else {
                 continue;
             };
