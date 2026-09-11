@@ -259,6 +259,24 @@ impl ResolvedProperty {
     pub fn as_constant(&self) -> Option<Value> {
         self.expression.as_constant()
     }
+
+    /// The numbers this resolves to at `zoom`, if it resolves to an array of them.
+    ///
+    /// `line-dasharray` is the only property shaped this way, and it is cross-faded: the caller
+    /// asks at three zooms and blends the answers, which is why this takes a zoom rather than
+    /// reading the constant. Anything that is not an array of numbers answers `None` -- a layer
+    /// with no dasharray resolves to null, and a pattern of strings was refused at load.
+    #[must_use]
+    pub fn numbers_at(&self, zoom: f64) -> Option<alloc::vec::Vec<f32>> {
+        let Ok(Value::Array(items)) = self.expression.evaluate(Some(zoom), None) else {
+            return None;
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        items
+            .iter()
+            .map(|item| item.as_number().map(|number| number as f32))
+            .collect()
+    }
 }
 
 const BACKGROUND_PAINT: &[PropertySpec] = &[

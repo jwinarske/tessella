@@ -1543,6 +1543,12 @@ pub struct LineDraw<'a> {
     pub permutation_key: u64,
     /// The pattern atlas, when the layer resolved one.
     pub pattern_atlas: Option<TextureId>,
+    /// The dash atlas, when the layer carries a `line-dasharray`.
+    ///
+    /// Beside the pattern atlas rather than sharing its slot, because the two are different
+    /// textures behind the same sampler and which one a drawable gets is decided by which shader
+    /// it names. A layer that sets both draws dashed, as mbgl's does.
+    pub dash_atlas: Option<TextureId>,
     /// Per-vertex pattern rectangles, when the pattern is data-driven.
     pub pattern_vertices: Option<&'a PatternVertices>,
 }
@@ -1570,6 +1576,7 @@ pub fn encode_line(
         attributes,
         permutation_key,
         pattern_atlas,
+        dash_atlas,
         pattern_vertices,
     } = draw;
     let mut vertex_bytes = Vec::with_capacity(bucket.vertices.len() * LINE_STRIDE as usize);
@@ -1608,12 +1615,12 @@ pub fn encode_line(
         bucket.vertices.len(),
         &descriptors,
         &bucket.segments,
-        if pattern_atlas.is_some() {
-            BuiltIn::LinePatternShader
-        } else {
-            BuiltIn::LineShader
+        match (dash_atlas, pattern_atlas) {
+            (Some(_), _) => BuiltIn::LineSDFShader,
+            (None, Some(_)) => BuiltIn::LinePatternShader,
+            (None, None) => BuiltIn::LineShader,
         },
-        pattern_atlas,
+        dash_atlas.or(pattern_atlas),
         TextureFilter::Linear,
     )
 }

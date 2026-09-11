@@ -343,6 +343,15 @@ fn glyph_atlas_id(index: usize) -> tessella_capture_abi::envelope::TextureId {
     tessella_capture_abi::envelope::TextureId(GLYPH_ATLAS_BASE + index as u64)
 }
 
+/// The first texture id a dash atlas takes.
+///
+/// Above the raster tiles' packed space rather than below it. A raster id is the tile packed into
+/// the low sixty bits of the word, so the range above [`RASTER_TEXTURE_BASE`] is claimed as far
+/// as `MAX_ZOOM` reaches; putting the dashes at the top of the word leaves both injective with
+/// nothing to check at run time. One per style layer, so a style would need 2^62 of them to
+/// collide.
+const DASH_TEXTURE_BASE: u64 = 1 << 62;
+
 /// The first texture id a raster tile's picture takes.
 ///
 /// One per tile rather than one per layer: a raster tile *is* its picture, and two raster layers
@@ -612,6 +621,24 @@ fn emit_group(
             texture::pattern_atlas(patterns.texture, patterns.size, patterns.pixels)
     {
         texture::write(producer, &upload)?;
+    }
+
+    // And the dash atlases, for the same reason and on the same terms: a dashed line's drawable
+    // names a texture, and a reference the consumer has not been given samples whatever was last
+    // at that slot -- which for a distance field is a line that dashes at somebody else's rhythm
+    // rather than one that does not draw.
+    //
+    // Re-sent every frame, as the sprite atlas is. A pattern that steps with zoom changes under
+    // a moving camera, and four kilobytes a dashed layer is not worth a dirty flag to avoid.
+    let dashes = crate::dash::Dashes::for_buckets(
+        style,
+        buckets,
+        view.zoom,
+        patterns.map_or_else(ZoomHistory::new, |patterns| patterns.history),
+        DASH_TEXTURE_BASE,
+    );
+    for entry in dashes.iter() {
+        texture::write(producer, &texture::dash_atlas(entry.texture, &entry.atlas))?;
     }
 
     // Derived from the viewport, so it moves when the camera does and not otherwise -- and
@@ -912,6 +939,7 @@ fn emit_group(
                         stacks: &stacks,
                         prepared: &prepared,
                         key: (tile_index, bucket_index),
+                        dashes: &dashes,
                         background_cells,
                     },
                 ) else {
@@ -1112,7 +1140,7 @@ fn emit_group(
                     .copied()
                     .unwrap_or(u32::MAX)
             });
-            write_layer_state(producer, frame, *layer_index, &ordered, tiles)?;
+            write_layer_state(producer, frame, *layer_index, &ordered, tiles, &dashes)?;
         }
     }
 
@@ -1321,6 +1349,8 @@ struct Encoding<'a> {
     prepared: &'a BTreeMap<(usize, usize), PreparedSymbols>,
     /// Which bucket this is, to address `prepared` with.
     key: (usize, usize),
+    /// The dash atlases, for a line layer that carries a `line-dasharray`.
+    dashes: &'a crate::dash::Dashes,
     /// How many cells a background's quad is split into, per side.
     ///
     /// One on a plane, which is mbgl's four-vertex quad and what the goldens hash. On a globe it
@@ -2461,6 +2491,7 @@ fn encode_parts(
         stacks,
         prepared,
         key,
+        dashes,
         background_cells,
     } = context;
     let bind = |family: &[BuiltIn], shader: BuiltIn| {
@@ -2504,14 +2535,31 @@ fn encode_parts(
             Some(encoded)
         }
         Content::Line(line) => {
-            let (vertex_layout, key) = bind(LINE_FAMILY, BuiltIn::LineShader);
+            // A dasharray takes precedence over a pattern, as it does in mbgl: the SDF branch is
+            // tested first there, so a layer carrying both draws dashed. The two are different
+            // shaders over the same vertices, and the layout has to be bound against whichever
+            // one the drawable will name -- the SDF shader declares `floorwidth` where the plain
+            // one does not, and binding against the wrong table drops or invents a slot.
+            let dash = dashes.get(bucket.layer_index);
             let atlas = patterns
+                .filter(|_| dash.is_none())
                 .filter(|patterns| {
                     patterns
                         .placement(&bucket.paint, "line-pattern", zoom)
                         .is_some()
                 })
                 .map(|patterns| patterns.texture);
+            // A pattern binds against the plain shader's table, which is what it did before the
+            // SDF branch existed and is left alone here: `LinePatternShader` drops the colour
+            // attribute and shifts every binding after it down one, so switching to its table
+            // would move a patterned line's slots for reasons that have nothing to do with
+            // dashes. The SDF table differs only by *adding* `floorwidth` at binding eight.
+            let shader = if dash.is_some() {
+                BuiltIn::LineSDFShader
+            } else {
+                BuiltIn::LineShader
+            };
+            let (vertex_layout, key) = bind(LINE_FAMILY, shader);
             Some(emit::encode_line(
                 arena,
                 PLACEHOLDER,
@@ -2521,6 +2569,7 @@ fn encode_parts(
                     attributes: bucket.binder.data(),
                     permutation_key: key,
                     pattern_atlas: atlas,
+                    dash_atlas: dash.map(|dash| dash.texture),
                     // Only where the atlas resolved: a pattern the sprite sheet does not hold
                     // draws as a plain line, and rectangles for a pattern nothing will bind are
                     // bytes on the wire that no shader reads.
@@ -2750,6 +2799,7 @@ fn write_layer_state(
     layer_index: i32,
     bindings: &[GeometryBinding],
     tiles: &[TileCoord],
+    dashes: &crate::dash::Dashes,
 ) -> Result<(), FrameError> {
     let Frame {
         projection,
@@ -3054,9 +3104,12 @@ fn write_layer_state(
             )?;
         }
         LayerKind::Line => {
-            let line: Vec<ubo::LineDrawableEntry> = matrices(0)
+            // The tile beside its block, because a dashed line needs both: the pattern is scaled
+            // by the tile's own level against the camera's, and a parent standing in for a finer
+            // tile is stretched.
+            let placed: Vec<(u8, ubo::LineDrawableEntry)> = matrices(0)
                 .filter_map(|tile| {
-                    ubo::LineDrawableEntry::for_tile(
+                    let entry = ubo::LineDrawableEntry::for_tile(
                         view,
                         projection,
                         tile.z,
@@ -3067,11 +3120,60 @@ fn write_layer_state(
                         0,
                         ubo::line_interpolations(&paint, f64::from(tile.z), view.zoom),
                     )
-                    .ok()
+                    .ok()?;
+                    Some((tile.z, entry))
                 })
                 .collect();
-            let buffer =
-                ubo::pack_line_drawable_buffer(&line, ubo_layouts::LINE_DRAWABLE_UNION_UBO.stride);
+            let line: Vec<ubo::LineDrawableEntry> =
+                placed.iter().map(|&(_, entry)| entry).collect();
+            // The dash atlas this layer resolved, which decides both blocks below:
+            // `LineSDFDrawableUBO` is `LineDrawableUBO` with the pattern's placement between the
+            // matrix and the ratio, and the tile props carry the distance field's gamma rather
+            // than a sprite rectangle.
+            let placement = usize::try_from(layer_index)
+                .ok()
+                .and_then(|index| dashes.get(index))
+                .map(|dash| ubo::DashPlacement {
+                    from: dash.from,
+                    to: dash.to,
+                    crossfade: dash.crossfade,
+                    pixel_ratio: 1.0,
+                });
+            let buffer = match placement {
+                Some(placement) => {
+                    let sdf: Vec<ubo::LineSdfDrawableEntry> = placed
+                        .iter()
+                        .map(|&(z, entry)| {
+                            #[allow(clippy::cast_possible_truncation)]
+                            let units =
+                                tessella_tile::camera::pixels_to_tile_units(z, view.zoom.floor())
+                                    as f32;
+                            let (scale_a, scale_b) = placement.scales(units);
+                            ubo::LineSdfDrawableEntry {
+                                matrix: entry.matrix,
+                                ratio: entry.ratio,
+                                patternscale_a: scale_a,
+                                patternscale_b: scale_b,
+                                tex_y_a: placement.from.y,
+                                tex_y_b: placement.to.y,
+                                interpolations: ubo::line_sdf_interpolations(
+                                    &paint,
+                                    f64::from(z),
+                                    view.zoom,
+                                ),
+                            }
+                        })
+                        .collect();
+                    ubo::pack_line_sdf_drawable_buffer(
+                        &sdf,
+                        ubo_layouts::LINE_DRAWABLE_UNION_UBO.stride,
+                    )
+                }
+                None => ubo::pack_line_drawable_buffer(
+                    &line,
+                    ubo_layouts::LINE_DRAWABLE_UNION_UBO.stride,
+                ),
+            };
             ubo::write(
                 producer,
                 view_id,
@@ -3113,33 +3215,41 @@ fn write_layer_state(
             // A line's pattern block is wider than a fill's — it carries the scale and the
             // fade — so it is packed by its own function, not by the fill's with a different
             // stride. The union's stride is the line's sixty-four either way.
-            let tile_props = match patterns.and_then(|patterns| {
-                Some((
-                    patterns,
-                    patterns.placement(&paint, "line-pattern", view.zoom)?,
-                ))
-            }) {
-                Some((patterns, placement)) => {
-                    let entry = ubo::LinePatternPlacement {
-                        placement,
-                        pixel_ratio: 1.0,
-                        // Tile units per pixel at the tile's own level, inverted. Every tile of
-                        // a cover is at the same level, so one value serves the layer.
-                        #[allow(clippy::cast_possible_truncation)]
-                        units_per_pixel: tiles.first().map_or(1.0, |tile| {
-                            1.0 / tessella_tile::camera::pixels_to_tile_units(
-                                tile.z,
-                                f64::from(tile.z),
-                            ) as f32
-                        }),
-                        crossfade: patterns.crossfade(view.zoom),
-                    };
-                    ubo::pack_line_pattern_tile_props(&alloc::vec![entry; line.len()])
-                }
-                None => ubo::pack_tile_props_buffer(
+            let tile_props = if let Some(placement) = placement {
+                ubo::pack_line_sdf_tile_props(
+                    &placement,
                     line.len(),
                     ubo_layouts::LINE_TILE_PROPS_UNION_UBO.stride,
-                ),
+                )
+            } else {
+                match patterns.and_then(|patterns| {
+                    Some((
+                        patterns,
+                        patterns.placement(&paint, "line-pattern", view.zoom)?,
+                    ))
+                }) {
+                    Some((patterns, placement)) => {
+                        let entry = ubo::LinePatternPlacement {
+                            placement,
+                            pixel_ratio: 1.0,
+                            // Tile units per pixel at the tile's own level, inverted. Every tile of
+                            // a cover is at the same level, so one value serves the layer.
+                            #[allow(clippy::cast_possible_truncation)]
+                            units_per_pixel: tiles.first().map_or(1.0, |tile| {
+                                1.0 / tessella_tile::camera::pixels_to_tile_units(
+                                    tile.z,
+                                    f64::from(tile.z),
+                                ) as f32
+                            }),
+                            crossfade: patterns.crossfade(view.zoom),
+                        };
+                        ubo::pack_line_pattern_tile_props(&alloc::vec![entry; line.len()])
+                    }
+                    None => ubo::pack_tile_props_buffer(
+                        line.len(),
+                        ubo_layouts::LINE_TILE_PROPS_UNION_UBO.stride,
+                    ),
+                }
             };
             ubo::write(
                 producer,

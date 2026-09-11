@@ -35,6 +35,7 @@ use tessella_capture_abi::ring::{Full, Producer};
 use tessella_layout::raster::{self, RasterColour};
 use tessella_layout::symbol_layout::{Alignment, Alignments, Placement};
 use tessella_style::Value;
+use tessella_style::crossfade::Crossfade;
 use tessella_style::property::{Binding, Color, DefaultValue, ResolvedProperty};
 use tessella_tile::camera;
 use tessella_tile::cover::ViewTransform;
@@ -568,6 +569,32 @@ pub fn line_interpolations(
     ]
 }
 
+/// The seven factors a dashed line drawable's UBO carries.
+///
+/// The first six are [`line_interpolations`]'s. The seventh is `line-floorwidth`'s, and it is
+/// computed at the *integer* zoom: mbgl evaluates that property through
+/// `DataDrivenPropertyEvaluator<float, true>`, whose one job is to floor the zoom, and its binder
+/// floors it again when it reports a factor. The shader divides the distance along the line by
+/// floor width, so a value that moved continuously with the zoom would make the dash pattern
+/// breathe between levels instead of stepping at them.
+#[must_use]
+pub fn line_sdf_interpolations(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    bucket_zoom: f64,
+    view_zoom: f64,
+) -> [f32; 7] {
+    let six = line_interpolations(paint, bucket_zoom, view_zoom);
+    let floorwidth = paint
+        .get("line-floorwidth")
+        .map_or(0.0, |property| match property.binding {
+            Binding::Attribute { interpolated: true } => property
+                .expression
+                .zoom_mix_factor(bucket_zoom, view_zoom.floor()),
+            _ => 0.0,
+        });
+    [six[0], six[1], six[2], six[3], six[4], six[5], floorwidth]
+}
+
 /// Packs a layer's line drawable buffer at the union's stride.
 #[must_use]
 pub fn pack_line_drawable_buffer(entries: &[LineDrawableEntry], stride: u32) -> Vec<u8> {
@@ -578,6 +605,137 @@ pub fn pack_line_drawable_buffer(entries: &[LineDrawableEntry], stride: u32) -> 
         push_f32s(&mut out, &entry.matrix);
         push_f32s(&mut out, &[entry.ratio]);
         push_f32s(&mut out, &entry.interpolations);
+        out.resize(start + stride, 0);
+    }
+    out
+}
+
+/// One dashed line drawable's entry.
+///
+/// `LineSDFDrawableUBO`, which is the plain line's block with the dash texture's placement
+/// wedged between the matrix and the ratio -- so it cannot share [`LineDrawableEntry`]'s packer
+/// even though six of its seven mix factors are the same six.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LineSdfDrawableEntry {
+    /// Tile-local to clip, as the shaders take it.
+    pub matrix: [f32; 16],
+    /// Screen pixels per tile unit, inverted.
+    pub ratio: f32,
+    /// How the pattern being faded from is scaled: along the line, then across it.
+    pub patternscale_a: [f32; 2],
+    /// The same for the pattern being faded to.
+    pub patternscale_b: [f32; 2],
+    /// Where the `from` pattern's rows sit in the atlas.
+    pub tex_y_a: f32,
+    /// And the `to` pattern's.
+    pub tex_y_b: f32,
+    /// Mix factors for color, blur, opacity, gap width, offset, width and floor width.
+    ///
+    /// Seven where a plain line has six: the shader reads `floorwidth` as a property of its own
+    /// because it divides the distance along the line by it, and mbgl gives it its own factor
+    /// rather than reusing the width's -- the two differ, because floor width is evaluated at
+    /// the integer zoom.
+    pub interpolations: [f32; 7],
+}
+
+/// The dash placement a layer's drawables share, in the terms the UBO wants.
+///
+/// mbgl derives all of this from the `DashPatternTexture` at tweak time rather than storing it:
+/// `patternscale` is the reciprocal of the pattern's length in tile units against its width in
+/// the atlas, and `sdfgamma` is half a texel of the narrower of the two patterns.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DashPlacement {
+    /// The `from` pattern's place in the atlas.
+    pub from: tessella_glyph::dash::Position,
+    /// The `to` pattern's.
+    pub to: tessella_glyph::dash::Position,
+    /// How each is scaled, which is the crossfade's doing.
+    pub crossfade: Crossfade,
+    /// The view's device pixel ratio.
+    pub pixel_ratio: f32,
+}
+
+impl DashPlacement {
+    /// The two pattern widths after the crossfade has scaled them, in style units.
+    fn widths(&self) -> (f32, f32) {
+        (
+            self.from.width * self.crossfade.from_scale,
+            self.to.width * self.crossfade.to_scale,
+        )
+    }
+
+    /// `patternscale_a` and `patternscale_b`, for a tile with this many tile units to the pixel.
+    ///
+    /// The x is the reciprocal of the pattern's length in tile units, so the texture coordinate
+    /// the shader forms from `linesofar` advances by one per repeat. The y is minus half the
+    /// pattern's height, which with a normal of plus or minus one spans exactly its rows.
+    ///
+    /// `tile_units_per_pixel` is mbgl's `tileID.pixelsToTileUnits(1, intZoom)`, and `intZoom` is
+    /// the *camera's* integer zoom rather than the tile's own level -- so a parent standing in
+    /// for a finer tile has its dashes stretched by however far it has been stretched, which is
+    /// why this is per drawable and `sdfgamma` is not.
+    #[must_use]
+    pub fn scales(&self, tile_units_per_pixel: f32) -> ([f32; 2], [f32; 2]) {
+        let (width_a, width_b) = self.widths();
+        let along = |width: f32| {
+            let units = width * tile_units_per_pixel;
+            if units == 0.0 { 0.0 } else { 1.0 / units }
+        };
+        (
+            [along(width_a), -self.from.height / 2.0],
+            [along(width_b), -self.to.height / 2.0],
+        )
+    }
+
+    /// `sdfgamma`: the antialiasing width the fragment stage smoothsteps over.
+    ///
+    /// Half a texel of the narrower pattern, expressed in the units the shader measures the
+    /// distance field in. The atlas is [`tessella_glyph::dash::WIDTH`] wide and the field is
+    /// stored over 256 levels, so the two cancel and what is left is the reciprocal of the
+    /// pattern's width in device pixels.
+    #[must_use]
+    pub fn sdfgamma(&self) -> f32 {
+        let (width_a, width_b) = self.widths();
+        let narrower = width_a.min(width_b);
+        #[allow(clippy::cast_precision_loss)]
+        let atlas = tessella_glyph::dash::WIDTH as f32;
+        let denominator = narrower * 256.0 * self.pixel_ratio;
+        if denominator == 0.0 {
+            0.0
+        } else {
+            atlas / denominator / 2.0
+        }
+    }
+}
+
+/// Packs a layer's dashed line drawable buffer at the union's stride.
+#[must_use]
+pub fn pack_line_sdf_drawable_buffer(entries: &[LineSdfDrawableEntry], stride: u32) -> Vec<u8> {
+    let stride = stride as usize;
+    let mut out = Vec::with_capacity(entries.len() * stride);
+    for entry in entries {
+        let start = out.len();
+        push_f32s(&mut out, &entry.matrix);
+        push_f32s(&mut out, &entry.patternscale_a);
+        push_f32s(&mut out, &entry.patternscale_b);
+        push_f32s(&mut out, &[entry.tex_y_a, entry.tex_y_b, entry.ratio]);
+        push_f32s(&mut out, &entry.interpolations);
+        out.resize(start + stride, 0);
+    }
+    out
+}
+
+/// Packs `LineSDFTilePropsUBO`, one entry per drawable, at the union's stride.
+///
+/// One placement repeated rather than one per drawable computed separately, as a pattern's is:
+/// a dasharray cannot vary per feature, so every tile of the cover gets the same two numbers.
+#[must_use]
+pub fn pack_line_sdf_tile_props(placement: &DashPlacement, count: usize, stride: u32) -> Vec<u8> {
+    let stride = stride as usize;
+    let mut out = Vec::with_capacity(count * stride);
+    for _ in 0..count {
+        let start = out.len();
+        push_f32s(&mut out, &[placement.sdfgamma(), placement.crossfade.t]);
         out.resize(start + stride, 0);
     }
     out
@@ -725,7 +883,11 @@ pub fn line_props_from_paint(
         uniform_number(paint, "line-gap-width", zoom),
         uniform_number(paint, "line-offset", zoom),
         uniform_number(paint, "line-width", zoom),
-        uniform_number(paint, "line-floorwidth", zoom),
+        // At the integer zoom, because mbgl evaluates this one property through
+        // `DataDrivenPropertyEvaluator<float, true>` -- and the SDF shader divides the distance
+        // along the line by it, so evaluating at the fractional zoom would make a dash pattern
+        // stretch continuously instead of stepping at each level.
+        uniform_number(paint, "line-floorwidth", zoom.floor()),
     )
 }
 

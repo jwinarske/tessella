@@ -71,7 +71,7 @@ pub struct Position {
     pub width: f32,
     /// How tall the pattern is, as a fraction of the atlas height.
     pub height: f32,
-    /// The centre of the pattern's rows, as a fraction of the atlas height.
+    /// The center of the pattern's rows, as a fraction of the atlas height.
     pub y: f32,
 }
 
@@ -142,7 +142,7 @@ fn write_butt(mut runs: Vec<Range>, row: u32, into: &mut [u8]) {
     if runs.is_empty() {
         return;
     }
-    // Neighbouring runs of the same kind are one run. A zero-length entry between two dashes has
+    // Neighboring runs of the same kind are one run. A zero-length entry between two dashes has
     // just been removed, and leaving the two as separate ranges would put a boundary -- and so a
     // distance of zero, and so a seam -- in the middle of what is now one dash.
     let mut merged: Vec<Range> = Vec::with_capacity(runs.len());
@@ -154,10 +154,14 @@ fn write_butt(mut runs: Vec<Range>, row: u32, into: &mut [u8]) {
     }
     // And the seam itself, where the pattern repeats: if it begins and ends with the same kind,
     // the two are one run wrapping around, so each is told about the other's side.
+    //
+    // A single run is the same statement about itself, and is why there is no length guard: a
+    // pattern that collapsed to one dash has no boundary anywhere, and reading the row's own
+    // ends as boundaries would put a seam at both of them.
     if let (Some(&first), Some(&last)) = (merged.first(), merged.last())
         && first.is_dash == last.is_dash
-        && merged.len() > 1
     {
+        #[allow(clippy::cast_precision_loss)]
         let width = WIDTH as f32;
         merged[0].left = last.left - width;
         let end = merged.len() - 1;
@@ -183,7 +187,7 @@ fn write_butt(mut runs: Vec<Range>, row: u32, into: &mut [u8]) {
 ///
 /// The second dimension is what makes the cap round: `distance_across` runs from one edge of the
 /// line to the other, and the distance to a dash *end* is the hypotenuse of that and the distance
-/// along. Inside a gap the sign flips and the same hypotenuse is measured from the cap's centre,
+/// along. Inside a gap the sign flips and the same hypotenuse is measured from the cap's center,
 /// which is what rounds the gap's ends as well as the dash's.
 fn write_round(runs: &[Range], first_row: u32, stretch: f32, reach: i32, into: &mut [u8]) {
     if runs.is_empty() {
