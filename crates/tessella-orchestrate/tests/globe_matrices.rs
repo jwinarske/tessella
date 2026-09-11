@@ -15,7 +15,6 @@ use tessella_capture_abi::ProjectionMode;
 use tessella_orchestrate::ubo::{DrawableEntry, depth_offset};
 use tessella_tile::camera;
 use tessella_tile::cover::ViewTransform;
-use tessella_tile::globe;
 
 fn view() -> ViewTransform {
     ViewTransform {
@@ -52,17 +51,15 @@ fn the_plane_still_carries_projection_times_placement() {
     assert_eq!(entry(ProjectionMode::Mercator, 3, 0), want);
 }
 
-/// A globe's is the placement alone, over a unit world, with the depth nudge scaled to the frustum.
+/// A globe's is the placement alone, over a unit world, with the plane's own depth nudge.
 ///
-/// And to `clip_w_scale`, because the nudge reaches clip `z` after `globe::clip_matrix` has been
-/// applied: the material adds it onto an already-scaled vector, and the offset that survives the
-/// divide is `nudge / w`.
+/// The same number as the plane's, because `globe::clip_matrix` puts `w` in the plane's
+/// convention and what reaches NDC is `nudge / w` on either projection.
 #[test]
 fn a_globe_carries_the_mercator_placement() {
     let (z, x, y, wrap) = TILE;
     let mut want = camera::mercator_matrix_for_tile(z, x, y, wrap);
-    let (near, far) = globe::depth_range(&view());
-    want[14] = -f64::from(depth_offset(3, 0)) * (far - near) * globe::clip_w_scale(&view());
+    want[14] = -f64::from(depth_offset(3, 0));
 
     #[allow(clippy::cast_possible_truncation)]
     let want: [f32; 16] = core::array::from_fn(|index| want[index] as f32);
@@ -97,16 +94,15 @@ fn the_emitted_matrix_puts_the_tile_where_it_belongs() {
 /// The placement's *scale and translation* are the tile's alone; only the depth term is the
 /// camera's.
 ///
-/// This was a pure function of the tile until the depth nudge had to be scaled to the frustum. A
-/// globe's frustum shrinks as the camera closes on the surface -- 1.7 deep at z4 and 0.055 at z14
-/// -- so an absolute nudge is 56% of the range at z14 and pushes its layer through the near plane.
-/// Scaling it is what stopped the planet going black up there, and the cost is this: `[14]` moves
-/// with the zoom where the rest does not.
+/// A globe's placement is a pure function of the tile, depth term and all.
 ///
-/// What that does *not* cost is §5.1. The bucket is still camera-free; this matrix lives in a
-/// per-drawable uniform block that is written every frame either way, as the plane's is.
+/// It was not, for a while: the nudge was scaled to the frustum, because a `w` measured in sphere
+/// radii made an absolute one land 56% of the range deep at z14 and pushed its layer through the
+/// near plane. `globe::clip_matrix` carries the plane's `w` convention now, so the plane's own
+/// nudge reaches NDC as the plane's own separation and the compensation is gone -- with it, the
+/// last thing in this matrix that moved with the camera.
 #[test]
-fn only_the_depth_term_of_a_globes_placement_moves_with_the_zoom() {
+fn a_globes_placement_is_a_pure_function_of_the_tile() {
     let (z, x, y, wrap) = TILE;
     let at = |zoom: f64, projection| {
         let mut view = view();
@@ -120,12 +116,7 @@ fn only_the_depth_term_of_a_globes_placement_moves_with_the_zoom() {
         at(9.0, ProjectionMode::Globe),
     );
     for index in 0..16 {
-        if index == 14 {
-            assert_ne!(
-                low[index], high[index],
-                "the depth term did not follow the frustum"
-            );
-        } else {
+        {
             assert_eq!(
                 low[index], high[index],
                 "slot {index} moved with the camera"
@@ -151,11 +142,10 @@ fn the_depth_offset_survives_the_move() {
         let high = entry(projection, 40, 0);
         assert_ne!(low, high, "{projection:?} gave two layers the same depth");
     }
-    // On a globe the slot is readable directly, which is the property the consumer depends on --
-    // scaled to the frustum, because a globe's is 1.7 deep at z4 and 0.055 at z14 and an absolute
-    // nudge is over half the range up there.
+    // On a globe the slot is readable directly, which is the property the consumer depends on,
+    // and it holds the plane's own nudge: `globe::clip_matrix` puts `w` in the plane's convention,
+    // so the same number separates the same layers on either projection.
     let (z, x, y, wrap) = TILE;
-    let (near, far) = globe::depth_range(&view());
     for (layer, sub) in [(0, 0), (7, 1), (40, 0)] {
         let matrix =
             DrawableEntry::for_tile(&view(), ProjectionMode::Globe, z, x, y, wrap, layer, sub)
@@ -164,9 +154,7 @@ fn the_depth_offset_survives_the_move() {
         // Multiplied in f64 and cast once, as the producer does. Scaling in f32 instead differs
         // in the last bit, which is a real difference on a wire that is compared byte for byte.
         #[allow(clippy::cast_possible_truncation)]
-        let want = (-f64::from(depth_offset(layer, sub))
-            * (far - near)
-            * globe::clip_w_scale(&view())) as f32;
+        let want = -depth_offset(layer, sub);
         assert_eq!(matrix[14], want);
         // Everything else is the placement, untouched.
         let want = camera::mercator_matrix_for_tile(z, x, y, wrap);

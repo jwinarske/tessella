@@ -82,16 +82,16 @@ fn the_blocks_w_is_a_distance_a_plane_would_recognise() {
 fn the_depth_bias_lands_in_the_anchor() {
     let (z, x, y, wrap) = TILE;
     let bend = globe::anchored_bend(&view(), z, x, y, wrap);
-    let (near, far) = globe::depth_range(&view());
 
     let mut moved = 0;
     for (layer, sub) in [(0, 0), (3, 1), (40, 0)] {
         let block = ubo::globe_bend_block(&view(), z, x, y, wrap, layer, sub);
-        // The bias is scaled, the anchor already is: the offset that reaches NDC is `bias / w`,
-        // and `clip_matrix` has multiplied `w` by the scale, so an unscaled bias would land
-        // smaller by exactly that factor -- a layer separation quietly reduced to nothing.
-        let bias =
-            -f64::from(depth_offset(layer, sub)) * (far - near) * globe::clip_w_scale(&view());
+        // The plane's own nudge, unscaled: `clip_matrix` puts `w` in the plane's convention, so
+        // what reaches NDC is the same `bias / w` on either projection. The frustum span it was
+        // multiplied by was a compensation for a `w` in sphere radii and outlived it -- at z15
+        // that made the nudge 4.7 in NDC at style layer 28, which clips an extrusion through the
+        // near plane.
+        let bias = -f64::from(depth_offset(layer, sub));
         #[allow(clippy::cast_possible_truncation)]
         let want = (bend.anchor[2] + bias) as f32;
         assert_eq!(block.anchor[2], want, "layer {layer}/{sub}");

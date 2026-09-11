@@ -435,6 +435,18 @@ pub struct AnchoredBend {
     pub d_vv: [f64; 4],
     /// See [`Self::d_uu`].
     pub d_uv: [f64; 4],
+    /// Clip displacement per *metre* of height above the surface, at the anchor.
+    ///
+    /// The radial direction, which on a unit sphere is the sphere point itself, taken as a
+    /// direction rather than a position and divided by the Earth's radius so the caller can
+    /// multiply by a height in the units a style writes. An extrusion is the only thing that
+    /// leaves the surface, and this is what lifts it along the normal rather than along the
+    /// plane's `z`.
+    ///
+    /// Taken at the anchor like every other coefficient, and unlike them it has no second-order
+    /// term here: the radial turns by the tile's own angular width across it, which at z15 is
+    /// 1e-4 radians, so a hundred-metre building leans by a centimetre.
+    pub d_h: [f64; 4],
 }
 
 impl AnchoredBend {
@@ -509,6 +521,9 @@ pub fn anchored_bend(
         let p = [v[0], v[1], v[2], w];
         core::array::from_fn(|r| (0..4).map(|c| clip[c * 4 + r] * p[c]).sum())
     };
+    // One metre of height, as a clip direction. `point` is the outward normal on a unit sphere,
+    // and the sphere is the planet, so a metre is `1 / EARTH_RADIUS_M` radii exactly.
+    let radial: [f64; 3] = core::array::from_fn(|i| point[i] / crate::camera::EARTH_RADIUS_M);
     AnchoredBend {
         anchor: apply(point, 1.0),
         d_u: apply(s_u, 0.0),
@@ -516,6 +531,7 @@ pub fn anchored_bend(
         d_uu: apply(s_uu, 0.0),
         d_vv: apply(s_vv, 0.0),
         d_uv: apply(s_uv, 0.0),
+        d_h: apply(radial, 0.0),
     }
 }
 

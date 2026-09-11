@@ -173,18 +173,20 @@ pub fn tile_matrix(
         }
         ProjectionMode::Globe => {
             let mut placement = camera::mercator_matrix_for_tile(z, x, y, wrap);
-            // Scaled to the frustum, not absolute. mbgl's nudge is a fixed distance in clip space
-            // because its depth range is a fixed depth; a globe's is not -- the camera closes on
-            // the surface as the zoom rises, so the span falls from 1.7 at z4 to 0.055 at z14 and
-            // 0.027 at z16. Sent absolute, the nudge is 56% of the range at z14 and 112% at z16,
-            // and the layer it belongs to is pushed through the near plane. The whole planet went
-            // black from z14 up, and the frames below that were layers shuffled past each other.
-            let (near, far) = globe::depth_range(view);
-            // Scaled like the clip matrix, because this reaches `z` *after* it. The material adds
-            // this straight onto a clip vector that `globe::clip_matrix` has already scaled, and
-            // an unscaled bias there is one divided by the larger `w` -- a layer separation
-            // quietly reduced by a factor of sixty thousand.
-            placement[14] = -f64::from(depth) * (far - near) * globe::clip_w_scale(view);
+            // The plane's own nudge, unscaled, because `globe::clip_matrix` puts `w` in the
+            // plane's convention: what reaches NDC is `nudge / w`, and the two `w`s now agree at
+            // the point under the camera. So the same number separates the same layers by the
+            // same amount on either projection.
+            //
+            // It used to be scaled to the frustum -- `(far - near)` -- which was a compensation
+            // for a `w` measured in sphere radii, and it outlived the thing it compensated for.
+            // The arithmetic says how badly: at z15 the span is 0.017 against a `w` of 1.5e-4, so
+            // a nudge of `depth_offset * span` reaches 4.7 in NDC at style layer 28 and 11.3 at
+            // layer 68, against the plane's 6e-5. Every family but the extrusions is painter
+            // ordered with the depth test off, so nothing read it and nothing noticed; an
+            // extrusion is the one that resolves in depth, and it was clipped through the near
+            // plane by its own layer separation.
+            placement[14] = -f64::from(depth);
             Ok(placement)
         }
     }
@@ -2459,18 +2461,15 @@ pub fn globe_bend_block(
     sub_layer_index: i32,
 ) -> GlobeBendUbo {
     let bend = globe::anchored_bend(view, z, x, y, wrap);
-    let (near, far) = globe::depth_range(view);
-    let bias = -f64::from(depth_offset(layer_index, sub_layer_index)) * (far - near);
+    let bias = -f64::from(depth_offset(layer_index, sub_layer_index));
 
     // The rows arrive scaled: `anchored_bend` walks `globe::clip_matrix`, which carries the `w`
-    // convention. What does not is the bias, which is added here rather than multiplied through --
-    // the offset that reaches NDC is `bias / w`, so an unscaled one lands smaller by exactly the
-    // scale, which is a layer separation quietly reduced to nothing.
-    let scale = globe::clip_w_scale(view);
+    // convention, and the bias is the plane's own number for the reason the globe arm of
+    // `tile_matrix` gives -- the two `w`s agree, so the same nudge separates the same layers.
     #[allow(clippy::cast_possible_truncation)]
     let row = |v: [f64; 4]| -> [f32; 4] { core::array::from_fn(|i| v[i] as f32) };
     let mut anchor = bend.anchor;
-    anchor[2] += bias * scale;
+    anchor[2] += bias;
     GlobeBendUbo {
         anchor: row(anchor),
         d_u: row(bend.d_u),
@@ -2478,6 +2477,7 @@ pub fn globe_bend_block(
         d_uu: row(bend.d_uu),
         d_vv: row(bend.d_vv),
         d_uv: row(bend.d_uv),
+        d_h: row(bend.d_h),
     }
 }
 
