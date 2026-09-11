@@ -864,12 +864,26 @@ fn build_fill_content(
     // not the camera, so §5.1's bucket stays camera-free and one set of vertices still serves a
     // globe view and a flat one at once -- which is the alternative this avoids: a bucket keyed by
     // surface, built twice, in an app that shows both.
-    // The polyline outline, where this layer's paint is one the triangulated shader can draw.
-    // Not gated on the pattern: `encode_parts` decides that against the atlas the frame actually
-    // resolved, and a style naming a sprite that never arrived draws as a plain fill -- which
-    // would then want the geometry this skipped.
-    let triangulated = crate::ubo::fill_outline_triangulates(paint, false);
-    let (bucket, ends) = fill::build_features_tracked_on(rings, step, triangulated);
+    // Which outline this layer draws, if it draws one. `fill-antialias` and the pattern rule
+    // settle whether, and the outline's own paint settles which form -- see `Outlines`.
+    //
+    // The polyline is not gated on the pattern: `encode_parts` decides that against the atlas
+    // the frame actually resolved, and a style naming a sprite that never arrived draws as a
+    // plain fill, which would then want the geometry this skipped. A patterned layer that draws
+    // an outline therefore carries both forms, which is the only case that does.
+    let outlines = if crate::ubo::fill_draws_outline(layer, paint) {
+        fill::Outlines {
+            lines: !crate::ubo::fill_outline_triangulates(paint, false)
+                || layer.paint.contains_key("fill-pattern"),
+            polyline: crate::ubo::fill_outline_triangulates(paint, false),
+        }
+    } else {
+        fill::Outlines {
+            lines: false,
+            polyline: false,
+        }
+    };
+    let (bucket, ends) = fill::build_features_tracked_on(rings, step, outlines);
     (Content::Fill(bucket), ends)
 }
 

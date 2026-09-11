@@ -443,9 +443,15 @@ pub fn bindings_for(
             Content::Background => {
                 emit(0, view::background_pass(), view::background_flags());
             }
-            Content::Fill(_) => {
+            Content::Fill(ref fill) => {
                 emit(1, view::fill_pass(), view::tiled_flags());
-                emit(2, view::fill_pass(), view::tiled_flags());
+                // The outline, where the layer draws one. mbgl's `doOutline` decides that from
+                // the paint; the bucket is where it was decided here, so what the bucket carries
+                // is the answer -- and `encode_parts` reads the same thing, which is what keeps
+                // the two from disagreeing about how many drawables a fill has.
+                if !fill.line_indices.is_empty() || !fill.outline.indices.is_empty() {
+                    emit(2, view::fill_pass(), view::tiled_flags());
+                }
             }
             // Sublayer 0, not 1: a fill's triangles and outline occupy 1 and 2 so that the
             // outline sorts above the fill it belongs to, and a line has no such pair.

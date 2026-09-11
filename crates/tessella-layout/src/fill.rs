@@ -65,6 +65,9 @@ pub struct FillBucket {
     pub segments: Vec<Segment>,
     /// Line indices for the outline, over the same vertices.
     ///
+    /// Empty where the outline is a polyline instead, or where the layer draws none -- see
+    /// [`Outlines`].
+    ///
     /// A fill draws twice — its triangles and then its outline — and the oracle gives the two
     /// different shaders, `FillShader` and `FillOutlineShader`, over one vertex buffer. What
     /// differs is the indices: triangles from earcut, and a line loop per ring.
@@ -94,8 +97,44 @@ pub struct FillBucket {
     /// way around it.
     ///
     /// Empty where the layer's outline is data-driven and takes the line-primitive path instead,
-    /// which is the caller's decision: [`build_features_tracked_on`] takes it as a flag.
+    /// or where it draws no outline at all. The caller's decision: [`Outlines`].
     pub outline: crate::line::LineBucket,
+}
+
+/// Which forms of a fill's outline a bucket carries.
+///
+/// # Why this is two flags and not one
+///
+/// A fill's outline is drawn one of two ways -- as line primitives over the fill's own vertices,
+/// or as a polyline with vertices of its own -- and which one it is is the layer's paint rather
+/// than the geometry. Neither, when the layer draws no outline at all: mbgl's `doOutline` is
+/// `fill-antialias` and the pattern rule together, and a layer that answers false has no second
+/// drawable to build for.
+///
+/// Both, for the one case where the frame can still change its mind: a style that names a
+/// `fill-pattern` draws `FillOutlinePatternShader` over the line indices when the sprite
+/// resolves, and a plain triangulated outline when it does not. The bucket is built before the
+/// atlas is known, so it carries what either answer will need.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Outlines {
+    /// Line indices over the fill's vertices, for `FillOutlineShader` and its pattern variant.
+    pub lines: bool,
+    /// The ring as extruded quads, for `FillOutlineTriangulatedShader`.
+    pub polyline: bool,
+}
+
+impl Default for Outlines {
+    /// Both, which is what mbgl's bucket always builds.
+    ///
+    /// A bucket there serves every layer over one source layer, so which outline is drawn is the
+    /// render layer's decision and not the bucket's. This crate's callers know the layer, and
+    /// [`build_features_tracked_on`] is where they say so.
+    fn default() -> Self {
+        Self {
+            lines: true,
+            polyline: true,
+        }
+    }
 }
 
 /// Largest vertex index a segment can address.
@@ -300,7 +339,7 @@ pub fn build_features(features: &[&[Ring]]) -> FillBucket {
 /// dropped ring with its neighbour's colour.
 #[must_use]
 pub fn build_features_tracked(features: &[&[Ring]]) -> (FillBucket, Vec<usize>) {
-    build_features_tracked_on(features, 0, true)
+    build_features_tracked_on(features, 0, Outlines::default())
 }
 
 /// As [`build_features_tracked`], splitting against a `step`-unit grid.
@@ -312,13 +351,13 @@ pub fn build_features_tracked(features: &[&[Ring]]) -> (FillBucket, Vec<usize>) 
 pub fn build_features_tracked_on(
     features: &[&[Ring]],
     step: i32,
-    outline: bool,
+    outlines: Outlines,
 ) -> (FillBucket, Vec<usize>) {
     let mut bucket = FillBucket::default();
     let mut ends = Vec::with_capacity(features.len());
 
     for rings in features {
-        build_polygons_on(&mut bucket, classify_rings(rings), step, outline);
+        build_polygons_on(&mut bucket, classify_rings(rings), step, outlines);
         ends.push(bucket.vertices.len());
     }
 
@@ -339,7 +378,12 @@ pub fn build_features_tracked_on(
 /// corners while the fill beneath it follows the sphere, so the outline lifts off its own fill. The
 /// rings are cut first, which also seeds earcut with the boundary vertices the triangles will be
 /// cut at anyway.
-fn build_polygons_on(bucket: &mut FillBucket, polygons: Vec<Vec<Ring>>, step: i32, outline: bool) {
+fn build_polygons_on(
+    bucket: &mut FillBucket,
+    polygons: Vec<Vec<Ring>>,
+    step: i32,
+    outlines: Outlines,
+) {
     for mut polygon in polygons {
         // Before anything is counted: the cap changes the vertex count as well as the
         // triangulation, and a segment sized against the uncapped count is a segment whose
@@ -395,7 +439,9 @@ fn build_polygons_on(bucket: &mut FillBucket, polygons: Vec<Vec<Ring>>, step: i3
                 flat.push(f64::from(point[0]));
                 flat.push(f64::from(point[1]));
             }
-            outline_indices(bucket, ring_base, ring.len());
+            if outlines.lines {
+                outline_indices(bucket, ring_base, ring.len());
+            }
             // And the same ring as a polyline, for the backends that cannot widen a line. mbgl's
             // options, which are all defaults but one: `type = Polygon` is what closes the ring
             // and forces a butt cap at the end, and is this crate's `closed`.
@@ -406,7 +452,7 @@ fn build_polygons_on(bucket: &mut FillBucket, polygons: Vec<Vec<Ring>>, step: i3
             // so the paint is already known -- and a polyline is two vertices a ring point and
             // six indices a segment against one and two, which is worth not building for the
             // layers that will draw the line-primitive outline instead.
-            if outline {
+            if outlines.polyline {
                 bucket.outline.add_geometry(
                     ring,
                     &crate::line::LineOptions {

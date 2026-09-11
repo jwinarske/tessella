@@ -136,8 +136,13 @@ fn a_square_also_outlines_as_a_polyline() {
 fn a_polyline_outline_is_built_only_when_asked_for() {
     let rings = [square()];
     let features: &[&[Vec<[i16; 2]>]] = &[&rings];
-    let (with, _) = fill::build_features_tracked_on(features, 0, true);
-    let (without, _) = fill::build_features_tracked_on(features, 0, false);
+    let both = fill::Outlines::default();
+    let lines_only = fill::Outlines {
+        polyline: false,
+        ..both
+    };
+    let (with, _) = fill::build_features_tracked_on(features, 0, both);
+    let (without, _) = fill::build_features_tracked_on(features, 0, lines_only);
     assert!(!with.outline.vertices.is_empty());
     assert!(without.outline.vertices.is_empty(), "not built");
     assert_eq!(
@@ -145,4 +150,27 @@ fn a_polyline_outline_is_built_only_when_asked_for() {
         "the fill itself is the same either way"
     );
     assert_eq!(with.line_indices, without.line_indices);
+}
+
+/// A layer that draws no outline carries neither form.
+///
+/// mbgl's `doOutline`: `fill-antialias` false, or a patterned fill whose outline colour the
+/// style wrote. The fill itself is untouched -- what goes is the second drawable.
+#[test]
+fn a_layer_with_no_outline_builds_neither_form() {
+    let rings = [square()];
+    let features: &[&[Vec<[i16; 2]>]] = &[&rings];
+    let (bucket, _) = fill::build_features_tracked_on(
+        features,
+        0,
+        fill::Outlines {
+            lines: false,
+            polyline: false,
+        },
+    );
+    assert_eq!(bucket.vertices.len(), 5, "the fill is still built");
+    assert_eq!(bucket.indices.len(), 6);
+    assert!(bucket.line_indices.is_empty(), "no line indices");
+    assert!(bucket.line_segments.is_empty(), "and no segments for them");
+    assert!(bucket.outline.vertices.is_empty(), "and no polyline");
 }
