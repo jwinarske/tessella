@@ -505,11 +505,41 @@ pub fn bindings_for(
             // talked itself out of — that symbols overhang tile edges and must not be clipped —
             // was the right one, and clipping them cut every label at every tile boundary.
             Content::Symbol(ref layout) => {
-                emit(0, view::fill_pass(), view::symbol_flags());
-                // The sprite half, when the layer resolved any. Sub-layer 1, so it draws over the
-                // glyphs the way a shield's number sits on its shield.
+                // Up to three drawables: the letters, the halo under them, and the sprites over
+                // both. A halo is not a flag on one drawable -- it is a second drawable over the
+                // same geometry, which mbgl adds first and draws underneath.
+                //
+                // The halo takes the *higher* index, which looks backwards and is not. This list
+                // is reversed by the consumer -- a translucent pass with no depth buffer blends
+                // bottom-up, so the producer's order is front-to-back -- and the existing pair
+                // says so: the sprites sit at the higher index and draw *over* the glyphs, which
+                // is the arrangement a shield's number needs. Measured rather than reasoned, and
+                // the wrong way round first: black letters with a white halo came out as white
+                // letters, the halo painted over what it should sit behind.
+                //
+                // Packed rather than fixed, which is the opposite of the extrusion's rule and
+                // for a reason the golden gives: mbgl calls `setSubLayerIndex(0)` for *every*
+                // symbol drawable, halo and fill alike, and orders the two by the order it adds
+                // them. This side has no such second key -- the sub-layer index is what orders a
+                // layer's drawables -- so it is used as one, and packing is what keeps the
+                // common case identical to mbgl's. A layer with no halo draws its letters at
+                // zero, which is what the capture's order section carries.
+                //
+                // Nothing emits an *icon* halo yet. mbgl haloes an icon only when the sprite is
+                // a distance field, which is a property of the sheet rather than of the layer.
+                let mut sub = 0;
+                if layout.text_passes.fill {
+                    emit(sub, view::fill_pass(), view::symbol_flags());
+                    sub += 1;
+                }
+                if layout.text_passes.halo {
+                    emit(sub, view::fill_pass(), view::symbol_flags());
+                    sub += 1;
+                }
+                // The sprite half, when the layer resolved any, over the glyphs the way a
+                // shield's number sits on its shield.
                 if layout.has_icons() {
-                    emit(1, view::fill_pass(), view::symbol_flags());
+                    emit(sub, view::fill_pass(), view::symbol_flags());
                 }
             }
         }

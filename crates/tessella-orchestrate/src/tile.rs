@@ -169,7 +169,13 @@ impl LayerBucket {
             // twelve-glyph drawable is two labels, not two drawables. Two when the layer draws
             // sprites as well: the glyphs go through an SDF shader and the sprites through a
             // plain sampler, so the halves cannot share a vertex buffer and are two drawables.
-            Content::Symbol(ref layout) => 1 + usize::from(layout.has_icons()),
+            // The halo pass, the letters, and the sprites -- see `order::bindings_for` for the
+            // sub-layer numbering and why a layer may draw one, two or three of them.
+            Content::Symbol(ref layout) => {
+                usize::from(layout.text_passes.halo)
+                    + usize::from(layout.text_passes.fill)
+                    + usize::from(layout.has_icons())
+            }
         }
     }
 }

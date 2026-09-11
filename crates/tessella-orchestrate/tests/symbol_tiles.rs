@@ -1369,3 +1369,71 @@ fn the_gamma_scale_reads_pitch_as_degrees() {
     };
     assert!(symbol_gamma_scale(&steeper, Alignment::Map) < scale);
 }
+
+/// A layer with a halo becomes two text drawables, and the halo is the second.
+///
+/// A halo is not a flag on one drawable: mbgl draws the same geometry twice, the halo underneath
+/// and the letters over it. Nothing emitted the second one, so every label in every style with
+/// `text-halo-width` drew bare -- 7,079 pixels of one POI layer at threshold 12, and none at all
+/// at the section 9.1 threshold of 48, because a halo is by design low-contrast against what it
+/// sits on.
+///
+/// The halo takes the *higher* sub-layer index, which is the order the consumer needs: it draws
+/// the producer's list back to front, which is also why the sprites sit above the glyphs.
+#[test]
+fn a_halo_is_a_second_drawable_under_the_letters() {
+    use tessella_orchestrate::order;
+
+    let subs = |paint: &str| -> Vec<i32> {
+        let text = format!(
+            r#"{{"version": 8, "sources": {{"v": {{"type": "vector", "tiles": []}}}},
+                 "layers": [{{"id": "l", "type": "symbol", "source": "v", "source-layer": "road",
+                   "layout": {{"text-field": "{{type}}", "text-font": ["TestFont"]}},
+                   "paint": {paint}}}]}}"#
+        );
+        let style: Style = serde_json::from_str(&text).expect("a style");
+        let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+        let mut next_id = 1;
+        order::bindings_for(
+            tessella_capture_abi::envelope::ViewId(0),
+            order::tile_of(ID.z, ID.x, ID.y),
+            &buckets,
+            &mut next_id,
+            true,
+        )
+        .iter()
+        .map(|binding| binding.sub_layer_index)
+        .collect()
+    };
+
+    assert_eq!(
+        subs(r##"{"text-color": "#000000"}"##),
+        [0],
+        "no halo asked for, so the letters keep sub-layer zero"
+    );
+    assert_eq!(
+        subs(r##"{"text-color": "#000000", "text-halo-color": "#ffffff", "text-halo-width": 1}"##),
+        [0, 1],
+        "the letters, then the halo the consumer draws under them"
+    );
+    // mbgl's `hasHalo` wants both: a colour with alpha and a width that is not zero.
+    assert_eq!(
+        subs(r##"{"text-color": "#000000", "text-halo-color": "#ffffff"}"##),
+        [0],
+        "a halo colour with no width is no halo"
+    );
+    assert_eq!(
+        subs(r##"{"text-color": "#000000", "text-halo-width": 2}"##),
+        [0],
+        "and a width with no colour is a transparent halo, which is none"
+    );
+    // And `hasFill`: a fully transparent `text-color` draws the halo alone, which styles do.
+    assert_eq!(
+        subs(
+            r##"{"text-color": "rgba(0,0,0,0)", "text-halo-color": "#ffffff",
+                "text-halo-width": 1}"##
+        ),
+        [0],
+        "the halo takes zero when there are no letters to sit under"
+    );
+}
