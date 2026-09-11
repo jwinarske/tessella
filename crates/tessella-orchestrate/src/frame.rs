@@ -2776,26 +2776,40 @@ fn encode_parts(
     // The second part, where there is one. A fill's outline is built from the first's buffers;
     // an extrusion's walls stand on the roof's outline.
     if let Some(shared) = fill_shared {
-        let (vertex_layout, key) = bind(FILL_FAMILY, BuiltIn::FillOutlineShader);
-        parts.push(
-            emit::encode_fill(
+        let Content::Fill(fill) = &bucket.content else {
+            return Some(parts);
+        };
+        // A backend that cannot widen a line draws the outline as a polyline instead, where the
+        // layer's paint lets it -- see `ubo::fill_outline_triangulates`. Its own vertices, so
+        // none of the fill's buffers are shared into it.
+        if ubo::fill_outline_triangulates(&bucket.paint, fill_atlas.is_some()) {
+            parts.push(emit::encode_fill_outline_triangulated(
                 arena,
                 PLACEHOLDER,
-                match &bucket.content {
-                    Content::Fill(fill) => fill,
-                    _ => return Some(parts),
-                },
-                &emit::FillDraw {
-                    layout: &vertex_layout,
-                    attributes: bucket.binder.data(),
-                    permutation_key: key,
-                    shared: Some(shared),
-                    pattern_atlas: fill_atlas,
-                    pattern_vertices: None,
-                },
-            )
-            .0,
-        );
+                fill,
+                // The shader declares the line family's two attributes and no paint, so there is
+                // nothing for a permutation to select between.
+                0,
+            ));
+        } else {
+            let (vertex_layout, key) = bind(FILL_FAMILY, BuiltIn::FillOutlineShader);
+            parts.push(
+                emit::encode_fill(
+                    arena,
+                    PLACEHOLDER,
+                    fill,
+                    &emit::FillDraw {
+                        layout: &vertex_layout,
+                        attributes: bucket.binder.data(),
+                        permutation_key: key,
+                        shared: Some(shared),
+                        pattern_atlas: fill_atlas,
+                        pattern_vertices: None,
+                    },
+                )
+                .0,
+            );
+        }
     }
     if let Some(shared) = extrusion_shared {
         let (wall_layout, key) = bind(FILL_EXTRUSION_FAMILY, BuiltIn::FillExtrusionInstancedShader);
@@ -3050,6 +3064,29 @@ fn write_layer_state(
                     &pattern,
                     ubo_layouts::FILL_DRAWABLE_UNION_UBO.stride,
                 )
+            } else if ubo::fill_outline_triangulates(&paint, false) {
+                // The outline is a polyline, and its block is `FillOutlineTriangulatedDrawableUBO`
+                // -- matrix and ratio -- at the same union stride the fill's own block sits at.
+                // Only sub-layer 2's half changes; the interior is still a fill.
+                let stride = ubo_layouts::FILL_DRAWABLE_UNION_UBO.stride;
+                let mut buffer = ubo::pack_drawable_buffer(&entries(1), stride);
+                let outline: Vec<ubo::FillOutlineTriangulatedEntry> = matrices(2)
+                    .filter_map(|tile| {
+                        ubo::FillOutlineTriangulatedEntry::for_tile(
+                            view,
+                            projection,
+                            tile.z,
+                            tile.x,
+                            tile.y,
+                            i32::from(tile.wrap),
+                            layer_index,
+                            2,
+                        )
+                        .ok()
+                    })
+                    .collect();
+                buffer.extend(ubo::pack_fill_outline_triangulated_buffer(&outline, stride));
+                buffer
             } else {
                 ubo::pack_drawable_buffer(&all, ubo_layouts::FILL_DRAWABLE_UNION_UBO.stride)
             };

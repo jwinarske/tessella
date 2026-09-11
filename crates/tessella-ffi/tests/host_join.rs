@@ -228,13 +228,14 @@ fn a_style_reaches_a_backend_as_batched_draws() {
     //   3  background        the layer that draws behind everything
     //   5  circle            the point feature
     //   11 fill              the polygon
-    //   12 fill outline      the second fill layer's `fill-outline-color`
+    //   15 fill outline      the second fill layer's `fill-outline-color`, triangulated because
+    //                        the colour is constant and Filament cannot widen a line
     //   25 line              the polygon's edge
     for (id, what) in [
         (3, "background"),
         (5, "circle"),
         (11, "fill"),
-        (12, "fill outline"),
+        (15, "fill outline"),
         (25, "line"),
     ] {
         assert!(

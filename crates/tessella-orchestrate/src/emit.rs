@@ -1660,6 +1660,79 @@ pub fn encode_line(
     )
 }
 
+/// Encodes a fill's outline as a polyline, for a backend that cannot widen a line.
+///
+/// # Why a fill's outline is worth a second geometry
+///
+/// The outline pass is a fill's whole antialiasing: the triangles rasterise hard and mbgl runs
+/// no MSAA, so the only thing softening a polygon's boundary is a one-pixel fade in the outline
+/// fragment. mbgl gives that fade room by drawing the line **two pixels wide** --
+/// `constexpr auto lineWidth = 2.0f` -- and a one-pixel line generates no fragment further than
+/// half a pixel from its centre, so half the fade simply has nowhere to land.
+///
+/// Filament exposes no line width. mbgl met the same wall on Metal and WebGPU and answered it
+/// with `MLN_TRIANGULATE_FILL_OUTLINES`: generate the ring as the same extruded quads a line
+/// layer is made of, and draw it through `FillOutlineTriangulatedShader`. Two attributes, the
+/// line family's own `pos_normal` and `data`, and no paint of its own -- the colour comes from
+/// the layer's `outline_color`, which is why mbgl only takes this path when that colour and the
+/// opacity are constant.
+///
+/// Its own vertices, not the fill's: a polyline has two vertices per ring point and the fill has
+/// one, so this is a second buffer over the same geometry rather than a second index list into
+/// the first.
+pub fn encode_fill_outline_triangulated(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    bucket: &tessella_layout::fill::FillBucket,
+    permutation_key: u64,
+) -> Encoded {
+    let outline = &bucket.outline;
+    let mut vertex_bytes = Vec::with_capacity(outline.vertices.len() * LINE_STRIDE as usize);
+    for vertex in &outline.vertices {
+        vertex_bytes.extend_from_slice(&vertex.pos_normal[0].to_le_bytes());
+        vertex_bytes.extend_from_slice(&vertex.pos_normal[1].to_le_bytes());
+        vertex_bytes.extend_from_slice(&vertex.data);
+    }
+    let vertices = arena.alloc(&vertex_bytes);
+    let indexes = alloc_u16(arena, &outline.indices);
+
+    let descriptors = [
+        AttributeDesc {
+            attr_id: POSITION_ATTRIBUTE,
+            binding: 0,
+            source: vertices,
+            offset: 0,
+            vertex_offset: 0,
+            stride: LINE_STRIDE,
+            data_type: AttributeDataType::Short2 as u8,
+            declared_data_type: AttributeDataType::Short2 as u8,
+            _pad: [0; 2],
+        },
+        AttributeDesc {
+            attr_id: LINE_DATA_ATTRIBUTE,
+            binding: 1,
+            source: vertices,
+            offset: 4,
+            vertex_offset: 0,
+            stride: LINE_STRIDE,
+            data_type: AttributeDataType::UByte4 as u8,
+            declared_data_type: AttributeDataType::UByte4 as u8,
+            _pad: [0; 2],
+        },
+    ];
+    geometry_add(
+        geometry,
+        permutation_key,
+        indexes,
+        outline.vertices.len(),
+        &descriptors,
+        &outline.segments,
+        BuiltIn::FillOutlineTriangulatedShader,
+        None,
+        TextureFilter::Linear,
+    )
+}
+
 /// Encodes a background's quad.
 ///
 /// # Why the producer sends this rather than the consumer inventing it

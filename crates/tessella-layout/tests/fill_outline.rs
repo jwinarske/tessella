@@ -100,3 +100,49 @@ fn nothing_outlines_nothing() {
     assert!(bucket.line_indices.is_empty());
     assert!(bucket.line_segments.is_empty());
 }
+
+/// And the same outline as a polyline, for a backend that cannot widen a line.
+///
+/// mbgl's `MLN_TRIANGULATE_FILL_OUTLINES` path: `generateFillAndOutineBuffers` runs the ring
+/// through `PolylineGenerator` with `type = FeatureType::Polygon`, which closes it and forces a
+/// butt end cap. Two vertices a ring point rather than one, so this is a second buffer over the
+/// same geometry rather than a second index list into the first.
+#[test]
+fn a_square_also_outlines_as_a_polyline() {
+    let bucket = fill::build(&[square()]);
+    assert!(
+        bucket.outline.vertices.len() > bucket.vertices.len(),
+        "a polyline has two vertices a point, not one: {} against {}",
+        bucket.outline.vertices.len(),
+        bucket.vertices.len()
+    );
+    assert!(
+        !bucket.outline.indices.is_empty(),
+        "triangles, not line pairs"
+    );
+    assert_eq!(
+        bucket.outline.indices.len() % 3,
+        0,
+        "triangles come in threes"
+    );
+}
+
+/// And is not built at all where the layer will draw the line-primitive outline instead.
+///
+/// The flag is the caller's: a layer whose outline colour or opacity varies per feature takes
+/// `FillOutlineShader` over the fill's own vertices, and the polyline would be geometry nothing
+/// draws. mbgl builds both because a bucket there serves every layer over one source layer.
+#[test]
+fn a_polyline_outline_is_built_only_when_asked_for() {
+    let rings = [square()];
+    let features: &[&[Vec<[i16; 2]>]] = &[&rings];
+    let (with, _) = fill::build_features_tracked_on(features, 0, true);
+    let (without, _) = fill::build_features_tracked_on(features, 0, false);
+    assert!(!with.outline.vertices.is_empty());
+    assert!(without.outline.vertices.is_empty(), "not built");
+    assert_eq!(
+        with.vertices, without.vertices,
+        "the fill itself is the same either way"
+    );
+    assert_eq!(with.line_indices, without.line_indices);
+}

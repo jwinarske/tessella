@@ -75,6 +75,27 @@ pub struct FillBucket {
     /// segment carries both offsets. The vertex ranges do coincide, which is what lets the
     /// outline share the fill's vertices.
     pub line_segments: Vec<Segment>,
+    /// The outline again, as triangles rather than line primitives.
+    ///
+    /// # Why a fill's outline is drawn twice over
+    ///
+    /// The outline pass is a fill's whole antialiasing: the triangles rasterise hard and mbgl
+    /// runs no MSAA, so what softens a polygon's boundary is a one-pixel fade in the outline.
+    /// mbgl gets the room for that fade by drawing the line **two pixels wide** --
+    /// `constexpr auto lineWidth = 2.0f` in `render_fill_layer.cpp` -- and a backend that cannot
+    /// widen a line gets only half the fade, because a one-pixel line generates no fragment
+    /// further than half a pixel from its centre.
+    ///
+    /// Filament exposes no line width at all. mbgl met the same wall on Metal and WebGPU and
+    /// answered it the same way: `MLN_TRIANGULATE_FILL_OUTLINES` is defined as
+    /// `(MLN_RENDER_BACKEND_METAL || MLN_RENDER_BACKEND_WEBGPU)`, and under it the outline is
+    /// generated as a *polyline* -- the same extruded quads a line layer is made of -- and drawn
+    /// through `FillOutlineTriangulatedShader`. So this is mbgl's own second path rather than a
+    /// way around it.
+    ///
+    /// Empty where the layer's outline is data-driven and takes the line-primitive path instead,
+    /// which is the caller's decision: [`build_features_tracked_on`] takes it as a flag.
+    pub outline: crate::line::LineBucket,
 }
 
 /// Largest vertex index a segment can address.
@@ -279,7 +300,7 @@ pub fn build_features(features: &[&[Ring]]) -> FillBucket {
 /// dropped ring with its neighbour's colour.
 #[must_use]
 pub fn build_features_tracked(features: &[&[Ring]]) -> (FillBucket, Vec<usize>) {
-    build_features_tracked_on(features, 0)
+    build_features_tracked_on(features, 0, true)
 }
 
 /// As [`build_features_tracked`], splitting against a `step`-unit grid.
@@ -288,12 +309,16 @@ pub fn build_features_tracked(features: &[&[Ring]]) -> (FillBucket, Vec<usize>) 
 /// caller derives it from, and answers zero above z10 -- so this is the same function as the one
 /// above wherever a globe would not have bent the geometry noticeably anyway.
 #[must_use]
-pub fn build_features_tracked_on(features: &[&[Ring]], step: i32) -> (FillBucket, Vec<usize>) {
+pub fn build_features_tracked_on(
+    features: &[&[Ring]],
+    step: i32,
+    outline: bool,
+) -> (FillBucket, Vec<usize>) {
     let mut bucket = FillBucket::default();
     let mut ends = Vec::with_capacity(features.len());
 
     for rings in features {
-        build_polygons_on(&mut bucket, classify_rings(rings), step);
+        build_polygons_on(&mut bucket, classify_rings(rings), step, outline);
         ends.push(bucket.vertices.len());
     }
 
@@ -314,7 +339,7 @@ pub fn build_features_tracked_on(features: &[&[Ring]], step: i32) -> (FillBucket
 /// corners while the fill beneath it follows the sphere, so the outline lifts off its own fill. The
 /// rings are cut first, which also seeds earcut with the boundary vertices the triangles will be
 /// cut at anyway.
-fn build_polygons_on(bucket: &mut FillBucket, polygons: Vec<Vec<Ring>>, step: i32) {
+fn build_polygons_on(bucket: &mut FillBucket, polygons: Vec<Vec<Ring>>, step: i32, outline: bool) {
     for mut polygon in polygons {
         // Before anything is counted: the cap changes the vertex count as well as the
         // triangulation, and a segment sized against the uncapped count is a segment whose
@@ -371,6 +396,26 @@ fn build_polygons_on(bucket: &mut FillBucket, polygons: Vec<Vec<Ring>>, step: i3
                 flat.push(f64::from(point[1]));
             }
             outline_indices(bucket, ring_base, ring.len());
+            // And the same ring as a polyline, for the backends that cannot widen a line. mbgl's
+            // options, which are all defaults but one: `type = Polygon` is what closes the ring
+            // and forces a butt cap at the end, and is this crate's `closed`.
+            //
+            // Only where the layer will draw it. mbgl generates both forms for every fill bucket
+            // because a bucket there serves every layer sharing the source layer, and which of
+            // them is drawn is the render layer's decision. A bucket here belongs to one layer,
+            // so the paint is already known -- and a polyline is two vertices a ring point and
+            // six indices a segment against one and two, which is worth not building for the
+            // layers that will draw the line-primitive outline instead.
+            if outline {
+                bucket.outline.add_geometry(
+                    ring,
+                    &crate::line::LineOptions {
+                        closed: true,
+                        round_limit: 1.0,
+                        ..crate::line::LineOptions::default()
+                    },
+                );
+            }
         }
         debug_assert_eq!(flat.len(), total_vertices * 2);
 
