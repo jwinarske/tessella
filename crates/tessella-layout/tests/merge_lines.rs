@@ -19,6 +19,8 @@ fn layout(features: &[(&str, &[(i32, i32)])]) -> SymbolLayout {
     let pending = features
         .iter()
         .map(|(text, points)| Pending {
+            // Merging is about geometry; nothing here sets a sort key.
+            sort_key: 0.0,
             text: (*text).to_string(),
             sections: vec![tessella_layout::symbol::Section {
                 text: (*text).to_string(),
@@ -50,6 +52,7 @@ fn layout(features: &[(&str, &[(i32, i32)])]) -> SymbolLayout {
         pending,
         symbol: SymbolOptions::default(),
         // Merging is about geometry; the size these labels draw at never enters it.
+        sort_by_key: false,
         text_size: SizeBinding::Constant(16.0),
         icon_size: SizeBinding::Constant(1.0),
         // Merging is about geometry; whether the letters carry a halo never enters it.
