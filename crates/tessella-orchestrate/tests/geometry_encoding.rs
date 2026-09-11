@@ -57,6 +57,7 @@ fn encode(kind: &str, extra: &str, family: &[BuiltIn], shader: BuiltIn) -> Encod
                 attributes: data,
                 permutation_key: key,
                 pattern_atlas: None,
+                dash_atlas: None,
                 pattern_vertices: None,
             },
         ),

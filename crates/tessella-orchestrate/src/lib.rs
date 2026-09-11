@@ -47,6 +47,7 @@ pub mod camera;
 pub mod clock;
 pub mod counters;
 pub mod damage;
+pub mod dash;
 #[cfg(feature = "std")]
 pub mod deferred;
 pub mod emit;

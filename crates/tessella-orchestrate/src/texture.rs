@@ -251,6 +251,21 @@ pub fn sprite_sheet(texture: TextureId, sheet: &tessella_glyph::sprite::Sheet) -
     Some(whole(texture, size, SPRITE_SHEET_FORMAT, &sheet.pixels))
 }
 
+/// The upload for a dash atlas.
+///
+/// Alpha, like the glyph atlas and for the same reason: what it holds is a distance field, and
+/// three of four channels would be copies of the one the shader reads. Whole-texture, because a
+/// dash atlas is small and is rebuilt entire when its pattern changes -- there is no sub-rect to
+/// describe.
+#[must_use]
+pub fn dash_atlas(texture: TextureId, atlas: &tessella_glyph::dash::Atlas) -> Upload {
+    let size = Extent {
+        width: tessella_glyph::dash::WIDTH,
+        height: atlas.height,
+    };
+    whole(texture, size, GLYPH_ATLAS_FORMAT, &atlas.data)
+}
+
 /// The pixel format a raster tile is uploaded in.
 ///
 /// RGBA, for the sprite sheet's reason and one more: a raster tile may carry alpha — a
