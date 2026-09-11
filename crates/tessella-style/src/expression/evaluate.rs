@@ -230,7 +230,28 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
                 *slot = expect_number(&evaluate(arg, context)?)?;
             }
             // Red, green and blue arrive 0..255 and alpha 0..1, which is how CSS spells it and
-            // what the spec inherits.
+            // what the spec inherits -- and out of range is an *error*, not a clamp. A style
+            // computing a channel and overshooting gets told so rather than drawing a colour it
+            // did not ask for: this used to admit `-1`, which came back as a blue of -0.0039 and
+            // rendered as whatever the pipeline made of a negative channel.
+            if channels[..3].iter().any(|c| !(0.0..=255.0).contains(c)) {
+                return Err(EvaluationError::Custom(alloc::format!(
+                    "Invalid rgba value [{}, {}, {}, {}]: 'r', 'g', and 'b' must be between 0 and 255.",
+                    channels[0],
+                    channels[1],
+                    channels[2],
+                    channels[3]
+                )));
+            }
+            if !(0.0..=1.0).contains(&channels[3]) {
+                return Err(EvaluationError::Custom(alloc::format!(
+                    "Invalid rgba value [{}, {}, {}, {}]: 'a' must be between 0 and 1.",
+                    channels[0],
+                    channels[1],
+                    channels[2],
+                    channels[3]
+                )));
+            }
             Ok(colour_value([
                 channels[0] / 255.0,
                 channels[1] / 255.0,
@@ -1113,9 +1134,15 @@ fn evaluate_legacy(
                 return Ok(last.1.clone());
             }
 
+            // The last stop *below* the position, not at or below it. The difference is
+            // duplicate stops: `[[0, 10], [1, 20], [1, 25], [2, 30]]` at 1 takes the second of
+            // the two ones under `<=`, and interpolates away from it to 25 where the spec says
+            // 20. Taking the last one strictly below leaves the pair `(0, 10)` and `(1, 20)`
+            // with a factor of one, which is the first of the duplicates -- and is the same
+            // answer as before wherever the stops are distinct.
             let index = numeric
                 .iter()
-                .rposition(|(stop, _)| *stop <= position)
+                .rposition(|(stop, _)| *stop < position)
                 .unwrap_or(0);
             let (lower_stop, lower) = numeric[index];
             let (upper_stop, upper) = numeric[index + 1];
@@ -1127,6 +1154,35 @@ fn evaluate_legacy(
                 lower_stop,
                 upper_stop,
             );
+            // Coerced to the property's type *before* mixing, which is where a colour ramp
+            // written the legacy way lives or dies. Its stops are strings -- `"black"` and
+            // `"white"` is how the spec's own suite writes one -- and two strings do not
+            // interpolate, so the mix failed and stepped to the lower stop. The coercion then
+            // happened afterwards, on the stop rather than on the blend: every colour ramp in
+            // the legacy form was a hard step from black to white at the last stop.
+            //
+            // Only Color, because it is the only type whose spec form is a *string*. A number
+            // property's stops are already numbers, and a string property does not interpolate
+            // at all.
+            let coerced = |value: &Value| -> Option<Value> {
+                if function.property_type != Some(Type::Color) {
+                    return None;
+                }
+                to_colour(value).map(|[r, g, b, a]| {
+                    #[allow(clippy::cast_possible_truncation)]
+                    Value::Color(crate::property::Color {
+                        r: r as f32,
+                        g: g as f32,
+                        b: b as f32,
+                        a: a as f32,
+                    })
+                })
+            };
+            let lower_value = coerced(lower);
+            let upper_value = coerced(upper);
+            let lower = lower_value.as_ref().unwrap_or(lower);
+            let upper = upper_value.as_ref().unwrap_or(upper);
+
             // A non-interpolatable output steps rather than blends, which is what the spec does
             // for strings and booleans in an exponential function.
             mix(lower, upper, t).or_else(|_| Ok(lower.clone()))
