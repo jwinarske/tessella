@@ -1077,6 +1077,111 @@ fn lookup_in_object(target: &Value, key: &str) -> Result<Option<Value>, Evaluati
 /// `default` and then to the *property spec's*. That is the difference from `match`, which
 /// requires a fallback branch and errors without one, and it is why the spec's default has to be
 /// carried down here from parse.
+/// A legacy function whose stops are keyed by `{zoom, value}` pairs.
+///
+/// # One curve per zoom, and the zoom chooses between them
+///
+/// mbgl's `CompositeFunction`. The stops group by their zoom, each group being an ordinary
+/// function over the property; the zoom picks the two groups it falls between, both are evaluated
+/// against the feature, and the results are combined.
+///
+/// How they combine is the function's kind, not a rule of its own. An `exponential` composite
+/// interpolates between the two, because that is what its plain form does between stops; an
+/// `interval` composite takes the lower one, because an interval function steps. The suite pins
+/// both: the same four stops at zoom 0.5 give 1.5 through the exponential form where the
+/// interval form gives 0.
+fn evaluate_composite(
+    function: &LegacyFunction,
+    context: &Context<'_>,
+    fallback: &dyn Fn() -> Result<Value, EvaluationError>,
+) -> Result<Value, EvaluationError> {
+    let zoom = context.zoom()?;
+
+    // The distinct zooms, in order, and the stops belonging to each.
+    let mut levels: Vec<f64> = Vec::new();
+    for (stop, _) in &function.stops {
+        let Value::Object(fields) = stop else {
+            continue;
+        };
+        let Some(level) = fields.get("zoom").and_then(Value::as_number) else {
+            continue;
+        };
+        if !levels.contains(&level) {
+            levels.push(level);
+        }
+    }
+    levels.sort_by(|a, b| a.partial_cmp(b).unwrap_or(core::cmp::Ordering::Equal));
+    let Some(&first) = levels.first() else {
+        return fallback();
+    };
+
+    // The function over the property at one zoom: the same node with that level's stops, keyed by
+    // their `value` rather than by the pair. Built rather than evaluated in place so that the
+    // plain path below decides everything else -- clamping, the base, the fallback -- exactly as
+    // it does for a non-composite function.
+    let at = |level: f64| -> Result<Value, EvaluationError> {
+        let stops: Vec<(Value, Value)> = function
+            .stops
+            .iter()
+            .filter_map(|(stop, output)| {
+                let Value::Object(fields) = stop else {
+                    return None;
+                };
+                if fields.get("zoom").and_then(Value::as_number) != Some(level) {
+                    return None;
+                }
+                Some((
+                    fields.get("value").cloned().unwrap_or(Value::Null),
+                    output.clone(),
+                ))
+            })
+            .collect();
+        evaluate_legacy(
+            &LegacyFunction {
+                kind: function.kind,
+                property: function.property.clone(),
+                stops,
+                base: function.base,
+                function_default: function.function_default.clone(),
+                property_default: function.property_default.clone(),
+                property_type: function.property_type,
+            },
+            context,
+        )
+    };
+
+    // Outside the zoom range the nearest level answers alone, which is the same clamp the plain
+    // forms make over their own stops.
+    if zoom <= first {
+        return at(first);
+    }
+    let last = *levels.last().expect("non-empty");
+    if zoom >= last {
+        return at(last);
+    }
+    let index = levels.iter().rposition(|level| *level < zoom).unwrap_or(0);
+    let (lower_level, upper_level) = (levels[index], levels[index + 1]);
+    let lower = at(lower_level)?;
+
+    // An interval composite steps between levels rather than blending, which is what its plain
+    // form does between stops. The property is null-checked by `at` above, so a feature that has
+    // no value has already fallen back by here.
+    if function.kind != LegacyKind::Exponential {
+        return Ok(lower);
+    }
+    let upper = at(upper_level)?;
+    let t = factor(
+        Interpolation::Exponential {
+            base: function.base,
+        },
+        zoom,
+        lower_level,
+        upper_level,
+    );
+    // A non-interpolatable output steps, as it does between a plain function's stops.
+    mix(&lower, &upper, t).or(Ok(lower))
+}
+
 fn evaluate_legacy(
     function: &LegacyFunction,
     context: &Context<'_>,
@@ -1100,6 +1205,22 @@ fn evaluate_legacy(
             ))
         })
     };
+
+    // A composite function keys its stops by a `{zoom, value}` pair rather than by a bare value:
+    // one curve over the property per zoom level, and the zoom chooses between them. It is how a
+    // pre-expression style wrote a property that varies by both.
+    //
+    // Handled before the kinds below because it is not a fifth kind -- an `interval` composite and
+    // an `exponential` composite differ in the same way their plain forms do -- and because the
+    // stops those kinds read cannot be read at all here: `stop.as_number()` on an object is
+    // `None`, so every stop was filtered out and every composite function returned its default.
+    if function
+        .stops
+        .iter()
+        .any(|(stop, _)| matches!(stop, Value::Object(fields) if fields.contains_key("zoom")))
+    {
+        return evaluate_composite(function, context, &fallback);
+    }
 
     match function.kind {
         // Identity passes the property through, but only when it is the type the property spec
