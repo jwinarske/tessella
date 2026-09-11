@@ -18,6 +18,7 @@
 
 pub mod arabic;
 pub mod atlas;
+pub mod dash;
 pub mod fonts;
 pub mod generated;
 pub mod manager;
