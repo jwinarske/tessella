@@ -16,6 +16,22 @@ use tessella_glyph::pbf::{self, Glyph, Metrics, Range};
 use tessella_layout::symbol_bucket::{Glyphs, Label, SymbolOptions, build_symbols};
 use tessella_orchestrate::emit::{self, SlabArena};
 
+/// A layer whose paint is entirely the layer's, which is what every fixture here is.
+///
+/// The empty layout rather than `None`: `encode_symbol` describes what it is given, and what it is
+/// given for a uniform-paint layer is a buffer with nothing in it.
+fn no_paint() -> tessella_orchestrate::emit::SymbolPaint<'static> {
+    static EMPTY: std::sync::OnceLock<tessella_orchestrate::binder::VertexLayout> =
+        std::sync::OnceLock::new();
+    tessella_orchestrate::emit::SymbolPaint {
+        bytes: &[],
+        layout: EMPTY.get_or_init(|| tessella_orchestrate::binder::VertexLayout {
+            attributes: Vec::new(),
+            stride: 0,
+        }),
+    }
+}
+
 const GLYPHS: &[u8] = include_bytes!("../../../tests/glyph-fixtures/TestFont/0-255.pbf");
 
 /// The glyph atlas a symbol drawable samples. Any id will do here — what is under test is the
@@ -86,6 +102,7 @@ fn labelled(text: &str) -> (SlabArena, emit::Encoded, usize) {
         ATLAS,
         None,
         tessella_capture_abi::envelope::TextureFilter::Linear,
+        &no_paint(),
     );
     arena.seal();
     (arena, encoded, glyphs)
@@ -134,6 +151,7 @@ fn a_non_sdf_symbol_names_the_icon_shader() {
         ATLAS,
         None,
         tessella_capture_abi::envelope::TextureFilter::Linear,
+        &no_paint(),
     );
     assert_eq!(
         encoded.record.builtin_shader,
@@ -284,6 +302,7 @@ fn an_empty_layer_encodes_to_nothing() {
         ATLAS,
         None,
         tessella_capture_abi::envelope::TextureFilter::Linear,
+        &no_paint(),
     );
     assert_eq!(encoded.record.vertex_count, 0);
     assert_eq!(encoded.segments()[0].vertex_length, 0);

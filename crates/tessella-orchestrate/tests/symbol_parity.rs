@@ -29,6 +29,22 @@ use tessella_glyph::atlas::Atlas;
 use tessella_glyph::pbf::{self, Glyph, Metrics, Range};
 use tessella_layout::symbol_bucket::{Glyphs, Label, SymbolBuffers, SymbolOptions, build_symbols};
 
+/// A layer whose paint is entirely the layer's, which is what every fixture here is.
+///
+/// The empty layout rather than `None`: `encode_symbol` describes what it is given, and what it is
+/// given for a uniform-paint layer is a buffer with nothing in it.
+fn no_paint() -> tessella_orchestrate::emit::SymbolPaint<'static> {
+    static EMPTY: std::sync::OnceLock<tessella_orchestrate::binder::VertexLayout> =
+        std::sync::OnceLock::new();
+    tessella_orchestrate::emit::SymbolPaint {
+        bytes: &[],
+        layout: EMPTY.get_or_init(|| tessella_orchestrate::binder::VertexLayout {
+            attributes: Vec::new(),
+            stride: 0,
+        }),
+    }
+}
+
 const DUMP: &str = include_str!("../../../tests/golden/symbol_style.dump");
 const GLYPHS: &[u8] = include_bytes!("../../../tests/glyph-fixtures/TestFont/0-255.pbf");
 
@@ -694,6 +710,7 @@ mod through_the_builder {
                 ATLAS,
                 None,
                 tessella_capture_abi::envelope::TextureFilter::Linear,
+                &crate::no_paint(),
             );
 
             let mut attributes: Vec<(u32, u32, u32, u32)> = encoded
@@ -787,6 +804,7 @@ fn an_encoded_symbol_binds_its_atlas_at_the_oracle_s_slot() {
             atlas,
             None,
             tessella_capture_abi::envelope::TextureFilter::Linear,
+            &crate::no_paint(),
         );
         assert_eq!(encoded.record.texture_refs.count, 1, "sdf={is_sdf}");
 

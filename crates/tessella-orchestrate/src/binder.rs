@@ -161,6 +161,77 @@ pub fn attribute_id_name(property: &str) -> Option<alloc::string::String> {
     Some(name)
 }
 
+/// The symbol family's attribute id for a paint property, for the half being described.
+///
+/// # Why symbols need their own
+///
+/// Every other family names its attributes after its properties, so `fill-color` is
+/// `idFillColorVertexAttribute` and [`attribute_id_name`] is a spelling rule. A symbol has *ten*
+/// paint properties and *five* attributes: `text-color` and `icon-color` are both
+/// `idSymbolColorVertexAttribute`, and which of them a drawable means is decided by which half it
+/// draws. The spelling rule produces `idTextColorVertexAttribute`, which is in no shader's table,
+/// so every symbol paint slot was silently dropped -- no descriptor, no attribute on the wire,
+/// and a label drawn in the property's spec default however the style set it.
+///
+/// `None` for a property belonging to the other half, which is what keeps one interleaved buffer
+/// holding both from describing each attribute twice.
+#[must_use]
+pub fn symbol_attribute_id_name(property: &str, is_text: bool) -> Option<alloc::string::String> {
+    use alloc::string::String;
+
+    let (half, rest) = property.split_once('-')?;
+    if half != if is_text { "text" } else { "icon" } {
+        return None;
+    }
+    let mut name = String::from("idSymbol");
+    for word in rest.split('-') {
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            name.extend(first.to_uppercase());
+            name.push_str(chars.as_str());
+        }
+    }
+    name.push_str("VertexAttribute");
+    Some(name)
+}
+
+/// [`layout`] for one half of a symbol bucket.
+///
+/// The binder writes both halves into one buffer -- they are ten slots of the same layer's paint
+/// -- and each drawable describes only its own five. See [`symbol_attribute_id_name`].
+pub fn symbol_layout(
+    binder: &PaintBinder,
+    ids: &alloc::collections::BTreeMap<alloc::string::String, u32>,
+    is_text: bool,
+    declared: impl Fn(u32) -> Option<(i32, AttributeDataType)>,
+) -> VertexLayout {
+    let mut attributes = Vec::new();
+    for slot in binder.slots() {
+        let Some(id_name) = symbol_attribute_id_name(slot.name, is_text) else {
+            continue;
+        };
+        let Some(&attr_id) = ids.get(&id_name) else {
+            continue;
+        };
+        let (binding, declared_type) =
+            declared(attr_id).unwrap_or((-1, AttributeDataType::Invalid));
+        #[allow(clippy::cast_possible_truncation)]
+        attributes.push(BoundAttribute {
+            property: slot.name,
+            attr_id,
+            binding,
+            supplied: float_type(slot.width as u32 / 4),
+            declared: declared_type,
+            offset: slot.offset as u32,
+        });
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    VertexLayout {
+        attributes,
+        stride: binder.stride() as u32,
+    }
+}
+
 /// Describes, for the wire, the interleaved layout a [`PaintBinder`] produced.
 ///
 /// # Why this reads the binder rather than recomputing
