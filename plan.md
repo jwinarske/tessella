@@ -4318,6 +4318,14 @@ a subdivision and a draw the consumer no longer makes.
   redundant -- dropping it rendered pixel-identically. Fixed by reversing at layer granularity and
   restoring the producer's order inside a layer that resolves in depth.
 
+  That carve-out was the general rule seen from one family. **Every** layer's internal order is
+  already mbgl's paint order -- a fill's triangles then its outline, a symbol's sprites then its
+  halo then its letters -- and only the order *between* layers is front-to-back. The reversal is
+  over layer runs now, with no family special-cased, and the producer's symbol sub-layers were
+  renumbered the way mbgl adds them rather than inverted to survive the old rule. Measured on a
+  fill with a contrasting `fill-outline-color`: 9,902 gross pixels to 2, and the Protomaps
+  basemap 1,884 low-contrast pixels to 1,000.
+
   **The extrusion matrix carried the flat-layer sublayer nudge.** `for_tile_with` applies mbgl's
   `depthModeForSublayer`, which divides a flat layer's depth range so a fill's outline does not
   z-fight the fill it outlines. mbgl draws a fill-extrusion under `depthModeFor3D` instead -- the

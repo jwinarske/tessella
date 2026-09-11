@@ -108,6 +108,18 @@ impl Placed {
     /// reverse each translucent run itself. That is the consumer's business, and putting the
     /// reversal here would have made the stream disagree with the oracle it is measured against.
     ///
+    /// # What such a consumer must not reverse
+    ///
+    /// The inside of a layer. Between layers the order is front-to-back and has to be turned
+    /// around; within one it is already the order mbgl paints in -- a fill's triangles then its
+    /// outline, a symbol's sprites then its halo then its letters, an extrusion's roof then the
+    /// walls raised on it. So the reversal is over layer *runs*, each run left as it was given.
+    ///
+    /// Reversing per drawable is invisible for as long as a layer's parts agree in colour, which
+    /// is why it survived: the usual `fill-outline-color` is the fill's own. With a contrasting
+    /// one it is plain -- the oracle's outline straddles the polygon edge, half of it blended
+    /// over the fill, and a consumer that paints the fill last covers that half.
+    ///
     /// Then sublayer, then sort key, then tile. Sublayer above the sort key because a sort key
     /// that reordered within a layer would separate a fill's outline from the triangles it
     /// outlines, and the outline has to follow the fill.
@@ -511,30 +523,28 @@ pub fn bindings_for(
             // talked itself out of — that symbols overhang tile edges and must not be clipped —
             // was the right one, and clipping them cut every label at every tile boundary.
             Content::Symbol(ref layout) => {
-                // Up to three drawables: the letters, the halo under them, and the sprites over
-                // both. A halo is not a flag on one drawable -- it is a second drawable over the
-                // same geometry, which mbgl adds first and draws underneath.
+                // Up to three drawables, in the order mbgl adds them: the sprites, then the halo,
+                // then the letters over both. A halo is not a flag on one drawable -- it is a
+                // second drawable over the same geometry, added first and drawn underneath.
                 //
-                // The halo takes the *higher* index, which looks backwards and is not. This list
-                // is reversed by the consumer -- a translucent pass with no depth buffer blends
-                // bottom-up, so the producer's order is front-to-back -- and the existing pair
-                // says so: the sprites sit at the higher index and draw *over* the glyphs, which
-                // is the arrangement a shield's number needs. Measured rather than reasoned, and
-                // the wrong way round first: black letters with a white halo came out as white
-                // letters, the halo painted over what it should sit behind.
+                // mbgl's own order, from `render_symbol_layer.cpp`. Its `RenderableSegment`
+                // comparator sorts "text over icons" in as many words, so a shield's sprite is
+                // added before the number on it; and within a renderable the halo is drawn
+                // before the fill. Sub-layer order is paint order here, so this list reads the
+                // same way.
                 //
-                // Packed rather than fixed, which is the opposite of the extrusion's rule and
-                // for a reason the golden gives: mbgl calls `setSubLayerIndex(0)` for *every*
-                // symbol drawable, halo and fill alike, and orders the two by the order it adds
-                // them. This side has no such second key -- the sub-layer index is what orders a
-                // layer's drawables -- so it is used as one, and packing is what keeps the
-                // common case identical to mbgl's. A layer with no halo draws its letters at
-                // zero, which is what the capture's order section carries.
+                // Packed rather than fixed, for a reason the golden gives: mbgl calls
+                // `setSubLayerIndex(0)` for *every* symbol drawable, halo and fill alike, and
+                // orders the two by the order it adds them. This side has no such second key --
+                // the sub-layer index is what orders a layer's drawables -- so it is used as one,
+                // and packing is what keeps the common case identical to mbgl's. A layer with no
+                // halo and no sprites draws its letters at zero, which is what the capture's
+                // order section carries.
                 //
                 // Nothing emits an *icon* halo yet. mbgl haloes an icon only when the sprite is
                 // a distance field, which is a property of the sheet rather than of the layer.
                 let mut sub = 0;
-                if layout.text_passes.fill {
+                if layout.has_icons() {
                     emit(sub, view::fill_pass(), view::symbol_flags());
                     sub += 1;
                 }
@@ -542,9 +552,7 @@ pub fn bindings_for(
                     emit(sub, view::fill_pass(), view::symbol_flags());
                     sub += 1;
                 }
-                // The sprite half, when the layer resolved any, over the glyphs the way a
-                // shield's number sits on its shield.
-                if layout.has_icons() {
+                if layout.text_passes.fill {
                     emit(sub, view::fill_pass(), view::symbol_flags());
                 }
             }
