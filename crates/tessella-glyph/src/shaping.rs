@@ -383,6 +383,48 @@ impl Anchor {
     }
 }
 
+/// Where a label sits when its anchor is one of a variable list, in shaping units.
+///
+/// mbgl's `evaluateRadialOffset`. A style writing `text-variable-anchor` gives a *distance* rather
+/// than a vector -- `text-radial-offset` -- and which way that distance points is the anchor's to
+/// say: anchored `left`, the label sits to the right of the point by the whole offset; anchored
+/// `top-left`, it sits diagonally by the leg of a right isosceles triangle whose hypotenuse is the
+/// offset, which is what the `sqrt(2)` is.
+///
+/// # The seven pixels
+///
+/// `BASELINE_OFFSET` is mbgl's, and it is not derived from anything: a comment there calls it the
+/// baseline shift, and it moves a vertically anchored label up or down so the *text* rather than
+/// its em box clears the point. Left and right anchors do not take it, which is why the two
+/// switches below are separate rather than one match with eight arms.
+///
+/// A negative offset is ignored rather than reflected, which is also mbgl's -- a style asking to
+/// be pushed backwards gets the anchor it asked for and no offset.
+#[must_use]
+pub fn radial_offset(anchor: Anchor, offset: f32) -> [f32; 2] {
+    /// mbgl's `baselineOffset`, in the same units as the advances.
+    const BASELINE_OFFSET: f32 = 7.0;
+
+    let offset = offset.max(0.0);
+    // Solve `r² + r² = offset²` for the diagonal anchors.
+    let leg = offset / core::f32::consts::SQRT_2;
+    let y = match anchor {
+        Anchor::TopRight | Anchor::TopLeft => leg - BASELINE_OFFSET,
+        Anchor::BottomRight | Anchor::BottomLeft => -leg + BASELINE_OFFSET,
+        Anchor::Bottom => -offset + BASELINE_OFFSET,
+        Anchor::Top => offset - BASELINE_OFFSET,
+        _ => 0.0,
+    };
+    let x = match anchor {
+        Anchor::TopRight | Anchor::BottomRight => -leg,
+        Anchor::TopLeft | Anchor::BottomLeft => leg,
+        Anchor::Left => offset,
+        Anchor::Right => -offset,
+        _ => 0.0,
+    };
+    [x, y]
+}
+
 /// How lines are aligned against each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Justify {

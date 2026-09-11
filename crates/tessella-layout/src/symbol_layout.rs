@@ -256,6 +256,92 @@ fn anchor_of(value: Option<&Value>) -> tessella_glyph::shaping::Anchor {
     }
 }
 
+/// `text-justify`, against the anchor that `auto` would ask.
+///
+/// Absent is `center`, which is the spec's default, and *not* the same as `auto`: a layer with
+/// `text-anchor: left` and no justify is centre-justified, and only one that writes `auto` takes
+/// its justification from the anchor. mbgl draws the same line -- it evaluates the property, whose
+/// default is `center`, and consults `getAnchorJustification` in the one branch where the value is
+/// `auto`.
+fn justify_of(
+    value: Option<&Value>,
+    anchor: tessella_glyph::shaping::Anchor,
+) -> tessella_glyph::shaping::Justify {
+    use tessella_glyph::shaping::Justify;
+    match value.and_then(Value::as_str) {
+        Some("left") => Justify::Left,
+        Some("right") => Justify::Right,
+        Some("auto") => anchor.justification(),
+        _ => Justify::Center,
+    }
+}
+
+/// The anchor a label is laid out around, and the offset that goes with it.
+///
+/// # Variable anchors, without the retry
+///
+/// `text-variable-anchor` is a *list*: mbgl tries each in order against the collision index and
+/// keeps the first that fits. What it does when nothing collides -- which is most labels on most
+/// maps -- is take the first, and that is what this does. The retry belongs in placement, where
+/// the index is; until it is there, a label that would have moved to the second anchor keeps the
+/// first and competes from there.
+///
+/// # The anchor does the box, the offset does the rest
+///
+/// mbgl shapes a variable-anchored label around `Center` so that one shaping serves whichever
+/// anchor placement settles on, and then shifts it twice: by the radial offset, and by
+/// `calculateVariableLayoutOffset`, which is `-(align - 0.5) * size` over the shaped box. That
+/// second shift is exactly what this shaper's own anchor alignment already applies, so shaping
+/// around the anchor and adding the offset is the same picture arrived at in one step instead of
+/// two. It costs the ability to reuse one shaping across anchors, which is the retry's concern
+/// and is not here yet.
+///
+/// Shaping around `Center` and adding only the radial offset is what this looked like first, and
+/// it left every label short of where the oracle puts it by half its own width -- a rigid error
+/// on a short name and a large one on a long one, which is what named it.
+fn variable_anchor(
+    layer: &Layer,
+    zoom: f64,
+    feature: Option<&dyn Feature>,
+) -> Option<(tessella_glyph::shaping::Anchor, [f32; 2])> {
+    let anchors = layout_value(layer, "text-variable-anchor", zoom, feature)?;
+    let first = anchors.as_array()?.first()?;
+    let anchor = anchor_of(Some(first));
+    #[allow(clippy::cast_possible_truncation)]
+    let radial = layout_value(layer, "text-radial-offset", zoom, feature)
+        .as_ref()
+        .and_then(Value::as_number)
+        .unwrap_or(0.0) as f32;
+    let mut offset = tessella_glyph::shaping::radial_offset(anchor, radial * ONE_EM);
+
+    // And the padding, because mbgl centres the *collision box* and this shaper centres the
+    // shaped text. `calculateVariableLayoutOffset` shifts by `-(align - 0.5) * width` where the
+    // width is `textBox.x2 - textBox.x1`, which is the box `text-padding` widened -- so a fully
+    // left- or right-anchored label sits one padding further out there than here. Measured before
+    // it was written down: every label in the Protomaps POI layer was two pixels adrift at the
+    // default padding of two, uniformly, with nothing else between the two pictures.
+    //
+    // Converted into shaping units, which the size scales back to pixels downstream, because a
+    // padding is screen pixels and an offset here is not.
+    #[allow(clippy::cast_possible_truncation)]
+    let padding = layout_value(layer, "text-padding", zoom, feature)
+        .as_ref()
+        .and_then(Value::as_number)
+        .unwrap_or(2.0) as f32;
+    #[allow(clippy::cast_possible_truncation)]
+    let size = layout_value(layer, "text-size", zoom, feature)
+        .as_ref()
+        .and_then(Value::as_number)
+        .unwrap_or(16.0) as f32;
+    if size > 0.0 {
+        let (across, down) = anchor.alignment();
+        let span = 2.0 * padding * ONE_EM / size;
+        offset[0] -= (across - 0.5) * span;
+        offset[1] -= (down - 0.5) * span;
+    }
+    Some((anchor, offset))
+}
+
 /// How a layer sets its text, at a zoom and optionally for one feature.
 ///
 /// The spec allows `text-size`, `text-max-width` and `text-letter-spacing` to be data-driven, so
@@ -279,14 +365,30 @@ fn text_options(layer: &Layer, zoom: f64, feature: Option<&dyn Feature>) -> Symb
         }
         Some([array[0].as_number()? as f32, array[1].as_number()? as f32])
     };
+    // A variable anchor replaces both. The spec says not to write `text-offset` and
+    // `text-radial-offset` together and does not say what happens if you do; mbgl takes the
+    // radial one, and so does this.
+    let variable = variable_anchor(layer, zoom, feature);
+    let plain = anchor_of(layout_value(layer, "text-anchor", zoom, feature).as_ref());
     SymbolOptions {
         size: number("text-size").unwrap_or(16.0),
         // Both of these were unread, and the pair of them is how a style puts a name under the
         // marker it names. Without them a POI label sat on top of its own icon.
-        anchor: anchor_of(layout_value(layer, "text-anchor", zoom, feature).as_ref()),
-        offset: pair("text-offset")
-            .map(|offset| [offset[0] * ONE_EM, offset[1] * ONE_EM])
-            .unwrap_or([0.0, 0.0]),
+        anchor: variable.map_or(plain, |(anchor, _)| anchor),
+        offset: variable.map_or_else(
+            || {
+                pair("text-offset")
+                    .map(|offset| [offset[0] * ONE_EM, offset[1] * ONE_EM])
+                    .unwrap_or([0.0, 0.0])
+            },
+            |(_, offset)| offset,
+        ),
+        // The anchor `auto` asks is the variable one where there is one, because that is the
+        // anchor the label is actually placed at.
+        justify: justify_of(
+            layout_value(layer, "text-justify", zoom, feature).as_ref(),
+            variable.map_or(plain, |(anchor, _)| anchor),
+        ),
         max_width_ems: number("text-max-width").unwrap_or(10.0),
         // `text-letter-spacing` is in ems and everything downstream of it is in pixels, so it
         // is resolved here where the unit changes rather than carried in the spec's unit and
