@@ -224,7 +224,8 @@ fn draw_a_frame() {
             icon: None,
             line: &[],
             variable: &[],
-            radial: 0.0,
+            variable_offset: [0.0, 0.0],
+            variable_radial: false,
         })
         .collect();
 
@@ -510,7 +511,8 @@ fn draw_line_labels() {
                 icon: None,
                 line,
                 variable: &[],
-                radial: 0.0,
+                variable_offset: [0.0, 0.0],
+                variable_radial: false,
             });
             repetition += 1;
         }

@@ -226,7 +226,8 @@ fn run(zooms: &[f64]) -> (Vec<Vec<Opacities>>, usize) {
                         icon: None,
                         line: &[],
                         variable: &[],
-                        radial: 0.0,
+                        variable_offset: [0.0, 0.0],
+                        variable_radial: false,
                     });
                     texts.push(symbol.key.clone());
                 }

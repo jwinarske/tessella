@@ -425,6 +425,38 @@ pub fn radial_offset(anchor: Anchor, offset: f32) -> [f32; 2] {
     [x, y]
 }
 
+/// Where a variable-anchored label sits, from a style's offset in whichever form it wrote one.
+///
+/// mbgl's `evaluateVariableOffset`. A style may give a *distance* -- `text-radial-offset`, whose
+/// direction is the anchor's to decide, handled by [`radial_offset`] -- or a *vector*,
+/// `text-offset`, whose magnitude is the anchor's to point. This is the second form, and
+/// `is_radial` chooses between them so a caller can carry one pair either way.
+///
+/// The vector form takes the magnitudes and lets the anchor choose the signs, which is why a
+/// negative `text-offset` does not flip a label to the other side: `[-1, 0]` on a `left` anchor
+/// puts the label one unit to the *right* of the point, the same as `[1, 0]`.
+#[must_use]
+pub fn variable_offset(anchor: Anchor, offset: [f32; 2], is_radial: bool) -> [f32; 2] {
+    if is_radial {
+        return radial_offset(anchor, offset[0]);
+    }
+    /// mbgl's `baselineOffset`, as in [`radial_offset`].
+    const BASELINE_OFFSET: f32 = 7.0;
+
+    let (x, y) = (offset[0].abs(), offset[1].abs());
+    let down = match anchor {
+        Anchor::TopRight | Anchor::TopLeft | Anchor::Top => y - BASELINE_OFFSET,
+        Anchor::BottomRight | Anchor::BottomLeft | Anchor::Bottom => -y + BASELINE_OFFSET,
+        Anchor::Center | Anchor::Left | Anchor::Right => 0.0,
+    };
+    let across = match anchor {
+        Anchor::TopRight | Anchor::BottomRight | Anchor::Right => -x,
+        Anchor::TopLeft | Anchor::BottomLeft | Anchor::Left => x,
+        Anchor::Center | Anchor::Top | Anchor::Bottom => 0.0,
+    };
+    [across, down]
+}
+
 /// How lines are aligned against each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Justify {

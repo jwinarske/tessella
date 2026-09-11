@@ -319,11 +319,17 @@ pub struct SymbolOptions {
     /// not use the height at all, and nothing compared a multi-line label through the production
     /// path until a section grew a line and made the other branch run.
     pub line_height_ems: f32,
-    /// `text-radial-offset`, in shaping units, and zero where there is none.
+    /// The offset a variable-anchored label takes, in shaping units, before the anchor points it.
     ///
-    /// A *distance*, not a vector: which way it points is the anchor's to say, and which anchor
-    /// that is can change per frame. See `SymbolLayout::variable_anchors`.
-    pub radial_offset: f32,
+    /// Two forms, and the style chooses which. `text-radial-offset` is a *distance* whose
+    /// direction the anchor decides, and `variable_radial` is true for it. `text-offset` is a
+    /// *vector* whose signs the anchor decides, and it is false. mbgl branches on whether the
+    /// style wrote a radial offset at all, not on its value, so a layer writing both takes the
+    /// radial one -- and a layer writing only `text-offset` takes that, which is the case this
+    /// used to drop on the floor and place every label on its own point.
+    pub variable_offset: [f32; 2],
+    /// Whether [`Self::variable_offset`] is a radial distance rather than a vector.
+    pub variable_radial: bool,
     /// Where the label sits relative to its anchor.
     pub anchor: tessella_glyph::shaping::Anchor,
     /// `text-offset`, converted from the spec's ems to the shaping's units.
@@ -357,7 +363,8 @@ impl Default for SymbolOptions {
             line_height_ems: 1.2,
             anchor: tessella_glyph::shaping::Anchor::Center,
             offset: [0.0, 0.0],
-            radial_offset: 0.0,
+            variable_offset: [0.0, 0.0],
+            variable_radial: false,
             writing_mode: tessella_glyph::shaping::WritingMode::Horizontal,
             allow_vertical_placement: false,
             justify: tessella_glyph::shaping::Justify::Center,
