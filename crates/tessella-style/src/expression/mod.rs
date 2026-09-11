@@ -1453,24 +1453,79 @@ impl LegacyFunction {
 }
 
 impl Expression {
+    /// The pair of zoom stops enclosing `[lower, upper]`, if this varies with zoom at all.
+    ///
+    /// mbgl's `getCoveringStops`: the last stop at or below `lower`, and the first stop at or
+    /// above `upper`, each clamped to the outermost stop the curve has.
+    ///
+    /// # Which binders use this, and which do not
+    ///
+    /// The *symbol size* binders do — `ConstantSymbolSizeBinder` and
+    /// `CompositeFunctionSymbolSizeBinder` both hold `getCoveringStops(tileZoom, tileZoom + 1)`
+    /// and sample the curve there. The paint binders do not: they hold `{zoom, zoom + 1}`
+    /// literally, which [`Self::zoom_mix_factor`] matches and a golden dump confirms.
+    ///
+    /// The difference is only visible where a stop falls strictly inside the interval. Inside
+    /// one stop interval the two conventions agree exactly -- the factor and the samples cancel
+    /// algebraically, for a linear curve and an exponential one alike -- so a style whose stops
+    /// sit on integer zooms cannot tell them apart.
+    ///
+    /// `None` when nothing varies with zoom, and for a curve with no stops.
+    #[must_use]
+    pub fn covering_stops(&self, lower: f64, upper: f64) -> Option<(f64, f64)> {
+        let stops = match zoom_curve(&self.root)? {
+            Expr::Interpolate { stops, .. } | Expr::Step { stops, .. } => stops,
+            _ => return None,
+        };
+        let first = stops.first()?.0;
+        let last = stops.last()?.0;
+        // `lower_bound`, then backed up one where it overshot -- mbgl's own comment, and the
+        // reason the two ends are not symmetric: the low end wants the last stop *at or below*
+        // and the high end the first stop *at or above*.
+        let min = stops
+            .iter()
+            .rev()
+            .find(|(at, _)| *at <= lower)
+            .map_or(first, |(at, _)| *at);
+        let max = stops
+            .iter()
+            .find(|(at, _)| *at >= upper)
+            .map_or(last, |(at, _)| *at);
+        Some((min, max))
+    }
+
+    /// The mix factor between two zoom stops, at a camera zoom.
+    ///
+    /// mbgl's `util::interpolationFactor`, and the arithmetic [`Self::zoom_mix_factor`] used to
+    /// carry inline. Zero for a `step` curve, which selects rather than blends, and zero for a
+    /// range of no width.
+    #[must_use]
+    pub fn interpolation_factor(&self, range: (f64, f64), view_zoom: f64) -> f32 {
+        let Some(curve) = zoom_curve(&self.root) else {
+            return 0.0;
+        };
+        let Expr::Interpolate { interpolation, .. } = curve else {
+            return 0.0;
+        };
+        factor_between(interpolation, range, view_zoom)
+    }
+
     /// The shader's mix factor between this property's two zoom endpoints.
     ///
     /// A property that varies with zoom *and* per feature cannot be evaluated at the camera's
-    /// zoom when its buckets are built, so its value at `bucket_zoom` and at `bucket_zoom + 1`
+    /// zoom when its buckets are built, so its value at each end of the tile's zoom interval
     /// goes into the vertex and the shader mixes between them by this scalar — recomputed per
     /// view, per frame, which is the only place the camera's fractional zoom enters.
+    ///
+    /// The interval is `[bucket_zoom, bucket_zoom + 1]` exactly, which is where the endpoints
+    /// are sampled too — mbgl's `CompositeFunctionPaintPropertyBinder` holds that pair and not
+    /// the curve's own stops. [`Self::covering_stops`] is the other convention, and it belongs
+    /// to the *symbol size* binders alone; the golden dump settles which is which, carrying
+    /// `color_t = 0.5` at camera zoom 13.5 over a z13 tile whose curve runs 13 to 15.
     ///
     /// Zero for anything that does not vary with zoom, and zero for a `step` curve: a step
     /// selects rather than blends, so mbgl returns zero for it explicitly rather than letting
     /// the endpoints mix.
-    ///
-    /// # Why this is not the same arithmetic as interpolating between stops
-    ///
-    /// It looks like the same formula and it is a different function in mbgl —
-    /// `util::interpolationFactor`, computed in `f32` from a camera zoom already narrowed to
-    /// `f32`, where stop interpolation runs in `double`. Sharing one implementation would be
-    /// right to within a rounding error, which is exactly the size of error the oracle diff
-    /// exists to catch.
     #[must_use]
     pub fn zoom_mix_factor(&self, bucket_zoom: f64, view_zoom: f64) -> f32 {
         let Some(curve) = zoom_curve(&self.root) else {
@@ -1481,42 +1536,45 @@ impl Expression {
             return 0.0;
         };
 
-        #[allow(clippy::cast_possible_truncation)]
-        let (min, max, z) = (
-            bucket_zoom as f32,
-            (bucket_zoom + 1.0) as f32,
-            view_zoom as f32,
-        );
-        let diff = max - min;
-        let progress = z - min;
-        if diff == 0.0 {
-            return 0.0;
-        }
-        let factor = match interpolation {
-            Interpolation::Linear => progress / diff,
-            Interpolation::Exponential { base } if (*base - 1.0).abs() < f64::EPSILON => {
-                progress / diff
-            }
-            Interpolation::Exponential { base } => {
-                // mbgl widens the base to double for the powers and narrows the quotient back,
-                // which is not the same as computing the whole thing in f32.
-                #[allow(clippy::cast_possible_truncation)]
-                let value =
-                    (base.powf(f64::from(progress)) - 1.0) / (base.powf(f64::from(diff)) - 1.0);
-                value as f32
-            }
-            // The curve eases the *linear* factor rather than the input: mbgl's
-            // `CubicBezierInterpolator` computes `interpolationFactor(1.0, …)` — a plain
-            // fraction — and solves the Bézier for it. The epsilon is mbgl's 1e-6.
-            Interpolation::CubicBezier { x1, y1, x2, y2 } => {
-                #[allow(clippy::cast_possible_truncation)]
-                {
-                    solve_unit_bezier(*x1, *y1, *x2, *y2, f64::from(progress / diff)) as f32
-                }
-            }
-        };
-        factor.clamp(0.0, 1.0)
+        factor_between(interpolation, (bucket_zoom, bucket_zoom + 1.0), view_zoom)
     }
+}
+
+/// The mix factor between two zoom stops, for a given interpolation.
+///
+/// # Why this is not the same arithmetic as interpolating between stops
+///
+/// It looks like the same formula and it is a different function in mbgl —
+/// `util::interpolationFactor`, computed in `f32` from a camera zoom already narrowed to `f32`,
+/// where stop interpolation runs in `double`. Sharing one implementation would be right to
+/// within a rounding error, which is exactly the size of error the oracle diff exists to catch.
+#[allow(clippy::cast_possible_truncation)]
+fn factor_between(interpolation: &Interpolation, range: (f64, f64), view_zoom: f64) -> f32 {
+    let (min, max, z) = (range.0 as f32, range.1 as f32, view_zoom as f32);
+    let diff = max - min;
+    let progress = z - min;
+    if diff == 0.0 {
+        return 0.0;
+    }
+    let factor = match interpolation {
+        Interpolation::Linear => progress / diff,
+        Interpolation::Exponential { base } if (*base - 1.0).abs() < f64::EPSILON => {
+            progress / diff
+        }
+        Interpolation::Exponential { base } => {
+            // mbgl widens the base to double for the powers and narrows the quotient back,
+            // which is not the same as computing the whole thing in f32.
+            let value = (base.powf(f64::from(progress)) - 1.0) / (base.powf(f64::from(diff)) - 1.0);
+            value as f32
+        }
+        // The curve eases the *linear* factor rather than the input: mbgl's
+        // `CubicBezierInterpolator` computes `interpolationFactor(1.0, …)` — a plain
+        // fraction — and solves the Bézier for it. The epsilon is mbgl's 1e-6.
+        Interpolation::CubicBezier { x1, y1, x2, y2 } => {
+            solve_unit_bezier(*x1, *y1, *x2, *y2, f64::from(progress / diff)) as f32
+        }
+    };
+    factor.clamp(0.0, 1.0)
 }
 
 /// The zoom curve at the root, through the wrappers that are transparent to it.

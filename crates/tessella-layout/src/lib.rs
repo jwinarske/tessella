@@ -32,6 +32,7 @@ pub mod fill_extrusion;
 pub mod line;
 pub mod paint;
 pub mod raster;
+pub mod size;
 pub mod subdivide;
 pub mod symbol;
 pub mod symbol_bucket;

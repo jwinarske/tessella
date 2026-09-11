@@ -3431,35 +3431,35 @@ fn write_layer_state(
                         .and_then(tessella_style::Value::as_array)
                         .is_none()
                 });
-            // The layer-wide `text-size`, which is what the shader scales every glyph's corners
-            // by. A data-driven one is in the vertex instead and this is then the fallback the
-            // constant path never reads.
+            // How each half's size reaches the shader, per tile zoom.
             //
-            // Read the way the layout read it, not out of the spec tables. `resolve_layout`
-            // covers the layer kinds whose layout feeds an interleaved buffer and answers an
-            // empty map for a symbol layer, so this was the spec default for every style ever
-            // loaded: labels drew at 16 pixels whatever the style asked for, which is most of
-            // what made our type a different size from the oracle's.
-            let size = tessella_style::property::layout_value(layer, "text-size", zoom, None)
-                .and_then(|value| value.as_number())
-                .unwrap_or(16.0);
-            #[allow(clippy::cast_possible_truncation)]
-            let size = size as f32;
-
+            // Per zoom because a composite size is sampled at the stops enclosing the *tile's*
+            // zoom interval, so a parent standing in for a finer tile reads a different pair --
+            // and per *distinct* zoom rather than per tile because building one parses the
+            // style's expression, which is not a thing to do once a tile per frame. A cover is
+            // one zoom in the ordinary case and two while a level loads.
+            //
             // `icon-size` is a multiplier and defaults to one, where `text-size` names a size in
             // pixels. The shader divides by `ONE_EM` for text and does not for an icon, so the
-            // two halves need their own value as well as their own flag.
-            let icon_size = tessella_style::property::layout_value(layer, "icon-size", zoom, None)
-                .and_then(|value| value.as_number())
-                .unwrap_or(1.0);
-            #[allow(clippy::cast_possible_truncation)]
-            let icon_size = icon_size as f32;
+            // two halves need their own binder as well as their own flag.
+            let mut bindings: BTreeMap<u8, [tessella_layout::size::SizeBinding; 2]> =
+                BTreeMap::new();
+            for tile in matrices(0).chain(matrices(1)) {
+                bindings.entry(tile.z).or_insert_with(|| {
+                    let z = f64::from(tile.z);
+                    [
+                        tessella_layout::size::SizeBinding::of(layer, "text-size", z, 16.0),
+                        tessella_layout::size::SizeBinding::of(layer, "icon-size", z, 1.0),
+                    ]
+                });
+            }
 
             // Both halves, in sub-layer order, the way a fill packs its triangles and its
             // outline. A symbol layer that draws sprites has two drawables per tile and each
             // needs its own matrix slot: packing only the glyphs left the icon drawable pointing
             // one slot past the end of the buffer, where it was counted `unplaced` and skipped,
             // and a highway shield drew its number over nothing.
+            let bindings = &bindings;
             let entry = |sub_layer_index: i32| {
                 let sub = sub_layer_index;
                 matrices(sub).filter_map(move |tile| {
@@ -3480,7 +3480,15 @@ fn write_layer_state(
                         // icon drew as a flat black square rather than as its sprite.
                         sheet_size,
                         // Sub-layer 1 is the sprite half -- see `bindings_for`.
-                        if sub == 1 { icon_size } else { size },
+                        bindings.get(&tile.z).map_or_else(
+                            || tessella_layout::size::EvaluatedSize {
+                                zoom_constant: true,
+                                feature_constant: true,
+                                size_t: 0.0,
+                                size: if sub == 1 { 1.0 } else { 16.0 },
+                            },
+                            |pair| pair[usize::from(sub == 1)].at_zoom(zoom),
+                        ),
                         sub != 1,
                         alignments,
                         placement,
