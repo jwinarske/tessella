@@ -20,7 +20,13 @@ export function evaluate(report, { budget = false } = {}) {
   const rows = [
     {
       property: "frame budget",
-      statement: `sum(tick_ms) + absorb_ms + draw_ms < ${BUDGET_MS} at p99, clock B`,
+      // Says which clock the number came from. The statement is about clock B, and run A's
+      // number -- fetches awaited, time told in fixed steps -- is not a measurement of it.
+      statement:
+        `sum(tick_ms) + absorb_ms + draw_ms < ${BUDGET_MS} at p99, clock B` +
+        (report.clock === "B"
+          ? ""
+          : ` (this is clock ${report.clock}'s number, not a measure of it)`),
       value: frameP99,
       pass: report.clock === "B" && frameP99 !== null ? frameP99 < BUDGET_MS : null,
       gating: budget && report.clock === "B",
