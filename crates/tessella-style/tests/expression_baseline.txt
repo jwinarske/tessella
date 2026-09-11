@@ -68,6 +68,7 @@ format/data-driven-font
 format/implicit
 format/implicit-coerce
 format/implicit-omit
+format/to-string
 geometry-type/basic
 get/basic
 get/from-literal
@@ -95,8 +96,10 @@ in/invalid-needle
 index-of/assert-array
 index-of/assert-string
 index-of/basic-array
+index-of/basic-string
 index-of/invalid-haystack
 index-of/invalid-needle
+index-of/with-from-index
 interpolate/cubic-bezier
 interpolate/cubic-bezier-3-args
 interpolate/cubic-bezier-5-args
@@ -275,9 +278,12 @@ to-color/basic
 to-color/color
 to-number/2-ary
 to-number/basic
+to-rgba/alpha
+to-rgba/basic
 to-rgba/zero
 to-string/2-ary
 to-string/basic
+to-string/color
 typecheck/array-invalid-item
 typecheck/array-item-subtyping
 typecheck/array-length-subtyping
