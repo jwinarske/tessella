@@ -52,7 +52,7 @@ const STYLE: &str = r##"{
     {"id": "banks", "type": "line", "source": "src", "source-layer": "water",
      "paint": {"line-color": "#88a", "line-width": 1.5}},
     {"id": "blocks", "type": "fill-extrusion", "source": "src", "source-layer": "water",
-     "paint": {"fill-extrusion-height": 20}}
+     "paint": {"fill-extrusion-height": 20, "fill-extrusion-opacity": 0.5}}
   ]
 }"##;
 
@@ -318,6 +318,10 @@ fn a_slab_holds_one_layer() {
 /// The two records keep separate ids and name the same bytes. Separate ids because
 /// `ViewRelease` is keyed by (geometry, view): sharing one would mean a single release dropped
 /// both drawables, with nothing in the stream to say it had.
+///
+/// The extrusion is the fixture's sharing case, which is why its opacity is there: a fill's
+/// outline used to be one too, and stopped being one when the plain-paint outline became a
+/// polyline with vertices of its own.
 #[test]
 fn a_bucket_is_encoded_once() {
     let (bindings, order) = frame_stream();

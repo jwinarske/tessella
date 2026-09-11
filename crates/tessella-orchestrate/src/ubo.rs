@@ -439,6 +439,102 @@ pub fn pack_tile_props_buffer(drawables: usize, stride: u32) -> Vec<u8> {
     alloc::vec![0u8; drawables * stride as usize]
 }
 
+/// Whether a fill's outline is drawn as a polyline rather than as line primitives.
+///
+/// mbgl's condition, from the `MLN_TRIANGULATE_FILL_OUTLINES` arm of `render_fill_layer.cpp`:
+/// the triangulated outline is used in the plain-fill branch -- so not for a patterned fill --
+/// and only when the outline is not data-driven:
+///
+/// ```text
+/// dataDrivenOutline = !outlineColor.isConstant() || !opacity.isConstant()
+/// ```
+///
+/// The reason for that last part is the shader: `FillOutlineTriangulatedShader` declares two
+/// attributes, the line family's position and data, and no paint of its own. Its colour comes
+/// from the layer's `outline_color` uniform, so a colour that varies per feature has nowhere to
+/// travel and the line-primitive path has to take it.
+///
+/// `has_pattern` is whether the layer resolved a pattern for this frame.
+#[must_use]
+pub fn fill_outline_triangulates(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    has_pattern: bool,
+) -> bool {
+    if has_pattern {
+        return false;
+    }
+    let constant = |name: &str| {
+        paint
+            .get(name)
+            .is_none_or(|property| !matches!(property.binding, Binding::Attribute { .. }))
+    };
+    constant("fill-outline-color") && constant("fill-opacity")
+}
+
+/// One triangulated fill-outline drawable's entry.
+///
+/// `FillOutlineTriangulatedDrawableUBO`: the matrix and the ratio, and nothing else. The ratio
+/// is the line family's -- screen pixels per tile unit, inverted -- because the outline is
+/// extruded sideways in tile units exactly as a line layer's quad is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FillOutlineTriangulatedEntry {
+    /// Tile-local to clip.
+    pub matrix: [f32; 16],
+    /// Screen pixels per tile unit, inverted.
+    pub ratio: f32,
+}
+
+impl FillOutlineTriangulatedEntry {
+    /// The entry for a tile under a view.
+    ///
+    /// # Errors
+    ///
+    /// [`camera::CameraError`] when the view has no area.
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_tile(
+        view: &ViewTransform,
+        projection: ProjectionMode,
+        z: u8,
+        x: u32,
+        y: u32,
+        wrap: i32,
+        layer_index: i32,
+        sub_layer_index: i32,
+    ) -> Result<Self, camera::CameraError> {
+        let matrix = tile_matrix(
+            view,
+            projection,
+            z,
+            x,
+            y,
+            wrap,
+            depth_offset(layer_index, sub_layer_index),
+        )?;
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(Self {
+            matrix: core::array::from_fn(|index| matrix[index] as f32),
+            ratio: line_ratio(z, view.zoom),
+        })
+    }
+}
+
+/// Packs a layer's triangulated outline blocks at the fill union's stride.
+#[must_use]
+pub fn pack_fill_outline_triangulated_buffer(
+    entries: &[FillOutlineTriangulatedEntry],
+    stride: u32,
+) -> Vec<u8> {
+    let stride = stride as usize;
+    let mut out = Vec::with_capacity(entries.len() * stride);
+    for entry in entries {
+        let start = out.len();
+        push_f32s(&mut out, &entry.matrix);
+        push_f32s(&mut out, &[entry.ratio]);
+        out.resize(start + stride, 0);
+    }
+    out
+}
+
 /// Packs `FillEvaluatedPropsUBO`.
 #[must_use]
 pub fn pack_fill_props(
