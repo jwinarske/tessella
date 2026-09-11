@@ -62,7 +62,7 @@ pub fn whole(texture: TextureId, size: Extent, format: TexturePixelType, pixels:
         },
         format: format as u8,
         rect_count: 0,
-        _pad: [0; 2],
+        _pad: [0; 6],
     };
     Upload {
         record,
@@ -107,7 +107,7 @@ pub fn regions(
         },
         format: format as u8,
         rect_count: dirty.len() as u8,
-        _pad: [0; 2],
+        _pad: [0; 6],
     };
     Ok(Upload {
         record,

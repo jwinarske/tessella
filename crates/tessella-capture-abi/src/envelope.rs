@@ -685,7 +685,12 @@ pub struct TextureUpdate {
     /// Number of meaningful entries in `rects`. Zero means a whole-texture upload.
     pub rect_count: u8,
     /// Padding. Must be zero.
-    pub _pad: [u8; 2],
+    ///
+    /// Six bytes, not two, for the reason [`ViewUse::_pad`] is five: the fields before it end at
+    /// 58 and the record is 64, so two left four of compiler tail padding that `as_bytes` copied
+    /// to the ring uninitialized. Two runs of the same producer then disagreed about the first
+    /// frame, by the bytes of its stack that went out with it.
+    pub _pad: [u8; 6],
 }
 
 /// One tile of a clip set: which tile, and the matrix that places its mask quad.
