@@ -29,7 +29,7 @@ use tessella_place::feature::{
     Extent, Padding, collision_box, collision_box_with, collision_circles,
 };
 use tessella_place::grid::GridIndex;
-use tessella_place::placement::{Candidate, Placed, Rules, Shape, place};
+use tessella_place::placement::{Alternative, Candidate, Placed, Rules, Shape, place};
 
 /// A label offered to placement this frame.
 #[derive(Debug, Clone)]
@@ -45,6 +45,14 @@ pub struct FrameLabel<'a> {
     /// rather than one because they are separate *drawables*: the two go through different
     /// shaders and cannot share a vertex buffer.
     pub icon: Option<LaidOut>,
+    /// Where else this label may go, from `text-variable-anchor`, and empty when it may not.
+    ///
+    /// A borrow, like the line: it is the layer's list, the same for every label in the bucket,
+    /// and up to nine entries copied per label per frame is the sort of cost that only looks
+    /// small.
+    pub variable: &'a [tessella_layout::symbol_layout::VariableAnchor],
+    /// `text-radial-offset` for this label, in shaping units, scaling `variable`'s directions.
+    pub radial: f32,
     /// The line it follows, in tile units, or empty when it is point-placed.
     ///
     /// A borrow rather than a copy: a street tile has thousands of these and the geometry is
@@ -185,6 +193,12 @@ pub struct ViewSymbols {
     /// orientation it was drawn in, and re-deciding while it fades would turn it on its side on
     /// the way. So a frame that places nothing for a label leaves its entry alone.
     orientations: alloc::collections::BTreeMap<u32, bool>,
+    /// Where a variable-anchored label was actually placed, against where it was built.
+    ///
+    /// Kept beside the orientations for the same reason they are: the frame writes its vertices
+    /// after every bucket has competed, so what placement decided has to survive until then. Only
+    /// labels that moved are in here.
+    shifts: alloc::collections::BTreeMap<u32, (f32, f32)>,
 }
 
 impl ViewSymbols {
@@ -319,8 +333,45 @@ impl ViewSymbols {
                 };
                 let text_padding = scaled(options.padding);
                 let icon_padding = scaled(options.icon_padding);
+                // Where `text-variable-anchor` puts this label, for each position it offers.
+                // mbgl's `calculateVariableLayoutOffset`:
+                //
+                //     -(align - 0.5) * size + offset * scale
+                //
+                // The size is the *padded* box -- `textBox.x2 - textBox.x1` there -- so a fully
+                // left- or right-anchored label sits one padding further out than the shaped text
+                // alone would put it. That term alone was two pixels across every label in the
+                // Protomaps POI layer when it was missing.
+                //
+                // Empty for a line-placed label: `text-variable-anchor` is a point-placement
+                // property, and mbgl reads it only where `symbol-placement` is `point`.
+                let shifts: Vec<(f32, f32)> = if label.line.is_empty() {
+                    let width = (extent.right - extent.left) * box_scale
+                        + text_padding.left
+                        + text_padding.right;
+                    let height = (extent.bottom - extent.top) * box_scale
+                        + text_padding.top
+                        + text_padding.bottom;
+                    let radial = label.radial * options.font_scale * label.perspective;
+                    label
+                        .variable
+                        .iter()
+                        .map(|entry| {
+                            (
+                                -(entry.alignment.0 - 0.5) * width + entry.offset[0] * radial,
+                                -(entry.alignment.1 - 0.5) * height + entry.offset[1] * radial,
+                            )
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                // The first is where the style asked for it, and is what `place` tries first.
+                let shift = shifts.first().copied().unwrap_or((0.0, 0.0));
+                let shifted = (anchor.0 + shift.0, anchor.1 + shift.1);
+
                 let text = if label.line.is_empty() {
-                    collision_box(extent, anchor, box_scale, text_padding, 0.0).map(Shape::Box)
+                    collision_box(extent, shifted, box_scale, text_padding, 0.0).map(Shape::Box)
                 } else if options.tile_units_per_pixel > 0.0 {
                     // Walked in *tile* units and projected afterwards, which is where mbgl walks
                     // it: `CollisionFeature` lays its boxes out once against the tile's own line
@@ -461,11 +512,30 @@ impl ViewSymbols {
                     }
                 });
 
+                // And the rest, each a box at the same extent moved to its own position. The
+                // first is skipped: `text` above is that one, and `place` tries it before any of
+                // these.
+                let alternatives = shifts
+                    .iter()
+                    .skip(1)
+                    .filter_map(|&shift| {
+                        let moved = (anchor.0 + shift.0, anchor.1 + shift.1);
+                        collision_box(extent, moved, box_scale, text_padding, 0.0).map(|shape| {
+                            Alternative {
+                                shape: Shape::Box(shape),
+                                shift,
+                            }
+                        })
+                    })
+                    .collect();
+
                 Candidate {
                     cross_tile_id: label.cross_tile_id,
                     text,
                     vertical_text,
                     icon,
+                    alternatives,
+                    shift,
                 }
             })
             .collect();
@@ -476,6 +546,14 @@ impl ViewSymbols {
             if entry.text {
                 self.orientations
                     .insert(entry.cross_tile_id, entry.vertical);
+                // Inserted even when it is zero, and removed when it is: a label that moved
+                // last frame and did not this one would otherwise keep the old shift, which
+                // draws it beside where it was placed and blinks back as soon as the map moves.
+                if entry.shift == (0.0, 0.0) {
+                    self.shifts.remove(&entry.cross_tile_id);
+                } else {
+                    self.shifts.insert(entry.cross_tile_id, entry.shift);
+                }
             }
         }
         // The fades are *not* stepped here, and that is the whole of a defect worth writing
@@ -764,12 +842,20 @@ impl ViewSymbols {
     {
         for label in labels {
             let (x, y) = project(label.laid_out.anchor);
+            // And where placement moved it to, if it moved it. The shift is screen pixels and
+            // this position is already projected, which is what makes adding it the whole of the
+            // variable anchor's effect on what is drawn.
+            let (dx, dy) = self
+                .shifts
+                .get(&label.cross_tile_id)
+                .copied()
+                .unwrap_or((0.0, 0.0));
             let range = label.laid_out.vertices.clone();
             if range.end > buffers.dynamic.len() {
                 continue;
             }
             for slot in &mut buffers.dynamic[range] {
-                *slot = [x, y, 0.0];
+                *slot = [x + dx, y + dy, 0.0];
             }
         }
     }

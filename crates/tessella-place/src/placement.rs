@@ -49,7 +49,7 @@ pub struct Rules {
 }
 
 /// One symbol offered for placement.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Candidate {
     /// Its identity, from the cross-tile index — what the fade will be keyed by.
     pub cross_tile_id: u32,
@@ -64,6 +64,31 @@ pub struct Candidate {
     pub vertical_text: Option<Shape>,
     /// The shape the icon reserves, if it has one.
     pub icon: Option<Shape>,
+    /// Where else the text may go, and what it must be shifted by to go there.
+    ///
+    /// `text-variable-anchor` offers a list of positions, and mbgl takes the first that fits
+    /// rather than the first that was written. Empty for a label with one place to be, which is
+    /// most of them; where it is not, `text` is the first entry's shape and these are the rest,
+    /// in the order the style wrote them.
+    ///
+    /// Every shift here is in screen pixels from the label's own anchor, so a caller that draws
+    /// it has only to add the winning one to the projected position.
+    pub alternatives: Vec<Alternative>,
+    /// How far from its anchor [`Self::text`] was built, in screen pixels.
+    ///
+    /// Zero for a label with one place to be. For a variable-anchored one it is the first
+    /// anchor's shift, because that is the position the style asked for first and the one
+    /// `place` tries before any alternative.
+    pub shift: (f32, f32),
+}
+
+/// One of the places a variable-anchored label may go.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Alternative {
+    /// What it reserves there.
+    pub shape: Shape,
+    /// How far from the anchor it sits, in screen pixels.
+    pub shift: (f32, f32),
 }
 
 /// What a symbol reserves: one box, or a run of circles along a line.
@@ -225,7 +250,7 @@ impl Shape {
 }
 
 /// What placement decided about one symbol.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Placed {
     /// Its identity.
     pub cross_tile_id: u32,
@@ -238,6 +263,13 @@ pub struct Placed {
     /// mbgl's `placedOrientation`. Always false when there is only one shaping, which is every
     /// label the style did not ask to set vertically.
     pub vertical: bool,
+    /// How far from where it was built this label was actually placed, in screen pixels.
+    ///
+    /// Zero unless a `text-variable-anchor` alternative won it. Carried out of placement because
+    /// the decision and the drawing are in different places: the vertices are written after the
+    /// whole frame has competed, and recomputing which anchor won would be a second derivation
+    /// of something already decided.
+    pub shift: (f32, f32),
 }
 
 impl Placed {
@@ -260,14 +292,33 @@ pub fn place(candidates: &[Candidate], rules: &Rules, grid: &mut GridIndex<u32>)
 
     for candidate in candidates {
         // A half with no box is nothing to draw, and nothing to test.
+        let fits = |shape: &Shape, grid: &GridIndex<u32>| {
+            shape.placeable()
+                && shape.in_grid(grid)
+                && (rules.text_allow_overlap || !shape.collides(grid))
+        };
         let mut place_text = match &candidate.text {
             None => false,
-            Some(shape) => {
-                shape.placeable()
-                    && shape.in_grid(grid)
-                    && (rules.text_allow_overlap || !shape.collides(grid))
-            }
+            Some(shape) => fits(shape, grid),
         };
+        // And where it did not, the other places the style offered. mbgl walks
+        // `variableTextAnchors` and keeps the first that fits; the one the label was built
+        // around is the first of them, which is why this runs only after that one failed.
+        //
+        // The shift is carried out rather than recomputed: what placement decided has to reach
+        // the vertices, and a second derivation of it is a second chance to disagree.
+        let mut shift = candidate.shift;
+        let mut chosen: Option<&Shape> = candidate.text.as_ref();
+        if !place_text {
+            for alternative in &candidate.alternatives {
+                if fits(&alternative.shape, grid) {
+                    place_text = true;
+                    shift = alternative.shift;
+                    chosen = Some(&alternative.shape);
+                    break;
+                }
+            }
+        }
         // Horizontal first, and vertical only if it did not fit. mbgl's order, and it is a
         // preference rather than a tie-break: a label that fits both ways is drawn across.
         let mut vertical = false;
@@ -307,7 +358,7 @@ pub fn place(candidates: &[Candidate], rules: &Rules, grid: &mut GridIndex<u32>)
         let drawn = if vertical {
             candidate.vertical_text.as_ref()
         } else {
-            candidate.text.as_ref()
+            chosen
         };
         if place_text
             && !rules.text_ignore_placement
@@ -327,6 +378,14 @@ pub fn place(candidates: &[Candidate], rules: &Rules, grid: &mut GridIndex<u32>)
             text: place_text,
             icon: place_icon,
             vertical: place_text && vertical,
+            // The vertical shaping is its own box at its own anchor and takes no variable
+            // offset, which is mbgl's arrangement too; and a label that was not drawn needs no
+            // shift at all.
+            shift: if place_text && !vertical {
+                shift
+            } else {
+                (0.0, 0.0)
+            },
         });
     }
 

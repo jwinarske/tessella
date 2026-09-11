@@ -319,6 +319,11 @@ pub struct SymbolOptions {
     /// not use the height at all, and nothing compared a multi-line label through the production
     /// path until a section grew a line and made the other branch run.
     pub line_height_ems: f32,
+    /// `text-radial-offset`, in shaping units, and zero where there is none.
+    ///
+    /// A *distance*, not a vector: which way it points is the anchor's to say, and which anchor
+    /// that is can change per frame. See `SymbolLayout::variable_anchors`.
+    pub radial_offset: f32,
     /// Where the label sits relative to its anchor.
     pub anchor: tessella_glyph::shaping::Anchor,
     /// `text-offset`, converted from the spec's ems to the shaping's units.
@@ -352,6 +357,7 @@ impl Default for SymbolOptions {
             line_height_ems: 1.2,
             anchor: tessella_glyph::shaping::Anchor::Center,
             offset: [0.0, 0.0],
+            radial_offset: 0.0,
             writing_mode: tessella_glyph::shaping::WritingMode::Horizontal,
             allow_vertical_placement: false,
             justify: tessella_glyph::shaping::Justify::Center,

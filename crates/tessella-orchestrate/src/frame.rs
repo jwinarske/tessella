@@ -1866,6 +1866,7 @@ fn place_symbols(
             &buffers,
             icons.as_ref(),
             &ids,
+            layout,
             perspective_with(&plane, camera_to_center),
         );
         // Where each glyph lands along its road. Written before placement because the answer is
@@ -1934,6 +1935,20 @@ fn place_symbols(
             &options,
             &mut grid,
         );
+
+        // A variable-anchored point label is positioned here rather than by the shader, because
+        // which anchor it took was decided against the collision index a line above and the
+        // dynamic buffer is the only channel that decision has. `SymbolDrawableEntry::for_tile`
+        // gives such a layer an identity label plane to match, the way it already does for a
+        // label walked along a line.
+        //
+        // Unpadded, where placement competed padded: the padding exists so a label off the left
+        // edge keeps a real position in the grid, and it is not part of the space the shader
+        // offsets in. `write_line_positions` draws the same distinction one branch up.
+        if !layout.variable_anchors.is_empty() && !layout.placement.along_line() {
+            held.symbols
+                .write_positions(&labels, project_with(&plane, 0.0), &mut buffers);
+        }
         drop(held);
 
         keys.push((tile_index, bucket_index));
@@ -1986,7 +2001,7 @@ fn place_symbols(
         let Content::Symbol(layout) = &bucket.content else {
             continue;
         };
-        let labels = frame_labels(laid, &buffers, icons.as_ref(), &ids, |_| 1.0);
+        let labels = frame_labels(laid, &buffers, icons.as_ref(), &ids, layout, |_| 1.0);
         // A label placement never offered has no fade entry, which reads as hidden -- so the
         // ones whose road ran out stay hidden without being special-cased here.
         held.symbols.write_opacity(&labels, &mut buffers);
@@ -2068,6 +2083,9 @@ fn place_symbols(
                         .map(|label| crate::symbols::FrameLabel {
                             cross_tile_id: label.cross_tile_id,
                             laid_out: icon.clone(),
+                            // Opacity only; an icon does not take the text's variable anchor.
+                            variable: &[],
+                            radial: 0.0,
                             icon: None,
                             line: &[],
                             // Opacity only; this pairing never reaches placement.
@@ -2338,6 +2356,7 @@ fn frame_labels<'a>(
     buffers: &SymbolBuffers,
     icons: Option<&(SymbolBuffers, Vec<tessella_layout::symbol_bucket::LaidOut>)>,
     ids: &[u32],
+    layout: &'a tessella_layout::symbol_layout::SymbolLayout,
     perspective: impl Fn((f32, f32)) -> f32,
 ) -> Vec<crate::symbols::FrameLabel<'a>> {
     laid.iter()
@@ -2348,6 +2367,13 @@ fn frame_labels<'a>(
             // unplaced label rather than as another label's identity.
             cross_tile_id: ids.get(index).copied().unwrap_or(0),
             laid_out: instance.clone(),
+            // The layer's, and this label's own distance along them. Both are needed to say where
+            // an alternative would put the box, and neither is knowable from the instance alone.
+            variable: layout.variable_anchors.as_slice(),
+            radial: layout
+                .pending
+                .get(instance.pending)
+                .map_or(0.0, |pending| pending.symbol.radial_offset),
             // Its icon's box, so the pair is decided together: `text-optional` and
             // `icon-optional` are about exactly this, and a shield that cannot have its number
             // should not keep its shield.
@@ -3279,6 +3305,17 @@ fn write_layer_state(
             let zoom = view.zoom;
             let placement = Placement::of(layer, zoom);
             let alignments = Alignments::of(layer, zoom, placement, "text");
+            // Whether this layer's labels are positioned by the frame rather than by the shader.
+            // See the `plane` fork in `SymbolDrawableEntry::for_tile`.
+            let variable_anchors = !layer
+                .layout
+                .get("text-variable-anchor")
+                .is_none_or(|value| {
+                    value
+                        .as_literal()
+                        .and_then(tessella_style::Value::as_array)
+                        .is_none()
+                });
             // The layer-wide `text-size`, which is what the shader scales every glyph's corners
             // by. A data-driven one is in the vertex instead and this is then the fallback the
             // constant path never reads.
@@ -3333,6 +3370,7 @@ fn write_layer_state(
                         alignments,
                         placement,
                         projection,
+                        variable_anchors,
                     )
                     .ok()
                 })

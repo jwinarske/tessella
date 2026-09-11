@@ -81,6 +81,8 @@ fn lay_out(entries: &[(&str, (f32, f32))]) -> (SymbolBuffers, Vec<FrameLabel<'st
             laid_out,
             icon: None,
             line: &[],
+            variable: &[],
+            radial: 0.0,
         })
         .collect();
     (buffers, frame)
@@ -428,6 +430,8 @@ fn a_line_label_reserves_its_road_and_not_its_box() {
                 laid_out: laid[0].clone(),
                 icon: None,
                 line,
+                variable: &[],
+                radial: 0.0,
             },
             FrameLabel {
                 // Flat: the pitched case is measured through the probe.
@@ -437,6 +441,8 @@ fn a_line_label_reserves_its_road_and_not_its_box() {
                 laid_out: beside[0].clone(),
                 icon: None,
                 line: &[],
+                variable: &[],
+                radial: 0.0,
             },
         ];
         let mut view = ViewSymbols::new();
@@ -539,6 +545,8 @@ mod two_halves {
                 laid_out,
                 icon: Some(icon),
                 line: &[],
+                variable: &[],
+                radial: 0.0,
             })
             .collect();
 
@@ -662,6 +670,8 @@ mod two_halves {
                     laid_out,
                     icon: Some(icon),
                     line: &[],
+                    variable: &[],
+                    radial: 0.0,
                 })
                 .collect();
             let mut view = ViewSymbols::new();
@@ -721,6 +731,8 @@ fn a_label_with_no_room_for_a_run_is_offered_but_not_placed() {
             laid_out: label.laid_out.clone(),
             icon: None,
             line: &stub,
+            variable: &[],
+            radial: 0.0,
         })
         .collect();
 
