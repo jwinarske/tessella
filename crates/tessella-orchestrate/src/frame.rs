@@ -3370,7 +3370,18 @@ fn write_layer_state(
                         alignments,
                         placement,
                         projection,
-                        variable_anchors,
+                        // The text half only. A variable anchor moves the *label* beside its
+                        // point and leaves the icon on it -- that is what the property is for --
+                        // so the icon keeps the label plane the shader projects through and the
+                        // tile-unit anchor `lay_out` left in its dynamic buffer.
+                        //
+                        // Both halves took it at first, and only the text half has its positions
+                        // written per frame: the icon was handed an identity plane over
+                        // coordinates that were still in tile units, which put it thousands of
+                        // pixels away. It reads as the icon simply being absent, and the layer's
+                        // gross-pixel count barely moves, because what is missing is a handful of
+                        // sprites against a screen of labels.
+                        variable_anchors && sub != 1,
                     )
                     .ok()
                 })
