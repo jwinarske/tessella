@@ -15,6 +15,7 @@
 //! was never sent, and the tile is missing until the cover changes again.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::ViewId;
@@ -39,7 +40,7 @@ struct Scene {
     style: Style,
     view: ViewTransform,
     tiles: Vec<cover::TileCoord>,
-    buckets: Vec<(TileId, Vec<LayerBucket>)>,
+    buckets: Vec<(TileId, Arc<Vec<LayerBucket>>)>,
 }
 
 fn scene(longitude: f64) -> Scene {
@@ -61,7 +62,7 @@ fn scene(longitude: f64) -> Scene {
         let mut built = build_mvt_tile(&style, "s", id, &decoded).expect("builds");
         built.extend(build_sourceless(&style, id).expect("background"));
         built.sort_by_key(|bucket| bucket.layer_index);
-        buckets.push((id, built));
+        buckets.push((id, Arc::new(built)));
     }
     Scene {
         style,

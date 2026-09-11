@@ -627,7 +627,13 @@ impl Map {
         // arrived is left out rather than waited for — a map that blocked on the slowest tile
         // would stall the whole frame for ground nobody has looked at yet. What fills the hole in
         // the meantime is the substitution above, not a wait.
-        let mut buckets: Vec<(TileId, Vec<LayerBucket>)> = Vec::with_capacity(self.drawn.len());
+        //
+        // Shared, not copied. The store's list is an `Arc` so that nothing drawing a tile needs a
+        // copy of it, and a copy per drawn tile per emitted frame was a seventh of every tick on
+        // four views sweeping a real tile -- every vertex, index and binder byte, for a frame that
+        // only reads them.
+        let mut buckets: Vec<(TileId, Arc<Vec<LayerBucket>>)> =
+            Vec::with_capacity(self.drawn.len());
         // The cover entry each bucket set is drawn for, kept alongside because the frame reads the
         // two by index. Built here rather than reusing `self.drawn` because above a source's
         // maxzoom they are not the same list -- several cover entries share one tile, and the
@@ -661,14 +667,12 @@ impl Map {
             if !served.insert((id, entry.wrap)) {
                 continue;
             }
-            let mut built: Vec<LayerBucket> = Vec::new();
-            if let Some((_, ready)) = &holding {
-                built.extend(ready.iter().cloned());
-            }
-            if !built.is_empty() {
-                built.sort_by_key(|bucket| bucket.layer_index);
-                buckets.push((id, built));
-                origins.push(holding.as_ref().map(|(_, ready)| Arc::clone(ready)));
+            let Some((_, ready)) = &holding else {
+                continue;
+            };
+            if !ready.is_empty() {
+                buckets.push((id, in_layer_order(ready)));
+                origins.push(Some(Arc::clone(ready)));
                 placed.push(TileCoord {
                     z: id.z,
                     x: id.x,
@@ -712,18 +716,26 @@ impl Map {
                 // style the frame carried 128 water drawables where it should carry 20, and 256
                 // background where it should carry 40. What that looks like is the imagery
                 // washing out everything under it, which is how it was first described.
-                let mut built: Vec<LayerBucket> = ready
-                    .iter()
-                    .filter(|bucket| matches!(bucket.content, Content::Raster(_)))
-                    .cloned()
-                    .collect();
+                let raster = |bucket: &LayerBucket| matches!(bucket.content, Content::Raster(_));
+                // A tile of the raster source alone -- the usual case -- is shared whole, and
+                // only a tile that mixes in something else is filtered into a list of its own.
+                let built = if ready.iter().all(raster) {
+                    in_layer_order(&ready)
+                } else {
+                    let mut kept: Vec<LayerBucket> = ready
+                        .iter()
+                        .filter(|bucket| raster(bucket))
+                        .cloned()
+                        .collect();
+                    kept.sort_by_key(|bucket| bucket.layer_index);
+                    Arc::new(kept)
+                };
                 if built.is_empty() {
                     continue;
                 }
-                built.sort_by_key(|bucket| bucket.layer_index);
                 buckets.push((id, built));
-                // Filtered to the raster buckets, so it is not the store's list -- and a raster
-                // layer has no symbols to lay out.
+                // No identity to key on: filtered, it is not the store's list, and whole, it has no
+                // symbols -- a raster layer has none to lay out.
                 origins.push(None);
                 placed.push(TileCoord {
                     z: id.z,
@@ -763,7 +775,7 @@ impl Map {
                 .filter(|bucket| matches!(bucket.content, Content::Background))
                 .collect();
             if !built.is_empty() {
-                buckets.push((anchor, built));
+                buckets.push((anchor, Arc::new(built)));
                 origins.push(None);
                 placed.push(TileCoord {
                     z: anchor.z,
@@ -793,9 +805,11 @@ impl Map {
                 // is stored empty. Taking that as the answer is a frame with no drawables at
                 // all -- and the consumer rebuilds its scene from the frame's order, so it is a
                 // screen that goes black. On the quad's zoom sweep, 777 of 930 emitted frames.
-                let built: Vec<LayerBucket> = match tiles.sourceless(cover) {
-                    Some(held) if !held.is_empty() => held.iter().cloned().collect(),
-                    _ => crate::tile::build_sourceless(&self.style, cover).unwrap_or_default(),
+                let built = match tiles.sourceless(cover) {
+                    Some(held) if !held.is_empty() => held,
+                    _ => Arc::new(
+                        crate::tile::build_sourceless(&self.style, cover).unwrap_or_default(),
+                    ),
                 };
                 if built.is_empty() {
                     continue;
@@ -850,6 +864,22 @@ impl Map {
             &mut self.session,
         )?;
         Ok(Tick::Emitted(emitted))
+    }
+}
+
+/// A tile's buckets in style order, as the frame reads them: the store's own list where it is
+/// already in that order, and a sorted copy only where it is not.
+///
+/// A build emits its buckets layer by layer, so the copy is the exception; the check is what lets
+/// the frame rely on the order without every tile paying for the guarantee. Sorted stably either
+/// way, so buckets of one layer keep the order they were built in.
+fn in_layer_order(ready: &Arc<Vec<LayerBucket>>) -> Arc<Vec<LayerBucket>> {
+    if ready.is_sorted_by_key(|bucket| bucket.layer_index) {
+        Arc::clone(ready)
+    } else {
+        let mut sorted = Vec::clone(ready);
+        sorted.sort_by_key(|bucket| bucket.layer_index);
+        Arc::new(sorted)
     }
 }
 

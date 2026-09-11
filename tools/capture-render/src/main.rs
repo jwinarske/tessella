@@ -314,7 +314,7 @@ fn run() -> Result<String, String> {
                 eprintln!("    built {} -> {kind}", bucket.layer_id);
             }
         }
-        buckets.push((id, built));
+        buckets.push((id, std::sync::Arc::new(built)));
     }
 
     // Shaping is a two-phase thing and this is the round trip between the phases: the buckets
@@ -325,7 +325,7 @@ fn run() -> Result<String, String> {
         let mut store = Fonts::new("glyphs://{fontstack}/{range}.pbf");
         let files = glyphs::Directory::new(directory);
         for (_, tile_buckets) in &buckets {
-            for bucket in tile_buckets {
+            for bucket in tile_buckets.iter() {
                 if let Some(layout) = bucket.content.as_symbol() {
                     store
                         .fetch(&layout.dependencies(), &files)

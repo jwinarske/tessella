@@ -23,6 +23,7 @@
 //! count, which no assertion on pixels or on values would catch.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use tessella_capture_abi::EnvelopeKind;
 use tessella_capture_abi::ProjectionMode;
@@ -103,7 +104,7 @@ fn frame_stream() -> (BTreeMap<u64, Binding>, Vec<OrderEntry>) {
         let mut built = build_mvt_tile(&style, "src", id, &decoded).expect("the tile builds");
         built.extend(build_sourceless(&style, id).expect("the background builds"));
         built.sort_by_key(|bucket| bucket.layer_index);
-        buckets.push((id, built));
+        buckets.push((id, Arc::new(built)));
     }
 
     let mut ring = Ring::new(1 << 24);

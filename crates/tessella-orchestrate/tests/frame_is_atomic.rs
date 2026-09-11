@@ -19,6 +19,7 @@
 //! Recovery is to try again next frame, which only works if the failed attempt left nothing
 //! behind. R4 calls this backpressure under stall.
 
+use std::sync::Arc;
 use tessella_capture_abi::EnvelopeKind;
 use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::ViewId;
@@ -51,7 +52,7 @@ type Scene = (
     Style,
     ViewTransform,
     Vec<cover::TileCoord>,
-    Vec<(TileId, Vec<LayerBucket>)>,
+    Vec<(TileId, Arc<Vec<LayerBucket>>)>,
 );
 
 fn scene() -> Scene {
@@ -73,7 +74,7 @@ fn scene() -> Scene {
         let mut built = build_mvt_tile(&style, "src", id, &decoded).expect("the tile builds");
         built.extend(build_sourceless(&style, id).expect("the background builds"));
         built.sort_by_key(|bucket| bucket.layer_index);
-        buckets.push((id, built));
+        buckets.push((id, Arc::new(built)));
     }
     (style, view, tiles, buckets)
 }

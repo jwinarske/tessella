@@ -154,7 +154,10 @@ pub struct Frame<'a> {
     /// The cover, for the clip masks.
     pub tiles: &'a [TileCoord],
     /// Built buckets, per tile, in cover order.
-    pub buckets: &'a [(TileId, Vec<LayerBucket>)],
+    ///
+    /// Shared with whoever holds them -- the store, for a map -- rather than owned, because the
+    /// frame only reads them and a copy is every vertex the tile has. Each list is in style order.
+    pub buckets: &'a [(TileId, alloc::sync::Arc<Vec<LayerBucket>>)],
     /// The store's bucket list each entry of `buckets` was taken from, for the symbol layout
     /// cache to key on. `None` where the frame built the list itself and there is no identity to
     /// key on -- the sourceless background, which carries no symbols.
@@ -711,7 +714,7 @@ fn emit_group(
         // atlas does: a texture reference the consumer has not been given samples whatever was
         // last at that slot.
         let raster_texture = raster_texture_id(tile.z, tile.x, tile.y, wrap);
-        for bucket in tile_buckets {
+        for bucket in tile_buckets.iter() {
             if let Content::Raster(raster) = &bucket.content
                 && let Some(upload) = texture::raster_tile(raster_texture, &raster.image)
             {
@@ -1184,10 +1187,12 @@ fn emit_group(
 /// A stack rather than a font: `text-font` is a list, and the glyphs a label draws come from the
 /// first entry that has each codepoint. The atlas is keyed by the whole stack for that reason,
 /// so asking for one font's atlas would miss every label that fell through to the second.
-fn symbol_stacks(buckets: &[(TileId, Vec<LayerBucket>)]) -> Vec<Vec<alloc::string::String>> {
+fn symbol_stacks(
+    buckets: &[(TileId, alloc::sync::Arc<Vec<LayerBucket>>)],
+) -> Vec<Vec<alloc::string::String>> {
     let mut stacks: Vec<Vec<alloc::string::String>> = Vec::new();
     for (_, tile_buckets) in buckets {
-        for bucket in tile_buckets {
+        for bucket in tile_buckets.iter() {
             let Content::Symbol(layout) = &bucket.content else {
                 continue;
             };
@@ -1616,7 +1621,7 @@ fn placement_rules(
 fn place_symbols(
     order: &[tessella_capture_abi::envelope::OrderEntry],
     source: &BTreeMap<u64, (usize, usize, tessella_capture_abi::envelope::TextureId)>,
-    buckets: &[(TileId, Vec<LayerBucket>)],
+    buckets: &[(TileId, alloc::sync::Arc<Vec<LayerBucket>>)],
     origins: &[Option<alloc::sync::Arc<Vec<LayerBucket>>>],
     layouts: &mut SymbolCache,
     tiles: &[TileCoord],

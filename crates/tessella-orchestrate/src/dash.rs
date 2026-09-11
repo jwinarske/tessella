@@ -61,7 +61,7 @@ impl Dashes {
     #[must_use]
     pub fn for_buckets(
         style: &Style,
-        buckets: &[(crate::tile::TileId, Vec<LayerBucket>)],
+        buckets: &[(crate::tile::TileId, alloc::sync::Arc<Vec<LayerBucket>>)],
         zoom: f64,
         history: ZoomHistory,
         base: u64,
@@ -76,7 +76,7 @@ impl Dashes {
 
         let mut by_layer: BTreeMap<usize, Dash> = BTreeMap::new();
         for (_, layer_buckets) in buckets {
-            for bucket in layer_buckets {
+            for bucket in layer_buckets.iter() {
                 if !matches!(bucket.content, Content::Line(_))
                     || by_layer.contains_key(&bucket.layer_index)
                 {

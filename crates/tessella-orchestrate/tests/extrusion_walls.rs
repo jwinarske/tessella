@@ -153,6 +153,7 @@ fn a_patterned_extrusion_takes_the_instanced_pattern_shader() {
 /// one geometry and silently wrong the moment it had two.
 mod through_a_frame {
     use std::collections::BTreeMap;
+    use std::sync::Arc;
     use tessella_capture_abi::ProjectionMode;
 
     use tessella_capture_abi::EnvelopeKind;
@@ -196,7 +197,7 @@ mod through_a_frame {
         for tile in &tiles {
             let id = TileId::new(tile.z, tile.x, tile.y);
             let built = build_mvt_tile(&style, "src", id, &decoded).expect("the tile builds");
-            buckets.push((id, built));
+            buckets.push((id, Arc::new(built)));
         }
 
         let mut ring = Ring::new(1 << 24);
