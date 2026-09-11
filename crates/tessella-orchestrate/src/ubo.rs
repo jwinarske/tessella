@@ -1287,6 +1287,7 @@ impl SymbolDrawableEntry {
         alignments: Alignments,
         placement: Placement,
         surface: ProjectionMode,
+        variable: bool,
     ) -> Result<Self, camera::CameraError> {
         // The matrices here are the plane's under either projection, and a globe uses only some
         // of them: the consumer bends the anchor itself from `globe_ubo`, so `matrix` and the
@@ -1314,10 +1315,16 @@ impl SymbolDrawableEntry {
         let rotate_with_map = effective_rotation(alignments.rotation, surface) == Alignment::Map;
         let along_line = alignments.along_line(placement);
 
-        // The identity for a label walked along a line. The projection does the walk itself,
-        // point by point along the *projected* road, so a plane here would bend the label once
-        // before the walk bent it again.
-        let plane = if along_line {
+        // The identity for a label the producer has already projected. Two cases reach it, and
+        // they are the same case: the frame wrote label-plane coordinates into the dynamic
+        // buffer, so a plane here would project them a second time.
+        //
+        // A label walked along a line is the first -- the projection *is* the walk, point by
+        // point along the projected road. A variable-anchored one is the second: which of the
+        // anchors it took is decided against the collision index, in screen pixels, and the only
+        // place that decision can reach the vertices is the position the frame writes. mbgl
+        // splits the same way on `hasVariablePlacement`.
+        let plane = if along_line || variable {
             camera::identity()
         } else if pitch_with_map {
             camera::label_plane_matrix_on_map(z, view.zoom, view.bearing, rotate_with_map)

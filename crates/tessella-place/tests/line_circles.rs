@@ -400,6 +400,7 @@ fn a_label_outside_the_grid_is_not_placed() {
         text: boxed(100.0),
         vertical_text: None,
         icon: None,
+        ..Default::default()
     };
     let outside = Candidate {
         cross_tile_id: 2,
@@ -407,6 +408,7 @@ fn a_label_outside_the_grid_is_not_placed() {
         text: boxed(900.0),
         vertical_text: None,
         icon: None,
+        ..Default::default()
     };
 
     let mut grid = grid_of();

@@ -44,6 +44,8 @@ fn layout(features: &[(&str, &[(i32, i32)])]) -> SymbolLayout {
 
     SymbolLayout {
         icons_need_linear: false,
+        // Merging is about geometry; these features have one place to be.
+        variable_anchors: Vec::new(),
         pending,
         symbol: SymbolOptions::default(),
         line: LineOptions::default(),

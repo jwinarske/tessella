@@ -301,6 +301,7 @@ fn a_tile_of_labels_places_and_settles() {
             text: Some(Shape::Box(*placed)),
             vertical_text: None,
             icon: None,
+            ..Default::default()
         })
         .collect();
     // A grid the size of the tile on screen, in cells of roughly a label's height.

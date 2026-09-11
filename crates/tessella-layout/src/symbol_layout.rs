@@ -276,70 +276,51 @@ fn justify_of(
     }
 }
 
-/// The anchor a label is laid out around, and the offset that goes with it.
+/// Every position `text-variable-anchor` offers, reduced for placement.
 ///
-/// # Variable anchors, without the retry
+/// # The anchor is not the layout's any more
 ///
-/// `text-variable-anchor` is a *list*: mbgl tries each in order against the collision index and
-/// keeps the first that fits. What it does when nothing collides -- which is most labels on most
-/// maps -- is take the first, and that is what this does. The retry belongs in placement, where
-/// the index is; until it is there, a label that would have moved to the second anchor keeps the
-/// first and competes from there.
+/// A label with variable anchors has no one place to be shaped around: which anchor it takes is
+/// decided per frame, against the collision index, and can change as the map moves. So the
+/// shaping is centred and *both* shifts are applied at placement -- the radial offset, and the
+/// `-(align - 0.5) * size` that moves the box off the point.
 ///
-/// # The anchor does the box, the offset does the rest
+/// That is mbgl's arrangement too, and for the same reason: it shapes around `Center` and
+/// `calculateVariableLayoutOffset` does the rest. This used to fold the first anchor into the
+/// shaping, which is exact for a label that never moves and cannot express one that does.
 ///
-/// mbgl shapes a variable-anchored label around `Center` so that one shaping serves whichever
-/// anchor placement settles on, and then shifts it twice: by the radial offset, and by
-/// `calculateVariableLayoutOffset`, which is `-(align - 0.5) * size` over the shaped box. That
-/// second shift is exactly what this shaper's own anchor alignment already applies, so shaping
-/// around the anchor and adding the offset is the same picture arrived at in one step instead of
-/// two. It costs the ability to reuse one shaping across anchors, which is the retry's concern
-/// and is not here yet.
-///
-/// Shaping around `Center` and adding only the radial offset is what this looked like first, and
-/// it left every label short of where the oracle puts it by half its own width -- a rigid error
-/// on a short name and a large one on a long one, which is what named it.
-fn variable_anchor(
+/// `text-radial-offset` is data-driven and the anchor list is not, so the distance is read per
+/// label in [`text_options`] and only the directions are here -- each one a unit-distance offset
+/// the caller scales.
+fn variable_anchors(layer: &Layer, zoom: f64) -> Vec<VariableAnchor> {
+    let Some(value) = layout_value(layer, "text-variable-anchor", zoom, None) else {
+        return Vec::new();
+    };
+    let Some(list) = value.as_array() else {
+        return Vec::new();
+    };
+    list.iter()
+        .map(|entry| {
+            let anchor = anchor_of(Some(entry));
+            VariableAnchor {
+                alignment: anchor.alignment(),
+                // At unit distance. The label's own `text-radial-offset` scales it, and a radial
+                // offset is a distance rather than a vector -- which is the whole reason the two
+                // are separable.
+                offset: tessella_glyph::shaping::radial_offset(anchor, 1.0),
+            }
+        })
+        .collect()
+}
+
+/// The first anchor `text-variable-anchor` offers, for the justification `auto` asks it for.
+fn first_variable_anchor(
     layer: &Layer,
     zoom: f64,
     feature: Option<&dyn Feature>,
-) -> Option<(tessella_glyph::shaping::Anchor, [f32; 2])> {
+) -> Option<tessella_glyph::shaping::Anchor> {
     let anchors = layout_value(layer, "text-variable-anchor", zoom, feature)?;
-    let first = anchors.as_array()?.first()?;
-    let anchor = anchor_of(Some(first));
-    #[allow(clippy::cast_possible_truncation)]
-    let radial = layout_value(layer, "text-radial-offset", zoom, feature)
-        .as_ref()
-        .and_then(Value::as_number)
-        .unwrap_or(0.0) as f32;
-    let mut offset = tessella_glyph::shaping::radial_offset(anchor, radial * ONE_EM);
-
-    // And the padding, because mbgl centres the *collision box* and this shaper centres the
-    // shaped text. `calculateVariableLayoutOffset` shifts by `-(align - 0.5) * width` where the
-    // width is `textBox.x2 - textBox.x1`, which is the box `text-padding` widened -- so a fully
-    // left- or right-anchored label sits one padding further out there than here. Measured before
-    // it was written down: every label in the Protomaps POI layer was two pixels adrift at the
-    // default padding of two, uniformly, with nothing else between the two pictures.
-    //
-    // Converted into shaping units, which the size scales back to pixels downstream, because a
-    // padding is screen pixels and an offset here is not.
-    #[allow(clippy::cast_possible_truncation)]
-    let padding = layout_value(layer, "text-padding", zoom, feature)
-        .as_ref()
-        .and_then(Value::as_number)
-        .unwrap_or(2.0) as f32;
-    #[allow(clippy::cast_possible_truncation)]
-    let size = layout_value(layer, "text-size", zoom, feature)
-        .as_ref()
-        .and_then(Value::as_number)
-        .unwrap_or(16.0) as f32;
-    if size > 0.0 {
-        let (across, down) = anchor.alignment();
-        let span = 2.0 * padding * ONE_EM / size;
-        offset[0] -= (across - 0.5) * span;
-        offset[1] -= (down - 0.5) * span;
-    }
-    Some((anchor, offset))
+    Some(anchor_of(Some(anchors.as_array()?.first()?)))
 }
 
 /// How a layer sets its text, at a zoom and optionally for one feature.
@@ -365,29 +346,41 @@ fn text_options(layer: &Layer, zoom: f64, feature: Option<&dyn Feature>) -> Symb
         }
         Some([array[0].as_number()? as f32, array[1].as_number()? as f32])
     };
-    // A variable anchor replaces both. The spec says not to write `text-offset` and
+    // A variable anchor replaces both the anchor and the offset: the shaping is centred and
+    // placement does the moving. The spec says not to write `text-offset` and
     // `text-radial-offset` together and does not say what happens if you do; mbgl takes the
     // radial one, and so does this.
-    let variable = variable_anchor(layer, zoom, feature);
+    let variable = first_variable_anchor(layer, zoom, feature);
     let plain = anchor_of(layout_value(layer, "text-anchor", zoom, feature).as_ref());
     SymbolOptions {
         size: number("text-size").unwrap_or(16.0),
         // Both of these were unread, and the pair of them is how a style puts a name under the
         // marker it names. Without them a POI label sat on top of its own icon.
-        anchor: variable.map_or(plain, |(anchor, _)| anchor),
-        offset: variable.map_or_else(
-            || {
-                pair("text-offset")
-                    .map(|offset| [offset[0] * ONE_EM, offset[1] * ONE_EM])
-                    .unwrap_or([0.0, 0.0])
-            },
-            |(_, offset)| offset,
-        ),
+        anchor: if variable.is_some() {
+            tessella_glyph::shaping::Anchor::Center
+        } else {
+            plain
+        },
+        offset: if variable.is_some() {
+            [0.0, 0.0]
+        } else {
+            pair("text-offset")
+                .map(|offset| [offset[0] * ONE_EM, offset[1] * ONE_EM])
+                .unwrap_or([0.0, 0.0])
+        },
+        // The distance the anchors' directions are scaled by, in shaping units. Zero for a layer
+        // with no variable anchors, which is also what a layer that writes them without a radial
+        // offset gets -- and is what mbgl reads for it.
+        radial_offset: if variable.is_some() {
+            number("text-radial-offset").unwrap_or(0.0) * ONE_EM
+        } else {
+            0.0
+        },
         // The anchor `auto` asks is the variable one where there is one, because that is the
         // anchor the label is actually placed at.
         justify: justify_of(
             layout_value(layer, "text-justify", zoom, feature).as_ref(),
-            variable.map_or(plain, |(anchor, _)| anchor),
+            variable.unwrap_or(plain),
         ),
         max_width_ems: number("text-max-width").unwrap_or(10.0),
         // `text-letter-spacing` is in ems and everything downstream of it is in pixels, so it
@@ -586,9 +579,35 @@ pub struct Pending {
     pub symbol: SymbolOptions,
 }
 
+/// One candidate position from `text-variable-anchor`, reduced to what placement needs.
+///
+/// The anchor itself does not survive the layout: what placement wants from it is where the box
+/// sits relative to the point (`alignment`, each in 0..1) and which way the radial offset points
+/// (`offset`, in shaping units). Both are the anchor's alone and neither depends on the label, so
+/// they are computed once here rather than per label per frame.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VariableAnchor {
+    /// How far along the box's width and height the point sits, from `Anchor::alignment`.
+    pub alignment: (f32, f32),
+    /// `evaluateRadialOffset` for this anchor, in shaping units.
+    pub offset: [f32; 2],
+}
+
 /// A symbol layer's contribution to one tile, before glyphs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SymbolLayout {
+    /// The positions `text-variable-anchor` offers, in the order the style wrote them.
+    ///
+    /// Empty for a layer that does not use it, which is the ordinary case and the one where a
+    /// label goes where its `text-anchor` says and stays there. Where it is not empty, placement
+    /// tries each in turn and keeps the first that fits -- so the anchor is not a property of the
+    /// layout at all, and the shaping is centred with the offset applied per frame.
+    ///
+    /// A layer's rather than a label's: the spec does not allow `text-variable-anchor` to be
+    /// data-driven. `text-radial-offset` is, which is why the distance lives in `SymbolOptions`
+    /// and only the directions are here.
+    pub variable_anchors: Vec<VariableAnchor>,
+
     /// Whether this layer's icons have to be sampled with interpolation.
     ///
     /// mbgl's `iconsNeedLinear`, plus the `iconScaled` test that wraps it in
@@ -671,6 +690,7 @@ impl SymbolLayout {
         Self {
             pending: Vec::new(),
             icons_need_linear,
+            variable_anchors: variable_anchors(layer, zoom),
             symbol,
             line: LineOptions {
                 symbol,

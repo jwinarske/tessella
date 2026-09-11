@@ -223,6 +223,8 @@ fn draw_a_frame() {
             laid_out,
             icon: None,
             line: &[],
+            variable: &[],
+            radial: 0.0,
         })
         .collect();
 
@@ -507,6 +509,8 @@ fn draw_line_labels() {
                 laid_out: laid[repetition].clone(),
                 icon: None,
                 line,
+                variable: &[],
+                radial: 0.0,
             });
             repetition += 1;
         }

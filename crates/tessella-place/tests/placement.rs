@@ -32,6 +32,7 @@ fn text_only(id: u32, anchor: (f32, f32)) -> Candidate {
         text: Some(Shape::Box(label(anchor))),
         vertical_text: None,
         icon: None,
+        ..Default::default()
     }
 }
 
@@ -70,12 +71,14 @@ fn the_first_of_two_overlapping_labels_wins() {
                 text: true,
                 icon: false,
                 vertical: false,
+                ..Default::default()
             },
             Placed {
                 cross_tile_id: 2,
                 text: false,
                 icon: false,
                 vertical: false,
+                ..Default::default()
             },
         ]
     );
@@ -267,6 +270,7 @@ fn the_two_halves_combine_by_the_optional_rules() {
             text: Some(Shape::Box(label((100.0, 100.0)))),
             vertical_text: None,
             icon: Some(Shape::Box(label((300.0, 100.0)))),
+            ..Default::default()
         };
         let rules = Rules {
             text_optional,
@@ -307,6 +311,7 @@ fn an_icon_only_symbol_places_without_text() {
         text: None,
         vertical_text: None,
         icon: Some(Shape::Box(label((100.0, 100.0)))),
+        ..Default::default()
     };
     let placed = place(&[candidate], &Rules::default(), &mut grid());
     assert!(placed[0].icon);
@@ -321,6 +326,7 @@ fn a_symbol_with_no_boxes_reserves_nothing() {
         text: None,
         vertical_text: None,
         icon: None,
+        ..Default::default()
     };
     let mut grid = grid();
     let placed = place(&[empty], &Rules::default(), &mut grid);
@@ -341,6 +347,7 @@ fn horizontal_wins_when_both_fit() {
         text: Some(Shape::Box(label((100.0, 100.0)))),
         vertical_text: Some(Shape::Box(label((100.0, 100.0)))),
         icon: None,
+        ..Default::default()
     }];
 
     let placed = place(&candidates, &Rules::default(), &mut grid());
@@ -359,6 +366,7 @@ fn vertical_is_tried_when_horizontal_collides() {
         text: Some(Shape::Box(label((100.0, 100.0)))),
         vertical_text: None,
         icon: None,
+        ..Default::default()
     }];
     place(&blocker, &Rules::default(), &mut grid);
 
@@ -369,6 +377,7 @@ fn vertical_is_tried_when_horizontal_collides() {
         text: Some(Shape::Box(label((100.0, 100.0)))),
         vertical_text: Some(Shape::Box(label((600.0, 600.0)))),
         icon: None,
+        ..Default::default()
     }];
 
     let placed = place(&candidates, &Rules::default(), &mut grid);
@@ -385,6 +394,7 @@ fn neither_orientation_fits() {
         text: Some(Shape::Box(label((100.0, 100.0)))),
         vertical_text: None,
         icon: None,
+        ..Default::default()
     }];
     place(&blocker, &Rules::default(), &mut grid);
 
@@ -393,6 +403,7 @@ fn neither_orientation_fits() {
         text: Some(Shape::Box(label((100.0, 100.0)))),
         vertical_text: Some(Shape::Box(label((100.0, 100.0)))),
         icon: None,
+        ..Default::default()
     }];
 
     let placed = place(&candidates, &Rules::default(), &mut grid);
