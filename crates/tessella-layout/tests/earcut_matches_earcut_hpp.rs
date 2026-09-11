@@ -117,4 +117,58 @@ fn a_lasso_triangulates_the_way_mbgl_triangulates_it() {
     assert_eq!(doubled, 3_092_779, "and covers this much doubled area");
 }
 
+/// `earcutr::earcut`, on a thread, with a limit: a regression here is a hang, and a hang should
+/// fail this test rather than hold the whole suite until the runner gives up.
+fn earcut_within_a_second(flat: &[f64], holes: &[usize]) -> Vec<usize> {
+    let (flat, holes) = (flat.to_vec(), holes.to_vec());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(earcutr::earcut(&flat, &holes, 2)));
+    rx.recv_timeout(std::time::Duration::from_secs(1))
+        .expect("earcut did not return")
+        .expect("earcut refused the rings")
+}
+
+/// A hole no segment of the outer ring lies to the left of has no bridge, and is left out.
+///
+/// `find_hole_bridge` answers NULL for it. `earcut.hpp` checks for that and skips the hole; the
+/// port spliced the NULL node in regardless, linking the list's sentinel into the rings. On most
+/// input that corrupts only the hole's own list, which nothing reads again -- this square is one,
+/// and it triangulated correctly by luck. What it answers is what `earcut.hpp` answers.
+#[test]
+fn a_hole_with_no_bridge_is_left_out() {
+    let flat = [
+        1000.0, 0.0, 2000.0, 0.0, 2000.0, 1000.0, 1000.0, 1000.0, // the outer square
+        100.0, 200.0, 100.0, 800.0, 700.0, 800.0, 700.0, 200.0, // a hole wholly to its left
+    ];
+    assert_eq!(earcut_within_a_second(&flat, &[4]), [3, 0, 1, 1, 2, 3]);
+}
+
+/// And where the corruption was not harmless, it was a hang.
+///
+/// Holes that collapse to runs of one repeated point, on a 512-unit grid: the sentinel spliced in
+/// ahead of them leaves `filter_points` a cycle that never reaches the node it is walking to, and
+/// the original never returned. `earcut.hpp` answers the outer ring's two triangles -- these six
+/// indices, read off mbgl's vendored copy on these rings -- and so does this now.
+///
+/// The fill layer does not hand earcut these rings: `classify_rings` drops the zero-area holes
+/// first. This is about the triangulator's own contract, which is to return.
+#[test]
+fn collapsed_holes_with_no_bridge_do_not_hang() {
+    let flat = [
+        5632.0, 5632.0, 6144.0, 6656.0, 5632.0, 1536.0, 5120.0, 3072.0, // the outer ring
+        3072.0, 4096.0, 3072.0, 4096.0, 3072.0, 4096.0, 3072.0,
+        4096.0, // one point, four times
+        5120.0, 4608.0, 5120.0, 4608.0, 5120.0, 4608.0, 4608.0, 4608.0, 5120.0, 4096.0, 5120.0,
+        4096.0, 5120.0, 4096.0, 5120.0, 4096.0, 5120.0, 4096.0, //
+        4096.0, 5120.0, 4096.0, 5120.0, 4096.0, 5120.0, 4096.0, 4608.0, 4096.0, 5120.0, 4608.0,
+        5120.0, 4096.0, 5120.0, 4096.0, 5120.0, //
+        3072.0, 4608.0, 3072.0, 4608.0, 3072.0, 4608.0, 3072.0, 4608.0, 3072.0, 4608.0, 3072.0,
+        4608.0, 3072.0, 4096.0, 3072.0, 4096.0, 3072.0, 4096.0,
+    ];
+    assert_eq!(
+        earcut_within_a_second(&flat, &[4, 8, 17, 25]),
+        [1, 0, 3, 3, 2, 1]
+    );
+}
+
 extern crate alloc;

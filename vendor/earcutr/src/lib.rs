@@ -276,6 +276,13 @@ impl<T: Float> LinkedLists<T> {
         outer_node_idx: LinkedListNodeIndex,
     ) {
         let test_idx = find_hole_bridge(self, hole_idx, outer_node_idx);
+        // tessella: no bridge, no splice. `find_hole_bridge` answers NULL when no segment of the
+        // outer ring lies to the hole's left, and splicing the NULL node in anyway links the
+        // sentinel into the rings, which `filter_points` then walks for ever. `earcut.hpp` leaves
+        // such a hole out -- `if (outerNode)` -- and so does this. See PATCH.md.
+        if test_idx == NULL {
+            return;
+        }
         let b = split_bridge_polygon(self, test_idx, hole_idx);
         let ni = self.nodes[b].next_linked_list_node_index;
         filter_points(self, b, Some(ni));
