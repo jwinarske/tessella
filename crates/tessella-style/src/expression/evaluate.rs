@@ -340,14 +340,38 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
         // returning the channels as held would give a translucent red as a dark one.
         Expr::ToRgba(inner) => {
             let value = evaluate(inner, context)?;
-            let color = crate::property::as_color(&value).map_err(|_| EvaluationError::Type {
-                expected: "color",
-                got: value.type_name(),
-            })?;
+            // Coerced, not merely read. The spec serializes this as
+            // `["to-rgba", ["to-color", …]]` -- the cast is implicit and is part of the operator
+            // -- and the two differ for exactly the argument a style is most likely to write: an
+            // array. `as_color` takes `[0, 255, 0, 1]` as channels already in 0..1, so the green
+            // came back out as 255 * 255.
+            let color = to_colour(&value)
+                .map(|[r, g, b, a]| crate::property::Color {
+                    #[allow(clippy::cast_possible_truncation)]
+                    r: r as f32,
+                    #[allow(clippy::cast_possible_truncation)]
+                    g: g as f32,
+                    #[allow(clippy::cast_possible_truncation)]
+                    b: b as f32,
+                    #[allow(clippy::cast_possible_truncation)]
+                    a: a as f32,
+                })
+                .ok_or(EvaluationError::Type {
+                    expected: "color",
+                    got: value.type_name(),
+                })?;
+            // Fully transparent is four zeros, which is mbgl's answer and is a property of how
+            // it *stores* a colour rather than of the operator: its components are premultiplied,
+            // so an alpha of zero has already taken the other three with it. Kept so the two
+            // agree, since a style can branch on the result.
             if color.a == 0.0 {
                 return Ok(Value::Array(alloc::vec![Value::Number(0.0); 4]));
             }
-            let channel = |c: f32| f64::from(c) * 255.0 / f64::from(color.a);
+            // And no division by the alpha. mbgl's `toArray` divides because it is undoing its
+            // own premultiply; this crate stores straight components -- `property::Color` says so
+            // in its first line -- so dividing here scaled every translucent colour up by one
+            // over its alpha. A half-transparent mid-grey came back as 256 of 255.
+            let channel = |c: f32| f64::from(c) * 255.0;
             Ok(Value::Array(alloc::vec![
                 Value::Number(channel(color.r)),
                 Value::Number(channel(color.g)),
@@ -392,8 +416,25 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
             let needle = evaluate(needle, context)?;
             let haystack = evaluate(haystack, context)?;
             let length = sequence_length(&haystack)?;
+            // Clamped at zero, *not* counted from the end. `slice` reads a negative index as an
+            // offset from the length and this does not, which looks like an inconsistency and is
+            // the spec's: the suite asks for `-1` and `-100` over a six-element array and wants
+            // the first match from the start in both. Reading them as `slice` does searched from
+            // the fifth element and answered "not found".
             let start = match from {
-                Some(from) => relative_index(expect_number(&evaluate(from, context)?)?, length),
+                Some(from) => {
+                    let index = expect_number(&evaluate(from, context)?)?;
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss,
+                        clippy::cast_precision_loss
+                    )]
+                    if index <= 0.0 {
+                        0
+                    } else {
+                        (index as usize).min(length)
+                    }
+                }
                 None => 0,
             };
             #[allow(clippy::cast_precision_loss)]
@@ -773,8 +814,18 @@ fn find_in(
 
     match haystack {
         Value::String(text) => {
-            let Value::String(needle) = needle else {
-                return Ok(None);
+            // A scalar needle is searched for as its text: `["in", true, "falsetrue"]` is true,
+            // and `["index-of", 123, "hello123world"]` is 5. Only a string needle used to match,
+            // so both answered "not found" -- which is the same answer a genuine miss gives and
+            // is why nothing noticed.
+            //
+            // Null is the exception, and not by omission: the suite asks for `null` in
+            // `"helloworld"` and wants *false*. Its text is the empty string, which is found
+            // everywhere, so stringifying it would make every haystack contain it.
+            let needle = match needle {
+                Value::Null => return Ok(None),
+                Value::String(text) => text.clone(),
+                scalar => to_string(scalar),
             };
             let chars: Vec<char> = text.chars().collect();
             let target: Vec<char> = needle.chars().collect();
@@ -1274,6 +1325,24 @@ fn to_string(value: &Value) -> String {
     match value {
         Value::String(text) => text.clone(),
         Value::Null => String::new(),
+        // `rgba(r,g,b,a)` with the channels as 0..255 integers and the alpha as written, which is
+        // the spec's own form and what `["concat", ["to-string", colour]]` puts on a map. It used
+        // to fall through to the JSON arm and come out wrapped in its own quotes.
+        Value::Color(colour) => {
+            let channel = |value: f32| {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                {
+                    (value * 255.0).round() as i64
+                }
+            };
+            alloc::format!(
+                "rgba({},{},{},{})",
+                channel(colour.r),
+                channel(colour.g),
+                channel(colour.b),
+                colour.a
+            )
+        }
         Value::Bool(flag) => flag.to_string(),
         Value::Number(number) => {
             // A whole number renders without a trailing `.0`, as the spec's JSON-ish
@@ -1283,6 +1352,27 @@ fn to_string(value: &Value) -> String {
             } else {
                 alloc::format!("{number}")
             }
+        }
+        // A formatted value is its sections' text, joined. mbgl's `Formatted::toString`, and it
+        // is what `["to-string", ["format", …]]` has to give: a style folding a formatted label
+        // back into a plain one wants the words, not the structure. It used to fall through to
+        // the JSON arm and render the whole object -- font stacks, scales and all -- onto the map.
+        //
+        // Recognized by shape because that is what a formatted value *is* here: an object with a
+        // `sections` array. Nothing else in the spec produces one.
+        Value::Object(members)
+            if members.len() == 1 && matches!(members.get("sections"), Some(Value::Array(_))) =>
+        {
+            let Some(Value::Array(sections)) = members.get("sections") else {
+                unreachable!("guarded by the arm")
+            };
+            sections
+                .iter()
+                .filter_map(|section| match section {
+                    Value::Object(fields) => fields.get("text").and_then(Value::as_str),
+                    _ => None,
+                })
+                .collect()
         }
         // Arrays and objects serialize as compact JSON. This used to be `{other:?}`, which is
         // Rust's Debug form: a style doing `["to-string", ["get", "tags"]]` rendered
