@@ -131,6 +131,11 @@ legacy/categorical/tokens
 legacy/exponential/array
 legacy/exponential/array-default
 legacy/exponential/base
+legacy/exponential/color
+legacy/exponential/color-default
+legacy/exponential/color-hcl
+legacy/exponential/color-lab
+legacy/exponential/duplicate-stops
 legacy/exponential/implicit
 legacy/exponential/number
 legacy/exponential/number-default
@@ -251,6 +256,7 @@ pow/basic
 properties/basic
 rgb/basic
 rgba/basic
+rgba/out-of-bounds
 round/basic
 sin/basic
 slice/array-one-index
