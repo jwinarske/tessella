@@ -297,3 +297,91 @@ fn leading_whitespace_is_trimmed() {
         "nor move it"
     );
 }
+
+/// `text-radial-offset`: a distance, and the anchor says which way it points.
+///
+/// mbgl's `evaluateRadialOffset`, transcribed, and the numbers in it are chosen rather than
+/// derived -- the seven-pixel baseline shift especially -- so every arm is pinned here. Getting
+/// one wrong moves a class of labels by a few pixels, which is a diff nothing else names.
+mod radial_offset {
+    use tessella_glyph::shaping::{Anchor, radial_offset};
+
+    /// The offset the tests are written against, and the leg of the square it implies.
+    const OFFSET: f32 = 24.0;
+    const LEG: f32 = 24.0 / core::f32::consts::SQRT_2;
+    const BASELINE: f32 = 7.0;
+
+    fn near(a: [f32; 2], b: [f32; 2]) -> bool {
+        (a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4
+    }
+
+    /// A label anchored on one side sits the whole offset to the other side of the point, and
+    /// takes no baseline shift: the two switches in mbgl are separate for exactly this pair.
+    #[test]
+    fn the_side_anchors_take_the_whole_offset_and_no_baseline() {
+        assert!(near(radial_offset(Anchor::Left, OFFSET), [OFFSET, 0.0]));
+        assert!(near(radial_offset(Anchor::Right, OFFSET), [-OFFSET, 0.0]));
+    }
+
+    /// Above and below take the whole offset too, and the baseline shift with it.
+    #[test]
+    fn the_vertical_anchors_take_the_baseline_shift() {
+        assert!(near(
+            radial_offset(Anchor::Top, OFFSET),
+            [0.0, OFFSET - BASELINE]
+        ));
+        assert!(near(
+            radial_offset(Anchor::Bottom, OFFSET),
+            [0.0, -OFFSET + BASELINE]
+        ));
+    }
+
+    /// A corner splits the offset into the legs of a right isosceles triangle, so the label sits
+    /// at the offset's distance rather than at the offset on each axis.
+    #[test]
+    fn a_corner_splits_the_offset_into_two_legs() {
+        assert!(near(
+            radial_offset(Anchor::TopLeft, OFFSET),
+            [LEG, LEG - BASELINE]
+        ));
+        assert!(near(
+            radial_offset(Anchor::TopRight, OFFSET),
+            [-LEG, LEG - BASELINE]
+        ));
+        assert!(near(
+            radial_offset(Anchor::BottomLeft, OFFSET),
+            [LEG, -LEG + BASELINE]
+        ));
+        assert!(near(
+            radial_offset(Anchor::BottomRight, OFFSET),
+            [-LEG, -LEG + BASELINE]
+        ));
+        // The hypotenuse is the offset, which is the whole point of the split.
+        let [x, y] = radial_offset(Anchor::TopLeft, OFFSET);
+        assert!((x.hypot(y + BASELINE) - OFFSET).abs() < 1e-4);
+    }
+
+    /// A centred label is not moved, whatever the offset.
+    #[test]
+    fn the_centre_does_not_move() {
+        assert!(near(radial_offset(Anchor::Center, OFFSET), [0.0, 0.0]));
+    }
+
+    /// A negative offset is clamped to zero, not reflected -- but the baseline shift survives it.
+    ///
+    /// mbgl clamps the *offset* and then reads it, so a `top` anchor asked for a negative offset
+    /// still comes out at `-baselineOffset` rather than at nothing. It looks like an oversight and
+    /// is not one to diverge from: it is what the oracle draws, and the seven pixels are visible.
+    #[test]
+    fn a_negative_offset_is_clamped_but_the_baseline_is_not() {
+        assert!(near(radial_offset(Anchor::Left, -10.0), [0.0, 0.0]));
+        assert!(near(radial_offset(Anchor::Right, -10.0), [0.0, 0.0]));
+        assert!(near(radial_offset(Anchor::Top, -10.0), [0.0, -BASELINE]));
+        assert!(near(radial_offset(Anchor::Bottom, -10.0), [0.0, BASELINE]));
+        // And zero is the same picture, which is what says the clamp is the only thing happening.
+        assert_eq!(
+            radial_offset(Anchor::Top, -10.0),
+            radial_offset(Anchor::Top, 0.0)
+        );
+    }
+}
