@@ -304,13 +304,15 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
             }
             Ok(Value::String(parts.join(&separator)))
         }
-        // Rust's `to_uppercase` is the full Unicode mapping, which is the one that can change a
-        // string's *length* — `ß` upcases to `SS`. mbgl walks codepoints and maps each singly,
-        // so the two disagree on exactly those characters. The spec says "the input string
-        // converted to upper case" and names no algorithm, so the difference is real and
-        // unresolvable from the spec; the full mapping is chosen because it is the correct
-        // answer for a reader, and it is written down here so the disagreement is not a
-        // surprise if a golden ever covers it.
+        // Rust's `to_uppercase` is the full Unicode mapping, the one that can change a string's
+        // *length* — `ß` upcases to `SS`. This comment used to say mbgl maps code points singly
+        // and that the two therefore disagree. They do not: `platform::uppercase` walks code
+        // points but `_nu_toupper` has an out-parameter for the multi-code-point case and
+        // `string_stdlib.cpp` decodes it, so nunicode's mapping is the full one as well.
+        //
+        // Measured, not read: the same question decides `text-transform`, which is drawn, and
+        // "Straße Weiß" upcased came out 698 pixels from the oracle under the simple mapping and
+        // exactly equal under this one. See `tessella_layout::symbol::Transform::apply`.
         Expr::CaseFold { upper, arg } => {
             let value = evaluate(arg, context)?;
             let Some(text) = value.as_str() else {
