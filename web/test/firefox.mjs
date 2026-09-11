@@ -1,8 +1,9 @@
-// What the browser harnesses share: a server for the repository, and a headless Firefox pointed at
-// a page on it, read through `dump()`.
+// What the browser harnesses share: a server for the repository, and a headless browser pointed at
+// a page on it, read as lines of text.
 //
-// Headless Firefox, because it is what this machine has and because `dump()` gives a plain text
-// channel out of the page. A screenshot would mean reading numbers out of an image.
+// Headless Firefox by default, because `dump()` gives a plain text channel out of the page. A
+// screenshot would mean reading numbers out of an image. Chromium has no `dump()`, and the same
+// lines come out of its console log instead.
 
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
@@ -143,40 +144,116 @@ export async function firefox(url, { until, timeoutMs = 120_000, windowSize = "5
         },
       },
     );
-
-    let out = "";
-    return await new Promise((resolve, reject) => {
-      const bell = setTimeout(() => {
-        browser.kill("SIGKILL");
-        reject(new Error(`the browser did not report within ${timeoutMs / 1000} s:\n${tail(out)}`));
-      }, timeoutMs);
-      const check = () => {
-        // Whole lines only: a chunk can end halfway through one, and half a JSON line is not
-        // an answer.
-        const answer = until(out.slice(0, out.lastIndexOf("\n") + 1));
-        if (answer !== undefined) {
-          clearTimeout(bell);
-          browser.kill("SIGKILL");
-          resolve(answer);
-          return true;
-        }
-        return false;
-      };
-      const watch = (chunk) => {
-        out += chunk;
-        check();
-      };
-      browser.stdout.on("data", watch);
-      browser.stderr.on("data", watch);
-      browser.on("error", reject);
-      browser.on("exit", () => {
-        clearTimeout(bell);
-        if (!check()) {
-          reject(new Error(`the page reported nothing:\n${tail(out)}`));
-        }
-      });
-    });
+    return await watch(browser, { until, timeoutMs });
   } finally {
     await rm(profile, { recursive: true, force: true });
   }
+}
+
+/**
+ * Runs a page in headless Chromium, as `firefox` runs one in Firefox.
+ *
+ * `CHROMIUM` names the binary: a Chromium, a Chrome, or Chrome for Testing's
+ * `chrome-headless-shell`, which is the one made for this. There is no `dump()`, so the page
+ * reports through the console, and `--enable-logging=stderr` prints each message as
+ *
+ *   [0911/143304.619607:INFO:CONSOLE:2] "the message", source: http://127.0.0.1/... (2)
+ *
+ * with the message as the page wrote it, its quotes unescaped. Each line is unwrapped back into
+ * what the page said before `until` sees it.
+ *
+ * @template T
+ * @param {string} url
+ * @param {{until: (out: string) => T | undefined, timeoutMs?: number, windowSize?: string}} options
+ * @returns {Promise<T>}
+ */
+export async function chromium(url, { until, timeoutMs = 120_000, windowSize = "512,512" }) {
+  const profile = await mkdtemp(join(tmpdir(), "tessella-cr-"));
+  try {
+    const browser = spawn(process.env.CHROMIUM ?? "chromium", [
+      "--headless",
+      `--user-data-dir=${profile}`,
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--enable-logging=stderr",
+      "--v=0",
+      `--window-size=${windowSize}`,
+      // Software GL, as the Firefox runs have: SwiftShader is Chromium's llvmpipe. It is "unsafe"
+      // for pages off the web, and the only page here is this repository's, from loopback.
+      "--use-angle=swiftshader",
+      "--enable-unsafe-swiftshader",
+      // A headless page is never in the foreground, and a throttled frame would be charged to
+      // the producer.
+      "--disable-background-timer-throttling",
+      "--disable-renderer-backgrounding",
+      "--disable-backgrounding-occluded-windows",
+      url,
+    ]);
+    return await watch(browser, { until, timeoutMs, unwrap: consoleMessage });
+  } finally {
+    await rm(profile, { recursive: true, force: true });
+  }
+}
+
+/** What a console line in Chromium's log said, or any other line as it is. */
+function consoleMessage(line) {
+  const open = line.indexOf('] "');
+  const close = line.lastIndexOf('", source: ');
+  const console_ = line.startsWith("[") && open > 0 && line.slice(0, open).includes(":CONSOLE");
+  return console_ && close > open ? line.slice(open + 3, close) : line;
+}
+
+/**
+ * Hands a browser's output to `until`, a whole line at a time, and resolves with its first answer.
+ *
+ * The browser is killed on the answer rather than waited on: without `--screenshot` a browser has
+ * no reason to exit, and with it the page is torn down at load -- which is before an async module
+ * that drives four hundred ticks has finished its first.
+ */
+function watch(browser, { until, timeoutMs, unwrap = (line) => line }) {
+  let lines = "";
+  return new Promise((resolve, reject) => {
+    const bell = setTimeout(() => {
+      browser.kill("SIGKILL");
+      reject(new Error(`the browser did not report within ${timeoutMs / 1000} s:\n${tail(lines)}`));
+    }, timeoutMs);
+    const check = () => {
+      const answer = until(lines);
+      if (answer !== undefined) {
+        clearTimeout(bell);
+        browser.kill("SIGKILL");
+        resolve(answer);
+        return true;
+      }
+      return false;
+    };
+    // Whole lines only, and each stream its own: a chunk can end halfway through a line, and half
+    // a JSON line is not an answer, nor is one with the other stream's bytes spliced into it.
+    const stream = (from) => {
+      let partial = "";
+      from.setEncoding("utf8");
+      from.on("data", (chunk) => {
+        partial += chunk;
+        const end = partial.lastIndexOf("\n");
+        if (end >= 0) {
+          lines += partial
+            .slice(0, end + 1)
+            .split("\n")
+            .map(unwrap)
+            .join("\n");
+          partial = partial.slice(end + 1);
+          check();
+        }
+      });
+    };
+    stream(browser.stdout);
+    stream(browser.stderr);
+    browser.on("error", reject);
+    browser.on("exit", () => {
+      clearTimeout(bell);
+      if (!check()) {
+        reject(new Error(`the page reported nothing:\n${tail(lines)}`));
+      }
+    });
+  });
 }

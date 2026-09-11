@@ -21,6 +21,12 @@
     tiles=URL      the tile origin. Default this origin's /bench-tiles. Another origin has to
                    allow CORS, since the page is cross-origin isolated when served for timing.
     module=PATH    the module, from this origin. Default the release build.
+    dpr=N          device pixels per CSS pixel, 1 to 4. Each map stays 640x480 -- the ABI has
+                   no pixel ratio, and a fill is the same triangles at any -- so the producer's
+                   stream is unchanged and only the panes it is drawn into grow. Default 1.
+    quiet=N        frames to run on once the maps settle, for the wall-clock settle protocol.
+                   Default 0.
+    sweep=0|1      run the sweep after settling. Default 1.
 
   `node web/test/bench.mjs --serve` serves this page with the tile route beside it.
 -->
@@ -66,8 +72,12 @@
     ),
     styleUrl: new URL("./bench/style.json", location.href).href,
     tileOrigin: params.get("tiles") ?? new URL("/bench-tiles", location.href).href,
-    // Fixed, and sent once. dpr 1: the panes are 640x480 device pixels whatever the display.
+    // Fixed, and sent once: each map is 640x480 whatever the display. `dpr` is how many device
+    // pixels each of those is drawn into on a side, so the default panes are 640x480 of them.
     pane: { width: 640, height: 480 },
+    dpr: Math.min(4, Math.max(1, Math.round(number("dpr", 1)) || 1)),
+    quiet: Math.min(600, Math.max(0, Math.floor(number("quiet", 0)) || 0)),
+    sweep: params.get("sweep") !== "0",
     ringBytes: number("ring", 4) * (1 << 20),
     slabBytes: number("slab", 0) * (1 << 20),
     samples: [32, 24],
@@ -91,6 +101,8 @@
   };
 
   const canvas = document.getElementById("views");
+  canvas.width = 2 * config.pane.width * config.dpr;
+  canvas.height = 2 * config.pane.height * config.dpr;
   const offscreen = canvas.transferControlToOffscreen ? canvas.transferControlToOffscreen() : null;
   const worker = new Worker(new URL("./bench.worker.js", import.meta.url), { type: "module" });
   let frames = 0;
@@ -103,7 +115,13 @@
       }
     } else if (data.type === "done") {
       emit("REPORT " + JSON.stringify(data.report));
-      show(data.report);
+      // Showing the report is not the measurement. A throw in here would otherwise cost the run
+      // its `DONE`, and a harness waiting for that waits out its whole timeout.
+      try {
+        show(data.report);
+      } catch (error) {
+        status.textContent = `the report is above; showing it failed: ${error}`;
+      }
       emit("DONE");
     } else if (data.type === "error") {
       emit("ERROR " + JSON.stringify(data.error));
@@ -119,13 +137,17 @@
 
   function show(report) {
     const t = report.timings;
+    // A run with no sweep -- what the settle protocol asks for -- has no frames to take a
+    // percentile of, and every summary is null.
+    const spread = (s) => (s ? `p50 ${s.p50} p99 ${s.p99} max ${s.max} ms` : "no sweep frames");
+    const p99 = (s) => (s ? s.p99 : "-");
     status.textContent =
       `clock ${report.clock}, ${report.frames} sweep frames ` +
       `after ${report.settle_frames} to settle, ` +
       `${report.pacing} pacing\n` +
-      `frame cpu p50 ${t.frame_cpu_ms.p50} p99 ${t.frame_cpu_ms.p99} ` +
-      `max ${t.frame_cpu_ms.max} ms ` +
-      `(ticks p99 ${t.tick_ms_sum.p99}, absorb ${t.absorb_ms.p99}, draw ${t.draw_ms.p99})\n` +
+      `settled in ${report.settle.first_quiet_ms} ms after ${report.settle.setup_ms} ms of setup\n` +
+      `frame cpu ${spread(t.frame_cpu_ms)} ` +
+      `(ticks p99 ${p99(t.tick_ms_sum)}, absorb ${p99(t.absorb_ms)}, draw ${p99(t.draw_ms)})\n` +
       `fetches ${report.fetch.origin_fetches} for ${report.fetch.distinct_urls} urls, ` +
       `${report.fetch.tickets} tickets, ${report.fetch.coalesced} coalesced; ` +
       `peak ${report.mem_pages_peak} pages\n` +
