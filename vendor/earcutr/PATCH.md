@@ -1,10 +1,10 @@
-# earcutr 0.5.0, with one correction and a faster search for the same ears
+# earcutr 0.5.0, with two corrections and a faster search for the same ears
 
 Vendored rather than depended on, for a one-line divergence from `earcut.hpp`. §9.1 diffs this
 crate's output against mbgl's pixel for pixel, and mbgl calls `earcut.hpp`; a triangulation that
 is merely *valid* is not enough here, it has to be the same one.
 
-## The change
+## The hashing threshold
 
 `linked_list` decides whether to build the z-order hash:
 
@@ -64,24 +64,40 @@ collinear and lasso shapes, on both sides of the hashing threshold.
 `crates/tessella-layout/tests/earcut_pinned.rs` keeps the fixture half of that as a hash taken
 before these changes. A later change that alters any of those triangulations fails there.
 
-## Known divergence, not yet corrected
+## A hole with no bridge is left out
 
-On a polygon whose holes collapse to runs of one repeated point, `filter_points` never returns
-when it is called from `eliminate_hole`. `earcut.hpp` returns the outer ring's triangulation for
-the same input. The reproducer is an outer ring of four points with four holes on a 512-unit grid:
+`find_hole_bridge` answers NULL when no segment of the outer ring lies to a hole's left. The port
+passed that straight to `split_bridge_polygon`, which linked the list's NULL sentinel into the
+rings. `earcut.hpp` checks, `if (outerNode)`, and skips the hole. `eliminate_hole` now does the
+same.
 
-```text
-flat  = [5632,5632, 6144,6656, 5632,1536, 5120,3072,
-         3072,4096, 3072,4096, 3072,4096, 3072,4096,
-         5120,4608, 5120,4608, 5120,4608, 4608,4608, 5120,4096, 5120,4096, 5120,4096, 5120,4096, 5120,4096,
-         4096,5120, 4096,5120, 4096,5120, 4096,4608, 4096,5120, 4608,5120, 4096,5120, 4096,5120,
-         3072,4608, 3072,4608, 3072,4608, 3072,4608, 3072,4608, 3072,4608, 3072,4096, 3072,4096, 3072,4096]
-holes = [4, 8, 17, 25]
-```
+The corruption was usually harmless: it fell on the skipped hole's own list, which nothing reads
+again. On holes that collapse to runs of one repeated point, it left `filter_points` walking a
+cycle that never reached its end node, and `earcut` never returned. `earcut.hpp` returns the outer
+ring's triangulation for the same input, and so does this now.
+`crates/tessella-layout/tests/earcut_matches_earcut_hpp.rs` has that input and a plain no-bridge
+square, each against the answer mbgl's copy gives.
 
-The fill layer does not reach it with these rings: `fill::classify_rings` drops the zero-area
-holes first. Whether a hole with some area but repeated points can still reach it has not been
-established. It predates the changes above, which do not touch `filter_points`.
+The fill layer did not reach the hang with the rings it was found on: `fill::classify_rings` drops
+zero-area holes first. It is corrected here because the triangulator's contract is to return, and
+because tiles come from the network.
+
+What else it changed: nothing that terminated before. On 48,139 polygons, and on 2,000 more
+built to have no bridge, the only output that differs from the previous build is output the
+previous build never produced.
+
+## Where this still differs from `earcut.hpp`
+
+Hole bridging. `find_hole_bridge` follows an older `earcut.js` than mbgl's `earcut.hpp` does. When
+the hole touches an outer segment it picks `m.prev` where the C++ picks `m`. Its second pass starts
+after `m` rather than at it, starts from a finite minimum, and breaks ties without
+`sectorContainsSector`. Each of these can pick a different bridge. The result is still a valid
+triangulation, but not the same triangles.
+
+Measured against maplibre-native's vendored `earcut.hpp` on the 5,030 fill polygons of the
+fixture tiles: 5,007 are identical index for index, 5,012 have the same triangles in another order,
+and 18 have different triangles, 17 of them with holes. Correcting it changes those 18, so it is a
+parity change to make against the oracle, and not one to fold into another.
 
 ## Provenance
 
