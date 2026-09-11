@@ -437,8 +437,33 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
             }),
         },
         Expr::In { needle, haystack } => {
-            let needle = evaluate(needle, context)?;
+            // Its own type rules rather than `find_in`'s, because mbgl's `In` and `IndexOf`
+            // disagree about null and the suite pins both: `["in", x, null]` is *false* where
+            // `["index-of", x, null]` is an error. A style filtering on a property some features
+            // do not carry is the reason -- `["in", ["get", "kind"], ["get", "kinds"]]` asks a
+            // question that has an answer when `kinds` is missing, and that answer is no.
+            //
+            // The order is mbgl's too: the needle's runtime type is checked before the
+            // haystack's, so a bad pair reports the first argument, and the null short-circuit
+            // comes after both checks -- `["in", null, 123]` is an error about the haystack, not
+            // false.
             let haystack = evaluate(haystack, context)?;
+            let needle = evaluate(needle, context)?;
+            if matches!(needle, Value::Object(_) | Value::Array(_)) {
+                return Err(EvaluationError::Type {
+                    expected: "boolean, string, number or null",
+                    got: needle.type_name(),
+                });
+            }
+            if !matches!(haystack, Value::String(_) | Value::Array(_) | Value::Null) {
+                return Err(EvaluationError::Type {
+                    expected: "string or array",
+                    got: haystack.type_name(),
+                });
+            }
+            if matches!(needle, Value::Null) || matches!(haystack, Value::Null) {
+                return Ok(Value::Bool(false));
+            }
             Ok(Value::Bool(find_in(&needle, &haystack, 0)?.is_some()))
         }
         Expr::IndexOf {
