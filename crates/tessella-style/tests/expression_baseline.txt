@@ -140,6 +140,8 @@ legacy/exponential/color
 legacy/exponential/color-default
 legacy/exponential/color-hcl
 legacy/exponential/color-lab
+legacy/exponential/composite
+legacy/exponential/composite-default
 legacy/exponential/duplicate-stops
 legacy/exponential/implicit
 legacy/exponential/number
@@ -159,6 +161,8 @@ legacy/interval/array
 legacy/interval/array-default
 legacy/interval/color
 legacy/interval/color-default
+legacy/interval/composite
+legacy/interval/composite-default
 legacy/interval/duplicate-stops
 legacy/interval/implicit
 legacy/interval/number
