@@ -33,11 +33,11 @@ fn the_block_carries_the_expansion() {
     let bend = globe::anchored_bend(&view(), z, x, y, wrap);
     let block = ubo::globe_bend_block(&view(), z, x, y, wrap, 0, 0);
 
-    // Scaled by `clip_w_scale`, which is what puts `w` in the units the symbol path reads it in.
-    // A projective coordinate is scale-invariant in `x / w`, so this is not a change of position.
-    let scale = globe::clip_w_scale(&view());
+    // Cast and nothing else. The `clip_w_scale` that puts `w` in the units the symbol path reads
+    // it in is applied by `globe::clip_matrix`, which `anchored_bend` walks -- so it is already in
+    // both sides of this comparison rather than something the packing adds.
     #[allow(clippy::cast_possible_truncation)]
-    let want = |v: [f64; 4]| -> [f32; 4] { core::array::from_fn(|i| (v[i] * scale) as f32) };
+    let want = |v: [f64; 4]| -> [f32; 4] { core::array::from_fn(|i| v[i] as f32) };
     assert_eq!(block.d_u, want(bend.d_u));
     assert_eq!(block.d_v, want(bend.d_v));
     assert_eq!(block.d_uu, want(bend.d_uu));
@@ -87,12 +87,13 @@ fn the_depth_bias_lands_in_the_anchor() {
     let mut moved = 0;
     for (layer, sub) in [(0, 0), (3, 1), (40, 0)] {
         let block = ubo::globe_bend_block(&view(), z, x, y, wrap, layer, sub);
-        // The bias goes on before the scale: the offset that reaches NDC is `bias / w`, and
-        // scaling multiplies `w` too, so a bias added afterwards would land smaller by exactly
-        // that factor -- a layer separation quietly reduced to nothing.
-        let bias = -f64::from(depth_offset(layer, sub)) * (far - near);
+        // The bias is scaled, the anchor already is: the offset that reaches NDC is `bias / w`,
+        // and `clip_matrix` has multiplied `w` by the scale, so an unscaled bias would land
+        // smaller by exactly that factor -- a layer separation quietly reduced to nothing.
+        let bias =
+            -f64::from(depth_offset(layer, sub)) * (far - near) * globe::clip_w_scale(&view());
         #[allow(clippy::cast_possible_truncation)]
-        let want = ((bend.anchor[2] + bias) * globe::clip_w_scale(&view())) as f32;
+        let want = (bend.anchor[2] + bias) as f32;
         assert_eq!(block.anchor[2], want, "layer {layer}/{sub}");
         if layer > 0 {
             moved += 1;

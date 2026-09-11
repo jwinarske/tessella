@@ -53,12 +53,16 @@ fn the_plane_still_carries_projection_times_placement() {
 }
 
 /// A globe's is the placement alone, over a unit world, with the depth nudge scaled to the frustum.
+///
+/// And to `clip_w_scale`, because the nudge reaches clip `z` after `globe::clip_matrix` has been
+/// applied: the material adds it onto an already-scaled vector, and the offset that survives the
+/// divide is `nudge / w`.
 #[test]
 fn a_globe_carries_the_mercator_placement() {
     let (z, x, y, wrap) = TILE;
     let mut want = camera::mercator_matrix_for_tile(z, x, y, wrap);
     let (near, far) = globe::depth_range(&view());
-    want[14] = -f64::from(depth_offset(3, 0)) * (far - near);
+    want[14] = -f64::from(depth_offset(3, 0)) * (far - near) * globe::clip_w_scale(&view());
 
     #[allow(clippy::cast_possible_truncation)]
     let want: [f32; 16] = core::array::from_fn(|index| want[index] as f32);
@@ -160,7 +164,9 @@ fn the_depth_offset_survives_the_move() {
         // Multiplied in f64 and cast once, as the producer does. Scaling in f32 instead differs
         // in the last bit, which is a real difference on a wire that is compared byte for byte.
         #[allow(clippy::cast_possible_truncation)]
-        let want = (-f64::from(depth_offset(layer, sub)) * (far - near)) as f32;
+        let want = (-f64::from(depth_offset(layer, sub))
+            * (far - near)
+            * globe::clip_w_scale(&view())) as f32;
         assert_eq!(matrix[14], want);
         // Everything else is the placement, untouched.
         let want = camera::mercator_matrix_for_tile(z, x, y, wrap);

@@ -224,6 +224,27 @@ pub fn chord_error(z: u8, zoom: f64, segments: u32) -> f64 {
     radius * (1.0 - (arc / (2.0 * f64::from(segments))).cos())
 }
 
+/// Unit sphere to clip, with `w` in the plane's convention.
+///
+/// [`clip_w_scale`] says why the scale is there and what reads it. It is applied here rather than
+/// by each caller because it is a property of the space, not of one packing function: a projective
+/// coordinate is scale-invariant in `x / w`, so nothing moves on screen, and every consumer that
+/// reads `w` as a distance -- the symbol path sizing type and the box it competes with -- gets the
+/// same number a plane would have given it.
+///
+/// The one thing that is *not* scale-invariant is a value added to `z` after the multiply. A depth
+/// bias parked in a placement matrix reaches clip space unscaled and would be divided by the larger
+/// `w`, so the two places that write one scale it to match: [`crate::camera::EXTENT`]-space
+/// placements in `ubo::tile_matrix` and the anchor in `ubo::pack_globe_bend`.
+#[must_use]
+pub fn clip_matrix(view: &crate::cover::ViewTransform) -> crate::camera::Mat4 {
+    let mut out = clip_matrix_unscaled(view);
+    let scale = clip_w_scale(view);
+    for value in &mut out {
+        *value *= scale;
+    }
+    out
+}
 /// The matrix that takes a point on the unit sphere to clip space.
 ///
 /// Built the way GL JS builds its globe matrix: turn the world so the point under the camera faces
@@ -236,7 +257,7 @@ pub fn chord_error(z: u8, zoom: f64, segments: u32) -> f64 {
 /// derivation: the point under the camera lands at the centre of the screen, and a point a quarter
 /// turn away lands off it in the direction it should.
 #[must_use]
-pub fn clip_matrix(view: &crate::cover::ViewTransform) -> crate::camera::Mat4 {
+fn clip_matrix_unscaled(view: &crate::cover::ViewTransform) -> crate::camera::Mat4 {
     let distance = camera_distance(view.zoom, view.latitude, view.height);
     // The plane's own two angles, unnegated. Named here rather than written into the composition
     // so that a sign is one line to find -- both were wrong once, and each presents differently:
@@ -528,11 +549,7 @@ pub fn anchored_matrix(
         out[8 + row] = 0.0;
         out[12 + row] = bend.anchor[row] - bend.d_u[row] * half - bend.d_v[row] * half;
     }
-
-    let scale = clip_w_scale(view);
-    for value in &mut out {
-        *value *= scale;
-    }
+    // No scaling here: `anchored_bend` walks `clip_matrix`, which carries it.
     out
 }
 
@@ -543,11 +560,14 @@ pub fn anchored_matrix(
 /// camera to the anchor and divides `camera_to_center_distance` by it to decide how much
 /// perspective shrank a label -- both to size the type and to size the box it competes with.
 ///
-/// [`clip_matrix`] measures that distance in sphere radii, so `w` arrives at 0.0011 where a
+/// The bare projection measures that distance in sphere radii, so `w` arrives at 0.0011 where a
 /// plane's is 1152. The ratio is then a million, `perspective_ratio` pins to its clamp of four,
 /// and two things follow: every collision box is four times its size, so every label in the frame
 /// collides with every other -- 12 glyph quads drawn against a plane's 1384 at the same camera --
 /// and the type that does survive is drawn four times too large.
+///
+/// [`clip_matrix`] applies it, so a caller of that has it already; this is public because the two
+/// places that add a depth bias *after* the multiply have to scale the bias to match.
 ///
 /// Taken at the point under the camera, so it is one number for the frame rather than one per
 /// tile: a per-tile normalisation would leave neighbouring tiles disagreeing about how far away
@@ -556,7 +576,8 @@ pub fn anchored_matrix(
 pub fn clip_w_scale(view: &crate::cover::ViewTransform) -> f64 {
     let reference = crate::camera::camera_to_center_distance(view.height);
     let under = sphere_point(view.longitude, view.latitude);
-    let clip = clip_matrix(view);
+    // The unscaled matrix, which is what makes this the scale rather than a fixed point of it.
+    let clip = clip_matrix_unscaled(view);
     let point = [under[0], under[1], under[2], 1.0];
     let centre_w: f64 = (0..4).map(|c| clip[c * 4 + 3] * point[c]).sum();
     if centre_w.abs() <= f64::EPSILON {
