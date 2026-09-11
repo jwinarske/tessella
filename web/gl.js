@@ -224,10 +224,24 @@ export class FillRenderer {
     return new Float32Array(16).map((_, i) => view.getFloat32(at + i * 4, true));
   }
 
-  /** Draws the current order into the canvas. */
+  /** Draws the current order into the whole canvas. */
   draw(width, height) {
+    return this.drawViewport(0, 0, width, height);
+  }
+
+  /**
+   * Draws the current order into one rectangle of the canvas, leaving the rest alone.
+   *
+   * Several renderers sharing one context each take a rectangle, which is how several views are
+   * drawn in one frame and presented together. The scissor is what confines the clear: a
+   * viewport alone bounds where triangles land, not what `clear` touches, so without it each
+   * view would wipe the ones drawn before it.
+   */
+  drawViewport(x, y, width, height) {
     const gl = this.gl;
-    gl.viewport(0, 0, width, height);
+    gl.viewport(x, y, width, height);
+    gl.enable(gl.SCISSOR_TEST);
+    gl.scissor(x, y, width, height);
     gl.clearColor(...this.background);
     gl.clear(gl.COLOR_BUFFER_BIT);
     gl.useProgram(this.program);
@@ -256,6 +270,7 @@ export class FillRenderer {
       drawn++;
     }
     gl.bindVertexArray(null);
+    gl.disable(gl.SCISSOR_TEST);
     return drawn;
   }
 }
