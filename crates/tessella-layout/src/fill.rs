@@ -235,28 +235,39 @@ pub const MAX_HOLES: usize = 500;
 /// hundred, and the cap is not an optimization this build chose — a bucket built without it has
 /// *more* geometry than the oracle's for the same feature, which fails the diff.
 ///
-/// # Why the largest, and why the order after is not defined
+/// # Why the largest, and why in this order
 ///
 /// Largest by absolute area, because a dropped hole is a hole that gets painted over and the
 /// visible cost of that scales with its size. mbgl selects them with `std::nth_element`, which
 /// partitions rather than sorts: everything before the nth is no smaller than everything after,
-/// and nothing more is promised. So the kept holes' relative order is unspecified there, and
-/// matching it exactly is neither possible nor necessary — earcut's output does not depend on
-/// the order holes are presented in, only on which ones are.
+/// and the standard promises nothing more. What libstdc++'s introselect actually leaves is
+/// definite, though, and it matters twice over. Where holes tie on area it decides which are kept.
+/// And the kept holes' order is the order their vertices are numbered in, and the order that breaks
+/// earcut's ties when it sorts the holes to bridge them -- so a different order is different
+/// indices, and sometimes different triangles.
+///
+/// So this is that introselect (`crate::libstdcxx::nth_element`), run over the holes' areas with
+/// mbgl's comparison, and the polygon rebuilt in the order it leaves. It is deterministic, so a
+/// rebuild of the same tile keeps the same holes in the same order.
 pub fn limit_holes(polygon: &mut Vec<Ring>) {
     if polygon.len() <= 1 + MAX_HOLES {
         return;
     }
-    // The exterior stays put; only the holes are ranked.
-    polygon[1..].sort_by(|a, b| {
-        signed_area(b)
-            .abs()
-            .cmp(&signed_area(a).abs())
-            // A stable tiebreak so a rebuild of the same tile keeps the same holes, which a
-            // partition does not guarantee and a diff against a previous frame relies on.
-            .then_with(|| b.len().cmp(&a.len()))
-    });
-    polygon.truncate(1 + MAX_HOLES);
+    // The exterior stays put; only the holes are ranked, by `std::fabs(signedArea(ring))` with
+    // `>`. Ranked as (area, position) pairs, which the selection moves exactly as it would move
+    // the rings themselves.
+    let mut ranked: Vec<(i64, usize)> = polygon[1..]
+        .iter()
+        .enumerate()
+        .map(|(index, ring)| (signed_area(ring).abs(), index))
+        .collect();
+    crate::libstdcxx::nth_element(&mut ranked, MAX_HOLES, &|a, b| a.0 > b.0);
+    let mut holes: Vec<Option<Ring>> = polygon.drain(1..).map(Some).collect();
+    polygon.extend(
+        ranked[..MAX_HOLES]
+            .iter()
+            .filter_map(|&(_, index)| holes[index].take()),
+    );
 }
 
 /// Builds a fill bucket from a feature's rings.
