@@ -253,11 +253,82 @@ pub fn label(layer: &Layer, zoom: f64, feature: &dyn Feature) -> Option<Label> {
         });
     }
 
+    // `text-transform`, applied per section and not to the joined string, which is mbgl's order
+    // and matters for a `["format", …]`: an image section carries a sprite rather than letters
+    // and upcasing its name would look for a sprite nobody packed.
+    let text = match transform(layer, zoom, feature) {
+        Transform::None => text,
+        cased => {
+            for section in &mut sections {
+                if section.image.is_none() {
+                    section.text = cased.apply(&section.text);
+                }
+            }
+            sections
+                .iter()
+                .map(|section| section.text.as_str())
+                .collect()
+        }
+    };
+
     Some(Label {
         text,
         sections,
         fonts: font_stack(layer, zoom, feature),
     })
+}
+
+/// What `text-transform` asks for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Transform {
+    /// The text as the field produced it, which is the spec's default.
+    None,
+    /// `uppercase`.
+    Upper,
+    /// `lowercase`.
+    Lower,
+}
+
+impl Transform {
+    /// The transformed text.
+    ///
+    /// # The full mapping, which is a thing the oracle had to settle
+    ///
+    /// Rust's `to_uppercase` is Unicode's *full* mapping, the one that can change a string's
+    /// length: `ß` becomes `SS`. The *simple* mapping maps one code point to one and leaves `ß`
+    /// alone, and it was the obvious guess for what mbgl does -- `platform::uppercase` walks the
+    /// string a code point at a time through nunicode.
+    ///
+    /// It is not what mbgl does. `_nu_toupper` has a second out-parameter for exactly the
+    /// multi-code-point case and `string_stdlib.cpp` decodes it, so nunicode's mapping is the
+    /// full one too. Measured rather than reasoned: "Straße Weiß" upcased and drawn came out 698
+    /// pixels apart with the simple mapping, the oracle carrying the more ink, which is `SS`
+    /// where this had kept `ß`.
+    ///
+    /// The locale-sensitive mappings are not reachable either way: Rust's are the
+    /// locale-independent ones, and so are nunicode's.
+    fn apply(self, text: &str) -> String {
+        match self {
+            Self::None => String::from(text),
+            Self::Upper => text.to_uppercase(),
+            Self::Lower => text.to_lowercase(),
+        }
+    }
+}
+
+/// The layer's `text-transform` for this feature.
+///
+/// A layout property like any other: it may be a literal, a zoom curve, or data-driven, and mbgl
+/// evaluates it with the feature in hand. Anything that is not `uppercase` or `lowercase` --
+/// including the spec's own `none` -- leaves the text alone.
+fn transform(layer: &Layer, zoom: f64, feature: &dyn Feature) -> Transform {
+    let value =
+        tessella_style::property::layout_value(layer, "text-transform", zoom, Some(feature));
+    match value.as_ref().and_then(Value::as_str) {
+        Some("uppercase") => Transform::Upper,
+        Some("lowercase") => Transform::Lower,
+        _ => Transform::None,
+    }
 }
 
 /// Reads the sections a `["format", …]` evaluated to.

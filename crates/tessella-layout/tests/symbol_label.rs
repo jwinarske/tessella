@@ -184,3 +184,76 @@ fn token_replacement_handles_awkward_strings() {
     // An empty token names a property nothing has, so it resolves to nothing.
     assert_eq!(replace_tokens("{}", &feature), "");
 }
+
+/// `text-transform` cases the label, and cases it the way the oracle does.
+///
+/// Unimplemented until now, which is invisible in a style that does not use it and stark in one
+/// that does: `places_subplace` in the Protomaps schema sets `uppercase`, and a neighbourhood
+/// name drew as "Nikolaiviertel" where mbgl draws "NIKOLAIVIERTEL" — 861 differing pixels in the
+/// layer at Berlin z15, and it is the same word.
+#[test]
+fn text_transform_cases_the_label() {
+    let feature = Props::new(&[("name", Value::String("Nikolaiviertel".to_string()))]);
+    let cased = |transform: &str| {
+        let layer = layer(&format!(
+            r#"{{"text-field": ["get", "name"], "text-transform": "{transform}"}}"#
+        ));
+        label(&layer, 15.0, &feature).expect("a label").text
+    };
+    assert_eq!(cased("uppercase"), "NIKOLAIVIERTEL");
+    assert_eq!(cased("lowercase"), "nikolaiviertel");
+    assert_eq!(cased("none"), "Nikolaiviertel");
+
+    // Absent is the spec's default, which is `none`.
+    let plain = layer(r#"{"text-field": ["get", "name"]}"#);
+    assert_eq!(
+        label(&plain, 15.0, &feature).expect("a label").text,
+        "Nikolaiviertel"
+    );
+}
+
+/// It is the *full* Unicode mapping, which is the one that can change a string's length.
+///
+/// The simple mapping leaves `ß` alone and was the obvious guess for what mbgl's code-point walk
+/// does. It is not: nunicode decodes multi-code-point replacements too, and drawing the two
+/// against `mbgl-render` settled it at 698 pixels apart.
+#[test]
+fn text_transform_uses_the_full_mapping() {
+    let one = |transform: &str, text: &str| {
+        let feature = Props::new(&[("name", Value::String(text.to_string()))]);
+        let layer = layer(&format!(
+            r#"{{"text-field": ["get", "name"], "text-transform": "{transform}"}}"#
+        ));
+        label(&layer, 15.0, &feature).expect("a label").text
+    };
+    assert_eq!(one("uppercase", "Straße"), "STRASSE");
+    assert_eq!(one("uppercase", "ﬁord"), "FIORD");
+    assert_eq!(one("lowercase", "İSTANBUL"), "i\u{307}stanbul");
+}
+
+/// A `["format", …]` is cased section by section, and an image section is left alone.
+///
+/// mbgl's order, and it matters: an image section carries a sprite name rather than letters, and
+/// upcasing it would look for a sprite nobody packed.
+#[test]
+fn text_transform_spares_an_image_section() {
+    let feature = Props::new(&[("name", Value::String("Nikolaiviertel".to_string()))]);
+    let layer = layer(
+        r#"{"text-field": ["format", ["image", "aerialway"], {}, ["get", "name"], {}],
+            "text-transform": "uppercase"}"#,
+    );
+    let label = label(&layer, 15.0, &feature).expect("a label");
+    let images: Vec<&str> = label
+        .sections
+        .iter()
+        .filter_map(|section| section.image.as_deref())
+        .collect();
+    assert_eq!(images, ["aerialway"], "the sprite keeps its name");
+    let text: Vec<&str> = label
+        .sections
+        .iter()
+        .filter(|section| section.image.is_none())
+        .map(|section| section.text.as_str())
+        .collect();
+    assert_eq!(text, ["NIKOLAIVIERTEL"]);
+}
