@@ -643,6 +643,12 @@ impl Pending {
 /// One feature's symbol, resolved but not shaped.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pending {
+    /// This feature's `symbol-sort-key`, which decides where it sits in the layout.
+    ///
+    /// Not a property of the label so much as of the list: the layout holds its features in
+    /// sort-key order, and everything downstream -- which anchor the repeat filter keeps, which
+    /// label is placed first, which glyphs are drawn over which -- follows that order.
+    pub sort_key: f32,
     /// What it says, after tokens and expressions. Empty for an icon with no label.
     pub text: String,
     /// Its sections, which concatenate to [`Self::text`]. One for an ordinary label.
@@ -737,6 +743,11 @@ pub struct SymbolLayout {
     pub text_size: SizeBinding,
     /// The same for `icon-size`.
     pub icon_size: SizeBinding,
+    /// Whether this layer's features are held in `symbol-sort-key` order.
+    ///
+    /// mbgl's `sortFeaturesByKey`: the key is set *and* `symbol-z-order` is not `viewport-y`,
+    /// which asks for a different ordering entirely.
+    pub sort_by_key: bool,
     /// Which passes this layer's text draws: the halo, the letters, or both.
     ///
     /// A halo is a *second drawable over the same geometry*, drawn underneath, so this is what
@@ -776,6 +787,13 @@ impl SymbolLayout {
         let text_size = SizeBinding::of(layer, "text-size", zoom, 16.0);
         let icon_size = SizeBinding::of(layer, "icon-size", zoom, 1.0);
         let text_passes = passes(layer, "text", zoom);
+        // mbgl's `sortFeaturesByKey`. `symbol-z-order: viewport-y` sorts by screen position at
+        // placement instead, so the two are alternatives rather than a pair.
+        let sort_by_key = layer.layout.contains_key("symbol-sort-key")
+            && layout_value(layer, "symbol-z-order", zoom, None)
+                .as_ref()
+                .and_then(Value::as_str)
+                != Some("viewport-y");
         let symbol = text_options(layer, zoom, None, &text_size);
         let placement = Placement::of(layer, zoom);
 
@@ -808,6 +826,7 @@ impl SymbolLayout {
             symbol,
             text_size,
             icon_size,
+            sort_by_key,
             text_passes,
             line: LineOptions {
                 symbol,
@@ -850,6 +869,11 @@ impl SymbolLayout {
     ) {
         let label = symbol::label(layer, zoom, feature);
         let icon = symbol::icon_image(layer, zoom, feature);
+        #[allow(clippy::cast_possible_truncation)]
+        let sort_key = layout_value(layer, "symbol-sort-key", zoom, Some(feature))
+            .as_ref()
+            .and_then(Value::as_number)
+            .map_or(0.0, |value| value as f32);
 
         // A symbol needs one half or the other. Neither is the common case — most features of a
         // symbol source have no name and no icon — and it is why this is a filter rather than an
@@ -887,7 +911,8 @@ impl SymbolLayout {
             if lines.is_empty() {
                 return;
             }
-            self.pending.push(Pending {
+            self.insert(Pending {
+                sort_key,
                 text,
                 sections,
                 icon,
@@ -915,7 +940,8 @@ impl SymbolLayout {
             };
 
             for anchoring in anchorings {
-                self.pending.push(Pending {
+                self.insert(Pending {
+                    sort_key,
                     text: text.clone(),
                     sections: sections.clone(),
                     icon: icon.clone(),
@@ -947,6 +973,35 @@ impl SymbolLayout {
                 .extend(pending.text.chars().map(|character| character as u32));
         }
         out
+    }
+
+    /// Adds a pending symbol, in `symbol-sort-key` order where the layer asks for one.
+    ///
+    /// # Why the order is the whole of the feature
+    ///
+    /// Almost everything downstream of the layout is order-dependent, and none of it obviously
+    /// so. The repeat-distance filter keeps the *first* anchor it sees carrying a given name and
+    /// drops every later one within half a `symbol-spacing`; placement competes labels in list
+    /// order; and the vertices are emitted in list order, which is what decides which label is
+    /// drawn over which. A style that sets `symbol-sort-key` is asking for all three.
+    ///
+    /// Found by measuring rather than by reading: the Protomaps road-label layers set
+    /// `["get", "min_zoom"]`, and every anchor this build generated for them matched mbgl's
+    /// exactly -- all forty-seven of them -- while two labels still drew in a different place.
+    /// The repeat filter had seen the same anchors in a different order and kept different ones.
+    ///
+    /// `lower_bound`, so a feature is inserted *before* the ones it ties with. That is mbgl's
+    /// `std::lower_bound` and it reverses the relative order of equal keys, which is a property
+    /// of the arrangement rather than an accident of it.
+    fn insert(&mut self, pending: Pending) {
+        if !self.sort_by_key {
+            self.pending.push(pending);
+            return;
+        }
+        let at = self
+            .pending
+            .partition_point(|held| held.sort_key < pending.sort_key);
+        self.pending.insert(at, pending);
     }
 
     /// Joins line features that share an endpoint and say the same thing.
