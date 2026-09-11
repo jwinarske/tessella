@@ -3,15 +3,17 @@
 //! §8 picks `earcutr` on the grounds that it is the same algorithm, and notes in passing that
 //! "output ordering matters for §9". That note is the whole risk, and this is the measurement.
 //!
-//! The answer: they produce the *same triangulation*, and for simple polygons — including
-//! concave ones — they emit it in the same order, index for index. Once a hole is involved the
-//! triangles come out in a different order. The same triangles: same count, same total area,
-//! and every one with the same winding.
+//! The answer: they produce the *same triangulation*, and emit it in the same order, index for
+//! index -- holes included. That last part was not always so. The vendored crate followed an
+//! older `earcut.js` in how it bridges a hole to its outer ring, and on a polygon with a hole the
+//! same triangles came out in another sequence; `vendor/earcutr/PATCH.md` records the port of
+//! `earcut.hpp`'s bridging that closed it.
 //!
 //! Emission order is not a property of the map. Triangles are independent, the rendered result
 //! is identical, and nothing downstream depends on the sequence. So the oracle hashes indices
 //! in the canonical form below rather than raw, and this file is where that decision is
-//! justified and kept honest.
+//! justified and kept honest -- it is what made the old difference harmless, and it is what
+//! keeps a future one from being mistaken for a different triangulation.
 //!
 //! Expectations come from running mbgl's vendored `earcut.hpp` on these polygons.
 
@@ -87,23 +89,22 @@ fn simple_polygons_agree_index_for_index() {
     );
 }
 
-/// The divergence, recorded rather than hidden. A hole makes the two emit the same triangles
-/// in a different sequence, which is why the oracle compares canonically.
+/// A hole no longer changes the emission order.
+///
+/// It did: this test used to assert that the sequences differed while the triangles agreed, and
+/// said that if it ever passed the canonicalization was no longer needed. It stopped passing when
+/// the crate took `earcut.hpp`'s hole bridging, and now the sequence is `earcut.hpp`'s too. The
+/// canonicalization stays -- see the module comment -- but it is no longer covering a difference.
 #[test]
-fn a_hole_changes_the_emission_order() {
+fn a_hole_leaves_the_emission_order_alone() {
     let ours = earcut(&[SQUARE, HOLE]);
     let theirs = [
         0, 4, 7, 5, 4, 0, 1, 0, 7, 5, 0, 3, 2, 1, 7, 6, 5, 3, 2, 7, 6, 6, 3, 2,
     ];
 
-    assert_ne!(
-        ours, theirs,
-        "if this ever passes, the canonicalization is no longer needed"
-    );
     assert_eq!(
-        canonical(&ours),
-        canonical(&theirs),
-        "the same triangles, differently ordered"
+        ours, theirs,
+        "earcut.hpp's triangles, in earcut.hpp's order"
     );
 }
 

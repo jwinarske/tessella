@@ -8,9 +8,11 @@
 //! any triangle of any of them -- the order of the triangles, or which vertex a triangle starts
 //! from, included -- fails here rather than as a pixel count somewhere downstream.
 //!
-//! A change that is meant to alter the triangulation updates the numbers below, and says in its
-//! commit what the oracle made of the new one. A change that is not meant to -- a faster search
-//! for the same ears -- must leave them exactly as they are.
+//! The numbers are `earcut.hpp`'s. mbgl's vendored copy, run over the same polygons and hashed
+//! the same way, gives exactly these -- every one of the fixtures' fill polygons triangulated as
+//! mbgl triangulates it, index for index. A change that is meant to alter the triangulation
+//! updates them, and says in its commit what `earcut.hpp` makes of the new ones. A change that is
+//! not meant to -- a faster search for the same ears -- must leave them exactly as they are.
 
 use std::path::Path;
 
@@ -19,11 +21,12 @@ use tessella_source::mvt::{GeomType, Tile};
 
 /// What the fixtures triangulate to: polygons, triangles, and FNV-1a 64 over the indices.
 ///
-/// Taken from earcutr 0.5.0 with the threshold correction alone, before any change to how it
-/// searches for ears -- so a faster search that passes here finds exactly the ears it did.
+/// Taken from mbgl's vendored `earcut.hpp`, and matched by this crate since it took `earcut.hpp`'s
+/// hole bridging and fallback passes. Before that, 18 of these polygons triangulated differently,
+/// and the hash was `0x342f_2a43_07e2_aece`.
 const POLYGONS: usize = 5030;
 const TRIANGLES: usize = 150_661;
-const HASH: u64 = 0x342f_2a43_07e2_aece;
+const HASH: u64 = 0xa329_e819_8ac2_57cf;
 
 /// The vector tiles the fill layer is exercised on elsewhere in the suite.
 const TILES: &[&str] = &[
