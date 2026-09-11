@@ -217,6 +217,57 @@ fn a_polygon_under_the_cap_is_unchanged() {
     assert_eq!(polygon, before);
 }
 
+/// Where holes tie, the cap keeps the ones libstdc++'s `std::nth_element` keeps, in its order.
+///
+/// Six hundred holes in five sizes, so almost every comparison is a tie. The standard leaves the
+/// outcome unspecified; mbgl's oracle is built against libstdc++, and its introselect keeps a
+/// definite set in a definite order -- the numbers below are what it answered for these areas.
+/// The order is not cosmetic: it is the order the kept holes' vertices are numbered in.
+#[test]
+fn tied_holes_are_kept_as_libstdcxx_keeps_them() {
+    let mut polygon = vec![vec![[0i16, 0], [4000, 0], [4000, 4000], [0, 4000]]];
+    for index in 0..600i16 {
+        let side = 1 + (index * 7) % 5;
+        let (x, y) = ((index % 30) * 100 + 10, (index / 30) * 100 + 10);
+        polygon.push(vec![
+            [x, y],
+            [x, y + side],
+            [x + side, y + side],
+            [x + side, y],
+        ]);
+    }
+    let holes = polygon[1..].to_vec();
+
+    fill::limit_holes(&mut polygon);
+    let kept: Vec<usize> = polygon[1..]
+        .iter()
+        .map(|ring| {
+            holes
+                .iter()
+                .position(|hole| hole == ring)
+                .expect("a kept hole")
+        })
+        .collect();
+
+    assert_eq!(kept.len(), fill::MAX_HOLES);
+    assert_eq!(
+        kept[..12],
+        [1, 599, 2, 597, 4, 596, 594, 7, 592, 9, 591, 589]
+    );
+    assert_eq!(kept[kept.len() - 4..], [560, 585, 580, 545]);
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for index in &kept {
+        for byte in (*index as u64).to_le_bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    assert_eq!(
+        hash, 0x52ff_e102_fb78_1e44,
+        "the whole kept order, as libstdc++ left it"
+    );
+}
+
 /// The cap is stable: the same rings in, the same holes out.
 ///
 /// mbgl selects with `std::nth_element`, which partitions rather than sorts and promises nothing
