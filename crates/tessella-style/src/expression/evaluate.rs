@@ -159,6 +159,15 @@ pub(super) struct Context<'a> {
     pub(super) camera: Option<Camera>,
     /// Current feature, when there is one.
     pub(super) feature: Option<&'a dyn Feature>,
+    /// The sprites the caller has, for `["image", …]` to report on.
+    ///
+    /// `None` is "the caller did not say", and an image is then reported *available*. mbgl
+    /// defaults its own set to empty and reports unavailable, which is the right answer when the
+    /// set is known to be empty and the wrong one when it is merely absent: a `coalesce` over
+    /// images would skip every one of them and a style's icons would all vanish. The tile build
+    /// is where `icon-image` is resolved and it has no sprite sheet -- the sheet is a frame-time
+    /// resource -- so `None` is what it passes, and until that is wired this is the difference.
+    pub(super) images: Option<&'a [alloc::string::String]>,
     /// Names bound by enclosing `let`s, innermost first.
     ///
     /// A borrowed chain rather than an owned map: a `let` pushes one frame onto the stack and
@@ -195,6 +204,7 @@ impl Context<'_> {
             zoom: None,
             camera: None,
             feature: None,
+            images: None,
             scope: None,
         }
     }
@@ -486,10 +496,14 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
             })
         }
         Expr::Image(name) => {
-            // mbgl's `Image`, whose serialization is an object with the name in it. The `format`
-            // evaluator above recognises an image section by exactly that key.
+            // mbgl's `Image`, whose serialization is an object with the name in it and whether the
+            // sheet holds it. The `format` evaluator below recognizes an image section by the
+            // name key; `coalesce` reads the other one, which is what lets a style name a sprite
+            // and a fallback and get the one that exists.
             let name = to_string(&evaluate(name, context)?);
+            let available = context.images.is_none_or(|images| images.contains(&name));
             let mut members = alloc::collections::BTreeMap::new();
+            members.insert("available".to_string(), Value::Bool(available));
             members.insert("name".to_string(), Value::String(name));
             Ok(Value::Object(members))
         }
@@ -517,8 +531,27 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
                     }
                 };
                 entry.insert("scale".to_string(), optional(&section.scale)?);
-                entry.insert("fontStack".to_string(), optional(&section.font)?);
-                entry.insert("textColor".to_string(), optional(&section.color)?);
+                // A font stack is written as an array and carried as the comma-joined string the
+                // glyph side keys its caches by -- `["a", "b"]` is the stack `a,b`. mbgl joins it
+                // when it builds the section rather than leaving every reader to.
+                entry.insert(
+                    "fontStack".to_string(),
+                    match optional(&section.font)? {
+                        Value::Array(names) => {
+                            Value::String(names.iter().map(to_string).collect::<Vec<_>>().join(","))
+                        }
+                        other => other,
+                    },
+                );
+                // And the color is a color, not the string the style wrote it as: a section is
+                // consumed by the shaper, which wants channels rather than something to parse.
+                entry.insert(
+                    "textColor".to_string(),
+                    match optional(&section.color)? {
+                        Value::Null => Value::Null,
+                        other => to_colour(&other).map_or(other, colour_value),
+                    },
+                );
                 out.push(Value::Object(entry));
             }
             let mut formatted = alloc::collections::BTreeMap::new();
@@ -652,9 +685,19 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
         Expr::Coalesce(args) => {
             for arg in args {
                 let value = evaluate(arg, context)?;
-                if value != Value::Null {
-                    return Ok(value);
+                if value == Value::Null {
+                    continue;
                 }
+                // An image the sheet does not hold is skipped as though it were null, which is
+                // the whole point of writing `["coalesce", ["image", a], ["image", b]]`: name a
+                // sprite and a fallback, and take the one that exists. Without this the first is
+                // always taken and the fallback never reached.
+                if let Value::Object(members) = &value
+                    && members.get("available") == Some(&Value::Bool(false))
+                {
+                    continue;
+                }
+                return Ok(value);
             }
             Ok(Value::Null)
         }
@@ -965,6 +1008,7 @@ fn evaluate_let(
         zoom: context.zoom,
         camera: context.camera,
         feature: context.feature,
+        images: context.images,
         scope: Some(&bound),
     };
     evaluate_let(rest, body, &inner)

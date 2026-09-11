@@ -1340,12 +1340,33 @@ impl Expression {
         camera: Option<Camera>,
         feature: Option<&dyn Feature>,
     ) -> Result<Value, EvaluationError> {
+        self.evaluate_in(zoom, camera, feature, None)
+    }
+
+    /// As [`evaluate_with_camera`](Self::evaluate_with_camera), and saying which sprites exist.
+    ///
+    /// `["image", name]` reports whether the sheet holds the name, and `coalesce` skips one it
+    /// does not -- which is how a style names a sprite and a fallback and gets the one that is
+    /// there. A caller passing `None` says it does not know, and every image is then reported
+    /// available; see `Context::images` for why that rather than mbgl's empty default.
+    ///
+    /// # Errors
+    ///
+    /// As [`evaluate_with_camera`](Self::evaluate_with_camera).
+    pub fn evaluate_in(
+        &self,
+        zoom: Option<f64>,
+        camera: Option<Camera>,
+        feature: Option<&dyn Feature>,
+        images: Option<&[alloc::string::String]>,
+    ) -> Result<Value, EvaluationError> {
         evaluate::evaluate(
             &self.root,
             &evaluate::Context {
                 zoom,
                 camera,
                 feature,
+                images,
                 scope: None,
             },
         )
