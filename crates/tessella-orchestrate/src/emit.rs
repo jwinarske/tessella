@@ -388,7 +388,22 @@ impl SlabArena {
     /// quoted here for a decision it was not making. The vertex-side rule is DR-21's, and it
     /// reaches the same layer boundary by a different argument: batching, not uniform indexing.
     pub fn alloc(&mut self, bytes: &[u8]) -> SlabRef {
-        if bytes.is_empty() {
+        self.alloc_with(bytes.len(), |out| out.copy_from_slice(bytes))
+    }
+
+    /// Allocates `len` bytes and has `write` fill them where they will be read.
+    ///
+    /// [`alloc`](Self::alloc) for a caller that would otherwise build the bytes in a buffer of its
+    /// own only to have them copied in: a bucket's vertices and indices are typed values that
+    /// become bytes on the way into the slab, and building them first cost an allocation, a
+    /// capacity check per value and a second copy. On four views sweeping a real tile that was
+    /// nearly all of encoding a fill, and encoding fills was a sixth of every tick.
+    ///
+    /// `write` is handed exactly `len` bytes and must fill all of them. It is not called when
+    /// `len` is zero, nor when the region is full; the reference is the same as `alloc` gives in
+    /// those cases.
+    pub fn alloc_with(&mut self, len: usize, write: impl FnOnce(&mut [u8])) -> SlabRef {
+        if len == 0 {
             return SlabRef {
                 slab: self.open.as_ref().map_or(0, |slab| slab.id),
                 offset: 0,
@@ -405,14 +420,14 @@ impl SlabArena {
             None => true,
             // Not a tuning threshold: past this the offset no longer fits the field that carries
             // it, and the reference would name the wrong bytes.
-            Some(slab) => slab.len() + padding + bytes.len() > u32::MAX as usize,
+            Some(slab) => slab.len() + padding + len > u32::MAX as usize,
         };
         if needs_new {
             self.seal();
             let id = self.take_slot();
             self.open = Some(Slab {
                 id,
-                bytes: self.open_bytes(id, SLAB_BYTES.max(bytes.len())),
+                bytes: self.open_bytes(id, SLAB_BYTES.max(len)),
             });
         }
 
@@ -426,14 +441,14 @@ impl SlabArena {
                     unreachable!("an owned arena opens owned slabs")
                 };
                 held.resize(held.len() + padding, 0);
-                #[allow(clippy::cast_possible_truncation)]
-                let offset = held.len() as u32;
-                held.extend_from_slice(bytes);
+                let at = held.len();
+                held.resize(at + len, 0);
+                write(&mut held[at..]);
                 #[allow(clippy::cast_possible_truncation)]
                 SlabRef {
                     slab: *id,
-                    offset,
-                    length: bytes.len() as u32,
+                    offset: at as u32,
+                    length: len as u32,
                 }
             }
             Backing::Region {
@@ -451,7 +466,7 @@ impl SlabArena {
                 };
                 // The open slab is the top of the region, so growing it is the same bump the
                 // region itself does — there is nothing above it to move.
-                let wanted = padding + bytes.len();
+                let wanted = padding + len;
                 if *cursor + wanted > region.len() {
                     // Nothing is written, and the frame will be told before it commits. Handing
                     // back a reference to bytes that were not written is the one answer that
@@ -464,7 +479,7 @@ impl SlabArena {
                     };
                 }
                 region.bytes_mut()[*cursor..*cursor + padding].fill(0);
-                region.bytes_mut()[*cursor + padding..*cursor + wanted].copy_from_slice(bytes);
+                write(&mut region.bytes_mut()[*cursor + padding..*cursor + wanted]);
                 *cursor += wanted;
                 #[allow(clippy::cast_possible_truncation)]
                 let offset = (*length + padding) as u32;
@@ -478,7 +493,7 @@ impl SlabArena {
                 SlabRef {
                     slab: *id,
                     offset,
-                    length: bytes.len() as u32,
+                    length: len as u32,
                 }
             }
         }
@@ -1240,16 +1255,11 @@ pub fn encode_fill(
         FillPart::Triangles => (&bucket.indices, &bucket.segments),
         FillPart::Outline => (&bucket.line_indices, &bucket.line_segments),
     };
-    let index_bytes = as_bytes_u16(indices);
-
     // The indices are this drawable's; the vertices are the pair's.
-    let indexes = arena.alloc(&index_bytes);
+    let indexes = alloc_u16(arena, indices);
     let vertices = match shared {
         Some(shared) => shared.vertices,
-        None => {
-            let vertex_bytes = as_bytes_i16(&bucket.vertices);
-            arena.alloc(&vertex_bytes)
-        }
+        None => alloc_i16x2(arena, &bucket.vertices),
     };
 
     let position = AttributeDesc {
@@ -1587,7 +1597,7 @@ pub fn encode_line(
     }
 
     let vertices = arena.alloc(&vertex_bytes);
-    let indexes = arena.alloc(&as_bytes_u16(&bucket.indices));
+    let indexes = alloc_u16(arena, &bucket.indices);
     let interleaved = arena.alloc(attributes);
 
     let fixed = [
@@ -1716,8 +1726,8 @@ pub fn encode_background_on(
         (QUAD.to_vec(), INDICES.to_vec())
     };
 
-    let vertices = arena.alloc(&as_bytes_i16(&grid));
-    let indexes = arena.alloc(&as_bytes_u16(&grid_indices));
+    let vertices = alloc_i16x2(arena, &grid);
+    let indexes = alloc_u16(arena, &grid_indices);
 
     let position = AttributeDesc {
         attr_id: POSITION_ATTRIBUTE,
@@ -1772,8 +1782,8 @@ pub fn encode_circle(
     attributes: &[u8],
     permutation_key: u64,
 ) -> Encoded {
-    let vertices = arena.alloc(&as_bytes_i16(&bucket.vertices));
-    let indexes = arena.alloc(&as_bytes_u16(&bucket.indices));
+    let vertices = alloc_i16x2(arena, &bucket.vertices);
+    let indexes = alloc_u16(arena, &bucket.indices);
     let interleaved = arena.alloc(attributes);
 
     let fixed = [(POSITION_ATTRIBUTE, 0, 0, AttributeDataType::Short2)];
@@ -1820,7 +1830,7 @@ pub fn encode_extrusion(
     }
 
     let vertices = arena.alloc(&vertex_bytes);
-    let indexes = arena.alloc(&as_bytes_u16(&bucket.indices));
+    let indexes = alloc_u16(arena, &bucket.indices);
     let interleaved = arena.alloc(attributes);
 
     let fixed = [
@@ -1932,8 +1942,8 @@ pub fn encode_extrusion_walls(
         BuiltIn::FillExtrusionInstancedShader
     };
 
-    let vertices = arena.alloc(&as_bytes_i16(&WALL_TEMPLATE));
-    let indexes = arena.alloc(&as_bytes_u16(&WALL_INDICES));
+    let vertices = alloc_i16x2(arena, &WALL_TEMPLATE);
+    let indexes = alloc_u16(arena, &WALL_INDICES);
 
     let template = [AttributeDesc {
         attr_id: POSITION_ATTRIBUTE,
@@ -2052,14 +2062,11 @@ pub fn encode_symbol(
     paint: &SymbolPaint<'_>,
 ) -> Encoded {
     let vertex_bytes = as_symbol_bytes(&buffers.vertices);
-    let index_bytes = as_bytes_u16(&buffers.indices);
-    let dynamic_bytes = as_bytes_f32_3(&buffers.dynamic);
-    let opacity_bytes = as_bytes_f32(&buffers.opacity);
 
     let interleaved = arena.alloc(&vertex_bytes);
-    let indexes = arena.alloc(&index_bytes);
-    let dynamic = arena.alloc(&dynamic_bytes);
-    let opacity = arena.alloc(&opacity_bytes);
+    let indexes = alloc_u16(arena, &buffers.indices);
+    let dynamic = alloc_f32x3(arena, &buffers.dynamic);
+    let opacity = alloc_f32(arena, &buffers.opacity);
 
     // The five attributes the capture shows, in the order it shows them. Offsets 0, 8 and 16
     // share the interleaved buffer at stride 24; the last two are tightly packed buffers of
@@ -2209,10 +2216,9 @@ pub fn encode_raster(
     image: TextureId,
 ) -> Encoded {
     let vertex_bytes = as_raster_bytes(&bucket.vertices);
-    let index_bytes = as_bytes_u16(&bucket.indices);
 
     let interleaved = arena.alloc(&vertex_bytes);
-    let indexes = arena.alloc(&index_bytes);
+    let indexes = alloc_u16(arena, &bucket.indices);
 
     let descriptors = alloc::vec![
         AttributeDesc {
@@ -2393,21 +2399,27 @@ fn push_span<T: WireRecord>(payload: &mut Vec<u8>, items: &[T]) -> Span {
     }
 }
 
-fn as_bytes_i16(values: &[[i16; 2]]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(values.len() * 4);
-    for value in values {
-        out.extend_from_slice(&value[0].to_le_bytes());
-        out.extend_from_slice(&value[1].to_le_bytes());
-    }
-    out
+/// Positions as the slab carries them: pairs of little-endian `i16`, written in place.
+///
+/// Per value into a destination already the right size, which has no capacity to check and
+/// compiles to a straight copy where the target is little-endian -- which is every target this
+/// builds for, and the reason the wire format is little-endian.
+fn alloc_i16x2(arena: &mut SlabArena, values: &[[i16; 2]]) -> SlabRef {
+    arena.alloc_with(values.len() * 4, |out| {
+        for (bytes, [x, y]) in out.chunks_exact_mut(4).zip(values) {
+            bytes[..2].copy_from_slice(&x.to_le_bytes());
+            bytes[2..].copy_from_slice(&y.to_le_bytes());
+        }
+    })
 }
 
-fn as_bytes_u16(values: &[u16]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(values.len() * 2);
-    for value in values {
-        out.extend_from_slice(&value.to_le_bytes());
-    }
-    out
+/// Indices, as little-endian `u16`, written in place.
+fn alloc_u16(arena: &mut SlabArena, values: &[u16]) -> SlabRef {
+    arena.alloc_with(values.len() * 2, |out| {
+        for (bytes, value) in out.chunks_exact_mut(2).zip(values) {
+            bytes.copy_from_slice(&value.to_le_bytes());
+        }
+    })
 }
 
 /// A symbol's interleaved vertices, in the order the three attributes are declared.
@@ -2450,22 +2462,24 @@ fn as_raster_bytes(values: &[RasterVertex]) -> Vec<u8> {
     out
 }
 
-fn as_bytes_f32_3(values: &[[f32; 3]]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(values.len() * 12);
-    for value in values {
-        for component in value {
-            out.extend_from_slice(&component.to_le_bytes());
+/// Three little-endian `f32` per value, written in place.
+fn alloc_f32x3(arena: &mut SlabArena, values: &[[f32; 3]]) -> SlabRef {
+    arena.alloc_with(values.len() * 12, |out| {
+        for (bytes, value) in out.chunks_exact_mut(12).zip(values) {
+            for (slot, component) in bytes.chunks_exact_mut(4).zip(value) {
+                slot.copy_from_slice(&component.to_le_bytes());
+            }
         }
-    }
-    out
+    })
 }
 
-fn as_bytes_f32(values: &[f32]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(values.len() * 4);
-    for value in values {
-        out.extend_from_slice(&value.to_le_bytes());
-    }
-    out
+/// Little-endian `f32`, written in place.
+fn alloc_f32(arena: &mut SlabArena, values: &[f32]) -> SlabRef {
+    arena.alloc_with(values.len() * 4, |out| {
+        for (bytes, value) in out.chunks_exact_mut(4).zip(values) {
+            bytes.copy_from_slice(&value.to_le_bytes());
+        }
+    })
 }
 
 #[cfg(test)]
