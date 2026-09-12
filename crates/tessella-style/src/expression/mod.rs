@@ -1036,6 +1036,22 @@ pub enum Expr {
         /// Output when no condition holds.
         fallback: Box<Expr>,
     },
+    /// `["number-format", value, options]`: a number as a person reads it.
+    ///
+    /// Every option is itself an expression -- a style reads the locale off the feature in the
+    /// specification's own case -- so they are held as parsed trees rather than as strings.
+    NumberFormat {
+        /// The number.
+        value: Box<Expr>,
+        /// BCP 47 tag, or `None` for the caller's default.
+        locale: Option<Box<Expr>>,
+        /// ISO 4217 code, or `None` for a plain number.
+        currency: Option<Box<Expr>>,
+        /// Fewest fraction digits to show.
+        min_digits: Option<Box<Expr>>,
+        /// Most to keep.
+        max_digits: Option<Box<Expr>>,
+    },
     /// `["within", geojson]`: whether the feature lies inside the polygon.
     ///
     /// The argument is a GeoJSON literal rather than an expression, which is why the rings are
@@ -1539,7 +1555,7 @@ impl Expr {
             }),
             // It never produces one, so nothing constrains what it could have been.
             Self::Error(_) => Type::Value,
-            Self::Concat(_) | Self::Join { .. } => Type::String,
+            Self::Concat(_) | Self::Join { .. } | Self::NumberFormat { .. } => Type::String,
             Self::In { .. } | Self::Within(_) => Type::Boolean,
             // `get`, `id`, and everything whose type depends on data or on branches this does
             // not unify.
@@ -1915,6 +1931,18 @@ fn children(expr: &Expr) -> Vec<&Expr> {
         }
         #[cfg(feature = "collator")]
         Expr::ResolvedLocale(collator) => collator.children(),
+        Expr::NumberFormat {
+            value,
+            locale,
+            currency,
+            min_digits,
+            max_digits,
+        } => core::iter::once(&**value)
+            .chain(locale.as_deref())
+            .chain(currency.as_deref())
+            .chain(min_digits.as_deref())
+            .chain(max_digits.as_deref())
+            .collect(),
         Expr::All(args)
         | Expr::Any(args)
         | Expr::Coalesce(args)
@@ -2077,6 +2105,11 @@ fn classify(expr: &Expr) -> Dependency {
             Some(object) => classify(key).join(classify(object)),
             None => Dependency::FEATURE.join(classify(key)),
         },
+        // The join over whatever the options read, which is the feature in the specification's
+        // own case: it takes the locale and the digit bounds off the feature's tags.
+        Expr::NumberFormat { .. } => children(expr)
+            .into_iter()
+            .fold(Dependency::NONE, |seen, child| seen.join(classify(child))),
         Expr::Compare { lhs, rhs, .. } => classify(lhs).join(classify(rhs)),
         #[cfg(feature = "collator")]
         Expr::CompareWith {

@@ -255,6 +255,9 @@ not_equal/mismatch
 not_equal/number
 not_equal/string
 not_equal/value
+number-format/currency
+number-format/default
+number-format/precision
 number/basic
 number/default-value
 object/basic

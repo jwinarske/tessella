@@ -34,6 +34,7 @@ pub mod expression;
 pub mod filter;
 pub mod generated;
 pub mod light;
+pub mod number_format;
 pub mod property;
 pub mod script;
 pub mod value;

@@ -252,6 +252,28 @@ fn parse_rooted(
         // `LineString` there is a parse error rather than a test nothing can pass. A *feature*
         // that is a polygon is a different question and is answered false at evaluation, where
         // mbgl answers it.
+        // `["number-format", value, options]`. The options object is a literal, but each of its
+        // values is an expression -- the spec's own case reads all three off the feature.
+        "number-format" => {
+            expect_arity(operator, args, 2, 2)?;
+            let options = args[1].as_object().ok_or_else(|| ParseError::Malformed {
+                operator: operator.to_string(),
+                detail: "the second argument is an options object".to_string(),
+            })?;
+            let option = |name: &str| -> Result<Option<Box<Expr>>, ParseError> {
+                match options.get(name) {
+                    Some(value) => Ok(Some(Box::new(parse_in(value, scope)?))),
+                    None => Ok(None),
+                }
+            };
+            Ok(Expr::NumberFormat {
+                value: Box::new(parse_in(&args[0], scope)?),
+                locale: option("locale")?,
+                currency: option("currency")?,
+                min_digits: option("min-fraction-digits")?,
+                max_digits: option("max-fraction-digits")?,
+            })
+        }
         "within" => {
             expect_arity(operator, args, 1, 1)?;
             let rings = within_rings(&args[0]).ok_or_else(|| ParseError::Malformed {
