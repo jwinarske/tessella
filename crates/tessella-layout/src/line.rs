@@ -201,6 +201,16 @@ pub struct LineBucket {
     pub indices: Vec<u16>,
     /// Draw segments.
     pub segments: Vec<Segment>,
+    /// The triangles of the ring being generated, kept between rings for its capacity.
+    ///
+    /// A fill's outline is one call a ring and a basemap tile is thousands of four-point rings,
+    /// so a buffer allocated per ring is an allocation and a free per ring, and one grown from
+    /// nothing copies what it already holds each time it doubles. Held here instead, it settles
+    /// at the size of the tile's largest ring and neither happens again.
+    ///
+    /// Empty outside [`Self::add_geometry`], so nothing a caller can observe changes -- the
+    /// derived `PartialEq` and `Clone` included.
+    scratch: Vec<TriangleElement>,
 }
 
 /// Build the packed vertex for a point and extrusion.
@@ -276,6 +286,7 @@ fn direction(a: Position, b: Position) -> [f64; 2] {
     ])
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TriangleElement(u16, u16, u16);
 
 /// Per-geometry generator state.
@@ -484,9 +495,14 @@ impl LineBucket {
         // all of them again.
         let points = len - first;
         self.vertices.reserve(2 * points);
+        // The last ring's buffer, emptied. Its capacity is this ring's, because a tile's rings
+        // are all much of a size.
+        let mut triangles = core::mem::take(&mut self.scratch);
+        triangles.clear();
+        triangles.reserve(2 * points);
         let mut out = Gen {
             vertices: &mut self.vertices,
-            triangles: Vec::with_capacity(2 * points),
+            triangles,
             start_vertex,
             e1: -1,
             e2: -1,
@@ -537,14 +553,12 @@ impl LineBucket {
                 join_normal = unit(join_normal);
             }
 
-            let cos_angle = prev_n[0] * next_n[0] + prev_n[1] * next_n[1];
             let cos_half_angle = join_normal[0] * next_n[0] + join_normal[1] * next_n[1];
             let miter_length = if cos_half_angle != 0.0 {
                 1.0 / cos_half_angle
             } else {
                 f64::INFINITY
             };
-            let approx_angle = 2.0 * libm::sqrt(2.0 - 2.0 * cos_half_angle);
 
             let is_sharp_corner = cos_half_angle < cos_half_sharp_corner
                 && prev_coordinate.is_some()
@@ -663,6 +677,11 @@ impl LineBucket {
                 }
 
                 if current_join == ResolvedJoin::FakeRound {
+                    // Only this join reads the angle itself or the angle between the segments.
+                    // Taken here rather than with `cos_half_angle` above, where every point in
+                    // every ring would pay the square root and almost none would spend it.
+                    let approx_angle = 2.0 * libm::sqrt(2.0 - 2.0 * cos_half_angle);
+                    let cos_angle = prev_n[0] * next_n[0] + prev_n[1] * next_n[1];
                     let n = libm::round(
                         (approx_angle * 180.0 / core::f64::consts::PI) / DEG_PER_TRIANGLE,
                     ) as u32;
@@ -759,7 +778,7 @@ impl LineBucket {
             start_of_line = false;
         }
 
-        let triangles = out.triangles;
+        let mut triangles = out.triangles;
         let vertex_count = self.vertices.len() - start_vertex;
 
         let needs_segment = match self.segments.last() {
@@ -787,6 +806,10 @@ impl LineBucket {
 
         segment.vertex_length += vertex_count as u32;
         segment.index_length += (triangles.len() * 3) as u32;
+
+        // Back for the next ring, emptied so that what a caller compares is unchanged.
+        triangles.clear();
+        self.scratch = triangles;
     }
 }
 

@@ -2567,6 +2567,12 @@ tenth of a decode. Revisit if a profile on the RK3566 lane says decode is the th
 budget — the argument above is what to pick up, and the standalone callgrind comparison in
 `crates/tessella-source/benches/decode.rs` is how to tell whether it worked. 
 
+One trap in taking any of these numbers. A `--toggle-collect` that names a function collects
+nothing at all under `lto = "fat"`: the profile comes back a few hundred bytes, prints `.` where
+its totals go, and never names the function anywhere, because what the linker kept is not the
+name callgrind matches against. `--toggle-collect=*name*` does match it. `nm` finding the symbol
+is no evidence that the bare name will, and an empty profile reads exactly like a cheap one.
+
 `benches/expression_cost.rs` holds the rest of the measurement, against the zoom-10 tile
 `benchmark/parse/vector_tile.benchmark.cpp` decodes in mbgl's own `Parse_VectorTile` — so the
 two sides can be compared on the same bytes rather than argued about. Every absolute figure in
