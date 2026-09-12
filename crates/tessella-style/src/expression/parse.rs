@@ -32,13 +32,23 @@ pub enum ParseError {
     #[error("a collator may only be written where one is expected, not bound and passed")]
     CollatorNotAValue,
     /// A comparison's third argument, or `resolved-locale`'s, was not a collator.
-    #[cfg(feature = "collator")]
+    ///
+    /// Checked whether or not this build can collate. The shape of a collator argument is the
+    /// spec's, not the table's, and a build that refuses the comparison should refuse it for the
+    /// reason the style got wrong.
     #[error("expected a `[\"collator\", {{…}}]`")]
     NotACollator,
     /// A collator was given a comparison that is not between strings.
-    #[cfg(feature = "collator")]
     #[error("cannot use collator to compare non-string type `{0:?}`")]
     CollatorOnNonString(Type),
+    /// A comparison asked for a collator this build does not carry.
+    ///
+    /// The DUCET table is behind the `collator` feature for its size (DR-12), and without it
+    /// there is no comparison to make — so the style is refused here rather than compared by
+    /// codepoint, which is the wrong answer wearing the right shape.
+    #[cfg(not(feature = "collator"))]
+    #[error("this build has no collator: enable the `collator` feature")]
+    CollatorUnavailable,
 
     /// A constant expression that cannot be evaluated.
     ///
@@ -455,10 +465,12 @@ fn parse_rooted(
             // Two, or three with a collator. The spec allows the third only on these six, and
             // only as a collator — so it is parsed as one here rather than as an expression that
             // might turn out to be one.
-            #[cfg(feature = "collator")]
+            //
+            // The third argument is accepted, and checked, by a build that cannot collate. It
+            // then refuses the comparison by name. Refusing the *arity* instead would reject the
+            // same styles while calling three arguments the mistake, which is not what the
+            // author wrote down and not what the spec says is wrong with it.
             expect_arity(operator, args, 2, 3)?;
-            #[cfg(not(feature = "collator"))]
-            expect_arity(operator, args, 2, 2)?;
             let op = match operator {
                 "==" => CompareOp::Eq,
                 "!=" => CompareOp::Ne,
@@ -470,7 +482,6 @@ fn parse_rooted(
             let lhs = parse_in(&args[0], scope)?;
             let rhs = parse_in(&args[1], scope)?;
             check_comparable(operator, op, &lhs, &rhs)?;
-            #[cfg(feature = "collator")]
             if let Some(third) = args.get(2) {
                 // Both sides must be text. A collator orders letters, so ordering numbers with
                 // one is a category error rather than a comparison that happens to ignore it —
@@ -483,12 +494,20 @@ fn parse_rooted(
                         return Err(ParseError::CollatorOnNonString(kind));
                     }
                 }
+                #[cfg(feature = "collator")]
                 return Ok(Expr::CompareWith {
                     op,
                     lhs: Box::new(lhs),
                     rhs: Box::new(rhs),
                     collator: Box::new(parse_collator(third, scope)?),
                 });
+                #[cfg(not(feature = "collator"))]
+                {
+                    // The shape first, so the style author hears about a malformed collator
+                    // before hearing that this build has none.
+                    collator_options(third)?;
+                    return Err(ParseError::CollatorUnavailable);
+                }
             }
             Ok(Expr::Compare {
                 op,
@@ -916,6 +935,25 @@ fn parse_all(args: &[Value], scope: &[String]) -> Result<Vec<Expr>, ParseError> 
     args.iter().map(|arg| parse_in(arg, scope)).collect()
 }
 
+/// The options object of a `["collator", {…}]`, or why it is not one.
+///
+/// Split from [`parse_collator`] because the shape is checked by every build and the members are
+/// parsed only by one that can collate: a build without the table still owes a style author the
+/// spec's own diagnostic, and `["==", "a", "b", ["collator", ["subexpression"]]]` is wrong in a
+/// way that has nothing to do with which table is compiled in.
+fn collator_options(
+    value: &Value,
+) -> Result<&alloc::collections::BTreeMap<String, Value>, ParseError> {
+    let items = value.as_array().ok_or(ParseError::NotACollator)?;
+    if items.first().and_then(Value::as_str) != Some("collator") {
+        return Err(ParseError::NotACollator);
+    }
+    items
+        .get(1)
+        .and_then(Value::as_object)
+        .ok_or(ParseError::NotACollator)
+}
+
 /// Parses a `["collator", {…}]` in the one position the spec allows one.
 ///
 /// Not through [`parse_in`], because a collator is not a value here: it may be written where a
@@ -924,14 +962,7 @@ fn parse_all(args: &[Value], scope: &[String]) -> Result<Vec<Expr>, ParseError> 
 /// by `var` would be legal by the spec's type system and is refused, with the message saying so.
 #[cfg(feature = "collator")]
 fn parse_collator(value: &Value, scope: &[String]) -> Result<super::CollatorSpec, ParseError> {
-    let items = value.as_array().ok_or(ParseError::NotACollator)?;
-    if items.first().and_then(Value::as_str) != Some("collator") {
-        return Err(ParseError::NotACollator);
-    }
-    let options = items
-        .get(1)
-        .and_then(Value::as_object)
-        .ok_or(ParseError::NotACollator)?;
+    let options = collator_options(value)?;
 
     let member = |name: &str| -> Result<Option<Expr>, ParseError> {
         options
