@@ -486,6 +486,42 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
         // A feature with no geometry, or one that is itself a polygon, is outside. Both are
         // mbgl's answers: its `within` matches on the feature's type and returns false for
         // anything but a point or a line.
+        // `["number-format", value, options]`. The options are expressions, so they are
+        // evaluated per feature: the specification's own case reads the locale and both digit
+        // bounds off the feature's tags.
+        Expr::NumberFormat {
+            value,
+            locale,
+            currency,
+            min_digits,
+            max_digits,
+        } => {
+            let number = expect_number(&evaluate(value, context)?)?;
+            let text = |slot: &Option<Box<Expr>>| -> Result<String, EvaluationError> {
+                match slot {
+                    Some(expr) => Ok(to_string(&evaluate(expr, context)?)),
+                    None => Ok(String::new()),
+                }
+            };
+            let digits = |slot: &Option<Box<Expr>>, fallback: u8| -> Result<u8, EvaluationError> {
+                match slot {
+                    Some(expr) => {
+                        let value = expect_number(&evaluate(expr, context)?)?;
+                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                        Ok(value.clamp(0.0, 20.0) as u8)
+                    }
+                    None => Ok(fallback),
+                }
+            };
+            // Zero and three are the spec's defaults, and ICU's for a plain number.
+            Ok(Value::String(crate::number_format::format_number(
+                number,
+                &text(locale)?,
+                &text(currency)?,
+                digits(min_digits, 0)?,
+                digits(max_digits, 3)?,
+            )))
+        }
         Expr::Within(rings) => {
             let Some(feature) = context.feature else {
                 return Err(EvaluationError::MissingFeature);
