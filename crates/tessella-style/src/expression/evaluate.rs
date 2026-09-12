@@ -52,6 +52,19 @@ pub trait Feature {
     /// A property by name, or `None` when the feature does not have it.
     fn property(&self, key: &str) -> Option<Value>;
 
+    /// The feature's own coordinates, for the operators that read geometry rather than tags.
+    ///
+    /// `["within", …]` is the only one, and it is why this is not on every implementation: a
+    /// feature that answers `None` is outside every polygon, which is what mbgl's `within` does
+    /// with a geometry it cannot read.
+    ///
+    /// The space is the caller's. A tile's features are in tile units and the suite's are in
+    /// longitude and latitude, and `within` converts its own polygon into whichever it is handed
+    /// -- see [`Expression::evaluate_on`](crate::expression::Expression::evaluate_on).
+    fn geometry(&self) -> Option<FeatureGeometry> {
+        None
+    }
+
     /// `Point`, `LineString` or `Polygon`, as the spec spells them.
     fn geometry_type(&self) -> &str;
 
@@ -64,6 +77,22 @@ pub trait Feature {
     fn properties(&self) -> Value {
         Value::Null
     }
+}
+
+/// A feature's coordinates, as the geometry operators read them.
+///
+/// Owned rather than borrowed, and that is affordable because only `["within", …]` asks: a style
+/// that does not use it never builds one, and a style that does pays a vector per feature per
+/// evaluation, which is what the operator costs anywhere.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FeatureGeometry {
+    /// One or more points.
+    Points(alloc::vec::Vec<[f64; 2]>),
+    /// One or more lines, each a list of points.
+    Lines(alloc::vec::Vec<alloc::vec::Vec<[f64; 2]>>),
+    /// Rings. `within` does not support a polygon *feature* -- mbgl returns false for one -- so
+    /// this exists to be recognised and refused rather than tested.
+    Rings(alloc::vec::Vec<alloc::vec::Vec<[f64; 2]>>),
 }
 
 /// Something an expression could not do.
@@ -168,6 +197,15 @@ pub(super) struct Context<'a> {
     /// is where `icon-image` is resolved and it has no sprite sheet -- the sheet is a frame-time
     /// resource -- so `None` is what it passes, and until that is wired this is the difference.
     pub(super) images: Option<&'a [alloc::string::String]>,
+    /// The tile a feature's coordinates are in, when the caller is a tile build.
+    ///
+    /// `["within", …]` is written in longitude and latitude and a tile's features are in tile
+    /// units, so one of the two has to move. mbgl moves the *polygon*, once per evaluation, with
+    /// `latLonToTileCoodinates` -- and this is the tile it needs to do it.
+    ///
+    /// `None` says the feature is already in longitude and latitude, which is what the spec's own
+    /// suite hands it: there is no tile there, and the geometry in the test case is degrees.
+    pub(super) canonical: Option<(u8, u32, u32)>,
     /// Names bound by enclosing `let`s, innermost first.
     ///
     /// A borrowed chain rather than an owned map: a `let` pushes one frame onto the stack and
@@ -205,6 +243,7 @@ impl Context<'_> {
             camera: None,
             feature: None,
             images: None,
+            canonical: None,
             scope: None,
         }
     }
@@ -436,6 +475,41 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
                 got: other.type_name(),
             }),
         },
+        // `["within", polygon]`: whether the feature's own geometry lies inside it.
+        //
+        // The polygon is written in longitude and latitude and a tile's features are in tile
+        // units, so one of the two has to move. mbgl moves the polygon -- `latLonToTileCoodinates`
+        // in `within.cpp`, once per evaluation -- and so does this, when the caller named a tile.
+        // A caller that did not is taken to be in degrees already, which is what the spec's own
+        // suite hands it.
+        //
+        // A feature with no geometry, or one that is itself a polygon, is outside. Both are
+        // mbgl's answers: its `within` matches on the feature's type and returns false for
+        // anything but a point or a line.
+        Expr::Within(rings) => {
+            let Some(feature) = context.feature else {
+                return Err(EvaluationError::MissingFeature);
+            };
+            let Some(geometry) = feature.geometry() else {
+                return Ok(Value::Bool(false));
+            };
+            let rings = match context.canonical {
+                Some(tile) => rings
+                    .iter()
+                    .map(|ring| ring.iter().map(|point| tile_point(*point, tile)).collect())
+                    .collect(),
+                None => rings.clone(),
+            };
+            Ok(Value::Bool(match geometry {
+                FeatureGeometry::Points(points) => {
+                    !points.is_empty() && points.iter().all(|point| in_rings(*point, &rings))
+                }
+                FeatureGeometry::Lines(lines) => {
+                    !lines.is_empty() && lines.iter().all(|line| line_in_rings(line, &rings))
+                }
+                FeatureGeometry::Rings(_) => false,
+            }))
+        }
         Expr::In { needle, haystack } => {
             // Its own type rules rather than `find_in`'s, because mbgl's `In` and `IndexOf`
             // disagree about null and the suite pins both: `["in", x, null]` is *false* where
@@ -939,6 +1013,90 @@ fn find_in(
     }
 }
 
+/// A longitude and latitude in the tile units of `(z, x, y)`.
+///
+/// mbgl's `latLonToTileCoodinates`, in the same arithmetic: the world is `EXTENT * 2^z` units
+/// across, longitude is linear in it, and latitude goes through the Mercator log.
+fn tile_point(point: [f64; 2], tile: (u8, u32, u32)) -> [f64; 2] {
+    use core::f64::consts::PI;
+    let (z, x, y) = tile;
+    let scale = f64::from(1u32 << z.min(30));
+    let extent = 8192.0;
+    let world = extent * scale;
+    let merc_x = (point[0] + 180.0) * world / 360.0;
+    let clamped = point[1].clamp(-89.999_999, 89.999_999);
+    let merc_y = (180.0
+        - (clamped * PI / 180.0 / 2.0 + PI / 4.0)
+            .tan()
+            .ln()
+            .to_degrees())
+        * world
+        / 360.0;
+    [
+        merc_x - f64::from(x) * extent,
+        merc_y - f64::from(y) * extent,
+    ]
+}
+
+/// Whether a point is inside a set of rings, by the even-odd rule.
+///
+/// mbgl counts crossings of a ray to the right and takes the parity, which is what this is. A
+/// point exactly on an edge is inside, because the comparison that decides the crossing is
+/// inclusive on one end -- the same convention, so the same answer on a shared boundary.
+fn in_rings(point: [f64; 2], rings: &[alloc::vec::Vec<[f64; 2]>]) -> bool {
+    let mut inside = false;
+    for ring in rings {
+        for pair in ring.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            if (a[1] > point[1]) != (b[1] > point[1]) {
+                let span = b[1] - a[1];
+                if span != 0.0 {
+                    let at = (point[1] - a[1]) / span * (b[0] - a[0]) + a[0];
+                    if point[0] < at {
+                        inside = !inside;
+                    }
+                }
+            }
+        }
+    }
+    inside
+}
+
+/// Whether every part of a line lies inside the rings.
+///
+/// Both ends inside is not enough -- a line can leave a concave polygon and come back -- so every
+/// segment is also tested against every edge for a crossing, which is mbgl's own test.
+fn line_in_rings(line: &[[f64; 2]], rings: &[alloc::vec::Vec<[f64; 2]>]) -> bool {
+    if line.is_empty() {
+        return false;
+    }
+    if !line.iter().all(|point| in_rings(*point, rings)) {
+        return false;
+    }
+    for segment in line.windows(2) {
+        for ring in rings {
+            for edge in ring.windows(2) {
+                if segments_cross(segment[0], segment[1], edge[0], edge[1]) {
+                    return false;
+                }
+            }
+        }
+    }
+    true
+}
+
+/// Whether two segments properly cross, which is the sign test on both sides.
+fn segments_cross(p0: [f64; 2], p1: [f64; 2], q0: [f64; 2], q1: [f64; 2]) -> bool {
+    let side = |a: [f64; 2], b: [f64; 2], c: [f64; 2]| -> f64 {
+        (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    };
+    let (d0, d1) = (side(p0, p1, q0), side(p0, p1, q1));
+    let (d2, d3) = (side(q0, q1, p0), side(q0, q1, p1));
+    // Strictly opposite on both, so a segment merely touching an edge -- which a line running
+    // along the boundary does at every vertex -- is not a crossing.
+    ((d0 > 0.0) != (d1 > 0.0)) && ((d2 > 0.0) != (d3 > 0.0))
+}
+
 /// A colour, as the spec renders one: four channels in 0..1.
 fn colour_value(channels: [f64; 4]) -> Value {
     // Inline, not a four-element `Value::Array`. The array spelling cost a heap allocation for
@@ -1036,6 +1194,7 @@ fn evaluate_let(
         camera: context.camera,
         feature: context.feature,
         images: context.images,
+        canonical: context.canonical,
         scope: Some(&bound),
     };
     evaluate_let(rest, body, &inner)

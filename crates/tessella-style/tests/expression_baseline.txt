@@ -313,6 +313,10 @@ typecheck/array-length-subtyping--no-length
 typecheck/array-wrong-length
 typeof/basic
 upcase/basic
+within/invalid-geojson
+within/line-within-polygon
+within/non-supported
+within/point-within-polygon
 zoom/basic
 zoom/invalid-nested-1
 zoom/invalid-nested-2

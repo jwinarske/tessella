@@ -101,8 +101,25 @@ impl Filter {
     /// admit.
     #[must_use]
     pub fn matches(&self, feature: &dyn crate::expression::Feature, zoom: Option<f64>) -> bool {
+        self.matches_on(feature, zoom, None)
+    }
+
+    /// As [`matches`](Self::matches), naming the tile the feature's coordinates are in.
+    ///
+    /// Only `["within", …]` reads it, and it is a filter operator in practice -- a style uses it
+    /// to keep the features inside a region. Its polygon is written in longitude and latitude and
+    /// a tile's features are in tile units, so without the tile the two are compared in different
+    /// spaces and everything is outside.
+    #[must_use]
+    pub fn matches_on(
+        &self,
+        feature: &dyn crate::expression::Feature,
+        zoom: Option<f64>,
+        canonical: Option<(u8, u32, u32)>,
+    ) -> bool {
         matches!(
-            self.expression.evaluate(zoom, Some(feature)),
+            self.expression
+                .evaluate_on(zoom, None, Some(feature), None, canonical),
             Ok(Value::Bool(true))
         )
     }

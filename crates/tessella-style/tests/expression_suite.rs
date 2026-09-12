@@ -25,7 +25,9 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use tessella_style::Value;
-use tessella_style::expression::{Dependency, Expression, Feature, PropertySpec, Type};
+use tessella_style::expression::{
+    Dependency, Expression, Feature, FeatureGeometry, PropertySpec, Type,
+};
 
 /// The vendored suite.
 fn suite_root() -> PathBuf {
@@ -76,6 +78,9 @@ struct SuiteFeature {
     properties: Value,
     geometry_type: String,
     id: Option<Value>,
+    /// The case's own `geometry`, which `["within", …]` reads. In longitude and latitude: the
+    /// suite has no tile, so the operator takes its polygon to be in the same degrees.
+    geometry: Option<FeatureGeometry>,
 }
 
 impl Feature for SuiteFeature {
@@ -94,6 +99,36 @@ impl Feature for SuiteFeature {
     fn properties(&self) -> Value {
         self.properties.clone()
     }
+
+    fn geometry(&self) -> Option<FeatureGeometry> {
+        self.geometry.clone()
+    }
+}
+
+/// The case's `geometry` in the shape the trait wants.
+///
+/// The suite writes a single Point or LineString, or the `Multi` form of either; a Polygon
+/// feature is carried through as rings so that `within` can refuse it the way mbgl does.
+fn suite_geometry(geometry: Option<&Value>) -> Option<FeatureGeometry> {
+    let geometry = geometry?;
+    let point = |value: &Value| -> Option<[f64; 2]> {
+        let pair = value.as_array()?;
+        Some([pair.first()?.as_number()?, pair.get(1)?.as_number()?])
+    };
+    let list =
+        |value: &Value| -> Option<Vec<[f64; 2]>> { value.as_array()?.iter().map(point).collect() };
+    let lists = |value: &Value| -> Option<Vec<Vec<[f64; 2]>>> {
+        value.as_array()?.iter().map(list).collect()
+    };
+    let coordinates = geometry.get("coordinates")?;
+    match geometry.get("type")?.as_str()? {
+        "Point" => Some(FeatureGeometry::Points(vec![point(coordinates)?])),
+        "MultiPoint" => Some(FeatureGeometry::Points(list(coordinates)?)),
+        "LineString" => Some(FeatureGeometry::Lines(vec![list(coordinates)?])),
+        "MultiLineString" => Some(FeatureGeometry::Lines(lists(coordinates)?)),
+        "Polygon" => Some(FeatureGeometry::Rings(lists(coordinates)?)),
+        _ => None,
+    }
 }
 
 fn suite_feature(input: Option<&Value>) -> Option<SuiteFeature> {
@@ -111,6 +146,7 @@ fn suite_feature(input: Option<&Value>) -> Option<SuiteFeature> {
             .unwrap_or("Point")
             .to_string(),
         id: feature.get("id").cloned(),
+        geometry: suite_geometry(feature.get("geometry")),
     })
 }
 

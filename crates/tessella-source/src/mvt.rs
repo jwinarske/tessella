@@ -878,6 +878,28 @@ impl StyleFeature for FeatureRef<'_> {
         self.id().map(|id| StyleValue::Number(id as f64))
     }
 
+    /// The feature's own coordinates, in tile units, for `["within", …]`.
+    ///
+    /// Tile units and not degrees: the operator converts its own polygon into whatever space the
+    /// feature is in, and a tile's are these. `Unknown` has no geometry to test and is outside
+    /// everything, which is what mbgl answers for it.
+    fn geometry(&self) -> Option<tessella_style::expression::FeatureGeometry> {
+        use tessella_style::expression::FeatureGeometry;
+        let ring = |ring: &[[i32; 2]]| -> alloc::vec::Vec<[f64; 2]> {
+            ring.iter()
+                .map(|point| [f64::from(point[0]), f64::from(point[1])])
+                .collect()
+        };
+        match self.geom_type() {
+            GeomType::Point => Some(FeatureGeometry::Points(
+                self.rings().flat_map(ring).collect(),
+            )),
+            GeomType::LineString => Some(FeatureGeometry::Lines(self.rings().map(ring).collect())),
+            GeomType::Polygon => Some(FeatureGeometry::Rings(self.rings().map(ring).collect())),
+            GeomType::Unknown => None,
+        }
+    }
+
     fn properties(&self) -> StyleValue {
         StyleValue::Object(
             self.properties()

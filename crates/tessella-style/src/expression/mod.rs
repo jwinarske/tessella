@@ -29,7 +29,7 @@
 mod evaluate;
 mod parse;
 
-pub use evaluate::{Camera, EvaluationError, Feature};
+pub use evaluate::{Camera, EvaluationError, Feature, FeatureGeometry};
 pub use parse::ParseError;
 
 use alloc::boxed::Box;
@@ -1036,6 +1036,12 @@ pub enum Expr {
         /// Output when no condition holds.
         fallback: Box<Expr>,
     },
+    /// `["within", geojson]`: whether the feature lies inside the polygon.
+    ///
+    /// The argument is a GeoJSON literal rather than an expression, which is why the rings are
+    /// held here already parsed: mbgl reads it once at parse time and keeps the polygon, and a
+    /// style cannot compute one.
+    Within(Vec<Vec<[f64; 2]>>),
     /// The first argument that is not null.
     Coalesce(Vec<Expr>),
     /// Arithmetic.
@@ -1411,6 +1417,27 @@ impl Expression {
         feature: Option<&dyn Feature>,
         images: Option<&[alloc::string::String]>,
     ) -> Result<Value, EvaluationError> {
+        self.evaluate_on(zoom, camera, feature, images, None)
+    }
+
+    /// As [`evaluate_in`](Self::evaluate_in), naming the tile a feature's coordinates are in.
+    ///
+    /// Only `["within", …]` reads it, and only a tile build has one to give: the operator's
+    /// polygon is written in longitude and latitude and a tile's features are in tile units, so
+    /// the polygon is converted per evaluation. A caller with no tile says so, and the operator
+    /// then takes the feature to be in degrees -- which is what the spec's own suite hands it.
+    ///
+    /// # Errors
+    ///
+    /// As [`evaluate_with_camera`](Self::evaluate_with_camera).
+    pub fn evaluate_on(
+        &self,
+        zoom: Option<f64>,
+        camera: Option<Camera>,
+        feature: Option<&dyn Feature>,
+        images: Option<&[alloc::string::String]>,
+        canonical: Option<(u8, u32, u32)>,
+    ) -> Result<Value, EvaluationError> {
         evaluate::evaluate(
             &self.root,
             &evaluate::Context {
@@ -1418,6 +1445,7 @@ impl Expression {
                 camera,
                 feature,
                 images,
+                canonical,
                 scope: None,
             },
         )
@@ -1512,7 +1540,7 @@ impl Expr {
             // It never produces one, so nothing constrains what it could have been.
             Self::Error(_) => Type::Value,
             Self::Concat(_) | Self::Join { .. } => Type::String,
-            Self::In { .. } => Type::Boolean,
+            Self::In { .. } | Self::Within(_) => Type::Boolean,
             // `get`, `id`, and everything whose type depends on data or on branches this does
             // not unify.
             _ => Type::Value,
@@ -1849,6 +1877,8 @@ fn children(expr: &Expr) -> Vec<&Expr> {
         | Expr::GeometryType
         | Expr::Id
         | Expr::Properties
+        // Its polygon is a literal, not a child: a style cannot compute one.
+        | Expr::Within(_)
         | Expr::Var(_)
         | Expr::LegacyFunction(_) => Vec::new(),
         Expr::Format { sections } => sections
@@ -1964,7 +1994,9 @@ fn classify(expr: &Expr) -> Dependency {
         // on every camera movement. Classifying either as ZOOM would freeze it at whatever the
         // camera happened to be doing when the interval began.
         Expr::Pitch | Expr::DistanceFromCenter => Dependency::CAMERA,
-        Expr::GeometryType | Expr::Id | Expr::Properties => Dependency::FEATURE,
+        // `within` reads the feature's geometry, which is as much a property of the feature as
+        // its tags are.
+        Expr::GeometryType | Expr::Id | Expr::Properties | Expr::Within(_) => Dependency::FEATURE,
         // A legacy function reads the feature when it names a property and the zoom when it
         // does not. Composite stops — `[{"zoom": z, "value": v}, out]` — read both, which is
         // the case that makes this a lattice join rather than a choice.

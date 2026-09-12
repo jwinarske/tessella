@@ -245,6 +245,21 @@ fn parse_rooted(
                 haystack: Box::new(parse_in(&args[1], scope)?),
             })
         }
+        // `["within", geojson]`. The argument is a literal rather than an expression: mbgl reads
+        // the polygon once here and keeps it, and there is nothing a style could compute it from.
+        //
+        // Only a `Polygon` or a `MultiPolygon` is admitted, which is mbgl's own check -- a
+        // `LineString` there is a parse error rather than a test nothing can pass. A *feature*
+        // that is a polygon is a different question and is answered false at evaluation, where
+        // mbgl answers it.
+        "within" => {
+            expect_arity(operator, args, 1, 1)?;
+            let rings = within_rings(&args[0]).ok_or_else(|| ParseError::Malformed {
+                operator: operator.to_string(),
+                detail: "expected a GeoJSON Polygon or MultiPolygon".to_string(),
+            })?;
+            Ok(Expr::Within(rings))
+        }
         "index-of" => {
             expect_arity(operator, args, 2, 3)?;
             Ok(Expr::IndexOf {
@@ -1077,6 +1092,36 @@ fn parse_interpolate(operator: &str, args: &[Value], scope: &[String]) -> Result
         input,
         stops,
     })
+}
+
+/// The rings of a GeoJSON `Polygon` or `MultiPolygon`, flattened.
+///
+/// Flattened because containment does not care which polygon a ring belongs to: mbgl's own test
+/// walks every ring and counts crossings, and a multi-polygon is the union of its parts. What is
+/// refused is anything that is not one of the two -- the spec's suite hands it a `LineString` and
+/// wants a compile error.
+fn within_rings(value: &Value) -> Option<Vec<Vec<[f64; 2]>>> {
+    let point = |value: &Value| -> Option<[f64; 2]> {
+        let pair = value.as_array()?;
+        Some([pair.first()?.as_number()?, pair.get(1)?.as_number()?])
+    };
+    let ring =
+        |value: &Value| -> Option<Vec<[f64; 2]>> { value.as_array()?.iter().map(point).collect() };
+    let polygon = |value: &Value| -> Option<Vec<Vec<[f64; 2]>>> {
+        value.as_array()?.iter().map(ring).collect()
+    };
+    let coordinates = value.get("coordinates")?;
+    match value.get("type")?.as_str()? {
+        "Polygon" => polygon(coordinates),
+        "MultiPolygon" => {
+            let mut rings = Vec::new();
+            for part in coordinates.as_array()? {
+                rings.extend(polygon(part)?);
+            }
+            Some(rings)
+        }
+        _ => None,
+    }
 }
 
 /// Parses stop/output pairs, requiring ascending stops.
