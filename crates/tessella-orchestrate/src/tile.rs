@@ -922,6 +922,24 @@ pub fn build_raster_tile(
     image: alloc::sync::Arc<tessella_source::image::Image>,
     mask: &[tessella_tile::mask::MaskEntry],
 ) -> Result<Vec<LayerBucket>, TileError> {
+    build_raster_tile_on(style, source, image, mask, 1)
+}
+
+/// As [`build_raster_tile`], with each mask entry gridded `cells` a side.
+///
+/// A sphere needs the grid for the reason `RasterBucket::add_quad_on` gives: four corners bent
+/// onto it is a flat sheet through it. `cells` of one is the flat path byte for byte.
+///
+/// # Errors
+///
+/// As [`build_raster_tile`].
+pub fn build_raster_tile_on(
+    style: &Style,
+    source: &str,
+    image: alloc::sync::Arc<tessella_source::image::Image>,
+    mask: &[tessella_tile::mask::MaskEntry],
+    cells: u32,
+) -> Result<Vec<LayerBucket>, TileError> {
     let mut buckets = Vec::new();
 
     for (layer_index, layer) in style.layers.iter().enumerate() {
@@ -938,7 +956,7 @@ pub fn build_raster_tile(
             layer_index,
             layer_id: layer.id.clone(),
             content: Content::Raster(RasterContent {
-                bucket: RasterBucket::masked(mask),
+                bucket: RasterBucket::masked_on(mask, cells),
                 image: alloc::sync::Arc::clone(&image),
             }),
             paint,
