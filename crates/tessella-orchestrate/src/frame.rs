@@ -561,7 +561,7 @@ fn emit_group(
     layouts: &mut SymbolCache,
     placement: &mut PlacementState,
     frame: &Frame<'_>,
-    stream: Option<&mut Session>,
+    mut stream: Option<&mut Session>,
     camera_moved: bool,
     declare: bool,
 ) -> Result<Emitted, FrameError> {
@@ -598,7 +598,21 @@ fn emit_group(
     // The glyph atlas, before any drawable names it. A symbol geometry carries a texture
     // reference, and a reference to a texture the consumer has not been given is a drawable that
     // samples whatever was last at that slot.
-    let stacks = symbol_stacks(buckets);
+    // In the session's order where there is one, not this frame's.
+    //
+    // A glyph atlas's texture id is its stack's position here, and a symbol geometry carries that
+    // id in the record that declared it. Taken per frame, the position is whatever order the
+    // cover happened to mention the stacks in -- so a tile arriving with an italic label
+    // renumbers every stack after it, and retained geometry then samples another stack's atlas.
+    // See `Session::atlas_stacks`.
+    //
+    // Cloned because the borrow has to end before the registry is split out of the same session
+    // below. It is a handful of short strings once a frame against the alternative of threading
+    // two borrows of one object through the rest of this function.
+    let stacks = match stream.as_deref_mut() {
+        Some(session) => session.atlas_stacks(&symbol_stacks(buckets)).to_vec(),
+        None => symbol_stacks(buckets),
+    };
     if let Some(fonts) = fonts {
         for (index, stack) in stacks.iter().enumerate().take(GLYPH_ATLAS_CAP) {
             if let Some(atlas) = fonts.atlas(stack) {

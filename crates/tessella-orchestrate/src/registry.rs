@@ -436,6 +436,9 @@ pub struct Session {
     registry: GeometryRegistry,
     /// Per-view memory: what order was last sent, and where the camera was.
     views: BTreeMap<u32, ViewMemory>,
+    /// Font stacks in the order their atlases were first published, which is the order their
+    /// texture ids are assigned in. See [`Self::atlas_stacks`].
+    stacks: Vec<Vec<alloc::string::String>>,
 }
 
 /// What one view remembers.
@@ -452,6 +455,33 @@ impl Session {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// This frame's font stacks merged into the session's, in publication order.
+    ///
+    /// # Why the order has to outlive the frame
+    ///
+    /// A glyph atlas's texture id is its stack's position in this list, and a symbol geometry
+    /// carries that id in the record that declared it. Derived per frame, the position is the
+    /// order the frame's buckets happened to mention the stacks in -- so a tile arriving with an
+    /// italic label, or a cover that dropped the tile which used to mention one first, renumbers
+    /// every stack after it. Retained geometry keeps the id it was encoded with, and samples
+    /// another stack's atlas: the labels come out as letters from the wrong script, which is what
+    /// `atlas_mismatched` counts when the two atlases also differ in size.
+    ///
+    /// Append-only, so an id once handed out is never reused for another stack. A stack that
+    /// leaves the cover keeps its place; the cost of that is an index, and the alternative is the
+    /// bug.
+    pub fn atlas_stacks(
+        &mut self,
+        seen: &[Vec<alloc::string::String>],
+    ) -> &[Vec<alloc::string::String>] {
+        for stack in seen {
+            if !self.stacks.contains(stack) {
+                self.stacks.push(stack.clone());
+            }
+        }
+        &self.stacks
     }
 
     /// The shared geometry registry, to read.
@@ -538,5 +568,45 @@ impl Session {
     /// Forgets a view entirely, for one that has been undeclared.
     pub fn forget(&mut self, view: ViewId) {
         self.views.remove(&view.0);
+    }
+}
+
+#[cfg(test)]
+mod stack_tests {
+    use super::Session;
+    use alloc::string::ToString;
+    use alloc::vec::Vec;
+
+    fn stack(name: &str) -> Vec<alloc::string::String> {
+        alloc::vec![name.to_string()]
+    }
+
+    /// A stack keeps the id it was first published under, however the cover mentions it later.
+    ///
+    /// The id is the position in this list and a symbol geometry carries it in the record that
+    /// declared it, so a renumbering makes retained geometry sample another stack's atlas. The
+    /// order a frame discovers stacks in is the order its buckets happen to be walked -- which
+    /// changes whenever a tile arrives, is replaced by its parent, or leaves the cover.
+    #[test]
+    fn a_stack_keeps_its_atlas_id_across_frames() {
+        let mut session = Session::new();
+        let first = session
+            .atlas_stacks(&[stack("Regular"), stack("Italic")])
+            .to_vec();
+        assert_eq!(first, [stack("Regular"), stack("Italic")]);
+
+        // The next frame meets them the other way round, and brings a third.
+        let second = session
+            .atlas_stacks(&[stack("Italic"), stack("Medium"), stack("Regular")])
+            .to_vec();
+        assert_eq!(
+            second,
+            [stack("Regular"), stack("Italic"), stack("Medium")],
+            "a stack moved, and every geometry encoded against it now reads another atlas"
+        );
+
+        // And a frame that no longer draws one does not close the gap it leaves.
+        let third = session.atlas_stacks(&[stack("Medium")]).to_vec();
+        assert_eq!(third, second, "an id once handed out is never reused");
     }
 }
