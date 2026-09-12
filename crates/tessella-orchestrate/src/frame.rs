@@ -3434,6 +3434,52 @@ fn write_layer_state(
                 &buffer,
             )?;
 
+            // The anchored bend, as a fill writes one and in the same order -- the consumer
+            // indexes both by the drawable's own UBO index, so all four sub-layers are chained
+            // here exactly as they were above.
+            //
+            // An extrusion is the one family that needs `d_h` out of it: every other leaves its
+            // geometry on the surface, and this one lifts a roof along the normal. Without a
+            // block a globe found no bend rows for the drawable, fell through to the direct
+            // table, found no material there either, and skipped it -- so a globe drew no
+            // buildings at any zoom.
+            if projection == ProjectionMode::Globe {
+                let bend: Vec<GlobeBendUbo> = [0, 1, 2, 3]
+                    .into_iter()
+                    .flat_map(|sub| {
+                        matrices(sub).map(move |tile| {
+                            ubo::globe_bend_block(
+                                view,
+                                tile.z,
+                                tile.x,
+                                tile.y,
+                                i32::from(tile.wrap),
+                                layer_index,
+                                // Zero for all four, where a fill passes its own sub-layer.
+                                //
+                                // An extrusion's sub-layers are two *passes* over one surface,
+                                // not two surfaces that must be separated: 0 and 1 fill the depth
+                                // buffer and 2 and 3 read it. mbgl's offset subtracts the
+                                // sub-layer index, so a colour pass nudged by its own index lands
+                                // *behind* the prepass that just wrote depth -- and on a globe
+                                // the nudge is scaled to the frustum, which makes a difference
+                                // that is negligible on a plane large enough to fail the test.
+                                // Every building disappeared, and only for a translucent layer,
+                                // because an opaque one emits no prepass to be rejected by.
+                                0,
+                            )
+                        })
+                    })
+                    .collect();
+                ubo::write(
+                    producer,
+                    view_id,
+                    layer_index,
+                    tessella_capture_abi::globe_ubo::ID_GLOBE_BEND_UBO,
+                    &ubo::pack_globe_bend_buffer(&bend),
+                )?;
+            }
+
             // Only when the layer has a pattern. A fill and a line write a zero-filled block
             // whatever their paint, because their slot is a union and the stride is the same
             // either way; an extrusion without a pattern has written nothing here, and adding a

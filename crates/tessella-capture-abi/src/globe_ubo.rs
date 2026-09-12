@@ -17,7 +17,7 @@
 //!
 //! # What it carries
 //!
-//! `globe::anchored_bend`'s six coefficients, already in clip space:
+//! `globe::anchored_bend`'s coefficients, already in clip space:
 //!
 //! ```text
 //! clip(du, dv) = anchor + d_u du + d_v dv + (d_uu du^2 + d_vv dv^2) / 2 + d_uv du dv
@@ -54,11 +54,17 @@ pub struct GlobeBendUbo {
     pub d_vv: [f32; 4],
     /// See [`Self::d_uu`].
     pub d_uv: [f32; 4],
+    /// Clip displacement per metre of height above the surface -- `globe::AnchoredBend::d_h`.
+    ///
+    /// Zero for every family but the extrusions, which are the only geometry that leaves the
+    /// surface. Sent for all of them rather than only for those, because the block is one shape
+    /// and a stride that varied by family would be a second thing to agree on.
+    pub d_h: [f32; 4],
 }
 
 impl GlobeBendUbo {
     /// Bytes on the wire, and the stride a buffer of these packs at.
-    pub const STRIDE: u32 = 96;
+    pub const STRIDE: u32 = 112;
 
     /// The block as little-endian bytes.
     #[must_use]
@@ -72,6 +78,7 @@ impl GlobeBendUbo {
             self.d_uu,
             self.d_vv,
             self.d_uv,
+            self.d_h,
         ] {
             for value in row {
                 out[at..at + 4].copy_from_slice(&value.to_le_bytes());
@@ -86,10 +93,10 @@ impl GlobeBendUbo {
 mod tests {
     use super::{GlobeBendUbo, ID_GLOBE_BEND_UBO};
 
-    /// Six `vec4` and nothing else, at the stride the packer uses.
+    /// Seven `vec4` and nothing else, at the stride the packer uses.
     #[test]
-    fn the_block_is_ninety_six_bytes() {
-        assert_eq!(core::mem::size_of::<GlobeBendUbo>(), 96);
+    fn the_block_is_one_hundred_and_twelve_bytes() {
+        assert_eq!(core::mem::size_of::<GlobeBendUbo>(), 112);
         assert_eq!(
             GlobeBendUbo::STRIDE as usize,
             core::mem::size_of::<GlobeBendUbo>()
