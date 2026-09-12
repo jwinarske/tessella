@@ -169,13 +169,14 @@ impl LayerBucket {
             // twelve-glyph drawable is two labels, not two drawables. Two when the layer draws
             // sprites as well: the glyphs go through an SDF shader and the sprites through a
             // plain sampler, so the halves cannot share a vertex buffer and are two drawables.
-            // The halo pass, the letters, and the sprites -- see `order::bindings_for` for the
-            // sub-layer numbering and why a layer may draw one, two or three of them.
-            Content::Symbol(ref layout) => {
-                usize::from(layout.text_passes.halo)
-                    + usize::from(layout.text_passes.fill)
-                    + usize::from(layout.has_icons())
-            }
+            // The sprites, and the halo and the letters *per font stack* -- see
+            // `SymbolLayout::parts`, which is the one place the numbering is decided and what
+            // `order::bindings_for` counts the sub-layers with. Spelling the count out a second
+            // time here is how this fell out of step: a layer whose `text-font` is data-driven
+            // has two stacks and five drawables, this said three, and the frame dropped the two
+            // it had not been told about -- every country label in the style, because the layer
+            // that decides the count is not the layer that loses the drawables.
+            Content::Symbol(ref layout) => layout.parts().len(),
         }
     }
 }

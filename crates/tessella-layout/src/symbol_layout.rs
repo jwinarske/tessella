@@ -184,6 +184,17 @@ pub fn passes(layer: &Layer, prefix: &str, zoom: f64) -> Passes {
     }
 }
 
+/// One drawable a symbol layout becomes. See [`SymbolLayout::parts`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SymbolPart {
+    /// The sprites, drawn under the text.
+    Icon,
+    /// The halo of the labels set in the `n`th of the layout's font stacks.
+    TextHalo(usize),
+    /// The letters of the labels set in the `n`th of the layout's font stacks.
+    TextFill(usize),
+}
+
 /// Which of a symbol half's two passes a layer draws.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Passes {
@@ -1304,6 +1315,40 @@ impl SymbolLayout {
         out
     }
 
+    /// Which drawables this layout becomes, in the order they are drawn.
+    ///
+    /// # Why the list rather than three flags
+    ///
+    /// A symbol layer draws up to three things -- sprites, a halo, the letters -- and *one per
+    /// font stack* for the two text passes, because a glyph's quad carries a rectangle in the
+    /// atlas its stack was packed into and a drawable binds one texture. A layer whose
+    /// `text-font` is data-driven puts two stacks in one bucket, which is how the Protomaps style
+    /// writes a place label: medium above a population, regular below it.
+    ///
+    /// mbgl's order, which the sub-layer index carries here: sprites first, then for each stack
+    /// the halo and then the letters over it. `RenderableSegment`'s comparator sorts "text over
+    /// icons" in as many words, and within a renderable the halo is drawn first.
+    ///
+    /// Both sides of the wire derive the numbering from this one function -- `order::bindings_for`
+    /// to decide how many drawables the bucket makes, and the frame writer to decide what each of
+    /// them draws -- so the two cannot disagree about what sub-layer three is.
+    #[must_use]
+    pub fn parts(&self) -> Vec<SymbolPart> {
+        let mut parts = Vec::new();
+        if self.has_icons() {
+            parts.push(SymbolPart::Icon);
+        }
+        for (index, _) in self.stacks().iter().enumerate() {
+            if self.text_passes.halo {
+                parts.push(SymbolPart::TextHalo(index));
+            }
+            if self.text_passes.fill {
+                parts.push(SymbolPart::TextFill(index));
+            }
+        }
+        parts
+    }
+
     /// The second phase: shape the labels and build the vertex buffers.
     ///
     /// A label whose glyphs are not all packed draws the ones that are and still measures the
@@ -1401,7 +1446,7 @@ impl SymbolLayout {
             // Each run's ranges address its own buffer, so they shift by what was already here.
             // Getting this wrong writes one label's per-frame state over another's, which draws
             // as a label that will not fade and errors nowhere.
-            let base = buffers.append(&built);
+            let base = buffers.append_run(&built, &head.fonts);
             let mut shifted = entries.into_iter().map(|mut entry| {
                 entry.vertices = entry.vertices.start + base..entry.vertices.end + base;
                 entry

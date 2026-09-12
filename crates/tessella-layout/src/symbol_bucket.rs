@@ -161,6 +161,23 @@ pub struct SymbolBuffers {
     /// sprites samples two, so a bucket with one image in it is bound to
     /// `SymbolTextAndIconShader` for all of it.
     pub icons_in_text: bool,
+    /// Which font stack each stretch of [`Self::indices`] was packed against.
+    ///
+    /// # Why a symbol buffer is not one drawable
+    ///
+    /// A glyph's quad carries its rectangle in the atlas its stack was packed into, and a
+    /// drawable binds one texture. A layer whose `text-font` is data-driven -- a place label in
+    /// medium above a population and regular below it, which is how the Protomaps style writes
+    /// one -- puts labels from two stacks in one bucket, and binding either atlas draws the other
+    /// stack's labels with the wrong rectangles. Letters from the wrong script, which is what it
+    /// looks like on a map.
+    ///
+    /// mbgl splits the bucket. This splits the *indices*: the vertices are one buffer, laid out
+    /// in runs that each belong to one stack, and a drawable takes the index range of the runs
+    /// that share its atlas. Same geometry, one buffer, one drawable a stack.
+    ///
+    /// Empty for a buffer whose caller did not record any, which is every path but `lay_out`.
+    pub runs: Vec<Run>,
     /// How far along its line each glyph sits, one per quad.
     ///
     /// mbgl's `PlacedSymbol::glyphOffsets`, and it is deliberately *not* in the vertex: the
@@ -168,6 +185,15 @@ pub struct SymbolBuffers {
     /// so a value baked into the geometry would be bent twice. Zero throughout for a point
     /// label, which is what makes the two placements share one buffer format.
     pub glyph_offsets: Vec<f32>,
+}
+
+/// One stretch of a symbol buffer's indices, and the font stack it was packed against.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Run {
+    /// The stack, as `text-font` names it.
+    pub fonts: Vec<alloc::string::String>,
+    /// Where in [`SymbolBuffers::indices`] this run's triangles are.
+    pub indices: core::ops::Range<usize>,
 }
 
 impl SymbolBuffers {
@@ -217,6 +243,26 @@ impl SymbolBuffers {
         self.indices
             .extend(other.indices.iter().map(|index| index + offset));
 
+        base
+    }
+
+    /// As [`Self::append`], recording which stack the appended indices belong to.
+    ///
+    /// Runs of the same stack are merged when they are adjacent, which is the ordinary case: the
+    /// caller walks its labels in order and they are usually all one font.
+    pub fn append_run(&mut self, other: &Self, fonts: &[alloc::string::String]) -> usize {
+        let first = self.indices.len();
+        let base = self.append(other);
+        if self.indices.len() == first {
+            return base;
+        }
+        match self.runs.last_mut() {
+            Some(run) if run.fonts == fonts => run.indices.end = self.indices.len(),
+            _ => self.runs.push(Run {
+                fonts: fonts.to_vec(),
+                indices: first..self.indices.len(),
+            }),
+        }
         base
     }
 

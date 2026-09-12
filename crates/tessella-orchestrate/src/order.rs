@@ -523,36 +523,23 @@ pub fn bindings_for(
             // talked itself out of — that symbols overhang tile edges and must not be clipped —
             // was the right one, and clipping them cut every label at every tile boundary.
             Content::Symbol(ref layout) => {
-                // Up to three drawables, in the order mbgl adds them: the sprites, then the halo,
-                // then the letters over both. A halo is not a flag on one drawable -- it is a
-                // second drawable over the same geometry, added first and drawn underneath.
-                //
-                // mbgl's own order, from `render_symbol_layer.cpp`. Its `RenderableSegment`
-                // comparator sorts "text over icons" in as many words, so a shield's sprite is
-                // added before the number on it; and within a renderable the halo is drawn
-                // before the fill. Sub-layer order is paint order here, so this list reads the
-                // same way.
+                // One sub-layer per drawable the layout becomes, in its order: the sprites, then
+                // for each font stack the halo and the letters over it. See
+                // `SymbolLayout::parts`, which is where the numbering is decided -- both sides of
+                // the wire read it from there rather than each spelling it out.
                 //
                 // Packed rather than fixed, for a reason the golden gives: mbgl calls
                 // `setSubLayerIndex(0)` for *every* symbol drawable, halo and fill alike, and
-                // orders the two by the order it adds them. This side has no such second key --
-                // the sub-layer index is what orders a layer's drawables -- so it is used as one,
-                // and packing is what keeps the common case identical to mbgl's. A layer with no
-                // halo and no sprites draws its letters at zero, which is what the capture's
-                // order section carries.
+                // orders them by the order it adds them. This side has no such second key -- the
+                // sub-layer index is what orders a layer's drawables -- so it is used as one, and
+                // packing is what keeps the common case identical to mbgl's. A layer with one
+                // stack, no halo and no sprites draws its letters at zero, which is what the
+                // capture's order section carries.
                 //
                 // Nothing emits an *icon* halo yet. mbgl haloes an icon only when the sprite is
                 // a distance field, which is a property of the sheet rather than of the layer.
-                let mut sub = 0;
-                if layout.has_icons() {
-                    emit(sub, view::fill_pass(), view::symbol_flags());
-                    sub += 1;
-                }
-                if layout.text_passes.halo {
-                    emit(sub, view::fill_pass(), view::symbol_flags());
-                    sub += 1;
-                }
-                if layout.text_passes.fill {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                for sub in 0..layout.parts().len() as i32 {
                     emit(sub, view::fill_pass(), view::symbol_flags());
                 }
             }
