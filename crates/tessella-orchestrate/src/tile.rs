@@ -389,7 +389,11 @@ pub fn build_tile_on_with_patterns(
                     |p: &[f64; 2]| projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
 
                 for feature in features {
-                    if !filter.matches(feature, Some(bucket_zoom)) {
+                    if !filter.matches_on(
+                        feature,
+                        Some(bucket_zoom),
+                        Some((tile.z, tile.x, tile.y)),
+                    ) {
                         continue;
                     }
 
@@ -466,7 +470,11 @@ pub fn build_tile_on_with_patterns(
                 let mut per_feature: Vec<Vec<Ring>> = Vec::new();
                 let mut kept: Vec<&GeoJsonFeature> = Vec::new();
                 for feature in features {
-                    if !filter.matches(feature, Some(bucket_zoom)) {
+                    if !filter.matches_on(
+                        feature,
+                        Some(bucket_zoom),
+                        Some((tile.z, tile.x, tile.y)),
+                    ) {
                         continue;
                     }
                     // Every geometry type, not just polygons. mbgl's `FillBucket::addFeature`
@@ -551,7 +559,11 @@ pub fn build_tile_on_with_patterns(
                 let mut kept: Vec<&GeoJsonFeature> = Vec::new();
                 let mut ends: Vec<usize> = Vec::new();
                 for feature in features {
-                    if !filter.matches(feature, Some(bucket_zoom)) {
+                    if !filter.matches_on(
+                        feature,
+                        Some(bucket_zoom),
+                        Some((tile.z, tile.x, tile.y)),
+                    ) {
                         continue;
                     }
                     match &feature.geometry {
@@ -632,7 +644,11 @@ pub fn build_tile_on_with_patterns(
 
                 let mut bucket = CircleBucket::default();
                 for feature in features {
-                    if !filter.matches(feature, Some(bucket_zoom)) {
+                    if !filter.matches_on(
+                        feature,
+                        Some(bucket_zoom),
+                        Some((tile.z, tile.x, tile.y)),
+                    ) {
                         continue;
                     }
                     let Geometry::Point(points) = &feature.geometry else {
@@ -1101,7 +1117,11 @@ pub fn build_mvt_tile_on_with_patterns(
                 let mut kept: Vec<tessella_source::mvt::FeatureRef<'_>> = Vec::new();
                 if let Some(named) = named {
                     for feature in named.features() {
-                        if !filter.matches(&feature, Some(bucket_zoom)) {
+                        if !filter.matches_on(
+                            &feature,
+                            Some(bucket_zoom),
+                            Some((tile.z, tile.x, tile.y)),
+                        ) {
                             continue;
                         }
                         // No geometry-type check, deliberately. `FillBucket::addFeature` has
@@ -1186,7 +1206,11 @@ pub fn build_mvt_tile_on_with_patterns(
                 let mut bucket = LineBucket::default();
                 if let Some(named) = named {
                     for feature in named.features() {
-                        if !filter.matches(&feature, Some(bucket_zoom)) {
+                        if !filter.matches_on(
+                            &feature,
+                            Some(bucket_zoom),
+                            Some((tile.z, tile.x, tile.y)),
+                        ) {
                             continue;
                         }
                         // Polygons are drawn by a line layer as their own outlines, which is
@@ -1242,7 +1266,11 @@ pub fn build_mvt_tile_on_with_patterns(
                 let mut layout = SymbolLayout::new(layer, bucket_zoom, tile.overscale_factor());
                 if let Some(named) = named {
                     for feature in named.features() {
-                        if !filter.matches(&feature, Some(bucket_zoom)) {
+                        if !filter.matches_on(
+                            &feature,
+                            Some(bucket_zoom),
+                            Some((tile.z, tile.x, tile.y)),
+                        ) {
                             continue;
                         }
 
@@ -1289,7 +1317,11 @@ pub fn build_mvt_tile_on_with_patterns(
                 let mut bucket = CircleBucket::default();
                 if let Some(named) = named {
                     for feature in named.features() {
-                        if !filter.matches(&feature, Some(bucket_zoom)) {
+                        if !filter.matches_on(
+                            &feature,
+                            Some(bucket_zoom),
+                            Some((tile.z, tile.x, tile.y)),
+                        ) {
                             continue;
                         }
                         // A circle layer draws points, and mbgl's `CircleBucket::addFeature`
