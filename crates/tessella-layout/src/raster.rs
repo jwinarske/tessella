@@ -69,37 +69,89 @@ impl RasterBucket {
     /// When the quad's coordinates would not fit an `i16`. The extent is 8192 and a mask level
     /// only ever shrinks it, so this is unreachable for a mask a tile could have.
     pub fn add_quad(&mut self, z: u8, x: u32, y: u32) {
+        self.add_quad_on(z, x, y, 1);
+    }
+
+    /// As [`Self::add_quad`], as a `cells` x `cells` grid rather than one quad.
+    ///
+    /// # Why a sphere needs more than four corners
+    ///
+    /// Four corners bent onto a sphere is a flat sheet through it, because what happens between
+    /// vertices is a linear interpolation in clip space and the bend is not linear. A background
+    /// met this first -- `encode_background_on` grids the viewport quad for it, and at zoom one
+    /// the ungridded version measured 0.894 of the disc the camera says the planet subtends,
+    /// against 0.900 for a regular octagon. A raster tile is the same sheet over a smaller patch.
+    ///
+    /// `cells` of zero or one is [`Self::add_quad`] exactly: the same four vertices in the same
+    /// order, which is what keeps a plane's buffer byte for byte what it was.
+    ///
+    /// The texture coordinates are the positions, as they are in the flat case, so the grid needs
+    /// nothing said about them separately.
+    ///
+    /// # Panics
+    ///
+    /// As [`Self::add_quad`].
+    pub fn add_quad_on(&mut self, z: u8, x: u32, y: u32, cells: u32) {
         let extent = EXTENT >> z.min(15);
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
         let (left, top) = ((x as i32 * extent) as i16, (y as i32 * extent) as i16);
         #[allow(clippy::cast_possible_truncation)]
         let (right, bottom) = (left + extent as i16, top + extent as i16);
 
+        let cells = cells.max(1);
         #[allow(clippy::cast_possible_truncation)]
         let base = self.vertices.len() as u16;
+        let side = cells as usize + 1;
         assert!(
-            self.vertices.len() + 4 <= usize::from(u16::MAX),
+            self.vertices.len() + side * side <= usize::from(u16::MAX),
             "a raster buffer past what a u16 index reaches needs a new segment"
         );
 
-        // Top-left, top-right, bottom-left, bottom-right — mbgl's order, and the one the two
-        // triangles below index against.
-        for (position, texture) in [
-            ([left, top], [left, top]),
-            ([right, top], [right, top]),
-            ([left, bottom], [left, bottom]),
-            ([right, bottom], [right, bottom]),
-        ] {
-            #[allow(clippy::cast_sign_loss)]
-            self.vertices.push(RasterVertex {
-                position,
-                texture: [texture[0] as u16, texture[1] as u16],
-            });
+        // Row by row, top to bottom, so that `(row, column)` is `base + row * side + column` and
+        // the one-cell case is the flat path's own order: top-left, top-right, bottom-left,
+        // bottom-right, which is mbgl's and what the two triangles below index against.
+        let at = |index: u32, low: i16, high: i16| -> i16 {
+            if index == 0 {
+                low
+            } else if index == cells {
+                high
+            } else {
+                // Interpolated in i32 and rounded, not stepped by a truncated cell width: a cell
+                // width that does not divide the extent would leave the last column short and the
+                // seam with the next tile open by that much.
+                #[allow(clippy::cast_possible_truncation)]
+                {
+                    (i32::from(low)
+                        + (i32::from(high) - i32::from(low)) * index as i32
+                            / i32::try_from(cells).unwrap_or(1)) as i16
+                }
+            }
+        };
+        for row in 0..=cells {
+            let y = at(row, top, bottom);
+            for column in 0..=cells {
+                let x = at(column, left, right);
+                #[allow(clippy::cast_sign_loss)]
+                self.vertices.push(RasterVertex {
+                    position: [x, y],
+                    texture: [x as u16, y as u16],
+                });
+            }
         }
 
-        // Two triangles sharing the diagonal: 0,1,2 then 1,2,3.
-        self.indices
-            .extend_from_slice(&[base, base + 1, base + 2, base + 1, base + 2, base + 3]);
+        // Two triangles a cell, wound as the flat pair is: `0,1,2` then `1,2,3` over the cell's
+        // own corners, so a one-cell grid emits exactly the six indices it always did.
+        #[allow(clippy::cast_possible_truncation)]
+        let side_u16 = side as u16;
+        for row in 0..cells {
+            for column in 0..cells {
+                #[allow(clippy::cast_possible_truncation)]
+                let corner = base + (row as u16) * side_u16 + column as u16;
+                let (tl, tr) = (corner, corner + 1);
+                let (bl, br) = (corner + side_u16, corner + side_u16 + 1);
+                self.indices.extend_from_slice(&[tl, tr, bl, tr, bl, br]);
+            }
+        }
     }
 
     /// The bucket for a whole tile.
@@ -127,9 +179,20 @@ impl RasterBucket {
     /// two tiles with the same mask produce the same bytes and therefore the same id (§5.3).
     #[must_use]
     pub fn masked(mask: &[tessella_tile::mask::MaskEntry]) -> Self {
+        Self::masked_on(mask, 1)
+    }
+
+    /// As [`Self::masked`], with each entry gridded `cells` a side.
+    ///
+    /// The cell count is a property of the tile's level rather than of the camera, which is what
+    /// keeps §5.1's bucket camera-free: [`crate::subdivide::step_for_level`] answers one segment
+    /// an edge from z11 up, so every raster tile at the zooms imagery is usually read at takes
+    /// the flat path exactly.
+    #[must_use]
+    pub fn masked_on(mask: &[tessella_tile::mask::MaskEntry], cells: u32) -> Self {
         let mut bucket = Self::default();
         for entry in mask {
-            bucket.add_quad(entry.z, entry.x, entry.y);
+            bucket.add_quad_on(entry.z, entry.x, entry.y, cells);
         }
         bucket
     }
@@ -192,5 +255,70 @@ pub fn contrast_factor(contrast: f32) -> f32 {
         1.0 / (1.0 - contrast)
     } else {
         1.0 + contrast
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RasterBucket;
+
+    /// One cell is the flat path, vertex for vertex and index for index.
+    ///
+    /// The globe's grid is only reached below z11, and everything above it -- which is every zoom
+    /// imagery is usually read at, and every zoom the parity sweep runs -- has to be the buffer
+    /// the oracle diff already compares.
+    #[test]
+    fn one_cell_is_the_four_corner_quad() {
+        let mut flat = RasterBucket::default();
+        flat.add_quad(0, 0, 0);
+        let mut gridded = RasterBucket::default();
+        gridded.add_quad_on(0, 0, 0, 1);
+        assert_eq!(flat.vertices, gridded.vertices);
+        assert_eq!(flat.indices, gridded.indices);
+        // And zero means one, so a caller that has not decided cannot produce a degenerate quad.
+        let mut zero = RasterBucket::default();
+        zero.add_quad_on(0, 0, 0, 0);
+        assert_eq!(flat.vertices, zero.vertices);
+    }
+
+    /// A grid is `(n + 1)^2` vertices and two triangles a cell, and it tiles the same square.
+    #[test]
+    fn a_grid_covers_the_quad_it_replaces() {
+        let mut bucket = RasterBucket::default();
+        bucket.add_quad_on(0, 0, 0, 4);
+        assert_eq!(bucket.vertices.len(), 25, "five a side");
+        assert_eq!(bucket.indices.len(), 4 * 4 * 6, "two triangles a cell");
+
+        // The corners are the quad's own, exactly: an interpolation that rounded the last column
+        // short would leave a seam against the next tile.
+        let extent = super::EXTENT as i16;
+        let corners: alloc::vec::Vec<[i16; 2]> = [0, 4, 20, 24]
+            .into_iter()
+            .map(|index| bucket.vertices[index].position)
+            .collect();
+        assert_eq!(
+            corners,
+            [[0, 0], [extent, 0], [0, extent], [extent, extent]]
+        );
+        // And the texture coordinates follow the positions, as they do in the flat case.
+        for vertex in &bucket.vertices {
+            #[allow(clippy::cast_sign_loss)]
+            let want = [vertex.position[0] as u16, vertex.position[1] as u16];
+            assert_eq!(vertex.texture, want);
+        }
+    }
+
+    /// A mask entry's quad is gridded in its own extent, not the tile's.
+    #[test]
+    fn a_mask_entry_grids_within_itself() {
+        let mut bucket = RasterBucket::default();
+        bucket.add_quad_on(1, 1, 1, 2);
+        let half = (super::EXTENT >> 1) as i16;
+        assert_eq!(bucket.vertices[0].position, [half, half], "its own corner");
+        assert_eq!(
+            bucket.vertices[8].position,
+            [half * 2, half * 2],
+            "and its own far corner"
+        );
     }
 }

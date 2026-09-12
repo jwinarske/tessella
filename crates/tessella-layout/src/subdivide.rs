@@ -107,6 +107,19 @@ pub fn step_for_level(z: u8, extent: i32) -> i32 {
     grid_step(extent, segments)
 }
 
+/// How many cells a tile's edge is split into at this level, for geometry that is a grid rather
+/// than a triangle list.
+///
+/// The same question [`step_for_level`] answers as a step in tile units, asked the way a quad
+/// builder wants it, and derived the same way and at the same level -- so a raster tile's grid
+/// and a fill's cuts agree about how much curvature a level has. One from z11 up, which is the
+/// flat path.
+#[must_use]
+pub fn edge_cells(z: u8) -> u32 {
+    let segments = tessella_tile::globe::edge_segments(z, f64::from(z) + 1.0, DEFAULT_TOLERANCE);
+    segments.max(1)
+}
+
 /// How far a chord may sit from the sphere, in pixels.
 ///
 /// Half a pixel, which is what §13.4's subdivision table is derived at. Not a knob: a caller

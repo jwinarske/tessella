@@ -3373,6 +3373,33 @@ fn write_layer_state(
                 ubo_slots::ID_CIRCLE_EVALUATED_PROPS_UBO,
                 &props,
             )?;
+
+            // The anchored bend, as every other family writes one. A circle needs only the
+            // placement out of it: its quad is extruded in clip space when it stands up on the
+            // screen and in tile units when it lies on the ground, and both of those are already
+            // in the space they belong to. What the bend replaces is the matrix between them.
+            if projection == ProjectionMode::Globe {
+                let bend: Vec<GlobeBendUbo> = matrices(0)
+                    .map(|tile| {
+                        ubo::globe_bend_block(
+                            view,
+                            tile.z,
+                            tile.x,
+                            tile.y,
+                            i32::from(tile.wrap),
+                            layer_index,
+                            0,
+                        )
+                    })
+                    .collect();
+                ubo::write(
+                    producer,
+                    view_id,
+                    layer_index,
+                    tessella_capture_abi::globe_ubo::ID_GLOBE_BEND_UBO,
+                    &ubo::pack_globe_bend_buffer(&bend),
+                )?;
+            }
         }
         LayerKind::FillExtrusion => {
             // Its own entry shape, not a fill's. An extrusion's block carries the height factor
@@ -3754,7 +3781,7 @@ fn write_layer_state(
             // The smallest drawable block of any layer: a matrix and nothing else. A raster tile
             // carries no per-feature anything, so there is nothing to interpolate and nothing to
             // bind — the picture is the tile.
-            let matrices: Vec<[f32; 16]> = matrices(0)
+            let placements: Vec<[f32; 16]> = matrices(0)
                 .filter_map(|tile| {
                     DrawableEntry::for_tile(
                         view,
@@ -3771,7 +3798,7 @@ fn write_layer_state(
                 })
                 .collect();
             let buffer = ubo::pack_raster_drawable_buffer(
-                &matrices,
+                &placements,
                 ubo_layouts::RASTER_DRAWABLE_UBO.stride,
             );
             ubo::write(
@@ -3790,6 +3817,34 @@ fn write_layer_state(
                 ubo_slots::ID_RASTER_EVALUATED_PROPS_UBO,
                 &props,
             )?;
+
+            // The anchored bend, as every other family writes one. A raster tile is a grid of
+            // quads and every vertex of it is on the surface, so the expansion is the whole of
+            // what it needs -- and the grid is what makes the expansion worth evaluating, since
+            // four corners bent onto a sphere is a flat sheet through it however exact the
+            // corners are.
+            if projection == ProjectionMode::Globe {
+                let bend: Vec<GlobeBendUbo> = matrices(0)
+                    .map(|tile| {
+                        ubo::globe_bend_block(
+                            view,
+                            tile.z,
+                            tile.x,
+                            tile.y,
+                            i32::from(tile.wrap),
+                            layer_index,
+                            0,
+                        )
+                    })
+                    .collect();
+                ubo::write(
+                    producer,
+                    view_id,
+                    layer_index,
+                    tessella_capture_abi::globe_ubo::ID_GLOBE_BEND_UBO,
+                    &ubo::pack_globe_bend_buffer(&bend),
+                )?;
+            }
         }
         _ => {}
     }

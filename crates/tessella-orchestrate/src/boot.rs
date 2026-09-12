@@ -66,7 +66,7 @@ use tessella_tile::store::Surface;
 
 use crate::cache::TileCache;
 use crate::pool::{Pool, Priority};
-use crate::tile::{LayerBucket, TileId, build_mvt_tile_on, build_raster_tile, build_tile};
+use crate::tile::{LayerBucket, TileId, build_mvt_tile_on, build_raster_tile_on, build_tile};
 
 /// The tile zoom a source is covered at.
 ///
@@ -575,11 +575,19 @@ fn decode_and_build(
             // ever shows one. A view that substitutes a parent while its children load computes
             // the mask over its own renderable set and rebuilds the geometry, because the mask
             // belongs to that view's moment rather than to the tile.
-            build_raster_tile(
+            // Gridded for a sphere, flat for a plane, on the tile's own level -- the same rule
+            // and the same function a fill's subdivision uses, so the two agree about how much
+            // curvature a level has without either knowing the camera.
+            let cells = match job.key.surface {
+                Surface::Plane => 1,
+                Surface::Sphere => tessella_layout::subdivide::edge_cells(job.tile.bucket_zoom()),
+            };
+            build_raster_tile_on(
                 style,
                 &job.source,
                 alloc::sync::Arc::new(image),
                 &[tessella_tile::mask::WHOLE_TILE],
+                cells,
             )
             .map_err(|error| BootError::Build {
                 url: url.clone(),
