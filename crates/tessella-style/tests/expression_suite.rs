@@ -465,13 +465,26 @@ fn report_the_pass_rate() {
     }
 
     println!(
-        "expression suite: {}/{} passing ({} in baseline)",
+        "expression suite: {}/{} passing ({} in baseline){}",
         passing.len(),
         passing.len() + failures.len(),
-        baseline.len()
+        baseline.len(),
+        if cfg!(feature = "collator") {
+            ""
+        } else {
+            " -- without `collator`, which holds 16 cases out of both counts"
+        }
     );
 
-    let gained: Vec<&String> = passing.difference(&baseline).collect();
+    // Diffed against the same filter the baseline was read through. Three of the collator error
+    // cases fail to compile here for an unrelated reason -- `==` and `<` take two arguments, and
+    // the case hands them three -- so a build without the feature "passes" them and would be told
+    // to regenerate a baseline that is already correct. Implementing collator comparison makes
+    // them pass for the stated reason instead.
+    let gained: Vec<&String> = passing
+        .difference(&baseline)
+        .filter(|name| cfg!(feature = "collator") || !needs_collator(name))
+        .collect();
     if !gained.is_empty() {
         println!(
             "newly passing ({}) — regenerate the baseline:",
@@ -527,6 +540,11 @@ fn report_the_pass_rate() {
     }
 
     if std::env::var("TESSELLA_REGENERATE_BASELINE").is_ok() {
+        if !cfg!(feature = "collator") {
+            panic!(
+                "regenerate with --features collator, or the collator cases are written out of the file"
+            );
+        }
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/expression_baseline.txt");
         let mut text = String::from(
             "# Cases from tests/expression-suite that this evaluator passes.\n\
