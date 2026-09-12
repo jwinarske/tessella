@@ -50,6 +50,14 @@ geo-types = "0.7"
 geojson = "1.0"
 rustybuzz = "0.20"       # harfbuzz
 unicode-bidi = "0.3"     # ubidi/ICU
+# CLDR's own number data, which is the half of ICU a hand-written formatter cannot stand in for:
+# grouping *shape* (South Asian locales group 2-2-3, not by threes), the separators, and the
+# numbering system a locale writes its digits in. Pure Rust and `no_std`, so the cross lanes stay
+# green -- which `icu` proper, being a C library, is exactly why this is `icu4x` and not it.
+icu_decimal = { version = "2.3", default-features = false, features = ["compiled_data"] }
+icu_locale_core = { version = "2.2", default-features = false }
+fixed_decimal = { version = "0.7", default-features = false, features = ["ryu"] }
+icu_experimental = { version = "0.6", default-features = false, features = ["compiled_data"] }
 unicode-linebreak = "0.1"
 crossbeam = "0.8"
 log = "0.4"

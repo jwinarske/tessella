@@ -11,6 +11,10 @@ homepage.workspace = true
 publish = false
 
 [dependencies]
+icu_decimal.workspace = true
+icu_locale_core.workspace = true
+fixed_decimal.workspace = true
+icu_experimental.workspace = true
 csscolorparser.workspace = true
 serde.workspace = true
 serde_json.workspace = true
