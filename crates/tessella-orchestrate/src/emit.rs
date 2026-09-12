@@ -2146,10 +2146,51 @@ pub fn encode_symbol(
     filter: TextureFilter,
     paint: &SymbolPaint<'_>,
 ) -> Encoded {
+    encode_symbol_indices(
+        arena,
+        geometry,
+        buffers,
+        &buffers.indices,
+        permutation_key,
+        is_sdf,
+        atlas,
+        sprites,
+        filter,
+        paint,
+    )
+}
+
+/// As [`encode_symbol`], drawing only one stretch of the buffer's indices.
+///
+/// # Why a symbol buffer is drawn in pieces
+///
+/// A glyph's quad carries its rectangle in the atlas its font stack was packed into, and a
+/// drawable binds one texture. A layer whose `text-font` is data-driven puts labels from two
+/// stacks in one bucket, so the bucket becomes one drawable a stack: same vertices, its own
+/// indices, its own atlas. `SymbolBuffers::runs` is where the stretches come from.
+///
+/// The vertices are re-allocated per piece rather than shared. A bucket with one stack -- which
+/// is every layer whose `text-font` is a literal, and so nearly all of them -- has one piece and
+/// pays nothing; a bucket with two pays a second copy of a buffer it already had, which is the
+/// cheaper side of the trade against threading a shared allocation through every symbol path.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_symbol_indices(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    buffers: &SymbolBuffers,
+    indices: &[u16],
+    permutation_key: u64,
+    is_sdf: bool,
+    atlas: TextureId,
+    sprites: Option<TextureId>,
+    filter: TextureFilter,
+    paint: &SymbolPaint<'_>,
+) -> Encoded {
     let vertex_bytes = as_symbol_bytes(&buffers.vertices);
 
     let interleaved = arena.alloc(&vertex_bytes);
-    let indexes = alloc_u16(arena, &buffers.indices);
+    let index_length = indices.len();
+    let indexes = alloc_u16(arena, indices);
     let dynamic = alloc_f32x3(arena, &buffers.dynamic);
     let opacity = alloc_f32(arena, &buffers.opacity);
 
@@ -2248,7 +2289,9 @@ pub fn encode_symbol(
             vertex_offset: 0,
             index_offset: 0,
             vertex_length: buffers.vertices.len() as u32,
-            index_length: buffers.indices.len() as u32,
+            // What this piece draws, not what the buffer holds: the indices were sliced above and
+            // a segment claiming the whole buffer's length would walk past them.
+            index_length: index_length as u32,
         }],
     );
 

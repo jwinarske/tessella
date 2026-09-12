@@ -21,6 +21,7 @@
 
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
+use tessella_layout::symbol_layout::SymbolPart;
 
 use tessella_capture_abi::envelope::{OrderEpoch, ViewId};
 use tessella_capture_abi::generated::{ubo_layouts, ubo_slots};
@@ -2476,11 +2477,22 @@ fn part_of(content: &Content, sub_layer_index: i32) -> usize {
     match content {
         Content::Fill(_) => sub.saturating_sub(1),
         Content::Fill3d(_) => sub % 2,
-        // The encoder returns the glyphs then the sprites, and the glyphs are drawn by one or
-        // two drawables: the halo pass and the fill pass share a geometry, as an extrusion's
-        // depth and colour passes do. The sprites are drawn under both and so take the first
-        // index, which is mbgl's "text over icons". See `order::bindings_for` for the numbering.
-        Content::Symbol(layout) => usize::from(layout.has_icons() && sub_layer_index == 0),
+        // The encoder returns one record per font stack and then the sprites. A stack's halo and
+        // fill share its record, as an extrusion's depth and colour passes share one; the sprites
+        // are drawn under all of it and take the first sub-layer, which is mbgl's "text over
+        // icons". `SymbolLayout::parts` is where the numbering is decided.
+        Content::Symbol(layout) => {
+            use tessella_layout::symbol_layout::SymbolPart;
+            match usize::try_from(sub_layer_index)
+                .ok()
+                .and_then(|sub| layout.parts().get(sub).copied())
+            {
+                Some(SymbolPart::TextHalo(stack) | SymbolPart::TextFill(stack)) => stack,
+                // The sprites are the record after the last stack's, which is where the encoder
+                // puts them.
+                Some(SymbolPart::Icon) | None => layout.stacks().len(),
+            }
+        }
         _ => 0,
     }
 }
@@ -2684,30 +2696,60 @@ fn encode_parts(
                 .icons_in_text
                 .then(|| patterns.map(|patterns| patterns.texture))
                 .flatten();
-            // The atlas this bucket's own glyphs were packed into. A bucket drawing more than
-            // one stack can name only one texture, so it takes the first; splitting such a bucket
-            // per stack is what mbgl does and is not done here yet.
+            // The atlas each of this bucket's stacks was packed into, and one record apiece.
+            //
+            // A glyph's quad carries its rectangle in its own stack's atlas and a drawable binds
+            // one texture, so a bucket whose `text-font` is data-driven -- a place label in
+            // medium above a population and regular below it -- cannot be one drawable. It was,
+            // and half its labels were drawn with the other stack's rectangles: letters from the
+            // wrong script, which `atlas_mismatched` counted eight of on the Protomaps place
+            // layer while every single-stack layer counted none.
+            //
+            // The vertices are one buffer; what differs is the indices. `SymbolBuffers::runs`
+            // records which stretch of them each run of labels belongs to, and the runs of one
+            // stack are drawn by that stack's record.
+            let atlas_for = |fonts: &[alloc::string::String]| {
+                stacks
+                    .iter()
+                    .position(|held| held.as_slice() == fonts)
+                    .filter(|index| *index < GLYPH_ATLAS_CAP)
+                    .map_or_else(|| glyph_atlas_id(0), glyph_atlas_id)
+            };
+            let mut text: Vec<emit::Encoded> = Vec::new();
+            for stack in layout.stacks() {
+                // Every run of this stack, which need not be one: the runs are maximal stretches
+                // of consecutive labels sharing a stack, and a layer alternating between two
+                // fonts produces several of each.
+                let mut drawn: Vec<u16> = Vec::new();
+                for run in buffers.runs.iter().filter(|run| run.fonts == stack) {
+                    drawn.extend_from_slice(
+                        buffers
+                            .indices
+                            .get(run.indices.clone())
+                            .unwrap_or(&buffers.indices[..0]),
+                    );
+                }
+                text.push(emit::encode_symbol_indices(
+                    arena,
+                    PLACEHOLDER,
+                    buffers,
+                    &drawn,
+                    key,
+                    true,
+                    atlas_for(&stack),
+                    sprites,
+                    // Glyphs are always sampled linearly, whatever the icons do.
+                    tessella_capture_abi::envelope::TextureFilter::Linear,
+                    &emit::SymbolPaint {
+                        bytes: &paint.text,
+                        layout: &text_layout,
+                    },
+                ));
+            }
             let atlas = layout
                 .stacks()
                 .first()
-                .and_then(|stack| stacks.iter().position(|held| held == stack))
-                .filter(|index| *index < GLYPH_ATLAS_CAP)
-                .map_or_else(|| glyph_atlas_id(0), glyph_atlas_id);
-            let text = emit::encode_symbol(
-                arena,
-                PLACEHOLDER,
-                buffers,
-                key,
-                true,
-                atlas,
-                sprites,
-                // Glyphs are always sampled linearly, whatever the icons do.
-                tessella_capture_abi::envelope::TextureFilter::Linear,
-                &emit::SymbolPaint {
-                    bytes: &paint.text,
-                    layout: &text_layout,
-                },
-            );
+                .map_or_else(|| glyph_atlas_id(0), |stack| atlas_for(stack));
 
             match icons {
                 Some(shaped) => {
@@ -2740,25 +2782,26 @@ fn encode_parts(
                     } else {
                         tessella_capture_abi::envelope::TextureFilter::Nearest
                     };
-                    return Some(alloc::vec![
-                        text,
-                        emit::encode_symbol(
-                            arena,
-                            PLACEHOLDER,
-                            shaped,
-                            key,
-                            false,
-                            sheet,
-                            None,
-                            filter,
-                            &emit::SymbolPaint {
-                                bytes: &paint.icons,
-                                layout: &icon_layout,
-                            },
-                        ),
-                    ]);
+                    let mut parts = text;
+                    parts.push(emit::encode_symbol(
+                        arena,
+                        PLACEHOLDER,
+                        shaped,
+                        key,
+                        false,
+                        sheet,
+                        None,
+                        filter,
+                        &emit::SymbolPaint {
+                            bytes: &paint.icons,
+                            layout: &icon_layout,
+                        },
+                    ));
+                    return Some(parts);
                 }
-                None => Some(text),
+                // Returned here too, because what follows expects one record and a bucket's text
+                // is one per font stack.
+                None => return Some(text),
             }
         }
         Content::Raster(raster) => Some(emit::encode_raster(
@@ -3566,6 +3609,8 @@ fn write_layer_state(
             // The size is only ever divided into a glyph's texture coordinates. A layer with no
             // glyphs has none to divide, and its icons take `sheet_size` instead; one, rather
             // than zero, because the shader divides by it.
+            // The layer's declared stack, for the halves that are not text -- an icon's block
+            // carries it too and the shader ignores it.
             let atlas_size = frame
                 .fonts
                 .and_then(|fonts| symbol_atlas_size(style, layer, fonts))
@@ -3584,19 +3629,14 @@ fn write_layer_state(
                         .and_then(tessella_style::Value::as_array)
                         .is_none()
                 });
-            // How many drawables a tile at each zoom was given, which is what says whether the
-            // layer resolved any sprites -- see `kind`. Taken before `bindings` is shadowed by
-            // the size-binding map below.
-            let parts_at: BTreeMap<u8, i32> = bindings.iter().fold(
-                BTreeMap::new(),
-                |mut counted: BTreeMap<u8, i32>, binding| {
-                    if let Some(tile) = binding.tile {
-                        let highest = counted.entry(tile.z).or_default();
-                        *highest = (*highest).max(binding.sub_layer_index + 1);
-                    }
-                    counted
-                },
-            );
+
+            // The highest sub-layer this layer's bindings carry, taken before `bindings` is
+            // shadowed by the size-binding map below.
+            let highest_sub = bindings
+                .iter()
+                .map(|binding| binding.sub_layer_index)
+                .max()
+                .unwrap_or(-1);
 
             // How each half's size reaches the shader, per tile zoom.
             //
@@ -3621,29 +3661,53 @@ fn write_layer_state(
                 });
             }
 
-            // Which half a sub-layer draws and whether it is the halo pass, for a tile at this
-            // zoom. `order::bindings_for` packs the indices -- sprites first, then the halo, then
-            // the letters -- so the mapping is read back the same way it was written.
+            // What each of a tile's sub-layers draws, read off the bucket that produced them.
             //
-            // Whether the layer has sprites is not a property of the *layer*: it is whether the
-            // bucket resolved any, which this side does not hold. It is recovered from the
-            // bindings instead, by counting how many sub-layers a tile at this zoom was given
-            // against how many text passes the layer has. One more than the text passes is the
-            // sprite half, and it can only be at zero.
-            let kind = |sub: i32, z: u8| -> Kind {
-                let passes = tessella_layout::symbol_layout::passes(layer, "text", f64::from(z));
-                let text = i32::from(passes.fill) + i32::from(passes.halo);
-                let mut at = 0;
-                if parts_at.get(&z).copied().unwrap_or_default() > text {
-                    if sub == at {
-                        return Kind::IconFill;
-                    }
-                    at += 1;
+            // Not derived from the layer: whether a bucket has sprites is whether it *resolved*
+            // any, and how many font stacks it spans is a property of the labels in that tile --
+            // a place layer whose `text-font` is data-driven spans two where its neighbour spans
+            // one. So the mapping is per tile, taken from `SymbolLayout::parts`, which is the
+            // same function `order::bindings_for` counted the sub-layers with.
+            let parts_of: BTreeMap<(u8, u32, u32), Vec<SymbolPart>> = frame
+                .buckets
+                .iter()
+                .filter_map(|(tile, tile_buckets)| {
+                    let bucket = tile_buckets.iter().find(|bucket| {
+                        i32::try_from(bucket.layer_index).is_ok_and(|index| index == layer_index)
+                    })?;
+                    let Content::Symbol(layout) = &bucket.content else {
+                        return None;
+                    };
+                    Some(((tile.z, tile.x, tile.y), layout.parts()))
+                })
+                .collect();
+            let stacks_of: BTreeMap<(u8, u32, u32), Vec<Vec<alloc::string::String>>> = frame
+                .buckets
+                .iter()
+                .filter_map(|(tile, tile_buckets)| {
+                    let bucket = tile_buckets.iter().find(|bucket| {
+                        i32::try_from(bucket.layer_index).is_ok_and(|index| index == layer_index)
+                    })?;
+                    let Content::Symbol(layout) = &bucket.content else {
+                        return None;
+                    };
+                    Some(((tile.z, tile.x, tile.y), layout.stacks()))
+                })
+                .collect();
+            let part_of_tile =
+                |sub: i32, tile: &tessella_capture_abi::envelope::TileId| -> Option<SymbolPart> {
+                    let parts = parts_of.get(&(tile.z, tile.x, tile.y))?;
+                    usize::try_from(sub)
+                        .ok()
+                        .and_then(|sub| parts.get(sub))
+                        .copied()
+                };
+            let kind_of = |sub: i32, tile: &tessella_capture_abi::envelope::TileId| -> Kind {
+                match part_of_tile(sub, tile) {
+                    Some(SymbolPart::Icon) => Kind::IconFill,
+                    Some(SymbolPart::TextHalo(_)) => Kind::TextHalo,
+                    Some(SymbolPart::TextFill(_)) | None => Kind::TextFill,
                 }
-                if passes.halo && sub == at {
-                    return Kind::TextHalo;
-                }
-                Kind::TextFill
             };
 
             // Both halves, in sub-layer order, the way a fill packs its triangles and its
@@ -3652,10 +3716,34 @@ fn write_layer_state(
             // one slot past the end of the buffer, where it was counted `unplaced` and skipped,
             // and a highway shield drew its number over nothing.
             let bindings = &bindings;
+            // The atlas a text drawable's glyphs were packed into, which is its own stack's and
+            // not the layer's. `symbol_atlas_size` reads `text-font` as a literal and answers
+            // nothing at all when the style wrote an expression there -- which is exactly the
+            // layer that spans two stacks, and exactly the drawable whose rectangles have to be
+            // divided by the right sheet.
+            let text_atlas_size = |sub: i32, tile: &tessella_capture_abi::envelope::TileId| {
+                let Some(SymbolPart::TextHalo(index) | SymbolPart::TextFill(index)) =
+                    part_of_tile(sub, tile)
+                else {
+                    return atlas_size;
+                };
+                let size = stacks_of
+                    .get(&(tile.z, tile.x, tile.y))
+                    .and_then(|stacks| stacks.get(index))
+                    .zip(frame.fonts)
+                    .and_then(|(stack, fonts)| fonts.atlas(stack))
+                    .map(tessella_glyph::atlas::Atlas::size);
+                #[allow(clippy::cast_precision_loss)]
+                match size {
+                    Some((width, height)) => [width as f32, height as f32],
+                    None => atlas_size,
+                }
+            };
             let entry = |sub_layer_index: i32| {
                 let sub = sub_layer_index;
                 matrices(sub).filter_map(move |tile| {
-                    let is_icon = kind(sub, tile.z) == Kind::IconFill;
+                    let is_icon = kind_of(sub, &tile) == Kind::IconFill;
+                    let atlas_size = text_atlas_size(sub, &tile);
                     ubo::SymbolDrawableEntry::for_tile(
                         view,
                         tile.z,
@@ -3705,7 +3793,12 @@ fn write_layer_state(
             // Which sub-layers this layer actually emitted, read off the bindings rather than
             // re-derived: `order::bindings_for` decides, and a second opinion here would be a
             // drawable buffer indexed differently from the drawables that address it.
-            let subs: Vec<i32> = (0..3)
+            //
+            // The upper bound comes from the bindings too. It was three -- sprites, halo, letters
+            // -- and a layer whose `text-font` is data-driven has two of the last two, so the
+            // drawables past the third addressed a buffer that stopped short of them and were
+            // counted `unplaced` and skipped.
+            let subs: Vec<i32> = (0..=highest_sub)
                 .filter(|&sub| matrices(sub).next().is_some())
                 .collect();
             let entries: Vec<ubo::SymbolDrawableEntry> =
@@ -3765,7 +3858,7 @@ fn write_layer_state(
             let mut tile_props = Vec::new();
             for &sub in &subs {
                 for tile in matrices(sub) {
-                    let kind = kind(sub, tile.z);
+                    let kind = kind_of(sub, &tile);
                     tile_props.extend(ubo::pack_symbol_tile_props(
                         1,
                         kind != Kind::IconFill,
