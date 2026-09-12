@@ -212,7 +212,22 @@ fn run_case(case: &Value) -> Result<(), String> {
             let unimplemented = matches!(
                 err,
                 tessella_style::expression::ParseError::UnknownOperator(_)
-            );
+            ) || {
+                // Same accident, one step further in: a build without the weights refuses every
+                // collator comparison, which would agree with any case the spec rejects for a
+                // reason of its own.
+                #[cfg(not(feature = "collator"))]
+                {
+                    matches!(
+                        err,
+                        tessella_style::expression::ParseError::CollatorUnavailable
+                    )
+                }
+                #[cfg(feature = "collator")]
+                {
+                    false
+                }
+            };
             return if wants_success || unimplemented {
                 Err(format!("parse failed: {err}"))
             } else {
@@ -383,13 +398,24 @@ fn values_match(got: &Value, want: &Value) -> bool {
     }
 }
 
-/// Whether a case needs the collator, wherever in the suite it lives.
+/// Whether a case needs the collator's *table*, wherever in the suite it lives.
 ///
 /// The `collator/` directory is most of them and `equal/collator-value` is not in it, which is
 /// the sort of thing a prefix test gets wrong quietly: the build without the feature would be
 /// told it regressed on a case it never could have passed.
+///
+/// Three of them do not need the table. A collator argument is checked for shape and for
+/// operand type by every build, so a build with no weights still answers `cannot use collator to
+/// compare non-string type` and `expected a ["collator", {…}]` — which is the whole of what those
+/// cases ask. They are held to it here rather than filtered out of it.
 fn needs_collator(case: &str) -> bool {
-    case.starts_with("collator/") || case.contains("collator")
+    const CHECKED_WITHOUT_THE_TABLE: [&str; 3] = [
+        "collator/comparison-number-error",
+        "collator/equals-non-string-error",
+        "collator/non-object-error",
+    ];
+    (case.starts_with("collator/") || case.contains("collator"))
+        && !CHECKED_WITHOUT_THE_TABLE.contains(&case)
 }
 
 /// The committed pass set, for the features this build has.
