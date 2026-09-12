@@ -3373,6 +3373,33 @@ fn write_layer_state(
                 ubo_slots::ID_CIRCLE_EVALUATED_PROPS_UBO,
                 &props,
             )?;
+
+            // The anchored bend, as every other family writes one. A circle needs only the
+            // placement out of it: its quad is extruded in clip space when it stands up on the
+            // screen and in tile units when it lies on the ground, and both of those are already
+            // in the space they belong to. What the bend replaces is the matrix between them.
+            if projection == ProjectionMode::Globe {
+                let bend: Vec<GlobeBendUbo> = matrices(0)
+                    .map(|tile| {
+                        ubo::globe_bend_block(
+                            view,
+                            tile.z,
+                            tile.x,
+                            tile.y,
+                            i32::from(tile.wrap),
+                            layer_index,
+                            0,
+                        )
+                    })
+                    .collect();
+                ubo::write(
+                    producer,
+                    view_id,
+                    layer_index,
+                    tessella_capture_abi::globe_ubo::ID_GLOBE_BEND_UBO,
+                    &ubo::pack_globe_bend_buffer(&bend),
+                )?;
+            }
         }
         LayerKind::FillExtrusion => {
             // Its own entry shape, not a fill's. An extrusion's block carries the height factor
