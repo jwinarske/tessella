@@ -164,7 +164,7 @@ fn touching_boxes_collide_and_touching_circles_do_not() {
 /// A circle meeting a box at a corner is tested against the corner, not the bounding box.
 ///
 /// The last branch of the circle-box test. Without it a circle diagonally outside a box's corner
-/// collides with it, and labels keep a gap they do not need at every diagonal neighbour.
+/// collides with it, and labels keep a gap they do not need at every diagonal neighbor.
 #[test]
 fn a_circle_near_a_corner_is_tested_against_the_corner() {
     let mut grid: GridIndex<i16> = GridIndex::new(100.0, 100.0, 10);

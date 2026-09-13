@@ -248,7 +248,7 @@ pub struct LineCircle {
     ///
     /// Testing the padding as though it were the label is what stopped a road carrying its name
     /// more than once: two labels 250 pixels apart on a straight road, each 114 pixels wide,
-    /// reserved 272 pixels each and so collided with a neighbour they never touched.
+    /// reserved 272 pixels each and so collided with a neighbor they never touched.
     pub covered_by_label: bool,
 }
 
@@ -270,7 +270,7 @@ pub struct LineCircle {
 ///
 /// mbgl adds padding circles either side, because a pitched camera makes distant labels *larger*
 /// on screen than the box they were laid out for, and a label that has grown past its collision
-/// shape overlaps its neighbour with nothing detecting it. The padding grows with overscaling,
+/// shape overlaps its neighbor with nothing detecting it. The padding grows with overscaling,
 /// slowly — `1 + 0.4 * log2(overscaling)` — because an overscaled tile places labels closer
 /// together and each extra circle costs a query.
 ///
@@ -302,7 +302,7 @@ pub fn line_circles(
     #[allow(clippy::cast_precision_loss)]
     let padding = (count as f32 * padding_factor / 2.0).floor() as isize;
 
-    // The first circle's centre is half a box in, so the *edge* of the run is the edge of the
+    // The first circle's center is half a box in, so the *edge* of the run is the edge of the
     // label rather than half a box past it.
     let first_offset = -box_size / 2.0;
     let label_start = -label_length / 2.0;

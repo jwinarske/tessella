@@ -19,7 +19,7 @@
 //! covers the bitmap plus *one*. The difference matters: the outer pixel keeps two glyphs from
 //! bleeding into each other when the texture is sampled with linear filtering, and the inner
 //! one is deliberately included so that the shader sampling the glyph's edge has real distance
-//! field to read rather than whatever its neighbour left there.
+//! field to read rather than whatever its neighbor left there.
 
 use std::collections::BTreeMap;
 
@@ -243,7 +243,7 @@ impl ShelfPack {
 
     /// Drops a reference, freeing the slot when the last one goes.
     ///
-    /// The slot is kept rather than merged back into its shelf: merging would need neighbours to
+    /// The slot is kept rather than merged back into its shelf: merging would need neighbors to
     /// be adjacent and the same height, which after a few evictions they are not. Keeping it
     /// means a glyph of the same size lands exactly where the old one was, which is also the
     /// arrangement that keeps §6.4's dirty rectangles small.
@@ -260,7 +260,7 @@ impl ShelfPack {
 
 /// Padding around every glyph in the atlas.
 ///
-/// Two: one so linear filtering cannot pull a neighbouring glyph's pixels in, and one more that
+/// Two: one so linear filtering cannot pull a neighboring glyph's pixels in, and one more that
 /// is handed back inside the reported rectangle so the shader has distance field to read at the
 /// glyph's own edge.
 pub const PADDING: u32 = 2;
@@ -438,7 +438,7 @@ impl Atlas {
 }
 
 /// The rectangle handed to a caller: the slot, less the pixel that exists only to separate it
-/// from its neighbour.
+/// from its neighbor.
 const fn reported(slot: Rect) -> Rect {
     Rect {
         x: slot.x + OUTER,

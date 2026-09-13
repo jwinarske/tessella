@@ -73,7 +73,7 @@ impl Glyphs for Font {
     }
 }
 
-fn labelled(text: &str) -> (SlabArena, emit::Encoded, usize) {
+fn labeled(text: &str) -> (SlabArena, emit::Encoded, usize) {
     let font = Font::new(text);
     let (buffers, _) = build_symbols(
         &[Label {
@@ -111,7 +111,7 @@ fn labelled(text: &str) -> (SlabArena, emit::Encoded, usize) {
 /// The record names the symbol shader and counts every vertex.
 #[test]
 fn the_record_describes_the_symbol_geometry() {
-    let (_, encoded, glyphs) = labelled("Alpha");
+    let (_, encoded, glyphs) = labeled("Alpha");
 
     assert_eq!(encoded.record.geometry, GeometryId(7));
     assert_eq!(encoded.record.vertex_count, glyphs as u32 * 4);
@@ -166,7 +166,7 @@ fn a_non_sdf_symbol_names_the_icon_shader() {
 /// nonsense with nothing in the stream to say so.
 #[test]
 fn the_five_attributes_match_the_capture() {
-    let (arena, encoded, _) = labelled("Alpha");
+    let (arena, encoded, _) = labeled("Alpha");
     let attrs = encoded.attributes();
 
     assert_eq!(attrs.len(), 5);
@@ -210,7 +210,7 @@ fn the_five_attributes_match_the_capture() {
 /// failure this rules out: the consumer reads past the end of the last vertex, or stops short.
 #[test]
 fn each_attribute_reads_a_slab_that_fits_it() {
-    let (arena, encoded, glyphs) = labelled("Bravo");
+    let (arena, encoded, glyphs) = labeled("Bravo");
     let vertices = glyphs * 4;
     let attrs = encoded.attributes();
 
@@ -236,7 +236,7 @@ fn each_attribute_reads_a_slab_that_fits_it() {
 /// The index buffer holds two triangles per glyph.
 #[test]
 fn the_index_buffer_holds_two_triangles_a_glyph() {
-    let (arena, encoded, glyphs) = labelled("Charlie");
+    let (arena, encoded, glyphs) = labeled("Charlie");
     let bytes = arena.resolve(encoded.record.indexes).expect("a slab");
     assert_eq!(bytes.len(), glyphs * 6 * 2, "six u16 indices a glyph");
 }
@@ -248,7 +248,7 @@ fn the_index_buffer_holds_two_triangles_a_glyph() {
 /// refuses rather than wrapping into.
 #[test]
 fn the_geometry_is_one_segment() {
-    let (_, encoded, glyphs) = labelled("Alpha");
+    let (_, encoded, glyphs) = labeled("Alpha");
     let segments = encoded.segments();
 
     assert_eq!(segments.len(), 1);
@@ -261,7 +261,7 @@ fn the_geometry_is_one_segment() {
 /// It goes on the ring as a `GeometryAdd`.
 #[test]
 fn it_reaches_the_ring() {
-    let (_, encoded, _) = labelled("Alpha");
+    let (_, encoded, _) = labeled("Alpha");
     let mut ring = Ring::new(1 << 16);
     let (producer, consumer) = ring.split();
 

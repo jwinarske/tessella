@@ -2,7 +2,7 @@
 //!
 //! A transcription of mbgl's `RasterBucket`. There is almost nothing here compared to a fill or a
 //! line, and that is the point — a raster tile *is* an image, so the geometry is the rectangle it
-//! is stretched over and the interesting work is the texture upload and the colour adjustment
+//! is stretched over and the interesting work is the texture upload and the color adjustment
 //! beside it.
 //!
 //! # Why a quad per masked tile rather than one quad
@@ -198,12 +198,12 @@ impl RasterBucket {
     }
 }
 
-/// The three colour adjustments a raster layer's shader is given, derived from its paint.
+/// The three color adjustments a raster layer's shader is given, derived from its paint.
 ///
 /// Each is a *factor* rather than the property's own value, because the shader wants the number
 /// it multiplies by and the property is stated the way a person thinks about it.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct RasterColour {
+pub struct RasterColor {
     /// How the hue rotation redistributes the channels.
     pub spin_weights: [f32; 4],
     /// What saturation multiplies by.
@@ -214,7 +214,7 @@ pub struct RasterColour {
 
 /// `raster-hue-rotate`, in degrees, as the three channel weights the shader mixes with.
 ///
-/// Rotating a hue is a rotation about the grey axis of the colour cube, and these are that
+/// Rotating a hue is a rotation about the gray axis of the color cube, and these are that
 /// rotation's row — the same construction a YIQ hue shift uses. The fourth weight is zero and
 /// exists because the shader wants a `vec4`.
 #[must_use]

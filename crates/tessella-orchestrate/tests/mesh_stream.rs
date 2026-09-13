@@ -122,11 +122,11 @@ mod placement {
         pack_mesh_drawable_buffer,
     };
 
-    /// A Mapbox buildings mesh is tile units in x and y and **metres** in z.
+    /// A Mapbox buildings mesh is tile units in x and y and **meters** in z.
     ///
     /// Measured rather than assumed, across 972 nodes of a real store: node translations span
     /// 60 to 8189, which is the tile extent, while node z-scale is exactly 1.0 and mesh heights
-    /// run to 330 with a 95th percentile of 136. Those are building heights in metres, not tile
+    /// run to 330 with a 95th percentile of 136. Those are building heights in meters, not tile
     /// units — half the nodes are flat because a buildings tile carries a footprint mesh beside
     /// each extruded one.
     ///
@@ -157,10 +157,10 @@ mod placement {
 
     /// A mesh's placement is the matrix and nothing else.
     ///
-    /// It carried `height_factor` beside the matrix, as what a metre multiplies by, and that
+    /// It carried `height_factor` beside the matrix, as what a meter multiplies by, and that
     /// told a consumer to scale a building by four thousand at z14. The matrix already converts:
     /// its third column carries `pixelsPerMeter`, which is why mbgl's own shader passes a height
-    /// in metres straight into it.
+    /// in meters straight into it.
     #[test]
     fn a_placement_carries_no_conversion_of_its_own() {
         assert_eq!(

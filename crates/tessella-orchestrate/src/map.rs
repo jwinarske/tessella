@@ -361,7 +361,7 @@ impl Map {
     ///
     /// A map that is never told stays in the still-picture mode every parity render uses: a fade
     /// completes in one step, so a label appears and disappears outright. That is
-    /// `mbgl-render`'s behaviour and correct for a capture; on a moving map it is what makes a
+    /// `mbgl-render`'s behavior and correct for a capture; on a moving map it is what makes a
     /// label that stops being placed at one anchor and starts at another read as text that
     /// *moved*, since nothing crossfades between the two.
     ///
@@ -372,7 +372,7 @@ impl Map {
         // A fade in flight is a reason to draw when nothing else has changed. The opacities
         // travel in the vertices, so a frame that is not emitted is a fade that does not move,
         // and a settled map does not emit -- which left every capture's labels part way through a
-        // fade, at about half the colour the style asks for.
+        // fade, at about half the color the style asks for.
         //
         // This used to render the map black instead, and the reason was one gate away: a frame
         // that wrote records and returned without a camera never closed, because the reader
@@ -752,7 +752,7 @@ impl Map {
         // instead` -- and computes `util::tileCover` at the integer zoom for this layer alone.
         // Taking the background off whatever tiles a source happened to serve was wrong twice
         // over. A style with no vector source has nothing renderable, so substitution records no
-        // coordinates and no background was drawn at all: the frame came out the clear colour,
+        // coordinates and no background was drawn at all: the frame came out the clear color,
         // which is black, and a raster-only basemap is exactly that style. And where a source
         // *was* present but an ancestor stood in for a missing tile, the background went onto the
         // ancestor's coordinate and so covered four or sixteen times the ground it should.
@@ -761,7 +761,7 @@ impl Map {
         // coordinate a walk already placed would blend over itself.
         //
         // Unless the oracle would not draw it at all. A solid first-layer background is mbgl's
-        // clear colour, and a clear covers the whole renderable rather than the cover: see
+        // clear color, and a clear covers the whole renderable rather than the cover: see
         // `tile::background_covers_viewport`. One drawable stands in for it, on a fixed
         // coordinate so the registry keeps it across a pan -- the quad is the viewport and does
         // not move with the camera, so nothing about it is per tile.

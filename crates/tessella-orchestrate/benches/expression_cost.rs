@@ -6,7 +6,7 @@
 //!
 //! §12.1 calls expression evaluation "the largest pure-CPU line item after tessellation" and
 //! DR-11 schedules a bytecode VM for it. Both are claims about mbgl, made before this port
-//! existed. Building the VM without checking whether they hold *here* would be optimising a
+//! existed. Building the VM without checking whether they hold *here* would be optimizing a
 //! number nobody has looked at — and if evaluation turns out to be a few percent of build, the
 //! VM is a large piece of machinery bought for nothing.
 //!
@@ -25,7 +25,7 @@
 //! `real-world-0-0-0.mvt` — a zoom-0 view of the whole world, 17 202 features with 17 153 of
 //! them in one dense `admin` layer — where the same measurement said the surcharge was three
 //! quarters of the build. Both tiles are valid; only one is shaped like the thing being
-//! optimised, and the difference is a factor of two in what the numbers recommend. The world
+//! optimized, and the difference is a factor of two in what the numbers recommend. The world
 //! tile is still decoded here, beside the real one, so the gap stays visible.
 //!
 //! The per-expression numbers say where the cost is, and the first two lines are there so it is
@@ -44,7 +44,7 @@
 //!
 //! That was taken as DR-11's bytecode VM's target. Building one showed it is not: a flat
 //! evaluator over an operand stack of `Value` measured slower than the walk at every frame size,
-//! because `Value` has a destructor and a frame is therefore initialised and dropped per
+//! because `Value` has a destructor and a frame is therefore initialized and dropped per
 //! evaluation. §12.1 records the conclusion: a compact `Copy` value comes before any VM.
 //!
 //! An earlier reading of these numbers named the 40-byte `Result` as *the* cause; that was
@@ -147,14 +147,14 @@ const TILE: &[u8] = include_bytes!("../../../tests/mvt-fixtures/streets-10-163-3
 ///
 /// Kept beside the streets tile because the two are dense in different things — Berlin carries
 /// 3.4 properties per feature against 2.0, and the streets tile 47 points per feature against
-/// 22. An optimisation that helps one need not help the other, which is the same lesson the
+/// 22. An optimization that helps one need not help the other, which is the same lesson the
 /// world tile taught more expensively.
 const BERLIN_TILE: &[u8] =
     include_bytes!("../../../tests/mvt-fixtures/protomaps-berlin-14-8802-5373.mvt");
 
 /// The zoom-0 world tile this used to measure, kept for contrast.
 ///
-/// 17 202 features, 17 153 of them in one `admin` layer. Every decision in the optimisation
+/// 17 202 features, 17 153 of them in one `admin` layer. Every decision in the optimization
 /// thread above was weighed against it before anyone checked what a real tile looks like — the
 /// wins were real, but their relative sizes were not. Reported beside the real tile so the
 /// difference stays visible rather than being a thing to rediscover.
@@ -334,7 +334,7 @@ fn per_expression(decoded: &mvt::Tile) {
         ("rgb", r#"["rgb", 255, 204, 0]"#),
         ("rgb over get", r#"["rgb", ["get", "class"], 204, 0]"#),
         (
-            "colour match",
+            "color match",
             r##"["match", ["get", "class"], "highway", "#ffcc00", "#ffffff"]"##,
         ),
     ];
@@ -370,9 +370,9 @@ fn per_expression(decoded: &mvt::Tile) {
         }
     }
 
-    // The colour parse on its own. `encode` calls this per feature per colour slot, on a string
-    // the style fixed at parse time, so it bounds what folding colours into a first-class value
-    // could win — together with the clone that the `colour match` case above shows.
+    // The color parse on its own. `encode` calls this per feature per color slot, on a string
+    // the style fixed at parse time, so it bounds what folding colors into a first-class value
+    // could win — together with the clone that the `color match` case above shows.
     {
         let value = tessella_style::Value::String("#ffcc00".into());
         let run = || {

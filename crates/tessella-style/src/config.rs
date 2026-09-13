@@ -131,8 +131,8 @@ impl ConfigOption {
                 Value::Null => false,
                 _ => true,
             }),
-            // A colour is a string until the property that reads it parses one, which is where
-            // every other colour in a style is parsed too.
+            // A color is a string until the property that reads it parses one, which is where
+            // every other color in a style is parsed too.
             Some(ConfigType::Color) | None => value,
         }
     }

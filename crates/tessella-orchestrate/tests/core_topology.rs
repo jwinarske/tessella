@@ -144,7 +144,7 @@ fn frequency_stands_in_where_capacity_is_absent() {
     assert_eq!(tiers.len(), 2, "P and E cores are told apart");
     assert_eq!(
         tiers[1].capacity, 1024,
-        "the largest is normalised to the top"
+        "the largest is normalized to the top"
     );
     assert_eq!(tiers[1].cpus, vec![0, 1]);
     assert_eq!(
@@ -169,7 +169,7 @@ fn a_silent_part_is_uniform() {
 /// Capacity is preferred to frequency, not mixed with it.
 ///
 /// A part reporting capacity for some cores and frequency for others would have the two on
-/// incomparable scales, and the tiers would be an artefact of which file happened to exist.
+/// incomparable scales, and the tiers would be an artifact of which file happened to exist.
 #[test]
 fn the_two_measures_are_not_mixed() {
     let mut files = capacities("0-3", &[(0, "1024"), (1, "1024")]);

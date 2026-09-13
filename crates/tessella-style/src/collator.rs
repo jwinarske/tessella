@@ -51,7 +51,7 @@
 //! leaves as written.
 //!
 //! **The locale.** mbgl's own default collator says in a comment that it ignores the locale and
-//! would need ICU to honour it, and its `resolvedLocale` returns the empty string. This does the
+//! would need ICU to honor it, and its `resolvedLocale` returns the empty string. This does the
 //! same, and the suite is why it matters rather than being a detail: `accent-equals-de` asks
 //! whether the resolved locale is `de` and *branches on the answer*, comparing `ü` with `ue`
 //! where a German tailoring exists and checking the input directly where none does. Reporting

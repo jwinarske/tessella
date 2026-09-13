@@ -32,7 +32,7 @@ use tessella_capture_abi::generated::ubo_layouts;
 use tessella_capture_abi::generated::ubo_slots;
 use tessella_capture_abi::globe_ubo::GlobeBendUbo;
 use tessella_capture_abi::ring::{Full, Producer};
-use tessella_layout::raster::{self, RasterColour};
+use tessella_layout::raster::{self, RasterColor};
 use tessella_layout::symbol_layout::{Alignment, Alignments, Placement};
 use tessella_style::Value;
 use tessella_style::crossfade::Crossfade;
@@ -306,7 +306,7 @@ impl DrawableEntry {
     /// The entry for a background standing in for the oracle's clear.
     ///
     /// See [`crate::tile::background_covers_viewport`] for which background reaches this and why.
-    /// There is no clear colour on this wire, so the equivalent of clearing the renderable is a
+    /// There is no clear color on this wire, so the equivalent of clearing the renderable is a
     /// quad over the whole of it: the same pixels, and one drawable where the per-tile path has
     /// one per cover tile.
     ///
@@ -348,11 +348,11 @@ impl DrawableEntry {
     /// separated by the geometry's own depth, which is the point of a 3D layer.
     ///
     /// Nudging one anyway is not the harmless bias it looks like. An extrusion's depth-only pass
-    /// and the colour pass that follows draw the *same* surfaces, and the colour pass has to
+    /// and the color pass that follows draw the *same* surfaces, and the color pass has to
     /// compare equal against what the depth pass wrote. One step of [`DEPTH_EPSILON`] is 9.3e-7
-    /// of clip depth after the divide, against the 2e-4 that a 150-metre building spans in
+    /// of clip depth after the divide, against the 2e-4 that a 150-meter building spans in
     /// total, and `depth_probe`'s third phase puts the tolerance below that: at a separation of
-    /// 1e-6 the colour pass is rejected entirely and the buildings vanish.
+    /// 1e-6 the color pass is rejected entirely and the buildings vanish.
     ///
     /// # Errors
     ///
@@ -381,8 +381,8 @@ impl DrawableEntry {
 ///
 /// A fill layer draws twice, and the two shaders read different properties: the triangles take
 /// `fill-color` and `fill-opacity`, the outline takes `fill-outline-color` and `fill-opacity`.
-/// They share the buffer and the opacity, and differ in the colour — so a single pair used for
-/// both would give the outline the fill's colour ramp. mbgl builds them separately in
+/// They share the buffer and the opacity, and differ in the color — so a single pair used for
+/// both would give the outline the fill's color ramp. mbgl builds them separately in
 /// `FillLayerTweaker::execute`, and so does this.
 ///
 /// `bucket_zoom` is the tile's overscaled zoom, the same one its endpoints were evaluated at;
@@ -456,8 +456,8 @@ pub fn pack_tile_props_buffer(drawables: usize, stride: u32) -> Vec<u8> {
 /// ```
 ///
 /// The reason for that last part is the shader: `FillOutlineTriangulatedShader` declares two
-/// attributes, the line family's position and data, and no paint of its own. Its colour comes
-/// from the layer's `outline_color` uniform, so a colour that varies per feature has nowhere to
+/// attributes, the line family's position and data, and no paint of its own. Its color comes
+/// from the layer's `outline_color` uniform, so a color that varies per feature has nowhere to
 /// travel and the line-primitive path has to take it.
 ///
 /// `has_pattern` is whether the layer resolved a pattern for this frame.
@@ -492,16 +492,16 @@ pub fn fill_outline_triangulates(
 /// one drawable rather than two.
 ///
 /// The second is stranger and is mbgl's own comment -- "Outline does not default to fill in the
-/// pattern case". A patterned fill whose outline colour the style *did* write asks for a colour
-/// the pattern shaders have no uniform for, and rather than draw it in the wrong colour mbgl
-/// draws no outline. A patterned fill that wrote no outline colour still gets one, because then
+/// pattern case". A patterned fill whose outline color the style *did* write asks for a color
+/// the pattern shaders have no uniform for, and rather than draw it in the wrong color mbgl
+/// draws no outline. A patterned fill that wrote no outline color still gets one, because then
 /// the outline is the pattern itself.
 ///
 /// Both halves of the second rule read the style's own keys rather than the resolved map, which
 /// is what `unevaluated` means: the question is what the style wrote, not what it evaluates to.
 ///
 /// The antialias is read at zoom zero for the reason [`uniform_opacity`] gives -- it decides how
-/// many drawables a layer becomes rather than what colour it is, and that is settled where the
+/// many drawables a layer becomes rather than what color it is, and that is settled where the
 /// bucket is built. It is data-constant in the spec, so the only thing this misses is a style
 /// that animates it with the camera.
 #[must_use]
@@ -612,7 +612,7 @@ pub struct LineDrawableEntry {
     pub matrix: [f32; 16],
     /// Screen pixels per tile unit, inverted.
     pub ratio: f32,
-    /// Mix factors for colour, blur, opacity, gap width, offset and width, in that order.
+    /// Mix factors for color, blur, opacity, gap width, offset and width, in that order.
     pub interpolations: [f32; 6],
 }
 
@@ -680,7 +680,7 @@ pub fn line_ratio(z: u8, zoom: f64) -> f32 {
 
 /// The six zoom-mix factors a line drawable's UBO carries.
 ///
-/// The order is the UBO's, which is not the property table's: colour, blur, opacity, gap width,
+/// The order is the UBO's, which is not the property table's: color, blur, opacity, gap width,
 /// offset, width. `line-floorwidth` is absent — it mirrors `line-width` and the shader reads
 /// the width factor for both — so the seven binders map onto six slots.
 #[must_use]
@@ -895,7 +895,7 @@ pub fn pack_line_sdf_tile_props(placement: &DashPlacement, count: usize, stride:
 /// varies per feature contributes its *spec default* here and its real values through the
 /// vertex attributes. That is not a fallback for something missing: the shader reads this slot
 /// only for the properties the permutation left as uniforms, and writing the data-driven ones'
-/// evaluated values instead would put one feature's colour into a layer-wide uniform.
+/// evaluated values instead would put one feature's color into a layer-wide uniform.
 ///
 /// The expression mask is zero. It selects mbgl's Metal-only GPU expression evaluation, which
 /// the probe disables outright (§3.1 wants data-driven properties as attributes or UBO fields,
@@ -940,7 +940,7 @@ fn uniform_value(property: &ResolvedProperty, zoom: f64) -> Option<Value> {
     }
 }
 
-/// A colour-typed property's uniform value, falling back to its spec default.
+/// A color-typed property's uniform value, falling back to its spec default.
 fn uniform_color(
     paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
     name: &str,
@@ -961,7 +961,7 @@ fn uniform_color(
 /// A number-typed property's uniform value, falling back to its spec default.
 /// A uniform property's value at zoom zero, for a decision that is not per frame.
 ///
-/// `fill-extrusion-opacity` decides how many drawables a layer becomes rather than what colour
+/// `fill-extrusion-opacity` decides how many drawables a layer becomes rather than what color
 /// it is, and that has to be settled where the bucket is built. A zoom-varying opacity would
 /// change the count between frames whatever this read, so the bucket's own zoom is as good an
 /// answer as exists on this side.
@@ -1066,13 +1066,13 @@ pub fn background_props_from_paint(
 ///
 /// A different shape from every other drawable block, and the difference is load-bearing. Where
 /// a fill's entry is a matrix and two mix factors, an extrusion's carries `height_factor` — what
-/// turns a height in metres into the tile-space z the shader raises a wall to — and the tile's
+/// turns a height in meters into the tile-space z the shader raises a wall to — and the tile's
 /// pixel coordinate, split across two floats because the shader needs more precision in it than
 /// one `f32` holds at a high zoom.
 ///
 /// Packing a fill's entry into this shape is not a near miss: the mix factors land where the
 /// pixel coordinate and the height factor belong, so `height_factor` reads as whatever the
-/// colour interpolation happened to be — zero, for a constant colour — and every building comes
+/// color interpolation happened to be — zero, for a constant color — and every building comes
 /// out flat. It draws, and it draws a fill layer.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ExtrusionDrawableEntry {
@@ -1082,11 +1082,11 @@ pub struct ExtrusionDrawableEntry {
     pub pixel_coord_upper: [f32; 2],
     /// The low halves.
     pub pixel_coord_lower: [f32; 2],
-    /// What a height in metres multiplies by.
+    /// What a height in meters multiplies by.
     pub height_factor: f32,
     /// Tile units per pixel, inverted.
     pub tile_ratio: f32,
-    /// Mix factors for base, height and colour, in that order.
+    /// Mix factors for base, height and color, in that order.
     pub interpolations: [f32; 3],
 }
 
@@ -1273,7 +1273,7 @@ pub fn pack_extrusion_drawable_buffer(entries: &[ExtrusionDrawableEntry], stride
     out
 }
 
-/// The base, height and colour mix factors an extrusion's drawable block carries.
+/// The base, height and color mix factors an extrusion's drawable block carries.
 #[must_use]
 pub fn extrusion_interpolations(
     paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
@@ -1300,7 +1300,7 @@ pub fn extrusion_interpolations(
 /// A fill-extrusion layer's evaluated properties, from its paint and the style light.
 ///
 /// Three of the five blocks are the light, which is why it is a parameter rather than something
-/// read from the paint: an extrusion is the first thing here whose colour depends on more than
+/// read from the paint: an extrusion is the first thing here whose color depends on more than
 /// its own layer, and a build that packed the paint and left the light at zero draws every
 /// building flat black.
 #[must_use]
@@ -1334,7 +1334,7 @@ pub struct CircleDrawableEntry {
     pub matrix: [f32; 16],
     /// Radius units, per [`circle_extrude_scale`].
     pub extrude_scale: [f32; 2],
-    /// Mix factors for colour, radius, blur, opacity, stroke colour, stroke width and stroke
+    /// Mix factors for color, radius, blur, opacity, stroke color, stroke width and stroke
     /// opacity, in that order.
     pub interpolations: [f32; 7],
 }
@@ -1563,7 +1563,7 @@ pub struct SymbolDrawableEntry {
     pub size_t: f32,
     /// The size itself, when it is constant.
     pub size: f32,
-    /// Mix factors for fill colour, halo colour, opacity, halo width and halo blur.
+    /// Mix factors for fill color, halo color, opacity, halo width and halo blur.
     pub interpolations: [f32; 5],
 }
 
@@ -1855,7 +1855,7 @@ pub struct PatternPlacement {
 ///
 /// # The padding is two and one of it is reported
 ///
-/// [`atlas::PADDING`] is two — one so linear filtering cannot pull a neighbour's pixels in, and
+/// [`atlas::PADDING`] is two — one so linear filtering cannot pull a neighbor's pixels in, and
 /// one handed back inside the reported rectangle so a distance field has something to read at
 /// the glyph's own edge. So a sprite of width `W` occupies a slot of `W + 4` and
 /// [`IconPosition::padded_rect`] reports `W + 2`: the sprite plus a pixel each side, which is
@@ -2055,7 +2055,7 @@ pub fn pack_pattern_tile_props(entries: &[PatternPlacement]) -> Vec<u8> {
 
 /// Packs `SymbolEvaluatedPropsUBO`.
 ///
-/// Ninety-six bytes: text colour, halo colour, opacity, halo width and blur, then the same five
+/// Ninety-six bytes: text color, halo color, opacity, halo width and blur, then the same five
 /// again for icons. Both halves are always present whether or not the layer draws icons, because
 /// one shader serves both and the buffer is its interface.
 #[allow(clippy::too_many_arguments)]
@@ -2118,7 +2118,7 @@ pub fn symbol_props_from_paint(
 /// Packs `FillExtrusionPropsUBO`.
 ///
 /// Five sixteen-byte blocks, and three of them are the *light*. An extrusion is the first thing
-/// in this build whose colour depends on more than its paint: `light-color`, `light-position`
+/// in this build whose color depends on more than its paint: `light-color`, `light-position`
 /// and `light-intensity` come from the style's top-level `light` block, and a wall's shade is
 /// the dot product of its normal with that direction. A build that packed the paint and left the
 /// light at zero draws every building flat black.
@@ -2195,13 +2195,13 @@ const _: () = assert!(
 /// from a generated layout for the reason the slot is.
 pub const MESH_DRAWABLE_UBO_SIZE: usize = 64;
 
-/// Converts a height in metres into the vertical unit the tile matrix works in.
+/// Converts a height in meters into the vertical unit the tile matrix works in.
 ///
 /// mbgl's `heightFactor`, `-numTiles / tileSize_D / 8.0`, and what it is *for* is narrower than
 /// it looks: it walks a pattern up an extrusion's wall. The whole shader set uses it once, in
 /// `fill_extrusion_pattern`'s `vec2 pos = vec2(edgedistance, z * drawable.height_factor)`.
 ///
-/// It is **not** the conversion from metres to the shader's z. Nothing converts: the position
+/// It is **not** the conversion from meters to the shader's z. Nothing converts: the position
 /// shader passes the height straight in, `gl_Position = matrix * vec4(pos, z, 1.0)`, because
 /// `getWorldToCamera` has already scaled the matrix's third column by `pixelsPerMeter`. Reading
 /// it as the conversion scales a building by the tile count — four thousand at z14 — which is
@@ -2221,24 +2221,24 @@ pub fn height_factor(z: u8) -> f32 {
 ///
 /// # A matrix and nothing else, because the matrix already converts
 ///
-/// This used to carry `height_factor` beside the matrix, described as what a height in metres
+/// This used to carry `height_factor` beside the matrix, described as what a height in meters
 /// multiplies by. That was wrong, and wrong by a factor of four thousand at z14.
 ///
 /// mbgl's fill-extrusion shader settles it:
 /// `gl_Position = drawable.matrix * vec4(in_position + decimals, z, 1.0)`, with `z` the height in
-/// **metres** and no conversion in front of it. It needs none: `getWorldToCamera` scales the
-/// matrix's third column by `pixelsPerMeter`, precisely so a height in metres and a position in
+/// **meters** and no conversion in front of it. It needs none: `getWorldToCamera` scales the
+/// matrix's third column by `pixelsPerMeter`, precisely so a height in meters and a position in
 /// tile units can share one matrix. `heightFactor` appears once in the whole shader set, in the
 /// *pattern* variant, walking a texture up a wall — `vec2(edgedistance, z * height_factor)` —
 /// which is not a conversion of the position and has no meaning for a mesh at all.
 ///
 /// The measurement behind the original claim still holds: a buildings mesh really is tile units
-/// in x and y and metres in z, across 972 nodes of a real store. What was wrong was the
+/// in x and y and meters in z, across 972 nodes of a real store. What was wrong was the
 /// conversion, not the convention — and the conversion is the matrix's.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct MeshPlacement {
     /// Tile-local to clip, as every other drawable matrix on this protocol is. Its third column
-    /// carries `pixelsPerMeter`, so a mesh's metres go in unscaled.
+    /// carries `pixelsPerMeter`, so a mesh's meters go in unscaled.
     pub matrix: [f32; 16],
 }
 
@@ -2289,7 +2289,7 @@ impl MeshPlacement {
 /// # Why a mesh needs a matrix at all when its glTF carries node transforms
 ///
 /// The node matrices place a building *within its tile*. Nothing in the file says where the tile
-/// is, what the camera is doing, or how a metre relates to a tile unit at this zoom — and none of
+/// is, what the camera is doing, or how a meter relates to a tile unit at this zoom — and none of
 /// that is the asset's to know. It is the producer's, which is the whole division this stream
 /// draws: the consumer's loader owns what the mesh is made of, and the producer owns whether and
 /// where it is drawn.
@@ -2308,7 +2308,7 @@ pub fn pack_mesh_drawable_buffer(placements: &[MeshPlacement], stride: u32) -> V
 /// Packs `RasterDrawableUBO`: one matrix, and nothing else.
 ///
 /// The smallest drawable buffer of any layer, because a raster tile carries no per-feature
-/// anything — the image is a texture and the colour adjustment is the layer's, so what is left
+/// anything — the image is a texture and the color adjustment is the layer's, so what is left
 /// per drawable is where the tile goes.
 #[must_use]
 pub fn pack_raster_drawable_buffer(matrices: &[[f32; 16]], stride: u32) -> Vec<u8> {
@@ -2332,7 +2332,7 @@ pub fn pack_raster_drawable_buffer(matrices: &[[f32; 16]], stride: u32) -> Vec<u
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn pack_raster_props(
-    colour: RasterColour,
+    color: RasterColor,
     opacity: f32,
     brightness_low: f32,
     brightness_high: f32,
@@ -2340,7 +2340,7 @@ pub fn pack_raster_props(
 ) -> Vec<u8> {
     const SIZE: usize = 64;
     let mut out = Vec::with_capacity(SIZE);
-    push_f32s(&mut out, &colour.spin_weights);
+    push_f32s(&mut out, &color.spin_weights);
     // The parent's top-left and scale: no parent, so the identity.
     push_f32s(&mut out, &[0.0, 0.0, 1.0, buffer_scale]);
     push_f32s(
@@ -2351,8 +2351,8 @@ pub fn pack_raster_props(
             opacity,
             brightness_low,
             brightness_high,
-            colour.saturation_factor,
-            colour.contrast_factor,
+            color.saturation_factor,
+            color.contrast_factor,
             0.0,
             0.0,
         ],
@@ -2367,7 +2367,7 @@ pub fn raster_props_from_paint(
     paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
     zoom: f64,
 ) -> Vec<u8> {
-    let colour = RasterColour {
+    let color = RasterColor {
         spin_weights: raster::spin_weights(uniform_number(paint, "raster-hue-rotate", zoom)),
         saturation_factor: raster::saturation_factor(uniform_number(
             paint,
@@ -2377,7 +2377,7 @@ pub fn raster_props_from_paint(
         contrast_factor: raster::contrast_factor(uniform_number(paint, "raster-contrast", zoom)),
     };
     pack_raster_props(
-        colour,
+        color,
         uniform_number(paint, "raster-opacity", zoom),
         uniform_number(paint, "raster-brightness-min", zoom),
         uniform_number(paint, "raster-brightness-max", zoom),
@@ -2484,7 +2484,7 @@ pub fn globe_bend_block(
 /// Packs a layer's anchored-bend blocks, one per drawable, in the order the drawables were sent.
 ///
 /// The same shape as [`pack_drawable_buffer`]: the consumer indexes it by the drawable's own UBO
-/// index, so a gap would put every later drawable on its neighbour's tile.
+/// index, so a gap would put every later drawable on its neighbor's tile.
 #[must_use]
 pub fn pack_globe_bend_buffer(blocks: &[GlobeBendUbo]) -> Vec<u8> {
     let stride = GlobeBendUbo::STRIDE as usize;

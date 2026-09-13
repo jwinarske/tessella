@@ -6,7 +6,7 @@ for each Arabic letter from its joining context. Both halves of what that needs 
 and neither is in the code:
 
   * ``ArabicShaping.txt`` gives each character's joining type — dual, right, left, causing,
-    transparent or non-joining — which decides whether a neighbour may join to it.
+    transparent or non-joining — which decides whether a neighbor may join to it.
   * ``UnicodeData.txt`` gives the forms themselves, as ``<isolated>``/``<initial>``/
     ``<medial>``/``<final>`` decompositions of the Arabic Presentation Forms-B block.
 
@@ -111,7 +111,7 @@ def main():
     print("//! every right-joining one — repeats its isolated and final, which is what keeps the")
     print("//! lookup a plain index rather than a branch.")
     print()
-    print("/// How a character joins to its neighbours.")
+    print("/// How a character joins to its neighbors.")
     print("///")
     print("/// Unicode's joining types. `Transparent` is the one that carries the algorithm: a")
     print("/// diacritic sits *between* two letters without breaking their join, so the context a")
@@ -124,7 +124,7 @@ def main():
     print("    Right,")
     print("    /// Joins only to the letter after it.")
     print("    Left,")
-    print("    /// Joins nothing itself but lets its neighbours join through it.")
+    print("    /// Joins nothing itself but lets its neighbors join through it.")
     print("    Causing,")
     print("    /// Invisible to joining: a diacritic.")
     print("    Transparent,")

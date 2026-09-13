@@ -41,7 +41,7 @@ const REQUIRED: &[&str] = &[
     "tessella_tick",
 ];
 
-/// How a forbidden name is recognised.
+/// How a forbidden name is recognized.
 ///
 /// Two kinds, and the difference is not academic: `tessella_create` is a whole name, and matching
 /// it loosely also matches `tessella_create_hosted`, which is required. The first run of this

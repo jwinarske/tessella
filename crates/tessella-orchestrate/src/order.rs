@@ -115,7 +115,7 @@ impl Placed {
     /// outline, a symbol's sprites then its halo then its letters, an extrusion's roof then the
     /// walls raised on it. So the reversal is over layer *runs*, each run left as it was given.
     ///
-    /// Reversing per drawable is invisible for as long as a layer's parts agree in colour, which
+    /// Reversing per drawable is invisible for as long as a layer's parts agree in color, which
     /// is why it survived: the usual `fill-outline-color` is the fill's own. With a contrasting
     /// one it is plain -- the oracle's outline straddles the polygon edge, half of it blended
     /// over the fill, and a consumer that paints the fill last covers that half.
@@ -482,19 +482,19 @@ pub fn bindings_for(
                 emit(0, view::fill_pass(), view::raster_flags());
             }
             // Two drawables, and the order between them is load-bearing. mbgl builds a
-            // depth-only pass at sub-layer 0 and a colour pass at 1 whenever the layer is not
+            // depth-only pass at sub-layer 0 and a color pass at 1 whenever the layer is not
             // opaque — `doDepthPass = (!opaque || hasPattern)`, with `opaque` meaning an opacity
             // of one. Without the depth pass every wall alpha-blends against every wall behind
             // it, which reads as a city made of glass rather than as buildings.
             //
-            // An opaque extrusion needs only the colour pass, and still takes sub-layer 1 —
+            // An opaque extrusion needs only the color pass, and still takes sub-layer 1 —
             // dropping it to zero would reorder it against a translucent extrusion in the same
             // layer group.
             Content::Fill3d(ref extrusion) => {
                 // Four drawables, which is what the capture shows on every tile: the roof and
-                // the instanced walls, each drawn in the depth pass and again in the colour
+                // the instanced walls, each drawn in the depth pass and again in the color
                 // pass. mbgl orders them by draw priority — every depth builder before every
-                // colour one — and within that by the order the builders were made, roof then
+                // color one — and within that by the order the builders were made, roof then
                 // walls. The sub-layer carries both, since it is what this side orders by.
                 //
                 // The indices are fixed rather than packed: an opaque extrusion emits only two

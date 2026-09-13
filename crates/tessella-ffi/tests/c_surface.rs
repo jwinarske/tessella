@@ -9,7 +9,7 @@
 //!
 //! So the header is checked instead of trusted. The probe sees only the declarations: a signature
 //! that disagrees fails to compile or fails to link, a struct whose layout disagrees fails its
-//! static assertion, and behaviour that disagrees fails an assertion here. It is C rather than
+//! static assertion, and behavior that disagrees fails an assertion here. It is C rather than
 //! C++ on purpose — the header claims to be a C surface, and a C++ compiler accepts things C does
 //! not.
 
@@ -30,7 +30,7 @@ fn profile_dir() -> PathBuf {
 
 /// Builds the staticlib this links against, and returns it.
 ///
-/// `cargo test` builds the rlib the harness needs; the staticlib is a *separate artefact of the
+/// `cargo test` builds the rlib the harness needs; the staticlib is a *separate artifact of the
 /// same crate* and is not rebuilt by a test run. Linking whatever happens to be on disk means a
 /// test that silently exercises a library from an earlier edit -- which cost real time here
 /// before it was understood, because every run reported the same numbers however the Rust

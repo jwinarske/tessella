@@ -105,18 +105,18 @@ fn the_cover_contains_every_tile_the_screen_lands_in() {
     }
 }
 
-/// Nearest to the centre first, because that is the order tiles are wanted in.
+/// Nearest to the center first, because that is the order tiles are wanted in.
 #[test]
-fn the_cover_is_ordered_from_the_centre_out() {
+fn the_cover_is_ordered_from_the_center_out() {
     let view = view(55.0, 0.0);
     let tiles = cover::cover(&view).expect("a cover");
     let z = view.tile_zoom();
-    let centre = tessella_tile::projection::tile_units(view.longitude, view.latitude, z);
+    let center = tessella_tile::projection::tile_units(view.longitude, view.latitude, z);
     let scale = f64::from(1u32 << z);
 
     let distance = |t: &cover::TileCoord| {
-        let dx = f64::from(t.wrap) * scale + f64::from(t.x) + 0.5 - centre[0];
-        let dy = f64::from(t.y) + 0.5 - centre[1];
+        let dx = f64::from(t.wrap) * scale + f64::from(t.x) + 0.5 - center[0];
+        let dy = f64::from(t.y) + 0.5 - center[1];
         dx * dx + dy * dy
     };
     let mut previous = f64::NEG_INFINITY;
@@ -140,18 +140,18 @@ fn a_contained_box_short_circuits_its_subtree() {
         Frustum::from_projection(&projection, camera::world_size(view.zoom), f64::from(z))
             .expect("a frustum");
 
-    let centre = tessella_tile::projection::tile_units(view.longitude, view.latitude, z);
-    // A sliver at the very centre of the screen is inside on every plane.
+    let center = tessella_tile::projection::tile_units(view.longitude, view.latitude, z);
+    // A sliver at the very center of the screen is inside on every plane.
     let tiny = Aabb {
-        min: [centre[0] - 0.01, centre[1] - 0.01, 0.0],
-        max: [centre[0] + 0.01, centre[1] + 0.01, 0.0],
+        min: [center[0] - 0.01, center[1] - 0.01, 0.0],
+        max: [center[0] + 0.01, center[1] + 0.01, 0.0],
     };
     assert_eq!(frustum.intersects(&tiny), Intersection::Contains);
 
     // And something on the far side of the world is not.
     let elsewhere = Aabb {
-        min: [centre[0] + 5000.0, centre[1], 0.0],
-        max: [centre[0] + 5001.0, centre[1] + 1.0, 0.0],
+        min: [center[0] + 5000.0, center[1], 0.0],
+        max: [center[0] + 5001.0, center[1] + 1.0, 0.0],
     };
     assert_eq!(frustum.intersects(&elsewhere), Intersection::Separate);
 }

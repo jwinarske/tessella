@@ -11,7 +11,7 @@
 //!
 //! So these are the assertions from `vendor/supercluster/test/test.cpp`, against
 //! `test/fixtures/supercluster/places.json`. They reach through everything: the projection, the
-//! per-level radius, the id encoding, the tree layout, the order neighbours are visited in, and
+//! per-level radius, the id encoding, the tree layout, the order neighbors are visited in, and
 //! the tie-breaking when a point is within reach of two clusters.
 
 use std::collections::BTreeMap;

@@ -359,7 +359,7 @@ fn a_feature_without_the_property_produces_no_label() {
     // The fixture's roads carry `type` and not `name`, so every one resolves to nothing.
     assert!(
         layout.is_empty(),
-        "{} roads were labelled with a name they do not have",
+        "{} roads were labeled with a name they do not have",
         layout.pending.len()
     );
 }
@@ -703,7 +703,7 @@ fn icon_size_is_a_multiplier_not_a_size() {
 
 /// An SDF sprite is marked as one in the vertex, and a plain image is not.
 ///
-/// The sprite decides, not the layer. A shield drawn as a distance field is recolourable by
+/// The sprite decides, not the layer. A shield drawn as a distance field is recolorable by
 /// `icon-color`; a photographic icon is not, and putting a plain image through the SDF shader
 /// draws its alpha as a coverage ramp.
 #[test]
@@ -733,7 +733,7 @@ fn the_sprite_decides_whether_it_is_a_field() {
     assert!(!is_sdf(&as_plain), "an image was drawn as a field");
 }
 
-/// A road's segments are joined before it is labelled.
+/// A road's segments are joined before it is labeled.
 ///
 /// The street fixture is 28 road *features* carrying 1,699 line strings between them -- one of
 /// them a single feature with 562 parts. A tile cuts a street at its edges and a source cuts it
@@ -746,7 +746,7 @@ fn the_sprite_decides_whether_it_is_a_field() {
 /// into `geometry[0]`. So the test is that first lines join, that nothing else moves, and that no
 /// geometry goes missing on the way.
 #[test]
-fn a_roads_segments_are_joined_before_it_is_labelled() {
+fn a_roads_segments_are_joined_before_it_is_labeled() {
     let style = road_style("line");
     let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
     let merged = buckets[0].content.as_symbol().expect("a symbol layout");
@@ -781,7 +781,7 @@ fn a_roads_segments_are_joined_before_it_is_labelled() {
 
     // One greedy pass, which is what mbgl does. It used to be assertable here that a second pass
     // joined more -- the index holds one entry per (text, endpoint), so where two roads of the
-    // same name start at the same point only one is reachable. That was an artefact of giving
+    // same name start at the same point only one is reachable. That was an artifact of giving
     // every line string its own pending: 1,699 of them contended for those slots. With one
     // pending per feature, and only its first line keyed, a second pass over this fixture joins
     // nothing, so there is nothing left to assert. mbgl's index is an `unordered_map` assigned
@@ -1416,16 +1416,16 @@ fn a_halo_is_a_second_drawable_under_the_letters() {
         [0, 1],
         "the letters, then the halo the consumer draws under them"
     );
-    // mbgl's `hasHalo` wants both: a colour with alpha and a width that is not zero.
+    // mbgl's `hasHalo` wants both: a color with alpha and a width that is not zero.
     assert_eq!(
         subs(r##"{"text-color": "#000000", "text-halo-color": "#ffffff"}"##),
         [0],
-        "a halo colour with no width is no halo"
+        "a halo color with no width is no halo"
     );
     assert_eq!(
         subs(r##"{"text-color": "#000000", "text-halo-width": 2}"##),
         [0],
-        "and a width with no colour is a transparent halo, which is none"
+        "and a width with no color is a transparent halo, which is none"
     );
     // And `hasFill`: a fully transparent `text-color` draws the halo alone, which styles do.
     assert_eq!(

@@ -11,13 +11,13 @@
 //! each changes the bytes:
 //!
 //! - **The order is mbgl's property declaration order**, not attribute-id order and not the
-//!   order a style writes them. The line layer's attribute ids are colour 2, width 7 and
-//!   floorwidth 8, and their offsets run colour 0, floorwidth 8, width 12 — declaration order.
-//! - **Colours are packed two channels to a float.** `packUint8Pair(255r, 255g)` and
-//!   `packUint8Pair(255b, 255a)`, each widened to `f32`. A colour is eight bytes here, not
+//!   order a style writes them. The line layer's attribute ids are color 2, width 7 and
+//!   floorwidth 8, and their offsets run color 0, floorwidth 8, width 12 — declaration order.
+//! - **Colors are packed two channels to a float.** `packUint8Pair(255r, 255g)` and
+//!   `packUint8Pair(255b, 255a)`, each widened to `f32`. A color is eight bytes here, not
 //!   sixteen, and the shader unpacks it.
 //! - **Properties the shader does not read still take their slot.** The plain line shader does
-//!   not bind floorwidth and the fill shader does not bind the outline colour, but both occupy
+//!   not bind floorwidth and the fill shader does not bind the outline color, but both occupy
 //!   space in the buffer, because the buffer is per *layer* and the two fill sublayers are two
 //!   shaders reading one buffer at different offsets.
 //!
@@ -26,7 +26,7 @@
 //! There is no indirection: the GPU reads an attribute per vertex, so a feature's value is
 //! repeated across every vertex it produced. That makes the buffer's length track the geometry
 //! exactly, and it makes the binder's correctness depend on the *vertex ranges* being right —
-//! a feature whose range is off by one paints one vertex of its neighbour. So the ranges are
+//! a feature whose range is off by one paints one vertex of its neighbor. So the ranges are
 //! taken from the bucket after each feature is added rather than predicted from its geometry.
 //!
 //! # A property that varies with zoom as well
@@ -109,7 +109,7 @@ pub struct PaintBinder {
 
 /// Bytes a property of this kind occupies.
 ///
-/// A colour is two floats because of the channel packing, everything numeric is one — and both
+/// A color is two floats because of the channel packing, everything numeric is one — and both
 /// double when the property varies with zoom as well as per feature, because the slot then
 /// carries the value at each end of the zoom range for the shader to mix between.
 ///
@@ -353,7 +353,7 @@ impl PaintValues {
 /// Encodes a slot's value — or its two zoom endpoints — into that slot's bytes.
 ///
 /// The two endpoints are written *grouped by end*, not interleaved per component: mbgl's
-/// `zoomInterpolatedAttributeValue` lays out `[min…, max…]`, so a composite colour is the two
+/// `zoomInterpolatedAttributeValue` lays out `[min…, max…]`, so a composite color is the two
 /// floats of the low end followed by the two of the high end. Interleaving them component-wise
 /// produces a buffer of the right length that the shader reads as nonsense.
 fn encode(
@@ -430,7 +430,7 @@ fn encode(
     Ok(())
 }
 
-/// Packs a colour into two floats, two channels each.
+/// Packs a color into two floats, two channels each.
 ///
 /// mbgl's `attributeValue(const Color&)`. The channels are already premultiplied and in 0..1,
 /// so this scales back to 0..255 and truncates — `static_cast<uint16_t>`, not a round — which
@@ -528,12 +528,12 @@ mod tests {
         assert_ne!(rows[0], rows[2]);
     }
 
-    /// Colour channels are truncated, not rounded, because mbgl casts rather than rounds.
+    /// Color channels are truncated, not rounded, because mbgl casts rather than rounds.
     ///
     /// `224/255 * 255` is not exactly 224 in `f32`. Whichever side of the integer it lands, a
     /// round and a truncate disagree, and the oracle does the truncate.
     #[test]
-    fn colour_channels_truncate() {
+    fn color_channels_truncate() {
         let (specs, resolved) =
             layer(r##"{"fill-color": ["match", ["get", "kind"], "a", "#e0d040", "#000000"]}"##);
         let mut binder = PaintBinder::new(&specs, &resolved, 13.0);

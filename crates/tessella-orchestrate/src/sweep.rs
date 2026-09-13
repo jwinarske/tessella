@@ -23,7 +23,7 @@
 //! Four views at one location share everything, which makes flatness trivially true and proves
 //! nothing about the case that matters. Four views at *partially* overlapping locations is the
 //! real cluster-display arrangement, and it is the one where a store keyed slightly wrong
-//! duplicates the overlap while looking correct. [`four_views`] places them so that neighbours
+//! duplicates the overlap while looking correct. [`four_views`] places them so that neighbors
 //! share and opposite corners do not.
 //!
 //! # Flatness is stated against the union, not against a view count
@@ -48,7 +48,7 @@ pub const SWEEP_HIGH: f64 = 16.0;
 
 /// The four viewports of the benchmark.
 ///
-/// Centred near the probe so the hermetic style's features are in range, and offset so that the
+/// Centered near the probe so the hermetic style's features are in range, and offset so that the
 /// covers overlap partially rather than coinciding. The offsets are in degrees and deliberately
 /// unequal on the two axes: a symmetric arrangement can hide an error that transposes x and y,
 /// because a transposed cover of a square arrangement is the same set.
@@ -63,7 +63,7 @@ pub fn four_views() -> [ViewTransform; 4] {
         bearing: 0.0,
         pitch: 0.0,
     };
-    // Roughly a third of a z13 tile apart, so neighbours overlap at high zoom and the whole
+    // Roughly a third of a z13 tile apart, so neighbors overlap at high zoom and the whole
     // group collapses into shared tiles as the sweep descends.
     [
         base,

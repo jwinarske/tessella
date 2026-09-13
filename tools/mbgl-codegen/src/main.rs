@@ -1148,7 +1148,7 @@ type TextureTable = (String, Vec<(u32, String)>);
 
 /// Extracts `(shader, [(binding, id name)])` from a shader source file.
 ///
-/// The zero case has to be recognised as well as the populated one. mbgl writes a shader with no
+/// The zero case has to be recognized as well as the populated one. mbgl writes a shader with no
 /// samplers as `std::array<TextureInfo, 0> XSource::textures = {};` — one line, no block — and a
 /// parser that only looked for an opening brace would leave those shaders absent from the table
 /// rather than present with nothing in them. The two mean different things.
@@ -2046,7 +2046,7 @@ fn ubo_field_kind(text: &str) -> Option<(&'static str, u32)> {
         //
         // Named rather than matched by shape because the alternative is guessing: an unmodelled
         // type is refused, and refusing `LineEvaluatedPropsUBO` for one 4-byte field left the
-        // line layer's colour, width and opacity undescribable — which the Fluorite mirror hit
+        // line layer's color, width and opacity undescribable — which the Fluorite mirror hit
         // as soon as it tried to read them.
         "LineExpressionMask" => Some(("U32", 4)),
         "std::array<float,2>" => Some(("Vec2", 8)),
@@ -2389,7 +2389,7 @@ fn screaming_snake_ident(name: &str) -> String {
 /// `parsing_context.cpp` holds the special forms — the ones with their own parse functions
 /// because their arguments are not all expressions (`let`'s bindings, `match`'s labels,
 /// `literal`'s payload). `compound_expression.cpp` holds everything else: the arithmetic, the
-/// lookups, the string and colour functions, each with one or more typed signatures.
+/// lookups, the string and color functions, each with one or more typed signatures.
 ///
 /// Names beginning `filter-` are excluded. They are mbgl's internal spelling for the legacy
 /// filter syntax, generated when a legacy filter is converted, and never appear in a style
@@ -2750,7 +2750,7 @@ fn generate_vertical_orientation(mbgl: &Path) -> Result<Option<String>, String> 
         "COMPLEX_SHAPING",
         "/// Where `isCharInComplexShapingScript` holds. These are never verticalized when\n\
          /// vertical placement is allowed, because their shaping already depends on their\n\
-         /// neighbours and turning one on its side would break the join.\n",
+         /// neighbors and turning one on its side would break the join.\n",
         &complex,
     );
 
@@ -2784,7 +2784,7 @@ const CHANNEL_SOURCE: &str = "src/mbgl/gl/resource_pool.cpp";
 /// consumer's guess wrong, silently, on one texture kind.
 ///
 /// Parsed from `Texture2DDesc::channelCount`, where the fall-through cases are the point: four
-/// formats share the `return 1` and reading only the labelled one would give three of them a
+/// formats share the `return 1` and reading only the labeled one would give three of them a
 /// channel count of zero.
 fn generate_channel_counts(mbgl: &Path) -> Result<String, String> {
     let path = mbgl.join(CHANNEL_SOURCE);

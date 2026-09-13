@@ -154,18 +154,18 @@ fn unset_properties_carry_their_defaults() {
     let paint = resolve_paint(background).expect("resolves");
 
     // The style sets the color and nothing else. It arrives resolved rather than as the
-    // string the style wrote: a colour-typed property is coerced at parse, so `"#101418"` and
+    // string the style wrote: a color-typed property is coerced at parse, so `"#101418"` and
     // a function returning `"#101418"` reach a binder in the same form.
-    let colour = paint["background-color"]
+    let color = paint["background-color"]
         .as_constant()
-        .expect("a constant colour");
-    let Value::Color(colour) = colour else {
-        panic!("a colour, got {colour:?}");
+        .expect("a constant color");
+    let Value::Color(color) = color else {
+        panic!("a color, got {color:?}");
     };
-    assert!((colour.r - 16.0 / 255.0).abs() < 1e-6, "{colour:?}");
-    assert!((colour.g - 20.0 / 255.0).abs() < 1e-6, "{colour:?}");
-    assert!((colour.b - 24.0 / 255.0).abs() < 1e-6, "{colour:?}");
-    assert_eq!(colour.a, 1.0);
+    assert!((color.r - 16.0 / 255.0).abs() < 1e-6, "{color:?}");
+    assert!((color.g - 20.0 / 255.0).abs() < 1e-6, "{color:?}");
+    assert!((color.b - 24.0 / 255.0).abs() < 1e-6, "{color:?}");
+    assert_eq!(color.a, 1.0);
     assert_eq!(
         paint["background-opacity"].as_constant(),
         Some(Value::Number(1.0))
@@ -184,7 +184,7 @@ fn unset_properties_carry_their_defaults() {
 /// An earlier version of this test asserted the table default was what came out, and an earlier
 /// commit message claimed that getting it "backwards" would outline every fill in black. That
 /// was wrong twice over: black is correct here, and the real consequence of getting it backwards
-/// is the binding, not the colour. The oracle settled it — its data-driven fill drawable carries
+/// is the binding, not the color. The oracle settled it — its data-driven fill drawable carries
 /// the outline as a vertex attribute even though the style never mentions the property, which
 /// only happens if the binding was inherited too.
 #[test]
@@ -206,7 +206,7 @@ fn fill_outline_color_inherits_fill_color() {
         .as_constant()
         .expect("a constant");
     assert_eq!(
-        tessella_style::property::as_color(&outline).expect("a colour"),
+        tessella_style::property::as_color(&outline).expect("a color"),
         Color::black(),
         "inherited from fill-color's default"
     );
@@ -236,7 +236,7 @@ fn fill_outline_color_inherits_fill_color() {
         .as_constant()
         .expect("a constant");
     assert_eq!(
-        tessella_style::property::as_color(&outline).expect("a colour"),
+        tessella_style::property::as_color(&outline).expect("a color"),
         Color::parse("#00ff00").expect("green")
     );
 }
@@ -482,14 +482,14 @@ fn a_defaultless_property_still_has_a_type() {
     );
 }
 
-/// A colour-typed property nobody wrote stays absent rather than becoming a cast of null.
+/// A color-typed property nobody wrote stays absent rather than becoming a cast of null.
 ///
-/// `line-gradient` is the case: colour-typed with no default, so the property boundary's
+/// `line-gradient` is the case: color-typed with no default, so the property boundary's
 /// coercion wrapped its `null` in a `to-color`, and a constant expression is folded at parse —
 /// where casting null raises "cannot cast null to number" and refuses the style over a property
 /// the author never set.
 #[test]
-fn an_unset_colour_property_is_not_coerced() {
+fn an_unset_color_property_is_not_coerced() {
     let layer = layer_with("line", r#""line-width": 2"#);
     let resolved = resolve_paint(&layer).expect("compiles");
     assert_eq!(

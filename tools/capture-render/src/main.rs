@@ -10,7 +10,7 @@
 //! suite could see them because nothing in the suite bound the stream the way a renderer does.
 //!
 //! So this binds it that way. It reads the descriptors, resolves the slabs, takes the matrix out
-//! of the layer's consolidated buffer at the order's own `ubo_index`, takes the colour out of the
+//! of the layer's consolidated buffer at the order's own `ubo_index`, takes the color out of the
 //! layer's evaluated-properties block at the generated offset, and draws. Nothing here reaches
 //! back into the producer's types for a value the stream is supposed to carry.
 //!
@@ -23,7 +23,7 @@
 //!
 //! The tile is used for every address in the cover, which is what makes this a *rendering* test
 //! rather than a map: one tile's features repeated is enough to see whether a layer draws, where
-//! it lands, and in what colour.
+//! it lands, and in what color.
 
 mod glyphs;
 mod png;
@@ -64,10 +64,10 @@ const RASTER_TEXTURE: u32 = 1;
 /// An extrusion's packed fraction, whose low bit says the ring closes here.
 const EXTRUSION_DECIMALS: u32 = 1;
 
-/// An extrusion's per-feature height, in metres.
+/// An extrusion's per-feature height, in meters.
 const EXTRUSION_HEIGHT: u32 = 5;
 
-/// An extrusion's per-feature base, in metres.
+/// An extrusion's per-feature base, in meters.
 const EXTRUSION_BASE: u32 = 3;
 
 /// A symbol's anchor and this corner's offset from it.
@@ -405,7 +405,7 @@ fn run() -> Result<String, String> {
 
 /// Draws the scene in the order the stream gave, which is the order the picture depends on.
 fn draw(scene: &Scene, arena: &SlabArena, width: u32, height: u32) -> Canvas {
-    // The background layer's own colour, taken from its properties block rather than assumed:
+    // The background layer's own color, taken from its properties block rather than assumed:
     // a background is the one layer whose geometry the consumer synthesizes, so if it is not
     // painted from the stream it is not tested by this at all.
     let background = scene
@@ -518,7 +518,7 @@ fn painter_order(scene: &Scene) -> Vec<usize> {
     out
 }
 
-/// A layer's colour and the scalar its geometry is sized by.
+/// A layer's color and the scalar its geometry is sized by.
 ///
 /// One field for two different measurements, because they are the same thing to the shape: a
 /// line's half-width and a circle's radius are both "how far, in pixels, a vertex moves from
@@ -528,7 +528,7 @@ struct Paint {
     color: [f32; 4],
     /// A line's stroke width, or a circle's radius plus its stroke.
     width: f32,
-    /// An extrusion's layer-wide height and base, in metres. The per-feature values override
+    /// An extrusion's layer-wide height and base, in meters. The per-feature values override
     /// them when the properties are data-driven, as they usually are.
     height: f32,
     base: f32,
@@ -539,27 +539,27 @@ fn layer_paint(scene: &Scene, shader: BuiltIn, layer_index: u32) -> Option<Paint
         BuiltIn::FillShader | BuiltIn::FillOutlineShader => {
             (ubo_slots::ID_FILL_EVALUATED_PROPS_UBO, 0, None)
         }
-        // A line's block is colour, then blur, opacity, gap width, offset and width.
+        // A line's block is color, then blur, opacity, gap width, offset and width.
         BuiltIn::LineShader => (ubo_slots::ID_LINE_EVALUATED_PROPS_UBO, 0, Some(32)),
-        // A circle's is colour, stroke colour, then radius — and the stroke widens the quad
+        // A circle's is color, stroke color, then radius — and the stroke widens the quad
         // beyond the radius, so a circle drawn at the radius alone is clipped by its own outline.
         BuiltIn::CircleShader => (ubo_slots::ID_CIRCLE_EVALUATED_PROPS_UBO, 0, Some(32)),
         BuiltIn::FillExtrusionShader | BuiltIn::FillExtrusionInstancedShader => {
             (ubo_slots::ID_FILL_EXTRUSION_PROPS_UBO, 0, None)
         }
-        // A symbol's block opens with the text half -- fill colour, halo colour, opacity --
+        // A symbol's block opens with the text half -- fill color, halo color, opacity --
         // and carries the icon half behind it, because one shader samples both and the buffer
         // is its interface. The text half is what a label reads.
         BuiltIn::SymbolSDFShader | BuiltIn::SymbolIconShader => {
             (ubo_slots::ID_SYMBOL_EVALUATED_PROPS_UBO, 0, None)
         }
-        // A raster's block has no colour at all -- its pixels are the colour. Only the opacity
+        // A raster's block has no color at all -- its pixels are the color. Only the opacity
         // is read, from where the generated layout puts it.
         BuiltIn::RasterShader => (ubo_slots::ID_RASTER_EVALUATED_PROPS_UBO, usize::MAX, None),
         _ => return None,
     };
     let bytes = scene.ubo(layer_index, slot)?;
-    // `usize::MAX` means the block holds no colour; white leaves a sampled texture unchanged.
+    // `usize::MAX` means the block holds no color; white leaves a sampled texture unchanged.
     let mut color = if color_at == usize::MAX {
         [1.0, 1.0, 1.0, 1.0]
     } else {
@@ -573,7 +573,7 @@ fn layer_paint(scene: &Scene, shader: BuiltIn, layer_index: u32) -> Option<Paint
         BuiltIn::LineShader => Some(20),
         BuiltIn::CircleShader => Some(40),
         BuiltIn::FillExtrusionShader | BuiltIn::FillExtrusionInstancedShader => Some(60),
-        // `text_opacity`, past the two colours.
+        // `text_opacity`, past the two colors.
         BuiltIn::SymbolSDFShader | BuiltIn::SymbolIconShader => Some(32),
         // `opacity`, past the spin weights, the parent-tile fade and the buffer scale.
         BuiltIn::RasterShader => Some(36),
@@ -722,7 +722,7 @@ fn draw_triangles(
     );
 }
 
-/// Draws a line by widening its centreline, which is what its shader does.
+/// Draws a line by widening its centerline, which is what its shader does.
 ///
 /// The widening happens after projection, in pixels, because that is where mbgl's line shader
 /// does it — a line's width is a screen measurement, which is why zooming does not rebuild the
@@ -757,7 +757,7 @@ fn draw_line(
                     .map(|pair| i16::from_le_bytes([pair[0], pair[1]]))
                     .unwrap_or(0)
             };
-            // The centreline is stored doubled, with the cap and side flags in the low bits.
+            // The centerline is stored doubled, with the cap and side flags in the low bits.
             let point = [f32::from(short(0) >> 1), f32::from(short(2) >> 1)];
 
             let data_at = data.offset as usize + index * data.stride as usize;
@@ -791,7 +791,7 @@ fn draw_line(
 
 /// Draws a circle layer by expanding each quad, which is what its shader does.
 ///
-/// The buffer holds the centre *doubled*, with the corner's sign in the low bit of each axis —
+/// The buffer holds the center *doubled*, with the corner's sign in the low bit of each axis —
 /// four vertices per point, all at the same place until something expands them. The radius is a
 /// uniform, so the expansion happens at draw time in pixels, and a consumer binding only the
 /// position gets four coincident vertices and two degenerate triangles per circle.
@@ -813,18 +813,18 @@ fn draw_circle(
     let projected: Vec<Option<[f32; 2]>> = packed
         .iter()
         .map(|v| {
-            // `floor(v / 2)` for the centre and `mod(v, 2) * 2 - 1` for the corner, which is
+            // `floor(v / 2)` for the center and `mod(v, 2) * 2 - 1` for the corner, which is
             // mbgl's own arithmetic rather than a bit test -- the vertex was built by doubling
             // and adding a zero or a one, so the halves recover exactly.
-            let centre = [(v[0] * 0.5).floor(), (v[1] * 0.5).floor()];
+            let center = [(v[0] * 0.5).floor(), (v[1] * 0.5).floor()];
             let corner = [
-                (v[0] - centre[0] * 2.0) * 2.0 - 1.0,
-                (v[1] - centre[1] * 2.0) * 2.0 - 1.0,
+                (v[0] - center[0] * 2.0) * 2.0 - 1.0,
+                (v[1] - center[1] * 2.0) * 2.0 - 1.0,
             ];
             let screen = raster::project(
                 matrix,
-                centre[0],
-                centre[1],
+                center[0],
+                center[1],
                 canvas.width as f32,
                 canvas.height as f32,
             )?;
@@ -844,10 +844,10 @@ fn draw_circle(
     );
 }
 
-/// The attribute a shader reads a per-feature colour from, when it has one.
+/// The attribute a shader reads a per-feature color from, when it has one.
 ///
-/// Each family numbers its own; there is no shared "colour is attribute one" rule, and assuming
-/// there were reads a line's blur as its colour.
+/// Each family numbers its own; there is no shared "color is attribute one" rule, and assuming
+/// there were reads a line's blur as its color.
 const fn color_attribute(shader: BuiltIn) -> Option<u32> {
     match shader {
         BuiltIn::FillShader | BuiltIn::FillOutlineShader | BuiltIn::CircleShader => Some(1),
@@ -857,12 +857,12 @@ const fn color_attribute(shader: BuiltIn) -> Option<u32> {
     }
 }
 
-/// Per-vertex colours, when the layer's colour is data-driven.
+/// Per-vertex colors, when the layer's color is data-driven.
 ///
 /// # Why a uniform is not enough
 ///
 /// DR-11 splits a property by what it depends on, and the split decides how it reaches the GPU:
-/// a constant or camera-only colour is a uniform, a colour that varies per feature is a vertex
+/// a constant or camera-only color is a uniform, a color that varies per feature is a vertex
 /// attribute. A consumer that reads only the uniform therefore gets the property's *default* for
 /// every data-driven layer — and `line-color`'s default is black, so a real style comes out as a
 /// map drawn in thick black lines. That is not a wrong value on the wire; it is the wire's other
@@ -908,10 +908,10 @@ fn vertex_colors(geometry: &Geometry, arena: &SlabArena) -> Option<Vec<[f32; 4]>
 /// The non-instanced branch would have put four extra vertices and six extra indices in the
 /// buffer *per edge*, which is the five-times-the-geometry the layout module refuses.
 ///
-/// # The height goes in as metres
+/// # The height goes in as meters
 ///
 /// `gl_Position = drawable.matrix * vec4(in_position + decimals, z, 1.0)`, with `z` the height
-/// in metres and no conversion in front of it: the matrix's third column already carries
+/// in meters and no conversion in front of it: the matrix's third column already carries
 /// `pixelsPerMeter`, which `getWorldToCamera` puts there precisely so heights and positions can
 /// share a matrix while being in different units.
 ///
@@ -923,7 +923,7 @@ fn vertex_colors(geometry: &Geometry, arena: &SlabArena) -> Option<Vec<[f32; 4]>
 ///
 /// Per feature when `fill-extrusion-height` is data-driven, in which case it is a vertex
 /// attribute and the uniform beside it is the property's default — the same split that made
-/// every data-driven colour come out black.
+/// every data-driven color come out black.
 ///
 /// # Which edges get a wall
 ///
@@ -1199,7 +1199,7 @@ fn draw_symbol(
 ///
 /// The texture comes from the geometry's own reference, as a symbol's atlas does. Choosing one
 /// here would draw whichever picture happened to be uploaded last, which on a tiled source is a
-/// neighbour's.
+/// neighbor's.
 fn draw_raster(
     canvas: &mut Canvas,
     geometry: &Geometry,
@@ -1310,8 +1310,8 @@ fn triangles(
             };
             if let (Some(a), Some(b), Some(c)) = (at(triangle[0]), at(triangle[1]), at(triangle[2]))
             {
-                // One colour for the triangle rather than three interpolated: a data-driven
-                // colour is per *feature*, so every vertex of a triangle already carries the
+                // One color for the triangle rather than three interpolated: a data-driven
+                // color is per *feature*, so every vertex of a triangle already carries the
                 // same one, and interpolating would only blur the seam between two features
                 // that happen to share an edge.
                 let color = per_vertex
@@ -1322,7 +1322,7 @@ fn triangles(
                     })
                     .map_or(color, |mut supplied| {
                         // The layer's own opacity still applies: it is a uniform even when the
-                        // colour beside it is not.
+                        // color beside it is not.
                         supplied[3] *= color[3];
                         supplied
                     });

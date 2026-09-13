@@ -18,9 +18,9 @@ fn tex() -> Rect {
     }
 }
 
-/// A centred icon straddles its anchor.
+/// A centered icon straddles its anchor.
 #[test]
-fn a_centred_icon_straddles_its_anchor() {
+fn a_centered_icon_straddles_its_anchor() {
     let icon = shape_icon((24.0, 24.0), [0.0, 0.0], Anchor::Center);
     assert_eq!((icon.left, icon.right), (-12.0, 12.0));
     assert_eq!((icon.top, icon.bottom), (-12.0, 12.0));
@@ -92,7 +92,7 @@ fn a_retina_icon_is_placed_at_its_logical_size() {
 ///
 /// The pad is on the quad and not on the texture rectangle: the extra pixel samples the atlas
 /// padding, which is why the atlas reserves it. Padding the rectangle instead would sample the
-/// neighbouring icon.
+/// neighboring icon.
 #[test]
 fn the_quad_is_the_box_grown_by_a_pixel() {
     let icon = shape_icon((24.0, 24.0), [0.0, 0.0], Anchor::Center);
@@ -192,13 +192,13 @@ mod text_fit {
         assert_eq!(icon.bottom - icon.top, FITTED);
     }
 
-    /// Fitting one axis centres the other rather than stretching it.
+    /// Fitting one axis centers the other rather than stretching it.
     ///
     /// mbgl's `else` branches, and the reason they are not "leave it alone": the icon has to move
     /// to sit on the text even where it does not resize, or a width-fitted shield stretches
     /// across the label while sitting above it.
     #[test]
-    fn fitting_one_axis_centres_the_other() {
+    fn fitting_one_axis_centers_the_other() {
         let wide = fit_icon_to_text(
             tessella_glyph::quads::PositionedIcon::default(),
             (40.0, 10.0),
@@ -210,8 +210,8 @@ mod text_fit {
         );
         assert_eq!(wide.right - wide.left, FITTED, "the width did not fit");
         assert_eq!(wide.bottom - wide.top, 10.0, "the height was stretched");
-        // Centred on the text's vertical middle, which is zero here.
-        assert_eq!(wide.top + wide.bottom, 0.0, "{wide:?} is not centred");
+        // Centered on the text's vertical middle, which is zero here.
+        assert_eq!(wide.top + wide.bottom, 0.0, "{wide:?} is not centered");
     }
 
     /// `icon-text-fit-padding` grows the fitted box, per side.

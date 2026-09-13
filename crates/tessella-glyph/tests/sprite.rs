@@ -46,7 +46,7 @@ fn the_pixel_ratio_scales_the_logical_size() {
 
 /// One bad entry is dropped and the sheet is kept.
 ///
-/// The behaviour a style with one broken icon needs: the other three hundred still draw. An
+/// The behavior a style with one broken icon needs: the other three hundred still draw. An
 /// implementation that failed the whole index would blank every icon on the map because one
 /// tool wrote one negative width.
 #[test]
@@ -116,7 +116,7 @@ fn the_bounds_are_mbgls() {
 /// A rectangle running off the sheet is refused.
 ///
 /// The one bound that needs the image. Without it the entry parses, and sampling it reads past
-/// the end of the texture — which on a real backend is whatever the neighbouring icon left
+/// the end of the texture — which on a real backend is whatever the neighboring icon left
 /// there, and looks like the wrong icon rather than like an error.
 #[test]
 fn a_rectangle_off_the_sheet_is_refused() {
@@ -306,7 +306,7 @@ fn the_bounds_refuse_an_incomparable_value() {
 
 /// mbgl's own sprite fixture and the expectations its `Sprite.*` tests state.
 ///
-/// Everything above checks behaviour this build reasons about. This checks it against the
+/// Everything above checks behavior this build reasons about. This checks it against the
 /// upstream it is a transcription of: same bytes, same answers. Reading `sprite_parser.cpp`
 /// found three places where the reasoning had gone wrong, and all three are here.
 mod against_mbgl {
@@ -410,7 +410,7 @@ mod against_mbgl {
     /// mbgl's `Sprite.SpriteParsingTextFit` and `SpriteParsingInvalidTextFit`.
     ///
     /// The third correction: this build did not read the fields at all. An unrecognized value is
-    /// absent rather than a default, because the three behaviours resize a shield differently
+    /// absent rather than a default, because the three behaviors resize a shield differently
     /// and guessing between them is worse than not stretching.
     #[test]
     fn text_fit_reads_its_three_values_and_no_others() {
@@ -437,7 +437,7 @@ mod against_mbgl {
 
     /// mbgl's `Sprite.SpriteParsingInvalidStretches` and `SpriteParsingInvalidContent`.
     ///
-    /// A malformed stretch is skipped and its neighbours kept; a malformed content box is
+    /// A malformed stretch is skipped and its neighbors kept; a malformed content box is
     /// dropped whole. The asymmetry is mbgl's: a stretch list is a list of ranges and one bad
     /// range is one bad range, while a content box is four numbers and three of them is nothing.
     #[test]

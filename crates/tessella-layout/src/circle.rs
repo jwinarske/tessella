@@ -7,7 +7,7 @@
 //!
 //! Four vertices and two triangles per point. The circle itself is drawn by the fragment
 //! shader inside that quad, which is why `circle-radius` never reaches the geometry: the
-//! vertices carry the centre and a corner sign, and the shader scales by the radius uniform (or
+//! vertices carry the center and a corner sign, and the shader scales by the radius uniform (or
 //! the radius attribute, when it is data-driven). One bucket therefore serves every radius the
 //! style can produce, at every zoom.
 //!
@@ -24,7 +24,7 @@
 //! kept the buffer would draw the same circle up to four times, each slightly offset, and the
 //! overdraw would be invisible against an opaque fill.
 //!
-//! mbgl skips the check in `Still` mode, where a neighbouring tile's points are wanted so a
+//! mbgl skips the check in `Still` mode, where a neighboring tile's points are wanted so a
 //! snapshot is not clipped at its edges. This build is continuous-only, so the check always
 //! runs; the mode is named here rather than silently assumed.
 
@@ -41,7 +41,7 @@ const MAX_SEGMENT_VERTICES: usize = u16::MAX as usize;
 /// A built circle bucket.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct CircleBucket {
-    /// Four vertices per point: the centre doubled, plus a corner bit.
+    /// Four vertices per point: the center doubled, plus a corner bit.
     pub vertices: Vec<Position>,
     /// Two triangles per point.
     pub indices: Vec<u16>,

@@ -40,7 +40,7 @@ pub fn sphere_point(longitude: f64, latitude: f64) -> [f64; 3] {
     [lat.cos() * lon.sin(), -lat.sin(), lat.cos() * lon.cos()]
 }
 
-/// The same, from a normalised Mercator position: `x` and `y` each in `0..1` across the world.
+/// The same, from a normalized Mercator position: `x` and `y` each in `0..1` across the world.
 ///
 /// This is the form a tile's geometry arrives in -- a tile at `z/x/y` covers a known square of it
 /// -- so it is the one the vertex bend will use. `y` outside `0..1` is past the Mercator limit and
@@ -79,7 +79,7 @@ pub fn sphere_point_from_mercator(x: f64, y: f64) -> [f64; 3] {
 pub fn camera_distance(zoom: f64, latitude: f64, height: f64) -> f64 {
     // The world spans `world_size(zoom)` pixels and the sphere's circumference is the same world,
     // so the radius in pixels is `world_size / 2π`. A camera `camera_to_center_distance` pixels
-    // from the centre of the screen therefore sits that many radii out.
+    // from the center of the screen therefore sits that many radii out.
     let stretch = latitude
         .clamp(
             -crate::projection::LATITUDE_MAX,
@@ -126,7 +126,7 @@ pub fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
 /// Whether any part of a tile faces a camera over `(longitude, latitude)` at `zoom`.
 ///
 /// The cull §13.4 leaves to the consumer: one test per tile before it subdivides, which removes the
-/// draw as well as the work. Sampled at the tile's four corners and its centre rather than solved,
+/// draw as well as the work. Sampled at the tile's four corners and its center rather than solved,
 /// because a tile is a curved patch and the extremum is at a corner for every tile a Mercator cover
 /// produces -- and because being wrong in the safe direction matters more than being tight. A tile
 /// wrongly kept costs a subdivision; a tile wrongly culled is a hole in the planet.
@@ -186,7 +186,7 @@ pub fn edge_segments(z: u8, zoom: f64, tolerance: f64) -> u32 {
     if !tolerance.is_finite() || tolerance <= 0.0 || radius <= 0.0 {
         return 1;
     }
-    // The arc one tile edge subtends at the sphere's centre.
+    // The arc one tile edge subtends at the sphere's center.
     let arc = 2.0 * core::f64::consts::PI / tiles_across(z);
     // `1 - cos(x) ≈ x²/2` for the small angles this always lands in, so `n ≈ θ/2 · √(R/2t)`.
     // Solved rather than iterated, then checked below, because the approximation is only good
@@ -254,7 +254,7 @@ pub fn clip_matrix(view: &crate::cover::ViewTransform) -> crate::camera::Mat4 {
 ///
 /// The `y` axis points *down* in [`sphere_point`]'s convention, so the latitude rotation is the
 /// negative of what a right-handed Earth would take. The tests pin the composition rather than the
-/// derivation: the point under the camera lands at the centre of the screen, and a point a quarter
+/// derivation: the point under the camera lands at the center of the screen, and a point a quarter
 /// turn away lands off it in the direction it should.
 #[must_use]
 fn clip_matrix_unscaled(view: &crate::cover::ViewTransform) -> crate::camera::Mat4 {
@@ -281,16 +281,16 @@ fn clip_matrix_unscaled(view: &crate::cover::ViewTransform) -> crate::camera::Ma
     // # Why the pull-back is split in two
     //
     // The obvious form backs the camera off by the whole `distance` and rotates about the
-    // sphere's centre. That is a planet on a turntable, and it is not what a map does: pitching
+    // sphere's center. That is a planet on a turntable, and it is not what a map does: pitching
     // would swing the point under the camera off the screen, and at street zoom -- where the
-    // visible cap is a few hundred metres across and the camera is 0.0007 radii above it -- it
+    // visible cap is a few hundred meters across and the camera is 0.0007 radii above it -- it
     // would swing it into the next country.
     //
     // A map pitches about the point under the camera. So the surface point comes to the origin
     // first, by the unit translate; the rotations happen there; and only then does the camera
     // stand off by what is left, which is `distance - 1` and is exactly
     // `camera_to_center_distance` in radii. That is also what makes a globe and a plane agree at
-    // the zoom they are meant to be interchangeable at, since the plane pitches about its centre
+    // the zoom they are meant to be interchangeable at, since the plane pitches about its center
     // too.
     //
     // Both angles keep the plane's sign, which is not obvious in advance: `flip` below negates y
@@ -316,7 +316,7 @@ fn clip_matrix_unscaled(view: &crate::cover::ViewTransform) -> crate::camera::Ma
     // documents. The flip reverses triangle winding, which is the consumer's to know about when it
     // culls faces: a globe patch wound like a Mercator one comes out back-facing.
     // On the *output* side: `scale` post-multiplies, and applied there it would flip the point
-    // before the rotation rather than the picture after it, which moves the centre off screen.
+    // before the rotation rather than the picture after it, which moves the center off screen.
     let flip = crate::camera::scale(&crate::camera::identity(), 1.0, -1.0, 1.0);
     let eye = crate::camera::multiply(&flip, &eye);
     // Near and far bracket the *visible cap*, not the ball.
@@ -435,7 +435,7 @@ pub struct AnchoredBend {
     pub d_vv: [f64; 4],
     /// See [`Self::d_uu`].
     pub d_uv: [f64; 4],
-    /// Clip displacement per *metre* of height above the surface, at the anchor.
+    /// Clip displacement per *meter* of height above the surface, at the anchor.
     ///
     /// The radial direction, which on a unit sphere is the sphere point itself, taken as a
     /// direction rather than a position and divided by the Earth's radius so the caller can
@@ -445,7 +445,7 @@ pub struct AnchoredBend {
     ///
     /// Taken at the anchor like every other coefficient, and unlike them it has no second-order
     /// term here: the radial turns by the tile's own angular width across it, which at z15 is
-    /// 1e-4 radians, so a hundred-metre building leans by a centimetre.
+    /// 1e-4 radians, so a hundred-meter building leans by a centimeter.
     pub d_h: [f64; 4],
 }
 
@@ -521,8 +521,8 @@ pub fn anchored_bend(
         let p = [v[0], v[1], v[2], w];
         core::array::from_fn(|r| (0..4).map(|c| clip[c * 4 + r] * p[c]).sum())
     };
-    // One metre of height, as a clip direction. `point` is the outward normal on a unit sphere,
-    // and the sphere is the planet, so a metre is `1 / EARTH_RADIUS_M` radii exactly.
+    // One meter of height, as a clip direction. `point` is the outward normal on a unit sphere,
+    // and the sphere is the planet, so a meter is `1 / EARTH_RADIUS_M` radii exactly.
     let radial: [f64; 3] = core::array::from_fn(|i| point[i] / crate::camera::EARTH_RADIUS_M);
     AnchoredBend {
         anchor: apply(point, 1.0),
@@ -543,7 +543,7 @@ pub fn anchored_bend(
 /// is what those callers can use unchanged.
 ///
 /// Accurate enough for *placement*, which is a question about where a label's box lands against its
-/// neighbours', and not for drawing: a glyph drawn through this would sit where the quadratic term
+/// neighbors', and not for drawing: a glyph drawn through this would sit where the quadratic term
 /// says it should not. The material evaluates the full expansion.
 ///
 /// The columns are the derivatives and the translation is the anchor with the tile's center taken
@@ -586,7 +586,7 @@ pub fn anchored_matrix(
 /// places that add a depth bias *after* the multiply have to scale the bias to match.
 ///
 /// Taken at the point under the camera, so it is one number for the frame rather than one per
-/// tile: a per-tile normalisation would leave neighbouring tiles disagreeing about how far away
+/// tile: a per-tile normalization would leave neighboring tiles disagreeing about how far away
 /// they are, which is the thing `w` exists to say.
 #[must_use]
 pub fn clip_w_scale(view: &crate::cover::ViewTransform) -> f64 {
@@ -595,9 +595,9 @@ pub fn clip_w_scale(view: &crate::cover::ViewTransform) -> f64 {
     // The unscaled matrix, which is what makes this the scale rather than a fixed point of it.
     let clip = clip_matrix_unscaled(view);
     let point = [under[0], under[1], under[2], 1.0];
-    let centre_w: f64 = (0..4).map(|c| clip[c * 4 + 3] * point[c]).sum();
-    if centre_w.abs() <= f64::EPSILON {
+    let center_w: f64 = (0..4).map(|c| clip[c * 4 + 3] * point[c]).sum();
+    if center_w.abs() <= f64::EPSILON {
         return 1.0;
     }
-    reference / centre_w
+    reference / center_w
 }

@@ -2,8 +2,8 @@
 //!
 //! # Why a transcription rather than any k-d tree
 //!
-//! Because the *order* it visits neighbours in is load-bearing. Clustering walks a zoom level
-//! marking points visited as it goes, so which neighbour a query reaches first decides which
+//! Because the *order* it visits neighbors in is load-bearing. Clustering walks a zoom level
+//! marking points visited as it goes, so which neighbor a query reaches first decides which
 //! cluster absorbs it — and supercluster's own expectations pin the result down to the point
 //! counts of a named cluster's four children. A tree with the same contents in a different
 //! layout answers the same *set* and a different sequence, and the numbers move.
@@ -201,7 +201,7 @@ impl KdBush {
     /// Partitions `[left, right]` so that the `k`th element is the one that belongs there.
     ///
     /// Floyd–Rivest, as `kdbush.hpp` has it including the sampling shortcut for wide ranges —
-    /// which is not an optimisation detail but part of the layout, since a different pivot
+    /// which is not an optimization detail but part of the layout, since a different pivot
     /// choice permutes the equal elements differently and the visit order with them.
     fn select(&mut self, k: usize, mut left: usize, mut right: usize, axis: u8) {
         let at = |points: &Vec<(f64, f64)>, index: usize| -> f64 {

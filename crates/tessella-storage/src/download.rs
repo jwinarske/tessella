@@ -136,7 +136,7 @@ pub struct Summary {
     /// so a resumed download does not ask the sea for tiles a second time.
     pub missing: u64,
     /// Whether it stopped because it was asked to.
-    pub cancelled: bool,
+    pub canceled: bool,
 }
 
 /// A download in progress: what it is downloading, from where, and into what.
@@ -221,7 +221,7 @@ impl Download<'_> {
             unchanged: 0,
             released: 0,
             missing: 0,
-            cancelled: false,
+            canceled: false,
         };
 
         // The style itself, then assets, then tiles. Assets before tiles because a region
@@ -233,7 +233,7 @@ impl Download<'_> {
 
         for url in urls {
             if cancel.load(Ordering::Relaxed) {
-                summary.cancelled = true;
+                summary.canceled = true;
                 break;
             }
             match self.fetch_one(url)? {
@@ -292,7 +292,7 @@ impl Download<'_> {
             unchanged: 0,
             released: 0,
             missing: 0,
-            cancelled: false,
+            canceled: false,
         };
 
         let urls = core::iter::once(&self.definition.style_url)
@@ -301,7 +301,7 @@ impl Download<'_> {
 
         for url in urls {
             if cancel.load(Ordering::Relaxed) {
-                summary.cancelled = true;
+                summary.canceled = true;
                 break;
             }
             match self.refresh_one(url)? {
@@ -317,10 +317,10 @@ impl Download<'_> {
             observe(summary.progress);
         }
 
-        // Only when the pass finished. A cancelled refresh has not visited every URL, so what
+        // Only when the pass finished. A canceled refresh has not visited every URL, so what
         // looks orphaned may simply not have been reached — releasing those would turn an
         // interrupted refresh into a partial delete.
-        if !summary.cancelled {
+        if !summary.canceled {
             let keep: BTreeSet<&str> = core::iter::once(self.definition.style_url.as_str())
                 .chain(plan.assets.iter().map(String::as_str))
                 .chain(plan.tiles.iter().map(String::as_str))

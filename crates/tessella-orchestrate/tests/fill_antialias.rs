@@ -8,12 +8,12 @@
 //!
 //! A fill's outline is its antialiasing, so `fill-antialias: false` is one drawable and not two.
 //! The second half is mbgl's own comment -- "Outline does not default to fill in the pattern
-//! case": a patterned fill whose outline colour the style wrote asks for a colour the pattern
+//! case": a patterned fill whose outline color the style wrote asks for a color the pattern
 //! shaders have no uniform for, and mbgl draws no outline rather than the wrong one.
 //!
 //! Counted as drawables rather than as pixels because that is what the rule decides. A layer
-//! that draws an outline it should not is a hairline in the fill's own colour around every
-//! polygon, which at threshold 48 against a matching fill colour is nothing at all.
+//! that draws an outline it should not is a hairline in the fill's own color around every
+//! polygon, which at threshold 48 against a matching fill color is nothing at all.
 
 use tessella_orchestrate::order;
 use tessella_orchestrate::tile::{TileId, build_tile};
@@ -84,7 +84,7 @@ fn antialias_off_drops_the_outline() {
     );
 }
 
-/// A patterned fill keeps its outline while the style writes no colour for it.
+/// A patterned fill keeps its outline while the style writes no color for it.
 #[test]
 fn a_pattern_alone_keeps_its_outline() {
     assert_eq!(drawables(r##"{ "fill-pattern": "sand" }"##), [1, 2]);
@@ -92,7 +92,7 @@ fn a_pattern_alone_keeps_its_outline() {
 
 /// And loses it when the style does, which is the rule that is not obvious.
 #[test]
-fn a_pattern_with_an_outline_colour_draws_no_outline() {
+fn a_pattern_with_an_outline_color_draws_no_outline() {
     assert_eq!(
         drawables(r##"{ "fill-pattern": "sand", "fill-outline-color": "#00ff00" }"##),
         [1],

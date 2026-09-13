@@ -994,7 +994,7 @@ pub struct StoredRegion {
     pub id: RegionId,
     /// What was asked for.
     pub region: Region,
-    /// Whatever the caller labelled it, typically a name a user typed.
+    /// Whatever the caller labeled it, typically a name a user typed.
     pub description: Option<String>,
     /// When it was created, in seconds since the Unix epoch.
     pub created: i64,

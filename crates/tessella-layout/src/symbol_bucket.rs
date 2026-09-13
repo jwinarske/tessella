@@ -772,7 +772,7 @@ pub struct LineOptions {
     /// The tile's overscale factor, which keeps a child's anchors aligned with its parent's.
     pub overscaling: f32,
     /// One label at the line's midpoint rather than a repeating run.
-    pub centred: bool,
+    pub centered: bool,
     /// How many tile units the shaped label's em-space extent occupies.
     ///
     /// mbgl's `textMaxBoxScale`, and the reason anchoring needs it: a shaped extent is in ems --
@@ -796,7 +796,7 @@ impl Default for LineOptions {
             spacing: 250.0,
             max_angle: core::f32::consts::PI / 4.0,
             overscaling: 1.0,
-            centred: false,
+            centered: false,
             // Sixteen tile units to the pixel at the default 512-pixel tile, and a default
             // `text-size` of 16 against a 24-unit em.
             max_box_scale: 16.0 * 16.0 / tessella_glyph::text::ONE_EM,
@@ -875,9 +875,9 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
         // Each anchor is carried with the line it was found on, because that line goes on to the
         // instance: mbgl hands `createSymbolInstanceSharedData` the very run `getAnchors` walked,
         // and `Anchor::segment` is an index into it.
-        let anchors: Vec<AnchorOnLine> = if options.centred {
+        let anchors: Vec<AnchorOnLine> = if options.centered {
             // One anchor per ring, and no clip on this branch. mbgl's `line-center` arm loops
-            // `for (const auto& line : feature.geometry)`, takes a centre on each ring longer
+            // `for (const auto& line : feature.geometry)`, takes a center on each ring longer
             // than a point, and hands that ring straight to the shared data.
             label
                 .lines
@@ -1121,7 +1121,7 @@ impl Default for IconOptions {
 /// `positions` is where each icon sits in the *icon atlas* — not in the sprite sheet. mbgl cuts
 /// every icon out of the sheet and repacks it with a pixel of padding around it, and that pixel
 /// is what the quad's one-pixel border samples. Drawing straight from the sheet, where icons are
-/// usually flush against each other, puts a hairline of the neighbouring picture around every
+/// usually flush against each other, puts a hairline of the neighboring picture around every
 /// marker on the map.
 ///
 /// An icon naming a sprite the sheet does not have is skipped — mbgl does the same, and it is
@@ -1199,7 +1199,7 @@ pub fn build_icons(
             ),
             label.options.vertex_size,
             // The sprite decides, not the layer. A shield drawn as a distance field is
-            // recolourable by `icon-color`; a photographic icon is not, and putting a plain
+            // recolorable by `icon-color`; a photographic icon is not, and putting a plain
             // image through the SDF shader draws its alpha as a coverage ramp.
             position.sdf,
             1.0,

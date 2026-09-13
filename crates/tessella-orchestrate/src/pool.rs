@@ -124,7 +124,7 @@ impl Queues {
 
 struct Inner {
     queues: Mutex<Queues>,
-    /// Signalled when a job is pushed or the pool is stopping.
+    /// Signaled when a job is pushed or the pool is stopping.
     available: Condvar,
     /// Jobs taken and not yet finished, for [`Pool::is_idle`].
     running: AtomicUsize,

@@ -22,12 +22,12 @@
 //!
 //! # Everything widens to RGBA
 //!
-//! A PNG may be greyscale, palletted, RGB or RGBA, a JPEG greyscale or YCbCr, and a WebP either
+//! A PNG may be grayscale, palletted, RGB or RGBA, a JPEG grayscale or YCbCr, and a WebP either
 //! three channels or four depending on whether it carries an alpha chunk. What is
 //! downstream — an atlas rectangle, a texture upload, a shader sampling a quad — counts in
 //! pixels. A decoder returning the file's own channel count would make every offset past this
 //! point depend on how the file happened to be encoded, which is a defect that appears only for
-//! the one source that ships greyscale.
+//! the one source that ships grayscale.
 //!
 //! # The bound is checked against the header
 //!
@@ -97,7 +97,7 @@ pub enum ImageError {
     /// The decoder refused the bytes.
     #[error("the image did not decode: {0}")]
     Decode(String),
-    /// The image decoded to a size or colour type nothing can index.
+    /// The image decoded to a size or color type nothing can index.
     #[error("the image is {width}x{height}, which is not usable")]
     Unusable {
         /// Decoded width.
@@ -200,7 +200,7 @@ fn decode_png(body: &[u8]) -> Result<Image, ImageError> {
 
     // Eight-bit RGBA outright rather than a conversion afterwards. A sixteen-bit image decoded
     // at its own depth is twice the bytes for the same pixels, and the mismatch shows up as
-    // everything sampling half of its neighbour.
+    // everything sampling half of its neighbor.
     let options = DecoderOptions::default()
         .png_set_strip_to_8bit(true)
         .png_set_add_alpha_channel(true);
@@ -252,12 +252,12 @@ fn decode_jpeg(body: &[u8]) -> Result<Image, ImageError> {
         .decode()
         .map_err(|error| ImageError::Decode(alloc::format!("{error:?}")))?;
 
-    // A greyscale JPEG comes back as one channel however the output colourspace was set —
-    // `jpeg_set_out_colorspace` is honoured for three-component images and the decoder keeps
+    // A grayscale JPEG comes back as one channel however the output colorspace was set —
+    // `jpeg_set_out_colorspace` is honored for three-component images and the decoder keeps
     // Luma otherwise — so the widening below is not dead code for the RGBA request above.
     let out = decoder
         .output_colorspace()
-        .ok_or_else(|| ImageError::Decode("the decoder reports no colourspace".into()))?;
+        .ok_or_else(|| ImageError::Decode("the decoder reports no colorspace".into()))?;
     // Bounded by `afford` above, so the cast cannot lose anything: a dimension whose product
     // fits 64 MiB of RGBA fits a u32 several times over.
     #[allow(clippy::cast_possible_truncation)]
@@ -287,7 +287,7 @@ fn decode_jpeg(body: &[u8]) -> Result<Image, ImageError> {
 /// A lossy WebP stores chroma at half resolution and something has to interpolate it back.
 /// `image-webp` defaults to the same fancy bilinear filter libwebp does, which is what mbgl gets
 /// through its own libwebp; the alternative — nearest — is faster and leaves jagged edges along
-/// every colour boundary. The default is taken deliberately rather than by omission.
+/// every color boundary. The default is taken deliberately rather than by omission.
 #[cfg(feature = "webp")]
 fn decode_webp(body: &[u8]) -> Result<Image, ImageError> {
     extern crate std;
@@ -322,7 +322,7 @@ fn decode_webp(body: &[u8]) -> Result<Image, ImageError> {
     finish(pixels, channels, width, height)
 }
 
-/// How many bytes a pixel occupies in a colour space, or a refusal.
+/// How many bytes a pixel occupies in a color space, or a refusal.
 #[cfg(feature = "image")]
 fn channels(space: zune_png::zune_core::colorspace::ColorSpace) -> Result<usize, ImageError> {
     use zune_png::zune_core::colorspace::ColorSpace;
@@ -332,7 +332,7 @@ fn channels(space: zune_png::zune_core::colorspace::ColorSpace) -> Result<usize,
         ColorSpace::LumaA => Ok(2),
         ColorSpace::Luma => Ok(1),
         other => Err(ImageError::Decode(alloc::format!(
-            "{other:?} is not a colour type a map image uses"
+            "{other:?} is not a color type a map image uses"
         ))),
     }
 }
@@ -373,7 +373,7 @@ fn finish(pixels: Vec<u8>, channels: usize, width: u32, height: u32) -> Result<I
     };
 
     // Only a source that carried alpha can have anything to premultiply — a widened RGB or
-    // greyscale image is opaque everywhere, so the pass would read and write every byte to leave
+    // grayscale image is opaque everywhere, so the pass would read and write every byte to leave
     // it as it was.
     if channels == 4 || channels == 2 {
         premultiply(&mut pixels);
@@ -386,7 +386,7 @@ fn finish(pixels: Vec<u8>, channels: usize, width: u32, height: u32) -> Result<I
     })
 }
 
-/// Multiplies each colour channel by its alpha, in place.
+/// Multiplies each color channel by its alpha, in place.
 #[cfg(feature = "image")]
 ///
 /// mbgl's `util::premultiply`, and its rounding: `(c * a + 127) / 255` rather than `c * a / 255`,
@@ -394,9 +394,9 @@ fn finish(pixels: Vec<u8>, channels: usize, width: u32, height: u32) -> Result<I
 ///
 /// # Why the decode is where this belongs
 ///
-/// Everything downstream blends premultiplied — style colours are stored that way, and the
+/// Everything downstream blends premultiplied — style colors are stored that way, and the
 /// shaders are mbgl's — so an image that is not is the odd one out. Left straight, a translucent
-/// icon's anti-aliased edge blends its own colour at full strength against the background and
+/// icon's anti-aliased edge blends its own color at full strength against the background and
 /// draws a bright fringe around every marker on the map: a defect that is invisible on opaque
 /// sprites, which is most of them, and appears only where the artwork fades out.
 ///

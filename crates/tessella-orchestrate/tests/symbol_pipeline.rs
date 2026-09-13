@@ -8,7 +8,7 @@
 //! The chain: decode a vendored Protomaps tile, resolve `text-field` against a feature, fetch
 //! the glyph range its codepoints need, shape the text, pack the glyphs into the atlas, build
 //! the quads, derive a collision box, assign a cross-tile identity, place it against its
-//! neighbours, and step the fade.
+//! neighbors, and step the fade.
 
 use std::collections::BTreeSet;
 
@@ -247,7 +247,7 @@ fn a_tile_of_labels_places_and_settles() {
     // vast plane and nothing ever collides — all seventy-five placed, which is what gave it
     // away.
     //
-    // Labels compete for *screen*, not for ground. Two towns a kilometre apart collide at z5
+    // Labels compete for *screen*, not for ground. Two towns a kilometer apart collide at z5
     // and not at z14, and the same two labels collide on a phone and not on a wall display.
     // So the anchor is projected first: a tile drawn 512 pixels wide over an extent of 8192.
     const TILE_PIXELS: f32 = 512.0;

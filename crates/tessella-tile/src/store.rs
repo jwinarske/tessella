@@ -12,7 +12,7 @@
 //! deferred to one, so its value at each end of the tile's zoom range is stored in the vertices
 //! and a `_t` uniform mixes between them per view per frame. The endpoints depend on the zoom
 //! the tile is *used* at — `overscaled_z`, not `z` — which is why that is in the key. What
-//! stays camera-free is everything continuous: fractional zoom, centre, bearing and pitch never
+//! stays camera-free is everything continuous: fractional zoom, center, bearing and pitch never
 //! reach a bucket, which is what makes sharing between views at different fractional zooms work
 //! at all.
 //!
@@ -28,7 +28,7 @@
 //! view's active tiles are another's retained ancestors, so a tile can be simultaneously
 //! current for one view and insurance for another, and releasing it from one must not drop it.
 //!
-//! R-11 is the risk this creates — one view's zoom behaviour extends another's tile lifetimes —
+//! R-11 is the risk this creates — one view's zoom behavior extends another's tile lifetimes —
 //! which is why eviction sheds unretained entries first and why the cap is on the store rather
 //! than per view.
 //!
@@ -62,7 +62,7 @@ pub struct TileKey {
     /// paint property varies with it: a zoom-varying property is stored as its value at
     /// `overscaled_z` and at `overscaled_z + 1`, so the same canonical tile standing in at two
     /// different zooms is two different buckets. Keying only on `(z, x, y)` would hand one
-    /// view the other's endpoints — wrong colours and widths, and invisible at integer zoom,
+    /// view the other's endpoints — wrong colors and widths, and invisible at integer zoom,
     /// which is where one would look first.
     pub overscaled_z: u8,
     /// Style revision the entry was built against.

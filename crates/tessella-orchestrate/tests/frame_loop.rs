@@ -351,7 +351,7 @@ fn labels_draw_only_once_the_glyphs_are_handed_over() {
     // What this measures is the labels, so the frame it compares against has to have announced
     // everything that is not a label already. The first frame announces the background and the
     // tile's other layers too -- the background over the whole cover, which is where a map's
-    // colour comes from before any tile arrives -- and counting those as though they were labels
+    // color comes from before any tile arrives -- and counting those as though they were labels
     // makes the comparison say nothing.
     let mut map = Map::new(style.clone(), at, ViewId(0));
     let Tick::Emitted(_) = map.tick(&mut producer, &tiles).expect("a frame") else {

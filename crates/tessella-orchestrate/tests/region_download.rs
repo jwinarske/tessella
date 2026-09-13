@@ -139,7 +139,7 @@ fn a_region_downloads_across_the_pool() {
     .run(&plan)
     .expect("downloads");
 
-    assert!(!outcome.cancelled);
+    assert!(!outcome.canceled);
     let expected = plan.len() as u64 + 1;
     assert_eq!(counters.completed.load(Ordering::Acquire), expected);
     assert_eq!(counters.fraction(), Some(1.0));
@@ -244,7 +244,7 @@ fn cancelling_stops_and_keeps() {
     .expect("stops cleanly");
     watcher.join().expect("the watcher");
 
-    assert!(outcome.cancelled);
+    assert!(outcome.canceled);
     let done = counters.completed.load(Ordering::Acquire);
     assert!(done >= 5, "kept what it got: {done}");
     assert!(done < plan.len() as u64 + 1, "and stopped early: {done}");
@@ -318,7 +318,7 @@ fn a_download_does_not_block_foreground_work() {
 
     cancel.store(true, Ordering::Release);
     let outcome = downloading.join().expect("the download thread");
-    assert!(outcome.expect("stops cleanly").cancelled);
+    assert!(outcome.expect("stops cleanly").canceled);
 
     // Two workers are inside 40 ms fetches, so the waiter runs all eight itself. Generous by an
     // order of magnitude: what is being ruled out is waiting on the fetches, not a tight bound.

@@ -1,4 +1,4 @@
-//! Arabic contextual shaping: choosing each letter's form from its neighbours.
+//! Arabic contextual shaping: choosing each letter's form from its neighbors.
 //!
 //! mbgl's `applyArabicShaping`, which is ICU's `u_shapeArabic` under `U_SHAPE_LETTERS_SHAPE`.
 //! Arabic is written joined, and which of a letter's four shapes is drawn depends on whether the
@@ -7,7 +7,7 @@
 //! reader can decipher and no reader would call written Arabic.
 //!
 //! It happens before the bidirectional reorder and before line breaking, which is mbgl's order:
-//! the forms depend on logical neighbours, and reordering first would join each letter to whatever
+//! the forms depend on logical neighbors, and reordering first would join each letter to whatever
 //! ended up beside it on screen.
 //!
 //! # Why the table is generated
@@ -94,7 +94,7 @@ fn next_visible(text: &[u32], at: usize) -> Option<u32> {
         .find(|codepoint| !is_transparent(*codepoint))
 }
 
-/// The form a letter takes, given whether its neighbours join to it.
+/// The form a letter takes, given whether its neighbors join to it.
 const fn form_for(before: bool, after: bool) -> Form {
     match (before, after) {
         (true, true) => Form::Medial,

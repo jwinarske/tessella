@@ -55,7 +55,7 @@ use crate::value::Value;
 /// The camera axis is not the zoom axis renamed. §12.1 evaluates a zoom-only expression once
 /// per `(layer, zoom interval)` and holds the result across every frame in that interval, which
 /// is sound because zoom is constant while the interval is. Pitch and the distance from the
-/// centre of the viewport are not: they change with every camera movement inside one interval,
+/// center of the viewport are not: they change with every camera movement inside one interval,
 /// so an expression that reads them has to be re-evaluated per frame and must not enter that
 /// cache. Classifying one as `Zoom` would freeze it at whatever the camera was doing when the
 /// interval began.
@@ -356,7 +356,7 @@ pub enum Type {
     Array(ArrayType),
     /// A color.
     Color,
-    /// Formatted text: sections with per-section font, scale and colour.
+    /// Formatted text: sections with per-section font, scale and color.
     Formatted,
     /// An image named for the sprite sheet to resolve.
     ///
@@ -448,9 +448,9 @@ impl Type {
         matches!(self, Self::Value | Self::Number | Self::String)
     }
 
-    /// Scalars can be compared for equality; aggregates and colours cannot.
+    /// Scalars can be compared for equality; aggregates and colors cannot.
     ///
-    /// A colour looks comparable and is not: two colours that render identically may hold
+    /// A color looks comparable and is not: two colors that render identically may hold
     /// different channel values, so the spec declines to define equality on them rather than
     /// pick a tolerance.
     #[must_use]
@@ -816,7 +816,7 @@ pub enum Expr {
     /// registry has no `pitch`, and its `Dependency` set has no bit for one. Degrees because
     /// that is the unit the root `pitch` style property uses and the unit a camera carries.
     Pitch,
-    /// How far the feature is from the centre of the viewport.
+    /// How far the feature is from the center of the viewport.
     ///
     /// The other v3 addition, and the one mbgl went furthest towards without arriving: it
     /// reserved `Dependency::Location = 1 << 3` and commented it "not used yet,
@@ -874,7 +874,7 @@ pub enum Expr {
     },
     /// `["format", content, options, …]`: text in sections.
     ///
-    /// The unit R2's shaping consumes. A section carries its own font, scale and colour, which
+    /// The unit R2's shaping consumes. A section carries its own font, scale and color, which
     /// is what lets one label mix a place name with a smaller elevation in a different face —
     /// and why formatted text is a type rather than a string with markup in it.
     Format {
@@ -916,7 +916,7 @@ pub enum Expr {
         /// What it is cut on. Empty splits into characters.
         delimiter: Box<Expr>,
     },
-    /// `["to-rgba", color]`: a colour's four components as an array.
+    /// `["to-rgba", color]`: a color's four components as an array.
     ToRgba(Box<Expr>),
     /// `["typeof", v]`: the spec's name for a value's type.
     TypeOf(Box<Expr>),
@@ -961,10 +961,10 @@ pub enum Expr {
     },
     /// `["rgb", r, g, b]` and `["rgba", r, g, b, a]`.
     ///
-    /// Its own node rather than a function call because its *type* is what matters: a colour is
+    /// Its own node rather than a function call because its *type* is what matters: a color is
     /// distinct from the four-element array it looks like, and the distinction is static. That
     /// is what lets `["to-color", ["rgba", …]]` be a pass-through while `["to-color", [0, 255,
-    /// 0, 1]]` rescales — the first is already a colour, the second is an array of numbers.
+    /// 0, 1]]` rescales — the first is already a color, the second is an array of numbers.
     Rgba {
         /// Red, green, blue, and optionally alpha.
         args: Vec<Expr>,
@@ -1224,7 +1224,7 @@ impl Expression {
             check_zoom_placement(&root)?;
         }
 
-        // A property the spec types as a colour gets its result coerced. The style writes
+        // A property the spec types as a color gets its result coerced. The style writes
         // `"red"` or a function returning `"red"`, and what the renderer needs is RGBA — so the
         // conversion belongs at the boundary between the two rather than in every operator that
         // might produce a string.
@@ -1243,7 +1243,7 @@ impl Expression {
         }
 
         // A property the spec types as formatted wraps whatever it got in a single section.
-        // Same shape as the colour coercion above and for the same reason: the style writes a
+        // Same shape as the color coercion above and for the same reason: the style writes a
         // string and the shaper needs sections, so the conversion belongs at that boundary.
         // Only from a string, or from a type not known until evaluation. mbgl converts those two
         // and rejects the rest: a number in a text-field is a style that means something else,
@@ -1766,22 +1766,22 @@ fn zoom_curve(expr: &Expr) -> Option<&Expr> {
     }
 }
 
-/// Coerces an expression to a colour, at the leaves rather than at the root.
+/// Coerces an expression to a color, at the leaves rather than at the root.
 ///
 /// # Why not simply wrap the whole thing
 ///
 /// Because of interpolation. `["interpolate", ["linear"], ["zoom"], 13, "#c04030", 15, "#20a080"]`
 /// wrapped in a cast asks the mixer to blend two *strings* and then convert; there is no such
 /// blend, and the style is a perfectly ordinary one. mbgl builds an `InterpolateImpl<Color>`
-/// whose stops are already colours and mixes RGBA component-wise, so the conversion has to
+/// whose stops are already colors and mixes RGBA component-wise, so the conversion has to
 /// happen on the way *in* to the curve, not on the way out.
 ///
-/// A curve's input is deliberately untouched: it is a number, and the property being a colour
+/// A curve's input is deliberately untouched: it is a number, and the property being a color
 /// says nothing about it. Everything else — including a `match`, which is where the
-/// data-driven styles put their colours — is wrapped whole, because it selects a value rather
+/// data-driven styles put their colors — is wrapped whole, because it selects a value rather
 /// than blending two.
 ///
-/// An expression that already produces a colour is left alone: converting one again would read
+/// An expression that already produces a color is left alone: converting one again would read
 /// its normalized channels as 0..255 and darken it by a factor of 255.
 fn coerce_to_color(expr: Expr) -> Expr {
     match expr {
@@ -1813,7 +1813,7 @@ fn coerce_to_color(expr: Expr) -> Expr {
         },
         other if other.result_type() == Type::Color => other,
         // A null is the *absence* of a value, not a value to convert. It reaches here from a
-        // colour-typed property with no default — `line-gradient`, whose mbgl default is an
+        // color-typed property with no default — `line-gradient`, whose mbgl default is an
         // empty `PropertyValue` — when the style does not write one, and casting it raises
         // "cannot cast null to number" at constant-fold time, refusing the whole style over a
         // property nobody set.
@@ -2057,7 +2057,7 @@ fn classify(expr: &Expr) -> Dependency {
         Expr::Literal(_) => Dependency::NONE,
         Expr::Zoom => Dependency::ZOOM,
         // Not ZOOM. §12.1 holds a zoom-only value across a whole zoom interval, which is sound
-        // because zoom does not change inside one; pitch and the distance from the centre do,
+        // because zoom does not change inside one; pitch and the distance from the center do,
         // on every camera movement. Classifying either as ZOOM would freeze it at whatever the
         // camera happened to be doing when the interval began.
         Expr::Pitch | Expr::DistanceFromCenter => Dependency::CAMERA,

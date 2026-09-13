@@ -8,7 +8,7 @@
 //! everything. The replacement shares geometry process-wide and binds it into each view's order
 //! with a `ViewUse` (§5.3, DR-18). Sharing is where correctness gets subtle: a view's draw order
 //! now depends on a structure other views are also writing to, and the failure it invites is a
-//! view whose output changes because of what its *neighbours* asked for.
+//! view whose output changes because of what its *neighbors* asked for.
 //!
 //! That failure is quiet. Four views over overlapping covers would still each draw something
 //! plausible; the primary display would just be drawing a cluster inset's idea of the order, or
@@ -90,7 +90,7 @@ fn bindings(views: &[(ViewId, ViewTransform)]) -> BTreeMap<ViewId, Vec<GeometryB
 }
 
 /// A binding with its geometry id replaced by when that id was first seen in this stream.
-type Normalised = (
+type Normalized = (
     u64,
     i32,
     i32,
@@ -99,7 +99,7 @@ type Normalised = (
     u8,
 );
 
-fn normalise(bindings: &[GeometryBinding]) -> Vec<Normalised> {
+fn normalize(bindings: &[GeometryBinding]) -> Vec<Normalized> {
     let mut seen: BTreeMap<u64, u64> = BTreeMap::new();
     bindings
         .iter()
@@ -120,7 +120,7 @@ fn normalise(bindings: &[GeometryBinding]) -> Vec<Normalised> {
 
 /// A view's bindings are the same alone as among four.
 #[test]
-fn a_views_order_does_not_depend_on_its_neighbours() {
+fn a_views_order_does_not_depend_on_its_neighbors() {
     let camera = at(13.0, -0.11);
 
     let alone = bindings(&[(ViewId(0), camera)]);
@@ -134,8 +134,8 @@ fn a_views_order_does_not_depend_on_its_neighbours() {
         (ViewId(3), at(13.0, -0.11)),
     ]);
 
-    let solo = normalise(alone.get(&ViewId(0)).expect("view 0 drew"));
-    let grouped = normalise(together.get(&ViewId(0)).expect("view 0 drew"));
+    let solo = normalize(alone.get(&ViewId(0)).expect("view 0 drew"));
+    let grouped = normalize(together.get(&ViewId(0)).expect("view 0 drew"));
 
     assert!(!solo.is_empty(), "the invariant is vacuous on nothing");
     assert_eq!(
@@ -159,8 +159,8 @@ fn the_invariant_holds_for_a_later_view() {
         (ViewId(2), camera),
     ]);
 
-    let solo = normalise(alone.get(&ViewId(2)).expect("view 2 drew"));
-    let grouped = normalise(together.get(&ViewId(2)).expect("view 2 drew"));
+    let solo = normalize(alone.get(&ViewId(2)).expect("view 2 drew"));
+    let grouped = normalize(together.get(&ViewId(2)).expect("view 2 drew"));
 
     assert!(!solo.is_empty());
     assert_eq!(solo, grouped);
@@ -175,8 +175,8 @@ fn two_views_at_one_camera_agree() {
     let camera = at(13.0, -0.11);
     let both = bindings(&[(ViewId(0), camera), (ViewId(3), camera)]);
 
-    let first = normalise(both.get(&ViewId(0)).expect("view 0 drew"));
-    let second = normalise(both.get(&ViewId(3)).expect("view 3 drew"));
+    let first = normalize(both.get(&ViewId(0)).expect("view 0 drew"));
+    let second = normalize(both.get(&ViewId(3)).expect("view 3 drew"));
 
     assert!(!first.is_empty());
     assert_eq!(first, second);

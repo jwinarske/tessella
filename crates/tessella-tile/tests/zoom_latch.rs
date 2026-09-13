@@ -68,7 +68,7 @@ fn a_jump_snaps_to_its_destination() {
     assert_eq!(down.update(3.2), 3, "and back down");
 }
 
-/// Zero margin is the behaviour that existed before, so the type can express it.
+/// Zero margin is the behavior that existed before, so the type can express it.
 #[test]
 fn a_zero_margin_is_a_plain_floor() {
     let mut latch = ZoomLatch::with_margin(13.5, 0.0);

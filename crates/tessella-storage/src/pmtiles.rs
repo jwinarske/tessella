@@ -14,7 +14,7 @@
 //! # The format, and the two things worth knowing about it
 //!
 //! Tiles are addressed by a single id rather than by `z/x/y`: a Hilbert curve index within the
-//! zoom level, offset by every level below it. A Hilbert curve keeps neighbours adjacent, which
+//! zoom level, offset by every level below it. A Hilbert curve keeps neighbors adjacent, which
 //! is what makes a viewport's worth of tiles a small number of contiguous reads rather than
 //! nine scattered ones — and what lets the directory run-length encode them.
 //!

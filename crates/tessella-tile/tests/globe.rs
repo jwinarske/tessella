@@ -157,8 +157,8 @@ fn the_camera_backs_off_as_the_zoom_falls() {
 /// A safe horizon cull removes nothing at tile granularity, and this pins that.
 ///
 /// §13.4 recorded "a third to a half of the cover between z1 and z2.5", which the measurement below
-/// reproduces to the tile -- but only for a test that asks whether a tile's *centre* is behind the
-/// horizon. A z1 tile spans ninety degrees of longitude, so its centre goes behind while a third of
+/// reproduces to the tile -- but only for a test that asks whether a tile's *center* is behind the
+/// horizon. A z1 tile spans ninety degrees of longitude, so its center goes behind while a third of
 /// it is still on screen, and culling on that leaves a hole in the planet. Asked safely -- is any
 /// part of the tile visible -- the answer is nothing, at every zoom.
 ///
@@ -239,7 +239,7 @@ fn horizon_counts() {
         // The same question asked three ways, because the answer depends entirely on which.
         let distance = globe::camera_distance(view.zoom, view.latitude, view.height);
         let toward = globe::sphere_point(view.longitude, view.latitude);
-        let centre_behind = tiles
+        let center_behind = tiles
             .iter()
             .filter(|t| {
                 let span = 1.0 / f64::from(1u32 << t.z);
@@ -252,7 +252,7 @@ fn horizon_counts() {
             .count();
         if tenth % 5 == 0 {
             println!(
-                "z{zoom:>4}  cover {:>3}  no-corner-visible {behind:>3}  centre-behind {centre_behind:>3}",
+                "z{zoom:>4}  cover {:>3}  no-corner-visible {behind:>3}  center-behind {center_behind:>3}",
                 tiles.len()
             );
         }
@@ -376,7 +376,7 @@ fn globe_view(longitude: f64, latitude: f64, zoom: f64) -> tessella_tile::cover:
 /// The point under the camera lands in the middle of the screen.
 ///
 /// The one thing a view matrix has to get right, and the check that catches a sign error in either
-/// rotation: get the latitude's sign wrong and the centre moves off in y, the longitude's and it
+/// rotation: get the latitude's sign wrong and the center moves off in y, the longitude's and it
 /// moves off in x.
 #[test]
 fn the_camera_looks_at_the_point_it_is_over() {
@@ -395,7 +395,7 @@ fn the_camera_looks_at_the_point_it_is_over() {
                 .expect("the point under the camera is in front of it");
             assert!(
                 ndc[0].abs() < 1e-9 && ndc[1].abs() < 1e-9,
-                "({longitude}, {latitude}) at zoom {zoom} landed at {ndc:?}, not the centre"
+                "({longitude}, {latitude}) at zoom {zoom} landed at {ndc:?}, not the center"
             );
         }
     }
@@ -403,7 +403,7 @@ fn the_camera_looks_at_the_point_it_is_over() {
 
 /// North is up.
 ///
-/// A point a little further north than the camera lands above the centre, which pins the sign of
+/// A point a little further north than the camera lands above the center, which pins the sign of
 /// the latitude rotation against `sphere_point`'s downward `y`.
 #[test]
 fn north_is_up() {
@@ -431,7 +431,7 @@ fn east_is_right() {
 /// The far side of the planet projects *in front* of the camera, and only the horizon knows.
 ///
 /// Written first as "the antipode is behind the camera" and that is false: it sits on the view axis
-/// inside the frustum, so the matrix puts it at the centre of the screen, further away in depth.
+/// inside the frustum, so the matrix puts it at the center of the screen, further away in depth.
 /// A projection cannot express occlusion. That is the whole reason `faces_camera` exists and why a
 /// globe needs either it or a depth test -- and the assertion is the pair of them agreeing, not
 /// the matrix doing something it cannot.
@@ -901,13 +901,13 @@ fn the_anchor_is_the_middle_of_its_tile() {
 /// `mbgl-render` has no globe, so nothing outside this tree can say where a pitched globe puts a
 /// point. What can say it is the plane: above `kAnchoredFromZoom` the two projections are meant
 /// to be interchangeable -- that is the whole premise of the anchored bend and of `clip_w_scale`
-/// -- so at street zoom a point a few hundred metres from the centre has to land in the same
+/// -- so at street zoom a point a few hundred meters from the center has to land in the same
 /// place under both, whatever the camera is doing. A sign error in either angle moves it by
 /// hundreds of pixels, and a rotation about the wrong pivot moves it off the screen.
 ///
 /// Written as a sweep rather than one camera because a single pitch with a single bearing admits
 /// three of the four sign combinations: at bearing zero the bearing's sign does not show, and a
-/// point due north of the centre is unmoved by it at any pitch.
+/// point due north of the center is unmoved by it at any pitch.
 mod pitched_globe {
     use tessella_tile::{camera, cover, globe};
 
@@ -940,7 +940,7 @@ mod pitched_globe {
     #[test]
     fn a_pitched_globe_agrees_with_a_pitched_plane() {
         // Street zoom, where the two projections are meant to be interchangeable. The offsets are
-        // a few hundred metres, which at z15 is most of the screen and is where a sign error is
+        // a few hundred meters, which at z15 is most of the screen and is where a sign error is
         // largest rather than smallest.
         let (longitude, latitude) = (13.405, 52.52);
         let offsets = [
@@ -971,7 +971,7 @@ mod pitched_globe {
                     let apart =
                         ((plane[0] - globe[0]).powi(2) + (plane[1] - globe[1]).powi(2)).sqrt();
                     // A twentieth of a pixel. A wrong sign in either angle is hundreds, and a
-                    // rotation about the sphere's centre rather than the surface point is
+                    // rotation about the sphere's center rather than the surface point is
                     // thousands, so the bound is not what catches those -- what it catches is a
                     // term that is *nearly* right. What is left at this bound is the difference
                     // between a sphere and a Mercator plane over the offsets, which is the one
@@ -988,13 +988,13 @@ mod pitched_globe {
         assert!(worst < 0.05, "worst {worst:.4} px");
     }
 
-    /// The centre stays the centre, which is what pivoting on the surface point buys.
+    /// The center stays the center, which is what pivoting on the surface point buys.
     ///
-    /// Rotating about the sphere's centre instead passes every check that only looks at the
+    /// Rotating about the sphere's center instead passes every check that only looks at the
     /// unpitched camera and fails this one at every pitch: the point under the camera swings away
     /// by the angle times the radius, which at street zoom is most of a continent.
     #[test]
-    fn the_centre_holds_under_any_pitch_or_bearing() {
+    fn the_center_holds_under_any_pitch_or_bearing() {
         for zoom in [1.0, 4.0, 9.0, 14.0] {
             for pitch in [0.0, 30.0, 60.0] {
                 for bearing in [0.0, 90.0, 210.0] {
@@ -1009,10 +1009,10 @@ mod pitched_globe {
                     };
                     let point = globe::sphere_point(view.longitude, view.latitude);
                     let clip = globe::project_point(&globe::clip_matrix(&view), point)
-                        .expect("the centre is in front of the camera");
+                        .expect("the center is in front of the camera");
                     assert!(
                         clip[0].abs() < 1e-9 && clip[1].abs() < 1e-9,
-                        "zoom {zoom} pitch {pitch} bearing {bearing}: centre at {clip:?}"
+                        "zoom {zoom} pitch {pitch} bearing {bearing}: center at {clip:?}"
                     );
                 }
             }
@@ -1045,7 +1045,7 @@ mod pitched_globe {
                 bearing: 0.0,
                 pitch: 0.0,
             };
-            // The old composition: one pull-back from the sphere's centre, no rotations between.
+            // The old composition: one pull-back from the sphere's center, no rotations between.
             let distance = globe::camera_distance(view.zoom, view.latitude, view.height);
             let turned = camera::rotate_y(
                 &camera::rotate_x(&camera::identity(), -view.latitude.to_radians()),

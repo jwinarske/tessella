@@ -23,7 +23,7 @@
 //! # What it needed on the way
 //!
 //! The `["image", …]` operator, which was not implemented. The `format` evaluator already knew
-//! to recognise an image section by an object with a `name` in it — nothing produced one, so
+//! to recognize an image section by an object with a `name` in it — nothing produced one, so
 //! the expression failed to parse and the layer drew no labels at all rather than labels
 //! without pictures.
 //!

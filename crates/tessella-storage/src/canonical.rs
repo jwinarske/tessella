@@ -241,7 +241,7 @@ pub enum CanonicalError {
 /// Deliberately not a general-purpose URL type. It is mbgl's `util::URL`, transcribed for one
 /// job: to give `{domain}`, `{path}` and the rest the exact spans mbgl's templates expect. A
 /// stricter parser would reject `mapbox://////`, which mbgl carries through unchanged and whose
-/// behaviour is asserted in its own tests.
+/// behavior is asserted in its own tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Url {
     /// `scheme` without the colon.
@@ -680,7 +680,7 @@ impl Kind {
     ///
     /// `mapbox://sprites/…` is a sprite and `mapbox://fonts/…` is a glyph range: the segment
     /// after the scheme *is* the kind, which is what lets a transport wrapper rewrite a URL
-    /// without being told what it is for. Anything the server does not recognise is a source,
+    /// without being told what it is for. Anything the server does not recognize is a source,
     /// because a source URL has no kind segment at all — `mapbox://user.map` is the tileset
     /// `user.map` and nothing else.
     ///

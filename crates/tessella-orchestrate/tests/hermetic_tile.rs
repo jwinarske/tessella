@@ -266,7 +266,7 @@ fn a_tile_outside_the_data_builds_empty_rather_than_failing() {
 /// Line vertex and index counts per tile, read out of the golden dump's `L00003` drawables.
 ///
 /// These are the assertion that the join and cap decisions are mbgl's. Two vertices are emitted
-/// per centreline point and two triangles per segment, so 4/6 is a single segment, 6/12 is two
+/// per centerline point and two triangles per segment, so 4/6 is a single segment, 6/12 is two
 /// segments joined, and 8/12 is *two separate pieces* of two vertices each — that last one is
 /// what says the line clip splits rather than bridging the gap, and it is the number a
 /// ring-style clip would get wrong.
@@ -387,7 +387,7 @@ fn a_line_layer_strokes_polygon_features() {
     assert!(!line.vertices.is_empty(), "the outline is drawn");
     assert_eq!(line.indices.len() % 3, 0, "whole triangles");
     // A closed ring joins at the seam rather than capping, so every vertex is extruded off the
-    // centreline; an unextruded pair would mean a cap was emitted where a join belongs.
+    // centerline; an unextruded pair would mean a cap was emitted where a join belongs.
     assert!(
         line.vertices
             .iter()
@@ -401,13 +401,13 @@ fn a_line_layer_strokes_polygon_features() {
 /// This is the whole binder in one assertion: which properties take a slot, in what order, at
 /// what stride, packed how, and which feature's value lands on which vertex. Every one of those
 /// changes the bytes, and three of them were established from these hashes rather than from the
-/// spec — the declaration ordering, the two-channels-per-float colour packing, and the slots for
+/// spec — the declaration ordering, the two-channels-per-float color packing, and the slots for
 /// `fill-outline-color` and `line-floorwidth`, neither of which the style mentions.
 ///
 /// The fill buffers survive the wagyu rotation that costs the fill's *vertex* buffer its byte
 /// comparison, because every vertex of a feature carries the same value: a rotation permutes
 /// identical bytes. Tile 4093 holds both polygons, so its buffer is the one that would catch a
-/// binder writing one feature's colour over the other's vertices.
+/// binder writing one feature's color over the other's vertices.
 #[test]
 fn paint_buffers_are_byte_identical_to_the_oracle() {
     let expected = [

@@ -1,8 +1,8 @@
-//! A raster layer: the quad a tile is stretched over, and the colour the shader adjusts it by.
+//! A raster layer: the quad a tile is stretched over, and the color the shader adjusts it by.
 //!
 //! Almost nothing compared to a fill or a line, and that is the point. A raster tile *is* an
 //! image, so the geometry is a rectangle and the interesting work is the texture beside it — but
-//! the rectangle has to be right, and the colour factors are not the property values.
+//! the rectangle has to be right, and the color factors are not the property values.
 
 use std::sync::Arc;
 
@@ -169,7 +169,7 @@ fn a_masked_quad_is_the_quadrant_it_names() {
         .collect();
     assert!(positions.contains(&[0, 0]));
     assert!(positions.contains(&[8192, 8192]));
-    assert!(positions.contains(&[4096, 4096]), "the centre is missing");
+    assert!(positions.contains(&[4096, 4096]), "the center is missing");
     assert!(
         positions
             .iter()
@@ -184,9 +184,9 @@ fn a_masked_quad_is_the_quadrant_it_names() {
 
 /// Hue rotation redistributes the channels and preserves their sum.
 ///
-/// The weights are a rotation about the grey axis of the colour cube, so they sum to one at every
-/// angle — a rotation moves colour between channels and does not create or destroy it. A version
-/// that normalised wrongly brightens or darkens as the hue turns, which reads as a broken image
+/// The weights are a rotation about the gray axis of the color cube, so they sum to one at every
+/// angle — a rotation moves color between channels and does not create or destroy it. A version
+/// that normalized wrongly brightens or darkens as the hue turns, which reads as a broken image
 /// rather than a broken rotation.
 #[test]
 fn hue_rotation_preserves_the_channel_sum() {
@@ -211,7 +211,7 @@ fn hue_rotation_preserves_the_channel_sum() {
 /// small values and visibly wrong at large ones, which is the shape of a defect nobody reports
 /// until a style uses it hard.
 #[test]
-fn the_colour_factors_are_asymmetric() {
+fn the_color_factors_are_asymmetric() {
     // Neutral is neutral.
     assert_eq!(saturation_factor(0.0), 0.0);
     assert_eq!(contrast_factor(0.0), 1.0);
@@ -265,21 +265,21 @@ fn a_raster_layers_paint_is_all_uniform() {
 /// error, so the offsets want asserting rather than reasoning about.
 #[test]
 fn the_raster_props_buffer_matches_the_oracles_offsets() {
-    use tessella_layout::raster::RasterColour;
+    use tessella_layout::raster::RasterColor;
     use tessella_orchestrate::ubo::pack_raster_props;
 
-    let colour = RasterColour {
+    let color = RasterColor {
         spin_weights: [0.1, 0.2, 0.3, 0.0],
         saturation_factor: 0.7,
         contrast_factor: 0.8,
     };
-    let packed = pack_raster_props(colour, 0.4, 0.5, 0.6, 0.9);
+    let packed = pack_raster_props(color, 0.4, 0.5, 0.6, 0.9);
     assert_eq!(packed.len(), 64, "sizeof(RasterEvaluatedPropsUBO)");
 
     let at = |offset: usize| {
         f32::from_le_bytes(packed[offset..offset + 4].try_into().expect("four bytes"))
     };
-    assert_eq!([at(0), at(4), at(8), at(12)], colour.spin_weights);
+    assert_eq!([at(0), at(4), at(8), at(12)], color.spin_weights);
     assert_eq!([at(16), at(20)], [0.0, 0.0], "tl_parent");
     assert_eq!(at(24), 1.0, "scale_parent");
     assert_eq!(at(28), 0.9, "buffer_scale");

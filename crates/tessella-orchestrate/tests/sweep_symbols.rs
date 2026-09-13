@@ -19,7 +19,7 @@
 //! # Why the sweep and not a single crossing
 //!
 //! A single crossing can be got right by accident — one tile, one parent, one child. The sweep
-//! crosses eight levels in each direction with four views at different centres, so the same
+//! crosses eight levels in each direction with four views at different centers, so the same
 //! label is in a different tile of a different zoom in different views at the same instant, and
 //! its identity has to hold across all of it.
 
@@ -64,7 +64,7 @@ impl FileSource for Disk {
     }
 }
 
-/// A style with a grid of named points around the sweep's centre.
+/// A style with a grid of named points around the sweep's center.
 ///
 /// Spread wide enough that the low end of the sweep sees all of them and the high end sees a few,
 /// so labels enter and leave the cover as it climbs — which is the traffic a pop hides in.

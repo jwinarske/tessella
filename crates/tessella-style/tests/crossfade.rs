@@ -212,9 +212,9 @@ mod dependencies {
         assert!(pattern_names(|name| paint.get(name), 14.0).is_empty());
     }
 
-    /// Away from the step, only the reachable neighbour is named.
+    /// Away from the step, only the reachable neighbor is named.
     #[test]
-    fn only_the_reachable_neighbour_is_named() {
+    fn only_the_reachable_neighbor_is_named() {
         let layer =
             layer(r#"{"fill-pattern": ["step", ["zoom"], "hatch-small", 14, "hatch-large"]}"#);
         let paint = tessella_style::property::resolve_paint(&layer).expect("resolves");

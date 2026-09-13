@@ -12,7 +12,7 @@
 //!
 //! Because clustering is a *choice* among many valid ones, and two implementations that both
 //! "group nearby points" disagree about which points end up together. The order the index
-//! visits neighbours in decides which cluster absorbs a point — see [`crate::kdbush`] — so the
+//! visits neighbors in decides which cluster absorbs a point — see [`crate::kdbush`] — so the
 //! grouping is a property of the whole construction rather than of the radius. mbgl ships
 //! supercluster and a style that renders correctly against it renders differently against
 //! anything else, so this follows it line for line and is checked against its own expectations.
@@ -137,14 +137,14 @@ impl Level {
             // How many points a cluster here would hold, counting only those the levels above
             // have not already taken.
             let mut num_points = num_points_origin;
-            let mut neighbours = Vec::new();
+            let mut neighbors = Vec::new();
             previous.tree.within(origin.0, origin.1, r, &mut |id| {
-                neighbours.push(id);
+                neighbors.push(id);
             });
-            for &id in &neighbours {
-                let neighbour = &previous.clusters[id as usize];
-                if !neighbour.visited {
-                    num_points += neighbour.num_points;
+            for &id in &neighbors {
+                let neighbor = &previous.clusters[id as usize];
+                if !neighbor.visited {
+                    num_points += neighbor.num_points;
                 }
             }
 
@@ -155,15 +155,15 @@ impl Level {
                     origin.0 * f64::from(num_points_origin),
                     origin.1 * f64::from(num_points_origin),
                 );
-                for &neighbour_id in &neighbours {
-                    let neighbour = &mut previous.clusters[neighbour_id as usize];
-                    if neighbour.visited {
+                for &neighbor_id in &neighbors {
+                    let neighbor = &mut previous.clusters[neighbor_id as usize];
+                    if neighbor.visited {
                         continue;
                     }
-                    neighbour.visited = true;
-                    neighbour.parent_id = id;
-                    weight.0 += neighbour.pos.0 * f64::from(neighbour.num_points);
-                    weight.1 += neighbour.pos.1 * f64::from(neighbour.num_points);
+                    neighbor.visited = true;
+                    neighbor.parent_id = id;
+                    weight.0 += neighbor.pos.0 * f64::from(neighbor.num_points);
+                    weight.1 += neighbor.pos.1 * f64::from(neighbor.num_points);
                 }
                 previous.clusters[index].parent_id = id;
                 clusters.push(Cluster {
@@ -188,13 +188,13 @@ impl Level {
                     visited: false,
                 });
                 if num_points > 1 {
-                    for &neighbour_id in &neighbours {
-                        let neighbour = &mut previous.clusters[neighbour_id as usize];
-                        if neighbour.visited {
+                    for &neighbor_id in &neighbors {
+                        let neighbor = &mut previous.clusters[neighbor_id as usize];
+                        if neighbor.visited {
                             continue;
                         }
-                        neighbour.visited = true;
-                        let (pos, id) = (neighbour.pos, neighbour.id);
+                        neighbor.visited = true;
+                        let (pos, id) = (neighbor.pos, neighbor.id);
                         clusters.push(Cluster {
                             pos,
                             num_points: 1,
@@ -320,7 +320,7 @@ impl Clustered {
     /// go through the ordinary GeoJSON tiling — projected and clipped once, by the code that
     /// does that for every other source, rather than rounded to tile units here and again there.
     /// A single point comes back as the feature it always was, properties and id intact; a
-    /// cluster as an invented one at its weighted centre.
+    /// cluster as an invented one at its weighted center.
     ///
     /// One difference from mbgl worth naming: supercluster's own `getTile` buffers by the
     /// cluster radius, and this hands that buffered set to a tiler that clips to *its* buffer.

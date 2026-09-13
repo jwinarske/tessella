@@ -16,13 +16,13 @@
 //!
 //! # What the oracle settles that nothing else could
 //!
-//! - The slot doubles, and the *supplied* type becomes the declared one: a composite colour is
-//!   `Float4` where a source-only colour is `Float2` supplied against a `Float4` declaration.
+//! - The slot doubles, and the *supplied* type becomes the declared one: a composite color is
+//!   `Float4` where a source-only color is `Float2` supplied against a `Float4` declaration.
 //! - The two endpoints are laid out grouped by end — `[min…, max…]` — not interleaved per
 //!   component.
 //! - The range is `[bucket zoom, bucket zoom + 1]`, and the bucket zoom is the tile's
 //!   *overscaled* zoom.
-//! - Colours are mixed component-wise on premultiplied channels, with `a * (1 - t) + b * t`.
+//! - Colors are mixed component-wise on premultiplied channels, with `a * (1 - t) + b * t`.
 //!   The algebraically equal `a + (b - a) * t` differs in the last bits and fails this diff.
 
 use tessella_capture_abi::ProjectionMode;
@@ -161,8 +161,8 @@ fn the_two_endpoints_are_a_range_and_not_a_repeat() {
         let max = f32::from_le_bytes(vertex[28..32].try_into().expect("four bytes"));
         assert_eq!((min, max), (4.0, 8.0));
 
-        // The colour's two ends are two packed pairs, and they are not the same pair.
-        assert_ne!(&vertex[0..8], &vertex[8..16], "colour ends coincide");
+        // The color's two ends are two packed pairs, and they are not the same pair.
+        assert_ne!(&vertex[0..8], &vertex[8..16], "color ends coincide");
     }
 }
 

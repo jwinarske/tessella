@@ -15,7 +15,7 @@
 //! linker change rather than a redesign — no envelope carries an in-process pointer, and slab
 //! handles are offsets — so the same header and the same records serve both.
 //!
-//! In-process is the case worth optimising for and the case this exists for: the consumer reads
+//! In-process is the case worth optimizing for and the case this exists for: the consumer reads
 //! geometry out of the producer's own arena, and "zero copy" is not a technique but the absence
 //! of a reason to copy.
 //!
@@ -625,7 +625,7 @@ pub unsafe extern "C" fn tessella_set_camera(
 /// returns one in static map mode -- and it is what every parity capture on both sides has been
 /// comparing, so it stays the default.
 ///
-/// It is the wrong behaviour for a map somebody is looking at. A label that stops being placed at
+/// It is the wrong behavior for a map somebody is looking at. A label that stops being placed at
 /// one anchor and starts at another along the same road, with nothing fading between the two, is
 /// read as the text having *moved*. Call this once a frame with the milliseconds since the last
 /// one and the fades run at mbgl's rate.
@@ -1053,7 +1053,7 @@ pub unsafe extern "C" fn tessella_take_request(
             *out_url_len = 0;
         }
 
-        // A queued ticket whose URL has gone is one that was answered or cancelled between being
+        // A queued ticket whose URL has gone is one that was answered or canceled between being
         // queued and being asked for. Skipped rather than reported: nobody wants it fetched.
         while let Some(ticket) = hosted.next_request() {
             if let Some((url, len)) = hosted.url_of(ticket) {
@@ -1076,7 +1076,7 @@ pub unsafe extern "C" fn tessella_take_request(
 /// would make a hole look like a fault. [`tessella_fail_request`] is for a fetch that did not
 /// happen at all.
 ///
-/// A ticket that was cancelled, already answered, or never issued is ignored and answers
+/// A ticket that was canceled, already answered, or never issued is ignored and answers
 /// [`Status::Ok`]: a caller that has lost track of its own bookkeeping has wasted a fetch, which
 /// is not something the map can fix by refusing.
 ///

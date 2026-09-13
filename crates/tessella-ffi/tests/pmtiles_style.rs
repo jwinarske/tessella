@@ -7,7 +7,7 @@
 //! somewhere, which is what this checks -- a style pointed at an archive over HTTP resolves and
 //! draws, and the archive is never downloaded.
 //!
-//! The server is the one the storage tests use, in thirty lines of `TcpListener`: it honours
+//! The server is the one the storage tests use, in thirty lines of `TcpListener`: it honors
 //! `Range` and nothing else, which is all an archive needs.
 
 use std::io::{BufRead, BufReader, Read, Write};
@@ -21,7 +21,7 @@ fn archive_bytes() -> Option<Vec<u8>> {
     path.exists().then(|| std::fs::read(path).expect("reads"))
 }
 
-/// Serves one file over HTTP, honouring `Range`. Answers the port it bound.
+/// Serves one file over HTTP, honoring `Range`. Answers the port it bound.
 fn serve(bytes: Vec<u8>) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0").expect("binds");
     let port = listener.local_addr().expect("has an address").port();

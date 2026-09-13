@@ -124,7 +124,7 @@ impl GlyphManager {
 
     /// The URL a range of a stack is fetched from.
     ///
-    /// `{fontstack}` and `{range}` are the only tokens, and an unrecognised one survives verbatim
+    /// `{fontstack}` and `{range}` are the only tokens, and an unrecognized one survives verbatim
     /// — mbgl's `replaceTokens` puts it back braces and all, because a URL may legitimately
     /// contain braces and dropping them yields a 404 with no clue why.
     #[must_use]

@@ -55,7 +55,7 @@ pub struct CameraKey {
     ///
     /// Not a property of where the camera is pointed, and here because every projection matrix on
     /// the wire is a function of it. Nothing else in this key moves when a window is resized --
-    /// the centre, zoom, bearing, pitch and scale are all unchanged -- so a view whose size was
+    /// the center, zoom, bearing, pitch and scale are all unchanged -- so a view whose size was
     /// the only thing to change reported a settled camera and went on drawing through the
     /// matrices of the old viewport.
     pub viewport: [f64; 2],

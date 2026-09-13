@@ -21,7 +21,7 @@ use crate::value::Value;
 ///
 /// Its members are expressions, so they are evaluated where the comparison happens rather than
 /// where it was written — `["collator", {"case-sensitive": ["get", "exact"]}]` is legal, and a
-/// collator built at parse time could not honour it.
+/// collator built at parse time could not honor it.
 #[cfg(feature = "collator")]
 fn build_collator(
     spec: &super::CollatorSpec,
@@ -91,7 +91,7 @@ pub enum FeatureGeometry {
     /// One or more lines, each a list of points.
     Lines(alloc::vec::Vec<alloc::vec::Vec<[f64; 2]>>),
     /// Rings. `within` does not support a polygon *feature* -- mbgl returns false for one -- so
-    /// this exists to be recognised and refused rather than tested.
+    /// this exists to be recognized and refused rather than tested.
     Rings(alloc::vec::Vec<alloc::vec::Vec<[f64; 2]>>),
 }
 
@@ -149,7 +149,7 @@ pub enum EvaluationError {
 /// # Why these are supplied rather than derived
 ///
 /// A style crate has no viewport. Pitch it could carry without one, but the distance from the
-/// centre needs the projection and the feature's position both, and deriving it here would mean
+/// center needs the projection and the feature's position both, and deriving it here would mean
 /// this crate knowing how a tile maps to a screen. It is a fact about the frame, so the frame
 /// provides it.
 ///
@@ -177,7 +177,7 @@ pub enum EvaluationError {
 pub struct Camera {
     /// Pitch in degrees.
     pub pitch: f64,
-    /// Distance from the centre of the map, in pixels over the container's height.
+    /// Distance from the center of the map, in pixels over the container's height.
     pub distance_from_center: f64,
 }
 
@@ -280,7 +280,7 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
             }
             // Red, green and blue arrive 0..255 and alpha 0..1, which is how CSS spells it and
             // what the spec inherits -- and out of range is an *error*, not a clamp. A style
-            // computing a channel and overshooting gets told so rather than drawing a colour it
+            // computing a channel and overshooting gets told so rather than drawing a color it
             // did not ask for: this used to admit `-1`, which came back as a blue of -0.0039 and
             // rendered as whatever the pipeline made of a negative channel.
             if channels[..3].iter().any(|c| !(0.0..=255.0).contains(c)) {
@@ -301,7 +301,7 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
                     channels[3]
                 )));
             }
-            Ok(colour_value([
+            Ok(color_value([
                 channels[0] / 255.0,
                 channels[1] / 255.0,
                 channels[2] / 255.0,
@@ -408,7 +408,7 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
             Ok(Value::Array(parts))
         }
         // Un-premultiplied on the way out, and the alpha rounded to two places. Both are mbgl's
-        // `Color::toArray`, and both matter: colours are *stored* premultiplied here, so
+        // `Color::toArray`, and both matter: colors are *stored* premultiplied here, so
         // returning the channels as held would give a translucent red as a dark one.
         Expr::ToRgba(inner) => {
             let value = evaluate(inner, context)?;
@@ -417,7 +417,7 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
             // -- and the two differ for exactly the argument a style is most likely to write: an
             // array. `as_color` takes `[0, 255, 0, 1]` as channels already in 0..1, so the green
             // came back out as 255 * 255.
-            let color = to_colour(&value)
+            let color = to_color(&value)
                 .map(|[r, g, b, a]| crate::property::Color {
                     #[allow(clippy::cast_possible_truncation)]
                     r: r as f32,
@@ -433,7 +433,7 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
                     got: value.type_name(),
                 })?;
             // Fully transparent is four zeros, which is mbgl's answer and is a property of how
-            // it *stores* a colour rather than of the operator: its components are premultiplied,
+            // it *stores* a color rather than of the operator: its components are premultiplied,
             // so an alpha of zero has already taken the other three with it. Kept so the two
             // agree, since a style can branch on the result.
             if color.a == 0.0 {
@@ -441,8 +441,8 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
             }
             // And no division by the alpha. mbgl's `toArray` divides because it is undoing its
             // own premultiply; this crate stores straight components -- `property::Color` says so
-            // in its first line -- so dividing here scaled every translucent colour up by one
-            // over its alpha. A half-transparent mid-grey came back as 256 of 255.
+            // in its first line -- so dividing here scaled every translucent color up by one
+            // over its alpha. A half-transparent mid-gray came back as 256 of 255.
             let channel = |c: f32| f64::from(c) * 255.0;
             Ok(Value::Array(alloc::vec![
                 Value::Number(channel(color.r)),
@@ -686,7 +686,7 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
                     "textColor".to_string(),
                     match optional(&section.color)? {
                         Value::Null => Value::Null,
-                        other => to_colour(&other).map_or(other, colour_value),
+                        other => to_color(&other).map_or(other, color_value),
                     },
                 );
                 out.push(Value::Object(entry));
@@ -1133,10 +1133,10 @@ fn segments_cross(p0: [f64; 2], p1: [f64; 2], q0: [f64; 2], q1: [f64; 2]) -> boo
     ((d0 > 0.0) != (d1 > 0.0)) && ((d2 > 0.0) != (d3 > 0.0))
 }
 
-/// A colour, as the spec renders one: four channels in 0..1.
-fn colour_value(channels: [f64; 4]) -> Value {
+/// A color, as the spec renders one: four channels in 0..1.
+fn color_value(channels: [f64; 4]) -> Value {
     // Inline, not a four-element `Value::Array`. The array spelling cost a heap allocation for
-    // sixteen bytes of channel, paid once per feature for every colour property a layer
+    // sixteen bytes of channel, paid once per feature for every color property a layer
     // data-drives, to rebuild something the style fixed when it was parsed.
     #[allow(clippy::cast_possible_truncation)]
     Value::Color(crate::property::Color {
@@ -1147,14 +1147,14 @@ fn colour_value(channels: [f64; 4]) -> Value {
     })
 }
 
-/// Converts a value to colour channels, or reports that it is not one.
+/// Converts a value to color channels, or reports that it is not one.
 ///
-/// Strings go through the same CSS parser the rest of the crate uses, so a colour written in a
-/// legacy function and a colour written as a paint value agree to the last bit. Arrays are
+/// Strings go through the same CSS parser the rest of the crate uses, so a color written in a
+/// legacy function and a color written as a paint value agree to the last bit. Arrays are
 /// `[r, g, b]` or `[r, g, b, a]` with the channels 0..255 and the alpha 0..1 — CSS's convention,
-/// not the normalized one, which is why an already-normalized colour must not be sent through
+/// not the normalized one, which is why an already-normalized color must not be sent through
 /// here a second time.
-fn to_colour(value: &Value) -> Option<[f64; 4]> {
+fn to_color(value: &Value) -> Option<[f64; 4]> {
     match value {
         Value::Color(color) => Some([
             f64::from(color.r),
@@ -1189,8 +1189,8 @@ fn to_colour(value: &Value) -> Option<[f64; 4]> {
 
 /// Whether a value satisfies the type a property spec asks for.
 ///
-/// A colour is a string in the style and an array once resolved, so both are accepted; the
-/// coercion happens later, and rejecting the string here would make every colour function fall
+/// A color is a string in the style and an array once resolved, so both are accepted; the
+/// coercion happens later, and rejecting the string here would make every color function fall
 /// back to its default.
 fn matches_spec_type(expected: Type, value: &Value) -> bool {
     match expected {
@@ -1544,11 +1544,11 @@ fn evaluate_legacy(
                 lower_stop,
                 upper_stop,
             );
-            // Coerced to the property's type *before* mixing, which is where a colour ramp
+            // Coerced to the property's type *before* mixing, which is where a color ramp
             // written the legacy way lives or dies. Its stops are strings -- `"black"` and
             // `"white"` is how the spec's own suite writes one -- and two strings do not
             // interpolate, so the mix failed and stepped to the lower stop. The coercion then
-            // happened afterwards, on the stop rather than on the blend: every colour ramp in
+            // happened afterwards, on the stop rather than on the blend: every color ramp in
             // the legacy form was a hard step from black to white at the last stop.
             //
             // Only Color, because it is the only type whose spec form is a *string*. A number
@@ -1558,7 +1558,7 @@ fn evaluate_legacy(
                 if function.property_type != Some(Type::Color) {
                     return None;
                 }
-                to_colour(value).map(|[r, g, b, a]| {
+                to_color(value).map(|[r, g, b, a]| {
                     #[allow(clippy::cast_possible_truncation)]
                     Value::Color(crate::property::Color {
                         r: r as f32,
@@ -1637,9 +1637,9 @@ fn factor(interpolation: Interpolation, position: f64, lower: f64, upper: f64) -
 
 /// Blends two values.
 ///
-/// Numbers, colours, and equal-length numeric arrays. A colour-typed property has its curve's
+/// Numbers, colors, and equal-length numeric arrays. A color-typed property has its curve's
 /// *stops* coerced rather than its result (see `coerce_to_color`), so both ends arrive as
-/// colours. The channels are premultiplied sRGB in 0..1, which is the space mbgl blends in, and
+/// colors. The channels are premultiplied sRGB in 0..1, which is the space mbgl blends in, and
 /// they are blended channel-wise exactly as the four-element array they used to be — the
 /// arithmetic is unchanged, only the container is.
 ///
@@ -1651,7 +1651,7 @@ fn mix(lower: &Value, upper: &Value, t: f64) -> Result<Value, EvaluationError> {
         (Value::Number(a), Value::Number(b)) => Ok(Value::Number(a * (1.0 - t) + b * t)),
         (Value::Color(a), Value::Color(b)) => {
             // Through `f64` and back, so the rounding matches what the four-element array did
-            // bit for bit. Blending in `f32` would be a diff on every interpolated colour.
+            // bit for bit. Blending in `f32` would be a diff on every interpolated color.
             let blend = |a: f32, b: f32| {
                 #[allow(clippy::cast_possible_truncation)]
                 {
@@ -1738,8 +1738,8 @@ fn cast(to: CastKind, args: &[Expr], context: &Context<'_>) -> Result<Value, Eva
         match to {
             CastKind::Boolean => return Ok(Value::Bool(truthy(&value))),
             CastKind::String => return Ok(Value::String(to_string(&value))),
-            CastKind::Color => match to_colour(&value) {
-                Some(colour) => return Ok(colour_value(colour)),
+            CastKind::Color => match to_color(&value) {
+                Some(color) => return Ok(color_value(color)),
                 None => last = Some(value.type_name()),
             },
             CastKind::Number => match to_number(&value) {
@@ -1772,9 +1772,9 @@ fn to_string(value: &Value) -> String {
         Value::String(text) => text.clone(),
         Value::Null => String::new(),
         // `rgba(r,g,b,a)` with the channels as 0..255 integers and the alpha as written, which is
-        // the spec's own form and what `["concat", ["to-string", colour]]` puts on a map. It used
+        // the spec's own form and what `["concat", ["to-string", color]]` puts on a map. It used
         // to fall through to the JSON arm and come out wrapped in its own quotes.
-        Value::Color(colour) => {
+        Value::Color(color) => {
             let channel = |value: f32| {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 {
@@ -1783,10 +1783,10 @@ fn to_string(value: &Value) -> String {
             };
             alloc::format!(
                 "rgba({},{},{},{})",
-                channel(colour.r),
-                channel(colour.g),
-                channel(colour.b),
-                colour.a
+                channel(color.r),
+                channel(color.g),
+                channel(color.b),
+                color.a
             )
         }
         Value::Bool(flag) => flag.to_string(),
@@ -1884,7 +1884,7 @@ fn write_json(out: &mut String, value: &Value) {
             }
             out.push('}');
         }
-        // The spec's `to-string` on a colour gives its `rgba(...)` form, and JSON has no colour,
+        // The spec's `to-string` on a color gives its `rgba(...)` form, and JSON has no color,
         // so the string conversion is the one that carries meaning here.
         Value::Color(color) => {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -1910,7 +1910,7 @@ fn truthy(value: &Value) -> bool {
         Value::Bool(flag) => *flag,
         Value::Number(number) => *number != 0.0 && !number.is_nan(),
         Value::String(text) => !text.is_empty(),
-        // An empty array and an empty object are true, and so is any colour.
+        // An empty array and an empty object are true, and so is any color.
         Value::Array(_) | Value::Object(_) | Value::Color(_) => true,
     }
 }

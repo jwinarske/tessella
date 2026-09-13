@@ -11,14 +11,14 @@
 //!
 //! and the triangulated outline is used when `doOutline && !dataDrivenOutline`. The reason is
 //! the shader: `FillOutlineTriangulatedShader` declares the line family's two attributes and no
-//! paint at all, so a colour that varies per feature has nowhere to travel and the layer keeps
+//! paint at all, so a color that varies per feature has nowhere to travel and the layer keeps
 //! `FillOutlineShader` over the fill's own vertices.
 //!
-//! The subtle half is the colour's *fallback*. `fill-outline-color` undefined does not mean
+//! The subtle half is the color's *fallback*. `fill-outline-color` undefined does not mean
 //! constant: thirty lines earlier the same file assigns
 //! `evaluated.get<FillOutlineColor>() = evaluated.get<FillColor>()`, so a layer with a
-//! data-driven `fill-color` and no outline colour of its own has a data-driven outline. That is
-//! the common case in a real basemap -- a park layer coloured by `kind` -- and getting it wrong
+//! data-driven `fill-color` and no outline color of its own has a data-driven outline. That is
+//! the common case in a real basemap -- a park layer colored by `kind` -- and getting it wrong
 //! sends the geometry to a shader with no attribute to read it from.
 
 use tessella_orchestrate::ubo::fill_outline_triangulates;
@@ -42,16 +42,16 @@ fn paint(paint_json: &str) -> Resolved {
 
 type Resolved = std::collections::BTreeMap<&'static str, tessella_style::ResolvedProperty>;
 
-/// A layer whose colour and opacity are the layer's own takes the polyline.
+/// A layer whose color and opacity are the layer's own takes the polyline.
 #[test]
 fn a_constant_outline_triangulates() {
     let resolved = paint(r##"{ "fill-color": "#ff0000", "fill-opacity": 0.5 }"##);
     assert!(fill_outline_triangulates(&resolved, false));
 }
 
-/// An outline colour that varies per feature does not.
+/// An outline color that varies per feature does not.
 #[test]
-fn a_data_driven_outline_colour_keeps_the_line_path() {
+fn a_data_driven_outline_color_keeps_the_line_path() {
     let resolved = paint(
         r##"{ "fill-color": "#ff0000",
               "fill-outline-color": ["match", ["get", "kind"], "park", "#00ff00", "#0000ff"] }"##,
@@ -61,12 +61,12 @@ fn a_data_driven_outline_colour_keeps_the_line_path() {
 
 /// Nor does one inherited from a data-driven `fill-color`, which is mbgl's own fallback.
 #[test]
-fn an_inherited_data_driven_colour_keeps_the_line_path() {
+fn an_inherited_data_driven_color_keeps_the_line_path() {
     let resolved =
         paint(r##"{ "fill-color": ["match", ["get", "kind"], "park", "#00ff00", "#0000ff"] }"##);
     assert!(
         !fill_outline_triangulates(&resolved, false),
-        "an undefined outline colour is the fill's, binding and all"
+        "an undefined outline color is the fill's, binding and all"
     );
 }
 
@@ -90,7 +90,7 @@ fn a_zoom_curve_still_triangulates() {
     assert!(fill_outline_triangulates(&resolved, false));
 }
 
-/// And a patterned fill takes its own outline shader whatever its colour is.
+/// And a patterned fill takes its own outline shader whatever its color is.
 #[test]
 fn a_pattern_keeps_its_own_outline() {
     let resolved = paint(r##"{ "fill-color": "#ff0000" }"##);

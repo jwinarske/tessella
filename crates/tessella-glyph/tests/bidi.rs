@@ -10,7 +10,7 @@
 //!
 //! Arabic *shaping* — the contextual letter forms, mbgl's `applyArabicShaping` — is a separate
 //! step and is not ported. Without it Arabic reorders correctly and each letter is drawn in its
-//! isolated form rather than joined to its neighbours.
+//! isolated form rather than joined to its neighbors.
 
 use tessella_glyph::shaping::{Char, reorder};
 
@@ -120,7 +120,7 @@ fn mixed_script_orders_runs_by_the_paragraphs_direction() {
 ///
 /// The trap in reordering a *shaped* line rather than a string: the widths belong to the
 /// characters, so a reorder that moved codepoints and left the advances behind would set every
-/// right-to-left label with its letters spaced by their neighbours' widths.
+/// right-to-left label with its letters spaced by their neighbors' widths.
 #[test]
 fn the_advances_travel_with_their_characters() {
     let stored = [

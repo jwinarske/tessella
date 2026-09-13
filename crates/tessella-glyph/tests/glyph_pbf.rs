@@ -107,7 +107,7 @@ fn a_space_keeps_its_advance() {
 
 /// Glyphs outside the range asked for are dropped.
 ///
-/// The id check is what stops a mislabelled or mis-served file from filling the wrong block of
+/// The id check is what stops a mislabeled or mis-served file from filling the wrong block of
 /// the atlas: the range is part of the URL, so a server answering `0-255` with `256-511` would
 /// otherwise be believed.
 #[test]
@@ -239,7 +239,7 @@ fn zz(value: i64) -> u64 {
 /// Every one of the six fields is required, and any one missing drops the glyph.
 ///
 /// Proto2 makes them all optional on the wire, so a glyph missing `advance` parses perfectly
-/// and then lays out on top of its neighbour. Nothing errors; the text is simply wrong.
+/// and then lays out on top of its neighbor. Nothing errors; the text is simply wrong.
 #[test]
 fn a_glyph_missing_any_required_field_is_dropped() {
     let range = Range {

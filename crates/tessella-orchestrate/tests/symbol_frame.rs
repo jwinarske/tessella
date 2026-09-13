@@ -122,9 +122,9 @@ fn a_frame_rejects_what_collides() {
 
 /// The same labels collide at one zoom and not at another.
 ///
-/// The reason placement is in screen space, stated as behaviour. The tile anchors do not move;
+/// The reason placement is in screen space, stated as behavior. The tile anchors do not move;
 /// only the projection does, and the outcome changes — which is exactly right, because two towns
-/// a kilometre apart are crowded on a small map and not on a large one.
+/// a kilometer apart are crowded on a small map and not on a large one.
 #[test]
 fn zoom_decides_whether_two_labels_collide() {
     let entries = [("Alpha", (1000.0, 1000.0)), ("Bravo", (1400.0, 1000.0))];
@@ -152,7 +152,7 @@ fn zoom_decides_whether_two_labels_collide() {
 /// Opacity is written into each label's own vertices, and nowhere else.
 ///
 /// Labels share one buffer per layer per tile, so a range that is off by one writes a label's
-/// opacity over its neighbour's. That draws as a label which will not fade, and nothing errors.
+/// opacity over its neighbor's. That draws as a label which will not fade, and nothing errors.
 #[test]
 fn each_label_gets_its_own_opacity_slots() {
     let (mut buffers, labels) =
@@ -285,7 +285,7 @@ fn positions_follow_the_camera() {
 /// Two views over the same buffer place independently.
 ///
 /// §9.2's invariant, at the symbol layer: the geometry is shared and the placement is not. A
-/// view that inherited its neighbour's decisions would draw the other's map.
+/// view that inherited its neighbor's decisions would draw the other's map.
 #[test]
 fn two_views_place_the_same_labels_independently() {
     let (_, labels) = lay_out(&[("Alpha", (1000.0, 1000.0)), ("Bravo", (1400.0, 1000.0))]);
@@ -397,11 +397,11 @@ fn a_line_label_reserves_its_road_and_not_its_box() {
         &font,
         None,
         &LineOptions {
-            centred: true,
+            centered: true,
             ..LineOptions::default()
         },
     );
-    assert_eq!(laid.len(), 1, "one centred label");
+    assert_eq!(laid.len(), 1, "one centered label");
 
     // And a point label beside the road, well clear of it, but inside the square its upright
     // bounding box would cover.
@@ -707,7 +707,7 @@ mod two_halves {
         assert_eq!(
             run(Padding::uniform(200.0)),
             1,
-            "a padding wide enough to reach the neighbour did not"
+            "a padding wide enough to reach the neighbor did not"
         );
     }
 }

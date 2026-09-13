@@ -42,7 +42,7 @@ use crate::value::Value;
 /// A color, as the stream carries it.
 ///
 /// Straight sRGB components in 0..1, not premultiplied and not linearized, with any layer
-/// opacity travelling separately. That is not an assumption: the golden dump's fill layer
+/// opacity traveling separately. That is not an assumption: the golden dump's fill layer
 /// carries `#2f6f4f` as `0.184314, 0.435294, 0.309804, 1.0` — exactly `0x2f/255` and so on —
 /// with the layer's `fill-opacity` of `0.8` as its own scalar beside it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -630,7 +630,7 @@ const RASTER_PAINT: &[PropertySpec] = &[
 /// them yet.
 /// A fill-extrusion layer's paint properties.
 ///
-/// Three of the eight are data-driven, and they are the three an extrusion *is*: colour, height
+/// Three of the eight are data-driven, and they are the three an extrusion *is*: color, height
 /// and base. A building layer varies all three per feature — that is the whole point of it — so
 /// unlike a raster layer these have to reach the shader as attributes rather than as uniforms.
 ///
@@ -1004,7 +1004,7 @@ fn expression_spec(spec: &PropertySpec) -> expression::PropertySpec {
             PropertyKind::Enum | PropertyKind::Image => expression::Type::String,
             // The declared shape, not just "an array": `fill-translate` is two numbers and
             // `line-dasharray` is any number of them, and a checker given only "array" cannot
-            // tell a style that wrote a colour there.
+            // tell a style that wrote a color there.
             PropertyKind::NumberArray(length) => expression::Type::Array(expression::ArrayType {
                 element: Some(expression::Scalar::Number),
                 #[allow(clippy::cast_possible_truncation)]
@@ -1048,12 +1048,12 @@ pub fn default_value(spec: &PropertySpec) -> Value {
 ///
 /// [`PropertyError::Color`] when the value is not a color string.
 pub fn as_color(value: &Value) -> Result<Color, PropertyError> {
-    // A colour-typed property now arrives already resolved, as four channels in 0..1: the
+    // A color-typed property now arrives already resolved, as four channels in 0..1: the
     // expression parser coerces the result, so `"red"` and a legacy function returning `"red"`
-    // both reach here as RGBA. The string form is still accepted, because a colour written
-    // inside an expression that is *not* colour-typed — a `match` output read by something
+    // both reach here as RGBA. The string form is still accepted, because a color written
+    // inside an expression that is *not* color-typed — a `match` output read by something
     // else — has not been through that coercion.
-    // The common path: a colour-typed expression coerces its result, so a colour property
+    // The common path: a color-typed expression coerces its result, so a color property
     // arrives here already resolved.
     if let Value::Color(color) = value {
         return Ok(*color);

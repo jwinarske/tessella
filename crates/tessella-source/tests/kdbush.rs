@@ -4,7 +4,7 @@
 //!
 //! That the *set* is right, which is what a spatial index is for. What it cannot check on its
 //! own is the *order*, and the order matters: clustering marks points visited as it walks a
-//! zoom level, so which neighbour a query reaches first decides which cluster absorbs it. There
+//! zoom level, so which neighbor a query reaches first decides which cluster absorbs it. There
 //! is no independent way to say what that order should be — it is whatever the tree layout
 //! makes it — so it is pinned from the other end, by supercluster's own expectations over the
 //! `places.json` fixture. A layout that differed would answer these tests and fail those.

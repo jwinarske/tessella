@@ -350,7 +350,7 @@ fn anchor_of(value: Option<&Value>) -> tessella_glyph::shaping::Anchor {
 /// `text-justify`, against the anchor that `auto` would ask.
 ///
 /// Absent is `center`, which is the spec's default, and *not* the same as `auto`: a layer with
-/// `text-anchor: left` and no justify is centre-justified, and only one that writes `auto` takes
+/// `text-anchor: left` and no justify is center-justified, and only one that writes `auto` takes
 /// its justification from the anchor. mbgl draws the same line -- it evaluates the property, whose
 /// default is `center`, and consults `getAnchorJustification` in the one branch where the value is
 /// `auto`.
@@ -373,7 +373,7 @@ fn justify_of(
 ///
 /// A label with variable anchors has no one place to be shaped around: which anchor it takes is
 /// decided per frame, against the collision index, and can change as the map moves. So the
-/// shaping is centred and *both* shifts are applied at placement -- the radial offset, and the
+/// shaping is centered and *both* shifts are applied at placement -- the radial offset, and the
 /// `-(align - 0.5) * size` that moves the box off the point.
 ///
 /// That is mbgl's arrangement too, and for the same reason: it shapes around `Center` and
@@ -439,7 +439,7 @@ fn text_options(
         }
         Some([array[0].as_number()? as f32, array[1].as_number()? as f32])
     };
-    // A variable anchor replaces both the anchor and the offset: the shaping is centred and
+    // A variable anchor replaces both the anchor and the offset: the shaping is centered and
     // placement does the moving. The spec says not to write `text-offset` and
     // `text-radial-offset` together and does not say what happens if you do; mbgl takes the
     // radial one, and so does this.
@@ -714,7 +714,7 @@ pub struct SymbolLayout {
     /// Empty for a layer that does not use it, which is the ordinary case and the one where a
     /// label goes where its `text-anchor` says and stays there. Where it is not empty, placement
     /// tries each in turn and keeps the first that fits -- so the anchor is not a property of the
-    /// layout at all, and the shaping is centred with the offset applied per frame.
+    /// layout at all, and the shaping is centered with the offset applied per frame.
     ///
     /// A layer's rather than a label's: the spec does not allow `text-variable-anchor` to be
     /// data-driven. `text-radial-offset` is, which is why the distance lives in `SymbolOptions`
@@ -853,7 +853,7 @@ impl SymbolLayout {
                 // The spec's default is 45 degrees, and it is in degrees on the wire.
                 max_angle: number("text-max-angle").unwrap_or(45.0).to_radians(),
                 overscaling,
-                centred: placement == Placement::LineCenter,
+                centered: placement == Placement::LineCenter,
                 max_box_scale: tile_pixel_ratio * max_text_size / tessella_glyph::text::ONE_EM,
             },
             text_alignments: Alignments::of(layer, zoom, placement, "text"),
@@ -942,7 +942,7 @@ impl SymbolLayout {
                 // A point label belongs to the tile it is in, and to no other. The features
                 // reaching this builder are the whole source rather than one tile's share, so
                 // without the test every tile of the cover draws every label — which looks
-                // right on the tile that owns it and wrong on its neighbours. Half-open, so a
+                // right on the tile that owns it and wrong on its neighbors. Half-open, so a
                 // point on a boundary lands in exactly one tile.
                 if !(0.0..EXTENT).contains(&first.0) || !(0.0..EXTENT).contains(&first.1) {
                     continue;

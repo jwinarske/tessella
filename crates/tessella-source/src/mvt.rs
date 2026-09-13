@@ -863,7 +863,7 @@ impl StyleFeature for FeatureRef<'_> {
 
     fn geometry_type(&self) -> &str {
         // The names the spec's `geometry-type` expression produces. A tile's `Unknown` maps to
-        // the same string a GeoJSON feature of no recognised type would give, so a filter reads
+        // the same string a GeoJSON feature of no recognized type would give, so a filter reads
         // one rule for both sources.
         match self.geom_type() {
             GeomType::Point => "Point",

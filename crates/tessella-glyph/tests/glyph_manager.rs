@@ -100,7 +100,7 @@ fn the_url_fills_both_tokens() {
     );
 }
 
-/// A token nothing recognises survives verbatim, braces and all.
+/// A token nothing recognizes survives verbatim, braces and all.
 ///
 /// mbgl's `replaceTokens` rule. A URL may legitimately contain braces, and dropping them
 /// produces a request that 404s with no clue why.

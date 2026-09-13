@@ -105,12 +105,12 @@ fn the_camera_operators_are_no_longer_rejected() {
 /// The camera operators are filter-only, and symbol-only, as the spec says twice.
 ///
 /// Of both `pitch` and `distance-from-center` the Mapbox Style Spec says they "may only be used
-/// in the `filter` expression for a `symbol` layer". Two restrictions, and this build honoured
+/// in the `filter` expression for a `symbol` layer". Two restrictions, and this build honored
 /// neither when it first implemented them.
 ///
 /// The paint half is the one that would have hurt. A camera-dependent paint property has
 /// nowhere correct to be evaluated: §12.1 holds a property's value for the length of a zoom
-/// interval, so a `pitch`-driven colour would freeze at whatever the camera was doing when the
+/// interval, so a `pitch`-driven color would freeze at whatever the camera was doing when the
 /// interval began and stay there for every frame in it. Refusing the layer is honest; rendering
 /// it with a stale pitch is not.
 #[test]

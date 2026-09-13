@@ -83,7 +83,7 @@ fn encode(kind: &str, extra: &str, family: &[BuiltIn], shader: BuiltIn) -> Encod
 
 /// A line supplies both fixed attributes, from one buffer at the line vertex's stride.
 ///
-/// The second is the one that matters. A `LineBucket` holds the centreline doubled, and the
+/// The second is the one that matters. A `LineBucket` holds the centerline doubled, and the
 /// extrusion that turns it into a quad lives in `data` — so a geometry that supplied only the
 /// position would describe a ribbon of degenerate triangles. It would draw, and draw nothing.
 #[test]
@@ -118,7 +118,7 @@ fn a_line_supplies_its_position_and_its_extrusion() {
 
 /// A circle's vertex is a position and nothing else: the radius is a uniform.
 #[test]
-fn a_circle_supplies_only_its_centre() {
+fn a_circle_supplies_only_its_center() {
     let encoded = encode("circle", "", CIRCLE_FAMILY, BuiltIn::CircleShader);
     assert_eq!(encoded.record.builtin_shader, BuiltIn::CircleShader as i32);
     let attrs = encoded.attributes();

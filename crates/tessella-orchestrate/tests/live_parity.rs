@@ -413,7 +413,7 @@ fn every_layer_matches_the_oracle() {
 // --- Uniform buffers, the other half of R1's exit criterion ---
 //
 // The tests above compare geometry: what the buffers hold. These compare the uniforms that tell
-// a shader where to put it and what colour to make it. Both halves have to hold on a real style
+// a shader where to put it and what color to make it. Both halves have to hold on a real style
 // for the exit to mean anything — geometry alone is a map drawn correctly in the wrong place.
 
 /// `(layer, slot)` → `(size, sorted 16-byte blocks)`, from the dump's `ubo` lines.
@@ -598,7 +598,7 @@ fn the_live_drawable_buffers_match_the_oracle() {
     }
 }
 
-/// The background layer's colour reaches the uniform the shader reads.
+/// The background layer's color reaches the uniform the shader reads.
 #[test]
 fn the_live_background_props_match_the_oracle() {
     let oracle = oracle_ubos();
@@ -613,8 +613,8 @@ fn the_live_background_props_match_the_oracle() {
 
 /// Both fill layers' evaluated properties match, including the outline inheriting the fill.
 ///
-/// Two layers with different colours, which is the check the hermetic style cannot make: one
-/// layer proves the packing, two prove the colour is read from the layer rather than from
+/// Two layers with different colors, which is the check the hermetic style cannot make: one
+/// layer proves the packing, two prove the color is read from the layer rather than from
 /// wherever the first one left it.
 #[test]
 fn the_live_fill_props_match_the_oracle() {
@@ -693,12 +693,12 @@ fn the_live_line_drawable_buffer_matches_the_oracle() {
     assert_eq!(ubo_blocks(&packed), *want);
 }
 
-/// The line layer's evaluated properties match, with a data-driven colour left to the binder.
+/// The line layer's evaluated properties match, with a data-driven color left to the binder.
 ///
 /// `line-color` is a `match` on a feature property, so the uniform carries the default rather
-/// than a colour: what each feature is actually painted comes through the per-vertex attribute
+/// than a color: what each feature is actually painted comes through the per-vertex attribute
 /// buffer, which `every_layer_matches_the_oracle` covers. The uniform still has to agree, and a
-/// data-driven property that wrote a colour here would be a layer painted one colour throughout.
+/// data-driven property that wrote a color here would be a layer painted one color throughout.
 #[test]
 fn the_live_line_props_match_the_oracle() {
     let oracle = oracle_ubos();
@@ -706,7 +706,7 @@ fn the_live_line_props_match_the_oracle() {
         .get(&(3, ubo_slots::ID_LINE_EVALUATED_PROPS_UBO))
         .expect("the oracle writes line evaluated props");
 
-    // The spec's defaults for everything the style does not set, and black for the colour it
+    // The spec's defaults for everything the style does not set, and black for the color it
     // sets data-driven.
     let packed = ubo::pack_line_props(Color::black(), 0.0, 1.0, 0.0, 0.0, 1.0, 1.0);
 

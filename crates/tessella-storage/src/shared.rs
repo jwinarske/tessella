@@ -89,7 +89,7 @@ impl<K, V> Default for Shared<K, V> {
     }
 }
 
-/// The leader's obligation to post *something*, honoured even if it unwinds.
+/// The leader's obligation to post *something*, honored even if it unwinds.
 struct Leadership<'a, K: Eq + Hash + Clone, V> {
     table: &'a Mutex<HashMap<K, Arc<Pending<V>>>>,
     key: K,

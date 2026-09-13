@@ -681,7 +681,7 @@ fn emit_group(
     }
 
     // Held across frames when there is a stream, so an order identical to the last one it sent
-    // recognises itself and stays off the ring. `DrawOrder` has always suppressed that; building
+    // recognizes itself and stays off the ring. `DrawOrder` has always suppressed that; building
     // a fresh one every frame threw the memory away before it could.
     #[allow(clippy::cast_possible_truncation)]
     let layer_count = style.layers.len() as u32;
@@ -901,7 +901,7 @@ fn emit_group(
         // A bucket's bytes go into the arena once, however many drawables it produces.
         //
         // Two of the seven kinds produce two: a fill's triangles and its outline, and a
-        // translucent extrusion's depth pass and its colour pass. Neither pair differs in
+        // translucent extrusion's depth pass and its color pass. Neither pair differs in
         // anything a `GeometryAdd` carries — the record is the buffer description, and view,
         // layer, tile, pass and flags are all on `ViewUse`. What separates the drawables is
         // render state and `ubo_index`, which are per drawable already.
@@ -924,7 +924,7 @@ fn emit_group(
         //
         // An extrusion is the same exception and then the first case again, which is why this
         // caches a *list*. It has two records — the roof and the instanced walls — and each is
-        // used by two drawables, the depth pass and the colour pass. So the part is chosen by
+        // used by two drawables, the depth pass and the color pass. So the part is chosen by
         // sub-layer and the record for it copied, rather than there being a "first" record and
         // a "second" one.
         // Geometry the consumer already has is not re-encoded. This test has to come before the
@@ -1404,7 +1404,7 @@ pub const FADE_DURATION_MILLIS: f64 = 300.0;
 ///
 /// # Why this outlives the frame
 ///
-/// Because a fade is a function of time and the thing fading has to be recognisable from one
+/// Because a fade is a function of time and the thing fading has to be recognizable from one
 /// frame to the next. Both halves of that were missing. `ViewSymbols` was constructed inside
 /// `emit_group`, so every frame started with no fades at all; and the identity a fade is keyed by
 /// was `base + index`, an ordinal into whatever order this frame happened to walk its buckets in.
@@ -1669,7 +1669,7 @@ fn place_symbols(
         25,
     );
 
-    // The camera's distance to the centre of the screen, which the perspective ratio divides by.
+    // The camera's distance to the center of the screen, which the perspective ratio divides by.
     let camera_to_center = tessella_tile::camera::camera_to_center_distance(view.height);
 
     // A bucket appears once per drawable it produces; it is shaped once.
@@ -2228,7 +2228,7 @@ struct SymbolPaintSlabs {
 ///
 /// Sorted by vertex start rather than taken in instance order. A line-placed label is one pending
 /// and an instance per anchor, and `lay_out` appends them in an order that is its own; writing
-/// them in instance order would give one anchor's quads another anchor's colour, which draws.
+/// them in instance order would give one anchor's quads another anchor's color, which draws.
 fn symbol_paint(
     bucket: &LayerBucket,
     layout: &tessella_layout::symbol_layout::SymbolLayout,
@@ -2471,14 +2471,14 @@ fn frame_labels<'a>(
 /// The sub-layer says it, because the sub-layer is what `DrawOrder` assigns and it is already
 /// what separates the drawables. A fill's are one and two — its triangles and its outline. An
 /// extrusion's are zero to three, roof and walls in the depth pass then roof and walls in the
-/// colour pass, so the part alternates and the pass does not change which record is drawn.
+/// color pass, so the part alternates and the pass does not change which record is drawn.
 fn part_of(content: &Content, sub_layer_index: i32) -> usize {
     let sub = usize::try_from(sub_layer_index).unwrap_or(0);
     match content {
         Content::Fill(_) => sub.saturating_sub(1),
         Content::Fill3d(_) => sub % 2,
         // The encoder returns one record per font stack and then the sprites. A stack's halo and
-        // fill share its record, as an extrusion's depth and colour passes share one; the sprites
+        // fill share its record, as an extrusion's depth and color passes share one; the sprites
         // are drawn under all of it and take the first sub-layer, which is mbgl's "text over
         // icons". `SymbolLayout::parts` is where the numbering is decided.
         Content::Symbol(layout) => {
@@ -2599,7 +2599,7 @@ fn encode_parts(
                 })
                 .map(|patterns| patterns.texture);
             // A pattern binds against the plain shader's table, which is what it did before the
-            // SDF branch existed and is left alone here: `LinePatternShader` drops the colour
+            // SDF branch existed and is left alone here: `LinePatternShader` drops the color
             // attribute and shifts every binding after it down one, so switching to its table
             // would move a patterned line's slots for reasons that have nothing to do with
             // dashes. The SDF table differs only by *adding* `floorwidth` at binding eight.
@@ -3045,14 +3045,14 @@ fn write_layer_state(
                 &buffer,
             )?;
 
-            // Through the same reader every other uniform colour uses. Evaluating the
+            // Through the same reader every other uniform color uses. Evaluating the
             // expression here and asking the result for a *string* gets `None` for every style
-            // ever written: the property boundary coerces a colour-typed property to a colour,
+            // ever written: the property boundary coerces a color-typed property to a color,
             // so the value is already `Value::Color` — and the fallback that catches is black,
             // which is a background nobody chose and one that looks deliberate.
             // A background with a pattern writes a different block at the same slot: sixty-four
             // bytes of corners, display sizes and the crossfade where a plain one writes
-            // thirty-two of colour and opacity. The two are told apart by their size, which is
+            // thirty-two of color and opacity. The two are told apart by their size, which is
             // why this slot is not a union the way a fill's is.
             let opacity = ubo::uniform_number(&paint, "background-opacity", view.zoom);
             let props = match patterns
@@ -3461,10 +3461,10 @@ fn write_layer_state(
         LayerKind::FillExtrusion => {
             // Its own entry shape, not a fill's. An extrusion's block carries the height factor
             // and the tile's split pixel coordinate where a fill's carries mix factors, so a
-            // fill entry packed into it reads the colour interpolation as `height_factor` --
-            // zero, for a constant colour -- and draws every building flat on the ground.
+            // fill entry packed into it reads the color interpolation as `height_factor` --
+            // zero, for a constant color -- and draws every building flat on the ground.
             //
-            // Both passes: a translucent extrusion takes a depth pass in front of its colour
+            // Both passes: a translucent extrusion takes a depth pass in front of its color
             // pass, and both read the same buffer.
             // `FillExtrusionTilePropsUBO` is `FillPatternTilePropsUBO`'s fields exactly —
             // two rectangles, an atlas size, two pads, forty-eight bytes — so it takes the same
@@ -3493,11 +3493,11 @@ fn write_layer_state(
             // Every sub-layer the extrusion emits, in the order the indices are handed out.
             //
             // Four of them when the layer needs a depth pass -- 0 and 1 draw depth, 2 and 3 draw
-            // colour -- and `ubo_index` is numbered per *layer* across all four. Packing only the
-            // first two left the colour pass indexing past the end of its own buffer, where the
+            // color -- and `ubo_index` is numbered per *layer* across all four. Packing only the
+            // first two left the color pass indexing past the end of its own buffer, where the
             // consumer counts it `unplaced` and skips it: eighteen drawables of thirty-six on a
-            // twelve-tile frame. What was on screen was the *depth* pass, drawn with colour
-            // because the consumer did not honour `ENABLE_COLOR` either, which is why the
+            // twelve-tile frame. What was on screen was the *depth* pass, drawn with color
+            // because the consumer did not honor `ENABLE_COLOR` either, which is why the
             // buildings looked like flat footprints with the roof's shade.
             //
             // `matrices` yields nothing for a sub-layer that has no bindings, so chaining all
@@ -3544,7 +3544,7 @@ fn write_layer_state(
                                 // An extrusion's sub-layers are two *passes* over one surface,
                                 // not two surfaces that must be separated: 0 and 1 fill the depth
                                 // buffer and 2 and 3 read it. mbgl's offset subtracts the
-                                // sub-layer index, so a colour pass nudged by its own index lands
+                                // sub-layer index, so a color pass nudged by its own index lands
                                 // *behind* the prepass that just wrote depth -- and on a globe
                                 // the nudge is scaled to the frustum, which makes a difference
                                 // that is negligible on a plane large enough to fail the test.
@@ -3665,7 +3665,7 @@ fn write_layer_state(
             //
             // Not derived from the layer: whether a bucket has sprites is whether it *resolved*
             // any, and how many font stacks it spans is a property of the labels in that tile --
-            // a place layer whose `text-font` is data-driven spans two where its neighbour spans
+            // a place layer whose `text-font` is data-driven spans two where its neighbor spans
             // one. So the mapping is per tile, taken from `SymbolLayout::parts`, which is the
             // same function `order::bindings_for` counted the sub-layers with.
             let parts_of: BTreeMap<(u8, u32, u32), Vec<SymbolPart>> = frame

@@ -56,7 +56,7 @@ pub(crate) struct Texture {
 }
 
 impl Texture {
-    /// The colour at a pixel, premultiplied as the decoder produced it.
+    /// The color at a pixel, premultiplied as the decoder produced it.
     ///
     /// Alpha-only textures answer white at the stored alpha, so one sampler serves a glyph atlas
     /// and a raster tile without a branch at the call site.

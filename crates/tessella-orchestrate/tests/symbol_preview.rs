@@ -82,18 +82,18 @@ fn place_names() -> Vec<(String, (f32, f32))> {
     out
 }
 
-/// An 8-bit greyscale PNG, written without a compression library.
+/// An 8-bit grayscale PNG, written without a compression library.
 ///
 /// zlib permits *stored* blocks — uncompressed, length-prefixed — so a valid PNG needs only a
 /// CRC and an Adler checksum. A dependency to make a debug picture would be a dependency in the
 /// shipping graph.
-fn write_png(path: &str, width: u32, height: u32, grey: &[u8]) {
-    write_png_typed(path, width, height, grey, 0, 1);
+fn write_png(path: &str, width: u32, height: u32, gray: &[u8]) {
+    write_png_typed(path, width, height, gray, 0, 1);
 }
 
 /// The same, for an image with more than one channel.
 ///
-/// `color_type` and `channels` are the PNG header's: 0 and 1 for greyscale, 6 and 4 for RGBA.
+/// `color_type` and `channels` are the PNG header's: 0 and 1 for grayscale, 6 and 4 for RGBA.
 /// Kept as one writer rather than two because the zlib and CRC halves are the whole of it and
 /// the only difference is the stride.
 fn write_png_typed(
@@ -286,10 +286,10 @@ fn draw_a_frame() {
     assert!(drawn > 0);
 }
 
-/// The atlas, sampled bilinearly and normalised to 0..1.
+/// The atlas, sampled bilinearly and normalized to 0..1.
 ///
 /// A distance field is meant to be interpolated — that is what makes it scale — so sampling it
-/// nearest-neighbour throws away most of the precision the encoding exists to carry.
+/// nearest-neighbor throws away most of the precision the encoding exists to carry.
 fn sample(pixels: &[u8], width: u32, x: f32, y: f32) -> f32 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let (x0, y0) = (x.floor().max(0.0) as u32, y.floor().max(0.0) as u32);
@@ -673,7 +673,7 @@ fn blit_along(
         for py in min_y as u32..(max_y.max(0.0) as u32).min(CANVAS) {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             for px in min_x as u32..(max_x.max(0.0) as u32).min(CANVAS) {
-                // The pixel's centre, rotated back into the glyph's own frame.
+                // The pixel's center, rotated back into the glyph's own frame.
                 let dx = f32::from(px as u16) + 0.5 - screen.0;
                 let dy = f32::from(py as u16) + 0.5 - screen.1;
                 let local = (cos.mul_add(dx, sin * dy), cos.mul_add(dy, -(sin * dx)));
@@ -706,7 +706,7 @@ fn blit_along(
 ///
 /// Nothing about the icon *pixel* path has ever been looked at. The audit already found one bug
 /// in it by reading mbgl rather than by eye — icons drawn straight from the sheet, so every
-/// quad's border sampled its neighbour — and a packer that shears a row, drops a channel, or
+/// quad's border sampled its neighbor — and a packer that shears a row, drops a channel, or
 /// mislays the padding produces arithmetic that checks out and a picture that does not.
 ///
 /// mbgl's own `emerald` sheet: seventy-three icons, markers and shields and patterns.

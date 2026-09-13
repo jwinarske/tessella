@@ -22,14 +22,14 @@
 //! ```
 //!
 //! One interleaved buffer, every data-driven property in spec order, each contributing its
-//! *supplied* width: a colour is two floats, a number one, doubled when the property is
+//! *supplied* width: a color is two floats, a number one, doubled when the property is
 //! zoom-interpolated. 8 + 4 + 8 = 20.
 //!
 //! # Supplied and declared differ on purpose
 //!
 //! `dt` is what the buffer holds and `ddt` is what the shader declares, and §2.2 says to bind
 //! the declared type with the supplied offset and stride. A shader always declares the
-//! interpolated width — `Float4` for a colour — because it has to handle a property that varies
+//! interpolated width — `Float4` for a color — because it has to handle a property that varies
 //! with zoom. The binder supplies half that when the property varies per feature but not with
 //! zoom, and the tweaker sets the mix factor to zero so the shader reads `.xy` and never touches
 //! `.zw`.
@@ -39,9 +39,9 @@
 //! still written into the buffer — that is why the stride is 20 rather than 12 — because the
 //! same bucket feeds the outline shader, which does declare it.
 //!
-//! # Colours are packed, not stored
+//! # Colors are packed, not stored
 //!
-//! A colour reaches the GPU as two floats, not four. Each float carries two 8-bit components:
+//! A color reaches the GPU as two floats, not four. Each float carries two 8-bit components:
 //! `packUint8Pair(a, b) = a * 256 + b`, applied to `255 * component`. That cast truncates rather
 //! than rounds, which would be a bug if `255 * (n / 255)` ever came out below `n` — it does not,
 //! for any of the 256 values, in either f32 or f64, and there is a test that checks all of them
@@ -73,7 +73,7 @@ pub fn pack_u8_pair(a: u8, b: u8) -> f32 {
     f32::from(u16::from(a) * 256 + u16::from(b))
 }
 
-/// Packs a colour into the two floats the vertex buffer carries.
+/// Packs a color into the two floats the vertex buffer carries.
 ///
 /// Components are scaled by 255 and truncated, which is what mbgl's `static_cast<uint16_t>`
 /// does. Truncation is safe here — see the module note — but it is truncation, not rounding,
@@ -239,7 +239,7 @@ pub fn symbol_layout(
 /// The offsets and stride here must be the ones the *bytes* were written at. Deriving them a
 /// second time from the same property table gives the same answer right up until one side
 /// changes — a new property kind, a composite that doubles its slot — and then the descriptors
-/// point into the middle of a value and the map draws in colours nothing chose. So this takes
+/// point into the middle of a value and the map draws in colors nothing chose. So this takes
 /// the binder's own slots as fact and adds only what the binder does not know: the shader's
 /// binding slot and declared type.
 ///
@@ -440,11 +440,11 @@ mod tests {
     use super::*;
     use tessella_style::property::paint_specs;
 
-    /// mbgl truncates rather than rounds when scaling a colour component, which is only safe if
+    /// mbgl truncates rather than rounds when scaling a color component, which is only safe if
     /// `255 * (n / 255)` never lands below `n`. Checked for every value rather than the few this
-    /// style happens to use — one that rounded down would silently shift a colour by a step.
+    /// style happens to use — one that rounded down would silently shift a color by a step.
     #[test]
-    fn scaling_a_colour_component_never_loses_a_step() {
+    fn scaling_a_color_component_never_loses_a_step() {
         for n in 0..=255u16 {
             #[allow(clippy::cast_precision_loss)]
             let component = f32::from(n) / 255.0;
@@ -462,13 +462,13 @@ mod tests {
         assert_eq!(pack_u8_pair(255, 255), 65535.0);
 
         // #2f6f4f opaque: r=47 g=111 b=79 a=255.
-        let packed = pack_color(Color::parse("#2f6f4f").expect("a colour"));
+        let packed = pack_color(Color::parse("#2f6f4f").expect("a color"));
         assert_eq!(packed[0], f32::from(47u16 * 256 + 111));
         assert_eq!(packed[1], f32::from(79u16 * 256 + 255));
     }
 
     /// The largest packed value is 65535, which an f32 holds exactly. If it did not, two
-    /// distinct colours could pack to one float.
+    /// distinct colors could pack to one float.
     #[test]
     fn every_packed_pair_is_exact_in_f32() {
         for a in [0u8, 1, 127, 128, 254, 255] {
@@ -509,7 +509,7 @@ mod tests {
         assert_eq!(attribute_id_name("fill-pattern"), None);
     }
 
-    /// The layout the oracle emits: colour at 0, opacity at 8, outline colour at 12, stride 20.
+    /// The layout the oracle emits: color at 0, opacity at 8, outline color at 12, stride 20.
     #[test]
     fn the_layout_matches_the_oracle() {
         use tessella_style::Style;
@@ -521,8 +521,8 @@ mod tests {
         let layer = style.layer("fill-datadriven").expect("the layer");
         let paint = tessella_style::property::resolve_paint(layer).expect("resolves");
 
-        // What the plain fill shader declares: position, colour at 1, opacity at 2. Nothing
-        // for outline colour.
+        // What the plain fill shader declares: position, color at 1, opacity at 2. Nothing
+        // for outline color.
         let declared = |attr_id: u32| match attr_id {
             1 => Some((1, AttributeDataType::Float4)),
             2 => Some((2, AttributeDataType::Float2)),
@@ -629,10 +629,10 @@ mod tests {
         let constant_key = permutation_key(&constant, &ids);
         let driven_key = permutation_key(&driven, &ids);
 
-        // Colour, opacity and outline colour are uniforms in the constant layer and attributes
+        // Color, opacity and outline color are uniforms in the constant layer and attributes
         // in the data-driven one. The pattern is a uniform in both, and contributes *two* bits,
         // because a cross-faded property is two attributes.
-        // Colour 1, opacity 2, outline colour 3, and the pattern's two ends at 4 and 5.
+        // Color 1, opacity 2, outline color 3, and the pattern's two ends at 4 and 5.
         assert_eq!(constant_key, 0b11_1110, "every one is a uniform");
         // The three the style drives are attributes; the pattern's ends remain uniforms.
         assert_eq!(driven_key, 0b11_0000, "only the pattern");

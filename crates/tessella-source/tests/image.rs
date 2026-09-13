@@ -20,11 +20,11 @@ const TILE_WEBP: &[u8] = include_bytes!("../../../tests/image-fixtures/tile.webp
 /// mbgl `Image.PNGReadNoProfile` and `Image.PNGReadProfile`.
 ///
 /// Both files hold the same pixel and one of them carries an ICC profile. mbgl expects the same
-/// bytes from each, which is the assertion worth having: a decoder that honoured the profile
-/// would colour-manage one tile of a basemap and not its neighbours, and the seam between them
+/// bytes from each, which is the assertion worth having: a decoder that honored the profile
+/// would color-manage one tile of a basemap and not its neighbors, and the seam between them
 /// is a bug report about the *tile server*.
 #[test]
-fn a_colour_profile_does_not_change_the_pixel() {
+fn a_color_profile_does_not_change_the_pixel() {
     for (name, body) in [("no_profile", NO_PROFILE), ("profile", PROFILE)] {
         let image = decode(body).expect("the fixture decodes");
         assert_eq!(image.size(), (1, 1), "{name}");
@@ -35,7 +35,7 @@ fn a_colour_profile_does_not_change_the_pixel() {
 /// mbgl `Image.PNGReadNoProfileAlpha` and `Image.PNGReadProfileAlpha`, and what says the decode
 /// premultiplies.
 ///
-/// The files hold half-red at half alpha. mbgl expects `64, 0, 0, 128` — the colour multiplied
+/// The files hold half-red at half alpha. mbgl expects `64, 0, 0, 128` — the color multiplied
 /// by its alpha — because everything downstream blends premultiplied. A decoder returning the
 /// straight `128` draws a bright fringe wherever artwork fades out, which is invisible on the
 /// opaque sprites that are most of a sheet.
@@ -78,9 +78,9 @@ fn an_opaque_pixel_is_untouched() {
     assert_eq!(image.pixels, vec![1, 127, 254, 255]);
 }
 
-/// A fully transparent pixel loses its colour, which is what premultiplied means.
+/// A fully transparent pixel loses its color, which is what premultiplied means.
 #[test]
-fn a_transparent_pixel_keeps_no_colour() {
+fn a_transparent_pixel_keeps_no_color() {
     let png = one_pixel_rgba(255, 255, 255, 0);
     let image = decode(&png).expect("the hand-built PNG decodes");
     assert_eq!(image.pixels, vec![0, 0, 0, 0]);
@@ -103,7 +103,7 @@ fn a_raster_tile_decodes_from_either_encoding() {
 
 /// A JPEG has no alpha, and comes back opaque rather than blank.
 ///
-/// The output colourspace is requested as RGBA, so the alpha channel is one the decoder invents.
+/// The output colorspace is requested as RGBA, so the alpha channel is one the decoder invents.
 /// Inventing it as zero would make every satellite tile fully transparent — a black map with a
 /// working fetch, which is the worst kind of silence.
 #[test]
@@ -114,13 +114,13 @@ fn a_jpeg_is_opaque_everywhere() {
         pixels.iter().all(|pixel| pixel[3] == 255),
         "a jpeg decoded with a transparent pixel in it"
     );
-    // And it is a photograph rather than one flat colour, which is what says the decode did
+    // And it is a photograph rather than one flat color, which is what says the decode did
     // something: a decoder returning a zeroed buffer of the right size passes every assertion
     // above it.
     let first = pixels[0];
     assert!(
         pixels.iter().any(|pixel| *pixel != first),
-        "the whole tile decoded to one colour"
+        "the whole tile decoded to one color"
     );
 }
 
@@ -184,7 +184,7 @@ fn a_webp_tile_decodes() {
     let first = pixels[0];
     assert!(
         pixels.iter().any(|pixel| *pixel != first),
-        "the whole tile decoded to one colour"
+        "the whole tile decoded to one color"
     );
 }
 
@@ -195,7 +195,7 @@ fn a_webp_tile_decodes() {
 /// mean. That is a much stronger statement than the size check `Image.WebPTile` makes: a decoder
 /// that swapped the chroma planes, or upsampled them wrongly, or read the extended header's
 /// dimensions instead of the frame's, produces something of exactly the right size and visibly
-/// the wrong colour. The mean is what notices.
+/// the wrong color. The mean is what notices.
 ///
 /// `tile.jpeg` is deliberately not in this comparison. It is a different photograph — its red
 /// channel means 117.6 against the PNG's 63.9 — and mbgl's own tests never claim otherwise; they

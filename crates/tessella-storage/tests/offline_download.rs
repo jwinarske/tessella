@@ -104,7 +104,7 @@ fn a_download_gets_everything_the_style_needs() {
     })
     .expect("downloads");
 
-    assert!(!summary.cancelled);
+    assert!(!summary.canceled);
     assert_eq!(summary.fetched, EXPECTED);
     assert_eq!(summary.missing, 0);
     assert_eq!(summary.progress.required_resources, EXPECTED);
@@ -183,7 +183,7 @@ fn cancelling_keeps_what_it_already_stored() {
     })
     .expect("stops cleanly");
 
-    assert!(summary.cancelled);
+    assert!(summary.canceled);
     assert_eq!(summary.progress.completed_resources, 3);
     assert!(summary.progress.fraction() < Some(1.0));
     assert_eq!(
@@ -232,7 +232,7 @@ fn resuming_pays_only_for_the_remainder() {
     .all(&style(&origin), &AtomicBool::new(false), &mut |_| {})
     .expect("resumes");
 
-    assert!(!summary.cancelled);
+    assert!(!summary.canceled);
     assert_eq!(summary.progress.completed_resources, EXPECTED);
     assert_eq!(summary.fetched, EXPECTED - 4, "only the remainder");
     assert_eq!(
@@ -468,7 +468,7 @@ fn a_downloaded_region_outlives_its_cache_headers() {
 /// An ambient copy of the same age does go back to the origin.
 ///
 /// The contrast is the point — pinning changes the answer, rather than the cache having simply
-/// stopped honouring `max-age`.
+/// stopped honoring `max-age`.
 #[test]
 fn an_unclaimed_copy_still_revalidates() {
     set_clock(NOW);

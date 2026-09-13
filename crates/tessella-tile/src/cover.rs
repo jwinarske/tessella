@@ -66,9 +66,9 @@ pub struct TileCoord {
 /// The view a cover is computed for.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewTransform {
-    /// Centre longitude.
+    /// Center longitude.
     pub longitude: f64,
-    /// Centre latitude.
+    /// Center latitude.
     pub latitude: f64,
     /// Fractional zoom.
     pub zoom: f64,
@@ -178,7 +178,7 @@ pub fn cover_on(
 /// By asking the projection rather than deriving a rectangle from it. Starting at the tile under
 /// the camera -- which is visible by construction, and is the answer for a tile larger than the
 /// screen -- it walks outward and keeps every tile that puts a sample inside the frustum and in
-/// front of the horizon. A tile whose neighbours are all invisible ends the walk in that direction.
+/// front of the horizon. A tile whose neighbors are all invisible ends the walk in that direction.
 ///
 /// Sampling rather than solving: the bend is `sphere_point_from_mercator`, which has no closed-form
 /// inverse worth writing here, and the forward direction is already tested. The margin makes the
@@ -233,11 +233,11 @@ pub fn cover_globe(view: &ViewTransform, z: u8) -> Result<Vec<TileCoord>, CoverE
         false
     };
 
-    let centre = projection::tile_units(settled.longitude, settled.latitude, z);
+    let center = projection::tile_units(settled.longitude, settled.latitude, z);
     #[allow(clippy::cast_possible_truncation)]
     let seed = (
-        (centre[0].floor() as i64).rem_euclid(across),
-        centre[1].floor() as i64,
+        (center[0].floor() as i64).rem_euclid(across),
+        center[1].floor() as i64,
     );
 
     let mut seen: BTreeSet<(i64, i64)> = BTreeSet::new();
@@ -350,7 +350,7 @@ pub fn cover_at_with(
 ///
 /// Folded onto the near copy rather than filtered to it: a tile visible *only* at `wrap: -1` is
 /// still a patch of the sphere, and dropping it would leave a hole where filtering to `wrap == 0`
-/// would. A view centred on the antimeridian is the case — its western half has no `wrap: 0`
+/// would. A view centered on the antimeridian is the case — its western half has no `wrap: 0`
 /// entry at all.
 #[must_use]
 pub fn fold_copies(tiles: Vec<TileCoord>, copies: WorldCopies) -> Vec<TileCoord> {
@@ -395,12 +395,12 @@ fn pitched_cover(view: &ViewTransform, z: u8) -> Result<Vec<TileCoord>, CoverErr
     let frustum = frustum::Frustum::from_projection(&projection, world_size, f64::from(z))
         .ok_or(CoverError::Pitched)?;
 
-    // The centre in tile units at *this* level, which is what the nearest-first sort measures
+    // The center in tile units at *this* level, which is what the nearest-first sort measures
     // from. Not the view's fractional zoom: a tile index is an integer-level thing.
-    let centre = projection::tile_units(view.longitude, view.latitude, z);
+    let center = projection::tile_units(view.longitude, view.latitude, z);
 
     // Above sixty degrees the descent stops short of the target zoom for tiles far from the
-    // centre, so the cover mixes levels rather than asking for a tile per pixel at the horizon.
+    // center, so the cover mixes levels rather than asking for a tile per pixel at the horizon.
     //
     // Sixty is mbgl's `tileLodPitchThreshold`, and it is also mbgl's `DEFAULT_PITCH_MAX` — so
     // with mbgl's own defaults the camera stops exactly where this would begin, and the
@@ -408,7 +408,7 @@ fn pitched_cover(view: &ViewTransform, z: u8) -> Result<Vec<TileCoord>, CoverErr
     // it reaches the angles the threshold was written for.
     let lod = (camera::pitch_radians(view) > LOD_PITCH_THRESHOLD).then(frustum::Lod::default);
 
-    let found = frustum::covered(&frustum, z, centre, WORLD_COPIES, MAX_TILES, lod).ok_or(
+    let found = frustum::covered(&frustum, z, center, WORLD_COPIES, MAX_TILES, lod).ok_or(
         CoverError::TooLarge {
             tiles: MAX_TILES as u64 + 1,
         },
@@ -456,10 +456,10 @@ pub fn cover_at(view: &ViewTransform, z: u8) -> Result<Vec<TileCoord>, CoverErro
     let z = z.min(MAX_ZOOM);
     let world = f64::from(1u32 << z);
 
-    // The centre in tile units at the *fractional* zoom, then rescaled to the integer one. Using
-    // the integer zoom directly would place the centre correctly but size the viewport wrongly,
+    // The center in tile units at the *fractional* zoom, then rescaled to the integer one. Using
+    // the integer zoom directly would place the center correctly but size the viewport wrongly,
     // because half a zoom level is a factor of √2 in tiles across.
-    let centre = projection::tile_units(view.longitude, view.latitude, z);
+    let center = projection::tile_units(view.longitude, view.latitude, z);
     let scale = (view.zoom - f64::from(z)).exp2();
 
     // Half the viewport in tiles at this level. A 512-pixel tile is the unit, and `scale`
@@ -472,10 +472,10 @@ pub fn cover_at(view: &ViewTransform, z: u8) -> Result<Vec<TileCoord>, CoverErro
     let (mut min_x, mut max_x) = (f64::INFINITY, f64::NEG_INFINITY);
     let (mut min_y, mut max_y) = (f64::INFINITY, f64::NEG_INFINITY);
     for [dx, dy] in corners {
-        min_x = min_x.min(centre[0] + dx);
-        max_x = max_x.max(centre[0] + dx);
-        min_y = min_y.min(centre[1] + dy);
-        max_y = max_y.max(centre[1] + dy);
+        min_x = min_x.min(center[0] + dx);
+        max_x = max_x.max(center[0] + dx);
+        min_y = min_y.min(center[1] + dy);
+        max_y = max_y.max(center[1] + dy);
     }
 
     let mut tiles = Vec::new();
@@ -718,7 +718,7 @@ pub fn coverage_gaps(
 
     let z = view.tile_zoom();
     let world = f64::from(1u32 << z);
-    let centre = projection::tile_units(view.longitude, view.latitude, z);
+    let center = projection::tile_units(view.longitude, view.latitude, z);
     let scale = (view.zoom - f64::from(z)).exp2();
     let half_width = view.width / (2.0 * projection::TILE_SIZE * scale);
     let half_height = view.height / (2.0 * projection::TILE_SIZE * scale);
@@ -736,8 +736,8 @@ pub fn coverage_gaps(
             // The same transform the corners take, so a gap is a real disagreement rather than
             // two different ideas of where the viewport is.
             let (dx, dy) = ((u - 0.5) * 2.0 * half_width, (v - 0.5) * 2.0 * half_height);
-            let x = centre[0] + (dx * cos - dy * sin);
-            let y = centre[1] + (dx * sin + dy * cos);
+            let x = center[0] + (dx * cos - dy * sin);
+            let y = center[1] + (dx * sin + dy * cos);
 
             let row_index = y.floor();
             if row_index < 0.0 || row_index >= world {
@@ -816,10 +816,10 @@ mod tests {
         assert_eq!(tiles, expected);
     }
 
-    /// A viewport one tile across still touches four tiles unless its centre sits exactly on a
+    /// A viewport one tile across still touches four tiles unless its center sits exactly on a
     /// tile corner, because half a tile each way straddles a boundary on both axes.
     ///
-    /// The probe's centre is at 4093.497, 2724.137 in tile units, so half a tile each way
+    /// The probe's center is at 4093.497, 2724.137 in tile units, so half a tile each way
     /// reaches back into 4092 and up into 2723. Assuming a one-tile viewport needs one tile is
     /// the intuitive error, and it under-fetches three quarters of the screen.
     #[test]
@@ -833,7 +833,7 @@ mod tests {
         assert!(tiles.iter().any(|t| t.x == 4092) && tiles.iter().any(|t| t.x == 4093));
         assert!(tiles.iter().any(|t| t.y == 2723) && tiles.iter().any(|t| t.y == 2724));
 
-        // The centre's own tile is in there, which is the sanity check that catches a cover
+        // The center's own tile is in there, which is the sanity check that catches a cover
         // computed in the right shape at the wrong offset.
         assert!(tiles.iter().any(|t| t.x == 4093 && t.y == 2724));
     }

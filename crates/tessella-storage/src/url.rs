@@ -8,7 +8,7 @@
 //!
 //! `replaceTokens` puts `{whatever}` back verbatim when the lookup declines. That is not
 //! leniency for its own sake — a tile URL may legitimately contain braces that are not tokens,
-//! and dropping them would produce a URL that 404s with no clue why. So an unrecognised token
+//! and dropping them would produce a URL that 404s with no clue why. So an unrecognized token
 //! survives into the request and shows up in the log as itself.
 //!
 //! # TMS flips y, and it flips it against the *tile* zoom
@@ -126,7 +126,7 @@ pub fn quadkey(z: u8, x: u32, y: u32) -> String {
     out
 }
 
-/// Half the equator, in metres — the Mercator plane's half-extent.
+/// Half the equator, in meters — the Mercator plane's half-extent.
 const HALF_EQUATOR: f64 = std::f64::consts::PI * 6_378_137.0;
 
 /// A tile's bounds in EPSG:3857, as `minx,miny,maxx,maxy`.

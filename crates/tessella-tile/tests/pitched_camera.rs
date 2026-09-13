@@ -9,7 +9,7 @@
 //! perspective must do to a square on the ground.
 //!
 //! Both faults these catch were live, and both were invisible without a picture. The camera
-//! never left the point directly above the map's centre, however the view was rotated; and the
+//! never left the point directly above the map's center, however the view was rotated; and the
 //! pitch was read as radians when it is documented, and passed, in degrees.
 
 use tessella_tile::camera::{self, camera_position, pitch_radians};
@@ -41,9 +41,9 @@ fn pitch_is_degrees_in_and_radians_out() {
     assert!(pitch_radians(&view(120.0, 0.0)) <= camera::MAX_PITCH);
 }
 
-/// The camera orbits the centre; it does not hover over it.
+/// The camera orbits the center; it does not hover over it.
 ///
-/// mbgl moves it back along its own forward direction by the centre distance. Staying overhead
+/// mbgl moves it back along its own forward direction by the center distance. Staying overhead
 /// while the view rotated put a tile several viewports away and mirrored in x — a map that had
 /// simply swung out of frame.
 #[test]
@@ -51,14 +51,14 @@ fn the_camera_orbits_rather_than_hovers() {
     let flat = camera_position(&view(0.0, 0.0));
     let pitched = camera_position(&view(55.0, 0.0));
 
-    // Straight down: the camera is over the centre, at the centre distance.
+    // Straight down: the camera is over the center, at the center distance.
     assert!(
         (pitched[0] - flat[0]).abs() < 1e-12,
         "no sideways swing at bearing zero"
     );
     assert!(
         pitched[1] > flat[1],
-        "a pitched camera moves back from the centre: {} vs {}",
+        "a pitched camera moves back from the center: {} vs {}",
         pitched[1],
         flat[1]
     );
@@ -69,7 +69,7 @@ fn the_camera_orbits_rather_than_hovers() {
         flat[2]
     );
 
-    // Its distance from the centre is unchanged: it swings on a sphere, and `forward` is a unit
+    // Its distance from the center is unchanged: it swings on a sphere, and `forward` is a unit
     // vector, so the orbit trades height for reach and nothing else.
     let distance = |p: [f64; 3]| {
         let (dx, dy, dz) = (p[0] - flat[0], p[1] - flat[1], p[2]);
@@ -83,7 +83,7 @@ fn the_camera_orbits_rather_than_hovers() {
     );
 }
 
-/// Bearing swings the camera around the centre rather than only turning it.
+/// Bearing swings the camera around the center rather than only turning it.
 #[test]
 fn bearing_swings_the_camera_too() {
     let north = camera_position(&view(55.0, 0.0));

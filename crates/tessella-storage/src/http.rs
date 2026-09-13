@@ -66,7 +66,7 @@ impl Default for HttpFileSource {
 /// Reads `Cache-Control` for the two directives that decide whether a copy may be used.
 ///
 /// Transcribed from mbgl's `CacheControl::parse`: a comma-separated list in which
-/// `must-revalidate` and `max-age=N` are recognised and everything else — including quoted
+/// `must-revalidate` and `max-age=N` are recognized and everything else — including quoted
 /// values that may themselves contain commas — is skipped.
 ///
 /// `max-age` is returned as stated, relative: resolving it needs a clock, and the only

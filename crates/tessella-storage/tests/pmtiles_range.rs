@@ -161,20 +161,20 @@ mod over_http {
     use tessella_storage::http::HttpFileSource;
     use tessella_storage::pmtiles::{Archive, HttpRange};
 
-    /// Serves one file, honouring `Range`. Answers `port` and runs until the test ends.
-    pub(crate) fn serve(bytes: Vec<u8>, honour_ranges: bool) -> u16 {
+    /// Serves one file, honoring `Range`. Answers `port` and runs until the test ends.
+    pub(crate) fn serve(bytes: Vec<u8>, honor_ranges: bool) -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").expect("binds");
         let port = listener.local_addr().expect("has an address").port();
         std::thread::spawn(move || {
             for stream in listener.incoming() {
                 let Ok(stream) = stream else { continue };
-                answer(stream, &bytes, honour_ranges);
+                answer(stream, &bytes, honor_ranges);
             }
         });
         port
     }
 
-    fn answer(mut stream: TcpStream, bytes: &[u8], honour_ranges: bool) {
+    fn answer(mut stream: TcpStream, bytes: &[u8], honor_ranges: bool) {
         let mut reader = BufReader::new(stream.try_clone().expect("clones"));
         let mut range = None;
         loop {
@@ -190,7 +190,7 @@ mod over_http {
             }
         }
 
-        let (status, body) = match (range, honour_ranges) {
+        let (status, body) = match (range, honor_ranges) {
             (Some((first, last)), true) => match bytes.get(first..=last.min(bytes.len() - 1)) {
                 Some(slice) if last < bytes.len() => ("206 Partial Content", slice.to_vec()),
                 _ => ("416 Range Not Satisfiable", Vec::new()),

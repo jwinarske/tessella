@@ -99,7 +99,7 @@ pub struct Outcome {
     /// Resources the origin did not have.
     pub missing: u64,
     /// Whether it stopped because it was asked to.
-    pub cancelled: bool,
+    pub canceled: bool,
 }
 
 /// A region download, fanned out across the pool.
@@ -165,9 +165,9 @@ impl<S: FileSource + 'static> RegionDownload<'_, S> {
             .collect();
         self.scatter(&assets, pass, &failure)?;
 
-        // The barrier. A download cancelled during its assets never starts a tile, which is what
+        // The barrier. A download canceled during its assets never starts a tile, which is what
         // makes "assets first" a guarantee rather than a tendency.
-        if !self.cancelled() {
+        if !self.canceled() {
             let tiles: Vec<&str> = plan
                 .tiles
                 .iter()
@@ -176,12 +176,12 @@ impl<S: FileSource + 'static> RegionDownload<'_, S> {
             self.scatter(&tiles, pass, &failure)?;
         }
 
-        let cancelled = self.cancelled();
-        // Only a completed refresh prunes. A cancelled one has not visited every URL, so what
+        let canceled = self.canceled();
+        // Only a completed refresh prunes. A canceled one has not visited every URL, so what
         // looks orphaned may simply not have been reached — releasing those would turn an
         // interrupted refresh into a partial delete, which for a region downloaded over hours
         // is the worst thing that could happen to it.
-        let released = if pass == Pass::Refresh && !cancelled {
+        let released = if pass == Pass::Refresh && !canceled {
             let keep: BTreeSet<&str> = core::iter::once(self.definition.style_url.as_str())
                 .chain(plan.assets.iter().map(alloc::string::String::as_str))
                 .chain(plan.tiles.iter().map(alloc::string::String::as_str))
@@ -197,11 +197,11 @@ impl<S: FileSource + 'static> RegionDownload<'_, S> {
             unchanged: self.counters.unchanged.load(Ordering::Acquire),
             released,
             missing: self.counters.missing.load(Ordering::Acquire),
-            cancelled,
+            canceled,
         })
     }
 
-    fn cancelled(&self) -> bool {
+    fn canceled(&self) -> bool {
         self.cancel.load(Ordering::Acquire)
     }
 

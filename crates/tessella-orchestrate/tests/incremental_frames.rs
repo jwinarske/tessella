@@ -607,7 +607,7 @@ fn a_camera_move_in_one_view_does_not_disturb_the_others() {
 /// at all. Nothing about that is tuned: the gate is per frame, and every tile's matrix genuinely
 /// does change when the camera does, so finer granularity would not help. What would is DR-9's
 /// consumer-camera mode, where the consumer owns the projection and the producer sends no
-/// matrices — and that is a mode, not an optimisation.
+/// matrices — and that is a mode, not an optimization.
 #[test]
 fn a_parked_view_writes_no_bytes_at_all() {
     use tessella_capture_abi::ring::{self, region_size};

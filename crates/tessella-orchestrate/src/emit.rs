@@ -886,7 +886,7 @@ impl SlabArena {
 
         // One entry per *slot*, empty ones included, because the handle indexes the table. A
         // table of only the occupied slots is the same thing right up until a sweep leaves a
-        // hole, and then every handle past it names its neighbour's bytes.
+        // hole, and then every handle past it names its neighbor's bytes.
         let mut entries = Vec::with_capacity(self.slots.len());
         let mut offset = (header + table).next_multiple_of(8);
         for slot in &self.slots {
@@ -1218,7 +1218,7 @@ impl<'a> FillDraw<'a> {
 /// Because the oracle says they differ per shader, which reading the binder classes does not
 /// suggest. A fill puts them at ids four and five, bindings one and two; a line puts the same two
 /// streams at ids nine and ten, bindings *seven and eight*, because the line shader has already
-/// spent its low bindings on colour, blur, opacity, gapwidth, offset and width. Everything else
+/// spent its low bindings on color, blur, opacity, gapwidth, offset and width. Everything else
 /// about them — `UShort4`, stride eight, one pair per vertex — is the same.
 fn push_pattern_attributes(
     descriptors: &mut Vec<AttributeDesc>,
@@ -1591,14 +1591,14 @@ pub struct LineDraw<'a> {
 /// Encodes a line layer's geometry.
 ///
 /// Two fixed attributes rather than one, and the second is what makes a line a line. A
-/// `LineBucket` holds the *centreline*, doubled: `pos_normal` is the point times two with the
+/// `LineBucket` holds the *centerline*, doubled: `pos_normal` is the point times two with the
 /// cap and side flags in the low bits, and `data` carries the extrusion as two biased bytes
-/// beside the distance along the line. The shader reads both and widens the centreline into a
+/// beside the distance along the line. The shader reads both and widens the centerline into a
 /// quad at draw time, in screen space, which is why a line's width is a uniform rather than
 /// geometry and why zooming does not rebuild the bucket.
 ///
 /// A consumer that binds only the position therefore draws nothing visible: every vertex of a
-/// segment sits on the centreline and its triangles are degenerate. That is not a defect in the
+/// segment sits on the centerline and its triangles are degenerate. That is not a defect in the
 /// encoding, it is what the second attribute is for.
 pub fn encode_line(
     arena: &mut SlabArena,
@@ -1661,13 +1661,13 @@ pub fn encode_line(
 /// no MSAA, so the only thing softening a polygon's boundary is a one-pixel fade in the outline
 /// fragment. mbgl gives that fade room by drawing the line **two pixels wide** --
 /// `constexpr auto lineWidth = 2.0f` -- and a one-pixel line generates no fragment further than
-/// half a pixel from its centre, so half the fade simply has nowhere to land.
+/// half a pixel from its center, so half the fade simply has nowhere to land.
 ///
 /// Filament exposes no line width. mbgl met the same wall on Metal and WebGPU and answered it
 /// with `MLN_TRIANGULATE_FILL_OUTLINES`: generate the ring as the same extruded quads a line
 /// layer is made of, and draw it through `FillOutlineTriangulatedShader`. Two attributes, the
-/// line family's own `pos_normal` and `data`, and no paint of its own -- the colour comes from
-/// the layer's `outline_color`, which is why mbgl only takes this path when that colour and the
+/// line family's own `pos_normal` and `data`, and no paint of its own -- the color comes from
+/// the layer's `outline_color`, which is why mbgl only takes this path when that color and the
 /// opacity are constant.
 ///
 /// Its own vertices, not the fill's: a polyline has two vertices per ring point and the fill has
@@ -1778,7 +1778,7 @@ pub fn encode_background_on(
             for column in 0..side {
                 // Rounded from the exact fraction rather than stepped by a truncated width, so the
                 // last row and column land on the tile's edge instead of short of it -- a gap
-                // there is a seam between neighbouring patches once both are bent.
+                // there is a seam between neighboring patches once both are bent.
                 let at = |n: u32| {
                     #[allow(clippy::cast_possible_truncation)]
                     {
@@ -1858,7 +1858,7 @@ pub fn encode_background_on(
 ///
 /// The same vertex as a fill's — two shorts — and for the same reason a line's is not: a circle
 /// is a quad per point with the disc drawn inside it by the shader, so the geometry is the
-/// centre doubled with a corner bit in the low bits and nothing else. The radius is a uniform.
+/// center doubled with a corner bit in the low bits and nothing else. The radius is a uniform.
 pub fn encode_circle(
     arena: &mut SlabArena,
     geometry: GeometryId,
@@ -2423,7 +2423,7 @@ pub fn encode_raster(
 ///
 /// It does not decode the glTF. Both consumers this targets already have a loader that does —
 /// Filament's `gltfio` links meshoptimizer and takes a byte pointer, flutter_scene's importer
-/// recognises the same extensions and takes a `Uint8List` — so decoding here would discard work
+/// recognizes the same extensions and takes a `Uint8List` — so decoding here would discard work
 /// the consumer already links and roughly triple what crosses the seam, since a meshopt-packed
 /// tile is several times smaller than its vertices.
 ///

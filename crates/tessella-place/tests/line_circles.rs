@@ -69,7 +69,7 @@ fn the_circles_cover_the_label() {
 /// The run extends past the end of the label.
 ///
 /// Not slack: a pitched camera draws a distant label *larger* than the box it was laid out for,
-/// and a label that has outgrown its collision shape overlaps its neighbour with nothing
+/// and a label that has outgrown its collision shape overlaps its neighbor with nothing
 /// detecting it.
 #[test]
 fn the_run_extends_past_the_label() {
@@ -304,7 +304,7 @@ mod thinning {
     /// its first circle, and a label would reserve a single point of the road it covers.
     #[test]
     fn no_two_circles_are_dropped_in_a_row() {
-        // Radius 50, spacing 1: every circle is on top of its neighbour.
+        // Radius 50, spacing 1: every circle is on top of its neighbor.
         let circles = run(20, 1.0, 50.0);
         let kept = thin(&circles);
 
@@ -345,7 +345,7 @@ mod thinning {
     ///
     /// Stated as coverage: every dropped circle is within a radius of one that was kept, so the
     /// ground the run reserves is the same ground to within the gaps mbgl accepts. A thinning
-    /// that dropped a circle with no kept neighbour would open a hole in the middle of a road.
+    /// that dropped a circle with no kept neighbor would open a hole in the middle of a road.
     #[test]
     fn every_dropped_circle_is_covered_by_a_kept_one() {
         let circles = run(20, 6.0, 10.0);

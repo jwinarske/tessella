@@ -57,18 +57,18 @@ fn the_block_carries_the_expansion() {
 /// and makes every collision box four times its size. Every label in the frame then collides with
 /// every other: 12 glyph quads drawn where a plane draws 1384.
 #[test]
-fn the_blocks_w_is_a_distance_a_plane_would_recognise() {
+fn the_blocks_w_is_a_distance_a_plane_would_recognize() {
     let (z, x, y, wrap) = TILE;
     let view = view();
     let block = ubo::globe_bend_block(&view, z, x, y, wrap, 0, 0);
     let reference = camera::camera_to_center_distance(view.height);
 
-    // At the tile's own centre the offsets are zero, so the anchor's `w` is the whole of it.
-    let at_centre = f64::from(block.anchor[3]);
-    let ratio = at_centre / reference;
+    // At the tile's own center the offsets are zero, so the anchor's `w` is the whole of it.
+    let at_center = f64::from(block.anchor[3]);
+    let ratio = at_center / reference;
     assert!(
         (0.5..2.0).contains(&ratio),
-        "w is {at_centre} where a plane's is about {reference}, a ratio of {ratio}"
+        "w is {at_center} where a plane's is about {reference}, a ratio of {ratio}"
     );
 }
 

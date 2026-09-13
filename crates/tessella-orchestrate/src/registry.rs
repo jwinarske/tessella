@@ -516,7 +516,7 @@ impl Session {
     /// The draw order this view last sent, ready to be rebuilt against.
     ///
     /// Cleared of its bindings and keeping its emitted list, which is what lets an unchanged
-    /// frame recognise itself. `DrawOrder::clear` documents that asymmetry.
+    /// frame recognize itself. `DrawOrder::clear` documents that asymmetry.
     pub fn order_for(&mut self, view: ViewId, layer_count: u32) -> &mut crate::order::DrawOrder {
         let memory = self.views.entry(view.0).or_default();
         if memory.order.layer_count() != layer_count {
