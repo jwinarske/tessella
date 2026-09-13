@@ -573,6 +573,34 @@ fn report_the_pass_rate() {
             );
         }
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/expression_baseline.txt");
+
+        // A regeneration may only add. `no_case_in_the_baseline_regressed` compares against the
+        // file as it stands, so a case that stops passing between two regenerations is caught
+        // once and then written out by the next one -- the loss is absorbed and the file goes on
+        // looking correct. Refusing to drop an entry is what makes the baseline a floor rather
+        // than a snapshot.
+        //
+        // Read from the file rather than from `baseline()`, which filters by feature: a
+        // regeneration runs with `collator` on, so nothing is filtered, and reading the raw file
+        // means a future filter cannot quietly widen what this permits.
+        let committed: BTreeSet<String> = include_str!("expression_baseline.txt")
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .map(ToString::to_string)
+            .collect();
+        let lost: Vec<&String> = committed.difference(&passing).collect();
+        assert!(
+            lost.is_empty(),
+            "regenerating would drop {} case(s) that the committed baseline says pass. Fix the \
+             regression, or delete them by hand with a commit message saying why:\n  {}",
+            lost.len(),
+            lost.iter()
+                .map(|name| name.as_str())
+                .collect::<Vec<_>>()
+                .join("\n  ")
+        );
+
         let mut text = String::from(
             "# Cases from tests/expression-suite that this evaluator passes.\n\
              # Regenerate with TESSELLA_REGENERATE_BASELINE=1; see expression_suite.rs.\n",
