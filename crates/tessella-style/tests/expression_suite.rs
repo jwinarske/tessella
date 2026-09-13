@@ -296,11 +296,19 @@ fn run_case(case: &Value) -> Result<(), String> {
                     .filter_map(|name| name.as_str().map(ToString::to_string))
                     .collect()
             });
-        let got = parsed.evaluate_in(
+        // The density a heatmap ramp is being walked at, which the suite carries in the globals
+        // beside the zoom. Only `heatmap-color` may hold a `["heatmap-density"]`, so every other
+        // case leaves it absent and reading one there is an error rather than a zero.
+        let density = globals
+            .and_then(|g| g.get("heatmapDensity"))
+            .and_then(Value::as_number);
+        let got = parsed.evaluate_at(
             zoom,
             None,
             feature.as_ref().map(|f| f as &dyn Feature),
             images.as_deref(),
+            None,
+            density,
         );
         let wants_error = want.get("error").is_some();
 

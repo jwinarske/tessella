@@ -101,6 +101,7 @@ greater_or_equal/string
 greater_or_equal/string-and-value
 greater_or_equal/value
 has/basic
+heatmap-density/basic
 id/basic
 image/basic
 image/coalesce

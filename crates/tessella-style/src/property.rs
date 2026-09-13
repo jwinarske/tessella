@@ -543,6 +543,54 @@ const CIRCLE_PAINT: &[PropertySpec] = &[
     },
 ];
 
+/// `heatmap`'s paint properties.
+///
+/// The layer draws nothing yet -- §1 keeps it behind the line and [`LayerKind::is_built`] does
+/// not name it -- but its properties are validated, so a style carrying a heatmap is checked
+/// rather than skipped. A malformed `heatmap-radius` is a style error whether or not this build
+/// would have drawn it.
+const HEATMAP_PAINT: &[PropertySpec] = &[
+    // The ramp the density is read through, and the one property in the language whose
+    // expression may contain `["heatmap-density"]`. Its spec default is that ramp -- six stops
+    // from transparent blue to red -- which this table has no way to write: a default here is a
+    // constant, and that one is an expression. Left as `None` until the renderer that walks it
+    // exists, which is also what decides where the ramp is built.
+    PropertySpec {
+        name: "heatmap-color",
+        kind: PropertyKind::Color,
+        default: DefaultValue::None,
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "heatmap-intensity",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(1.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "heatmap-opacity",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(1.0),
+        data_driven: false,
+    },
+    // Screen pixels, and the one to watch: it is data-driven, so a feature property decides how
+    // much of the screen one point covers. Density comes from overlap, so the quads are meant to
+    // overlap, and an unbounded radius from tile data is a cheap way to fill the viewport many
+    // times over.
+    PropertySpec {
+        name: "heatmap-radius",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(30.0),
+        data_driven: true,
+    },
+    PropertySpec {
+        name: "heatmap-weight",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(1.0),
+        data_driven: true,
+    },
+];
+
 const CIRCLE_LAYOUT: &[PropertySpec] = &[PropertySpec {
     name: "circle-sort-key",
     kind: PropertyKind::Number,
@@ -764,6 +812,7 @@ pub fn paint_specs(kind: &LayerKind) -> Option<&'static [PropertySpec]> {
         LayerKind::Symbol => Some(SYMBOL_PAINT),
         LayerKind::Raster => Some(RASTER_PAINT),
         LayerKind::FillExtrusion => Some(FILL_EXTRUSION_PAINT),
+        LayerKind::Heatmap => Some(HEATMAP_PAINT),
         _ => None,
     }
 }

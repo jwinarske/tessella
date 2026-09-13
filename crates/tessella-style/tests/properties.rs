@@ -322,19 +322,29 @@ fn an_unimplemented_layer_type_resolves_empty() {
     // The hermetic style no longer contains one: background, fill, line, circle, symbol,
     // raster and fill-extrusion are all implemented, which is why this reaches for types
     // outside it. A layer type with no spec table resolves to nothing rather than to guessed
-    // defaults — the difference between "this build does not know what a heatmap layer's
+    // defaults — the difference between "this build does not know what a hillshade layer's
     // properties are" and "it thinks they are empty".
     let style = Style::parse(
         r#"{"version": 8, "sources": {}, "layers": [
-             {"id": "h", "type": "heatmap", "source": "s", "paint": {"heatmap-opacity": 0.5}},
              {"id": "e", "type": "hillshade", "source": "s"}]}"#,
     )
     .expect("style parses");
-    for id in ["h", "e"] {
-        let paint = resolve_paint(style.layer(id).expect(id)).expect("resolves");
-        assert!(paint.is_empty(), "{id}");
-        assert!(is_all_uniform(&paint), "vacuously, {id}");
-    }
+    let paint = resolve_paint(style.layer("e").expect("e")).expect("resolves");
+    assert!(paint.is_empty(), "hillshade has no table");
+    assert!(is_all_uniform(&paint), "vacuously");
+
+    // Heatmap is the in-between case and worth pinning: it has a table, so its properties are
+    // resolved and a malformed one is a style error — and it still draws nothing, because
+    // `is_built` does not name it. A type can be known without being drawn.
+    let heat = Style::parse(
+        r#"{"version": 8, "sources": {}, "layers": [
+             {"id": "h", "type": "heatmap", "source": "s", "paint": {"heatmap-opacity": 0.5}}]}"#,
+    )
+    .expect("style parses");
+    let layer = heat.layer("h").expect("h");
+    assert!(!layer.kind.is_built(), "heatmap draws nothing yet");
+    let paint = resolve_paint(layer).expect("resolves");
+    assert!(!paint.is_empty(), "heatmap has a table");
 
     // And an implemented one does not resolve empty, which is what stops this passing for the
     // wrong reason once every type in the style spec has a table.

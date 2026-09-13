@@ -891,6 +891,13 @@ pub enum Expr {
     /// carries the name and lets the layout decide, which is where a missing sprite is already
     /// handled by drawing nothing.
     Image(Box<Expr>),
+    /// `["heatmap-density"]`: how dense the heatmap is where this pixel is, 0 to 1.
+    ///
+    /// A third axis beside zoom and the feature, and the spec's classification says so: an
+    /// expression that reads it is both feature-constant and zoom-constant. It is only meaningful
+    /// inside `heatmap-color`, where the renderer evaluates the ramp over the range; anywhere
+    /// else there is no density to read and evaluation says so rather than inventing one.
+    HeatmapDensity,
     /// `["concat", …]`: the arguments, coerced to text and run together.
     Concat(Vec<Expr>),
     /// `["join", array, separator]`: an array of strings with a separator between.
@@ -1348,7 +1355,12 @@ impl Expression {
         // ["literal", {"y": 0}]]]` reads a key that is not in a literal object, which is a
         // compile error there and would otherwise be an evaluation error here — once per
         // feature, forever, for a mistake that is visible on sight.
+        // Except where it reads the heatmap density. That is constant in both the axes
+        // `Dependency` tracks -- the spec says so, and the suite asserts it -- and still varies,
+        // per pixel, while the renderer walks the ramp. Folding it here would turn every
+        // `heatmap-color` into a load error for want of an input no caller has yet.
         if dependency.is_constant()
+            && !reads_heatmap_density(&parsed.root)
             && let Err(source) = evaluate::evaluate(&parsed.root, &evaluate::Context::empty())
         {
             return Err(ParseError::ConstantFolds { source });
@@ -1476,6 +1488,29 @@ impl Expression {
         images: Option<&[alloc::string::String]>,
         canonical: Option<(u8, u32, u32)>,
     ) -> Result<Value, EvaluationError> {
+        self.evaluate_at(zoom, camera, feature, images, canonical, None)
+    }
+
+    /// As [`evaluate_on`](Self::evaluate_on), with the heatmap density the ramp is being walked
+    /// at.
+    ///
+    /// `["heatmap-density"]` is the one expression that reads it, and only `heatmap-color` may
+    /// contain one. Every other caller passes `None`, and an expression that reads the density
+    /// then fails rather than seeing a zero -- which would paint the layer the ramp's first stop
+    /// and look like a style bug rather than a missing input.
+    ///
+    /// # Errors
+    ///
+    /// As [`evaluate_with_camera`](Self::evaluate_with_camera).
+    pub fn evaluate_at(
+        &self,
+        zoom: Option<f64>,
+        camera: Option<Camera>,
+        feature: Option<&dyn Feature>,
+        images: Option<&[alloc::string::String]>,
+        canonical: Option<(u8, u32, u32)>,
+        heatmap_density: Option<f64>,
+    ) -> Result<Value, EvaluationError> {
         evaluate::evaluate(
             &self.root,
             &evaluate::Context {
@@ -1483,6 +1518,7 @@ impl Expression {
                 camera,
                 feature,
                 images,
+                heatmap_density,
                 canonical,
                 scope: None,
             },
@@ -1512,7 +1548,9 @@ impl Expr {
     pub fn result_type(&self) -> Type {
         match self {
             Self::Literal(value) => Type::of(value),
-            Self::Zoom | Self::Pitch | Self::DistanceFromCenter => Type::Number,
+            Self::Zoom | Self::Pitch | Self::DistanceFromCenter | Self::HeatmapDensity => {
+                Type::Number
+            }
             Self::GeometryType => Type::String,
             Self::Has { .. } | Self::Not(_) | Self::Compare { .. } => Type::Boolean,
             Self::All(_) | Self::Any(_) => Type::Boolean,
@@ -1922,6 +1960,15 @@ fn zoom_positions(expr: &Expr, at_curve: bool) -> (usize, usize) {
     }
 }
 
+/// Whether anything in this tree reads the heatmap density.
+///
+/// Its own walk rather than a `Dependency` bit: the two bits are the spec's own
+/// `isZoomConstant` / `isFeatureConstant`, the suite checks them against the spec's answers, and
+/// a third bit would have to be masked out of every comparison to keep that working.
+fn reads_heatmap_density(expr: &Expr) -> bool {
+    matches!(expr, Expr::HeatmapDensity) || children(expr).into_iter().any(reads_heatmap_density)
+}
+
 /// Every direct child of a node, for walks that treat all of them alike.
 fn children(expr: &Expr) -> Vec<&Expr> {
     match expr {
@@ -1929,6 +1976,7 @@ fn children(expr: &Expr) -> Vec<&Expr> {
         | Expr::Zoom
         | Expr::Pitch
         | Expr::DistanceFromCenter
+        | Expr::HeatmapDensity
         | Expr::GeometryType
         | Expr::Id
         | Expr::Properties
@@ -2055,6 +2103,10 @@ fn children(expr: &Expr) -> Vec<&Expr> {
 fn classify(expr: &Expr) -> Dependency {
     match expr {
         Expr::Literal(_) => Dependency::NONE,
+        // Neither zoom nor feature: the density is the renderer's, supplied per pixel while it
+        // walks the ramp, and the spec's own classification says an expression reading it is
+        // constant in both.
+        Expr::HeatmapDensity => Dependency::NONE,
         Expr::Zoom => Dependency::ZOOM,
         // Not ZOOM. §12.1 holds a zoom-only value across a whole zoom interval, which is sound
         // because zoom does not change inside one; pitch and the distance from the center do,
