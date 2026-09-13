@@ -13,7 +13,7 @@ members = ["crates/*", "tools/*"]
 # `vendor/earcutr` is third-party and held to upstream's lint bar, not this workspace's: it is
 # a path dependency only so one line of it can be corrected, and rewriting the rest of it to
 # pass `-D warnings` would make the next version bump a merge instead of a copy.
-exclude = ["tools/unicode-codegen", "tools/glyph-fixtures", "fuzz", "vendor/earcutr"]
+exclude = ["tools/unicode-codegen", "tools/glyph-fixtures", "tools/parity", "fuzz", "vendor/earcutr"]
 
 [workspace.package]
 version = "0.0.0"
