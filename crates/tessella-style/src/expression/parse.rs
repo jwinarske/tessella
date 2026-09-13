@@ -126,6 +126,26 @@ fn coerce_to(expected: Type, parsed: Expr) -> Result<Expr, ParseError> {
         return Ok(parsed);
     }
     match (expected, found) {
+        // A literal is converted now rather than at evaluation: the style wrote the colour down,
+        // so whether it is a colour is knowable here, and mbgl answers it here. Deferring it to a
+        // cast would leave an unparseable colour inside a branch that never folds -- a `step`
+        // over a feature property is not constant -- and the style would load with a stop that
+        // fails per feature per tile instead.
+        (Type::Color, Type::String) if matches!(parsed, Expr::Literal(Value::String(_))) => {
+            let Expr::Literal(Value::String(text)) = &parsed else {
+                unreachable!("just matched a string literal")
+            };
+            if crate::property::Color::parse(text).is_err() {
+                return Err(ParseError::Malformed {
+                    operator: "color".to_string(),
+                    detail: format!("could not parse color from value '{text}'"),
+                });
+            }
+            Ok(Expr::Cast {
+                to: CastKind::Color,
+                args: alloc::vec![parsed],
+            })
+        }
         (Type::Color, Type::String) => Ok(Expr::Cast {
             to: CastKind::Color,
             args: alloc::vec![parsed],
@@ -134,6 +154,29 @@ fn coerce_to(expected: Type, parsed: Expr) -> Result<Expr, ParseError> {
             expected: expected.name().to_string(),
             found: found.name().to_string(),
         }),
+    }
+}
+
+/// Whether two values of this type have something to walk between.
+const fn interpolatable(found: Type) -> bool {
+    match found {
+        Type::Number | Type::Color | Type::Value => true,
+        Type::Array(array) => {
+            matches!(array.element, Some(Scalar::Number)) && array.length.is_some()
+        }
+        _ => false,
+    }
+}
+
+/// [`parse_expecting`] when the position knows its type, and a plain parse when it does not.
+fn parse_maybe_expecting(
+    value: &Value,
+    scope: &[String],
+    expected: Option<Type>,
+) -> Result<Expr, ParseError> {
+    match expected {
+        Some(wanted) => parse_expecting(value, scope, wanted),
+        None => parse_in(value, scope),
     }
 }
 
@@ -411,13 +454,23 @@ fn parse_rooted(
                     color: None,
                 };
                 if let Some(options) = options {
-                    for (key, target) in [
-                        ("font-scale", &mut section.scale),
-                        ("text-font", &mut section.font),
-                        ("text-color", &mut section.color),
+                    // Each option has a type the spec pins down, and a style that gets one wrong
+                    // is wrong about something the shaper needs: a font stack that is not
+                    // `array<string>` names no font, and a scale that is not a number has no size.
+                    for (key, wanted, target) in [
+                        ("font-scale", Type::Number, &mut section.scale),
+                        (
+                            "text-font",
+                            Type::Array(ArrayType {
+                                element: Some(Scalar::String),
+                                length: None,
+                            }),
+                            &mut section.font,
+                        ),
+                        ("text-color", Type::Color, &mut section.color),
                     ] {
                         if let Some(value) = options.get(key) {
-                            *target = Some(Box::new(parse_in(value, scope)?));
+                            *target = Some(Box::new(parse_expecting(value, scope, wanted)?));
                         }
                     }
                     index += 2;
@@ -601,7 +654,7 @@ fn parse_rooted(
                 .collect::<Result<Vec<_>, _>>()?,
             None => parse_all(args, scope)?,
         })),
-        "let" => parse_let(operator, args, scope),
+        "let" => parse_let(operator, args, scope, spec.expected),
         "var" => {
             expect_arity(operator, args, 1, 1)?;
             let name = args[0].as_str().ok_or_else(|| ParseError::Malformed {
@@ -622,9 +675,9 @@ fn parse_rooted(
             }
         }
         "match" => parse_match(operator, args, scope, spec.expected),
-        "case" => parse_case(operator, args, scope),
-        "step" => parse_step(operator, args, scope),
-        "interpolate" => parse_interpolate(operator, args, scope),
+        "case" => parse_case(operator, args, scope, spec.expected),
+        "step" => parse_step(operator, args, scope, spec.expected),
+        "interpolate" => parse_interpolate(operator, args, scope, spec.expected),
         "to-number" => Ok(Expr::Cast {
             to: CastKind::Number,
             args: parse_all(args, scope)?,
@@ -712,7 +765,12 @@ fn parse_rooted(
 /// shadowing is decided before anything runs. The alternative — carrying names to evaluation and
 /// failing there — turns a style-authoring mistake into a per-feature per-tile error, which is
 /// the same trade the comparison checker makes and for the same reason.
-fn parse_let(operator: &str, args: &[Value], scope: &[String]) -> Result<Expr, ParseError> {
+fn parse_let(
+    operator: &str,
+    args: &[Value],
+    scope: &[String],
+    expected: Option<Type>,
+) -> Result<Expr, ParseError> {
     // Pairs of name and value, then a body: odd, and at least three.
     if args.len() < 3 || args.len().is_multiple_of(2) {
         return Err(ParseError::Arity {
@@ -745,7 +803,13 @@ fn parse_let(operator: &str, args: &[Value], scope: &[String]) -> Result<Expr, P
         scope.push(name.to_string());
     }
 
-    let body = Box::new(parse_in(&args[args.len() - 1], &scope)?);
+    // The body is what the `let` evaluates to, so it stands where the whole expression does. A
+    // binding does not: it is whatever it is, and each use decides what it has to be there.
+    let body = Box::new(parse_maybe_expecting(
+        &args[args.len() - 1],
+        &scope,
+        expected,
+    )?);
     Ok(Expr::Let { bindings, body })
 }
 
@@ -1158,7 +1222,12 @@ fn parse_match(
 }
 
 /// `["case", condition, output, ..., fallback]`
-fn parse_case(operator: &str, args: &[Value], scope: &[String]) -> Result<Expr, ParseError> {
+fn parse_case(
+    operator: &str,
+    args: &[Value],
+    scope: &[String],
+    expected: Option<Type>,
+) -> Result<Expr, ParseError> {
     if args.len() < 3 || args.len().is_multiple_of(2) {
         return Err(ParseError::Arity {
             operator: operator.to_string(),
@@ -1166,16 +1235,28 @@ fn parse_case(operator: &str, args: &[Value], scope: &[String]) -> Result<Expr, 
             got: args.len(),
         });
     }
-    let fallback = Box::new(parse_in(&args[args.len() - 1], scope)?);
+    let fallback = Box::new(parse_maybe_expecting(
+        &args[args.len() - 1],
+        scope,
+        expected,
+    )?);
     let mut branches = Vec::new();
     for pair in args[..args.len() - 1].as_chunks::<2>().0 {
-        branches.push((parse_in(&pair[0], scope)?, parse_in(&pair[1], scope)?));
+        branches.push((
+            parse_expecting(&pair[0], scope, Type::Boolean)?,
+            parse_maybe_expecting(&pair[1], scope, expected)?,
+        ));
     }
     Ok(Expr::Case { branches, fallback })
 }
 
 /// `["step", input, base, stop, output, ...]`
-fn parse_step(operator: &str, args: &[Value], scope: &[String]) -> Result<Expr, ParseError> {
+fn parse_step(
+    operator: &str,
+    args: &[Value],
+    scope: &[String],
+    expected: Option<Type>,
+) -> Result<Expr, ParseError> {
     if args.len() < 4 || !args.len().is_multiple_of(2) {
         return Err(ParseError::Arity {
             operator: operator.to_string(),
@@ -1183,14 +1264,21 @@ fn parse_step(operator: &str, args: &[Value], scope: &[String]) -> Result<Expr, 
             got: args.len(),
         });
     }
-    let input = Box::new(parse_in(&args[0], scope)?);
-    let base = Box::new(parse_in(&args[1], scope)?);
-    let stops = parse_stops(operator, &args[2..], scope)?;
+    // The input is what the stops are compared against, so it is a number; the base and every
+    // output stand where the whole expression does.
+    let input = Box::new(parse_expecting(&args[0], scope, Type::Number)?);
+    let base = Box::new(parse_maybe_expecting(&args[1], scope, expected)?);
+    let stops = parse_stops(operator, &args[2..], scope, expected)?;
     Ok(Expr::Step { input, base, stops })
 }
 
 /// `["interpolate", interpolation, input, stop, output, ...]`
-fn parse_interpolate(operator: &str, args: &[Value], scope: &[String]) -> Result<Expr, ParseError> {
+fn parse_interpolate(
+    operator: &str,
+    args: &[Value],
+    scope: &[String],
+    expected: Option<Type>,
+) -> Result<Expr, ParseError> {
     if args.len() < 4 || !args.len().is_multiple_of(2) {
         return Err(ParseError::Arity {
             operator: operator.to_string(),
@@ -1262,8 +1350,24 @@ fn parse_interpolate(operator: &str, args: &[Value], scope: &[String]) -> Result
         }
     };
 
-    let input = Box::new(parse_in(&args[1], scope)?);
-    let stops = parse_stops(operator, &args[2..], scope)?;
+    // What is interpolated between is a number, and every stop output stands where the whole
+    // expression does.
+    let input = Box::new(parse_expecting(&args[1], scope, Type::Number)?);
+    let stops = parse_stops(operator, &args[2..], scope, expected)?;
+
+    // Not everything can be interpolated. Numbers and colours can, and so can an array of numbers
+    // whose length is known -- without a length there is no telling that two stops have the same
+    // number of components to walk between, which is why `array<number>` is refused where
+    // `array<number, 2>` is taken.
+    let output = expected.or_else(|| stops.first().map(|(_, stop)| stop.result_type()));
+    if let Some(found) = output
+        && !interpolatable(found)
+    {
+        return Err(ParseError::Malformed {
+            operator: operator.to_string(),
+            detail: format!("type {} is not interpolatable", found.name()),
+        });
+    }
     Ok(Expr::Interpolate {
         interpolation,
         input,
@@ -1310,6 +1414,7 @@ fn parse_stops(
     operator: &str,
     args: &[Value],
     scope: &[String],
+    expected: Option<Type>,
 ) -> Result<Vec<(f64, Expr)>, ParseError> {
     let mut stops = Vec::with_capacity(args.len() / 2);
     let mut previous: Option<f64> = None;
@@ -1327,7 +1432,7 @@ fn parse_stops(
             });
         }
         previous = Some(position);
-        stops.push((position, parse_in(&pair[1], scope)?));
+        stops.push((position, parse_maybe_expecting(&pair[1], scope, expected)?));
     }
     Ok(stops)
 }

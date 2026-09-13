@@ -1228,7 +1228,12 @@ impl Expression {
         // A property the spec types as formatted wraps whatever it got in a single section.
         // Same shape as the colour coercion above and for the same reason: the style writes a
         // string and the shaper needs sections, so the conversion belongs at that boundary.
-        if spec.expected == Some(Type::Formatted) && root.result_type() != Type::Formatted {
+        // Only from a string, or from a type not known until evaluation. mbgl converts those two
+        // and rejects the rest: a number in a text-field is a style that means something else,
+        // and wrapping it would turn the error into a label reading "42".
+        if spec.expected == Some(Type::Formatted)
+            && matches!(root.result_type(), Type::String | Type::Value)
+        {
             root = Expr::Format {
                 sections: alloc::vec![FormatSection {
                     content: Box::new(root),

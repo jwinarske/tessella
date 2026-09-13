@@ -51,6 +51,7 @@ concat/arity-0
 concat/arity-1
 concat/basic
 concat/coercion
+constant-folding/evaluation-error
 constant-folding/to-color
 constant-folding/to-color-inferred
 constant-folding/var
@@ -72,8 +73,10 @@ floor/basic
 format/basic
 format/coercion
 format/data-driven-font
+format/data-driven-scale
 format/image-sections
 format/implicit
+format/implicit-assert
 format/implicit-coerce
 format/implicit-omit
 format/to-string
@@ -122,6 +125,8 @@ interpolate/duplicate_stops
 interpolate/exponential
 interpolate/exponential-number-array
 interpolate/exponential-single-stop
+interpolate/exponential-string-array
+interpolate/exponential-uninterpolatable-numeric-array
 interpolate/infer-array-type
 interpolate/linear
 interpolate/linear-many-stops
