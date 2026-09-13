@@ -23,6 +23,7 @@ at/infer-array-type
 atan/basic
 boolean/basic
 boolean/default-value
+case/basic
 case/infer-array-type
 case/precedence
 ceil/basic
@@ -130,6 +131,7 @@ interpolate/exponential-string-array
 interpolate/exponential-uninterpolatable-numeric-array
 interpolate/infer-array-type
 interpolate/linear
+interpolate/linear-color
 interpolate/linear-many-stops
 join/empty-array
 join/empty-item
