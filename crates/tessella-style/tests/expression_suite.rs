@@ -21,7 +21,7 @@
 //! moves cases from failing to passing and the baseline is regenerated; breaking one moves a
 //! case the other way and the test names it. What it will not do is quietly rot.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use tessella_style::Value;
@@ -210,9 +210,13 @@ fn run_case(case: &Value) -> Result<(), String> {
             // the operator is not implemented*, is not conformance — it is two unrelated
             // failures agreeing by accident. Counting it as a pass inflates the baseline and,
             // worse, means implementing the operator can move a case from passing to failing.
+            // An operator the *spec* does not define is one this build is right to reject, and
+            // the case that says so is testing exactly that. Only an operator the spec defines
+            // and this build has not implemented is the accident this guard is for.
             let unimplemented = matches!(
-                err,
-                tessella_style::expression::ParseError::UnknownOperator(_)
+                &err,
+                tessella_style::expression::ParseError::UnknownOperator(name)
+                    if tessella_style::generated::operators::OPERATORS.contains(&name.as_str())
             ) || {
                 // Same accident, one step further in: a build without the weights refuses every
                 // collator comparison, which would agree with any case the spec rejects for a
@@ -399,6 +403,21 @@ fn values_match(got: &Value, want: &Value) -> bool {
     }
 }
 
+/// What maplibre-native ignores in its own run of this suite, and why.
+///
+/// A failure named here is not a gap in this evaluator: the implementation this is measured
+/// against does not pass it either. Vendored beside the suite for the reason the suite itself is
+/// -- a mitigation that needs someone to have a maplibre-native checkout is not one -- and
+/// reported separately so the number that matters is the one this build owns.
+fn upstream_ignores() -> BTreeMap<String, String> {
+    include_str!("expression_ignores.txt")
+        .lines()
+        .filter(|line| !line.trim().is_empty() && !line.starts_with('#'))
+        .filter_map(|line| line.split_once('\t'))
+        .map(|(name, reason)| (name.trim().to_string(), reason.trim().to_string()))
+        .collect()
+}
+
 /// Whether a case needs the collator's *table*, wherever in the suite it lives.
 ///
 /// The `collator/` directory is most of them and `equal/collator-value` is not in it, which is
@@ -521,6 +540,34 @@ fn report_the_pass_rate() {
             println!("  + {name}");
         }
     }
+    // Whose failure each one is. A case upstream ignores is not this build's to answer for, and
+    // saying so is the difference between a number that means something and one that has to be
+    // re-derived from a checkout nobody has.
+    let ignores = upstream_ignores();
+    type Failure<'a> = &'a (String, String);
+    let (ignored, ours): (Vec<Failure<'_>>, Vec<Failure<'_>>) = failures
+        .iter()
+        .partition(|(name, _)| ignores.contains_key(name));
+    println!(
+        "failing: {} -- {} ignored by maplibre-native, {} this build's",
+        failures.len(),
+        ignored.len(),
+        ours.len()
+    );
+    for (name, reason) in &ours {
+        println!("  ours  {name}: {reason}");
+    }
+    for (name, _) in &ignored {
+        println!("  upstream  {name}: {}", ignores[name]);
+    }
+    // And the other direction: an ignored case this build passes is one it is ahead on, which is
+    // worth knowing before anyone trims the list.
+    let ahead = ignores
+        .keys()
+        .filter(|name| passing.contains(*name))
+        .count();
+    println!("ahead of the ignore list on {ahead} of {}", ignores.len());
+
     // Grouped by cause rather than listed, because 285 failures scroll past and the shape of
     // them is the actionable part: which operator to implement next is a question about counts.
     let mut by_cause: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();

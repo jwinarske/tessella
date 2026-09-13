@@ -1,0 +1,24 @@
+# Cases maplibre-native ignores in its own run of this suite, from
+# metrics/ignores/platform-all.json at the revision the suite was vendored from.
+#
+# A case here is not a gap in this evaluator: the implementation this is measured against
+# does not pass it either, and upstream wrote down why. Listed as <case> <tab> <reason> so a
+# failure can be read without a maplibre-native checkout.
+collator/accent-equals-de	Locale-specific behavior changes based on platform.
+interpolate-hcl/linear	https://github.com/mapbox/mapbox-gl-native/issues/8720
+interpolate-lab/linear	https://github.com/mapbox/mapbox-gl-native/issues/8720
+is-supported-script/default	This tests RTL text plugin behavior specific to GL JS
+legacy/categorical/array	https://github.com/mapbox/mapbox-gl-native/issues/12747
+legacy/categorical/boolean	https://github.com/mapbox/mapbox-gl-native/issues/12747
+legacy/categorical/color	https://github.com/mapbox/mapbox-gl-native/issues/12747
+legacy/categorical/number	https://github.com/mapbox/mapbox-gl-native/issues/12747
+legacy/categorical/string	https://github.com/mapbox/mapbox-gl-native/issues/12747
+legacy/exponential/color-hcl	https://github.com/mapbox/mapbox-gl-native/issues/12747
+legacy/exponential/color-lab	https://github.com/mapbox/mapbox-gl-native/issues/12747
+legacy/identity/color-default	https://github.com/mapbox/mapbox-gl-native/issues/12747
+legacy/identity/enum-default	https://github.com/mapbox/mapbox-gl-native/issues/12747
+legacy/interval/composite	https://github.com/mapbox/mapbox-gl-native/issues/12747
+legacy/interval/composite-default	https://github.com/mapbox/mapbox-gl-native/issues/12747
+legacy/interval/tokens-zoom	https://github.com/mapbox/mapbox-gl-native/issues/12747
+resolved-locale/basic	Even the 'en' locale may not be present on some test systems.
+within/non-supported	Something is wrong with GeoJSON geometry in test
