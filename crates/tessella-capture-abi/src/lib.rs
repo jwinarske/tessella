@@ -70,7 +70,9 @@ pub mod generated;
 /// The anchored bend's per-drawable block, which mbgl has no counterpart for.
 pub mod globe_ubo;
 
-pub use generated::mbgl_enums::{AttributeDataType, BuiltIn, RenderPass, TexturePixelType};
+pub use generated::mbgl_enums::{
+    AttributeDataType, BuiltIn, RenderPass, TextureChannelDataType, TexturePixelType,
+};
 pub use generated::shader_attributes::{ShaderAttribute, attributes, declared_for};
 
 /// Revision of the capture-stream ABI this crate implements.
@@ -129,6 +131,12 @@ pub enum EnvelopeKind {
     /// carries one. It shares the geometry id space, so [`Self::ViewUse`], [`Self::ViewRelease`]
     /// and [`Self::GeometryRemove`] bind, release and drop a mesh exactly as they do geometry.
     MeshAdd = 12,
+    /// Makes a declared view draw into a texture rather than onto the screen (DR-25).
+    ///
+    /// Additive for the reason [`Self::MeshAdd`] is, and after it in the numbering for the same
+    /// reason: a stream with no offscreen layer never carries one, so every stream that
+    /// predates it is still a valid stream.
+    ViewTarget = 13,
 }
 
 /// How the ring treats an envelope under consumer stall (§4).
@@ -151,7 +159,7 @@ pub enum CoalescePolicy {
 impl EnvelopeKind {
     /// Every declared envelope kind. Adding a variant without adding it here fails the
     /// round-trip test rather than silently escaping coverage.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::GeometryAdd,
         Self::GeometryRemove,
         Self::ViewUse,
@@ -164,6 +172,7 @@ impl EnvelopeKind {
         Self::ViewDeclare,
         Self::ViewUndeclare,
         Self::MeshAdd,
+        Self::ViewTarget,
     ];
 
     /// Converts a wire discriminant into an [`EnvelopeKind`], rejecting unknown values.
@@ -185,6 +194,7 @@ impl EnvelopeKind {
             10 => Some(Self::ViewDeclare),
             11 => Some(Self::ViewUndeclare),
             12 => Some(Self::MeshAdd),
+            13 => Some(Self::ViewTarget),
             _ => None,
         }
     }
@@ -200,6 +210,7 @@ impl EnvelopeKind {
             | Self::GeometryRemove
             | Self::MeshAdd
             | Self::ViewDeclare
+            | Self::ViewTarget
             | Self::ViewUndeclare
             | Self::ViewUse
             | Self::ViewRelease => CoalescePolicy::Lossless,
@@ -320,7 +331,7 @@ mod tests {
         assert_eq!(EnvelopeKind::from_repr(0), None);
         // One past the last declared kind. This number moves every time one is added, which is
         // the point: it fails on the addition rather than quietly widening what the ring accepts.
-        assert_eq!(EnvelopeKind::from_repr(13), None);
+        assert_eq!(EnvelopeKind::from_repr(14), None);
         assert_eq!(EnvelopeKind::from_repr(u16::MAX), None);
     }
 
@@ -356,6 +367,9 @@ mod tests {
             // superseded, so a dropped one leaves a `ViewUse` naming an id the consumer never
             // saw — the same reason `GeometryAdd` is lossless.
             (EnvelopeKind::MeshAdd, Lossless),
+            // A target announces where a view draws. Dropping it would leave the view drawing
+            // to the screen, which is a different picture rather than a stale one.
+            (EnvelopeKind::ViewTarget, Lossless),
         ];
         assert_eq!(expected.len(), EnvelopeKind::ALL.len());
         for (kind, policy) in expected {

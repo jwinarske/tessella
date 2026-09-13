@@ -1,7 +1,7 @@
 //! How many channels a texture pixel format carries, generated from
 //! maplibre-native.
 //!
-//! Source revision: b5a2922844c9
+//! Source revision: 96c12fdbcf73
 //!
 //! From `Texture2DDesc::channelCount`. The enum alone says which formats
 //! exist and not how large a pixel of each is, which is enough for a

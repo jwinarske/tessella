@@ -27,6 +27,7 @@ export const KIND = Object.freeze({
   VIEW_DECLARE: 10,
   VIEW_UNDECLARE: 11,
   MESH_ADD: 12,
+  VIEW_TARGET: 13,
 });
 
 /** Shader families, as `tsl_geometry_add.builtin_shader` names them. */
@@ -1062,6 +1063,19 @@ export const LAYOUT = Object.freeze({
       view: 0,
       camera_mode: 4,
       _reserved: 5,
+    },
+  },
+  tsl_view_target: {
+    size: 24, align: 8,
+    at: {
+      view: 0,
+      parent: 4,
+      texture: 8,
+      scale_num: 16,
+      scale_den: 18,
+      format: 20,
+      channel_type: 21,
+      _pad: 22,
     },
   },
   tsl_view_undeclare: {

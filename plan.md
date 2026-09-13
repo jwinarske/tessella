@@ -3420,6 +3420,44 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
   the settle question, falling out of the wasm work rather than being built separately. That is why
   `drain` is a `Pool` method and not a wasm-only function.
 
+- **DR-25 An offscreen pass is a view, not a layer property. A heatmap's first pass is declared
+  as a view whose output is a texture, sized as a fraction of its parent.** A heatmap draws its
+  kernels into a half-resolution `HalfFloat` target and then draws that target through a color
+  ramp; a hillshade prepare pass has the same shape, and so does anything that needs a frame's
+  own pixels back. The stream has to say so, and this is how.
+
+  **The consumers decided it, as they did DR-21.** Every engine in view expresses "render to a
+  texture" as a property of the *camera or view*, and none of them expresses it per layer or per
+  draw. Filament has `View::setRenderTarget(RenderTarget*)` and nothing finer. Unity puts
+  `targetTexture` on `Camera`. UE5 renders through `USceneCaptureComponent2D`, a capture
+  component. Godot's is literally a `SubViewport`. A protocol that said "layer N of view V draws
+  offscreen" would oblige every one of those consumers to synthesize a view to honor it, and the
+  synthesis would be the same in each — which is the tell that the producer should have declared
+  the view.
+
+  **What was weighed against it.** *A `(view, layerIndex)` render-target record*, keyed the way
+  `StencilTiles` is, was the first design and reads well on the producer side: it mirrors mbgl,
+  where `RenderTarget` holds layer groups and `RenderTarget::render` runs before the main passes.
+  It was dropped on the consumer evidence above. *An offscreen pass folded into the existing view
+  as a second `RenderPass`* needs no new envelope at all, and cannot work: the second pass samples
+  what the first drew, so they are two render passes over two attachments, not two passes over
+  one.
+
+  **The size is a fraction, not pixels.** mbgl's target is `viewportSize / 2` and follows the
+  viewport. Declaring absolute pixels would put a re-declaration on the wire at every resize, for
+  a number the consumer already knows; a numerator and denominator against the parent view means a
+  resize moves no bytes, which is what §6.5 and DR-8 ask of every other per-view fact.
+
+  **What it does not carry.** No transient or discard hint. Filament's frame graph derives load
+  and store ops from how an attachment is used, and the others have their own; a hint the producer
+  cannot verify would be a field consumers disagree about. The target is addressable as a
+  `TextureId`, so a drawable in the parent view binds it through the `TextureRef` that already
+  exists, and nothing new is needed to sample it.
+
+  Carried by `ViewTarget`, envelope kind 13 — additive in the sense `MeshAdd` is: a stream with no
+  offscreen layer never carries one, so the R0 freeze holds for every stream that predates it.
+
+
 ## 15. Risk register
 
 - **R-1 Symbol pipeline underestimation.** No ecosystem substitute; placement parity is

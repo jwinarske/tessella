@@ -1,6 +1,6 @@
 //! Expression operator names, generated from maplibre-native.
 //!
-//! Source revision: b5a2922844c9
+//! Source revision: 96c12fdbcf73
 //!
 //! Do not edit: regenerate with `cargo run -p mbgl-codegen -- --mbgl <tree>`.
 //!
