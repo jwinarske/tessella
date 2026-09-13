@@ -799,7 +799,7 @@ pub fn constrained(view: &ViewTransform) -> ViewTransform {
         fraction.clamp(low, high)
     } else {
         // A viewport taller than the world it is shown, which the zoom floor above has already
-        // ruled out except for rounding. Centre it rather than picking an edge.
+        // ruled out except for rounding. Center it rather than picking an edge.
         0.5
     };
 

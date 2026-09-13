@@ -170,7 +170,7 @@ pub struct HostTransport {
     ///
     /// A browser reads it as a byte range in linear memory, which is the same arrangement
     /// `tessella_regions` uses for the ring: the alternative is an allocator export and a copy on
-    /// both sides of it. Removed when the request is answered, failed or cancelled, which is what
+    /// both sides of it. Removed when the request is answered, failed or canceled, which is what
     /// bounds how long the pointer is good for.
     urls: Mutex<BTreeMap<Ticket, String>>,
 }
@@ -226,7 +226,7 @@ impl HostTransport {
     /// Where a handed-out request's URL lies, and how long it is.
     ///
     /// The pointer is into this transport's own memory and is good until the ticket is answered,
-    /// failed or cancelled, or the transport is dropped. A caller that holds it past any of those
+    /// failed or canceled, or the transport is dropped. A caller that holds it past any of those
     /// is holding a dangling pointer, which is why the three of them are the only things that
     /// remove an entry.
     ///
@@ -253,7 +253,7 @@ impl HostTransport {
     ///
     /// `status` is the origin's, and a 404 is a *response* rather than a failure -- the tile path
     /// reads an absent tile as an edge of coverage, which is not the same thing as a fetch that
-    /// did not happen. A ticket that was cancelled, already answered, or never issued is ignored,
+    /// did not happen. A ticket that was canceled, already answered, or never issued is ignored,
     /// so a host that loses track of its own bookkeeping wastes a fetch rather than corrupting
     /// anything.
     pub fn answer(&self, ticket: Ticket, status: u16, body: Vec<u8>) {

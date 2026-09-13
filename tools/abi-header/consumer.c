@@ -544,7 +544,7 @@ int main(int argc, char **argv) {
             /* Every rectangle has to fall inside the texture it damages, and together they have
              * to account for the bytes. A rect that does not fit is an upload past the end of
              * the surface, which is the shape of failure a wrong offset produces here: the array
-             * is read from the wrong place and the coordinates come back as neighbouring
+             * is read from the wrong place and the coordinates come back as neighboring
              * fields. */
             uint64_t want = 0;
             for (unsigned r = 0; r < texture.rect_count; r++) {

@@ -163,7 +163,7 @@ pub fn clip_ring(ring: &[Position], lo: f64, hi: f64, axis: Axis) -> Ring {
 /// A line is not a ring: it has ends, and a line that leaves the box and comes back is *two*
 /// drawn pieces, not one with a chord across the gap. So this returns a list where
 /// [`clip_ring`] returns a single ring, and the count matters downstream — each piece gets its
-/// own caps and its own strip, which is why a tile can hold twice the vertices of its neighbour
+/// own caps and its own strip, which is why a tile can hold twice the vertices of its neighbor
 /// for the same feature.
 ///
 /// Ported from geojson-vt's `clipper::clipLine`. Its `lineMetrics` bookkeeping — `segStart`,

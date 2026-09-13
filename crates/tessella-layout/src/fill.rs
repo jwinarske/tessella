@@ -87,7 +87,7 @@ pub struct FillBucket {
     /// mbgl gets the room for that fade by drawing the line **two pixels wide** --
     /// `constexpr auto lineWidth = 2.0f` in `render_fill_layer.cpp` -- and a backend that cannot
     /// widen a line gets only half the fade, because a one-pixel line generates no fragment
-    /// further than half a pixel from its centre.
+    /// further than half a pixel from its center.
     ///
     /// Filament exposes no line width at all. mbgl met the same wall on Metal and WebGPU and
     /// answered it the same way: `MLN_TRIANGULATE_FILL_OUTLINES` is defined as
@@ -347,7 +347,7 @@ pub fn build_features(features: &[&[Ring]]) -> FillBucket {
 /// degenerate ones, so a feature's vertex count is not the sum of its rings' lengths. Taking the
 /// count from the bucket after each feature is the only reading that stays right when a ring is
 /// dropped — and a binder that guessed instead would paint every feature after the first
-/// dropped ring with its neighbour's colour.
+/// dropped ring with its neighbor's color.
 #[must_use]
 pub fn build_features_tracked(features: &[&[Ring]]) -> (FillBucket, Vec<usize>) {
     build_features_tracked_on(features, 0, Outlines::default())

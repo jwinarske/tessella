@@ -241,7 +241,7 @@ fn a_real_tile_line_layer_tessellates() {
     );
     assert_eq!(line.indices.len() % 3, 0, "whole triangles");
 
-    // Two vertices per emitted centreline point, so an odd count means a half-emitted point:
+    // Two vertices per emitted centerline point, so an odd count means a half-emitted point:
     // the shape a panic or an early return in the middle of `add_current_vertex` would leave.
     assert_eq!(line.vertices.len() % 2, 0, "vertices come in pairs");
 
@@ -325,7 +325,7 @@ fn data_driven_paint_binds_over_a_real_tile() {
         .expect("the layer");
     let line = bucket.content.as_line().expect("a line bucket");
 
-    assert_eq!(bucket.binder.stride(), 16, "colour, floorwidth, width");
+    assert_eq!(bucket.binder.stride(), 16, "color, floorwidth, width");
     assert_eq!(
         bucket.binder.data().len(),
         line.vertices.len() * bucket.binder.stride(),
@@ -350,7 +350,7 @@ fn data_driven_paint_binds_over_a_real_tile() {
             .collect::<std::collections::BTreeSet<_>>()
             .len()
     };
-    assert_eq!(distinct(0..8), 2, "two colours");
+    assert_eq!(distinct(0..8), 2, "two colors");
     assert_eq!(distinct(12..16), 2, "two widths");
     // And floorwidth mirrors width, so it varies the same way.
     assert_eq!(distinct(8..12), 2, "two floorwidths");
@@ -449,7 +449,7 @@ fn a_circle_layer_draws_from_a_vector_tile() {
     assert!(!bucket.segments.is_empty());
 
     // No more discs than points: a point outside the tile proper is dropped rather than drawn
-    // at the edge, which is what keeps a disc from appearing twice on neighbouring tiles.
+    // at the edge, which is what keeps a disc from appearing twice on neighboring tiles.
     assert!(
         bucket.vertices.len() / 4 <= points,
         "{} discs from {points} points",

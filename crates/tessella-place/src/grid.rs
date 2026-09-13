@@ -50,14 +50,14 @@ impl Bounds {
 /// A circle.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Circle {
-    /// Centre.
+    /// Center.
     pub center: (f32, f32),
     /// Radius.
     pub radius: f32,
 }
 
 impl Circle {
-    /// A circle from its centre and radius.
+    /// A circle from its center and radius.
     #[must_use]
     pub const fn new(center: (f32, f32), radius: f32) -> Self {
         Self { center, radius }

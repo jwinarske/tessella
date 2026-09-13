@@ -1,4 +1,4 @@
-//! Joining a road's segments before it is labelled — mbgl's `util::mergeLines`.
+//! Joining a road's segments before it is labeled — mbgl's `util::mergeLines`.
 //!
 //! The expectations are mbgl's own `MergeLines.*`, coordinate for coordinate. They are worth
 //! having exactly rather than in spirit: the merge is order-dependent, and an implementation that
@@ -119,13 +119,13 @@ fn lines_with_the_same_text_join() {
     );
 }
 
-/// mbgl `MergeLines.BothEnds`: a line with a neighbour at each end takes both.
+/// mbgl `MergeLines.BothEnds`: a line with a neighbor at each end takes both.
 ///
 /// The three-way case, and the one an implementation is most likely to get half right — joining
 /// one side and leaving the other, which looks correct on any fixture where only one side
 /// touches.
 #[test]
-fn a_line_joins_neighbours_at_both_ends() {
+fn a_line_joins_neighbors_at_both_ends() {
     let mut layout = layout(&[
         ("aaa", &[(0, 0), (1, 0), (2, 0)]),
         ("aaa", &[(4, 0), (5, 0), (6, 0)]),

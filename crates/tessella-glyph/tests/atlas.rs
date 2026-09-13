@@ -135,7 +135,7 @@ fn an_oversized_rectangle_is_refused() {
 ///
 /// The rectangle handed back covers the distance field plus one pixel, so the pixel just inside
 /// its corner is padding and the one after that is the glyph. Getting this off by one puts a
-/// row of a neighbouring glyph along every label's edge.
+/// row of a neighboring glyph along every label's edge.
 #[test]
 fn a_glyph_lands_inside_its_rectangle() {
     let mut atlas = Atlas::new(128, 128);

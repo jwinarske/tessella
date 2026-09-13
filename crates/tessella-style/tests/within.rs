@@ -105,7 +105,7 @@ fn a_non_polygon_argument_is_a_parse_error() {
 
 /// With a tile named, the polygon is converted into that tile's units.
 ///
-/// The check is a round trip rather than a constant: the centre of the tile that contains a
+/// The check is a round trip rather than a constant: the center of the tile that contains a
 /// point is inside a polygon drawn around that point, and the same feature in tile units is
 /// inside it only because the polygon moved.
 #[test]
@@ -117,7 +117,7 @@ fn a_tile_moves_the_polygon_rather_than_the_feature() {
     .expect("json");
     let within = Expression::parse(&value).expect("parses");
 
-    // Berlin's z14 tile, whose centre is inside that box.
+    // Berlin's z14 tile, whose center is inside that box.
     let tile = (14u8, 8802u32, 5373u32);
     let middle = Shape(
         Some(FeatureGeometry::Points(vec![[4096.0, 4096.0]])),
@@ -126,7 +126,7 @@ fn a_tile_moves_the_polygon_rather_than_the_feature() {
     assert_eq!(
         within.evaluate_on(None, None, Some(&middle), None, Some(tile)),
         Ok(Value::Bool(true)),
-        "the tile's own centre is inside a box drawn around Berlin"
+        "the tile's own center is inside a box drawn around Berlin"
     );
     // And without the tile the same coordinates are degrees, which are nowhere near it.
     assert_eq!(within.evaluate(None, Some(&middle)), Ok(Value::Bool(false)));

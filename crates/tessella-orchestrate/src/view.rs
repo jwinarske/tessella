@@ -28,7 +28,7 @@
 //! fill outline pass=2  flags: stencil, depth, color   sublayer 2
 //! ```
 //!
-//! Pass 3 is `Opaque | Translucent`: a background is opaque where its colour is, and mbgl marks
+//! Pass 3 is `Opaque | Translucent`: a background is opaque where its color is, and mbgl marks
 //! it for both rather than deciding per frame. Fills are translucent only. Stencil is on for
 //! fills and off for the background, which follows from what they draw — a background covers
 //! the viewport and needs no tile clipping, while a fill is per tile and does.
@@ -44,7 +44,7 @@ use tessella_capture_abi::{CameraMode, EnvelopeKind, RenderPass};
 
 /// Draw state for a layer that covers the viewport rather than a tile.
 ///
-/// Depth and colour, no stencil: there is no tile to clip to.
+/// Depth and color, no stencil: there is no tile to clip to.
 #[must_use]
 pub fn background_flags() -> DrawFlags {
     DrawFlags::ENABLE_DEPTH | DrawFlags::ENABLE_COLOR
@@ -62,7 +62,7 @@ pub fn tiled_flags() -> DrawFlags {
 /// The pass a background draws in.
 ///
 /// `Opaque | Translucent`, which is what the oracle emits. A background is opaque where its
-/// colour is opaque, and marking both leaves the choice to the consumer's own opaque-pass
+/// color is opaque, and marking both leaves the choice to the consumer's own opaque-pass
 /// cutoff rather than committing per frame.
 #[must_use]
 pub fn background_pass() -> RenderPass {
@@ -71,11 +71,11 @@ pub fn background_pass() -> RenderPass {
 
 /// Draw state for a circle.
 ///
-/// Depth and colour but *no stencil*: a circle layer is not clipped to the tile mask. The
+/// Depth and color but *no stencil*: a circle layer is not clipped to the tile mask. The
 /// oracle's circle drawable carries `flags=0011` where every fill and line carries `0111`, and
 /// the stencil section names three layers rather than four. A circle is drawn from a point
 /// whose quad may legitimately overhang the tile it belongs to, and the layout already dropped
-/// the points that belong to a neighbour — so the mask would only clip the overhang off.
+/// the points that belong to a neighbor — so the mask would only clip the overhang off.
 #[must_use]
 pub fn circle_flags() -> DrawFlags {
     DrawFlags::ENABLE_DEPTH | DrawFlags::ENABLE_COLOR
@@ -102,7 +102,7 @@ pub fn raster_flags() -> DrawFlags {
 
 /// Draw state for a symbol.
 ///
-/// Depth and colour but *no stencil*, which is the same answer as [`circle_flags`] and for the
+/// Depth and color but *no stencil*, which is the same answer as [`circle_flags`] and for the
 /// same reason: a label is drawn from an anchor and its glyphs legitimately overhang the tile
 /// that owns that anchor. Clipping them to the tile square cuts a road name in half at every
 /// tile edge it crosses -- a horizontal slice through the letters where the edge runs across
@@ -118,11 +118,11 @@ pub fn symbol_flags() -> DrawFlags {
 
 /// The depth-only pass of a fill extrusion.
 ///
-/// A translucent extrusion is drawn twice: once writing depth and no colour, then once writing
-/// colour. Without the first pass the walls of one building blend against the walls of the
+/// A translucent extrusion is drawn twice: once writing depth and no color, then once writing
+/// color. Without the first pass the walls of one building blend against the walls of the
 /// building behind it — every surface alpha-blended against every other surface in front of it —
 /// which reads as a city made of glass. The depth pass settles what is visible first so the
-/// colour pass blends only against the ground.
+/// color pass blends only against the ground.
 ///
 /// `IS_3D`, which the ABI has carried since R0 and nothing has set until now: an extrusion is
 /// the first geometry in this build that leaves the map plane.
@@ -131,20 +131,20 @@ pub fn extrusion_depth_flags() -> DrawFlags {
     DrawFlags::IS_3D | DrawFlags::ENABLE_DEPTH
 }
 
-/// The colour pass of a fill extrusion.
+/// The color pass of a fill extrusion.
 ///
 /// # The stencil follows the depth pass
 ///
 /// mbgl writes `colorBuilder->setEnableStencil(doDepthPass)`, and this used to set no stencil at
 /// all — with a comment asserting that mbgl "sets no stencil mode on either extrusion builder"
 /// because a building's walls legitimately overhang the tile that owns its footprint. That
-/// reasoning is sound and the fact was wrong: the capture's colour-pass drawable carries
+/// reasoning is sound and the fact was wrong: the capture's color-pass drawable carries
 /// `flags=1111`, and the layer appears in the stencil section with a mask per tile.
 ///
 /// Why it is conditional rather than always on: without a depth pass there is nothing that has
 /// already written the tile's stencil for this layer, so testing against it would clip the
 /// walls to the tile square and slice every building on a boundary in half — which is what the
-/// old comment was describing. With one, the prepass has laid down what the colour pass tests
+/// old comment was describing. With one, the prepass has laid down what the color pass tests
 /// against, and skipping the test double-draws wherever two tiles overlap.
 #[must_use]
 pub fn extrusion_color_flags(depth_pass: bool) -> DrawFlags {
@@ -467,7 +467,7 @@ mod tests {
     /// The pass and draw state the oracle emits, per layer kind.
     #[test]
     fn the_pass_and_flags_match_the_oracle() {
-        // Background: Opaque | Translucent, depth and colour, no stencil.
+        // Background: Opaque | Translucent, depth and color, no stencil.
         assert_eq!(background_pass().bits(), 3);
         assert!(background_pass().contains(RenderPass::OPAQUE));
         assert!(background_pass().contains(RenderPass::TRANSLUCENT));

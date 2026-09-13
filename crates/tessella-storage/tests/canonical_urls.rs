@@ -448,7 +448,7 @@ fn the_url_and_path_split_where_the_oracle_splits() {
 ///
 /// A file source is handed a URL and no context. The kind is written in the URL's own domain
 /// segment, so nothing has to be passed alongside it — and anything the server does not
-/// recognise is a source, because a source URL has no kind segment at all.
+/// recognize is a source, because a source URL has no kind segment at all.
 #[test]
 fn a_canonical_urls_kind_is_written_in_it() {
     let mapbox = TileServer::mapbox();

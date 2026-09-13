@@ -7,7 +7,7 @@
 use tessella_place::feature::{Extent, Padding, collision_box};
 
 fn label() -> Extent {
-    // A shaped label 40 wide and 20 tall, centred on its anchor.
+    // A shaped label 40 wide and 20 tall, centered on its anchor.
     Extent {
         top: -10.0,
         bottom: 10.0,
@@ -126,9 +126,9 @@ fn a_diagonal_label_reserves_more_than_it_draws() {
     );
 }
 
-/// The envelope stays centred on the anchor when the label is.
+/// The envelope stays centered on the anchor when the label is.
 ///
-/// Rotation is about the anchor, so a centred label stays centred however far it turns. A
+/// Rotation is about the anchor, so a centered label stays centered however far it turns. A
 /// rotation about a corner would drift the label away from its point as the angle changed.
 #[test]
 fn rotation_turns_about_the_anchor() {
@@ -136,13 +136,13 @@ fn rotation_turns_about_the_anchor() {
         let placed =
             collision_box(label(), (50.0, 60.0), 1.0, Padding::default(), degrees).expect("box");
         let bounds = placed.bounds();
-        let centre = (
+        let center = (
             (bounds.min.0 + bounds.max.0) / 2.0,
             (bounds.min.1 + bounds.max.1) / 2.0,
         );
         assert!(
-            (centre.0 - 50.0).abs() < 1e-3 && (centre.1 - 60.0).abs() < 1e-3,
-            "at {degrees} degrees the centre moved to {centre:?}"
+            (center.0 - 50.0).abs() < 1e-3 && (center.1 - 60.0).abs() < 1e-3,
+            "at {degrees} degrees the center moved to {center:?}"
         );
     }
 }
@@ -199,7 +199,7 @@ fn padding_is_what_keeps_labels_apart() {
 /// picture reaches further out by its border. Collision has to reserve the picture, or two
 /// shields overlap by their borders and look crowded while the numbers do not touch.
 ///
-/// Two paddings with different behaviours, which is why they are separate arguments: `text-padding`
+/// Two paddings with different behaviors, which is why they are separate arguments: `text-padding`
 /// is a number of screen pixels and stays put under zoom, while the margins are part of the
 /// drawing and scale with it.
 #[test]

@@ -54,7 +54,7 @@ pub struct Quad {
     ///
     /// True for every glyph, and for an image only when its sprite is an SDF. It is per quad
     /// because a label with an image in it draws both from one buffer, and the shader has to
-    /// recolour one and not the other.
+    /// recolor one and not the other.
     pub sdf: bool,
 }
 
@@ -73,7 +73,7 @@ pub struct Options {
     /// half of whether an upright glyph is turned at all — a label following a line is turned
     /// with the line whether or not the style asked for vertical placement, which is the other
     /// half. And with [`Shaping::verticalizable`] it decides whether every glyph on the line is
-    /// re-centred in its column, which is what keeps a scaled glyph or an image from sitting
+    /// re-centered in its column, which is what keeps a scaled glyph or an image from sitting
     /// against one edge of it.
     pub allow_vertical_placement: bool,
 }
@@ -160,7 +160,7 @@ where
 
             // Scaled by the section's `font-scale`, as every measurement of this glyph is:
             // mbgl reads `positionedGlyph.scale` at each of them. A glyph twice the size is
-            // twice as wide, sits twice as far from its own centre, and covers twice as much of
+            // twice as wide, sits twice as far from its own center, and covers twice as much of
             // the atlas rectangle it samples — and getting one of the three wrong shows as text
             // that is the right size in the wrong place, or the wrong size in the right one.
             #[allow(clippy::cast_precision_loss)]
@@ -173,21 +173,21 @@ where
             let rotate_vertical =
                 (options.along_line || options.allow_vertical_placement) && glyph.vertical;
 
-            // Every glyph on a vertical line is re-centred in its column. The column is one em
+            // Every glyph on a vertical line is re-centered in its column. The column is one em
             // wide and what sits in it need not be: a scaled glyph is wider or narrower than its
             // line's cell, and the correction is the difference. mbgl folds the line's own offset
             // in here as well, which is what pushes a line down that an oversized image grew.
             let line_offset = if options.allow_vertical_placement && shaping.verticalizable {
                 #[allow(clippy::cast_precision_loss)]
-                let centred = match glyph.image {
-                    // An image is centred on its own width in the column.
+                let centered = match glyph.image {
+                    // An image is centered on its own width in the column.
                     Some(_) => (crate::text::ONE_EM - metrics.width as f32 * glyph.scale) / 2.0,
                     // A scaled glyph is offset by how much bigger than the column it is, with
                     // the sign the other way round — which is why mbgl writes the two as one
                     // subtraction and negates the image half.
                     None => -(glyph.scale - 1.0) * crate::text::ONE_EM,
                 };
-                line.offset / 2.0 + centred
+                line.offset / 2.0 + centered
             } else {
                 0.0
             };
@@ -240,7 +240,7 @@ where
             if rotate_vertical {
                 // A glyph that stays upright on a vertical line is drawn from a horizontal
                 // layout, so the label is rotated a quarter turn clockwise and each such glyph a
-                // quarter turn back. The centre is the middle of the left edge of its own em
+                // quarter turn back. The center is the middle of the left edge of its own em
                 // box, which is where the two rotations cancel: turning about it lands the
                 // glyph's middle on the line's midline, so the `Y_OFFSET` that pulled it up
                 // there is no longer wanted — and is what the correction below takes out again,
@@ -303,7 +303,7 @@ pub const ICON_QUAD_BORDER: f32 = 1.0;
 ///
 /// mbgl's `ImagePosition::padding`. It is the sprite's counterpart to [`RECT_BUFFER`] and it is
 /// three pixels smaller, because a picture needs only enough room that linear filtering cannot
-/// reach a neighbour, while a distance field needs a border wide enough to carry the field
+/// reach a neighbor, while a distance field needs a border wide enough to carry the field
 /// itself. An image drawn inline in a label uses this where a glyph uses the other.
 pub const SPRITE_PADDING: i32 = 1;
 
@@ -377,9 +377,9 @@ pub enum IconTextFit {
     /// Leave the icon alone.
     #[default]
     None,
-    /// Stretch it to the text's width, and centre it vertically.
+    /// Stretch it to the text's width, and center it vertically.
     Width,
-    /// Stretch it to the text's height, and centre it horizontally.
+    /// Stretch it to the text's height, and center it horizontally.
     Height,
     /// Stretch it in both directions.
     Both,
@@ -391,7 +391,7 @@ pub enum IconTextFit {
 /// `icon-text-fit-padding`, in the same order.
 ///
 /// The icon's *anchor* is deliberately ignored, which mbgl says outright: `icon-text-fit` is a
-/// statement about where the icon goes relative to the text, and honouring the anchor as well
+/// statement about where the icon goes relative to the text, and honoring the anchor as well
 /// would move it away from the label it is drawn around.
 #[must_use]
 pub fn fit_icon_to_text(

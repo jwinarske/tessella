@@ -47,11 +47,11 @@ fn an_extrusion_layer_builds_from_polygons() {
 
 /// Two geometries, each drawn once per pass.
 ///
-/// The roof and the walls raised over it, in the depth pass and again in the colour pass — four
+/// The roof and the walls raised over it, in the depth pass and again in the color pass — four
 /// drawables, which is what the capture shows on every tile of an extrusion layer. Whether there
 /// is a depth pass is mbgl's `doDepthPass = (!opaque || hasPattern)`; without it every wall
 /// alpha-blends against the walls behind it, a city made of glass rather than of buildings, so
-/// the count is not an optimisation but the difference between two pictures.
+/// the count is not an optimization but the difference between two pictures.
 #[test]
 fn an_extrusion_is_two_geometries_in_one_pass_or_two() {
     let tile = Tile::decode(REAL_TILE).expect("the fixture decodes");
@@ -74,11 +74,11 @@ fn an_extrusion_is_two_geometries_in_one_pass_or_two() {
     assert_eq!(
         translucent[0].drawable_count(),
         4,
-        "and a translucent one draws both again in the depth pass in front of the colour one"
+        "and a translucent one draws both again in the depth pass in front of the color one"
     );
 }
 
-/// Both passes are 3D, and only the second writes colour — and the stencil follows the first.
+/// Both passes are 3D, and only the second writes color — and the stencil follows the first.
 ///
 /// `IS_3D` has been in the ABI since R0 and nothing set it until now: an extrusion is the first
 /// geometry in this build that leaves the map plane.
@@ -88,15 +88,15 @@ fn an_extrusion_is_two_geometries_in_one_pass_or_two() {
 /// That neither pass is stencilled, on the reasoning that a building's walls legitimately
 /// overhang the tile that owns its footprint and clipping them to the tile square would slice
 /// every building on a boundary in half. The reasoning is sound; the fact was wrong. mbgl writes
-/// `colorBuilder->setEnableStencil(doDepthPass)`, the pattern capture's colour-pass drawable
-/// carries `flags=1111` — is3D, stencil, depth, colour — and the extrusion layer appears in the
+/// `colorBuilder->setEnableStencil(doDepthPass)`, the pattern capture's color-pass drawable
+/// carries `flags=1111` — is3D, stencil, depth, color — and the extrusion layer appears in the
 /// capture's stencil section with a mask per tile.
 ///
 /// The two are reconciled by the condition. With no depth pass nothing has written this layer's
 /// stencil, so testing against it would do exactly the slicing the old comment described. With
-/// one, the prepass has laid down what the colour pass tests against.
+/// one, the prepass has laid down what the color pass tests against.
 #[test]
-fn the_two_passes_differ_in_colour_and_in_stencil() {
+fn the_two_passes_differ_in_color_and_in_stencil() {
     use tessella_orchestrate::view;
 
     let depth = view::extrusion_depth_flags();
@@ -109,7 +109,7 @@ fn the_two_passes_differ_in_colour_and_in_stencil() {
 
     assert!(
         !depth.contains(DrawFlags::ENABLE_COLOR),
-        "the depth pass writes no colour"
+        "the depth pass writes no color"
     );
     assert!(color.contains(DrawFlags::ENABLE_COLOR));
 
@@ -119,7 +119,7 @@ fn the_two_passes_differ_in_colour_and_in_stencil() {
     );
     assert!(
         color.contains(DrawFlags::ENABLE_STENCIL),
-        "and the colour pass tests it: `flags=1111` in the capture"
+        "and the color pass tests it: `flags=1111` in the capture"
     );
 
     // Without a prepass there is nothing to test against.
@@ -154,14 +154,14 @@ fn an_opaque_patterned_extrusion_still_gets_a_depth_pass() {
     );
     assert!(
         !plain(true, false).needs_depth_pass(),
-        "and an opaque unpatterned extrusion needs only its colour pass"
+        "and an opaque unpatterned extrusion needs only its color pass"
     );
 }
 
 /// The props buffer lands each value at mbgl's own offset.
 ///
 /// `fill_extrusion_layer_ubo.hpp` numbers every field. Three of the five blocks are the *light*,
-/// which is what makes an extrusion the first thing here whose colour depends on more than its
+/// which is what makes an extrusion the first thing here whose color depends on more than its
 /// paint: a build that packed the paint and left the light at zero draws every building flat
 /// black.
 #[test]
@@ -224,10 +224,10 @@ fn a_boolean_paint_property_defaults_to_one_not_zero() {
 
 /// The three data-driven properties are the three an extrusion is.
 ///
-/// Colour, height and base vary per feature — a building layer varies all three, which is the
+/// Color, height and base vary per feature — a building layer varies all three, which is the
 /// whole point of it — so unlike a raster layer they have to reach the shader as attributes.
 #[test]
-fn colour_height_and_base_are_data_driven() {
+fn color_height_and_base_are_data_driven() {
     use tessella_style::property::resolve_paint;
 
     let style = style_with("");
@@ -283,7 +283,7 @@ fn a_filter_sees_the_tiles_zoom() {
 /// Every layer kind has its own block, and this one differs from a fill's in the fields that
 /// decide whether a building has a height at all: `height_factor` and the tile's split pixel
 /// coordinate sit where a fill keeps its mix factors. Packing a fill entry into it puts the
-/// colour interpolation — zero, for a constant colour — where `height_factor` belongs, and every
+/// color interpolation — zero, for a constant color — where `height_factor` belongs, and every
 /// building comes out flat on the ground. It draws, and what it draws is a fill layer.
 #[test]
 fn the_drawable_block_is_an_extrusions_own() {
@@ -320,7 +320,7 @@ fn the_drawable_block_is_an_extrusions_own() {
     // term -- and not under `depthModeForSublayer`, which divides a flat layer's range so a
     // fill's outline does not z-fight the fill it outlines. Taking the flat-layer offset here
     // separates the roof from the walls it belongs to by one `DEPTH_EPSILON`, which after the
-    // divide is 9.3e-7 of clip depth against the 2e-4 a 150-metre building spans in total. The
+    // divide is 9.3e-7 of clip depth against the 2e-4 a 150-meter building spans in total. The
     // symptom is whole triangles of building where neither surface won the comparison.
     let flat = tessella_orchestrate::ubo::DrawableEntry::for_tile_with(
         &view,

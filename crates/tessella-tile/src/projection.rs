@@ -127,7 +127,7 @@ pub fn unproject(point: [f64; 2], world_size: f64) -> (f64, f64) {
 /// A point's position within the tile that contains it, in `0..EXTENT` units.
 ///
 /// Returned as f64 rather than i16 because clipping and simplification happen before rounding:
-/// a coordinate outside `0..EXTENT` is a point in a neighbouring tile that this tile's buffer
+/// a coordinate outside `0..EXTENT` is a point in a neighboring tile that this tile's buffer
 /// may still need, and rounding it here would lose the sign information that says so.
 #[must_use]
 pub fn tile_local(longitude: f64, latitude: f64, zoom: u8, tile_x: u32, tile_y: u32) -> [f64; 2] {
@@ -292,7 +292,7 @@ mod tests {
     }
 
     /// A point outside the tile keeps its sign rather than being clamped, because a negative
-    /// coordinate is what says "this belongs to the neighbour, and this tile's buffer wants it".
+    /// coordinate is what says "this belongs to the neighbor, and this tile's buffer wants it".
     #[test]
     fn tile_local_does_not_clamp_to_the_tile() {
         let (lon, lat) = unproject([4091.5, 2722.5], f64::from(1u32 << 13));

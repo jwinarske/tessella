@@ -424,7 +424,7 @@ pub struct TextureRef {
     /// How to sample it, as a [`TextureFilter`] discriminant.
     ///
     /// This was padding through R0, and zero is [`TextureFilter::Linear`] -- so a producer that
-    /// never sets it, and a consumer that never reads it, both keep the behaviour they had.
+    /// never sets it, and a consumer that never reads it, both keep the behavior they had.
     pub filter: u32,
 }
 
@@ -502,7 +502,7 @@ impl MeshFormat {
 ///
 /// So the bytes travel whole and the consumer's own loader reads them. Both consumers this
 /// targets already have one that does: Filament's `gltfio` links meshoptimizer and takes a byte
-/// pointer, and flutter_scene's importer recognises the same two extensions and takes a
+/// pointer, and flutter_scene's importer recognizes the same two extensions and takes a
 /// `Uint8List`. Decoding here and re-emitting would discard work the consumer already links and
 /// roughly triple what crosses the seam.
 ///
@@ -615,7 +615,7 @@ pub struct ViewUse {
     /// Padding. Must be zero.
     ///
     /// Five bytes, not one. The fields before it end at 35 and the record is 40, so a single byte
-    /// left four of compiler tail padding that `as_bytes` copied to the ring uninitialised -- the
+    /// left four of compiler tail padding that `as_bytes` copied to the ring uninitialized -- the
     /// trait's contract asks for every byte written, and this is what makes that true.
     pub _pad: [u8; 5],
 }

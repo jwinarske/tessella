@@ -67,7 +67,7 @@ pub trait DeferredFileSource: Send + Sync {
     ///
     /// [`None`] means still in flight. A ticket is *consumed* by the poll that answers it, so
     /// polling the same ticket again also answers [`None`]: the result has an owner, and it is
-    /// whoever took it. A ticket that was never issued, or was cancelled, answers [`None`] too —
+    /// whoever took it. A ticket that was never issued, or was canceled, answers [`None`] too —
     /// there is deliberately no way to tell those apart, because a caller that has to ask has
     /// already lost track of its own request.
     fn poll(&self, ticket: Ticket) -> Option<Fetched>;
@@ -80,7 +80,7 @@ pub trait DeferredFileSource: Send + Sync {
     /// when it lands rather than stored.
     fn cancel(&self, ticket: Ticket);
 
-    /// How many requests have been issued and neither answered nor cancelled.
+    /// How many requests have been issued and neither answered nor canceled.
     ///
     /// The deferred half of the settle question: a caller asking whether anything further is
     /// coming reads this the way it reads
@@ -105,7 +105,7 @@ struct Table {
 /// The table a [`DeferredFileSource`] hands out tickets into.
 ///
 /// Written once here rather than in each implementation, because the awkward parts are the same
-/// for all of them: a result posted for a cancelled ticket must be dropped rather than
+/// for all of them: a result posted for a canceled ticket must be dropped rather than
 /// resurrect the entry, and a request whose work unwinds must post *something* or its caller
 /// waits for ever. [`Tickets::post`] and [`Tickets::abandon`] are the two halves of that.
 #[derive(Debug)]
@@ -147,7 +147,7 @@ impl Tickets {
         let mut held = self.table.lock().unwrap_or_else(PoisonError::into_inner);
         let id = held.next;
         // A `u64` at one request per nanosecond runs for five hundred years, so the saturating
-        // arithmetic is a formality rather than a case with behaviour. It is here so that the
+        // arithmetic is a formality rather than a case with behavior. It is here so that the
         // impossible case reuses the last id instead of wrapping to zero, which *is* a live
         // ticket's name.
         held.next = held.next.saturating_add(1);
@@ -157,7 +157,7 @@ impl Tickets {
 
     /// Records an outcome, if anyone is still waiting for it.
     ///
-    /// A post for a cancelled or already-taken ticket is dropped. Re-inserting would make
+    /// A post for a canceled or already-taken ticket is dropped. Re-inserting would make
     /// [`Self::cancel`] a suggestion rather than a release.
     pub fn post(&self, ticket: Ticket, outcome: Fetched) {
         let mut held = self.table.lock().unwrap_or_else(PoisonError::into_inner);
@@ -203,7 +203,7 @@ impl Tickets {
             .remove(&ticket.0);
     }
 
-    /// Tickets issued and neither taken nor cancelled.
+    /// Tickets issued and neither taken nor canceled.
     #[must_use]
     pub fn open(&self) -> usize {
         self.table

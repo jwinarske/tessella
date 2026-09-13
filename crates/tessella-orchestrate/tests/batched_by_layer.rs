@@ -277,7 +277,7 @@ fn a_batch_spans_the_cover() {
 /// Batching does not need this — packing everything into a single frame-wide slab batches just
 /// as well, and the two tests above would pass. It is granularity that needs it. A slab is the
 /// unit §5.3 refcounts, so a layer whose tiles did not change keeps its buffer while a
-/// neighbour's is replaced; one slab for the frame would make every frame rebuild every byte.
+/// neighbor's is replaced; one slab for the frame would make every frame rebuild every byte.
 /// It is also the unit a consumer allocates, and a driver's maximum buffer size is a real
 /// number.
 ///
@@ -310,7 +310,7 @@ fn a_slab_holds_one_layer() {
 
 /// A bucket's bytes reach the arena once, however many drawables it produces.
 ///
-/// A translucent extrusion draws twice — a depth-only pass and then a colour pass — and the two
+/// A translucent extrusion draws twice — a depth-only pass and then a color pass — and the two
 /// differ in render state and `ubo_index`, neither of which a `GeometryAdd` carries. Encoding
 /// per drawable copied every vertex, index and interleaved attribute a second time, which on a
 /// city-sized cover was the largest single cost in `emit`.

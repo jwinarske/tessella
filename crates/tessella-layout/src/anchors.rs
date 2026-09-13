@@ -271,7 +271,7 @@ pub fn get_anchors(
     let continued_line =
         line[0].0 == 0.0 || line[0].0 == EXTENT || line[0].1 == 0.0 || line[0].1 == EXTENT;
 
-    // A long label at a short spacing would overlap its neighbours, so the spacing is widened
+    // A long label at a short spacing would overlap its neighbors, so the spacing is widened
     // to leave a quarter of it as a gap between edges. Collision would otherwise throw most of
     // them away, which is work done to be discarded.
     let mut spacing = spacing;
@@ -306,7 +306,7 @@ pub fn get_anchors(
 /// the name appears once, in the middle, and does not march along the feature.
 ///
 /// `None` when the line is empty, or when it bends too sharply at its middle. The second is not
-/// a failure to fall back from — a caller asked for the centre specifically, and putting the
+/// a failure to fall back from — a caller asked for the center specifically, and putting the
 /// label somewhere else instead would silently answer a different question.
 #[must_use]
 #[allow(clippy::too_many_arguments)]
@@ -326,15 +326,15 @@ pub fn get_center_anchor(
 
     let angle_window = angle_window_size(text_left, text_right, glyph_size, box_scale);
     let label_length = (text_right - text_left).max(icon_right - icon_left) * box_scale;
-    let centre = line_length(line) / 2.0;
+    let center = line_length(line) / 2.0;
     let mut travelled = 0.0f32;
 
     for (segment, pair) in line.windows(2).enumerate() {
         let (a, b) = (pair[0], pair[1]);
         let segment_distance = distance(a, b);
 
-        if travelled + segment_distance > centre {
-            let t = (centre - travelled) / segment_distance;
+        if travelled + segment_distance > center {
+            let t = (center - travelled) / segment_distance;
             let anchor = Anchor {
                 point: (
                     (a.0 + (b.0 - a.0) * t).round(),
@@ -344,9 +344,9 @@ pub fn get_center_anchor(
                 segment,
             };
 
-            // Note there is no tile-bounds test here, unlike the repeating case. A centred
+            // Note there is no tile-bounds test here, unlike the repeating case. A centered
             // label belongs to its feature rather than to a position, so a river whose middle
-            // falls outside this tile still gets its name — which is mbgl's behaviour and is
+            // falls outside this tile still gets its name — which is mbgl's behavior and is
             // why its own test asserts an anchor at (-3, -3).
             return (angle_window == 0.0
                 || check_max_angle(line, &anchor, label_length, angle_window, max_angle))

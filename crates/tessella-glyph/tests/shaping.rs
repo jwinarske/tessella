@@ -35,8 +35,8 @@ fn latin(text: &str, advance: f32) -> Vec<Char> {
         .collect()
 }
 
-/// mbgl's options for the ZWSP test: centred, centre-justified, one em line height.
-fn centred(max_width_in_chars: f32) -> Options {
+/// mbgl's options for the ZWSP test: centered, center-justified, one em line height.
+fn centered(max_width_in_chars: f32) -> Options {
     Options {
         max_width: max_width_in_chars * ONE_EM,
         line_height: ONE_EM,
@@ -53,20 +53,20 @@ fn the_bounding_box_matches_mbgl() {
     // Three lines, the widest being six characters.
     let shaping = shape(
         &cjk("中中\u{200b}中中\u{200b}中中\u{200b}中中中中中中\u{200b}中中"),
-        &centred(5.0),
+        &centered(5.0),
     );
     assert_eq!(shaping.lines.len(), 3);
     assert_eq!((shaping.top, shaping.bottom), (-36.0, 36.0));
     assert_eq!((shaping.left, shaping.right), (-63.0, 63.0));
 
     // Two lines, the widest being two characters.
-    let shaping = shape(&cjk("中中\u{200b}中"), &centred(1.0));
+    let shaping = shape(&cjk("中中\u{200b}中"), &centered(1.0));
     assert_eq!(shaping.lines.len(), 2);
     assert_eq!((shaping.top, shaping.bottom), (-24.0, 24.0));
     assert_eq!((shaping.left, shaping.right), (-21.0, 21.0));
 
     // One line: the trailing break opportunity is not a break.
-    let shaping = shape(&cjk("中中\u{200b}"), &centred(2.0));
+    let shaping = shape(&cjk("中中\u{200b}"), &centered(2.0));
     assert_eq!(shaping.lines.len(), 1);
     assert_eq!((shaping.top, shaping.bottom), (-12.0, 12.0));
     assert_eq!((shaping.left, shaping.right), (-21.0, 21.0));
@@ -74,7 +74,7 @@ fn the_bounding_box_matches_mbgl() {
     // Five lines of nothing: they take height and no width.
     let shaping = shape(
         &cjk("\u{200b}\u{200b}\u{200b}\u{200b}\u{200b}"),
-        &centred(1.0),
+        &centered(1.0),
     );
     assert_eq!(shaping.lines.len(), 5);
     assert_eq!((shaping.top, shaping.bottom), (-60.0, 60.0));
@@ -88,7 +88,7 @@ fn the_bounding_box_matches_mbgl() {
 /// into the quad builder, which then asks the atlas for a rectangle that does not exist.
 #[test]
 fn zero_width_spaces_are_not_placed() {
-    let shaping = shape(&cjk("中中\u{200b}中"), &centred(1.0));
+    let shaping = shape(&cjk("中中\u{200b}中"), &centered(1.0));
     let placed: usize = shaping.lines.iter().map(|line| line.glyphs.len()).sum();
     assert_eq!(placed, 3, "three ideographs and no space");
     for line in &shaping.lines {
@@ -111,7 +111,7 @@ fn the_anchor_moves_the_box_but_not_its_size() {
             &text,
             &Options {
                 anchor,
-                ..centred(2.0)
+                ..centered(2.0)
             },
         );
         (
@@ -148,7 +148,7 @@ fn the_anchor_moves_the_box_but_not_its_size() {
 
 /// An anchor on an edge justifies toward that edge unless the style says otherwise.
 ///
-/// mbgl's `getAnchorJustification`. Centring a left-anchored label leaves it ragged on the side
+/// mbgl's `getAnchorJustification`. Centering a left-anchored label leaves it ragged on the side
 /// that touches the point, which is the side a reader's eye follows back to the symbol.
 #[test]
 fn an_edge_anchor_justifies_toward_its_edge() {
@@ -165,7 +165,7 @@ fn an_edge_anchor_justifies_toward_its_edge() {
 /// Justification decides where a short line sits against a long one.
 ///
 /// Two lines of different length: left-justified they share a left edge, right-justified a
-/// right edge, centred neither. This is the assertion that catches a justify factor applied
+/// right edge, centered neither. This is the assertion that catches a justify factor applied
 /// with the wrong sign, which is otherwise invisible on a single-line label.
 #[test]
 fn justification_places_a_short_line_against_a_long_one() {
@@ -196,14 +196,14 @@ fn justification_places_a_short_line_against_a_long_one() {
     let (long, short) = at(Justify::Center);
     assert!(
         short > long && short - long < 4.0 * 12.0,
-        "centred sits between: {long} {short}"
+        "centered sits between: {long} {short}"
     );
 }
 
-/// Trailing whitespace does not shift a centred line.
+/// Trailing whitespace does not shift a centered line.
 ///
 /// A line that ends at a space keeps that space in the break's output. Measuring it would
-/// centre the line as though it were a character wider, putting every wrapped label slightly
+/// center the line as though it were a character wider, putting every wrapped label slightly
 /// left of where it belongs.
 #[test]
 fn a_trailing_space_does_not_shift_the_line() {
@@ -240,7 +240,7 @@ fn the_baseline_offset_is_what_mbgl_uses() {
 ///
 /// The pen takes the spacing after every glyph including the last, but that last gap is the
 /// space before a character that never came. Counting it makes every line measure one gap too
-/// wide, and a centred label is then shifted by half a gap.
+/// wide, and a centered label is then shifted by half a gap.
 #[test]
 fn the_trailing_spacing_is_not_part_of_the_line() {
     let shaping = shape(
@@ -270,7 +270,7 @@ fn right_justification_counts_the_final_advance() {
         },
     );
 
-    // Three glyphs of 12: the line is 36 wide, centred on the anchor, so it runs -18..18.
+    // Three glyphs of 12: the line is 36 wide, centered on the anchor, so it runs -18..18.
     assert_eq!(shaping.left, -18.0);
     assert_eq!(shaping.lines[0].glyphs.first().expect("a glyph").x, -18.0);
     assert_eq!(shaping.lines[0].glyphs.last().expect("a glyph").x, 6.0);
@@ -279,7 +279,7 @@ fn right_justification_counts_the_final_advance() {
 /// Leading whitespace is dropped before the line is laid out.
 ///
 /// A line that begins after a break begins with the space that caused it. Laying that out
-/// indents the line by a character it does not draw, which on a centred label moves everything
+/// indents the line by a character it does not draw, which on a centered label moves everything
 /// by half of that.
 #[test]
 fn leading_whitespace_is_trimmed() {

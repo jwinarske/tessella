@@ -20,7 +20,7 @@
 //! comment that it is "to make sure we're not infinitely waiting for tiles to load". That is
 //! forced by its architecture: tiles are waiting on an observer callback that has to fire.
 //! Nothing here is waiting on a callback, so a failure is returned. A caller that wants mbgl's
-//! behaviour can log it and carry on with no features; a caller given an empty source cannot
+//! behavior can log it and carry on with no features; a caller given an empty source cannot
 //! recover the fact that the style is broken.
 
 use std::borrow::Cow;

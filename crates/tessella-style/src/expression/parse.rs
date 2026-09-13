@@ -115,8 +115,8 @@ fn parse_expecting(value: &Value, scope: &[String], expected: Type) -> Result<Ex
 
 /// The argument as the position needs it, converted where the spec converts implicitly.
 ///
-/// A colour property written `"red"` is a string that has to become a colour, and mbgl does that
-/// by inserting the coercion rather than by widening what a colour position accepts. Doing the
+/// A color property written `"red"` is a string that has to become a color, and mbgl does that
+/// by inserting the coercion rather than by widening what a color position accepts. Doing the
 /// same here keeps the check strict and keeps `["match", …, "red", "blue"]` in `fill-color`
 /// working -- and it is what turns an unparseable literal into an error at parse, since the cast
 /// over a constant folds immediately.
@@ -143,9 +143,9 @@ fn coerce_to(expected: Type, parsed: Expr) -> Result<Expr, ParseError> {
         });
     }
     match (expected, found) {
-        // A literal is converted now rather than at evaluation: the style wrote the colour down,
-        // so whether it is a colour is knowable here, and mbgl answers it here. Deferring it to a
-        // cast would leave an unparseable colour inside a branch that never folds -- a `step`
+        // A literal is converted now rather than at evaluation: the style wrote the color down,
+        // so whether it is a color is knowable here, and mbgl answers it here. Deferring it to a
+        // cast would leave an unparseable color inside a branch that never folds -- a `step`
         // over a feature property is not constant -- and the style would load with a stop that
         // fails per feature per tile instead.
         (Type::Color, Type::String) if matches!(parsed, Expr::Literal(Value::String(_))) => {
@@ -244,7 +244,7 @@ fn parse_rooted(
     // A pre-expression function is an object, which `looks_like_expression` does not recognize,
     // so without this check it falls through to `Expr::Literal` and a style that varies a
     // property by zoom silently gets the raw JSON object as the value. That is worse than an
-    // error: it renders as a broken colour rather than as a message.
+    // error: it renders as a broken color rather than as a message.
     if let Some(function) = parse_legacy_function(value, spec)? {
         return Ok(function);
     }
@@ -540,10 +540,10 @@ fn parse_rooted(
         "to-color" => {
             expect_arity(operator, args, 1, usize::MAX)?;
             let parsed = parse_all(args, scope)?;
-            // Converting something that is already a colour would read its normalized channels
+            // Converting something that is already a color would read its normalized channels
             // as 0..255 and darken it by a factor of 255. The spec makes `["to-color", ["rgba",
             // …]]` a pass-through for exactly this reason, and the check is static because the
-            // difference between a colour and the four numbers it looks like is a type.
+            // difference between a color and the four numbers it looks like is a type.
             if let [only] = parsed.as_slice()
                 && only.result_type() == Type::Color
             {
@@ -884,7 +884,7 @@ fn check_comparable(
     );
 
     // Each operand on its own first, which is the check that was missing. An array, an object
-    // or a colour cannot be compared *at all*, whatever it is compared against — and asking
+    // or a color cannot be compared *at all*, whatever it is compared against — and asking
     // only whether the two could be equal never finds out, because an unknown could equal
     // anything and `["get", …]` is always unknown.
     for (side, kind) in [(left, "left"), (right, "right")] {
@@ -1399,7 +1399,7 @@ fn parse_interpolate(
     let input = Box::new(parse_expecting(&args[1], scope, Type::Number)?);
     let stops = parse_stops(operator, &args[2..], scope, expected)?;
 
-    // Not everything can be interpolated. Numbers and colours can, and so can an array of numbers
+    // Not everything can be interpolated. Numbers and colors can, and so can an array of numbers
     // whose length is known -- without a length there is no telling that two stops have the same
     // number of components to walk between, which is why `array<number>` is refused where
     // `array<number, 2>` is taken.
@@ -1453,7 +1453,7 @@ fn within_rings(value: &Value) -> Option<Vec<Vec<[f64; 2]>>> {
 ///
 /// Ascending order is checked rather than assumed. Both `interpolate` and `step` locate a stop
 /// by binary search, and an out-of-order stop list would make that search return an arbitrary
-/// neighbour — a wrong value from a style that looks perfectly reasonable.
+/// neighbor — a wrong value from a style that looks perfectly reasonable.
 fn parse_stops(
     operator: &str,
     args: &[Value],

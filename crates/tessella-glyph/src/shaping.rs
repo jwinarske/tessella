@@ -64,7 +64,7 @@ pub struct Char {
     ///
     /// The advance in [`Self::advance`] is already scaled, because the caller computes it from
     /// metrics this type does not carry. This is kept beside it for the two things the caller
-    /// cannot do: the line's height, which depends on its neighbours, and the quad's size.
+    /// cannot do: the line's height, which depends on its neighbors, and the quad's size.
     pub scale: f32,
     /// The sprite this character is, if it is an `["image", …]` section rather than text.
     ///
@@ -93,7 +93,7 @@ pub struct Image {
     pub pixel_ratio: f32,
     /// Whether it is a signed distance field rather than a picture.
     ///
-    /// The shader has to know: an SDF is recoloured and haloed like a glyph, and a picture is
+    /// The shader has to know: an SDF is recolored and haloed like a glyph, and a picture is
     /// drawn as it is. It is per *quad* rather than per drawable, because a label with an image
     /// in it draws both from one buffer.
     pub sdf: bool,
@@ -330,7 +330,7 @@ pub fn split_lines(text: &[Char], max_width: f32, spacing: f32) -> Vec<Vec<Char>
 /// `Top` puts the label *below* the point.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Anchor {
-    /// Centred on the point.
+    /// Centered on the point.
     #[default]
     Center,
     /// The label's left edge is at the point.
@@ -371,7 +371,7 @@ impl Anchor {
     /// The justification a label takes when its style does not state one.
     ///
     /// mbgl's `getAnchorJustification`: text anchored on its left edge reads left-justified,
-    /// and the alternative — centring a left-anchored label — leaves it ragged on the side that
+    /// and the alternative — centering a left-anchored label — leaves it ragged on the side that
     /// touches the point.
     #[must_use]
     pub const fn justification(self) -> Justify {
@@ -470,7 +470,7 @@ pub enum Justify {
 }
 
 impl Justify {
-    /// The factor mbgl multiplies a line's length by: left 0, centre a half, right 1.
+    /// The factor mbgl multiplies a line's length by: left 0, center a half, right 1.
     const fn factor(self) -> f32 {
         match self {
             Self::Left => 0.0,
@@ -533,7 +533,7 @@ pub enum WritingMode {
 /// mbgl's `PositionedLine`, and the offset is why it is a type rather than a list of glyphs. A
 /// line is normally as tall as the text on it; an image taller than an em pushes it down, and
 /// how far is a property of the *line* — every glyph on it moves together, and the quad builder
-/// needs the amount again afterwards to re-centre a vertical column.
+/// needs the amount again afterwards to re-center a vertical column.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Line {
     /// Its placed glyphs.
@@ -569,7 +569,7 @@ pub struct Shaping {
     ///
     /// mbgl's `Shaping::verticalizable`, and the quad builder reads it rather than the per-glyph
     /// flag to decide whether the *label* is one being set vertically — a line of rotated Latin
-    /// with one ideograph in it is still a vertical line, and every glyph on it is centred as
+    /// with one ideograph in it is still a vertical line, and every glyph on it is centered as
     /// one.
     pub verticalizable: bool,
     /// Whether any section of it is an image rather than text.
@@ -660,7 +660,7 @@ impl Default for Options {
 ///
 /// A line that ends at a space keeps that space, and a line that starts after one begins with
 /// it. Neither is drawn, and leaving them in shifts the line by their width — which is exactly
-/// the amount a centred label would be off by.
+/// the amount a centered label would be off by.
 fn trim(line: &[Char]) -> &[Char] {
     let start = line
         .iter()
@@ -753,7 +753,7 @@ pub fn apply_arabic(text: &[Char]) -> std::borrow::Cow<'_, [Char]> {
 ///
 /// Arabic *shaping* — the contextual letter forms — is a separate step mbgl runs before this one
 /// and is not ported. Without it Arabic reorders correctly and each letter is drawn in its
-/// isolated form rather than joined to its neighbours.
+/// isolated form rather than joined to its neighbors.
 #[must_use]
 pub fn reorder(line: &[Char]) -> std::borrow::Cow<'_, [Char]> {
     use std::borrow::Cow;
@@ -860,7 +860,7 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
     let mut max_line_height = 0.0f32;
 
     // Contextual forms first, then breaking, then reordering — mbgl's order, and each step
-    // depends on the one before. The forms come from *logical* neighbours, so reordering first
+    // depends on the one before. The forms come from *logical* neighbors, so reordering first
     // would join every letter to whatever ended up beside it on screen; breaking is decided on
     // the logical order too.
     let shaped_text = apply_arabic(text);
@@ -984,7 +984,7 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
         shaping.lines.push(Line {
             glyphs,
             // The larger of the two, because both are reasons this line's glyphs sit lower than
-            // the line above's and the quad builder needs the total when it re-centres a column.
+            // the line above's and the quad builder needs the total when it re-centers a column.
             offset: line_offset.max(max_line_offset),
         });
     }

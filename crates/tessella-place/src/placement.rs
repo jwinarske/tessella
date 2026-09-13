@@ -6,11 +6,11 @@
 //!
 //! # First come, first served, and the order is the whole design
 //!
-//! There is no global optimisation here — no attempt to fit the most labels, or the most
+//! There is no global optimization here — no attempt to fit the most labels, or the most
 //! important ones. Placement walks a list and takes what fits. That is deliberate: the order is
 //! the style's, by `symbol-sort-key` and then by feature order, so a cartographer decides what
 //! matters rather than an algorithm. It is also what makes placement stable frame to frame,
-//! which matters more than density: a set that re-optimises as the camera moves is a map where
+//! which matters more than density: a set that re-optimizes as the camera moves is a map where
 //! labels swap places while you watch.
 //!
 //! # A symbol's two halves place together, apart, or not at all
@@ -113,7 +113,7 @@ pub enum Shape {
 /// means adjacent circles are often nearly on top of each other, most of all where a pitched map
 /// squeezes the far end of a road into a few pixels.
 ///
-/// mbgl's rule: circles touch when their centres are two radii apart and are doubled up at one,
+/// mbgl's rule: circles touch when their centers are two radii apart and are doubled up at one,
 /// and it starts dropping at √2 — "thinning the number of circles as much as possible is a major
 /// performance win, and the small gaps introduced don't make a very noticeable difference".
 ///
@@ -129,7 +129,7 @@ pub fn thin(circles: &[LineCircle]) -> Vec<usize> {
         // concerned. mbgl makes this the *first* test in the loop and clears
         // `previousCirclePlaced` on the way out, which is why it belongs here rather than in a
         // filter afterwards: thinning compares each circle against the last one kept, and running
-        // it over circles the label never covers compares against neighbours mbgl never sees.
+        // it over circles the label never covers compares against neighbors mbgl never sees.
         if !entry.covered_by_label {
             previous_placed = false;
             continue;
@@ -145,7 +145,7 @@ pub fn thin(circles: &[LineCircle]) -> Vec<usize> {
             let too_dense = radius * radius * 2.0 > dx * dx + dy * dy;
 
             // Unless it is the last one the *label* can use, in which case it is kept however
-            // tightly it sits against its neighbour. mbgl asks whether the next circle is one it
+            // tightly it sits against its neighbor. mbgl asks whether the next circle is one it
             // would test -- `atLeastOneMoreCircle` and then the same reach test again -- not
             // merely whether the array continues.
             let next_is_usable = circles

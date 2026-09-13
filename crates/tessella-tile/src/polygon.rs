@@ -198,7 +198,7 @@ fn bound_towards_maximum(points: &[[f64; 2]], at: &mut usize) -> Option<Bound> {
 
 /// Takes the chain running upward from `at`, reversed so it too runs downward.
 ///
-/// Every bound starts at a minimum, whichever direction the ring was travelling — which is what
+/// Every bound starts at a minimum, whichever direction the ring was traveling — which is what
 /// lets one scan handle both sides of a shape.
 fn bound_towards_minimum(points: &[[f64; 2]], at: &mut usize) -> Option<Bound> {
     if points.len().checked_sub(*at)? < 2 {

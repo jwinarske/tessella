@@ -194,10 +194,10 @@ fn the_along_line_position_is_recorded_per_glyph() {
         "the word spans {span} units, which is narrower than one glyph"
     );
 
-    // Centred on the anchor: mbgl shapes about the middle, so the first glyph sits left of it.
+    // Centered on the anchor: mbgl shapes about the middle, so the first glyph sits left of it.
     assert!(
         offsets[0] < 0.0 && *offsets.last().expect("some") > 0.0,
-        "{offsets:?} is not centred on the anchor"
+        "{offsets:?} is not centered on the anchor"
     );
 }
 
@@ -231,16 +231,16 @@ fn every_repetition_draws_identical_glyphs() {
     );
 }
 
-/// A centred label appears once.
+/// A centered label appears once.
 #[test]
-fn a_centred_label_appears_once() {
+fn a_centered_label_appears_once() {
     let font = Font::new("Main Street");
     let (_, laid) = build_line_symbols(
         &[label("Main Street", road())],
         &font,
         None,
         &LineOptions {
-            centred: true,
+            centered: true,
             ..LineOptions::default()
         },
     );
@@ -367,7 +367,7 @@ fn a_line_label_never_wraps() {
         &font,
         None,
         &LineOptions {
-            // A width that would wrap this text several times if it were honoured.
+            // A width that would wrap this text several times if it were honored.
             symbol: SymbolOptions {
                 max_width_ems: 4.0,
                 ..SymbolOptions::default()

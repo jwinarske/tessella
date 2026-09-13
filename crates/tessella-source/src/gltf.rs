@@ -104,7 +104,7 @@ pub enum Mode {
 
 /// A reversible transform applied before compression.
 ///
-/// Filters make a stream more compressible by moving it into a representation where neighbouring
+/// Filters make a stream more compressible by moving it into a representation where neighboring
 /// values differ in fewer bits; they are undone after decoding. `Exponential` is what a buildings
 /// tile uses for its positions — a shared exponent per component with an integer mantissa, which
 /// keeps a building's coordinates to the precision they were quantised at rather than to the

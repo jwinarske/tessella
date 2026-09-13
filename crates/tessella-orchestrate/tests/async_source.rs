@@ -570,7 +570,7 @@ fn a_map_resolves_and_draws_with_no_threads_and_a_host_doing_the_fetching() {
     let pool: &'static Pool = Box::leak(Box::new(Pool::new(Workers::none())));
     let host = Arc::new(HostTransport::new());
     let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
-    // `r##` rather than `r#`, because a colour literal ends a `r#"` string at its `"#`.
+    // `r##` rather than `r#`, because a color literal ends a `r#"` string at its `"#`.
     let style = r##"{"version": 8,
         "sources": {"v": {"type": "vector", "url": "http://host.invalid/tiles.json"}},
         "layers": [
@@ -638,7 +638,7 @@ fn a_map_resolves_and_draws_with_no_threads_and_a_host_doing_the_fetching() {
     );
 }
 
-/// A cancelled request is taken off the queue as well as out of the table.
+/// A canceled request is taken off the queue as well as out of the table.
 ///
 /// The host would otherwise be handed a URL nobody wants and fetch it, which on a metered
 /// connection is the difference between a view closing and a view closing quietly.

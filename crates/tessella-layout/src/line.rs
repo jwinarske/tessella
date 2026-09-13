@@ -7,7 +7,7 @@
 //!
 //! # The vertex is not a position
 //!
-//! A line vertex carries the *centreline* point and an *extrusion*, not a corner. The shader
+//! A line vertex carries the *centerline* point and an *extrusion*, not a corner. The shader
 //! offsets by the extrusion scaled by the current line width, which is why a line can be
 //! restyled to a different width without re-tessellating, and why the same bucket serves views
 //! at different zooms (§5.1). Both halves are packed:
@@ -28,7 +28,7 @@
 //! A mitre longer than the limit becomes a bevel; a bevel longer than 2 becomes a *flipped*
 //! bevel, because 128/63 is the widest extrusion the byte encoding can hold and a longer one
 //! would clamp into a visible spike. Round joins that are shallow enough become mitres, and
-//! the rest become fans of flat triangles. None of that is an optimisation to be skipped: each
+//! the rest become fans of flat triangles. None of that is an optimization to be skipped: each
 //! branch emits a different number of vertices, so a shortcut changes the buffer lengths the
 //! diff checks.
 //!
@@ -186,7 +186,7 @@ impl Default for LineOptions {
 /// One line vertex, in the packed form the shader reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct LineVertex {
-    /// Centreline point doubled, with cap and side flags in the low bits.
+    /// Centerline point doubled, with cap and side flags in the low bits.
     pub pos_normal: [i16; 2],
     /// Extrusion, cap direction and distance-along-the-line.
     pub data: [u8; 4],
@@ -195,7 +195,7 @@ pub struct LineVertex {
 /// A built line bucket.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct LineBucket {
-    /// Vertices, two per emitted centreline point.
+    /// Vertices, two per emitted centerline point.
     pub vertices: Vec<LineVertex>,
     /// Triangle indices, relative to their segment's vertex base.
     pub indices: Vec<u16>,
@@ -318,7 +318,7 @@ impl Gen<'_> {
         self.e2 = self.e3;
     }
 
-    /// Emit both sides of one centreline point.
+    /// Emit both sides of one centerline point.
     ///
     /// `end_left` and `end_right` push the vertex along the line as well as across it, which is
     /// how a square cap extends past the endpoint and how a bevel's two edges are offset.

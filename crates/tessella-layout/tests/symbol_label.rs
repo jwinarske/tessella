@@ -64,7 +64,7 @@ fn text_around_a_token_is_kept() {
 ///
 /// mbgl converts `"{name}"` into `toString(get("name"))` at style-parse time, so an absent
 /// property is an empty string and the label disappears. This is deliberately *not* the tile URL
-/// rule, where an unrecognised token survives verbatim so a 404 can say why: most features in a
+/// rule, where an unrecognized token survives verbatim so a 404 can say why: most features in a
 /// symbol source have no name, and leaving the token would write a literal `{name}` across the
 /// map on every one of them.
 #[test]
@@ -118,7 +118,7 @@ fn a_layer_without_a_text_field_makes_no_labels() {
 /// The style spec has one number type and it is a double, so an elevation of 1200 arrives as
 /// 1200.0, and a label reading "1200.0" would be wrong on a map people read. Rust's float
 /// `Display` happens to do the right thing here where C++'s does not — this asserts the
-/// behaviour rather than the mechanism, so it keeps holding if the mechanism changes.
+/// behavior rather than the mechanism, so it keeps holding if the mechanism changes.
 #[test]
 fn a_number_property_reads_as_a_number() {
     let layer = layer(r#"{"text-field": "{ele}"}"#);
@@ -188,7 +188,7 @@ fn token_replacement_handles_awkward_strings() {
 /// `text-transform` cases the label, and cases it the way the oracle does.
 ///
 /// Unimplemented until now, which is invisible in a style that does not use it and stark in one
-/// that does: `places_subplace` in the Protomaps schema sets `uppercase`, and a neighbourhood
+/// that does: `places_subplace` in the Protomaps schema sets `uppercase`, and a neighborhood
 /// name drew as "Nikolaiviertel" where mbgl draws "NIKOLAIVIERTEL" — 861 differing pixels in the
 /// layer at Berlin z15, and it is the same word.
 #[test]

@@ -16,7 +16,7 @@
 //! already has the host supply that: `tessella_advance` is how a consumer says time has passed,
 //! precisely because a producer that read its own clock would disagree with the compositor
 //! driving it. What is left is the cold-start trace -- `style_parsed`, `sources_resolved` and the
-//! rest -- which is a diagnostic that no behaviour reads. It reports zero on wasm, and the
+//! rest -- which is a diagnostic that no behavior reads. It reports zero on wasm, and the
 //! orderings the tests assert over it still hold.
 //!
 //! A browser that wants those numbers has `performance.now` in its own hands and a tick to

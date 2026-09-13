@@ -73,7 +73,7 @@ fn profile_dir() -> PathBuf {
 
 /// Builds the staticlib this links against, and returns it.
 ///
-/// `cargo test` builds the rlib the harness needs; the staticlib is a *separate artefact of the
+/// `cargo test` builds the rlib the harness needs; the staticlib is a *separate artifact of the
 /// same crate* and is not rebuilt by a test run. Linking whatever happens to be on disk means a
 /// test that silently exercises a library from an earlier edit -- which cost real time here
 /// before it was understood, because every run reported the same numbers however the Rust
@@ -229,7 +229,7 @@ fn a_style_reaches_a_backend_as_batched_draws() {
     //   5  circle            the point feature
     //   11 fill              the polygon
     //   15 fill outline      the second fill layer's `fill-outline-color`, triangulated because
-    //                        the colour is constant and Filament cannot widen a line
+    //                        the color is constant and Filament cannot widen a line
     //   25 line              the polygon's edge
     for (id, what) in [
         (3, "background"),

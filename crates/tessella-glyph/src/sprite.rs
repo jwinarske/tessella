@@ -81,7 +81,7 @@ pub struct Sprite {
     /// downstream measures in logical pixels, which is why this is carried rather than folded
     /// in: folding it into the rectangle would lose the sheet coordinates the upload needs.
     pub pixel_ratio: f64,
-    /// Whether the icon is a distance field, drawn through the SDF shader and recolourable.
+    /// Whether the icon is a distance field, drawn through the SDF shader and recolorable.
     pub sdf: bool,
     /// Columns that may stretch.
     pub stretch_x: Vec<Stretch>,
@@ -118,7 +118,7 @@ pub type Index = BTreeMap<String, Sprite>;
 ///
 /// The rectangle here includes that one pixel on every side — mbgl's `paddedRect` — which is
 /// what the icon quad's one-pixel border samples. Handing out the sheet rectangle instead makes
-/// that border sample the neighbouring icon, which draws a hairline of the wrong picture around
+/// that border sample the neighboring icon, which draws a hairline of the wrong picture around
 /// every marker on the map.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IconPosition {
@@ -179,7 +179,7 @@ pub type Positions = BTreeMap<String, IconPosition>;
 /// Why an index could not be read at all.
 ///
 /// A *malformed entry* is not one of these — it is dropped and the rest of the sheet is kept,
-/// which is mbgl's behaviour and the one a style with one bad icon needs.
+/// which is mbgl's behavior and the one a style with one bad icon needs.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SpriteError {
     /// The body is not JSON.
@@ -261,7 +261,7 @@ fn content(entry: &serde_json::Map<String, Value>) -> Option<Content> {
 /// How an icon's own pixels are stretched to fit the text laid into it.
 ///
 /// mbgl's `style::TextFit`. An unrecognized string is `None` — the same as absent — rather than
-/// a default, because the three named behaviours are genuinely different and guessing between
+/// a default, because the three named behaviors are genuinely different and guessing between
 /// them resizes a shield the wrong way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextFit {
@@ -662,7 +662,7 @@ pub enum LoadError {
 /// Why this exists at all, given the sheet is already a laid-out image: mbgl does not upload the
 /// sheet. `parseSprite` copies each icon out of it, and the atlas packs those copies with
 /// padding between them. A sheet has no padding — icons in it are usually flush — so drawing
-/// straight from it makes every icon quad's one-pixel border sample its neighbour.
+/// straight from it makes every icon quad's one-pixel border sample its neighbor.
 #[cfg(feature = "image")]
 #[derive(Debug)]
 pub struct IconAtlas {

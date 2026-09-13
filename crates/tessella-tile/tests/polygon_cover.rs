@@ -159,9 +159,9 @@ fn a_hole_is_subtracted() {
     // The very middle of the hole is gone.
     let middle = tessella_tile::projection::tile_units(5.0, 5.0, z);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let centre = (middle[0] as u32, middle[1] as u32);
-    assert!(full.contains(&centre), "solid covers the middle");
-    assert!(!punched.contains(&centre), "holed does not");
+    let center = (middle[0] as u32, middle[1] as u32);
+    assert!(full.contains(&center), "solid covers the middle");
+    assert!(!punched.contains(&center), "holed does not");
 }
 
 /// A shape in two pieces covers both, and nothing between them.

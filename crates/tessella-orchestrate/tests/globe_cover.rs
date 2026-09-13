@@ -22,8 +22,8 @@
 //! longitude, y inverts through `atan(sinh(·))` — and lands on the sphere at that longitude and
 //! latitude.
 //!
-//! A tile is behind the horizon when the angle between its surface normal and the map centre's
-//! exceeds `acos(R / (R + d))`, where `d` is the camera's distance to the centre. That is the
+//! A tile is behind the horizon when the angle between its surface normal and the map center's
+//! exceeds `acos(R / (R + d))`, where `d` is the camera's distance to the center. That is the
 //! ordinary horizon of a sphere seen from a finite distance, and it degenerates correctly: as
 //! the camera closes in, `d` shrinks, the horizon tightens, and at the zooms where a tile spans
 //! a fraction of a degree there is nothing to cull.
@@ -49,8 +49,8 @@ fn dot(a: [f64; 3], b: [f64; 3]) -> f64 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-/// The centre of a tile, in normalized Mercator.
-fn tile_centre(z: u8, x: u32, y: u32) -> (f64, f64) {
+/// The center of a tile, in normalized Mercator.
+fn tile_center(z: u8, x: u32, y: u32) -> (f64, f64) {
     let span = f64::from(1u32 << z);
     ((f64::from(x) + 0.5) / span, (f64::from(y) + 0.5) / span)
 }
@@ -83,19 +83,19 @@ fn behind_the_horizon(view: &ViewTransform) -> (usize, usize) {
     let distance = camera::camera_to_center_distance(view.height);
     let horizon = radius / (radius + distance);
 
-    // The map centre's own normal, which is where the camera is looking.
-    let centre_y = {
+    // The map center's own normal, which is where the camera is looking.
+    let center_y = {
         let offset = camera::center_offset(view.longitude, view.latitude, view.zoom);
         0.5 - offset[1] / camera::world_size(view.zoom)
     };
-    let centre_x = 0.5 + view.longitude / 360.0;
-    let centre = normal(centre_x, centre_y);
+    let center_x = 0.5 + view.longitude / 360.0;
+    let center = normal(center_x, center_y);
 
     let hidden = tiles
         .iter()
         .filter(|tile| {
-            let (x, y) = tile_centre(tile.z, tile.x, tile.y);
-            dot(normal(x, y), centre) < horizon
+            let (x, y) = tile_center(tile.z, tile.x, tile.y);
+            dot(normal(x, y), center) < horizon
         })
         .count();
     (hidden, tiles.len())

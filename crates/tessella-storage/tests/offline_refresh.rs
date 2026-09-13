@@ -288,13 +288,13 @@ fn a_shrunken_plan_releases_its_orphans() {
     assert_eq!(before - after, refreshed.released);
 }
 
-/// A cancelled refresh releases nothing.
+/// A canceled refresh releases nothing.
 ///
 /// It has not visited every URL, so what looks orphaned may simply not have been reached.
 /// Pruning there would turn an interrupted refresh into a partial delete — which for a region
 /// downloaded over hours is the worst thing that could happen to it.
 #[test]
-fn a_cancelled_refresh_does_not_prune() {
+fn a_canceled_refresh_does_not_prune() {
     let fixture = Fixture::new(8.0);
     fixture.download();
     let before = fixture
@@ -332,7 +332,7 @@ fn a_cancelled_refresh_does_not_prune() {
     })
     .expect("stops cleanly");
 
-    assert!(refreshed.cancelled);
+    assert!(refreshed.canceled);
     assert_eq!(refreshed.released, 0, "nothing was pruned");
     assert_eq!(
         fixture

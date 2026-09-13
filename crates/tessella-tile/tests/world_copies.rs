@@ -13,7 +13,7 @@
 //! # Why folding rather than filtering
 //!
 //! The obvious implementation keeps the tiles whose `wrap` is zero. That is wrong at exactly the
-//! case the policy exists for: a view centred near the antimeridian can see a tile *only* at
+//! case the policy exists for: a view centered near the antimeridian can see a tile *only* at
 //! `wrap: -1`, and filtering would leave a hole in the globe where the patch belongs.
 
 use tessella_tile::cover::{ViewTransform, WorldCopies, cover, cover_with};
@@ -65,7 +65,7 @@ fn folding_keeps_every_distinct_patch() {
 /// A patch visible only in a far copy is kept, not dropped.
 ///
 /// This is what separates folding from filtering, and it is the case the policy exists for: a
-/// globe centred on the antimeridian sees tiles whose only cover entry has a non-zero wrap.
+/// globe centered on the antimeridian sees tiles whose only cover entry has a non-zero wrap.
 #[test]
 fn a_patch_seen_only_in_a_far_copy_survives() {
     // Near the antimeridian, so the viewport straddles it and half the cover wraps.

@@ -129,7 +129,7 @@ fn a_square_also_outlines_as_a_polyline() {
 
 /// And is not built at all where the layer will draw the line-primitive outline instead.
 ///
-/// The flag is the caller's: a layer whose outline colour or opacity varies per feature takes
+/// The flag is the caller's: a layer whose outline color or opacity varies per feature takes
 /// `FillOutlineShader` over the fill's own vertices, and the polyline would be geometry nothing
 /// draws. mbgl builds both because a bucket there serves every layer over one source layer.
 #[test]
@@ -154,7 +154,7 @@ fn a_polyline_outline_is_built_only_when_asked_for() {
 
 /// A layer that draws no outline carries neither form.
 ///
-/// mbgl's `doOutline`: `fill-antialias` false, or a patterned fill whose outline colour the
+/// mbgl's `doOutline`: `fill-antialias` false, or a patterned fill whose outline color the
 /// style wrote. The fill itself is untouched -- what goes is the second drawable.
 #[test]
 fn a_layer_with_no_outline_builds_neither_form() {

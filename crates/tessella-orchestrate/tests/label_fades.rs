@@ -19,7 +19,7 @@
 //! # What is asserted
 //!
 //! That time entering the map changes the rate, that the rate is mbgl's, and that a map told
-//! nothing keeps the still-picture behaviour every capture depends on.
+//! nothing keeps the still-picture behavior every capture depends on.
 
 use tessella_orchestrate::frame::{FADE_DURATION_MILLIS, PlacementState};
 use tessella_place::fade::Opacity;
@@ -65,7 +65,7 @@ fn a_frame_of_time_moves_a_fade_part_way() {
     );
 }
 
-/// A map told nothing keeps the still-picture behaviour the captures compare.
+/// A map told nothing keeps the still-picture behavior the captures compare.
 #[test]
 fn an_untold_map_fades_in_one_step() {
     let state = PlacementState::new();

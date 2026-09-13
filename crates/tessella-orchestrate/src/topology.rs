@@ -22,7 +22,7 @@
 //! between a policy that agrees with the scheduler and one that fights it.
 //!
 //! Where it is absent — x86, including hybrid parts with P and E cores — `cpufreq/
-//! cpuinfo_max_freq` stands in, normalised so the largest core is 1024. That is a worse
+//! cpuinfo_max_freq` stands in, normalized so the largest core is 1024. That is a worse
 //! measure, because frequency is not throughput across microarchitectures, but it separates
 //! tiers on the parts where it has to and it is what is there.
 //!
@@ -98,7 +98,7 @@ impl Topology {
 
         // Capacity where the kernel offers it, frequency where it does not. Not mixed: a part
         // that reports capacity for some cores and frequency for others would have the two on
-        // incomparable scales, and the tiers would be an artefact of which file existed.
+        // incomparable scales, and the tiers would be an artifact of which file existed.
         let capacities: Vec<Option<u32>> = ids
             .iter()
             .map(|id| {
@@ -121,7 +121,7 @@ impl Topology {
                 .collect()
         };
 
-        Some(Self::new(normalise(&ids, &raw)))
+        Some(Self::new(normalize(&ids, &raw)))
     }
 
     /// Every CPU, ascending.
@@ -162,7 +162,7 @@ impl Topology {
 /// A no-op for values already on it. For frequencies it divides through by the largest, which is
 /// the best that can be done with the measure available — and is why a part reporting capacity is
 /// preferred whenever it does.
-fn normalise(ids: &[u32], raw: &[u32]) -> Vec<Cpu> {
+fn normalize(ids: &[u32], raw: &[u32]) -> Vec<Cpu> {
     let largest = raw.iter().copied().max().unwrap_or(0);
     ids.iter()
         .zip(raw)

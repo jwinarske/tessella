@@ -11,7 +11,7 @@
 //! label laid out against metrics that do not describe it.
 //!
 //! Every one of the six fields is required. Proto2 makes them all optional on the wire, so a
-//! glyph missing `advance` parses perfectly and then lays out on top of its neighbour. The
+//! glyph missing `advance` parses perfectly and then lays out on top of its neighbor. The
 //! metric bounds are the same: mbgl checks `width < 256`, `left` in `-128..128` and so on, not
 //! because the wire type cannot hold more but because a glyph outside those ranges is a
 //! misencoded file rather than an unusual letter.

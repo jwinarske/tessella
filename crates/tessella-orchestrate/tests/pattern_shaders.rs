@@ -152,7 +152,7 @@ fn a_resolved_pattern_binds_the_pattern_shaders() {
 /// Without them the layer draws plain, rather than not drawing.
 ///
 /// Plain all the way through: the outline is 15, `FillOutlineTriangulatedShader`, because the
-/// layer's outline colour and opacity are constant and the pattern branch is the one thing that
+/// layer's outline color and opacity are constant and the pattern branch is the one thing that
 /// would have kept it on the line-primitive path. `build_fill_content` builds the polyline for
 /// exactly this case -- a style that names a sprite the frame could not resolve.
 #[test]

@@ -179,7 +179,7 @@ fn two_views_at_one_camera_share_every_uniform() {
 
 /// The frame-wide block is per view too, and for more reasons than the zoom.
 ///
-/// `GlobalPaintParams` carries the viewport, the aspect ratio and the camera-to-centre distance
+/// `GlobalPaintParams` carries the viewport, the aspect ratio and the camera-to-center distance
 /// as well as the zoom. A cluster inset is not the size of the display it sits on, so a shared
 /// frame-wide block would hand the inset the display's viewport and stretch everything it drew.
 #[test]
@@ -205,7 +205,7 @@ fn the_frame_wide_block_follows_the_viewport_and_not_only_the_zoom() {
 
     // And the case that catches a block distinguished by aspect ratio alone: an inset that is a
     // scaled copy of the display — 320x240 beside 1024x768 — has the very same 4:3. Its
-    // viewport and its camera-to-centre distance still differ, and a block that shared them
+    // viewport and its camera-to-center distance still differ, and a block that shared them
     // would size the inset's geometry to the display and put its near and far planes there too.
     let scaled = GlobalPaintParams::for_view(
         &ViewTransform {
@@ -269,7 +269,7 @@ fn the_distinction_holds_at_every_frame_of_the_sweep() {
 /// `DrawableEntry` biases the projection by layer for depth ordering; a clip mask does not
 /// participate in that and so carries an unbiased matrix. They look interchangeable, which is
 /// why the module says in as many words that they must not be shared — and a mask left on the
-/// wrong camera clips a view to its neighbour's tiles, which subtracts geometry rather than
+/// wrong camera clips a view to its neighbor's tiles, which subtracts geometry rather than
 /// misplacing it.
 #[test]
 fn the_stencil_matrix_is_per_view_and_is_not_the_drawable_matrix() {

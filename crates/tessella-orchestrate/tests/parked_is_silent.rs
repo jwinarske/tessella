@@ -192,7 +192,7 @@ fn one_views_churn_does_not_wake_another() {
 
 /// A zoom that stays between two integer levels emits camera bytes and no geometry (§13.1).
 ///
-/// # Why this is a guarantee rather than an optimisation
+/// # Why this is a guarantee rather than an optimization
 ///
 /// Fractional zoom is the commonest thing a map does: every pinch, every fly-to, every inertial
 /// settle spends most of its frames between integer levels. The cover does not change there —

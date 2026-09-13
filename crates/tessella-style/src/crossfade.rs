@@ -1,6 +1,6 @@
 //! Cross-faded properties: the two values a pattern is between, and how far between them it is.
 //!
-//! # Why a pattern has two values and a colour has one
+//! # Why a pattern has two values and a color has one
 //!
 //! A pattern property resolves to an image, and which image it resolves to can change with the
 //! zoom — `["step", ["zoom"], "hatch-small", 14, "hatch-large"]` is an ordinary thing to write.
@@ -8,7 +8,7 @@
 //! polygon at once, so mbgl draws both and fades between them: `Faded { from, to }` and a mix
 //! factor.
 //!
-//! That is why the binder for these is shaped differently from every other one. A colour binds
+//! That is why the binder for these is shaped differently from every other one. A color binds
 //! one value per feature; a pattern binds two atlas rectangles and a `t`, and the property is
 //! *uninterpolated* in the usual sense — mbgl's `Interpolator<Faded<T>>` is `Uninterpolated`,
 //! because the fade is the interpolation and doing it twice would be wrong.
@@ -29,7 +29,7 @@ use alloc::vec::Vec;
 /// Where the zoom has been, which is what says whether the camera is zooming in or out.
 ///
 /// mbgl's `ZoomHistory`. The interesting field is `last_integer_zoom`: crossing an integer zoom
-/// is what starts a fade, and the direction of the crossing chooses which neighbour a pattern
+/// is what starts a fade, and the direction of the crossing chooses which neighbor a pattern
 /// fades from.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ZoomHistory {
@@ -186,7 +186,7 @@ pub fn faded<T, F: Fn(f64) -> T>(evaluate: F, z: f64, history: &ZoomHistory) -> 
 /// The atlas rectangle an image occupies, as the shader reads it.
 ///
 /// mbgl's `ImagePosition::tlbr` — the padded rectangle inset by the padding on every side, so a
-/// sampler reading between these corners never picks up a neighbour's edge. Top and left first,
+/// sampler reading between these corners never picks up a neighbor's edge. Top and left first,
 /// then bottom and right.
 #[must_use]
 pub fn tlbr(x: u16, y: u16, width: u16, height: u16, padding: u16) -> [u16; 4] {

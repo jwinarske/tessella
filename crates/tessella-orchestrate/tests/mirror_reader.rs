@@ -194,7 +194,7 @@ fn the_mirror_reads_a_real_frame() {
     );
 
     // The camera and its order arrive as one thing at the sink, which is what lets a consumer
-    // honour §11.7 at all.
+    // honor §11.7 at all.
     assert_eq!(
         counts.get("cameras").copied(),
         Some(1),
@@ -216,7 +216,7 @@ fn the_mirror_reads_a_real_frame() {
     // *after* `frame::emit` has written the camera, so from the stream's point of view those are
     // the start of a second frame that no camera has committed yet.
     //
-    // That is a real situation and not an artefact — a consumer draining while the producer is
+    // That is a real situation and not an artifact — a consumer draining while the producer is
     // mid-frame sees exactly this — and it is worth asserting, because the failure it rules out
     // is a reader that closes a frame it never saw a camera for. Such a reader would hand the
     // mirror a half-built frame to draw.

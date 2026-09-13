@@ -52,7 +52,7 @@ const STYLE: &str = r##"{"version": 8, "sources": {"src": {"type": "vector", "ti
      "layout": {"text-field": "{name}", "text-font": ["TestFont"], "text-size": 14,
                 "symbol-placement": "line"}}]}"##;
 
-/// Three neighbouring tiles at the fixture's own zoom. The same features are built into each, so
+/// Three neighboring tiles at the fixture's own zoom. The same features are built into each, so
 /// every tile carries the same label texts at the same tile-local anchors and a different patch of
 /// the world -- which is what keeps their identities distinct while making the walk order the only
 /// thing that separates them.
@@ -279,7 +279,7 @@ fn a_new_tile_does_not_renumber_the_others() {
 /// A tile re-parsed into a fresh bucket list keeps the identities its labels had.
 ///
 /// This is the path the memo cannot serve: the `Arc` differs, so the frame asks the index, and
-/// the index has to recognise the labels by text and position. It is the same matching a zoom
+/// the index has to recognize the labels by text and position. It is the same matching a zoom
 /// crossing needs, exercised without having to reproject a fixture into child tiles.
 #[test]
 fn a_re_parsed_tile_keeps_its_labels_identities() {

@@ -139,7 +139,7 @@ fn an_empty_document_is_its_own_error() {
 ///
 /// mbgl logs and carries on with an empty source, because its tiles are waiting on a callback
 /// that has to fire. Nothing here is waiting, so the failure is returned and the caller may
-/// choose mbgl's behaviour — the reverse is not available to a caller handed an empty source.
+/// choose mbgl's behavior — the reverse is not available to a caller handed an empty source.
 #[test]
 fn a_malformed_document_is_reported() {
     let server = served("this is not json");

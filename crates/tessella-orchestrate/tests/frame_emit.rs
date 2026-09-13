@@ -334,7 +334,7 @@ fn a_symbol_layer_carries_its_quads_and_its_atlas() {
 /// A raster tile *is* its picture, so the two travel together or neither means anything. The
 /// geometry carries a texture reference and the image is uploaded ahead of it — a reference to a
 /// texture the consumer has not been given samples whatever was last at that slot, which on a
-/// tiled source is a neighbouring tile's photograph.
+/// tiled source is a neighboring tile's photograph.
 #[test]
 fn a_raster_layer_carries_its_quad_and_its_picture() {
     use std::sync::Arc;

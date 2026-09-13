@@ -110,7 +110,7 @@ fn an_operator_headed_array_is_an_expression() {
 
 /// An array of numbers was never a call and still is not.
 ///
-/// A `line-dasharray` or a colour triple. This worked before the registry — the head is not a
+/// A `line-dasharray` or a color triple. This worked before the registry — the head is not a
 /// string — and the test stays because it is the other half of the classification.
 #[test]
 fn an_array_of_numbers_is_a_literal() {

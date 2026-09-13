@@ -4,7 +4,7 @@
 //! rather than by hand. Fourteen hundred lines of `{2, 0, {2, 1, 3}}` transcribed by eye would
 //! introduce exactly the class of quiet error these tests exist to catch — an id off by one in
 //! an expectation does not fail loudly, it makes a wrong implementation look right. The
-//! converter refuses to emit on any statement it does not recognise, so nothing is silently
+//! converter refuses to emit on any statement it does not recognize, so nothing is silently
 //! dropped, and mbgl's own comments are carried across so a reader can check each line against
 //! the original.
 //!

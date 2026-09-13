@@ -17,7 +17,7 @@
 //! without the property yields an *empty* label and therefore no symbol at all.
 //!
 //! This is where `text-field` and a tile URL part company, and the difference is not cosmetic.
-//! `util::replaceTokens` leaves an unrecognised token in place, braces and all, because a URL
+//! `util::replaceTokens` leaves an unrecognized token in place, braces and all, because a URL
 //! may legitimately contain braces and a request that 404s with `{nmae}` in it says why. A label
 //! cannot do that: most features in a symbol source have no name, so leaving the token would
 //! write a literal `{name}` across the map on every unnamed feature. Which is what this did

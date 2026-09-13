@@ -8,7 +8,7 @@
 //! # Why the projection is the caller's
 //!
 //! Placement happens in screen space — labels compete for screen, not for ground, so two towns
-//! a kilometre apart collide at z5 and not at z14, and the same two collide on a phone and not
+//! a kilometer apart collide at z5 and not at z14, and the same two collide on a phone and not
 //! on a wall display. The projection from tile units to screen is a function of the camera,
 //! which is per view, so it is passed in rather than assumed. Getting this wrong does not fail:
 //! it produces a map where nothing ever collides, which is what a tile-unit anchor against a
@@ -419,7 +419,7 @@ impl ViewSymbols {
                         tile_reach,
                     )
                     .map(|circles| {
-                        // Back to the screen, one circle at a time: the centre through the same
+                        // Back to the screen, one circle at a time: the center through the same
                         // projection every other anchor takes, the radius by the ratio that built
                         // it. `distance_from_anchor` stays in tile units, which is the space its
                         // reach is compared in.
@@ -768,7 +768,7 @@ impl ViewSymbols {
             // mbgl's `reprojectLineLabels`: `pitchScaledFontSize = pitchWithMap ? fontSize *
             // perspectiveRatio : fontSize / perspectiveRatio`, with the ratio here in the
             // orientation the shader does not use -- `0.5 + 0.5 * cameraToAnchorDistance /
-            // cameraToCenterDistance`, one at the centre distance and growing with it.
+            // cameraToCenterDistance`, one at the center distance and growing with it.
             //
             // This path is the along-line one, and along-line means `*-rotation-alignment: map`,
             // which `*-pitch-alignment` inherits -- so it is the *multiplying* branch. A label
@@ -781,7 +781,7 @@ impl ViewSymbols {
             //
             // `label.perspective` is `0.5 + 0.5 * cameraToCenter / w`, so the other orientation
             // comes from it without projecting the anchor again. One at pitch zero, where `w` is
-            // the centre distance, so the flat path does not move.
+            // the center distance, so the flat path does not move.
             let walk_scale = if label.perspective > 0.5 {
                 0.5 + 0.5 / (2.0 * label.perspective - 1.0)
             } else {

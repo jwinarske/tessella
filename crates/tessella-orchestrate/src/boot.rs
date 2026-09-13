@@ -995,7 +995,7 @@ pub(crate) fn plan_resolution(
     // addressed by the style alone, so nothing it needs is in a manifest and waiting for one
     // would put a round trip on the critical path for nothing. Tiles cannot be issued that early
     // — the manifest carries their templates — which is the asymmetry that makes this worth doing
-    // rather than an optimisation of the same shape everywhere.
+    // rather than an optimization of the same shape everywhere.
     #[cfg(feature = "image")]
     let sprite_base = style.sprite.clone();
     // Without a decoder there is no sheet to fetch, so there is nothing to ask for either.

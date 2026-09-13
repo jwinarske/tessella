@@ -52,7 +52,7 @@ pub fn is_rotated(codepoint: u32) -> bool {
     !(is_upright(codepoint) || is_neutral(codepoint))
 }
 
-/// Whether a character belongs to a script whose shaping depends on its neighbours.
+/// Whether a character belongs to a script whose shaping depends on its neighbors.
 ///
 /// mbgl's `isCharInComplexShapingScript`. Such a character is never verticalized when vertical
 /// placement is allowed: it is drawn by joining to what surrounds it, and turning one of a run
@@ -75,9 +75,9 @@ pub fn punctuation_form(codepoint: u32) -> Option<u32> {
 
 /// Replaces horizontal punctuation with its vertical form, in place and without reordering.
 ///
-/// mbgl's string `verticalizePunctuation`, and the neighbour test is the whole of it: a mark is
-/// only replaced when *neither* neighbour is a character that would be rotated — unless that
-/// neighbour is itself a mark with a vertical form, which is how a run of them converts
+/// mbgl's string `verticalizePunctuation`, and the neighbor test is the whole of it: a mark is
+/// only replaced when *neither* neighbor is a character that would be rotated — unless that
+/// neighbor is itself a mark with a vertical form, which is how a run of them converts
 /// together. A comma between two ideographs becomes a vertical comma; the same comma between two
 /// Latin letters, which are rotated, stays as it is, because the line around it is lying on its
 /// side and a vertical comma there would be the one thing pointing the wrong way.
@@ -86,12 +86,12 @@ pub fn punctuation_form(codepoint: u32) -> Option<u32> {
 /// per-character section indices alongside and a substitution that grew would desynchronize them.
 #[must_use]
 pub fn verticalize_punctuation(text: &[u32]) -> Vec<u32> {
-    // mbgl reads a missing neighbour as the code unit zero and tests `!nextCharCode` first, so
-    // an actual NUL inside the label counts as no neighbour too. Degenerate input, but the two
+    // mbgl reads a missing neighbor as the code unit zero and tests `!nextCharCode` first, so
+    // an actual NUL inside the label counts as no neighbor too. Degenerate input, but the two
     // cases are one branch there and are one here.
     let convertible = |at: Option<&u32>| match at {
         None | Some(0) => true,
-        Some(&neighbour) => !is_rotated(neighbour) || punctuation_form(neighbour).is_some(),
+        Some(&neighbor) => !is_rotated(neighbor) || punctuation_form(neighbor).is_some(),
     };
     text.iter()
         .enumerate()

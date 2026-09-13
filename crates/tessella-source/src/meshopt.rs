@@ -10,7 +10,7 @@
 //! maplibre-native.
 //!
 //! Only the *scalar* paths are ported. The reference carries SSE, AVX512, NEON and WASM variants
-//! of the same functions, and each is an optimisation of the scalar one rather than a different
+//! of the same functions, and each is an optimization of the scalar one rather than a different
 //! answer — meshoptimizer's own tests check them against each other. Porting the scalar form
 //! keeps this `forbid(unsafe_code)` and portable, which the SIMD forms could not be.
 //!
@@ -185,7 +185,7 @@ fn decode_bytes(data: &[u8], out: &mut [u8]) -> Option<usize> {
 /// Decodes one block of vertices, transposed and delta-coded against the previous vertex.
 ///
 /// The transposition is the codec's central idea: all the first bytes of every vertex are stored
-/// together, then all the second bytes, and so on. Neighbouring vertices differ little, so a
+/// together, then all the second bytes, and so on. Neighboring vertices differ little, so a
 /// column of one byte's worth of a coordinate is nearly constant and compresses to almost
 /// nothing — where the interleaved form would mix a high byte's stability with a low byte's noise.
 fn decode_vertex_block(

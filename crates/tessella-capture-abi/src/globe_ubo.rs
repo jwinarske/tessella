@@ -34,7 +34,7 @@
 /// from `FILL_LAYER_SSBO_COUNT` and is not: every family keeps its evaluated paint there --
 /// `ID_FILL_EVALUATED_PROPS_UBO`, `ID_BACKGROUND_PROPS_UBO` and four more are all five, and the
 /// consumer reads it as `kPropsSlot`. A block that landed there would have overwritten the layer's
-/// colour with a matrix.
+/// color with a matrix.
 pub const ID_GLOBE_BEND_UBO: u32 = 11;
 
 /// One drawable's coefficients, in the order the shader reads them.
@@ -54,7 +54,7 @@ pub struct GlobeBendUbo {
     pub d_vv: [f32; 4],
     /// See [`Self::d_uu`].
     pub d_uv: [f32; 4],
-    /// Clip displacement per metre of height above the surface -- `globe::AnchoredBend::d_h`.
+    /// Clip displacement per meter of height above the surface -- `globe::AnchoredBend::d_h`.
     ///
     /// Zero for every family but the extrusions, which are the only geometry that leaves the
     /// surface. Sent for all of them rather than only for those, because the block is one shape
@@ -108,7 +108,7 @@ mod tests {
     ///
     /// `FILL_LAYER_SSBO_COUNT` says five and means "a fill binds five", not "five is free". Slot
     /// five is where every family keeps its evaluated paint, so a block there would have replaced
-    /// the layer's colour. This checks the whole table rather than one family's count.
+    /// the layer's color. This checks the whole table rather than one family's count.
     #[test]
     fn the_slot_is_past_every_block_mbgl_declares() {
         use crate::generated::ubo_slots::{

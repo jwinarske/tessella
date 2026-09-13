@@ -64,7 +64,7 @@ pub struct FillExtrusionBucket {
     ///
     /// mbgl's `opaque = evaluated.get<FillExtrusionOpacity>() >= 1`, and it reaches the bucket
     /// because the *geometry* is the same either way while the drawable count is not. A
-    /// translucent extrusion needs a depth-only pass in front of its colour pass; an opaque one
+    /// translucent extrusion needs a depth-only pass in front of its color pass; an opaque one
     /// does not.
     pub opaque: bool,
 }
@@ -118,7 +118,7 @@ fn edge_length(a: Position, b: Position) -> u32 {
 }
 
 impl FillExtrusionBucket {
-    /// Whether this needs a depth-only pass in front of its colour pass.
+    /// Whether this needs a depth-only pass in front of its color pass.
     ///
     /// mbgl's `doDepthPass = (!opaque || hasPattern)`. Both halves matter and only the first was
     /// implemented: an *opaque* extrusion with a pattern still gets one, because a pattern is
@@ -126,7 +126,7 @@ impl FillExtrusionBucket {
     /// opaque whatever the opacity says.
     ///
     /// It decides two things that were being decided separately — how many drawables the layer
-    /// becomes, and whether the colour pass is stencilled, since mbgl writes
+    /// becomes, and whether the color pass is stencilled, since mbgl writes
     /// `colorBuilder->setEnableStencil(doDepthPass)`.
     #[must_use]
     pub const fn needs_depth_pass(&self) -> bool {
@@ -145,8 +145,8 @@ pub fn build(rings: &[Ring]) -> FillExtrusionBucket {
 /// The paint binder needs it for the reason [`crate::fill::build_features_tracked`] gives: a
 /// feature's vertex count is not the sum of its rings' lengths, because `classify_rings` may
 /// split one feature into several polygons and drops degenerate ones. An extrusion's three
-/// data-driven properties — colour, height and base — are all bound this way, so a miscount
-/// paints one building with its neighbour's height.
+/// data-driven properties — color, height and base — are all bound this way, so a miscount
+/// paints one building with its neighbor's height.
 #[must_use]
 pub fn build_features_tracked(
     features: &[&[Ring]],

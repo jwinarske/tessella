@@ -1,9 +1,9 @@
-//! Decoding a sprite sheet, and the widening every colour type goes through.
+//! Decoding a sprite sheet, and the widening every color type goes through.
 //!
 //! The rectangles the index hands out are in *pixels*, so a decoder that returned the file's own
 //! channel count would make every offset downstream depend on how the sheet happened to be
-//! encoded — a greyscale sheet and an RGBA one with identical rectangles would sample different
-//! things. Everything is widened to RGBA for that reason, and each colour type is checked.
+//! encoded — a grayscale sheet and an RGBA one with identical rectangles would sample different
+//! things. Everything is widened to RGBA for that reason, and each color type is checked.
 
 #![cfg(feature = "image")]
 
@@ -45,11 +45,11 @@ fn encode(width: u32, height: u32, color_type: u8, samples: &[u8]) -> Vec<u8> {
     }
 
     let channels = match color_type {
-        0 => 1, // greyscale
+        0 => 1, // grayscale
         2 => 3, // RGB
-        4 => 2, // greyscale + alpha
+        4 => 2, // grayscale + alpha
         6 => 4, // RGBA
-        other => panic!("colour type {other} is not one this encoder writes"),
+        other => panic!("color type {other} is not one this encoder writes"),
     };
     let stride = width as usize * channels;
 
@@ -106,7 +106,7 @@ fn an_opaque_rgba_sheet_decodes_unchanged() {
 
 /// A sheet with alpha in it comes back premultiplied.
 ///
-/// mbgl decodes every image to a `PremultipliedImage`, and the shaders and the style colours are
+/// mbgl decodes every image to a `PremultipliedImage`, and the shaders and the style colors are
 /// both in that space. Left straight, an icon's anti-aliased edge blends at full strength and
 /// draws a bright fringe around the marker — invisible on the opaque sprites that are most of a
 /// sheet, and obvious on the ones that fade out.
@@ -128,23 +128,23 @@ fn an_rgb_sheet_gains_opaque_alpha() {
     assert_eq!(sheet.pixels, vec![10, 20, 30, 255, 40, 50, 60, 255]);
 }
 
-/// A greyscale sheet is broadcast across the colour channels.
+/// A grayscale sheet is broadcast across the color channels.
 ///
 /// Not left in the red channel: the rectangle is the same either way, so an icon would decode to
 /// the right place in the right size and draw red.
 #[test]
-fn a_greyscale_sheet_broadcasts_across_the_channels() {
+fn a_grayscale_sheet_broadcasts_across_the_channels() {
     let sheet = sprite::decode_sheet(&encode(2, 1, 0, &[64, 200])).expect("decodes");
     assert_eq!(sheet.pixels, vec![64, 64, 64, 255, 200, 200, 200, 255]);
 }
 
-/// Greyscale with alpha keeps the alpha, broadcasts the rest, and premultiplies.
+/// Grayscale with alpha keeps the alpha, broadcasts the rest, and premultiplies.
 ///
 /// The half-alpha 64 becomes 32 and the transparent 200 becomes nothing, which is the same rule
 /// the RGBA case follows — the widening and the premultiply are two steps and the order between
 /// them is the one that reads: broadcast first, then multiply what was broadcast.
 #[test]
-fn greyscale_with_alpha_keeps_its_alpha() {
+fn grayscale_with_alpha_keeps_its_alpha() {
     let sheet = sprite::decode_sheet(&encode(2, 1, 4, &[64, 128, 200, 0])).expect("decodes");
     assert_eq!(sheet.pixels, vec![32, 32, 32, 128, 0, 0, 0, 0]);
 }
@@ -357,7 +357,7 @@ mod store {
 /// The sheet is a *transport*, not a texture. `parseSprite` copies each icon into an image of
 /// its own and `DynamicTextureAtlas` packs those with a pixel of padding around each; the icon
 /// quad's one-pixel border then samples that padding. Drawing straight from the sheet — where
-/// icons sit flush against each other — makes the border sample the neighbouring picture, which
+/// icons sit flush against each other — makes the border sample the neighboring picture, which
 /// is a hairline of the wrong icon around every marker on the map.
 mod atlas {
     use super::encode;
@@ -372,12 +372,12 @@ mod atlas {
         for row in 0..4usize {
             for column in 0..8usize {
                 let at = (row * 8 + column) * 4;
-                let colour: [u8; 4] = if column < 4 {
+                let color: [u8; 4] = if column < 4 {
                     [255, 0, 0, 255]
                 } else {
                     [0, 0, 255, 255]
                 };
-                samples[at..at + 4].copy_from_slice(&colour);
+                samples[at..at + 4].copy_from_slice(&color);
             }
         }
         encode(8, 4, 6, &samples)
@@ -408,12 +408,12 @@ mod atlas {
         );
     }
 
-    /// The pixel around a packed icon is transparent, not its neighbour.
+    /// The pixel around a packed icon is transparent, not its neighbor.
     ///
     /// The assertion the whole rework exists for. In the sheet the two icons are flush, so the
     /// pixel to the right of the red one is blue; in the atlas it must be nothing.
     #[test]
-    fn the_border_pixel_is_padding_and_not_the_neighbour() {
+    fn the_border_pixel_is_padding_and_not_the_neighbor() {
         let sheet = decode_sheet(&flush_sheet()).expect("decodes");
         let index =
             tessella_glyph::sprite::parse(INDEX.as_bytes(), Some(sheet.size())).expect("parses");
@@ -439,7 +439,7 @@ mod atlas {
         assert_eq!(
             &atlas.pixels()[at..at + 4],
             &[0, 0, 0, 0],
-            "the quad's border samples the neighbouring icon"
+            "the quad's border samples the neighboring icon"
         );
 
         // And the icon's own pixels are there, unshifted.

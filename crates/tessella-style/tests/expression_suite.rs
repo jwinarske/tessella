@@ -366,9 +366,9 @@ fn values_match(got: &Value, want: &Value) -> bool {
                 && a.iter()
                     .all(|(key, x)| b.get(key).is_some_and(|y| values_match(x, y)))
         }
-        // The suite's expectations are JSON, and JSON has no colour: the spec writes a colour
+        // The suite's expectations are JSON, and JSON has no color: the spec writes a color
         // result as its four channels. That is a spelling of the same value, so the comparison
-        // unwraps it rather than the evaluator giving colours back as arrays to suit a test
+        // unwraps it rather than the evaluator giving colors back as arrays to suit a test
         // harness.
         (Value::Color(color), Value::Array(_)) => values_match(
             &Value::Array(

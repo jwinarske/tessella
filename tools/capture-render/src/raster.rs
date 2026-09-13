@@ -18,7 +18,7 @@ pub(crate) struct Canvas {
 }
 
 impl Canvas {
-    /// A canvas filled with one colour.
+    /// A canvas filled with one color.
     pub(crate) fn new(width: u32, height: u32, fill: [f32; 4]) -> Self {
         let rgba = to_bytes(fill);
         Self {
@@ -145,10 +145,10 @@ impl Canvas {
 }
 
 impl Canvas {
-    /// Blends one triangle, taking its *colour* from a sampled image rather than a constant.
+    /// Blends one triangle, taking its *color* from a sampled image rather than a constant.
     ///
-    /// The sibling of [`Canvas::sampled_triangle`], which takes coverage from a field and colour
-    /// from a uniform. A raster tile is the other way round: the picture is the colour, and the
+    /// The sibling of [`Canvas::sampled_triangle`], which takes coverage from a field and color
+    /// from a uniform. A raster tile is the other way round: the picture is the color, and the
     /// layer's opacity is the only uniform in it.
     pub(crate) fn textured_triangle(
         &mut self,

@@ -11,7 +11,7 @@
 //! # The half that is easy to miss
 //!
 //! A resize has to *register*. Nothing else in the camera key moves when a window is resized --
-//! the centre, zoom, bearing, pitch and scale are all unchanged -- so a map that merely accepted
+//! the center, zoom, bearing, pitch and scale are all unchanged -- so a map that merely accepted
 //! a new size would report a settled camera and go on drawing through the matrices of the old
 //! viewport. The viewport is part of the key for that reason, and the second test is what holds
 //! it there.
@@ -70,7 +70,7 @@ fn a_resize_moves_nothing_but_the_viewport() {
     assert!(
         (after.longitude - before.longitude).abs() < 1e-9
             && (after.latitude - before.latitude).abs() < 1e-9,
-        "the centre moved"
+        "the center moved"
     );
     assert!((after.width - 800.0).abs() < 1e-12 && (after.height - 600.0).abs() < 1e-12);
 }

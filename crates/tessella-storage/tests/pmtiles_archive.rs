@@ -57,7 +57,7 @@ fn a_level_is_a_permutation_of_its_range() {
     }
 }
 
-/// Neighbours on the curve are neighbours on the map.
+/// Neighbors on the curve are neighbors on the map.
 ///
 /// The reason the format uses a Hilbert curve at all: a viewport is a small number of contiguous
 /// reads rather than nine scattered ones. A raster-order id would satisfy the permutation test
@@ -196,7 +196,7 @@ fn an_out_of_range_coordinate_has_no_id() {
     assert_eq!(tile_id(255, 0, 0), None);
 }
 
-/// And the archive answers "no such tile" rather than handing back its aliased neighbour.
+/// And the archive answers "no such tile" rather than handing back its aliased neighbor.
 #[test]
 fn an_out_of_range_coordinate_reads_no_tile() {
     let Some(path) = archive_path() else {

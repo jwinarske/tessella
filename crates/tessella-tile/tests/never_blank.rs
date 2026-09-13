@@ -20,7 +20,7 @@
 //! cover it between them. That recursion is exact and terminates on the quadtree, which beats
 //! rasterising both sets and comparing pixels: a sampling test passes for an implementation that
 //! leaves a hole thinner than the sample spacing, and a hairline of background between two tiles
-//! is precisely the artefact this is meant to rule out.
+//! is precisely the artifact this is meant to rule out.
 
 use std::collections::{BTreeMap, BTreeSet};
 

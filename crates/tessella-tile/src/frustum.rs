@@ -46,18 +46,18 @@ impl Aabb {
     /// lookup between them.
     #[must_use]
     pub fn quadrant(&self, index: usize) -> Self {
-        let centre_x = 0.5 * (self.max[0] + self.min[0]);
-        let centre_y = 0.5 * (self.max[1] + self.min[1]);
+        let center_x = 0.5 * (self.max[0] + self.min[0]);
+        let center_y = 0.5 * (self.max[1] + self.min[1]);
         let (mut min, mut max) = (self.min, self.max);
         if index & 1 == 1 {
-            min[0] = centre_x;
+            min[0] = center_x;
         } else {
-            max[0] = centre_x;
+            max[0] = center_x;
         }
         if index & 2 == 2 {
-            min[1] = centre_y;
+            min[1] = center_y;
         } else {
-            max[1] = centre_y;
+            max[1] = center_y;
         }
         Self { min, max }
     }
@@ -304,10 +304,10 @@ pub struct Lod {
     /// mbgl's `zoomRange.min`, which is the source's minimum: a cover may not name a tile the
     /// source cannot serve.
     pub min_zoom: u8,
-    /// How many tiles of the target zoom are kept around the centre, at least.
+    /// How many tiles of the target zoom are kept around the center, at least.
     ///
     /// mbgl's `tileLodMinRadius`, three, and it asserts the value is at least one. Zero would
-    /// let the centre of the screen — the part being looked at — go coarse.
+    /// let the center of the screen — the part being looked at — go coarse.
     pub min_radius: f64,
     /// Scales the distance at which a tile stops splitting.
     ///
@@ -327,9 +327,9 @@ impl Default for Lod {
     }
 }
 
-/// The tiles whose ground the frustum crosses, nearest to the centre first.
+/// The tiles whose ground the frustum crosses, nearest to the center first.
 ///
-/// Every tile is at `zoom` when `lod` is `None`. With `Some`, a tile far enough from the centre
+/// Every tile is at `zoom` when `lod` is `None`. With `Some`, a tile far enough from the center
 /// stops short — see [`Lod`] — so the cover mixes zoom levels the way mbgl's does above sixty
 /// degrees of pitch.
 ///
@@ -339,7 +339,7 @@ impl Default for Lod {
 pub fn covered(
     frustum: &Frustum,
     zoom: u8,
-    centre: [f64; 2],
+    center: [f64; 2],
     wraps: i32,
     limit: usize,
     lod: Option<Lod>,
@@ -378,16 +378,16 @@ pub fn covered(
             }
         }
 
-        // Whether this node is close enough to the centre to be worth four children.
+        // Whether this node is close enough to the center to be worth four children.
         //
         // mbgl's radial rule. A parent in a quadtree is twice its child per dimension, so the
         // distance at which level k stops splitting is `radius + 2 + 4 + ... + 2^k`, which is
         // `radius + 2^(k+1) - 2` — and `k` here is `zoom - node.zoom`, the levels still to go.
-        // The distance itself is the *longest* axis of the gap between the box and the centre,
+        // The distance itself is the *longest* axis of the gap between the box and the center,
         // not the euclidean length: mbgl takes `max_element` over `distanceXYZ`, which measures
-        // the ring of tiles around the centre in tiles rather than in a circle.
+        // the ring of tiles around the center in tiles rather than in a circle.
         let should_split = lod.is_none_or(|lod| {
-            let gap = node.aabb.distance_xyz([centre[0], centre[1], 0.0]);
+            let gap = node.aabb.distance_xyz([center[0], center[1], 0.0]);
             let longest = gap.iter().copied().fold(f64::NEG_INFINITY, f64::max);
             // `1 << (zoom - node.zoom)` in mbgl, as a float because the shift overflows once
             // the gap between the levels passes the width of the integer.
@@ -397,8 +397,8 @@ pub fn covered(
         let floor = lod.map_or(zoom, |lod| lod.min_zoom.min(zoom));
 
         if node.zoom == zoom || (!should_split && node.zoom >= floor) {
-            let dx = f64::from(node.wrap) * tiles + f64::from(node.x) + 0.5 - centre[0];
-            let dy = f64::from(node.y) + 0.5 - centre[1];
+            let dx = f64::from(node.wrap) * tiles + f64::from(node.x) + 0.5 - center[0];
+            let dy = f64::from(node.y) + 0.5 - center[1];
             found.push((dx * dx + dy * dy, (node.zoom, node.x, node.y, node.wrap)));
             if found.len() > limit {
                 return None;

@@ -31,7 +31,7 @@ pub(crate) fn encode(width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
     let mut header = Vec::with_capacity(13);
     header.extend_from_slice(&width.to_be_bytes());
     header.extend_from_slice(&height.to_be_bytes());
-    // Eight bits per channel, colour type 6 (RGBA), deflate, no filter, no interlace.
+    // Eight bits per channel, color type 6 (RGBA), deflate, no filter, no interlace.
     header.extend_from_slice(&[8, 6, 0, 0, 0]);
     chunk(&mut out, b"IHDR", &header);
     chunk(&mut out, b"IDAT", &compressed);

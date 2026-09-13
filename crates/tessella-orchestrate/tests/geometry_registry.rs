@@ -27,7 +27,7 @@ fn key(x: u32, layer: i32, sub: i32) -> DrawableKey {
     }
 }
 
-/// A tile that stays in the cover keeps its id, even as its neighbours change.
+/// A tile that stays in the cover keeps its id, even as its neighbors change.
 #[test]
 fn a_tile_that_stays_keeps_its_id() {
     let mut registry = GeometryRegistry::new();

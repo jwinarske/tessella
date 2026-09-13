@@ -441,7 +441,7 @@ pub struct Plan {
     /// Manifests, glyphs, sprites and single documents.
     ///
     /// Separate from the tiles because they are the small, shared, always-needed part: a
-    /// download fetches them first so that a cancelled or interrupted region still has a style
+    /// download fetches them first so that a canceled or interrupted region still has a style
     /// that renders whatever tiles did arrive.
     pub assets: Vec<String>,
     /// Every tile, across every source.

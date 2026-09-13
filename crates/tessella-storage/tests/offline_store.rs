@@ -45,7 +45,7 @@ fn a_region_round_trips() {
     assert_eq!(stored[0].created, 1_000);
 }
 
-/// A region exists before it has anything, so a download can be resumed and cancelled.
+/// A region exists before it has anything, so a download can be resumed and canceled.
 #[test]
 fn a_new_region_is_empty_rather_than_absent() {
     let cache = SqliteCache::in_memory().expect("opens");

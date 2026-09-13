@@ -22,7 +22,7 @@ const TILE_JPEG: &[u8] = include_bytes!("../../../tests/image-fixtures/tile.jpeg
 const TILE_WEBP: &[u8] = include_bytes!("../../../tests/image-fixtures/tile.webp");
 const MVT: &[u8] = include_bytes!("../../../tests/mvt-fixtures/real-world-0-0-0.mvt");
 
-/// An origin serving one body for tiles and refusing anything it does not recognise.
+/// An origin serving one body for tiles and refusing anything it does not recognize.
 struct Origin {
     raster: Vec<u8>,
 }

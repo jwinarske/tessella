@@ -8,7 +8,7 @@
 use tessella_tile::cover::{ViewTransform, cover};
 
 #[test]
-fn the_cover_contains_the_tile_the_centre_falls_in() {
+fn the_cover_contains_the_tile_the_center_falls_in() {
     let view = ViewTransform {
         longitude: 13.3777,
         latitude: 52.5163,
@@ -33,6 +33,6 @@ fn the_cover_contains_the_tile_the_centre_falls_in() {
         tiles
             .iter()
             .any(|tile| tile.x == x && tile.y == y && tile.wrap == 0),
-        "cover {tiles:?} should contain the centre tile z14 {x},{y}"
+        "cover {tiles:?} should contain the center tile z14 {x},{y}"
     );
 }

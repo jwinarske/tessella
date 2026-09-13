@@ -354,9 +354,9 @@ fn the_line_evaluated_props_match_the_oracle() {
 /// The evaluated-props buffers derive from the style, not from hardcoded values.
 ///
 /// Both layers of each kind are checked, because the data-driven one is where the rule bites:
-/// its colour and opacity are attributes, so this block must carry the *spec defaults* rather
+/// its color and opacity are attributes, so this block must carry the *spec defaults* rather
 /// than either feature's value. A packer that evaluated the expression anyway would put one
-/// feature's colour into a layer-wide uniform and be right only where that feature happened to
+/// feature's color into a layer-wide uniform and be right only where that feature happened to
 /// be drawn.
 #[test]
 fn the_props_buffers_derive_from_the_style() {
@@ -371,7 +371,7 @@ fn the_props_buffers_derive_from_the_style() {
 
     let oracle = oracle_buffers();
 
-    // The constant fill layer: its own colour and opacity, and they match the oracle's block.
+    // The constant fill layer: its own color and opacity, and they match the oracle's block.
     let (size, want) = oracle
         .get(&(1, ubo_slots::ID_FILL_EVALUATED_PROPS_UBO))
         .expect("fill-constant props");
@@ -387,7 +387,7 @@ fn the_props_buffers_derive_from_the_style() {
     assert_eq!(packed.len(), *size);
     assert_eq!(blocks(&packed), *want, "fill-datadriven");
 
-    // And the line layer, whose colour and width are attributes.
+    // And the line layer, whose color and width are attributes.
     let (size, want) = oracle
         .get(&(3, ubo_slots::ID_LINE_EVALUATED_PROPS_UBO))
         .expect("line props");

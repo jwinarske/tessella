@@ -108,7 +108,7 @@ fn a_layer_that_does_not_draw_from_the_source_is_skipped() {
 
 /// Features without labels ask for nothing.
 #[test]
-fn unlabelled_features_ask_for_nothing() {
+fn unlabeled_features_ask_for_nothing() {
     let tile = Tile::decode(TILE).expect("the fixture decodes");
     let layer = tile
         .layers

@@ -16,7 +16,7 @@
 //! # Why folded and not filtered
 //!
 //! A tile visible *only* at `wrap: -1` is still a patch of the sphere. Filtering to `wrap == 0`
-//! would drop exactly those, which is a hole rather than a saving, and the view centred on the
+//! would drop exactly those, which is a hole rather than a saving, and the view centered on the
 //! antimeridian below is the case that shows it: its western half has no `wrap: 0` entry at all.
 
 use std::collections::BTreeSet;
@@ -85,7 +85,7 @@ fn a_globe_cover_holds_no_copies() {
 
 /// The fold keeps the ground, which filtering to `wrap == 0` would not.
 ///
-/// Centred on the antimeridian, half the visible world is reached only at a non-zero wrap. The
+/// Centered on the antimeridian, half the visible world is reached only at a non-zero wrap. The
 /// globe must still be given those patches.
 #[test]
 fn a_view_on_the_antimeridian_keeps_its_western_half() {

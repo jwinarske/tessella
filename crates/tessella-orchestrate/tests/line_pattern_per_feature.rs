@@ -16,7 +16,7 @@
 //! A capture with a data-driven `line-pattern` layer binds ids **9 and 10** at bindings **7 and
 //! 8**, beside the line's own position and normal at 0 and 1 — where a fill puts the same two
 //! streams at ids 4 and 5, bindings 1 and 2. The line shader has already spent its low bindings
-//! on colour, blur, opacity, gapwidth, offset and width. Everything else is identical: `UShort4`,
+//! on color, blur, opacity, gapwidth, offset and width. Everything else is identical: `UShort4`,
 //! stride eight, one pair per vertex.
 //!
 //! The layer that settles it is `line-pattern-data-driven` in `pattern_style.json`, added for

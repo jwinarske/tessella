@@ -405,7 +405,7 @@ fn wrong_arity_is_reported() {
 }
 
 /// Both `interpolate` and `step` locate a stop by binary search, so an out-of-order stop list
-/// would return an arbitrary neighbour: a wrong value from a style that looks reasonable.
+/// would return an arbitrary neighbor: a wrong value from a style that looks reasonable.
 #[test]
 fn out_of_order_stops_are_rejected() {
     for bad in [
@@ -676,23 +676,23 @@ fn to_color_converts_strings_and_channel_arrays() {
 
     // Fallbacks, as with the other casts.
     assert_eq!(
-        eval(r#"["to-color", "not a colour", "red"]"#, None, None),
+        eval(r#"["to-color", "not a color", "red"]"#, None, None),
         red
     );
 }
 
-/// A colour is not the array it looks like, and the difference is static.
+/// A color is not the array it looks like, and the difference is static.
 ///
 /// `["to-color", ["rgba", …]]` is a pass-through while `["to-color", [0, 255, 0, 1]]` rescales.
-/// Getting this wrong is not subtle: converting an already-normalized colour reads its channels
+/// Getting this wrong is not subtle: converting an already-normalized color reads its channels
 /// as 0..255 and darkens it by a factor of 255.
 #[test]
-fn a_colour_is_not_an_array_of_numbers() {
+fn a_color_is_not_an_array_of_numbers() {
     use tessella_style::expression::Type;
 
-    let colour: Value = serde_json::from_str(r#"["rgba", 0, 255, 0, 1]"#).expect("json");
+    let color: Value = serde_json::from_str(r#"["rgba", 0, 255, 0, 1]"#).expect("json");
     assert_eq!(
-        Expression::parse(&colour).expect("parses").result_type(),
+        Expression::parse(&color).expect("parses").result_type(),
         Type::Color
     );
 
@@ -707,16 +707,16 @@ fn a_colour_is_not_an_array_of_numbers() {
         })
     );
 
-    // Converting a colour twice must not change it.
+    // Converting a color twice must not change it.
     assert_eq!(
         eval(r#"["to-color", ["to-color", "lime"]]"#, None, None),
         eval(r#"["to-color", "lime"]"#, None, None)
     );
 }
 
-/// A property the spec types as a colour has its result coerced, wherever the value came from.
+/// A property the spec types as a color has its result coerced, wherever the value came from.
 #[test]
-fn a_colour_property_coerces_its_result() {
+fn a_color_property_coerces_its_result() {
     use tessella_style::expression::{PropertySpec, Type};
 
     let spec = PropertySpec {
@@ -735,7 +735,7 @@ fn a_colour_property_coerces_its_result() {
         })
     );
 
-    // And an expression already producing a colour is left alone rather than rescaled.
+    // And an expression already producing a color is left alone rather than rescaled.
     let already: Value = serde_json::from_str(r#"["rgba", 255, 0, 0, 1]"#).expect("json");
     assert_eq!(
         Expression::parse_for(&already, &spec)
@@ -930,7 +930,7 @@ fn an_aggregate_needle_is_an_error() {
     );
 }
 
-/// `format` builds sections, each carrying its own font, scale and colour.
+/// `format` builds sections, each carrying its own font, scale and color.
 ///
 /// That per-section state is why formatted text is a type rather than a string with markup in
 /// it: one label can mix a place name with a smaller elevation in a different face, and R2's
@@ -971,7 +971,7 @@ fn format_coerces_its_content() {
 
 /// A property the spec types as formatted wraps whatever it got in a single section.
 ///
-/// The same shape as the colour coercion, for the same reason: the style writes a string and the
+/// The same shape as the color coercion, for the same reason: the style writes a string and the
 /// shaper needs sections, so the conversion belongs at that boundary rather than in every
 /// operator that might produce text.
 #[test]
@@ -1054,15 +1054,15 @@ fn concat_coerces_and_join_does_not() {
     }
 }
 
-/// A colour reports itself as a colour, which is what the spec says and what the static side
+/// A color reports itself as a color, which is what the spec says and what the static side
 /// already believed.
 ///
-/// `Type::Color` has existed since colour-typed properties were coerced, but at runtime a
-/// colour was four numbers in a `Value::Array` — indistinguishable from a plain array of the
+/// `Type::Color` has existed since color-typed properties were coerced, but at runtime a
+/// color was four numbers in a `Value::Array` — indistinguishable from a plain array of the
 /// same four numbers, and every evaluation allocated a `Vec` for sixteen bytes of channel.
 /// (`typeof` would be the spec's way to ask; it is not implemented yet, so this asks the value.)
 #[test]
-fn a_colour_is_typed_as_one() {
+fn a_color_is_typed_as_one() {
     for source in [r#"["to-color", "red"]"#, r#"["rgb", 255, 0, 0]"#] {
         assert_eq!(eval(source, None, None).type_name(), "color", "{source}");
     }
@@ -1073,24 +1073,24 @@ fn a_colour_is_typed_as_one() {
     );
 }
 
-/// Interpolating between colours blends channel-wise, unchanged by the representation.
+/// Interpolating between colors blends channel-wise, unchanged by the representation.
 ///
 /// The arithmetic goes through `f64` exactly as the four-element array did: blending in `f32`
-/// would be a diff on every interpolated colour, and the golden oracle would find it.
+/// would be a diff on every interpolated color, and the golden oracle would find it.
 #[test]
-fn colours_still_blend_channel_wise() {
+fn colors_still_blend_channel_wise() {
     let midpoint = eval(
         r#"["interpolate", ["linear"], ["zoom"], 0, ["rgb", 0, 0, 0], 10, ["rgb", 255, 0, 0]]"#,
         Some(5.0),
         None,
     );
-    let Value::Color(colour) = midpoint else {
-        panic!("a colour, got {midpoint:?}");
+    let Value::Color(color) = midpoint else {
+        panic!("a color, got {midpoint:?}");
     };
-    assert!((colour.r - 0.5).abs() < 1e-6, "{colour:?}");
-    assert_eq!(colour.g, 0.0);
-    assert_eq!(colour.b, 0.0);
-    assert_eq!(colour.a, 1.0);
+    assert!((color.r - 0.5).abs() < 1e-6, "{color:?}");
+    assert_eq!(color.g, 0.0);
+    assert_eq!(color.b, 0.0);
+    assert_eq!(color.a, 1.0);
 }
 
 /// `cubic-bezier` interpolation, which is CSS easing and mbgl's `util::UnitBezier`.

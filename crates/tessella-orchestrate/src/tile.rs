@@ -618,7 +618,7 @@ pub fn build_tile_on_with_patterns(
                 // does. The oracle settles what it binds: ids nine and ten at bindings seven and
                 // eight, beside the line's own position and normal — the same two rectangles a
                 // fill puts at ids four and five, at different slots because the line shader has
-                // already spent its low bindings on colour, blur, opacity, gapwidth, offset and
+                // already spent its low bindings on color, blur, opacity, gapwidth, offset and
                 // width.
                 let borrowed_features: Vec<&dyn tessella_style::expression::Feature> = kept
                     .iter()
@@ -726,17 +726,17 @@ fn draws_from(layer: &tessella_style::Layer, source: &str) -> bool {
 
 /// Whether the style's background is the one the oracle replaces with a clear.
 ///
-/// mbgl does not draw such a layer at all. `RenderOrchestrator` recognises it —
+/// mbgl does not draw such a layer at all. `RenderOrchestrator` recognizes it —
 /// `backgroundLayerAsColor && layer.baseImpl == layerImpls->front()` with a `getSolidBackground`
-/// that answers for a background with no pattern and a positive opacity — takes its colour as
-/// the frame's clear colour and drops the layer from the render items entirely. The clear covers
+/// that answers for a background with no pattern and a positive opacity — takes its color as
+/// the frame's clear color and drops the layer from the render items entirely. The clear covers
 /// the whole renderable, which is what `commonClearPass` means by "this also paints in areas
 /// where we don't have any tiles whatsoever".
 ///
 /// That last part is the difference that shows. `util::tileCover` has no tiles past the pole, so
 /// a background drawn per cover tile leaves that region unpainted: at a low zoom under pitch the
 /// top of the viewport looks past the world's edge, and where the oracle shows the background
-/// colour a per-tile background shows whatever the pane was cleared to. Black, in a platform
+/// color a per-tile background shows whatever the pane was cleared to. Black, in a platform
 /// view.
 ///
 /// `backgroundLayerAsColor` is `ContextMode::Unique` — mbgl skips the clear entirely when it
@@ -1733,7 +1733,7 @@ impl TileBuilder {
     /// views that would build it identically, and a zoom-varying paint property is stored as
     /// its value at `overscaled_z` and `overscaled_z + 1` — so the same canonical tile standing
     /// in at two different zooms is two different buckets. Keying on `(z, x, y)` alone hands
-    /// one view the other's endpoints: wrong colours and widths, and invisible at integer zoom,
+    /// one view the other's endpoints: wrong colors and widths, and invisible at integer zoom,
     /// which is where a person would look first.
     #[must_use]
     pub fn key(&self, source: &str, tile: TileId) -> TileKey {

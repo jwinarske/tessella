@@ -141,7 +141,7 @@ fn an_empty_line_has_no_anchors() {
 
 /// Anchors outside the tile are dropped.
 ///
-/// A line runs past the tile's edge into its neighbour, and the neighbour draws that part. Two
+/// A line runs past the tile's edge into its neighbor, and the neighbor draws that part. Two
 /// tiles both labelling the overlap would draw the name twice, a fraction of a pixel apart.
 #[test]
 fn anchors_outside_the_tile_are_dropped() {
@@ -246,9 +246,9 @@ fn a_lines_length_is_its_segments() {
 
 /// mbgl `getAnchors.GetCenterAnchor`.
 #[test]
-fn the_centre_anchor_matches_mbgl() {
+fn the_center_anchor_matches_mbgl() {
     let line = [(1.0, 1.0), (1.0, 3.0), (3.0, 6.0), (4.0, 7.0)];
-    let anchor = centre(&line, core::f32::consts::PI).expect("a centre");
+    let anchor = center(&line, core::f32::consts::PI).expect("a center");
 
     assert_eq!(anchor.point, (2.0, 4.0));
     assert!(
@@ -261,13 +261,13 @@ fn the_centre_anchor_matches_mbgl() {
 
 /// mbgl `getAnchors.GetCenterAnchorOutsideTileBounds`.
 ///
-/// A centred label belongs to its feature rather than to a position, so a line whose middle
+/// A centered label belongs to its feature rather than to a position, so a line whose middle
 /// falls outside the tile still gets one. That is the opposite of the repeating case, where an
-/// anchor outside the tile is dropped because the neighbouring tile will draw it.
+/// anchor outside the tile is dropped because the neighboring tile will draw it.
 #[test]
-fn a_centre_outside_the_tile_is_still_placed() {
+fn a_center_outside_the_tile_is_still_placed() {
     let line = [(-10.0, -10.0), (5.0, 5.0)];
-    let anchor = centre(&line, core::f32::consts::PI).expect("a centre");
+    let anchor = center(&line, core::f32::consts::PI).expect("a center");
 
     assert_eq!(anchor.point, (-3.0, -3.0));
     assert!((anchor.angle - core::f32::consts::FRAC_PI_4).abs() < 1e-6);
@@ -277,21 +277,21 @@ fn a_centre_outside_the_tile_is_still_placed() {
 /// mbgl `getAnchors.GetCenterAnchorFailMaxAngle`.
 ///
 /// A right angle at the middle refuses the label outright rather than sliding it along. The
-/// caller asked for the centre; answering with somewhere else would silently answer a different
+/// caller asked for the center; answering with somewhere else would silently answer a different
 /// question.
 #[test]
-fn a_bend_at_the_centre_refuses_it() {
+fn a_bend_at_the_center_refuses_it() {
     let line = [(1.0, 1.0), (1.0, 3.0), (3.0, 3.0)];
-    assert!(centre(&line, core::f32::consts::PI / 4.0).is_none());
+    assert!(center(&line, core::f32::consts::PI / 4.0).is_none());
 }
 
-/// An empty line has no centre.
+/// An empty line has no center.
 #[test]
-fn an_empty_line_has_no_centre() {
-    assert!(centre(&[], core::f32::consts::PI).is_none());
+fn an_empty_line_has_no_center() {
+    assert!(center(&[], core::f32::consts::PI).is_none());
 }
 
-fn centre(line: &[(f32, f32)], max_angle: f32) -> Option<tessella_layout::anchors::Anchor> {
+fn center(line: &[(f32, f32)], max_angle: f32) -> Option<tessella_layout::anchors::Anchor> {
     tessella_layout::anchors::get_center_anchor(
         line, max_angle, TEXT_LEFT, TEXT_RIGHT, ICON_LEFT, ICON_RIGHT, GLYPH_SIZE, 1.0,
     )

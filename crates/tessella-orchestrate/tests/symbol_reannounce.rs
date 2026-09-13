@@ -41,7 +41,7 @@ const GLYPHS: &[u8] = include_bytes!("../../../tests/glyph-fixtures/TestFont/0-2
 const BERLIN: &[u8] =
     include_bytes!("../../../tests/mvt-fixtures/protomaps-berlin-14-8802-5373.mvt");
 
-/// A labelled layer and an unlabelled one, so the retained family is the control.
+/// A labeled layer and an unlabeled one, so the retained family is the control.
 const STYLE: &str = r##"{"version": 8, "sources": {"src": {"type": "vector", "tiles": []}},
   "layers": [
     {"id": "bg", "type": "background", "paint": {"background-color": "#f4f1ea"}},
@@ -182,7 +182,7 @@ fn a_camera_move_re_announces_the_labels_and_nothing_else() {
         "the first frame announced no fills, so the control never ran"
     );
 
-    // The same cover under a camera that moved. The zoom is nudged rather than the centre so the
+    // The same cover under a camera that moved. The zoom is nudged rather than the center so the
     // cover is provably identical -- what is under test is retention across a *camera* change,
     // and a pan that changed the tile set would announce the labels for the ordinary reason.
     let moved = view_at(14.2);
