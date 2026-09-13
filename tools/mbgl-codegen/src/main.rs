@@ -70,6 +70,16 @@ const SOURCES: &[Source] = &[
               persistent texture — so `Alpha` carries more traffic here than it does upstream.",
     },
     Source {
+        header: "include/mbgl/gfx/types.hpp",
+        name: "TextureChannelDataType",
+        repr: "u8",
+        shape: Shape::Discriminant,
+        doc: "Component type of a texture crossing the capture stream.\n\nSeparate from \
+              `TexturePixelType`, which is the channel *layout*: a heatmap's offscreen target \
+              is RGBA and `HalfFloat` together, because a kernel sum runs past one and an \
+              8-bit target clips it (DR-25).",
+    },
+    Source {
         header: "src/mbgl/renderer/render_pass.hpp",
         name: "RenderPass",
         repr: "u8",

@@ -65,6 +65,7 @@ typedef enum tsl_envelope_kind {
     TSL_ENVELOPE_KIND_VIEW_DECLARE = 10,
     TSL_ENVELOPE_KIND_VIEW_UNDECLARE = 11,
     TSL_ENVELOPE_KIND_MESH_ADD = 12,
+    TSL_ENVELOPE_KIND_VIEW_TARGET = 13,
 } tsl_envelope_kind;
 
 /* Why geometry was announced. A steady stream of ATTRIBUTES_MODIFIED on a static scene is a */
@@ -104,6 +105,15 @@ typedef enum tsl_texture_pixel_type {
     TSL_TEXTURE_PIXEL_TYPE_DEPTH = 3,
     TSL_TEXTURE_PIXEL_TYPE_LUMINANCE = 4,
 } tsl_texture_pixel_type;
+
+/* Component type of a texture. Separate from the pixel format, which is the channel layout: a */
+/* heatmap's offscreen target is RGBA and HALF_FLOAT together, because the kernel sum runs past */
+/* one and an 8-bit target clips it. */
+typedef enum tsl_texture_channel_data_type {
+    TSL_TEXTURE_CHANNEL_DATA_TYPE_UNSIGNED_BYTE = 0,
+    TSL_TEXTURE_CHANNEL_DATA_TYPE_HALF_FLOAT = 1,
+    TSL_TEXTURE_CHANNEL_DATA_TYPE_FLOAT = 2,
+} tsl_texture_channel_data_type;
 
 /*
  * How many bytes one pixel of a format occupies.
@@ -1862,6 +1872,56 @@ TSL_ASSERT(TSL_ALIGNOF(tsl_view_declare) == 4, "tsl_view_declare alignment diffe
 TSL_ASSERT(offsetof(tsl_view_declare, view) == 0, "tsl_view_declare.view moved");
 TSL_ASSERT(offsetof(tsl_view_declare, camera_mode) == 4, "tsl_view_declare.camera_mode moved");
 TSL_ASSERT(offsetof(tsl_view_declare, _reserved) == 5, "tsl_view_declare._reserved moved");
+
+/*
+ * Makes a declared view draw into a texture instead of onto the screen.
+ *
+ * A heatmap draws its kernels into a half-resolution target and then draws that target through a
+ * color ramp; a hillshade prepare pass has the same shape. The pass is a view rather than a
+ * property of a layer because that is the only granularity the consumers have: Filament sets a
+ * render target on a View, Unity puts targetTexture on a Camera, UE5 renders through a capture
+ * component and Godot through a SubViewport.
+ *
+ * Ordered after the tsl_view_declare naming the view and before any tsl_view_use that binds
+ * geometry into it. A view with no tsl_view_target draws to the screen, which is every view that
+ * existed before this envelope did.
+ *
+ * The size is a fraction of the parent rather than pixels, so a resize moves no bytes. Nothing
+ * uploads pixels to the id: it names the output, and a drawable in the parent view binds it
+ * through the tsl_texture_ref that already exists.
+ *
+ * Mirrors `ViewTarget`.
+ */
+typedef struct tsl_view_target {
+    /* The offscreen view. Declared first. */
+    uint32_t view;
+    /* The view it is sized against, and whose pass it runs ahead of. */
+    uint32_t parent;
+    /* The id its output is bound by. Never the subject of a tsl_texture_update. */
+    uint64_t texture;
+    /* Numerator of the size against the parent. One half is mbgl's heatmap target. */
+    uint16_t scale_num;
+    /* Denominator of the size against the parent. Zero is a protocol fault. */
+    uint16_t scale_den;
+    /* tsl_texture_pixel_type. The channel layout. */
+    uint8_t format;
+    /* tsl_texture_channel_data_type. Not implied by the layout: a heatmap target is RGBA and */
+    /* HalfFloat together, because the kernel sum runs past one. */
+    uint8_t channel_type;
+    /* Must be zero. */
+    uint8_t _pad[2];
+} tsl_view_target;
+
+TSL_ASSERT(sizeof(tsl_view_target) == 24, "tsl_view_target size differs from the Rust definition");
+TSL_ASSERT(TSL_ALIGNOF(tsl_view_target) == 8, "tsl_view_target alignment differs from the Rust definition");
+TSL_ASSERT(offsetof(tsl_view_target, view) == 0, "tsl_view_target.view moved");
+TSL_ASSERT(offsetof(tsl_view_target, parent) == 4, "tsl_view_target.parent moved");
+TSL_ASSERT(offsetof(tsl_view_target, texture) == 8, "tsl_view_target.texture moved");
+TSL_ASSERT(offsetof(tsl_view_target, scale_num) == 16, "tsl_view_target.scale_num moved");
+TSL_ASSERT(offsetof(tsl_view_target, scale_den) == 18, "tsl_view_target.scale_den moved");
+TSL_ASSERT(offsetof(tsl_view_target, format) == 20, "tsl_view_target.format moved");
+TSL_ASSERT(offsetof(tsl_view_target, channel_type) == 21, "tsl_view_target.channel_type moved");
+TSL_ASSERT(offsetof(tsl_view_target, _pad) == 22, "tsl_view_target._pad moved");
 
 /*
  * Drops a view and everything scoped to it: its scene, uniform buffers, stencil sets and

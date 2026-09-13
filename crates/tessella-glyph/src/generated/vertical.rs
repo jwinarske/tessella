@@ -1,6 +1,6 @@
 //! Vertical writing orientation, generated from maplibre-native.
 //!
-//! Source revision: b5a2922844c9
+//! Source revision: 96c12fdbcf73
 //!
 //! Produced by *running* mbgl rather than by reading it. The predicates behind
 //! these tables are nested block tests with single characters excluded from the
@@ -91,7 +91,7 @@ pub const NEUTRAL: [Range; 35] = [
 
 /// Where `isCharInComplexShapingScript` holds. These are never verticalized when
 /// vertical placement is allowed, because their shaping already depends on their
-/// neighbours and turning one on its side would break the join.
+/// neighbors and turning one on its side would break the join.
 pub const COMPLEX_SHAPING: [Range; 5] = [
     (0x0600, 0x06FF),
     (0x0750, 0x077F),

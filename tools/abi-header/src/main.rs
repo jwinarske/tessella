@@ -35,7 +35,9 @@ use tessella_capture_abi::reverse::{
     FLAG_PUBLISHED, FLAG_VISIBLE, MAX_VIEWS, ReverseChannel, ViewSlot,
 };
 use tessella_capture_abi::ring::{RECORD_ALIGN, RECORD_FLAG_SKIP, RecordHeader, RingControl};
-use tessella_capture_abi::{ABI_REV, AttributeDataType, BuiltIn, EnvelopeKind, TexturePixelType};
+use tessella_capture_abi::{
+    ABI_REV, AttributeDataType, BuiltIn, EnvelopeKind, TextureChannelDataType, TexturePixelType,
+};
 
 /// Path of the generated header, relative to the workspace root.
 const OUTPUT: &str = "include/tessella_capture_abi.h";
@@ -695,6 +697,58 @@ fn structs() -> Vec<Struct> {
             ]
         ),
         c_struct!(
+            ViewTarget,
+            "view_target",
+            "Makes a declared view draw into a texture instead of onto the screen.\n\n\
+             A heatmap draws its kernels into a half-resolution target and then draws that \
+             target through a color ramp; a hillshade prepare pass has the same shape. The \
+             pass is a view rather than a property of a layer because that is the only \
+             granularity the consumers have: Filament sets a render target on a View, Unity \
+             puts targetTexture on a Camera, UE5 renders through a capture component and Godot \
+             through a SubViewport.\n\n\
+             Ordered after the tsl_view_declare naming the view and before any tsl_view_use \
+             that binds geometry into it. A view with no tsl_view_target draws to the screen, \
+             which is every view that existed before this envelope did.\n\n\
+             The size is a fraction of the parent rather than pixels, so a resize moves no \
+             bytes. Nothing uploads pixels to the id: it names the output, and a drawable in \
+             the parent view binds it through the tsl_texture_ref that already exists.",
+            [
+                (view, "uint32_t view", "The offscreen view. Declared first."),
+                (
+                    parent,
+                    "uint32_t parent",
+                    "The view it is sized against, and whose pass it runs ahead of."
+                ),
+                (
+                    texture,
+                    "uint64_t texture",
+                    "The id its output is bound by. Never the subject of a tsl_texture_update."
+                ),
+                (
+                    scale_num,
+                    "uint16_t scale_num",
+                    "Numerator of the size against the parent. One half is mbgl's heatmap target."
+                ),
+                (
+                    scale_den,
+                    "uint16_t scale_den",
+                    "Denominator of the size against the parent. Zero is a protocol fault."
+                ),
+                (
+                    format,
+                    "uint8_t format",
+                    "tsl_texture_pixel_type. The channel layout."
+                ),
+                (
+                    channel_type,
+                    "uint8_t channel_type",
+                    "tsl_texture_channel_data_type. Not implied by the layout: a heatmap target \
+                     is RGBA and HalfFloat together, because the kernel sum runs past one."
+                ),
+                (_pad, "uint8_t _pad[2]", "Must be zero."),
+            ]
+        ),
+        c_struct!(
             ViewUndeclare,
             "view_undeclare",
             "Drops a view and everything scoped to it: its scene, uniform buffers, stencil \
@@ -1243,6 +1297,14 @@ fn generate() -> String {
         "texture_pixel_type",
         "Pixel format of a texture.",
         &TexturePixelType::ALL.map(|t| (screaming(&format!("{t:?}")), t as i64)),
+    );
+    emit_enum(
+        w,
+        "texture_channel_data_type",
+        "Component type of a texture. Separate from the pixel format, which is the channel \
+         layout: a heatmap's offscreen target is RGBA and HALF_FLOAT together, because the \
+         kernel sum runs past one and an 8-bit target clips it.",
+        &TextureChannelDataType::ALL.map(|t| (screaming(&format!("{t:?}")), t as i64)),
     );
     // How large a pixel of each format is, which the enum alone does not say. A producer never
     // needs it — every caller sizes its own pixel slice — and a consumer cannot do without it:

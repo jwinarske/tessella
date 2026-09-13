@@ -21,7 +21,9 @@
 //! Sizes and alignments are asserted at the bottom of this file. They are what the generated C
 //! header mirrors, and what R-6 checks on every target.
 
-use crate::{AttributeDataType, BuiltIn, CameraMode, RenderPass, TexturePixelType};
+use crate::{
+    AttributeDataType, BuiltIn, CameraMode, RenderPass, TextureChannelDataType, TexturePixelType,
+};
 
 /// Identifies a view — one map instance's camera, cover, and draw order.
 ///
@@ -577,6 +579,63 @@ pub struct ViewDeclare {
     pub _reserved: [u8; 3],
 }
 
+/// Makes a declared view draw into a texture instead of onto the screen (DR-25).
+///
+/// A heatmap draws its kernels into a half-resolution target and then draws that target through
+/// a color ramp; a hillshade prepare pass has the same shape. DR-25 records why that first pass
+/// is a *view* rather than a property of a layer: `View::setRenderTarget` is the only granularity
+/// Filament has, Unity puts `targetTexture` on `Camera`, UE5 renders through a capture component
+/// and Godot through a `SubViewport`. A protocol that said "layer N draws offscreen" would make
+/// every one of them synthesize the view anyway.
+///
+/// Ordered after the [`ViewDeclare`] naming `view`, and before any [`ViewUse`] that binds
+/// geometry into it. A view with no `ViewTarget` draws to the screen, which is every view that
+/// existed before this envelope did.
+///
+/// # The size is a fraction
+///
+/// mbgl's heatmap target is `viewportSize / 2` and follows the viewport. Carrying absolute
+/// pixels would put a re-declaration on the wire at every resize, for a number the consumer
+/// already has; `scale_num / scale_den` against `parent` means a resize moves no bytes — the
+/// same property §6.5 and DR-8 ask of every other per-view fact.
+///
+/// # What it does not carry
+///
+/// No transient or discard hint. Filament's frame graph derives load and store ops from how an
+/// attachment is used and the other consumers have their own rules, so a hint the producer
+/// cannot verify is a field they would disagree about. The output is addressable as
+/// [`Self::texture`], so a drawable in `parent` samples it through the [`TextureRef`] that
+/// already exists.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(C)]
+pub struct ViewTarget {
+    /// The offscreen view. Declared by its own [`ViewDeclare`] first.
+    pub view: ViewId,
+    /// The view it is sized against, and in whose frame it is drawn before.
+    ///
+    /// Not merely bookkeeping: it is what makes `scale_num / scale_den` mean something, and it
+    /// is how a consumer knows to run this view's pass ahead of the one that samples it.
+    pub parent: ViewId,
+    /// The id this view's output is bound by. In [`TextureUpdate`]'s id space, and never the
+    /// subject of one — nothing uploads pixels to a render target.
+    pub texture: TextureId,
+    /// Numerator of the size against `parent`. One half is mbgl's heatmap target.
+    pub scale_num: u16,
+    /// Denominator of the size against `parent`. Zero is a protocol fault.
+    pub scale_den: u16,
+    /// Channel layout, as a [`TexturePixelType`] discriminant.
+    pub format: u8,
+    /// Component type, as a [`TextureChannelDataType`] discriminant.
+    ///
+    /// Separate from `format` and not derivable from it. A heatmap target is `RGBA` and
+    /// `HalfFloat` together: the kernel sum runs past one, and an 8-bit target clips it to a
+    /// flat cap over every dense cluster — which reads as a ramp that has lost its top stop
+    /// rather than as a format bug.
+    pub channel_type: u8,
+    /// Padding. Must be zero.
+    pub _pad: [u8; 2],
+}
+
 /// Drops a view and everything scoped to it (§5.3, DR-18).
 ///
 /// The consumer releases the view's scene, uniform buffers, stencil sets and reverse-channel
@@ -899,6 +958,41 @@ impl ViewDeclare {
     }
 }
 
+impl ViewTarget {
+    /// The channel layout, or `None` if the discriminant is unrecognized.
+    #[must_use]
+    pub const fn format(&self) -> Option<TexturePixelType> {
+        TexturePixelType::from_repr(self.format)
+    }
+
+    /// The component type, or `None` if the discriminant is unrecognized.
+    #[must_use]
+    pub const fn channel_type(&self) -> Option<TextureChannelDataType> {
+        TextureChannelDataType::from_repr(self.channel_type)
+    }
+
+    /// The target's size against a parent view of `width` by `height`.
+    ///
+    /// `None` when the denominator is zero, which is a protocol fault, or when either side
+    /// rounds to nothing — a target with no area is not one a consumer can allocate, and an
+    /// inset small enough to reach that is a bug upstream of here rather than a size to clamp.
+    #[must_use]
+    pub const fn size(&self, width: u32, height: u32) -> Option<Extent> {
+        if self.scale_den == 0 {
+            return None;
+        }
+        let (num, den) = (self.scale_num as u32, self.scale_den as u32);
+        let (w, h) = (width * num / den, height * num / den);
+        if w == 0 || h == 0 {
+            return None;
+        }
+        Some(Extent {
+            width: w,
+            height: h,
+        })
+    }
+}
+
 impl TextureUpdate {
     /// The pixel format, or `None` if the discriminant is unrecognized.
     #[must_use]
@@ -1098,6 +1192,70 @@ mod tests {
         assert_eq!(offset_of!(ViewDeclare, camera_mode), 4);
         assert_eq!(offset_of!(ViewDeclare, _reserved), 5);
         assert_eq!(size_of::<[u8; 3]>(), 3, "three bytes reserved");
+    }
+
+    /// The target record's layout, and the two discriminants that are not one field.
+    #[test]
+    fn view_target_pins_its_layout_and_its_two_type_fields() {
+        assert_eq!(size_of::<ViewTarget>(), 24);
+        assert_eq!(offset_of!(ViewTarget, view), 0);
+        assert_eq!(offset_of!(ViewTarget, parent), 4);
+        assert_eq!(offset_of!(ViewTarget, texture), 8);
+        assert_eq!(offset_of!(ViewTarget, scale_num), 16);
+        assert_eq!(offset_of!(ViewTarget, scale_den), 18);
+        assert_eq!(offset_of!(ViewTarget, format), 20);
+        assert_eq!(offset_of!(ViewTarget, channel_type), 21);
+        assert_eq!(offset_of!(ViewTarget, _pad), 22);
+
+        // A heatmap's target: RGBA *and* HalfFloat, which is two fields because the layout does
+        // not imply the component type.
+        let target = ViewTarget {
+            view: ViewId(1),
+            parent: ViewId(0),
+            texture: TextureId(7),
+            scale_num: 1,
+            scale_den: 2,
+            format: TexturePixelType::RGBA as u8,
+            channel_type: TextureChannelDataType::HalfFloat as u8,
+            _pad: [0; 2],
+        };
+        assert_eq!(target.format(), Some(TexturePixelType::RGBA));
+        assert_eq!(
+            target.channel_type(),
+            Some(TextureChannelDataType::HalfFloat)
+        );
+        assert_eq!(
+            target.size(1024, 768),
+            Some(Extent {
+                width: 512,
+                height: 384
+            }),
+            "the oracle's 512x384 from a 1024x768 parent"
+        );
+    }
+
+    /// A denominator of zero and a fraction that rounds a side away both refuse rather than
+    /// producing a target nothing can allocate.
+    #[test]
+    fn a_target_with_no_area_has_no_size() {
+        let mut target = ViewTarget {
+            view: ViewId(1),
+            parent: ViewId(0),
+            texture: TextureId(7),
+            scale_num: 1,
+            scale_den: 0,
+            format: TexturePixelType::RGBA as u8,
+            channel_type: TextureChannelDataType::HalfFloat as u8,
+            _pad: [0; 2],
+        };
+        assert_eq!(target.size(1024, 768), None, "a zero denominator");
+
+        target.scale_den = 2048;
+        assert_eq!(
+            target.size(1024, 768),
+            None,
+            "a height that rounds to nothing"
+        );
     }
 
     /// Camera mode is per view, so it must not be reachable from a per-use record. If this
