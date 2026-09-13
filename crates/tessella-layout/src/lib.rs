@@ -18,7 +18,8 @@
 //! `fixupPolygons` rotates a fill's rings and does not touch lines; both layers' *paint*
 //! buffers are byte-exact, a rotation being invisible to a buffer that repeats one value per
 //! feature. Zoom-interpolated (composite) properties are refused rather than half-written.
-//! Circle, pattern and symbol layout are not implemented.
+//! Circle and heatmap share one quad bucket — see [`heatmap`] for why that is one module
+//! and not two. Pattern layout is not implemented.
 
 #![forbid(unsafe_code)]
 #![cfg_attr(not(test), no_std)]
@@ -29,6 +30,7 @@ pub mod anchors;
 pub mod circle;
 pub mod fill;
 pub mod fill_extrusion;
+pub mod heatmap;
 mod libstdcxx;
 pub mod line;
 pub mod paint;

@@ -20,6 +20,81 @@ maplibre-native build. Regenerating them needs both.
 | `spaced_style.dump` | `crates/tessella-style/tests/spaced_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `vertical_style.dump` | `crates/tessella-style/tests/vertical_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `image_text_style.dump` | `crates/tessella-style/tests/image_text_style.json` | 51.505, -0.11 @ z13, 1024x768 |
+| `heatmap_style.dump` | `crates/tessella-style/tests/heatmap_style.json` | 51.505, -0.11 @ z13, 1024x768 |
+
+### The one that needed the backend extended to exist
+
+`heatmap_style.dump` is the first capture with a layer that draws to an offscreen target, and
+the capture backend refused it: `createOffscreenTexture` was a Phase 5 stub that logged and
+asserted. It is implemented now — a renderable of the right size and a `Texture2D` of the right
+size and channel type, which is all a backend that records rather than rasterizes has to
+provide.
+
+Two things about the dump format come from this capture.
+
+**`rendertarget` lines.** A render target uploads no pixels, so it produces no `TextureUpdate`
+and the second pass would bind a texture id nothing had described. The probe announces it
+instead, with the two numbers that are the renderer's choice rather than the style's:
+
+    rendertargets 2
+    rendertarget 512x384 ct=1
+    rendertarget 512x384 ct=1
+
+Half the viewport in each dimension, `HalfFloat` because a kernel sum runs past one, and **one
+target per heatmap layer** — each `RenderHeatmapLayer` holds its own. Every other golden gained
+a `rendertargets 0` line and nothing else.
+
+**`ubo layer:<index>/<style layer id>`.** Layer groups are now named in the dump, and that is a
+fix rather than a decoration. `RenderHeatmapLayer::update` hardcodes the tile group inside its
+render target to index 0, so two heatmap layers produce two groups both claiming zero — and the
+probe, keying uniform records on the index alone, kept one and dropped the other. This style
+emitted nine buffers and the dump recorded five: the second heatmap layer's evaluated
+properties overwrote the first's, and the *background* layer's consolidated buffer and props
+went the same way. Outside a render target the indices are already unique, which is why no
+other capture showed it. The three Rust helpers that parse these lines now assert that no two
+records collide rather than letting one win.
+
+The style is two heatmap layers over eight clustered points, one constant and one not. The pair
+is necessary: `HeatmapEvaluatedPropsUBO` carries `weight` and `radius` whether or not they are
+data-driven, because mbgl writes `constantOr(defaultValue())` there and lets the shader's
+`#pragma mapbox: initialize` choose between the block and the attribute. Against a single
+constant layer, a packer that writes the evaluated value and one that writes the spec default
+agree.
+
+It settled two things that reading the source did not:
+
+- **A heatmap drawable gets no depth offset.** Every other drawable's matrix is nudged by
+  `((1 + currentLayer) * numSublayers - subLayerIndex) * depthEpsilon` so sublayers resolve
+  against each other. `multiplyWithProjectionMatrix` applies that only
+  `if (!drawable.getIs3D() && drawable.getEnableDepth())`, and the heatmap builder calls
+  `setEnableDepth(false)` — the oracle's `flags=0001`. Offsetting anyway is wrong by `3/2048`
+  in element 14, which is the size of a bug nothing downstream would attribute: the layer draws
+  into a target with no depth buffer to disagree with.
+- **The second pass's matrix takes no view.** It is `ortho(0, width, height, 0, -1, 1)` over
+  the *backend* size, not the half-resolution target, and the quad's vertices are the unit
+  square scaled to the world size in the vertex shader.
+
+### The heatmap capture's two elided ids, and the eighty-six thousand that are not there
+
+`RenderHeatmapLayer::update` rebuilds its texture-pass layer group every frame, and each
+rebuild does `context.createTexture2D()` and `setImage(colorRamp)` — a brand-new texture object
+for identical pixels, 43,000 times over a settle. Two heatmap layers, 86,290 texture uploads.
+
+Two consequences, handled differently on purpose.
+
+The **id** a drawable binds is a frame counter, and it moved by hundreds between three
+consecutive captures. `elide_heatmap_ramp.py` elides it, and only it: `slot=0` is the render
+target, created once per layer, and keeps its id. Two lines of a hundred and three.
+
+The **count** is dealt with in the probe rather than by elision. `textures N` now counts
+distinct content instead of distinct ids, which is what keeps this dump at a hundred lines
+instead of eighty-six thousand. How many times mbgl recreated the same pixels is a property of
+the run, and it was the last thing in this file that was. Checked against every other golden:
+the change moved no line in any of them.
+
+Neither hides the churn, which is a finding rather than noise — it is per-frame drawable
+creation and a per-frame texture upload for a layer whose ramp never changes, and this build
+should not copy it.
 
 ### The one that is not hermetic
 
@@ -90,7 +165,7 @@ It settles several things that reading mbgl's source did not:
 - **And the slots differ per shader.** A data-driven `line-pattern` binds the same two streams at
   ids **9 and 10**, bindings **7 and 8**, beside the line's own position and normal at 0 and 1 —
   where a fill puts them at ids 4 and 5, bindings 1 and 2. The line shader has already spent its
-  low bindings on colour, blur, opacity, gapwidth, offset and width. Everything else is
+  low bindings on color, blur, opacity, gapwidth, offset and width. Everything else is
   identical: `UShort4`, stride eight, one pair per vertex. Nothing about reading the binder
   classes suggests the slots move, and the `line-pattern-data-driven` layer is here to say so.
   It carries a second line feature beside the first, because one line cannot tell a per-vertex
@@ -228,6 +303,12 @@ python3 <tessella>/tools/mbgl-codegen/oracles/canonicalize_drawable_index.py \
     <tessella>/tests/golden/pattern_style.dump
 python3 <tessella>/tools/mbgl-codegen/oracles/elide_pattern_atlas.py \
     <tessella>/tests/golden/pattern_style.dump
+
+# The heatmap capture, with its own elision.
+./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/heatmap_style.json \
+    --dump=<tessella>/tests/golden/heatmap_style.dump
+python3 <tessella>/tools/mbgl-codegen/oracles/elide_heatmap_ramp.py \
+    <tessella>/tests/golden/heatmap_style.dump
 
 ./mbgl-capture-probe --dump=<tessella>/tests/golden/hermetic_style.dump
 ./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/composite_style.json \
