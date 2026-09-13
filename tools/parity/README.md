@@ -6,8 +6,14 @@ whether or not it meant to.
 
 ## Running it
 
-    tools/parity/build.sh        # render_probe and the materials, from the current trees
+    tools/parity/build.sh        # both probes and the materials, from the current trees
     tools/parity/sweep.sh        # the five cameras, against the oracle
+
+    cd "$PARITY_WORK" && ./quad_probe "$PARITY_DIR/scenes/quad_remote.json" mat quad.ppm
+
+The quad is the other half of the gate and is not part of the sweep: four views on one engine,
+which is what catches a regression in layer masking or in the shared scene that a single-view
+render cannot. It holds at `22 / 22 / 22 / 32` primitives with `image_stable 1`.
 
 Needs three things the tree does not carry: maplibre-native's `mbgl-render` as the oracle, a
 Filament build, and the tile and asset servers the scenes name (`serve.sh` on 8080 and

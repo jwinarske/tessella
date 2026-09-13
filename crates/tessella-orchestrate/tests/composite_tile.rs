@@ -323,10 +323,17 @@ fn the_fill_drawable_buffer_matches_the_oracle_at_a_fractional_zoom() {
         };
         let (head, tail) = rest.split_once(" bytes=").expect("a bytes= field");
         let mut fields = head.split_whitespace();
+        // `layer:<index>/<style layer id>` since the probe started naming groups; see the
+        // note in `ubo_buffers.rs` on why the name matters and why this keys on the index.
         let layer = fields
             .next()
             .and_then(|f| f.strip_prefix("layer:"))
-            .map_or(-1, |n| n.parse().expect("a layer index"));
+            .map_or(-1, |n| {
+                n.split_once('/')
+                    .map_or(n, |(index, _)| index)
+                    .parse()
+                    .expect("a layer index")
+            });
         let slot: u32 = fields
             .next()
             .and_then(|f| f.strip_prefix("slot="))
@@ -346,7 +353,10 @@ fn the_fill_drawable_buffer_matches_the_oracle_at_a_fractional_zoom() {
             .map(|c| String::from_utf8(c.to_vec()).expect("hex"))
             .collect();
         blocks.sort();
-        oracle.insert((layer, slot), (size, blocks));
+        assert!(
+            oracle.insert((layer, slot), (size, blocks)).is_none(),
+            "two layer groups share index {layer} at slot {slot} -- key by the group name"
+        );
     }
 
     let paint = tessella_style::property::resolve_paint(

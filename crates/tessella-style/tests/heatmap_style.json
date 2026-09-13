@@ -1,0 +1,205 @@
+{
+  "version": 8,
+  "name": "capture-probe-heatmap",
+  "sources": {
+    "probe": {
+      "type": "geojson",
+      "data": {
+        "type": "FeatureCollection",
+        "features": [
+          {
+            "type": "Feature",
+            "properties": {
+              "kind": "a",
+              "w": 0.2
+            },
+            "geometry": {
+              "type": "Point",
+              "coordinates": [
+                -0.115,
+                51.503
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {
+              "kind": "b",
+              "w": 0.3
+            },
+            "geometry": {
+              "type": "Point",
+              "coordinates": [
+                -0.112,
+                51.506
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {
+              "kind": "a",
+              "w": 0.4
+            },
+            "geometry": {
+              "type": "Point",
+              "coordinates": [
+                -0.108,
+                51.504
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {
+              "kind": "b",
+              "w": 0.5
+            },
+            "geometry": {
+              "type": "Point",
+              "coordinates": [
+                -0.105,
+                51.508
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {
+              "kind": "a",
+              "w": 0.6
+            },
+            "geometry": {
+              "type": "Point",
+              "coordinates": [
+                -0.118,
+                51.5
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {
+              "kind": "b",
+              "w": 0.7
+            },
+            "geometry": {
+              "type": "Point",
+              "coordinates": [
+                -0.101,
+                51.501
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {
+              "kind": "a",
+              "w": 0.8
+            },
+            "geometry": {
+              "type": "Point",
+              "coordinates": [
+                -0.113,
+                51.511
+              ]
+            }
+          },
+          {
+            "type": "Feature",
+            "properties": {
+              "kind": "b",
+              "w": 0.9
+            },
+            "geometry": {
+              "type": "Point",
+              "coordinates": [
+                -0.099,
+                51.509
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "layers": [
+    {
+      "id": "bg",
+      "type": "background",
+      "paint": {
+        "background-color": "#101418"
+      }
+    },
+    {
+      "id": "heatmap-constant",
+      "type": "heatmap",
+      "source": "probe",
+      "paint": {
+        "heatmap-weight": 1,
+        "heatmap-radius": 20,
+        "heatmap-intensity": 1,
+        "heatmap-opacity": 0.9
+      }
+    },
+    {
+      "id": "heatmap-composite",
+      "type": "heatmap",
+      "source": "probe",
+      "paint": {
+        "heatmap-weight": [
+          "get",
+          "w"
+        ],
+        "heatmap-radius": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "zoom"
+          ],
+          13,
+          [
+            "match",
+            [
+              "get",
+              "kind"
+            ],
+            "a",
+            12,
+            6
+          ],
+          15,
+          [
+            "match",
+            [
+              "get",
+              "kind"
+            ],
+            "a",
+            36,
+            18
+          ]
+        ],
+        "heatmap-intensity": 0.7,
+        "heatmap-opacity": 0.6,
+        "heatmap-color": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "heatmap-density"
+          ],
+          0,
+          "rgba(0, 0, 255, 0)",
+          0.5,
+          "rgb(0, 255, 0)",
+          1,
+          "rgb(255, 0, 0)"
+        ]
+      }
+    }
+  ]
+}

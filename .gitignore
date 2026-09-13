@@ -4,3 +4,4 @@
 
 # The render probe writes its tile cache into the working directory.
 cache.sqlite
+cache.sqlite-journal

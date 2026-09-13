@@ -1498,6 +1498,170 @@ pub fn circle_props_from_paint(
     )
 }
 
+/// One heatmap drawable's entry.
+///
+/// Two departures from [`CircleDrawableEntry`], both of which read as bugs if assumed away.
+/// Its `extrude_scale` is a *scalar*, not a pair: a heatmap has no `pitch-alignment`, so the
+/// radius is always in tile units and both axes carry the same number. And it mixes only two
+/// properties where a circle mixes seven.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HeatmapDrawableEntry {
+    /// Tile-local to clip, as the shaders take it.
+    pub matrix: [f32; 16],
+    /// Tile units per pixel — mbgl's `tileID.pixelsToTileUnits(1, zoom)`.
+    pub extrude_scale: f32,
+    /// Mix factors for weight then radius, in that order.
+    pub interpolations: [f32; 2],
+}
+
+impl HeatmapDrawableEntry {
+    /// The entry for a tile under a view.
+    ///
+    /// # No layer or sublayer, and so no depth offset
+    ///
+    /// Every other drawable's matrix is nudged by [`depth_offset`] so a layer's sublayers
+    /// resolve against each other. A heatmap's is not, and the reason is one line of
+    /// `LayerTweaker::multiplyWithProjectionMatrix`: the nudge is applied only
+    /// `if (!drawable.getIs3D() && drawable.getEnableDepth())`. The heatmap builder calls
+    /// `setEnableDepth(false)` — the oracle's `flags=0001`, color and nothing else — so the
+    /// projection reaches the matrix unmodified.
+    ///
+    /// Passing a layer index here and offsetting by it is wrong by `3/2048` in element 14,
+    /// which is what the golden caught and what nothing else would have: the layer is drawn
+    /// into an offscreen target with no depth buffer to disagree with.
+    ///
+    /// # Errors
+    ///
+    /// [`camera::CameraError`] when the view has no area.
+    pub fn for_tile(
+        view: &ViewTransform,
+        projection: ProjectionMode,
+        z: u8,
+        x: u32,
+        y: u32,
+        wrap: i32,
+        interpolations: [f32; 2],
+    ) -> Result<Self, camera::CameraError> {
+        let matrix = tile_matrix(view, projection, z, x, y, wrap, 0.0)?;
+
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(Self {
+            matrix: core::array::from_fn(|index| matrix[index] as f32),
+            extrude_scale: heatmap_extrude_scale(z, view),
+            interpolations,
+        })
+    }
+}
+
+/// Tile units per pixel, which is what `heatmap-radius` is scaled by.
+///
+/// The map-aligned half of [`circle_extrude_scale`] and nothing else — there is no viewport
+/// case to choose between, because the spec gives a heatmap no pitch alignment.
+#[must_use]
+pub fn heatmap_extrude_scale(z: u8, view: &ViewTransform) -> f32 {
+    1.0 / line_ratio(z, view.zoom)
+}
+
+/// The two zoom-mix factors a heatmap drawable's UBO carries, in the UBO's own order.
+#[must_use]
+pub fn heatmap_interpolations(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    bucket_zoom: f64,
+    view_zoom: f64,
+) -> [f32; 2] {
+    let factor = |name: &str| {
+        paint
+            .get(name)
+            .map_or(0.0, |property| match property.binding {
+                Binding::Attribute { interpolated: true } => {
+                    property.expression.zoom_mix_factor(bucket_zoom, view_zoom)
+                }
+                _ => 0.0,
+            })
+    };
+    [factor("heatmap-weight"), factor("heatmap-radius")]
+}
+
+/// Packs a layer's heatmap drawable buffer at the union's stride.
+#[must_use]
+pub fn pack_heatmap_drawable_buffer(entries: &[HeatmapDrawableEntry], stride: u32) -> Vec<u8> {
+    let stride = stride as usize;
+    let mut out = Vec::with_capacity(entries.len() * stride);
+    for entry in entries {
+        let start = out.len();
+        push_f32s(&mut out, &entry.matrix);
+        push_f32s(&mut out, &[entry.extrude_scale]);
+        push_f32s(&mut out, &entry.interpolations);
+        out.resize(start + stride, 0);
+    }
+    out
+}
+
+/// Packs `HeatmapEvaluatedPropsUBO`.
+///
+/// `weight` and `radius` are here *and* bound as attributes when they are data-driven, which is
+/// mbgl's `constantOr(default)`: the block always carries a number, and the shader's
+/// `#pragma mapbox: initialize` decides whether it is the one that is read. Writing a zero here
+/// for a data-driven property would be correct for the shader and wrong for the buffer
+/// comparison against the oracle, which is how the difference shows up.
+#[must_use]
+pub fn pack_heatmap_props(weight: f32, radius: f32, intensity: f32) -> Vec<u8> {
+    const SIZE: usize = 16;
+    let mut out = Vec::with_capacity(SIZE);
+    push_f32s(&mut out, &[weight, radius, intensity, 0.0]);
+    debug_assert_eq!(out.len(), SIZE);
+    out
+}
+
+/// A heatmap layer's evaluated properties, from its resolved paint.
+#[must_use]
+pub fn heatmap_props_from_paint(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    zoom: f64,
+) -> Vec<u8> {
+    pack_heatmap_props(
+        uniform_number(paint, "heatmap-weight", zoom),
+        uniform_number(paint, "heatmap-radius", zoom),
+        uniform_number(paint, "heatmap-intensity", zoom),
+    )
+}
+
+/// Packs `HeatmapTexturePropsUBO` — the second pass, which draws the offscreen target.
+///
+/// Its matrix is not a tile matrix and takes no view: the pass is a screen-aligned quad, and
+/// mbgl builds `ortho(0, width, height, 0, -1, 1)` over the *backend* size. The quad's vertices
+/// are the unit square, scaled to the world size in the vertex shader.
+#[must_use]
+pub fn pack_heatmap_texture_props(width: u32, height: u32, opacity: f32) -> Vec<u8> {
+    const SIZE: usize = 80;
+    let mut out = Vec::with_capacity(SIZE);
+    push_f32s(&mut out, &screen_ortho(width, height));
+    push_f32s(&mut out, &[opacity, 0.0, 0.0, 0.0]);
+    debug_assert_eq!(out.len(), SIZE);
+    out
+}
+
+/// `ortho(0, width, height, 0, -1, 1)`, column-major, as mbgl's `matrix::ortho` builds it.
+///
+/// Top-left origin: `bottom` is the height and `top` is zero, so the `y` scale is negative and
+/// a quad at `y = 0` lands at the top of the frame. Swapping them mirrors the pass vertically,
+/// which against a symmetric heatmap can look almost right.
+#[must_use]
+#[allow(clippy::cast_precision_loss)]
+fn screen_ortho(width: u32, height: u32) -> [f32; 16] {
+    let (left, right, bottom, top, near, far) =
+        (0.0f32, width as f32, height as f32, 0.0f32, -1.0f32, 1.0f32);
+    let mut m = [0.0f32; 16];
+    m[0] = 2.0 / (right - left);
+    m[5] = 2.0 / (top - bottom);
+    m[10] = -2.0 / (far - near);
+    m[12] = -(right + left) / (right - left);
+    m[13] = -(top + bottom) / (top - bottom);
+    m[14] = -(far + near) / (far - near);
+    m[15] = 1.0;
+    m
+}
+
 /// An enum-typed property's uniform value, falling back to its spec default.
 fn uniform_enum(
     paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
@@ -1720,7 +1884,7 @@ pub fn symbol_gamma_scale(view: &ViewTransform, pitch: Alignment) -> f32 {
 /// each other. `symbol_gamma_scale` answers `cos(pitch) * camera_to_center_distance` for a
 /// map-pitched label -- 1152 at pitch zero -- and the on-map `coord_matrix` puts the same figure
 /// into the fragment's `clip.w`; the shader divides by one and multiplies by the other, so the SDF
-/// edge lands where it should. Switch the matrix and not the gamma and the two stop cancelling:
+/// edge lands where it should. Switch the matrix and not the gamma and the two stop canceling:
 /// the smoothstep narrows by a factor of a thousand, which is a hard step rather than an edge, and
 /// street names come out aliased and thin.
 #[must_use]
