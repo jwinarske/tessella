@@ -122,8 +122,25 @@ fn parse_expecting(value: &Value, scope: &[String], expected: Type) -> Result<Ex
 /// over a constant folds immediately.
 fn coerce_to(expected: Type, parsed: Expr) -> Result<Expr, ParseError> {
     let found = parsed.result_type();
-    if found == Type::Value || expected.accepts(found) {
+    if expected.accepts(found) {
         return Ok(parsed);
+    }
+    if found == Type::Value {
+        // A type not known until evaluation gets mbgl's assertion: a runtime check with no
+        // conversion, so a feature whose property is the wrong type is an error rather than a
+        // silently different answer. `["case", ["get", "x"], …]` on a feature holding the string
+        // "false" is the case in point -- a truthy string is not a condition.
+        return Ok(match expected {
+            Type::Number => assertion(AssertKind::Number, parsed),
+            Type::Boolean => assertion(AssertKind::Boolean, parsed),
+            Type::Object => assertion(AssertKind::Object, parsed),
+            // A color is converted rather than asserted, which is the list mbgl coerces.
+            Type::Color => Expr::Cast {
+                to: CastKind::Color,
+                args: alloc::vec![parsed],
+            },
+            _ => parsed,
+        });
     }
     match (expected, found) {
         // A literal is converted now rather than at evaluation: the style wrote the colour down,
@@ -165,6 +182,14 @@ const fn interpolatable(found: Type) -> bool {
             matches!(array.element, Some(Scalar::Number)) && array.length.is_some()
         }
         _ => false,
+    }
+}
+
+/// An argument wrapped in the runtime check its position needs.
+fn assertion(kind: AssertKind, parsed: Expr) -> Expr {
+    Expr::Assert {
+        kind,
+        args: alloc::vec![parsed],
     }
 }
 
@@ -340,7 +365,14 @@ fn parse_rooted(
         }
         "to-rgba" => {
             expect_arity(operator, args, 1, 1)?;
-            Ok(Expr::ToRgba(Box::new(parse_in(&args[0], scope)?)))
+            // It takes a color apart, so what it is given is a color -- and saying so is what
+            // lets an `interpolate` inside it know that its stops are colors and that walking
+            // between them is meaningful.
+            Ok(Expr::ToRgba(Box::new(parse_expecting(
+                &args[0],
+                scope,
+                Type::Color,
+            )?)))
         }
         "typeof" => {
             expect_arity(operator, args, 1, 1)?;
@@ -1172,9 +1204,21 @@ fn parse_match(
         .flatten(),
         None => None,
     };
-    let input = Box::new(match label_type {
-        Some(wanted) => parse_expecting(&args[0], scope, wanted)?,
-        None => parse_in(&args[0], scope)?,
+    // Checked against the labels, not asserted against them: a feature whose value is another
+    // type simply matches nothing and takes the fallback, which is what `match` is for. Only a
+    // *statically* known mismatch is an error, because then no feature could ever match.
+    let input = Box::new({
+        let parsed = parse_in(&args[0], scope)?;
+        if let Some(wanted) = label_type {
+            let found = parsed.result_type();
+            if found != Type::Value && !wanted.accepts(found) {
+                return Err(ParseError::TypeMismatch {
+                    expected: wanted.name().to_string(),
+                    found: found.name().to_string(),
+                });
+            }
+        }
+        parsed
     });
 
     // Every output stands in the same position. When the property named a type they all take it;
