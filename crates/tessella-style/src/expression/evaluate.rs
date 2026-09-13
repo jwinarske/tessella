@@ -116,6 +116,14 @@ pub enum EvaluationError {
     /// precisely the case §12.1's per-interval cache is in.
     #[error("expression needs a camera")]
     MissingCamera,
+    /// The expression reads the heatmap density outside a heatmap ramp.
+    ///
+    /// Not a zero: `["heatmap-density"]` is only meaningful while a renderer walks
+    /// `heatmap-color` over the range, and reading it anywhere else is a style that means
+    /// something it cannot have. Saying so beats a silent zero, which would paint the whole
+    /// layer the ramp's first stop.
+    #[error("expression needs a heatmap density")]
+    MissingHeatmapDensity,
     /// The expression reads the feature and none was supplied.
     ///
     /// Distinct from a feature that merely lacks the property, which yields null. This is the
@@ -197,6 +205,12 @@ pub(super) struct Context<'a> {
     /// is where `icon-image` is resolved and it has no sprite sheet -- the sheet is a frame-time
     /// resource -- so `None` is what it passes, and until that is wired this is the difference.
     pub(super) images: Option<&'a [alloc::string::String]>,
+    /// The heatmap density this evaluation is for, when the caller is walking a heatmap ramp.
+    ///
+    /// `None` everywhere else, and `["heatmap-density"]` then fails rather than reading a zero:
+    /// the property it is legal in is `heatmap-color`, and an expression that reads it anywhere
+    /// else is a style that means something it cannot have.
+    pub(super) heatmap_density: Option<f64>,
     /// The tile a feature's coordinates are in, when the caller is a tile build.
     ///
     /// `["within", …]` is written in longitude and latitude and a tile's features are in tile
@@ -243,6 +257,7 @@ impl Context<'_> {
             camera: None,
             feature: None,
             images: None,
+            heatmap_density: None,
             canonical: None,
             scope: None,
         }
@@ -266,6 +281,11 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
     match expr {
         Expr::Literal(value) => Ok(value.clone()),
         Expr::Zoom => Ok(Value::Number(context.zoom()?)),
+        Expr::HeatmapDensity => Ok(Value::Number(
+            context
+                .heatmap_density
+                .ok_or(EvaluationError::MissingHeatmapDensity)?,
+        )),
         Expr::Pitch => Ok(Value::Number(context.camera()?.pitch)),
         Expr::DistanceFromCenter => Ok(Value::Number(context.camera()?.distance_from_center)),
         Expr::GeometryType => Ok(Value::String(
@@ -1233,6 +1253,7 @@ fn evaluate_let(
         camera: context.camera,
         feature: context.feature,
         images: context.images,
+        heatmap_density: context.heatmap_density,
         canonical: context.canonical,
         scope: Some(&bound),
     };

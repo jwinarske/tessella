@@ -554,6 +554,13 @@ fn parse_rooted(
                 args: parsed,
             })
         }
+        // Only legal inside `heatmap-color`, which the parser cannot see from here -- the
+        // property's name does not reach expression parsing. Evaluation is where that is caught:
+        // no caller but the heatmap ramp supplies a density, so reading one anywhere else fails.
+        "heatmap-density" => {
+            expect_arity(operator, args, 0, 0)?;
+            Ok(Expr::HeatmapDensity)
+        }
         "zoom" => {
             expect_arity(operator, args, 0, 0)?;
             Ok(Expr::Zoom)
