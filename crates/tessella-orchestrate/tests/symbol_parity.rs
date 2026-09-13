@@ -1160,6 +1160,11 @@ mod symbol_ubos {
             let mut fields = rest.split(' ');
             let key = fields.next().expect("a key");
             let (kind, index) = key.split_once(':').expect("kind:index");
+            // `layer:<index>/<style layer id>` since the probe started naming groups. The name
+            // is what tells two groups apart when they share an index, which a heatmap's
+            // render-target groups do; this helper keys on the index alone and asserts below
+            // that no two collide rather than dropping one.
+            let index = index.split_once('/').map_or(index, |(n, _)| n);
             let layer = if kind == "global" {
                 -1
             } else {
@@ -1188,7 +1193,10 @@ mod symbol_ubos {
                 .map(|chunk| String::from_utf8_lossy(chunk).into_owned())
                 .collect();
             blocks.sort();
-            out.insert((layer, slot), (size, blocks));
+            assert!(
+                out.insert((layer, slot), (size, blocks)).is_none(),
+                "two layer groups share index {layer} at slot {slot} -- key by the group name"
+            );
         }
         out
     }
