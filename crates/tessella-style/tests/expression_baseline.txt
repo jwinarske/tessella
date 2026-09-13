@@ -279,6 +279,7 @@ object/implicit
 parse/empty
 parse/non-array
 parse/non-string
+parse/unknown-expression
 pi/basic
 plus/arity-0
 plus/arity-1
