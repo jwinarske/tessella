@@ -1204,6 +1204,9 @@ fn matches_spec_type(expected: Type, value: &Value) -> bool {
         Type::Null => matches!(value, Value::Null),
         // A formatted property accepts anything, because anything can be wrapped in a section.
         Type::Formatted => true,
+        // An image is named by a string. A legacy function's stop giving anything else is not a
+        // sprite name, and falls back rather than being asked for.
+        Type::ResolvedImage => matches!(value, Value::String(_)),
     }
 }
 

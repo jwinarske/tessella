@@ -358,6 +358,12 @@ pub enum Type {
     Color,
     /// Formatted text: sections with per-section font, scale and colour.
     Formatted,
+    /// An image named for the sprite sheet to resolve.
+    ///
+    /// Distinct from a string for the reason `Formatted` is: the style writes a name, and what
+    /// the layout needs is a request against the sheet. Keeping it a type is what lets a
+    /// property refuse a number where a name belongs.
+    ResolvedImage,
 }
 
 impl Type {
@@ -524,6 +530,7 @@ impl Type {
             Self::Object => "object".to_string(),
             Self::Color => "color".to_string(),
             Self::Formatted => "formatted".to_string(),
+            Self::ResolvedImage => "resolvedImage".to_string(),
             Self::Array(array) => match (array.element, array.length) {
                 (None, None) => "array".to_string(),
                 (Some(element), None) => alloc::format!("array<{}>", element.widen().name()),
@@ -1225,6 +1232,16 @@ impl Expression {
             root = coerce_to_color(root);
         }
 
+        // A property the spec types as an image wraps the name it was given, on the same terms as
+        // the formatted wrap below: a string names a sprite, a type not known until evaluation
+        // may turn out to be one, and anything else is a style that means something other than an
+        // image.
+        if spec.expected == Some(Type::ResolvedImage)
+            && matches!(root.result_type(), Type::String | Type::Value)
+        {
+            root = Expr::Image(Box::new(root));
+        }
+
         // A property the spec types as formatted wraps whatever it got in a single section.
         // Same shape as the colour coercion above and for the same reason: the style writes a
         // string and the shaper needs sections, so the conversion belongs at that boundary.
@@ -1523,6 +1540,23 @@ impl Expr {
             Self::Length(_) | Self::IndexOf { .. } => Type::Number,
             Self::CaseFold { .. } | Self::TypeOf(_) => Type::String,
             Self::IsSupportedScript(_) => Type::Boolean,
+            Self::Image(_) => Type::ResolvedImage,
+            // A coalesce is whatever its branches agree on. Without this it is `Value`, and a
+            // property that wraps a `Value` -- an image, a formatted -- wraps a coalesce of
+            // images a second time and the sprite is asked for by a name that is the JSON of the
+            // first wrap.
+            Self::Coalesce(branches) => {
+                let mut found: Option<Type> = None;
+                for branch in branches {
+                    let kind = branch.result_type();
+                    match found {
+                        None => found = Some(kind),
+                        Some(seen) if seen == kind => {}
+                        Some(_) => return Type::Value,
+                    }
+                }
+                found.unwrap_or(Type::Value)
+            }
             // An element of an array whose type is not known statically, which is what makes
             // `["at", …]` usable in a comparison the checker cannot otherwise admit.
             Self::At { .. } => Type::Value,
