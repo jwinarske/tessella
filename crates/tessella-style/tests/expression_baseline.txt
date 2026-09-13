@@ -104,6 +104,7 @@ id/basic
 image/basic
 image/coalesce
 image/compound
+image/implicit-assert
 in/assert-array
 in/assert-string
 in/basic-array
