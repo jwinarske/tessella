@@ -1,0 +1,24 @@
+{
+ "version": 8,
+ "name": "planet",
+ "glyphs": "http://127.0.0.1:8081/glyphs/{fontstack}/{range}.pbf",
+ "sources": {
+  "planet": { "type": "vector", "url": "pmtiles://https://build.protomaps.com/20260909.pmtiles" }
+ },
+ "layers": [
+  { "id": "bg", "type": "background", "paint": { "background-color": "#f4f1ea" } },
+  { "id": "water", "type": "fill", "source": "planet", "source-layer": "water",
+    "paint": { "fill-color": "#b9d9e8" } },
+  { "id": "roads", "type": "line", "source": "planet", "source-layer": "roads",
+    "paint": { "line-color": "#d8d0c0", "line-width": 3 } },
+  { "id": "road-labels", "type": "symbol", "source": "planet", "source-layer": "roads",
+    "filter": ["has", "name"],
+    "layout": { "symbol-placement": "line", "text-field": ["get", "name"],
+                "text-font": ["Noto Sans Regular"], "text-size": 12 },
+    "paint": { "text-color": "#333333" } },
+  { "id": "place-labels", "type": "symbol", "source": "planet", "source-layer": "places",
+    "layout": { "text-field": ["get", "name"], "text-font": ["Noto Sans Regular"],
+                "text-size": 14 },
+    "paint": { "text-color": "#000000" } }
+ ]
+}
