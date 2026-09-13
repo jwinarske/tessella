@@ -6,8 +6,8 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
 use super::{
-    ArithmeticOp, AssertKind, CastKind, CompareOp, Expr, FormatSection, Interpolation,
-    LegacyFunction, LegacyKind, PropertySpec, Type,
+    ArithmeticOp, ArrayType, AssertKind, CastKind, CompareOp, Expr, FormatSection, Interpolation,
+    LegacyFunction, LegacyKind, PropertySpec, Scalar, Type,
 };
 use crate::value::Value;
 
@@ -69,6 +69,18 @@ pub enum ParseError {
         /// What it got.
         got: usize,
     },
+    /// An argument was a type the operator cannot take.
+    ///
+    /// mbgl's `checkSubtype`, applied where the expected type is known before the argument is
+    /// parsed -- which is what makes `["coalesce", ["get", "a"], 5]` in a string property an
+    /// error at compile time rather than a wrong value per feature.
+    #[error("expected {expected} but found {found} instead")]
+    TypeMismatch {
+        /// What the position wanted.
+        expected: String,
+        /// What the argument produces.
+        found: String,
+    },
     /// An argument was the wrong shape.
     #[error("`{operator}`: {detail}")]
     Malformed {
@@ -85,6 +97,54 @@ pub enum ParseError {
 /// Parses a value in a scope.
 fn parse_in(value: &Value, scope: &[String]) -> Result<Expr, ParseError> {
     parse_rooted(value, &PropertySpec::default(), scope, false)
+}
+
+/// Parses an argument whose type the position already decided, and checks it.
+///
+/// The expectation is carried into the parse rather than applied to the result, because an
+/// operator that passes it through -- `coalesce`, `case`, `match`'s outputs, a `let` body -- has
+/// to hand it to *its* arguments in turn. That is mbgl's `ParsingContext::expected`.
+fn parse_expecting(value: &Value, scope: &[String], expected: Type) -> Result<Expr, ParseError> {
+    let spec = PropertySpec {
+        expected: Some(expected),
+        ..PropertySpec::default()
+    };
+    let parsed = parse_rooted(value, &spec, scope, false)?;
+    coerce_to(expected, parsed)
+}
+
+/// The argument as the position needs it, converted where the spec converts implicitly.
+///
+/// A colour property written `"red"` is a string that has to become a colour, and mbgl does that
+/// by inserting the coercion rather than by widening what a colour position accepts. Doing the
+/// same here keeps the check strict and keeps `["match", …, "red", "blue"]` in `fill-color`
+/// working -- and it is what turns an unparseable literal into an error at parse, since the cast
+/// over a constant folds immediately.
+fn coerce_to(expected: Type, parsed: Expr) -> Result<Expr, ParseError> {
+    let found = parsed.result_type();
+    if found == Type::Value || expected.accepts(found) {
+        return Ok(parsed);
+    }
+    match (expected, found) {
+        (Type::Color, Type::String) => Ok(Expr::Cast {
+            to: CastKind::Color,
+            args: alloc::vec![parsed],
+        }),
+        _ => Err(ParseError::TypeMismatch {
+            expected: expected.name().to_string(),
+            found: found.name().to_string(),
+        }),
+    }
+}
+
+/// The array element type a scalar expectation names, or `None` for one an array cannot hold.
+const fn scalar_of(expected: Type) -> Option<Scalar> {
+    match expected {
+        Type::Number => Some(Scalar::Number),
+        Type::String => Some(Scalar::String),
+        Type::Boolean => Some(Scalar::Boolean),
+        _ => None,
+    }
 }
 
 /// Parses a value, carrying the property spec's default for pre-expression functions.
@@ -211,9 +271,21 @@ fn parse_rooted(
         }
         "at" => {
             expect_arity(operator, args, 2, 2)?;
+            // What comes out of the array is what this position wanted, so the array itself is
+            // expected to hold that -- `["at", 1, …]` in a string property wants array<string>.
+            // Only a scalar narrows an array: there is no array<color> in the spec's grammar.
+            let array_of = spec.expected.and_then(scalar_of).map(|element| {
+                Type::Array(ArrayType {
+                    element: Some(element),
+                    length: None,
+                })
+            });
             Ok(Expr::At {
-                index: Box::new(parse_in(&args[0], scope)?),
-                array: Box::new(parse_in(&args[1], scope)?),
+                index: Box::new(parse_expecting(&args[0], scope, Type::Number)?),
+                array: Box::new(match array_of {
+                    Some(wanted) => parse_expecting(&args[1], scope, wanted)?,
+                    None => parse_in(&args[1], scope)?,
+                }),
             })
         }
         "split" => {
@@ -521,7 +593,14 @@ fn parse_rooted(
         }
         "all" => Ok(Expr::All(parse_all(args, scope)?)),
         "any" => Ok(Expr::Any(parse_all(args, scope)?)),
-        "coalesce" => Ok(Expr::Coalesce(parse_all(args, scope)?)),
+        // Every branch stands in the same position, so each takes the type that position wants.
+        "coalesce" => Ok(Expr::Coalesce(match spec.expected {
+            Some(expected) => args
+                .iter()
+                .map(|arg| parse_expecting(arg, scope, expected))
+                .collect::<Result<Vec<_>, _>>()?,
+            None => parse_all(args, scope)?,
+        })),
         "let" => parse_let(operator, args, scope),
         "var" => {
             expect_arity(operator, args, 1, 1)?;
@@ -542,7 +621,7 @@ fn parse_rooted(
                 })
             }
         }
-        "match" => parse_match(operator, args, scope),
+        "match" => parse_match(operator, args, scope, spec.expected),
         "case" => parse_case(operator, args, scope),
         "step" => parse_step(operator, args, scope),
         "interpolate" => parse_interpolate(operator, args, scope),
@@ -744,6 +823,15 @@ fn check_comparable(
 /// both, so some branch is dead. A duplicate label is a branch that can never run — and unlike
 /// the others it looks completely reasonable, which is why the spec calls it out rather than
 /// letting the first match win.
+/// The type a match label pins the input to.
+const fn label_kind(label: &Value) -> Option<Type> {
+    match label {
+        Value::String(_) => Some(Type::String),
+        Value::Number(_) => Some(Type::Number),
+        _ => None,
+    }
+}
+
 fn check_match_labels(operator: &str, arms: &[(Vec<Value>, Expr)]) -> Result<(), ParseError> {
     // JavaScript's safe-integer range, which is what the spec's labels are bounded by.
     const SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
@@ -994,7 +1082,12 @@ fn expect_arity(operator: &str, args: &[Value], min: usize, max: usize) -> Resul
 }
 
 /// `["match", input, label|labels, output, ..., fallback]`
-fn parse_match(operator: &str, args: &[Value], scope: &[String]) -> Result<Expr, ParseError> {
+fn parse_match(
+    operator: &str,
+    args: &[Value],
+    scope: &[String],
+    expected: Option<Type>,
+) -> Result<Expr, ParseError> {
     // One input, at least one label/output pair, and a fallback: 2 + 2k, so always even and
     // never fewer than four. (`case` is the odd-length one, having no separate input.)
     if args.len() < 4 || !args.len().is_multiple_of(2) {
@@ -1005,8 +1098,29 @@ fn parse_match(operator: &str, args: &[Value], scope: &[String]) -> Result<Expr,
         });
     }
 
-    let input = Box::new(parse_in(&args[0], scope)?);
+    // The labels decide what the input has to be: they are literals, so their type is known
+    // before anything is parsed, and an input of another type can never match one of them.
+    let label_type = match args[1..args.len() - 1].as_chunks::<2>().0.first() {
+        Some(pair) => match &pair[0] {
+            Value::Array(values) => values.first().map(label_kind),
+            single => Some(label_kind(single)),
+        }
+        .flatten(),
+        None => None,
+    };
+    let input = Box::new(match label_type {
+        Some(wanted) => parse_expecting(&args[0], scope, wanted)?,
+        None => parse_in(&args[0], scope)?,
+    });
+
+    // Every output stands in the same position. When the property named a type they all take it;
+    // when nothing did, the first one sets it and the rest have to agree -- which is how
+    // `["match", …, "a string", false]` is an error with no property spec in sight.
     let fallback = Box::new(parse_in(&args[args.len() - 1], scope)?);
+    let mut output_type = expected.or_else(|| {
+        let found = fallback.result_type();
+        (found != Type::Value).then_some(found)
+    });
     let mut arms = Vec::new();
     for pair in args[1..args.len() - 1].as_chunks::<2>().0 {
         // A label is one value or an array of them. An array here is a label set rather than
@@ -1021,7 +1135,17 @@ fn parse_match(operator: &str, args: &[Value], scope: &[String]) -> Result<Expr,
                 detail: "a label set must not be empty".to_string(),
             });
         }
-        arms.push((labels, parse_in(&pair[1], scope)?));
+        let output = match output_type {
+            Some(wanted) => parse_expecting(&pair[1], scope, wanted)?,
+            None => parse_in(&pair[1], scope)?,
+        };
+        if output_type.is_none() {
+            let found = output.result_type();
+            if found != Type::Value {
+                output_type = Some(found);
+            }
+        }
+        arms.push((labels, output));
     }
 
     check_match_labels(operator, &arms)?;
