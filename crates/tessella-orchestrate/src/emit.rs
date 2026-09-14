@@ -1524,13 +1524,48 @@ fn geometry_add_instanced(
     atlas: Option<TextureId>,
     filter: TextureFilter,
 ) -> Encoded {
+    geometry_add_textured(
+        geometry,
+        permutation_key,
+        indexes,
+        vertex_count,
+        descriptors,
+        instances,
+        segments,
+        shader,
+        atlas.as_slice(),
+        filter,
+    )
+}
+
+/// As [`geometry_add_instanced`], for a shader that declares more than one sampler.
+///
+/// The heatmap's texture pass is the first: it reads what the offscreen pass drew *and* the
+/// color ramp, so the single-atlas shape every other family uses cannot express it.
+#[allow(clippy::too_many_arguments)]
+fn geometry_add_textured(
+    geometry: GeometryId,
+    permutation_key: u64,
+    indexes: SlabRef,
+    vertex_count: usize,
+    descriptors: &[AttributeDesc],
+    instances: &[AttributeDesc],
+    segments: &[Segment],
+    shader: BuiltIn,
+    bound: &[TextureId],
+    filter: TextureFilter,
+) -> Encoded {
     let mut payload = Vec::new();
     let attrs = push_span(&mut payload, descriptors);
     let instance_attrs = push_span(&mut payload, instances);
     // The slot comes from the shader's own table, never from the caller — see `texture_refs`.
     let textures = push_span(
         &mut payload,
-        &atlas.map_or_else(Vec::new, |atlas| texture_refs(shader, &[atlas], filter)),
+        &if bound.is_empty() {
+            Vec::new()
+        } else {
+            texture_refs(shader, bound, filter)
+        },
     );
     let segments = push_span(
         &mut payload,
@@ -1883,6 +1918,62 @@ pub fn encode_circle(
         &bucket.segments,
         BuiltIn::CircleShader,
         None,
+        TextureFilter::Linear,
+    )
+}
+
+/// Encodes the screen quad a heatmap's second pass draws.
+///
+/// Not per tile and not per feature: one quad per heatmap layer, the unit square
+/// `(0,0) (1,0) (0,1) (1,1)` scaled to the world size by the vertex shader. The vertices are
+/// mbgl's `RenderStaticData::heatmapTextureVertices` and the indices its `quadTriangleIndices`
+/// — `(0,1,2)` and `(1,2,3)`, which is *not* the pair a point quad uses, and the golden's index
+/// hash is the same as a background's because a background's quad is the same quad.
+///
+/// Two samplers, in the shader's own slot order: what the first pass drew, then the color ramp.
+/// Binding them the other way round samples a 256x1 ramp as though it were the frame and a
+/// half-resolution frame as though it were a ramp, which produces a picture rather than an
+/// error.
+pub fn encode_heatmap_texture(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    target: TextureId,
+    ramp: TextureId,
+) -> Encoded {
+    const QUAD: [[i16; 2]; 4] = [[0, 0], [1, 0], [0, 1], [1, 1]];
+    const INDICES: [u16; 6] = [0, 1, 2, 1, 2, 3];
+
+    let vertices = alloc_i16x2(arena, &QUAD);
+    let indexes = alloc_u16(arena, &INDICES);
+
+    let descriptors = [AttributeDesc {
+        attr_id: POSITION_ATTRIBUTE,
+        binding: 0,
+        source: vertices,
+        offset: 0,
+        vertex_offset: 0,
+        stride: POSITION_STRIDE,
+        data_type: AttributeDataType::Short2 as u8,
+        declared_data_type: AttributeDataType::Short2 as u8,
+        _pad: [0; 2],
+    }];
+    let segments = [Segment {
+        vertex_offset: 0,
+        index_offset: 0,
+        vertex_length: QUAD.len() as u32,
+        index_length: INDICES.len() as u32,
+    }];
+
+    geometry_add_textured(
+        geometry,
+        0,
+        indexes,
+        QUAD.len(),
+        &descriptors,
+        &[],
+        &segments,
+        BuiltIn::HeatmapTextureShader,
+        &[target, ramp],
         TextureFilter::Linear,
     )
 }
@@ -2678,6 +2769,70 @@ mod tests {
             [2942, 4820],
             [10240, 4820],
         ]])
+    }
+
+    /// The second pass's quad: the unit square, the quad index pair, and two samplers in the
+    /// shader's own order.
+    ///
+    /// The vertices are what `--dump-vertices` prints for `sh0021` in the heatmap golden —
+    /// `(0,0) (1,0) (0,1) (1,1)` — and the index pair is `(0,1,2) (1,2,3)`, which is *not* the
+    /// pair a point quad uses. Both are static across every capture, so getting them from the
+    /// oracle once is getting them.
+    #[test]
+    fn the_heatmap_quad_is_the_unit_square_with_two_samplers() {
+        let mut arena = SlabArena::new();
+        let encoded =
+            encode_heatmap_texture(&mut arena, GeometryId(1), TextureId(70), TextureId(71));
+
+        assert_eq!(encoded.record.vertex_count, 4);
+        assert_eq!(
+            encoded.record.builtin_shader,
+            BuiltIn::HeatmapTextureShader as i32
+        );
+        assert_eq!(encoded.record.vertex_type, AttributeDataType::Short2 as u8);
+
+        arena.seal();
+
+        let attrs = encoded.attributes();
+        assert_eq!(attrs.len(), 1, "position and nothing else");
+        assert_eq!(attrs[0].stride, POSITION_STRIDE);
+        let vertices: Vec<[i16; 2]> = arena
+            .resolve(attrs[0].source)
+            .expect("vertex bytes")
+            .chunks(4)
+            .map(|chunk| {
+                [
+                    i16::from_le_bytes([chunk[0], chunk[1]]),
+                    i16::from_le_bytes([chunk[2], chunk[3]]),
+                ]
+            })
+            .collect();
+        assert_eq!(vertices, [[0, 0], [1, 0], [0, 1], [1, 1]]);
+
+        let indices: Vec<u16> = arena
+            .resolve(encoded.record.indexes)
+            .expect("index bytes")
+            .chunks(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect();
+        assert_eq!(indices, [0, 1, 2, 1, 2, 3]);
+
+        let segments = encoded.segments();
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].vertex_length, 4);
+        assert_eq!(segments[0].index_length, 6);
+
+        // What the first pass drew, then the ramp. The other way round samples a 256x1 ramp as
+        // though it were the frame, which produces a picture rather than an error.
+        let size = core::mem::size_of::<TextureRef>();
+        let start = encoded.record.texture_refs.offset as usize;
+        let textures: Vec<TextureRef> = (0..encoded.record.texture_refs.count as usize)
+            .filter_map(|index| TextureRef::from_bytes(&encoded.payload[start + index * size..]))
+            .collect();
+        assert_eq!(textures.len(), 2);
+        assert_eq!(textures[0].texture, TextureId(70));
+        assert_eq!(textures[1].texture, TextureId(71));
+        assert!(textures[0].slot < textures[1].slot);
     }
 
     #[test]

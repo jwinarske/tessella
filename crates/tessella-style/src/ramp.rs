@@ -62,6 +62,40 @@ pub enum RampParameter {
     HeatmapDensity,
 }
 
+/// The `heatmap-color` expression a layer's resolved paint means, default included.
+///
+/// The property's spec default is an expression and [`crate::property::PropertySpec`] holds
+/// constants, so `resolve_paint` gives a layer that set no `heatmap-color` a null rather than
+/// the ramp. mbgl has the same split — `HeatmapColor::defaultValue()` returns a parsed
+/// expression — and this is the join: the layer's own expression when it set one, the spec's
+/// when it did not.
+///
+/// "Set one" is decided by the *type*, not by presence. A resolved property always exists, and
+/// what distinguishes the layer that set nothing is that its expression is not a color.
+///
+/// # Errors
+///
+/// [`crate::expression::ParseError`] only from [`DEFAULT_HEATMAP_COLOR`], which is a constant of
+/// this crate — so a failure here is a bug in that string rather than in a style.
+pub fn heatmap_color(
+    paint: &alloc::collections::BTreeMap<&'static str, crate::property::ResolvedProperty>,
+) -> Result<Expression, crate::expression::ParseError> {
+    if let Some(property) = paint.get("heatmap-color")
+        && property.expression.result_type() == crate::expression::Type::Color
+    {
+        return Ok(property.expression.clone());
+    }
+    let value: crate::value::Value =
+        serde_json::from_str(DEFAULT_HEATMAP_COLOR).expect("the default ramp is valid json");
+    Expression::parse_for(
+        &value,
+        &crate::expression::PropertySpec {
+            default: None,
+            expected: Some(crate::expression::Type::Color),
+        },
+    )
+}
+
 /// Bakes a ramp expression into `RAMP_BYTES` of straight RGBA.
 ///
 /// # Errors
