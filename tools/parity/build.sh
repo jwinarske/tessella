@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BSD-2-Clause
+#
 # Builds render_probe and compiles the materials it binds, from the current trees.
 #
 # Both are build outputs and both land in PARITY_WORK. The probe links the producer's static

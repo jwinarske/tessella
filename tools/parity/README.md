@@ -19,6 +19,9 @@ Needs three things the tree does not carry: maplibre-native's `mbgl-render` as t
 Filament build, and the tile and asset servers the scenes name (`serve.sh` on 8080 and
 `assets.py` on 8081). `env.sh` says where each is expected and every path is an override.
 
+`examples.sh` runs the MapLibre GL JS documentation examples the same way, from a recorded
+snapshot of what their origins serve; see [`examples/README.md`](examples/README.md).
+
 ## What the numbers mean
 
 `gross N of M` counts pixels whose per-channel difference exceeds 48. Not a mean: a mean hides a

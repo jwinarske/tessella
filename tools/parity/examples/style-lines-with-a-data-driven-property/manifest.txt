@@ -1,0 +1,9 @@
+200 ae9c8894b4d2b6297da76a2e875685046f1f037f1a571ae006160a5540406086 https://tiles.openfreemap.org/fonts/Noto%20Sans%20Italic/0-255.pbf
+200 ef1f38a3f1978591e846e9eaddf8a54f7047f546fc6aaed7872cc53151a5de78 https://tiles.openfreemap.org/fonts/Noto%20Sans%20Regular/0-255.pbf
+200 3030217a570803f2ff73b73b1c59948007e31a99bb406841fd71679be8e83b92 https://tiles.openfreemap.org/planet
+200 0e4aa2bcd41677c812a9df12ecbc7d924aa4b0c050343298b9af8ffd2cd44037 https://tiles.openfreemap.org/planet/20260906_080001_pt/12/654/1582.pbf
+200 ff94abd821ef3415d22b3e34c8864365466945e7441f0e551838f01f514e59c0 https://tiles.openfreemap.org/planet/20260906_080001_pt/13/1308/3164.pbf
+200 47c5b92c419550ac1721462637d6ac12c877679fcee2ba6c1bb69654eba21908 https://tiles.openfreemap.org/planet/20260906_080001_pt/14/2617/6329.pbf
+200 73e75e58d8c7bb62cc25d9d150660500552f4d04f6eac5efa4e236076773c356 https://tiles.openfreemap.org/sprites/ofm_f384/ofm.json
+200 8996a519d218dc5f98015267709dae272a77bb74ef0ecc5a0992dcf276c1be4c https://tiles.openfreemap.org/sprites/ofm_f384/ofm.png
+200 ada317e9b31c65b726dc46a2b3b14acb9856782051a09e3f4bc92d034373999f https://tiles.openfreemap.org/styles/bright
