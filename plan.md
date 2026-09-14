@@ -48,9 +48,28 @@ evaluation, source/tile management, network + cache, layout/bucket generation, g
 atlases, transform/camera, the render orchestrator (render layers, tweakers, paint-property
 binders, draw order, UBO packing), and the stream emission itself.
 
-**Non-goals (rev 0.1):** heatmap, hillshade/color-relief, terrain, location-indicator,
-custom-layer/custom-drawable, annotations. Behind an explicit line until a target style demands
-them. Raster and fill-extrusion are in scope but late (R3).
+**In scope, in this order:** heatmap, annotations, hillshade/color-relief, terrain,
+location-indicator, custom-layer/custom-drawable. Raster and fill-extrusion are in scope but
+late (R3).
+
+These were rev 0.1 non-goals, "behind an explicit line until a target style demands them". The
+line is gone: they are the work rather than the exclusions, and the order above is the order
+they are taken in.
+
+**Heatmap is done** -- `heat_p` at 0.000%, which is the first of these to land and the reason
+the list was rewritten. What it cost is worth recording, because the rest will cost the same
+shape of thing. The layer itself was transcription against the oracle and went quickly. What
+took the time was three consumer bugs the goldens could not see, one of which -- a quad sharing
+a layer's `ubo_index` space with its own kernels -- produced a byte-identical dump and a visibly
+wrong frame. Every one of these six features adds a pass, a source kind, or a draw the stream
+has no precedent for, and that is exactly where that class of bug lives.
+
+Two of the six have no oracle, which changes their shape rather than their priority.
+**Terrain**: maplibre-native's support has not been checked at the pinned revision, and whether
+it exists decides between transcription and argument -- establish that before estimating.
+**Custom-layer/custom-drawable**: upstream *removed* `CustomDrawableLayer` (#4611), so there is
+nothing left to transcribe and nothing to diff against. It stays on the list as a capability
+this build may want, not as parity work, and whoever takes it is designing rather than porting.
 
 ### 1.1 Scope reality
 
