@@ -553,8 +553,8 @@ const HEATMAP_PAINT: &[PropertySpec] = &[
     // The ramp the density is read through, and the one property in the language whose
     // expression may contain `["heatmap-density"]`. Its spec default is that ramp -- six stops
     // from transparent blue to red -- which this table has no way to write: a default here is a
-    // constant, and that one is an expression. Left as `None` until the renderer that walks it
-    // exists, which is also what decides where the ramp is built.
+    // constant, and that one is an expression. It lives beside the code that bakes it, as
+    // `ramp::DEFAULT_HEATMAP_COLOR`, and mbgl splits it the same way for the same reason.
     PropertySpec {
         name: "heatmap-color",
         kind: PropertyKind::Color,

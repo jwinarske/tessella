@@ -25,6 +25,8 @@ use std::collections::BTreeMap;
 use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::generated::{ubo_layouts, ubo_slots};
 use tessella_orchestrate::ubo;
+use tessella_style::ramp::{self, RampParameter};
+use tessella_style::{Expression, Value};
 use tessella_tile::cover::ViewTransform;
 
 const DUMP: &str = include_str!("../../../tests/golden/heatmap_style.dump");
@@ -274,4 +276,68 @@ fn the_bucket_produces_the_oracles_vertex_and_index_counts() {
         assert_eq!(bucket.indices.len(), ilen);
         assert_eq!(bucket.segments.len(), 1);
     }
+}
+
+/// FNV-1a, as the probe hashes a texture's bytes.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100_0000_01b3);
+    }
+    hash
+}
+
+/// `heatmap-color` parses against a color expectation, as mbgl's
+/// `Converter<ColorRampPropertyValue>` does with its `ParsingContext(type::Color)`.
+fn color_ramp(json: &str) -> Expression {
+    let value: Value = serde_json::from_str(json).expect("valid json");
+    Expression::parse_for(
+        &value,
+        &tessella_style::expression::PropertySpec {
+            default: None,
+            expected: Some(tessella_style::expression::Type::Color),
+        },
+    )
+    .expect("parses")
+}
+
+/// Both ramps are byte-identical to the oracle's, which the dump pins by content hash.
+///
+/// The dump's `texture 256x1` lines are the only two things a heatmap uploads, and they are what
+/// the second pass samples: get the ramp wrong and every pixel of the layer is the wrong color
+/// while its geometry, its uniforms and its draw order all still match.
+///
+/// One of the two is the spec's default `heatmap-color`, which the constant layer does not set —
+/// so this also pins that the default is the spec's own six-stop ramp rather than an empty one.
+#[test]
+fn both_color_ramps_match_the_oracle_byte_for_byte() {
+    let want: Vec<u64> = DUMP
+        .lines()
+        .filter_map(|line| line.strip_prefix("texture 256x1 fmt=0 hash="))
+        .map(|hash| u64::from_str_radix(hash, 16).expect("a hex hash"))
+        .collect();
+    assert_eq!(want.len(), 2, "one ramp per heatmap layer");
+
+    // The spec's default, which `heatmap-constant` leaves alone.
+    let default = color_ramp(tessella_style::ramp::DEFAULT_HEATMAP_COLOR);
+    // `heatmap-composite`'s own.
+    let custom = color_ramp(
+        r#"["interpolate",["linear"],["heatmap-density"],
+           0,"rgba(0, 0, 255, 0)",0.5,"rgb(0, 255, 0)",1,"rgb(255, 0, 0)"]"#,
+    );
+
+    let mut got: Vec<u64> = [default, custom]
+        .iter()
+        .map(|expression| {
+            let baked = ramp::bake(expression, RampParameter::HeatmapDensity).expect("bakes");
+            assert_eq!(baked.len(), 1024, "256 RGBA texels");
+            fnv1a(&baked)
+        })
+        .collect();
+    got.sort_unstable();
+
+    let mut want = want;
+    want.sort_unstable();
+    assert_eq!(got, want);
 }
