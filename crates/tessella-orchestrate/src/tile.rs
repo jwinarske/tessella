@@ -140,6 +140,14 @@ pub struct LayerBucket {
     /// Empty unless the layer's pattern varies with the feature, which is the only case that
     /// cannot travel as a uniform. See [`PatternLookup`].
     pub pattern_vertices: PatternVertices,
+    /// Whether a fill's outline draws *under* its triangles rather than over them.
+    ///
+    /// mbgl's `setSubLayerIndex(unevaluated.get<FillOutlineColor>().isUndefined() ? 2 : 0)`.
+    /// Decided here, where the style layer is, because two places downstream need the same
+    /// answer -- `order::bindings_for` numbers the drawables and `frame::part_of` maps a number
+    /// back to the record it draws -- and a rule evaluated twice is a rule that can disagree
+    /// with itself. False for everything that is not a fill.
+    pub outline_under_fill: bool,
     /// The interleaved data-driven paint buffer, one entry per vertex.
     ///
     /// Empty-strided when every property is a uniform, which is the common case and is why it
@@ -739,6 +747,7 @@ pub fn build_tile_on_with_patterns(
             content,
             paint,
             binder,
+            outline_under_fill: crate::ubo::fill_outline_under_fill(layer),
             pattern_vertices,
         });
     }
@@ -894,6 +903,7 @@ pub fn build_sourceless(style: &Style, tile: TileId) -> Result<Vec<LayerBucket>,
             content,
             paint,
             binder,
+            outline_under_fill: crate::ubo::fill_outline_under_fill(layer),
             // A background and a raster have no features, so no per-feature pattern.
             pattern_vertices: PatternVertices::default(),
         });
@@ -1036,6 +1046,9 @@ pub fn build_raster_tile_on(
             // rather than a gap: there is no feature for one to vary over. The same is why it
             // carries no pattern rectangles.
             binder: PaintBinder::default(),
+            // A raster layer has no outline. Stated rather than defaulted: every other bucket
+            // says what it is, and one that did not would be the one nobody checked.
+            outline_under_fill: false,
             pattern_vertices: PatternVertices::default(),
         });
     }
@@ -1466,6 +1479,7 @@ pub fn build_mvt_tile_on_with_patterns(
             content,
             paint,
             binder,
+            outline_under_fill: crate::ubo::fill_outline_under_fill(layer),
             pattern_vertices,
         });
     }
