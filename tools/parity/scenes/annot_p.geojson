@@ -1,0 +1,26 @@
+{
+ "type": "FeatureCollection",
+ "features": [
+  { "type": "Feature", "properties": { "icon": "marker" },
+    "geometry": { "type": "Point", "coordinates": [13.405, 52.52] } },
+  { "type": "Feature", "properties": { "icon": "marker" },
+    "geometry": { "type": "Point", "coordinates": [13.4108, 52.5235] } },
+  { "type": "Feature", "properties": {},
+    "geometry": { "type": "Point", "coordinates": [13.3985, 52.5166] } },
+  { "type": "Feature", "properties": { "color": "#ff9c00", "width": 6, "opacity": 0.9 },
+    "geometry": { "type": "LineString", "coordinates": [
+      [13.3948, 52.5142], [13.4021, 52.5188], [13.4093, 52.5177], [13.4147, 52.5231] ] } },
+  { "type": "Feature", "properties": { "color": "#26c281", "width": 2, "opacity": 1 },
+    "geometry": { "type": "MultiLineString", "coordinates": [
+      [ [13.3962, 52.5254], [13.4044, 52.5262] ],
+      [ [13.4082, 52.5119], [13.4159, 52.5134] ] ] } },
+  { "type": "Feature", "properties": { "color": "#3f6fff", "opacity": 0.45, "outlineColor": "#ffffff" },
+    "geometry": { "type": "Polygon", "coordinates": [
+      [ [13.3990, 52.5203], [13.4060, 52.5203], [13.4060, 52.5240], [13.3990, 52.5240], [13.3990, 52.5203] ],
+      [ [13.4012, 52.5214], [13.4038, 52.5214], [13.4038, 52.5229], [13.4012, 52.5229], [13.4012, 52.5214] ] ] } },
+  { "type": "Feature", "properties": { "color": "#c0392b", "opacity": 0.6 },
+    "geometry": { "type": "MultiPolygon", "coordinates": [
+      [ [ [13.4098, 52.5196], [13.4139, 52.5196], [13.4139, 52.5218], [13.4098, 52.5218], [13.4098, 52.5196] ] ],
+      [ [ [13.3930, 52.5170], [13.3966, 52.5170], [13.3966, 52.5190], [13.3930, 52.5190], [13.3930, 52.5170] ] ] ] } }
+ ]
+}

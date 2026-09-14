@@ -1,0 +1,12 @@
+{
+ "version": 8,
+ "name": "annotation-parity",
+ "sources": {
+  "berlin": { "type": "vector", "url": "http://127.0.0.1:8080/berlin_z15.json" }
+ },
+ "layers": [
+  { "id": "bg", "type": "background", "paint": { "background-color": "#101014" } },
+  { "id": "water", "type": "fill", "source": "berlin", "source-layer": "water",
+    "paint": { "fill-color": "#12243a" } }
+ ]
+}
