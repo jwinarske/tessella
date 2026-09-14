@@ -366,7 +366,6 @@ fn heatmap_target_id(offscreen: ViewId) -> tessella_capture_abi::envelope::Textu
 }
 
 /// The texture a heatmap layer's second pass samples the ramp from.
-#[allow(dead_code)]
 fn heatmap_ramp_id(offscreen: ViewId) -> tessella_capture_abi::envelope::TextureId {
     tessella_capture_abi::envelope::TextureId(HEATMAP_RAMP_BASE | u64::from(offscreen.0))
 }
@@ -644,6 +643,36 @@ fn emit_group(
                 },
             )
             .map_err(FrameError::from)?;
+
+        // And the ramp the second pass samples, before anything names it — the rule every
+        // other texture on this protocol follows, and the reason the glyph atlas goes up
+        // first: a reference to a texture the consumer has not been given samples whatever
+        // was last at that slot.
+        //
+        // Baked here rather than per frame in the sense mbgl means it. mbgl rebuilds the
+        // texture object every frame; this writes the same bytes to the same id, which a
+        // latest-wins consumer collapses. What it costs is 256 expression evaluations per
+        // frame, and that is the next thing to hoist once a style-change signal exists to
+        // hoist it against.
+        if let Ok(paint) = tessella_style::property::resolve_paint(layer)
+            && let Ok(expression) = tessella_style::ramp::heatmap_color(&paint)
+            && let Ok(pixels) = tessella_style::ramp::bake(
+                &expression,
+                tessella_style::ramp::RampParameter::HeatmapDensity,
+            )
+        {
+            #[allow(clippy::cast_possible_truncation)]
+            let upload = texture::whole(
+                heatmap_ramp_id(offscreen),
+                tessella_capture_abi::envelope::Extent {
+                    width: tessella_style::ramp::RAMP_TEXELS as u32,
+                    height: 1,
+                },
+                tessella_capture_abi::TexturePixelType::RGBA,
+                &pixels,
+            );
+            texture::write(producer, &upload)?;
+        }
     }
 
     // Frame-wide state the shaders read whatever the style says. The placeholders matter: a

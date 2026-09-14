@@ -417,10 +417,24 @@ fn a_frame_writes_each_pass_block_to_its_own_view() {
     )
     .expect("the frame emits");
 
+    // The ramps go up too, one per layer, and they are the oracle's bytes.
+    // (Collected in the same drain below.)
+
     // `(view, layer, slot) -> bytes`, for the uniform writes only.
     let mut blocks: BTreeMap<(u32, i32, u32), Vec<u8>> = BTreeMap::new();
+    let mut ramps: Vec<u64> = Vec::new();
     while let Some(record) = consumer.peek() {
         let consumed = record.consumed();
+        if record.kind == EnvelopeKind::TextureUpdate
+            && let Some(update) =
+                tessella_capture_abi::envelope::TextureUpdate::from_bytes(record.record)
+            && update.size.width == 256
+            && update.size.height == 1
+        {
+            let bytes =
+                &record.payload[update.pixels.offset as usize..][..update.pixels.count as usize];
+            ramps.push(fnv1a(bytes));
+        }
         if record.kind == EnvelopeKind::UboUpdate
             && let Some(update) = UboUpdate::from_bytes(record.record)
         {
@@ -430,6 +444,17 @@ fn a_frame_writes_each_pass_block_to_its_own_view() {
         }
         consumer.advance(consumed);
     }
+
+    // One ramp per heatmap layer, and both are the oracle's.
+    ramps.sort_unstable();
+    ramps.dedup();
+    let mut want_ramps: Vec<u64> = DUMP
+        .lines()
+        .filter_map(|line| line.strip_prefix("texture 256x1 fmt=0 hash="))
+        .map(|hash| u64::from_str_radix(hash, 16).expect("a hex hash"))
+        .collect();
+    want_ramps.sort_unstable();
+    assert_eq!(ramps, want_ramps, "the frame uploads both color ramps");
 
     // The style's two heatmap layers are at indices 1 and 2.
     for layer_index in [1i32, 2] {
