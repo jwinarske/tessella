@@ -986,7 +986,16 @@ fn emit_group(
             geometry,
             view: view_id,
             layer_index,
-            sub_layer_index: 0,
+            // One, not zero, and it is load-bearing rather than cosmetic. `ubo_index` is dense
+            // from zero *within a layer*, and the quad shares this layer with the kernels -- so
+            // at sub-layer zero it sorted ahead of them and took slot 0, pushing every kernel's
+            // index up by one. Each then read the next tile's matrix out of a buffer that holds
+            // one entry per tile, and the last read past the end and was dropped: four points
+            // drew as three, in three wrong places.
+            //
+            // One is also what the quad *is*. A fill's outline is sub-layer 2 because it draws
+            // over the fill it outlines; this draws over the kernels it samples.
+            sub_layer_index: 1,
             // No tile: it covers the frame, the way a background's quad does.
             tile: None,
             pass: crate::view::fill_pass(),
