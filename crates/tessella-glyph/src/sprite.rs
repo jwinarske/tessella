@@ -497,8 +497,19 @@ pub fn decode_sheet(body: &[u8]) -> Result<Sheet, SheetError> {
 pub struct Sprites {
     base: String,
     pixel_ratio: f64,
+    /// The merged index every lookup goes through: the sheet's, with [`Self::added`] over it.
     index: Index,
+    /// The sheet's own index, kept apart so a reload can be merged again from a known base.
+    sheet_index: Index,
     sheet: Option<Sheet>,
+    /// Images the caller supplied, each its own one-image sheet.
+    ///
+    /// mbgl has no second collection: `addImage` puts an image into the style's, beside the ones
+    /// the sprite sheet contributed, and the atlas is packed from all of them. The split here is
+    /// bookkeeping rather than a different model -- a style reload replaces the sheet's half and
+    /// has to leave this half standing, and without somewhere to keep it there would be nothing
+    /// to re-merge.
+    added: BTreeMap<String, (Sheet, Sprite)>,
     atlas: IconAtlas,
     positions: Positions,
     /// Whether the sheet has been uploaded since it last changed — §6.4's damage, for a
@@ -515,7 +526,9 @@ impl Sprites {
             base: base.into(),
             pixel_ratio,
             index: Index::new(),
+            sheet_index: Index::new(),
             sheet: None,
+            added: BTreeMap::new(),
             atlas: IconAtlas::new(ATLAS_SIZE, ATLAS_SIZE),
             positions: Positions::new(),
             dirty: false,
@@ -574,23 +587,103 @@ impl Sprites {
         let sheet = decode_sheet(image).map_err(LoadError::Sheet)?;
         let parsed = parse(index, Some(sheet.size())).map_err(LoadError::Index)?;
 
-        // Cut every icon out of the sheet and pack it. mbgl does this in two places — the
-        // parser copies each icon to an image of its own, and the atlas packs those with padding
-        // — and the padding is what the icon quad's one-pixel border samples.
+        self.sheet_index = parsed;
+        self.sheet = Some(sheet);
+        self.rebuild();
+        Ok(())
+    }
+
+    /// Packs the atlas from the sheet's icons and then the added images.
+    ///
+    /// Cutting every icon out of the sheet is mbgl's two steps in one place -- the parser copies
+    /// each icon to an image of its own, and the atlas packs those with padding -- and the
+    /// padding is what the icon quad's one-pixel border samples.
+    ///
+    /// Added images go on last so that one named the same as a sheet icon wins, which is what
+    /// `addImage` over an existing id means.
+    fn rebuild(&mut self) {
         let mut atlas = IconAtlas::new(ATLAS_SIZE, ATLAS_SIZE);
         let mut positions = Positions::new();
-        for (name, sprite) in &parsed {
-            if let Some(position) = atlas.add(&sheet, sprite) {
+        let mut index = self.sheet_index.clone();
+
+        if let Some(sheet) = &self.sheet {
+            for (name, sprite) in &self.sheet_index {
+                if let Some(position) = atlas.add(sheet, sprite) {
+                    positions.insert(name.clone(), position);
+                }
+            }
+        }
+        for (name, (sheet, sprite)) in &self.added {
+            if let Some(position) = atlas.add(sheet, sprite) {
                 positions.insert(name.clone(), position);
+                index.insert(name.clone(), sprite.clone());
             }
         }
 
-        self.index = parsed;
-        self.sheet = Some(sheet);
+        self.index = index;
         self.atlas = atlas;
         self.positions = positions;
         self.dirty = true;
-        Ok(())
+    }
+
+    /// Adds an image the style's sheet does not carry, under a name a layer can ask for.
+    ///
+    /// This is mbgl's `Style::addImage`, which is where an annotation image ends up: the caller
+    /// hands over pixels rather than a rectangle in a sheet, and the atlas packs them beside the
+    /// sheet's icons. A style with no sprite at all can still have images this way.
+    ///
+    /// A new name is packed in place. Replacing one repacks the whole atlas, because the slot the
+    /// old one held cannot be handed back -- which is the same reason a sheet reload repacks.
+    pub fn insert_image(
+        &mut self,
+        name: impl Into<String>,
+        image: &tessella_source::image::Image,
+        pixel_ratio: f64,
+        sdf: bool,
+    ) {
+        let name = name.into();
+        let sheet = Sheet {
+            width: image.width,
+            height: image.height,
+            pixels: image.pixels.clone(),
+        };
+        let sprite = Sprite {
+            x: 0,
+            y: 0,
+            width: image.width,
+            height: image.height,
+            pixel_ratio,
+            sdf,
+            stretch_x: Vec::new(),
+            stretch_y: Vec::new(),
+            content: None,
+            text_fit_width: None,
+            text_fit_height: None,
+        };
+
+        let replacing = self.added.insert(name.clone(), (sheet, sprite)).is_some();
+        if replacing {
+            self.rebuild();
+            return;
+        }
+
+        let (sheet, sprite) = &self.added[&name];
+        if let Some(position) = self.atlas.add(sheet, sprite) {
+            self.positions.insert(name.clone(), position);
+            self.index.insert(name, sprite.clone());
+            self.dirty = true;
+        }
+    }
+
+    /// Removes an image [`Self::insert_image`] added. Returns whether it was there.
+    ///
+    /// Repacks, for the reason a replacement does.
+    pub fn remove_image(&mut self, name: &str) -> bool {
+        if self.added.remove(name).is_none() {
+            return false;
+        }
+        self.rebuild();
+        true
     }
 
     /// The index, for laying icons out.

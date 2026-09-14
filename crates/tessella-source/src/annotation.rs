@@ -251,6 +251,20 @@ struct PointIndex {
     ids: Vec<AnnotationId>,
 }
 
+/// An image a symbol annotation's `icon` can name.
+///
+/// Held rather than packed: the store has no atlas, and the sprite half of the frontend is what
+/// packs. What this owns is the pixels and the two things that cannot be recovered from them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnnotationImage {
+    /// RGBA pixels.
+    pub image: crate::image::Image,
+    /// How many image pixels make one logical pixel. A `@2x` marker has 2.
+    pub pixel_ratio: f64,
+    /// Whether it is a distance field, and so recolorable.
+    pub sdf: bool,
+}
+
 /// Every annotation a map is carrying, and the tiles it cuts.
 ///
 /// Cloning is not offered: the index behind it is a cache, and a copy of a cache is a second
@@ -259,6 +273,8 @@ struct PointIndex {
 pub struct Annotations {
     symbols: BTreeMap<AnnotationId, SymbolAnnotation>,
     shapes: BTreeMap<AnnotationId, ShapeAnnotation>,
+    /// Keyed by the *prefixed* id, which is the name the point layer's expression resolves to.
+    images: BTreeMap<String, AnnotationImage>,
     next_id: AnnotationId,
     /// `None` when the points have changed since the last query.
     index: RefCell<Option<PointIndex>>,
@@ -332,6 +348,51 @@ impl Annotations {
             return true;
         }
         self.shapes.remove(&id).is_some()
+    }
+
+    /// The name an annotation image is held and looked up under.
+    ///
+    /// mbgl prefixes every one with the source id on the way in, so that an annotation image can
+    /// never collide with an image from the style's own sheet. The point layer's `icon-image`
+    /// expression puts the same prefix back on, which is why the prefix is the manager's rather
+    /// than something the feature carries.
+    #[must_use]
+    pub fn image_name(id: &str) -> String {
+        let mut name = String::from(SOURCE_ID);
+        name.push('.');
+        name.push_str(id);
+        name
+    }
+
+    /// Adds an image, replacing one of the same id.
+    ///
+    /// `id` is the caller's, unprefixed -- what a symbol annotation's `icon` names.
+    pub fn add_image(&mut self, id: &str, image: AnnotationImage) {
+        self.images.insert(Self::image_name(id), image);
+    }
+
+    /// Removes an image by the caller's own id. Returns whether it was there.
+    pub fn remove_image(&mut self, id: &str) -> bool {
+        self.images.remove(&Self::image_name(id)).is_some()
+    }
+
+    /// Every image, by the prefixed name the sprite store holds it under.
+    pub fn images(&self) -> impl Iterator<Item = (&str, &AnnotationImage)> {
+        self.images
+            .iter()
+            .map(|(name, image)| (name.as_str(), image))
+    }
+
+    /// How far above its anchor an image's annotation sits, in logical pixels.
+    ///
+    /// mbgl's `getTopOffsetPixelsForImage`, which an embedder calls to place a callout above a
+    /// marker: half the image's logical height, negative. Zero for an id with no image, which is
+    /// what mbgl returns rather than an error.
+    #[must_use]
+    pub fn top_offset_pixels(&self, id: &str) -> f64 {
+        self.images.get(&Self::image_name(id)).map_or(0.0, |image| {
+            -(f64::from(image.image.height) / image.pixel_ratio) / 2.0
+        })
     }
 
     /// Every shape annotation, in id order, which is the order their layers are synthesized in.
@@ -1084,6 +1145,73 @@ mod tests {
         let rejected = style.reject_uncompilable();
         assert_eq!(rejected, Vec::new());
         assert_eq!(style.layers.len(), before);
+    }
+
+    fn marker_image(width: u32, height: u32) -> AnnotationImage {
+        AnnotationImage {
+            image: crate::image::Image {
+                width,
+                height,
+                pixels: alloc::vec![255; (width * height * 4) as usize],
+            },
+            pixel_ratio: 1.0,
+            sdf: false,
+        }
+    }
+
+    /// The prefix is the manager's, and it is the same one the point layer's expression puts
+    /// back on. A collision with a style's own image is what it exists to prevent.
+    #[test]
+    fn an_image_is_held_under_the_prefixed_name() {
+        let mut annotations = Annotations::new();
+        annotations.add_image("marker", marker_image(16, 16));
+
+        let held: Vec<&str> = annotations.images().map(|(name, _)| name).collect();
+        assert_eq!(held, ["org.maplibre.annotations.marker"]);
+        assert_eq!(
+            Annotations::image_name("marker"),
+            "org.maplibre.annotations.marker"
+        );
+
+        assert!(annotations.remove_image("marker"));
+        assert!(!annotations.remove_image("marker"));
+        assert_eq!(annotations.images().count(), 0);
+    }
+
+    #[test]
+    fn adding_an_image_twice_replaces_it() {
+        let mut annotations = Annotations::new();
+        annotations.add_image("marker", marker_image(16, 16));
+        annotations.add_image("marker", marker_image(8, 8));
+        let (_, image) = annotations.images().next().expect("one image");
+        assert_eq!(image.image.width, 8);
+        assert_eq!(annotations.images().count(), 1);
+    }
+
+    /// Half the logical height, negative. An embedder places a callout by it.
+    #[test]
+    fn the_top_offset_is_half_the_logical_height_above_the_anchor() {
+        let mut annotations = Annotations::new();
+        annotations.add_image("marker", marker_image(16, 24));
+        assert!((annotations.top_offset_pixels("marker") + 12.0).abs() < 1e-12);
+
+        let mut retina = marker_image(32, 48);
+        retina.pixel_ratio = 2.0;
+        annotations.add_image("retina", retina);
+        assert!((annotations.top_offset_pixels("retina") + 12.0).abs() < 1e-12);
+
+        // An id with no image is zero rather than an error, which is what mbgl returns.
+        assert!((annotations.top_offset_pixels("absent") - 0.0).abs() < 1e-12);
+    }
+
+    /// Images alone are not annotations: a store holding only images still cuts no tile and
+    /// synthesizes nothing, because there is nothing for the layers to draw.
+    #[test]
+    fn an_image_on_its_own_is_not_an_annotation() {
+        let mut annotations = Annotations::new();
+        annotations.add_image("marker", marker_image(16, 16));
+        assert!(annotations.is_empty());
+        assert!(annotations.tile(0, 0, 0).is_none());
     }
 
     /// The widening is what keeps a point exactly on a boundary in a tile at all.
