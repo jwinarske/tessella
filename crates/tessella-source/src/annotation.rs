@@ -46,7 +46,6 @@ use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::cell::RefCell;
 
 use tessella_style::Value;
 use tessella_tile::projection;
@@ -241,10 +240,15 @@ pub enum Annotation {
 /// annotations and is not at ten thousand — and ten thousand is the case the index exists for.
 ///
 /// mbgl keeps a boost R-tree, which inserts and removes in place. This is a static k-d tree that
-/// is thrown away when the set changes and rebuilt on the next query. For the access pattern that
-/// is the better trade and not a compromise: annotations are mutated in bursts and queried every
-/// frame, so a rebuild is paid once per burst rather than once per annotation, and the queries in
-/// between are answered by a tree with a better constant than an R-tree's.
+/// is thrown away when the set changes and rebuilt by [`Annotations::prepare`]. For the access
+/// pattern that is the better trade and not a compromise: annotations are mutated in bursts and
+/// queried every frame, so a rebuild is paid once per burst rather than once per annotation, and
+/// the queries in between are answered by a tree with a better constant than an R-tree's.
+///
+/// Rebuilt on demand rather than lazily on the first query, because a store is read from several
+/// worker threads at once and a cache behind a shared reference would need a lock on the path
+/// that a frame takes. [`Annotations::tile`] falls back to a scan when the index is stale, which
+/// answers the same set more slowly rather than answering a different one.
 struct PointIndex {
     tree: KdBush,
     /// The annotation ids, in the order the tree indexes them.
@@ -276,8 +280,8 @@ pub struct Annotations {
     /// Keyed by the *prefixed* id, which is the name the point layer's expression resolves to.
     images: BTreeMap<String, AnnotationImage>,
     next_id: AnnotationId,
-    /// `None` when the points have changed since the last query.
-    index: RefCell<Option<PointIndex>>,
+    /// `None` when the points have changed since [`Annotations::prepare`] last ran.
+    index: Option<PointIndex>,
 }
 
 impl core::fmt::Debug for PointIndex {
@@ -311,7 +315,7 @@ impl Annotations {
         match annotation {
             Annotation::Symbol(symbol) => {
                 self.symbols.insert(id, symbol);
-                self.index.replace(None);
+                self.index = None;
             }
             Annotation::Shape(shape) => {
                 self.shapes.insert(id, shape);
@@ -332,7 +336,7 @@ impl Annotations {
         match annotation {
             Annotation::Symbol(symbol) => {
                 self.symbols.insert(id, symbol);
-                self.index.replace(None);
+                self.index = None;
             }
             Annotation::Shape(shape) => {
                 self.shapes.insert(id, shape);
@@ -344,7 +348,7 @@ impl Annotations {
     /// Removes one. Returns whether it was there.
     pub fn remove(&mut self, id: AnnotationId) -> bool {
         if self.symbols.remove(&id).is_some() {
-            self.index.replace(None);
+            self.index = None;
             return true;
         }
         self.shapes.remove(&id).is_some()
@@ -427,49 +431,88 @@ impl Annotations {
         let mut layer = mvt::Layer::new(POINT_LAYER_ID.into(), EXTENT, 2);
         let sprite: Arc<str> = SPRITE_PROPERTY.into();
 
-        self.with_index(|index| {
-            let (west, south, east, north) = tile_bounds(z, x, y);
-            index
-                .tree
-                .range(west, south, east, north, &mut |slot: u32| {
-                    let id = index.ids[slot as usize];
-                    let Some(symbol) = self.symbols.get(&id) else {
-                        return;
-                    };
-                    let icon: Arc<str> = if symbol.icon.is_empty() {
-                        DEFAULT_MARKER.into()
-                    } else {
-                        symbol.icon.as_str().into()
-                    };
-                    let point = to_tile_units(symbol.geometry, z, x, y);
-                    layer.push_feature(
-                        Some(id),
-                        mvt::GeomType::Point,
-                        [(Arc::clone(&sprite), mvt::Value::String(icon))],
-                        &mvt::Geometry::from_rings([alloc::vec![point]]),
-                    );
-                });
-        });
+        let (west, south, east, north) = tile_bounds(z, x, y);
+
+        // Collected and sorted rather than pushed as they are found. The k-d tree visits its
+        // points in the tree's own order, which is neither insertion order nor anything a caller
+        // could predict, and the scan below visits them in id order -- so without this the same
+        // store answers the same tile with its features in two different orders depending on
+        // whether `prepare` had run. Id order is insertion order, which is the order a caller
+        // expects two markers on the same spot to stack in.
+        //
+        // mbgl's order is its R-tree's and is not reproducible from here. It only reaches the
+        // picture where two annotations overlap, because the point layer sets both
+        // `icon-allow-overlap` and `icon-ignore-placement`: no symbol is ever dropped or moved
+        // by collision, so the order decides which of two overlapping markers is on top and
+        // nothing else.
+        let mut found: Vec<AnnotationId> = Vec::new();
+        match &self.index {
+            Some(index) => {
+                index
+                    .tree
+                    .range(west, south, east, north, &mut |slot: u32| {
+                        found.push(index.ids[slot as usize]);
+                    });
+                found.sort_unstable();
+            }
+            // Stale, so every point is tested rather than none. Already in id order.
+            None => {
+                found.extend(self.symbols.iter().filter_map(|(id, symbol)| {
+                    let inside = symbol.geometry[0] >= west
+                        && symbol.geometry[0] <= east
+                        && symbol.geometry[1] >= south
+                        && symbol.geometry[1] <= north;
+                    inside.then_some(*id)
+                }));
+            }
+        }
+
+        for id in found {
+            let Some(symbol) = self.symbols.get(&id) else {
+                continue;
+            };
+            let icon: Arc<str> = if symbol.icon.is_empty() {
+                DEFAULT_MARKER.into()
+            } else {
+                symbol.icon.as_str().into()
+            };
+            let point = to_tile_units(symbol.geometry, z, x, y);
+            layer.push_feature(
+                Some(id),
+                mvt::GeomType::Point,
+                [(Arc::clone(&sprite), mvt::Value::String(icon))],
+                &mvt::Geometry::from_rings([alloc::vec![point]]),
+            );
+        }
 
         layer
     }
 
-    /// Runs `visit` against a current index, rebuilding it first if the points have moved.
-    fn with_index(&self, visit: impl FnOnce(&PointIndex)) {
-        let mut slot = self.index.borrow_mut();
-        let index = slot.get_or_insert_with(|| {
-            let ids: Vec<AnnotationId> = self.symbols.keys().copied().collect();
-            let points: Vec<(f64, f64)> = self
-                .symbols
-                .values()
-                .map(|symbol| (symbol.geometry[0], symbol.geometry[1]))
-                .collect();
-            PointIndex {
-                tree: KdBush::new(&points),
-                ids,
-            }
+    /// Builds the point index, if a mutation since the last call invalidated it.
+    ///
+    /// Call it before handing the store out to be read. [`Self::tile`] is correct without it and
+    /// scans instead, which is the same answer at a worse complexity -- so this is a performance
+    /// step and never a correctness one, and there is a test that the two agree.
+    pub fn prepare(&mut self) {
+        if self.index.is_some() {
+            return;
+        }
+        let ids: Vec<AnnotationId> = self.symbols.keys().copied().collect();
+        let points: Vec<(f64, f64)> = self
+            .symbols
+            .values()
+            .map(|symbol| (symbol.geometry[0], symbol.geometry[1]))
+            .collect();
+        self.index = Some(PointIndex {
+            tree: KdBush::new(&points),
+            ids,
         });
-        visit(index);
+    }
+
+    /// Whether the index is current, which is what [`Self::prepare`] leaves behind.
+    #[must_use]
+    pub const fn is_prepared(&self) -> bool {
+        self.index.is_some()
     }
 }
 
@@ -1212,6 +1255,77 @@ mod tests {
         annotations.add_image("marker", marker_image(16, 16));
         assert!(annotations.is_empty());
         assert!(annotations.tile(0, 0, 0).is_none());
+    }
+
+    /// The index is a performance step, never a correctness one: prepared and stale answer the
+    /// same tile with the same features in the same order.
+    #[test]
+    fn a_prepared_store_and_a_stale_one_cut_the_same_tile() {
+        let mut annotations = Annotations::new();
+        for step in 0..64 {
+            let lon = -170.0 + f64::from(step) * 5.0;
+            let lat = -60.0 + f64::from(step % 17) * 7.0;
+            annotations.add(symbol(lon, lat, "marker"));
+        }
+
+        assert!(!annotations.is_prepared());
+        let scanned: Vec<Option<mvt::Tile>> = (0..4)
+            .flat_map(|x| (0..4).map(move |y| (x, y)))
+            .map(|(x, y)| annotations.tile(2, x, y))
+            .collect();
+
+        annotations.prepare();
+        assert!(annotations.is_prepared());
+        let indexed: Vec<Option<mvt::Tile>> = (0..4)
+            .flat_map(|x| (0..4).map(move |y| (x, y)))
+            .map(|(x, y)| annotations.tile(2, x, y))
+            .collect();
+
+        assert_eq!(scanned, indexed);
+
+        // Every point is drawn somewhere, and the three that sit exactly on a z2 meridian are
+        // drawn twice -- longitudes -90, 0 and 90 fall in this sequence, and the widened bounds
+        // put each of them in the tiles on both sides. That is mapbox-gl-native#12472's fix
+        // working rather than a fault: a boundary point in neither tile does not draw at all,
+        // and placement decides which tile owns one that is in both.
+        let mut drawn: alloc::collections::BTreeSet<u64> = alloc::collections::BTreeSet::new();
+        let mut features = 0;
+        for tile in indexed.iter().flatten() {
+            features += tile.layers[0].len();
+            for index in 0..tile.layers[0].len() {
+                drawn.insert(
+                    tile.layers[0]
+                        .feature(index)
+                        .expect("a feature")
+                        .id()
+                        .expect("an id"),
+                );
+            }
+        }
+        assert_eq!(drawn.len(), 64, "every point is drawn somewhere");
+        assert_eq!(features, 67, "three sit on a meridian and are drawn twice");
+    }
+
+    /// A mutation puts the index back to stale, so a store prepared and then changed does not
+    /// answer from an index that no longer describes it.
+    #[test]
+    fn a_mutation_invalidates_the_index() {
+        let mut annotations = Annotations::new();
+        annotations.add(symbol(0.0, 0.0, "marker"));
+        annotations.prepare();
+        assert!(annotations.is_prepared());
+
+        let id = annotations.add(symbol(1.0, 1.0, "marker"));
+        assert!(!annotations.is_prepared());
+        annotations.prepare();
+
+        annotations.remove(id);
+        assert!(!annotations.is_prepared());
+        annotations.prepare();
+
+        // A shape is not a point, so it leaves the point index alone.
+        annotations.add(shape(ShapeKind::Fill, ShapePaint::default()));
+        assert!(annotations.is_prepared());
     }
 
     /// The widening is what keeps a point exactly on a boundary in a tile at all.

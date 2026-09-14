@@ -395,6 +395,10 @@ pub(crate) enum Work {
     Geojson {
         features: alloc::sync::Arc<Vec<GeoJsonFeature>>,
     },
+    /// Cut the tile out of the annotation store. Nothing to fetch and nothing to decode.
+    Annotation {
+        store: alloc::sync::Arc<tessella_source::annotation::Annotations>,
+    },
 }
 
 pub(crate) struct Job {
@@ -418,7 +422,9 @@ impl Job {
     fn what(&self) -> String {
         match &self.work {
             Work::Vector { url } | Work::Raster { url } => url.clone(),
-            Work::Geojson { .. } => alloc::format!("{}/{}", self.source, self.tile),
+            Work::Geojson { .. } | Work::Annotation { .. } => {
+                alloc::format!("{}/{}", self.source, self.tile)
+            }
         }
     }
 }
@@ -492,11 +498,11 @@ pub(crate) struct BuildProbe<'a> {
 /// The URL a job's bytes come from, for a caller that fetches them itself.
 ///
 /// [`None`] for a GeoJSON job: the document arrived during source resolution, so there is
-/// nothing left to ask any origin for.
+/// nothing left to ask any origin for. And for an annotation job, which never had an origin.
 pub(crate) fn fetch_url(job: &Job) -> Option<&str> {
     match &job.work {
         Work::Vector { url } | Work::Raster { url } => Some(url),
-        Work::Geojson { .. } => None,
+        Work::Geojson { .. } | Work::Annotation { .. } => None,
     }
 }
 
@@ -607,6 +613,26 @@ fn decode_and_build(
             url: job.what(),
             message: error.to_string(),
         }),
+        // The tile is cut from the store here rather than carried in the job, because a job is
+        // planned per cover coordinate and several of them can name the same data tile above the
+        // source's maxzoom -- cutting it at plan time would cut it once per coordinate.
+        //
+        // Through the MVT builder, not the GeoJSON one. An annotation tile carries named layers
+        // and that is the builder that reads them; see `tessella_source::annotation`.
+        Work::Annotation { store } => {
+            let Some(tile) = store.tile(job.tile.z, job.tile.x, job.tile.y) else {
+                // Every annotation was removed between planning this and running it. An empty
+                // tile rather than a failure: the cover asked for it, and a tile that is not
+                // there is a hole the frame would fill from an ancestor that is equally empty.
+                return Ok(Vec::new());
+            };
+            build_mvt_tile_on(style, &job.source, job.tile, &tile, job.key.surface).map_err(
+                |error| BootError::Build {
+                    url: job.what(),
+                    message: error.to_string(),
+                },
+            )
+        }
     }
 }
 
@@ -692,18 +718,34 @@ pub(crate) fn build_fetched(
 /// # Errors
 ///
 /// [`BootError::Uncovered`] when a raster source's own cover cannot be computed.
-pub(crate) fn plan(
-    sets: &[(String, TileSet, SourceKind)],
-    documents: &[(String, alloc::sync::Arc<Vec<GeoJsonFeature>>)],
-    clustered: &[(
+/// What resolution produced, borrowed for planning.
+///
+/// The four travel together because they are one thing -- every source a style has, split by
+/// what it resolved to -- and passing them as four parameters made `plan` a function whose call
+/// sites stopped being readable and whose next source would have made it worse.
+pub(crate) struct Resolution<'a> {
+    pub(crate) sets: &'a [(String, TileSet, SourceKind)],
+    pub(crate) documents: &'a [(String, alloc::sync::Arc<Vec<GeoJsonFeature>>)],
+    pub(crate) clustered: &'a [(
         String,
         alloc::sync::Arc<tessella_source::cluster::Clustered>,
     )],
+    pub(crate) annotations: Option<&'a alloc::sync::Arc<tessella_source::annotation::Annotations>>,
+}
+
+pub(crate) fn plan(
+    resolution: &Resolution<'_>,
     view: &ViewTransform,
     cover: &[cover::TileCoord],
     style_rev: u64,
     surface: Surface,
 ) -> Result<Vec<Job>, BootError> {
+    let &Resolution {
+        sets,
+        documents,
+        clustered,
+        annotations,
+    } = resolution;
     let mut raster_covers: alloc::collections::BTreeMap<u8, Vec<cover::TileCoord>> =
         alloc::collections::BTreeMap::new();
     for (_, _, kind) in sets {
@@ -795,6 +837,36 @@ pub(crate) fn plan(
         }
     }
 
+    // The annotation source has one zoom range and it is the source's rather than the style's:
+    // `RenderAnnotationSource::update` passes `{0, 16}`, citing mapbox-gl-native#10197. Past 16 a
+    // coarser tile stands in, the same way it does above a tileset's maxzoom, so the job is keyed
+    // by the overscaled id and the cover reaches it through the alias.
+    if let Some(store) = annotations {
+        use tessella_source::annotation::MAXZOOM;
+        for tile in cover {
+            let z = tile.z.min(MAXZOOM);
+            let shift = tile.z - z;
+            let id = TileId::overscaled(z, tile.x >> shift, tile.y >> shift, tile.z);
+            jobs.push(Job {
+                cover: TileId::new(tile.z, tile.x, tile.y),
+                source: String::from(tessella_source::annotation::SOURCE_ID),
+                key: tessella_tile::store::TileKey::overscaled(
+                    tessella_source::annotation::SOURCE_ID,
+                    id.z,
+                    id.x,
+                    id.y,
+                    id.overscaled_z,
+                    style_rev,
+                )
+                .on(surface),
+                tile: id,
+                work: Work::Annotation {
+                    store: alloc::sync::Arc::clone(store),
+                },
+            });
+        }
+    }
+
     Ok(jobs)
 }
 
@@ -819,6 +891,11 @@ pub struct Sources {
         String,
         alloc::sync::Arc<tessella_source::cluster::Clustered>,
     )>,
+    /// The annotations the caller added, when there are any.
+    ///
+    /// A snapshot rather than a handle: a build reads it on a worker, and the store is replaced
+    /// whole when the caller mutates it rather than being changed underneath one.
+    pub annotations: Option<alloc::sync::Arc<tessella_source::annotation::Annotations>>,
     /// The sprite sheet and when it landed, when the style names one and it arrived.
     #[cfg(feature = "image")]
     pub sprite_outcome: Option<(tessella_glyph::sprite::Sprites, Duration)>,
@@ -847,12 +924,13 @@ pub struct Sources {
 /// [`BootError`] when the style does not parse or a source does not resolve.
 pub fn resolve_sources<S: FileSource + 'static>(
     style_text: &str,
+    annotations: Option<&alloc::sync::Arc<tessella_source::annotation::Annotations>>,
     files: &Arc<Coalescing<S>>,
     pool: &Pool,
     priority: Priority,
     started: Instant,
 ) -> Result<Sources, BootError> {
-    let plan = plan_resolution(style_text, started)?;
+    let plan = plan_resolution(style_text, annotations, started)?;
 
     // Fetched together rather than one after another. A source described by a TileJSON URL costs
     // a round trip to find out what it offers, and every one of those sat on the critical path in
@@ -893,7 +971,7 @@ pub fn resolve_sources<S: FileSource + 'static>(
                 .take()
         })
         .collect();
-    assemble(plan, &answers, started)
+    assemble(plan, annotations.cloned(), &answers, started)
 }
 
 /// What one fetch produced, or why it did not.
@@ -967,10 +1045,18 @@ pub(crate) struct ResolvePlan {
 /// answer, so it is found here.
 pub(crate) fn plan_resolution(
     style_text: &str,
+    annotations: Option<&alloc::sync::Arc<tessella_source::annotation::Annotations>>,
     started: Instant,
 ) -> Result<ResolvePlan, BootError> {
     let mut style =
         Style::parse(style_text).map_err(|error| BootError::Style(error.to_string()))?;
+    // Before the layers are compiled and before the sources a layer draws from are collected,
+    // which is the whole reason it happens here rather than after: a synthesized layer is a
+    // layer, and one that skipped the compile check would be dropped from the draw and reported
+    // nowhere. The annotation source has nothing to fetch, so it adds no ask.
+    if let Some(annotations) = annotations {
+        annotations.synthesize(&mut style);
+    }
     // As mbgl's parser does, and before anything reads a layer: a document that names one thing
     // this build does not have still draws every layer that does.
     let rejected_layers = style.reject_uncompilable();
@@ -1115,6 +1201,7 @@ fn read_geojson(
 /// style with no sprite has.
 pub(crate) fn assemble(
     plan: ResolvePlan,
+    annotations: Option<alloc::sync::Arc<tessella_source::annotation::Annotations>>,
     answers: &[Option<Answer>],
     started: Instant,
 ) -> Result<Sources, BootError> {
@@ -1209,6 +1296,37 @@ pub(crate) fn assemble(
         None
     };
 
+    // The images a caller added go in beside the sheet's icons, and make a store where the style
+    // named no sprite at all. mbgl has no separate place for them either -- `addAnnotationImage`
+    // reaches `Style::addImage`, which is the same collection the sheet fills.
+    //
+    // A store with no sheet has an empty base, which is only ever used to build the two URLs a
+    // fetch would ask for. Nothing fetches this one: it is assembled here and handed over, and
+    // resolution has already happened by the time anything could ask.
+    #[cfg(feature = "image")]
+    let sprite_outcome = {
+        let mut sprite_outcome = sprite_outcome;
+        let images: Vec<_> = annotations
+            .iter()
+            .flat_map(|store| store.images())
+            .map(|(name, image)| (String::from(name), image.clone()))
+            .collect();
+        if !images.is_empty() {
+            let (sheet, at) = sprite_outcome.take().unwrap_or_else(|| {
+                (
+                    tessella_glyph::sprite::Sprites::new(String::new(), 1.0),
+                    started.elapsed(),
+                )
+            });
+            let mut sheet = sheet;
+            for (name, image) in images {
+                sheet.insert_image(name, &image.image, image.pixel_ratio, image.sdf);
+            }
+            sprite_outcome = Some((sheet, at));
+        }
+        sprite_outcome
+    };
+
     let mut sets: Vec<(String, TileSet, SourceKind)> = Vec::new();
     let mut documents: Vec<(String, alloc::sync::Arc<Vec<GeoJsonFeature>>)> = Vec::new();
     let mut clustered: Vec<(
@@ -1235,6 +1353,7 @@ pub(crate) fn assemble(
         sets,
         documents,
         clustered,
+        annotations,
         sprite_outcome,
         style_parsed,
         sources_resolved,
@@ -1290,10 +1409,13 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
         sets,
         documents,
         clustered,
+        // A cold start is a boot-timing path and has no caller to have added an annotation:
+        // the API that adds one takes a map, and a map is what a cold start produces.
+        annotations: _,
         sprite_outcome,
         style_parsed,
         sources_resolved,
-    } = resolve_sources(style_text, files, pool, priority, started)?;
+    } = resolve_sources(style_text, None, files, pool, priority, started)?;
 
     // One cover per *source kind*, not one for the map. mbgl computes `tileCover` per source
     // with that source's own `coveringZoomLevel`, and the levels genuinely differ: a 256-pixel
@@ -1304,9 +1426,12 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
     // before anything could have asked for one -- and a boot that guessed otherwise would
     // build every tile twice for the case nobody asked for.
     let jobs = plan(
-        &sets,
-        &documents,
-        &clustered,
+        &Resolution {
+            sets: &sets,
+            documents: &documents,
+            clustered: &clustered,
+            annotations: None,
+        },
         view,
         &cover,
         style_rev,
@@ -1516,5 +1641,123 @@ impl Boot {
                     + bucket.content.as_circle().map_or(0, |b| b.vertices.len())
             })
             .sum()
+    }
+}
+
+#[cfg(test)]
+mod annotation_plan_tests {
+    use super::*;
+    use tessella_source::annotation::{
+        Annotation, Annotations, MAXZOOM, SOURCE_ID, SymbolAnnotation,
+    };
+
+    fn store() -> alloc::sync::Arc<Annotations> {
+        let mut annotations = Annotations::new();
+        annotations.add(Annotation::Symbol(SymbolAnnotation {
+            geometry: [13.405, 52.52],
+            icon: alloc::string::String::from("marker"),
+        }));
+        annotations.prepare();
+        alloc::sync::Arc::new(annotations)
+    }
+
+    fn cover_at(z: u8) -> Vec<cover::TileCoord> {
+        alloc::vec![cover::TileCoord {
+            z,
+            x: 1,
+            y: 2,
+            wrap: 0
+        }]
+    }
+
+    fn view() -> ViewTransform {
+        ViewTransform {
+            longitude: 13.405,
+            latitude: 52.52,
+            zoom: 14.0,
+            width: 1024.0,
+            height: 768.0,
+            bearing: 0.0,
+            pitch: 0.0,
+        }
+    }
+
+    /// A store with nothing in it plans no job, which is what keeps a style that never uses
+    /// annotations from paying for a source it does not have.
+    #[test]
+    fn no_annotations_plans_no_annotation_job() {
+        let jobs = plan(
+            &Resolution {
+                sets: &[],
+                documents: &[],
+                clustered: &[],
+                annotations: None,
+            },
+            &view(),
+            &cover_at(14),
+            0,
+            Surface::Plane,
+        )
+        .expect("planning succeeds");
+        assert!(jobs.is_empty());
+    }
+
+    #[test]
+    fn an_annotation_job_is_planned_per_cover_tile() {
+        let store = store();
+        let jobs = plan(
+            &Resolution {
+                sets: &[],
+                documents: &[],
+                clustered: &[],
+                annotations: Some(&store),
+            },
+            &view(),
+            &cover_at(14),
+            0,
+            Surface::Plane,
+        )
+        .expect("planning succeeds");
+
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].source, SOURCE_ID);
+        assert_eq!(jobs[0].tile, TileId::new(14, 1, 2));
+        assert!(matches!(jobs[0].work, Work::Annotation { .. }));
+        // Nothing to fetch: the store is already in hand.
+        assert!(fetch_url(&jobs[0]).is_none());
+    }
+
+    /// The source's zoom range is `{0, 16}` -- `RenderAnnotationSource::update` passes it,
+    /// citing mapbox-gl-native#10197. Past 16 a coarser tile stands in, and the cover coordinate
+    /// that asked for it is what the frame looks it up by.
+    #[test]
+    fn past_the_sources_maxzoom_a_coarser_tile_stands_in() {
+        let store = store();
+        let cover = alloc::vec![cover::TileCoord {
+            z: 18,
+            x: 4 << 2,
+            y: (5 << 2) + 3,
+            wrap: 0,
+        }];
+        let jobs = plan(
+            &Resolution {
+                sets: &[],
+                documents: &[],
+                clustered: &[],
+                annotations: Some(&store),
+            },
+            &view(),
+            &cover,
+            0,
+            Surface::Plane,
+        )
+        .expect("planning succeeds");
+
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].tile.z, MAXZOOM);
+        assert_eq!(jobs[0].tile.overscaled_z, 18);
+        // Two zooms up from 18, so the coordinates shift by two.
+        assert_eq!((jobs[0].tile.x, jobs[0].tile.y), (4, 5));
+        assert_eq!(jobs[0].cover, TileId::new(18, 4 << 2, (5 << 2) + 3));
     }
 }

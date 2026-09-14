@@ -251,6 +251,13 @@ pub struct TileSource<D> {
     /// blank. Counted and named here so that state has an answer, for the same reason
     /// [`Readiness::Failed`] carries its reason rather than only its fact.
     failures: Mutex<(u64, Option<String>)>,
+    /// The annotations the caller added, as a snapshot the workers read.
+    ///
+    /// Replaced whole rather than mutated, because a build reads it on a worker thread: a store
+    /// changed underneath one would give two tiles of the same frame two different answers.
+    /// `None` until a caller adds something, which is the case every style that does not use
+    /// annotations stays in -- and it costs that style nothing, because a `None` plans no job.
+    annotations: RwLock<Option<Arc<tessella_source::annotation::Annotations>>>,
     /// Bumped whenever something lands.
     ///
     /// A map draws when its damage gate says something changed, and a tile arriving on a worker
@@ -350,6 +357,7 @@ impl<D: TileTransport + 'static> TileSource<D> {
                 resolving: None,
             }),
             landed: RwLock::new(Landed::default()),
+            annotations: RwLock::new(None),
             glyphs: Mutex::new(Glyphs::default()),
             generation: AtomicU64::new(0),
             failures: Mutex::new((0, None)),
@@ -481,6 +489,33 @@ impl<D: TileTransport + 'static> TileSource<D> {
                 .running,
         );
         resolving + tiles + glyphs
+    }
+
+    /// The annotations this source cuts tiles from, if a caller has set any.
+    fn annotations(&self) -> Option<Arc<tessella_source::annotation::Annotations>> {
+        self.annotations
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Hands the source the annotations to draw.
+    ///
+    /// Set whole rather than mutated in place, which is what makes a store readable from a worker
+    /// without a lock on the frame's path: a build holds a snapshot, and this leaves the next one
+    /// to hold the replacement. It is [`tessella_source::annotation::Annotations::prepare`]d on
+    /// the way in, so the index is built once here rather than scanned for per tile.
+    ///
+    /// Must be called before the first [`Self::want`]. The layers annotations draw through are
+    /// synthesized into the style during resolution, and resolution happens once -- so a store
+    /// arriving after it has started is in no style and draws nothing. Re-synthesizing a resolved
+    /// style is its own piece of work and is not this one.
+    pub fn set_annotations(&self, mut annotations: tessella_source::annotation::Annotations) {
+        annotations.prepare();
+        *self
+            .annotations
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(annotations));
     }
 
     /// The transport this source fetches through.
@@ -751,7 +786,8 @@ impl<D: TileTransport + 'static> TileSource<D> {
     /// what keeps a full pool from deadlocking on a job that waits for its own batch.
     fn resolve(self: Arc<Self>) {
         let started = Instant::now();
-        let plan = match boot::plan_resolution(&self.style_text, started) {
+        let annotations = self.annotations();
+        let plan = match boot::plan_resolution(&self.style_text, annotations.as_ref(), started) {
             Ok(plan) => plan,
             // A style that will not parse, or a source that names nowhere to fetch from. Neither
             // needs a request to find out, which is the point of planning first.
@@ -861,7 +897,7 @@ impl<D: TileTransport + 'static> TileSource<D> {
                 started,
                 ..
             } = resolving;
-            let outcome = boot::assemble(plan, &answers, started);
+            let outcome = boot::assemble(plan, this.annotations(), &answers, started);
             let mut inner = this.inner.lock().unwrap_or_else(PoisonError::into_inner);
             match outcome {
                 Ok(sources) => {
@@ -888,9 +924,12 @@ impl<D: TileTransport + 'static> TileSource<D> {
         surface: Surface,
     ) {
         let Ok(jobs) = boot::plan(
-            &sources.sets,
-            &sources.documents,
-            &sources.clustered,
+            &boot::Resolution {
+                sets: &sources.sets,
+                documents: &sources.documents,
+                clustered: &sources.clustered,
+                annotations: sources.annotations.as_ref(),
+            },
             view,
             coords,
             self.style_rev,
