@@ -574,3 +574,102 @@ fn header_only(width: u32, height: u32) -> Vec<u8> {
     chunk(b"IEND", &[], &mut png);
     png
 }
+
+/// An image the caller supplies is packed and looked up like one from the sheet.
+///
+/// This is the path an annotation image takes: it has pixels rather than a rectangle in a sheet,
+/// and a style with no `sprite` at all still has to be able to hold one.
+#[test]
+fn an_added_image_is_packed_without_a_sheet() {
+    let mut sprites = sprite::Sprites::new("", 1.0);
+    let image = tessella_source::image::Image {
+        width: 4,
+        height: 2,
+        pixels: vec![7u8; 4 * 2 * 4],
+    };
+    sprites.insert_image("org.maplibre.annotations.marker", &image, 1.0, false);
+
+    let sprite = sprites
+        .get("org.maplibre.annotations.marker")
+        .expect("the image is in the index");
+    assert_eq!(sprite.logical_size(), (4.0, 2.0));
+    assert!(!sprite.sdf);
+
+    let position = sprites
+        .positions()
+        .get("org.maplibre.annotations.marker")
+        .expect("it was packed");
+    // One pixel of the two reserved is reported, so the padded rect is the image plus two.
+    assert_eq!(position.padded_rect.width, 4 + 2);
+    assert_eq!(position.padded_rect.height, 2 + 2);
+
+    assert!(sprites.remove_image("org.maplibre.annotations.marker"));
+    assert!(sprites.get("org.maplibre.annotations.marker").is_none());
+    assert!(!sprites.remove_image("org.maplibre.annotations.marker"));
+}
+
+/// A sheet arriving later does not take the added images with it.
+///
+/// A style is reloaded and its sheet replaced underneath the annotations, and an annotation
+/// image that vanished at that moment would leave every marker on the map drawing nothing.
+#[test]
+fn an_added_image_survives_a_sheet_load() {
+    let mut sprites = sprite::Sprites::new("", 1.0);
+    let image = tessella_source::image::Image {
+        width: 4,
+        height: 4,
+        pixels: vec![9u8; 4 * 4 * 4],
+    };
+    sprites.insert_image("added", &image, 2.0, true);
+
+    let samples = vec![0u8; 32 * 32 * 4];
+    sprites
+        .load(
+            br#"{"from-sheet": {"x": 0, "y": 0, "width": 16, "height": 16}}"#,
+            &encode(32, 32, 6, &samples),
+        )
+        .expect("the sheet loads");
+
+    assert!(sprites.get("from-sheet").is_some());
+    let added = sprites.get("added").expect("the added image survived");
+    assert_eq!(added.pixel_ratio, 2.0);
+    assert!(added.sdf, "an SDF image stays an SDF image");
+    assert_eq!(added.logical_size(), (2.0, 2.0), "4 pixels at ratio 2");
+    assert!(sprites.positions().contains_key("added"));
+    assert!(sprites.positions().contains_key("from-sheet"));
+}
+
+/// An added image wins over a sheet icon of the same name, which is what replacing one means.
+#[test]
+fn an_added_image_shadows_a_sheet_icon() {
+    let mut sprites = sprite::Sprites::new("", 1.0);
+    let samples = vec![0u8; 32 * 32 * 4];
+    sprites
+        .load(
+            br#"{"marker": {"x": 0, "y": 0, "width": 16, "height": 16}}"#,
+            &encode(32, 32, 6, &samples),
+        )
+        .expect("the sheet loads");
+    assert_eq!(sprites.get("marker").expect("from the sheet").width, 16);
+
+    let image = tessella_source::image::Image {
+        width: 8,
+        height: 8,
+        pixels: vec![1u8; 8 * 8 * 4],
+    };
+    sprites.insert_image("marker", &image, 1.0, false);
+    assert_eq!(sprites.get("marker").expect("the added one").width, 8);
+
+    // And replacing the added one again repacks rather than leaking the slot.
+    let bigger = tessella_source::image::Image {
+        width: 12,
+        height: 12,
+        pixels: vec![2u8; 12 * 12 * 4],
+    };
+    sprites.insert_image("marker", &bigger, 1.0, false);
+    assert_eq!(sprites.get("marker").expect("the replacement").width, 12);
+
+    // Removing it uncovers the sheet's own icon again.
+    assert!(sprites.remove_image("marker"));
+    assert_eq!(sprites.get("marker").expect("from the sheet").width, 16);
+}
