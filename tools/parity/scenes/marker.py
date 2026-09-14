@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: BSD-2-Clause
+#
 # The icon a symbol annotation names. Generated rather than committed blind, so the pixels have a
 # stated origin: an opaque disc with a darker rim, on a transparent ground, premultiplied by the
 # consumer rather than here.
 #
 #   python3 marker.py marker.png
-import struct, sys, zlib
+import struct
+import sys
+import zlib
 
 N = 16
 CENTER = (N - 1) / 2
@@ -30,4 +34,5 @@ png = b"\x89PNG\r\n\x1a\n"
 png += chunk(b"IHDR", struct.pack(">IIBBBBB", N, N, 8, 6, 0, 0, 0))
 png += chunk(b"IDAT", zlib.compress(b"".join(rows), 9))
 png += chunk(b"IEND", b"")
-open(sys.argv[1] if len(sys.argv) > 1 else "marker.png", "wb").write(png)
+with open(sys.argv[1] if len(sys.argv) > 1 else "marker.png", "wb") as out:
+    out.write(png)

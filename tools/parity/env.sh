@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: BSD-2-Clause
+# shellcheck shell=bash
+#
 # Where the pieces of a parity run live, and what to set when they live elsewhere.
 #
 # Sourced by the scripts here. Every path is an override, so a checkout laid out differently
@@ -13,8 +16,15 @@
 : "${TESSELLA_FLUORITE:=/mnt/dev/tessella_fluorite}"
 : "${FILAMENT_STAGING:=/mnt/dev/maplibre-frontend/filament/build/release/staging}"
 : "${PARITY_WORK:=${TMPDIR:-/tmp}/tessella-parity}"
+#   PARITY_EXAMPLES_DATA  the examples' snapshot of what their origins served. Outside the tree
+#                      for the reason the README gives, and outside PARITY_WORK because it is
+#                      recorded once rather than rebuilt.
+#   PARITY_PROXY_PORT  where examples/proxy.py listens; beside the 8080 and 8081 servers.
+: "${PARITY_EXAMPLES_DATA:=${XDG_CACHE_HOME:-$HOME/.cache}/tessella-parity-examples}"
+: "${PARITY_PROXY_PORT:=8082}"
 
 PARITY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TESSELLA_DIR="$(cd "$PARITY_DIR/../.." && pwd)"
 export MBGL_RENDER TESSELLA_FLUORITE FILAMENT_STAGING PARITY_WORK PARITY_DIR TESSELLA_DIR
+export PARITY_EXAMPLES_DATA PARITY_PROXY_PORT
 mkdir -p "$PARITY_WORK"

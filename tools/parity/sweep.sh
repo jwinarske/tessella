@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: BSD-2-Clause
+#
 # The visual-parity sweep: the gate a change has to hold.
 #
 # Berlin at street zoom, north-up and pitched, at two levels -- plus the wide low camera that a
@@ -9,6 +11,7 @@
 set -euo pipefail
 P="$(dirname "${BASH_SOURCE[0]}")"
 for args in "14 1024 768 0" "14 1024 768 60" "16 1024 768 0" "16 1024 768 60"; do
+  # shellcheck disable=SC2086 # four words by construction: zoom, width, height, pitch
   bash "$P/parity.sh" families_p 52.52 13.405 $args
 done
 bash "$P/parity.sh" families_p 52.52 13.405 9 2400 900 0

@@ -1,0 +1,26 @@
+{
+ "example": "display-buildings-in-3d",
+ "base": "https://tiles.openfreemap.org/styles/bright",
+ "sources": {
+  "openfreemap": {"url": "https://tiles.openfreemap.org/planet", "type": "vector"}
+ },
+ "layers": [
+  {
+   "id": "3d-buildings",
+   "before": "first-text-symbol",
+   "source": "openfreemap",
+   "source-layer": "building",
+   "type": "fill-extrusion",
+   "minzoom": 15,
+   "filter": ["!=", ["get", "hide_3d"], true],
+   "paint": {
+    "fill-extrusion-color": ["interpolate", ["linear"], ["get", "render_height"], 0, "lightgray", 200, "royalblue", 400, "lightblue"],
+    "fill-extrusion-height": ["interpolate", ["linear"], ["zoom"], 15, 0, 16, ["get", "render_height"]],
+    "fill-extrusion-base": ["case", [">=", ["get", "zoom"], 16], ["get", "render_min_height"], 0]
+   }
+  }
+ ],
+ "cameras": [
+  {"lat": 40.7135, "lon": -74.0066, "zoom": 15.5, "pitch": 45, "bearing": -17.6}
+ ]
+}
