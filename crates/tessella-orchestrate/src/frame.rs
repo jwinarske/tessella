@@ -347,6 +347,30 @@ fn glyph_atlas_id(index: usize) -> tessella_capture_abi::envelope::TextureId {
     tessella_capture_abi::envelope::TextureId(GLYPH_ATLAS_BASE + index as u64)
 }
 
+/// The first texture id a heatmap's offscreen target takes.
+///
+/// Keyed by the *offscreen view* rather than by the layer, because that id is already unique per
+/// (view, layer) — see `view::offscreen_view` — so one derivation serves both and the texture a
+/// pass writes and the view that writes it cannot drift apart.
+const HEATMAP_TARGET_BASE: u64 = 5 << 60;
+
+/// The first texture id a heatmap's color ramp takes. Keyed the same way.
+///
+/// A separate range rather than an offset inside the target's, so that a reader of a texture id
+/// can tell which of the two it is without knowing how many layers a style has.
+const HEATMAP_RAMP_BASE: u64 = 6 << 60;
+
+/// The texture a heatmap layer's offscreen pass draws into.
+fn heatmap_target_id(offscreen: ViewId) -> tessella_capture_abi::envelope::TextureId {
+    tessella_capture_abi::envelope::TextureId(HEATMAP_TARGET_BASE | u64::from(offscreen.0))
+}
+
+/// The texture a heatmap layer's second pass samples the ramp from.
+#[allow(dead_code)]
+fn heatmap_ramp_id(offscreen: ViewId) -> tessella_capture_abi::envelope::TextureId {
+    tessella_capture_abi::envelope::TextureId(HEATMAP_RAMP_BASE | u64::from(offscreen.0))
+}
+
 /// The first texture id a dash atlas takes.
 ///
 /// Above the raster tiles' packed space rather than below it. A raster id is the tile packed into
@@ -586,6 +610,41 @@ fn emit_group(
     session
         .declare_if(producer, view_id, CameraMode::Producer, declare)
         .map_err(FrameError::from)?;
+
+    // A heatmap layer draws into a view of its own (DR-25), and that view has to exist before
+    // anything binds into it — the same rule, and the same enforcement, as the map's own view.
+    // Declared from the *style* rather than from the buckets, because a heatmap layer whose
+    // tiles are all empty still owns its pass: the quad that samples it is per layer.
+    for (index, layer) in style.layers.iter().enumerate() {
+        if layer.kind != tessella_style::LayerKind::Heatmap {
+            continue;
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let layer_index = index as u32;
+        let Some(offscreen) = crate::view::offscreen_view(view_id, layer_index) else {
+            continue;
+        };
+        if !declare {
+            continue;
+        }
+        session
+            .declare_target(
+                producer,
+                view_id,
+                CameraMode::Producer,
+                crate::view::TargetSpec {
+                    layer_index,
+                    texture: heatmap_target_id(offscreen),
+                    // mbgl's `viewportSize / 2`, and HalfFloat because the kernel sum runs past
+                    // one — both the renderer's choices rather than the style's, which is why
+                    // they are here rather than read off the layer.
+                    scale: (1, 2),
+                    format: tessella_capture_abi::TexturePixelType::RGBA,
+                    channel_type: tessella_capture_abi::TextureChannelDataType::HalfFloat,
+                },
+            )
+            .map_err(FrameError::from)?;
+    }
 
     // Frame-wide state the shaders read whatever the style says. The placeholders matter: a
     // shader samples its texture slots unconditionally, so a drawable whose layer binds none
@@ -3400,6 +3459,66 @@ fn write_layer_state(
                 layer_index,
                 ubo_slots::ID_LINE_EVALUATED_PROPS_UBO,
                 &props,
+            )?;
+        }
+        LayerKind::Heatmap => {
+            // The kernels' blocks go to the view the kernels are in, and that is not the
+            // frame's: DR-25 puts them in the layer's offscreen view, and `bindings_for` has
+            // already resolved which one. Reading it back off a binding rather than deriving it
+            // again is what keeps the two from disagreeing about where the layer draws.
+            let target = bindings.first().map_or(view_id, |binding| binding.view);
+
+            let kernels: Vec<ubo::HeatmapDrawableEntry> = matrices(0)
+                .filter_map(|tile| {
+                    ubo::HeatmapDrawableEntry::for_tile(
+                        view,
+                        projection,
+                        tile.z,
+                        tile.x,
+                        tile.y,
+                        i32::from(tile.wrap),
+                        ubo::heatmap_interpolations(&paint, f64::from(tile.z), view.zoom),
+                    )
+                    .ok()
+                })
+                .collect();
+            ubo::write(
+                producer,
+                target,
+                layer_index,
+                ubo_slots::ID_HEATMAP_DRAWABLE_UBO,
+                &ubo::pack_heatmap_drawable_buffer(
+                    &kernels,
+                    ubo_layouts::HEATMAP_DRAWABLE_UBO.stride,
+                ),
+            )?;
+
+            let props = ubo::heatmap_props_from_paint(&paint, view.zoom);
+            ubo::write(
+                producer,
+                target,
+                layer_index,
+                ubo_slots::ID_HEATMAP_EVALUATED_PROPS_UBO,
+                &props,
+            )?;
+
+            // And the second pass's block, in the frame's own view, because that is where the
+            // quad is drawn. Its matrix takes no camera -- an ortho over the backend size, not
+            // over the half-resolution target -- so the view supplies only its dimensions.
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                clippy::cast_precision_loss
+            )]
+            let (width, height) = (view.width as u32, view.height as u32);
+            let texture_props =
+                ubo::heatmap_texture_props_from_paint(&paint, view.zoom, width, height);
+            ubo::write(
+                producer,
+                view_id,
+                layer_index,
+                ubo_slots::ID_HEATMAP_TEXTURE_PROPS_UBO,
+                &texture_props,
             )?;
         }
         LayerKind::Circle => {
