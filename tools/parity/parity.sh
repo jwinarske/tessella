@@ -15,9 +15,23 @@ style="$PARITY_DIR/scenes/$scene.json"
 [ -f "$style" ] || { echo "no scene at $style" >&2; exit 1; }
 [ -x "$MBGL_RENDER" ] || { echo "no oracle at $MBGL_RENDER (set MBGL_RENDER)" >&2; exit 1; }
 
+# A scene with a sibling .geojson is an annotation scene. Annotations are not a style layer --
+# nothing in the stylesheet can produce one -- so the oracle takes them on the command line, and
+# every PNG beside the scene is offered as an icon. `default_marker` is what an annotation with no
+# icon asks for, and it aliases marker.png rather than needing a file of its own.
+annot=()
+if [ -f "$PARITY_DIR/scenes/$scene.geojson" ]; then
+  annot+=(--annotations "$PARITY_DIR/scenes/$scene.geojson")
+  for png in "$PARITY_DIR"/scenes/*.png; do
+    [ -f "$png" ] || continue
+    annot+=(--annotation-image "$(basename "${png%.png}")=$png")
+  done
+  [ -f "$PARITY_DIR/scenes/marker.png" ] && annot+=(--annotation-image "default_marker=$PARITY_DIR/scenes/marker.png")
+fi
+
 "$MBGL_RENDER" --style "$style" --output "$PARITY_WORK/o_$tag.png" \
     --lat "$lat" --lon "$lon" --zoom "$z" --width "$W" --height "$H" \
-    --pitch "$pitch" --bearing "$bearing" >/dev/null 2>&1 \
+    --pitch "$pitch" --bearing "$bearing" "${annot[@]}" >/dev/null 2>&1 \
     || { echo "ORACLE FAILED $tag" >&2; exit 1; }
 
 # TSF_NO_FADES: a fade is time-dependent and the two renderers are not started at the same

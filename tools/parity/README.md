@@ -39,11 +39,24 @@ The sweep's numbers as of 2026-09-13, which is the gate:
 - `families_p` — one layer of every family this build draws, over Berlin. The sweep's scene.
 - `quad_remote` — the four-pane quad's style, read over https with nothing on disk. Used by the
   consumer's own `quad_probe` rather than by `sweep.sh`.
-- `heat_p` — a heatmap over Berlin's POIs. **This one does not pass and is not meant to yet**:
-  the layer is not drawn, so the run reports the distance to go. It was captured before any
-  heatmap code existed so the design behind it has a referee rather than an argument. At
-  `f3054a1` it stood at `gross 271571 of 786432 (34.532%)`, against an oracle whose heatmap
-  covers 48.7% of the frame.
+- `heat_p` — a heatmap over Berlin's POIs. Captured before any heatmap code existed, so the
+  design behind it had a referee rather than an argument; it stood at `gross 271571 (34.532%)`
+  then and is at **0** now. Not in the sweep because the sweep is the five-camera gate.
+- `annot_p` — the three annotation classes over Berlin: symbols with and without an icon, a line
+  and a multi-line, a polygon with a hole and a multi-polygon. **This one does not pass and is
+  not meant to yet**, the same way `heat_p` did not: nothing here draws an annotation, so the run
+  reports the distance to go. It stands at `gross 39712 of 786432 (5.050%)` at z14 p0.
+
+  An annotation is not a style layer -- there is no `"type": "annotation"` and no stylesheet can
+  produce one. They arrive through `Map::addAnnotation`, and the manager synthesizes the source
+  `org.maplibre.annotations`, one symbol layer for the points and one line or fill layer per
+  shape. So the scene is two files: `annot_p.json` is the style and `annot_p.geojson` is what the
+  oracle is told to add. `parity.sh` pairs them by name, and offers every `.png` beside them as an
+  icon. `marker.py` writes `marker.png`, so the icon's pixels have a stated origin.
+
+  Stock `mbgl-render` has no such flags and will fail the run. They are on the capture branch
+  (`jwinarske/maplibre-gl-native`, `capture-backend-phase0`), which is the oracle these numbers
+  are measured against anyway.
 
 ## Why the scenes are here and the frames are not
 
