@@ -522,3 +522,145 @@ fn blocks_of_bytes(bytes: &[u8]) -> Vec<String> {
     out.sort();
     out
 }
+
+/// The whole layer reaches the stream: two passes, in the right two views, in the right order.
+///
+/// This is the shape assertion the earlier tests could not make. Each heatmap layer puts its
+/// kernels in an offscreen view and one quad in the map's, the quad's geometry is announced
+/// before anything binds it, and it carries the two samplers the second pass reads.
+#[test]
+fn each_heatmap_layer_emits_a_quad_bound_into_the_map() {
+    use std::sync::Arc;
+
+    use tessella_capture_abi::envelope::{GeometryAdd, ViewId, ViewUse, WireRecord};
+    use tessella_capture_abi::ring::Ring;
+    use tessella_capture_abi::{CameraMode, EnvelopeKind};
+    use tessella_orchestrate::SlabArena;
+    use tessella_orchestrate::frame::{self, Frame};
+    use tessella_orchestrate::tile::{TileId as BuildTile, build_sourceless, build_tile};
+    use tessella_orchestrate::view::{self, ViewSession};
+    use tessella_style::light::Light;
+    use tessella_style::{Source, Style};
+    use tessella_tile::cover;
+
+    const HEATMAP: &str = include_str!("../../tessella-style/tests/heatmap_style.json");
+
+    let style = Style::parse(HEATMAP).expect("style parses");
+    let Some(Source::Geojson(source)) = style.source("probe") else {
+        panic!("one geojson source");
+    };
+    let features = tessella_source::geojson::read(&source.data).expect("features read");
+
+    let camera = probe();
+    let tiles = cover::cover(&camera).expect("covers");
+    let mut buckets = Vec::new();
+    for tile in &tiles {
+        let id = BuildTile::new(tile.z, tile.x, tile.y);
+        let mut built = build_tile(
+            &style,
+            "probe",
+            id,
+            &features,
+            tessella_source::tiling::TilingOptions::default(),
+        )
+        .expect("tile builds");
+        built.extend(build_sourceless(&style, id).expect("background builds"));
+        built.sort_by_key(|bucket| bucket.layer_index);
+        buckets.push((id, Arc::new(built)));
+    }
+
+    let view_id = ViewId(0);
+    let mut ring = Ring::new(1 << 22);
+    let (producer, consumer) = ring.split();
+    let mut arena = SlabArena::new();
+    let mut session = ViewSession::new();
+    session
+        .declare(producer, view_id, CameraMode::Producer)
+        .expect("declares");
+
+    frame::emit(
+        producer,
+        &mut arena,
+        &Frame {
+            projection: ProjectionMode::Mercator,
+            style: &style,
+            view: &camera,
+            view_id,
+            tiles: &tiles,
+            buckets: &buckets,
+            origins: &[],
+            light: &Light::default(),
+            fonts: None,
+            patterns: None,
+        },
+    )
+    .expect("the frame emits");
+
+    let mut announced: Vec<(u64, i32, usize)> = Vec::new();
+    let mut uses: Vec<(u64, u32, i32)> = Vec::new();
+    while let Some(record) = consumer.peek() {
+        let consumed = record.consumed();
+        match record.kind {
+            EnvelopeKind::GeometryAdd => {
+                if let Some(add) = GeometryAdd::from_bytes(record.record) {
+                    announced.push((
+                        add.geometry.0,
+                        add.builtin_shader,
+                        add.texture_refs.count as usize,
+                    ));
+                }
+            }
+            EnvelopeKind::ViewUse => {
+                if let Some(use_record) = ViewUse::from_bytes(record.record) {
+                    uses.push((
+                        use_record.geometry.0,
+                        use_record.view.0,
+                        use_record.layer_index,
+                    ));
+                }
+            }
+            _ => {}
+        }
+        consumer.advance(consumed);
+    }
+
+    let texture_shader = tessella_capture_abi::BuiltIn::HeatmapTextureShader as i32;
+    let kernel_shader = tessella_capture_abi::BuiltIn::HeatmapShader as i32;
+
+    let quads: Vec<_> = announced
+        .iter()
+        .filter(|(_, shader, _)| *shader == texture_shader)
+        .collect();
+    assert_eq!(quads.len(), 2, "one quad per heatmap layer");
+    for (_, _, samplers) in &quads {
+        assert_eq!(*samplers, 2, "the target and the ramp");
+    }
+
+    for (geometry, _, _) in &quads {
+        let position = announced
+            .iter()
+            .position(|(id, _, _)| id == geometry)
+            .expect("announced");
+        let used = uses
+            .iter()
+            .find(|(id, _, _)| id == geometry)
+            .expect("a quad is bound");
+        assert_eq!(used.1, view_id.0, "the quad draws in the map's view");
+        assert!(position < announced.len(), "announced before it is bound");
+    }
+
+    // And the kernels are in the offscreen views, which is the pairing the layer is made of.
+    for (geometry, shader, _) in &announced {
+        if *shader != kernel_shader {
+            continue;
+        }
+        let used = uses
+            .iter()
+            .find(|(id, _, _)| id == geometry)
+            .expect("a kernel drawable is bound");
+        assert!(
+            view::is_offscreen(ViewId(used.1)),
+            "kernels draw in the layer's own view"
+        );
+    }
+}

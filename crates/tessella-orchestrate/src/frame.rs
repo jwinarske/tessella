@@ -360,6 +360,20 @@ const HEATMAP_TARGET_BASE: u64 = 5 << 60;
 /// can tell which of the two it is without knowing how many layers a style has.
 const HEATMAP_RAMP_BASE: u64 = 6 << 60;
 
+/// The first geometry id a heatmap's screen quad takes.
+///
+/// Derived from the offscreen view like its two textures, and for the third time for the same
+/// reason: the quad is per layer, so it has no tile to be keyed by and nothing in the per-tile
+/// numbering to take an id from. Keying it here also keeps it out of the drawable registry,
+/// which is right — a registry entry exists so a tile's geometry survives a pan, and this quad
+/// is four vertices that never change.
+const HEATMAP_QUAD_BASE: u64 = 7 << 60;
+
+/// The geometry id of the quad that samples a heatmap layer's offscreen view.
+fn heatmap_quad_id(offscreen: ViewId) -> tessella_capture_abi::envelope::GeometryId {
+    tessella_capture_abi::envelope::GeometryId(HEATMAP_QUAD_BASE | u64::from(offscreen.0))
+}
+
 /// The texture a heatmap layer's offscreen pass draws into.
 fn heatmap_target_id(offscreen: ViewId) -> tessella_capture_abi::envelope::TextureId {
     tessella_capture_abi::envelope::TextureId(HEATMAP_TARGET_BASE | u64::from(offscreen.0))
@@ -933,6 +947,45 @@ fn emit_group(
     let placement = core::cell::RefCell::new(placement);
     placement.borrow_mut().symbols.begin();
 
+    // The quad each heatmap layer's second pass draws, in the *map's* view. One per layer
+    // rather than one per tile, which is why it is built here and not in the loop above: there
+    // is no tile it belongs to, and the per-tile numbering has no id to give it.
+    type QuadTextures = (
+        tessella_capture_abi::envelope::TextureId,
+        tessella_capture_abi::envelope::TextureId,
+    );
+    let mut heatmap_quads: BTreeMap<u64, QuadTextures> = BTreeMap::new();
+    for (index, layer) in style.layers.iter().enumerate() {
+        if layer.kind != tessella_style::LayerKind::Heatmap {
+            continue;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        let (layer_index, wide) = (index as i32, index as u32);
+        let Some(offscreen) = crate::view::offscreen_view(view_id, wide) else {
+            continue;
+        };
+        let geometry = heatmap_quad_id(offscreen);
+        heatmap_quads.insert(
+            geometry.0,
+            (heatmap_target_id(offscreen), heatmap_ramp_id(offscreen)),
+        );
+        let binding = GeometryBinding {
+            geometry,
+            view: view_id,
+            layer_index,
+            sub_layer_index: 0,
+            // No tile: it covers the frame, the way a background's quad does.
+            tile: None,
+            pass: crate::view::fill_pass(),
+            // The same color-only state the kernels draw with, and for the first of the same
+            // two reasons: `setEnableDepth(false)`. The stencil is off because there is no tile
+            // to clip to.
+            flags: crate::view::heatmap_flags(),
+        };
+        draw_order.bind(binding);
+        bound.push(binding);
+    }
+
     // Resolved once and used twice: placement walks it backwards, encoding forwards.
     let order = draw_order.resolve();
     let prepared = place_symbols(
@@ -965,6 +1018,16 @@ fn emit_group(
             arena.seal();
         }
         open = Some(entry.layer_index);
+
+        // The heatmap quad, which has no bucket behind it. Encoded here rather than before the
+        // loop so it lands in its layer's slab like everything else.
+        if let Some(&(target, ramp)) = heatmap_quads.get(&entry.geometry.0) {
+            let encoded = emit::encode_heatmap_texture(arena, entry.geometry, target, ramp);
+            emit::write(producer, &encoded)?;
+            emitted.geometries += 1;
+            continue;
+        }
+
         let Some(&(tile_index, bucket_index, raster_texture)) = source.get(&entry.geometry.0)
         else {
             continue;
@@ -1141,7 +1204,11 @@ fn emit_group(
             layer_index: binding.layer_index,
             sub_layer_index: binding.sub_layer_index,
         };
-        if registry.is_some() && !unbound.contains(&key) {
+        // The heatmap quad is announced every frame and bound every frame, registry or not: its
+        // id is derived rather than allocated, so there is no registry entry to say the consumer
+        // already has it, and skipping the use would bind nothing to an id just announced.
+        let is_quad = heatmap_quads.contains_key(&binding.geometry.0);
+        if !is_quad && registry.is_some() && !unbound.contains(&key) {
             emitted.drawables += 1;
             continue;
         }
