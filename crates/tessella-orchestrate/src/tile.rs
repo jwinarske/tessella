@@ -40,6 +40,7 @@ use tessella_capture_abi::ProjectionMode;
 use tessella_layout::circle::CircleBucket;
 use tessella_layout::fill::{self, FillBucket, Position, Ring};
 use tessella_layout::fill_extrusion::{self, FillExtrusionBucket};
+use tessella_layout::heatmap::HeatmapBucket;
 use tessella_layout::line::{LineBucket, LineCap, LineJoin, LineOptions};
 use tessella_layout::paint::{BinderError, PaintBinder};
 use tessella_layout::raster::RasterBucket;
@@ -86,6 +87,13 @@ pub enum Content {
     Line(LineBucket),
     /// A quad per point, with the disc drawn inside it by the shader.
     Circle(CircleBucket),
+    /// A quad per point, with a Gaussian kernel drawn inside it by the shader.
+    ///
+    /// The same bucket a circle builds — see `tessella_layout::heatmap` for why that is one
+    /// module and not two — under its own variant, because what happens *to* it differs. A
+    /// circle's quads are drawn into the frame; these are drawn into the layer's own offscreen
+    /// view and the frame samples the result through a color ramp (DR-25).
+    Heatmap(HeatmapBucket),
     /// A raster layer's quad and the picture it is stretched over.
     ///
     /// The image rides with the geometry because it *is* the tile: a raster source carries no
@@ -157,6 +165,10 @@ impl LayerBucket {
             Content::Line(_) => 1,
             // As is a circle. Its stroke is a shader term, not a second draw.
             Content::Circle(_) => 1,
+            // And a heatmap's kernels, which are one drawable in the *offscreen* view. The
+            // quad that samples that view is per layer rather than per tile, so it is not
+            // counted here — nothing in this tile becomes it.
+            Content::Heatmap(_) => 1,
             // And a raster tile, whose quads share one drawable however many the mask made.
             Content::Raster(_) => 1,
             // An extrusion is two geometries — the roof and the walls raised over it — each
@@ -673,6 +685,49 @@ pub fn build_tile_on_with_patterns(
                         })?;
                 }
                 Content::Circle(bucket)
+            }
+            // The same geometry a circle builds, from the same features, by the same rules --
+            // points only, projected but not clipped, dropped outside the tile proper. What
+            // differs is where the drawable is bound and what the binder puts beside it: two
+            // properties, `heatmap-weight` and `heatmap-radius`, against a circle's seven.
+            LayerKind::Heatmap => {
+                let filter = match &layer.filter {
+                    Some(value) => Filter::parse(value).map_err(|source| TileError::Filter {
+                        layer: layer.id.clone(),
+                        source,
+                    })?,
+                    None => Filter::always(),
+                };
+
+                let mut bucket = HeatmapBucket::default();
+                for feature in features {
+                    if !filter.matches_on(
+                        feature,
+                        Some(bucket_zoom),
+                        Some((tile.z, tile.x, tile.y)),
+                    ) {
+                        continue;
+                    }
+                    let Geometry::Point(points) = &feature.geometry else {
+                        continue;
+                    };
+                    let projected: Vec<Position> = points
+                        .iter()
+                        .map(|p| {
+                            let local = projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
+                            #[allow(clippy::cast_possible_truncation)]
+                            [local[0].round() as i16, local[1].round() as i16]
+                        })
+                        .collect();
+                    bucket.add_geometry(&projected);
+                    binder
+                        .push(bucket.vertices.len(), &paint, feature)
+                        .map_err(|source| TileError::Binder {
+                            layer: layer.id.clone(),
+                            source,
+                        })?;
+                }
+                Content::Heatmap(bucket)
             }
             // `is_built` gates this, so anything else is unreachable rather than merely unhandled.
             _ => continue,
@@ -1442,6 +1497,7 @@ impl Content {
             | Self::Fill3d(_)
             | Self::Line(_)
             | Self::Circle(_)
+            | Self::Heatmap(_)
             | Self::Symbol(_) => None,
         }
     }
@@ -1455,6 +1511,7 @@ impl Content {
             | Self::Fill(_)
             | Self::Line(_)
             | Self::Circle(_)
+            | Self::Heatmap(_)
             | Self::Fill3d(_) => None,
             Self::Raster(_) => None,
         }
@@ -1468,6 +1525,7 @@ impl Content {
             Self::Background
             | Self::Line(_)
             | Self::Circle(_)
+            | Self::Heatmap(_)
             | Self::Symbol(_)
             | Self::Fill3d(_) => None,
             Self::Raster(_) => None,
@@ -1482,6 +1540,7 @@ impl Content {
             Self::Background
             | Self::Fill(_)
             | Self::Circle(_)
+            | Self::Heatmap(_)
             | Self::Symbol(_)
             | Self::Fill3d(_) => None,
             Self::Raster(_) => None,
@@ -1496,6 +1555,7 @@ impl Content {
             Self::Background
             | Self::Fill(_)
             | Self::Line(_)
+            | Self::Heatmap(_)
             | Self::Symbol(_)
             | Self::Fill3d(_) => None,
             Self::Raster(_) => None,
@@ -1523,6 +1583,7 @@ impl Content {
             Self::Fill(bucket) => !bucket.segments.is_empty(),
             Self::Line(bucket) => !bucket.segments.is_empty(),
             Self::Circle(bucket) => !bucket.segments.is_empty(),
+            Self::Heatmap(bucket) => !bucket.segments.is_empty(),
             // Labels, not vertices: a symbol layer has data when it resolved text, whether or
             // not the glyphs to shape it with have arrived.
             Self::Symbol(layout) => !layout.is_empty(),

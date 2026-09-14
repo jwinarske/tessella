@@ -333,16 +333,18 @@ fn an_unimplemented_layer_type_resolves_empty() {
     assert!(paint.is_empty(), "hillshade has no table");
     assert!(is_all_uniform(&paint), "vacuously");
 
-    // Heatmap is the in-between case and worth pinning: it has a table, so its properties are
-    // resolved and a malformed one is a style error — and it still draws nothing, because
-    // `is_built` does not name it. A type can be known without being drawn.
+    // Heatmap used to be the in-between case — a table without a renderer, so its properties
+    // resolved and a malformed one was a style error while the layer drew nothing. That gap is
+    // closed, and this now asserts the closure: every type with a table is a type that draws.
+    // The two sets being equal is what makes `paint_specs(&kind).is_none()` and `!is_built()`
+    // the same question, and a new type reopens the gap here rather than silently.
     let heat = Style::parse(
         r#"{"version": 8, "sources": {}, "layers": [
              {"id": "h", "type": "heatmap", "source": "s", "paint": {"heatmap-opacity": 0.5}}]}"#,
     )
     .expect("style parses");
     let layer = heat.layer("h").expect("h");
-    assert!(!layer.kind.is_built(), "heatmap draws nothing yet");
+    assert!(layer.kind.is_built(), "heatmap draws now");
     let paint = resolve_paint(layer).expect("resolves");
     assert!(!paint.is_empty(), "heatmap has a table");
 
