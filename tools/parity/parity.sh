@@ -24,7 +24,7 @@ style="$PARITY_DIR/scenes/$scene.json"
 # instant, so comparing mid-fade measures the clock rather than the geometry.
 out=$(TSF_NO_FADES=1 "$PARITY_WORK/render_probe" "$style" "$PARITY_WORK/mat" \
       "$PARITY_WORK/t_$tag.ppm" "$lat" "$lon" "$z" "$W" "$H" "$pitch" "$bearing" 2>&1)
-grep -q "materials_loaded 14" <<<"$out" || { echo "MATERIALS NOT LOADED $tag" >&2; exit 1; }
+grep -q "materials_loaded 16" <<<"$out" || { echo "MATERIALS NOT LOADED $tag" >&2; exit 1; }
 
 printf "%-20s z%-4s p%-3s " "$scene" "$z" "$pitch"
 python3 "$PARITY_DIR/gross.py" "$PARITY_WORK/t_$tag.ppm" "$PARITY_WORK/o_$tag.png"
