@@ -474,6 +474,29 @@ pub fn bindings_for(
             Content::Circle(_) => {
                 emit(0, view::fill_pass(), view::circle_flags());
             }
+            // Bound into the layer's *offscreen* view rather than this one (DR-25). The quad
+            // that samples what it draws is per layer rather than per tile, so it is not
+            // emitted here — nothing in this tile becomes it.
+            //
+            // A view or layer index too large to derive an offscreen id from is skipped rather
+            // than bound into the parent, where the kernels would draw over the map at full
+            // intensity instead of through the ramp.
+            Content::Heatmap(_) => {
+                #[allow(clippy::cast_possible_truncation)]
+                let index = bucket.layer_index as u32;
+                if let Some(offscreen) = view::offscreen_view(view, index) {
+                    bindings.push(GeometryBinding {
+                        geometry: GeometryId(*next_id),
+                        view: offscreen,
+                        layer_index,
+                        sub_layer_index: 0,
+                        tile: Some(tile),
+                        pass: view::fill_pass(),
+                        flags: view::heatmap_flags(),
+                    });
+                    *next_id += 1;
+                }
+            }
             // Translucent, whatever `raster-opacity` is: mbgl draws a raster layer in the
             // translucent pass and drops it from the frame entirely at an opacity of zero,
             // rather than promoting an opaque one to the opaque pass. An image with an alpha

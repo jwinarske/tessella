@@ -43,6 +43,7 @@ use tessella_layout::circle::CircleBucket;
 use tessella_layout::fill::FillBucket;
 use tessella_layout::fill::Segment;
 use tessella_layout::fill_extrusion::FillExtrusionBucket;
+use tessella_layout::heatmap::HeatmapBucket;
 use tessella_layout::line::LineBucket;
 use tessella_layout::raster::{RasterBucket, RasterVertex};
 use tessella_layout::symbol_bucket::{SymbolBuffers, SymbolVertex};
@@ -1881,6 +1882,43 @@ pub fn encode_circle(
         &descriptors,
         &bucket.segments,
         BuiltIn::CircleShader,
+        None,
+        TextureFilter::Linear,
+    )
+}
+
+/// Encodes a heatmap's kernel quads.
+///
+/// [`encode_circle`] with one field changed, because the two differ in one field. The bucket is
+/// the same bucket, the vertex layout is the same `Short2` position, and the interleaved paint
+/// buffer is built by the same binder — what differs is the shader the consumer resolves, and
+/// therefore which attributes ride beside the position: a circle's seven against a heatmap's
+/// weight and radius.
+///
+/// Kept as a second function rather than a parameter on the first so a call site reads as what
+/// it draws. See `tessella_layout::heatmap` for the same decision one layer down.
+pub fn encode_heatmap(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    bucket: &HeatmapBucket,
+    layout: &VertexLayout,
+    attributes: &[u8],
+    permutation_key: u64,
+) -> Encoded {
+    let vertices = alloc_i16x2(arena, &bucket.vertices);
+    let indexes = alloc_u16(arena, &bucket.indices);
+    let interleaved = arena.alloc(attributes);
+
+    let fixed = [(POSITION_ATTRIBUTE, 0, 0, AttributeDataType::Short2)];
+    let descriptors = descriptors(&fixed, vertices, POSITION_STRIDE, layout, interleaved);
+    geometry_add(
+        geometry,
+        permutation_key,
+        indexes,
+        bucket.vertices.len(),
+        &descriptors,
+        &bucket.segments,
+        BuiltIn::HeatmapShader,
         None,
         TextureFilter::Linear,
     )

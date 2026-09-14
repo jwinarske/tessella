@@ -83,6 +83,18 @@ pub fn circle_flags() -> DrawFlags {
     DrawFlags::ENABLE_DEPTH | DrawFlags::ENABLE_COLOR
 }
 
+/// Draw state for a heatmap's kernels.
+///
+/// Color and nothing else -- the oracle's `flags=0001`, against a circle's `0011`. The builder
+/// calls `setEnableDepth(false)`, and there is no depth buffer on the offscreen target to test
+/// against in any case. No stencil either: the kernels are meant to overlap and accumulate
+/// across tile boundaries, and a tile clip would leave a seam down every edge where two tiles'
+/// kernels should have summed.
+#[must_use]
+pub fn heatmap_flags() -> DrawFlags {
+    DrawFlags::ENABLE_COLOR
+}
+
 /// Draw state for a raster tile.
 ///
 /// No stencil, and `RenderRasterLayer` is the evidence: it never calls `setEnableStencil` nor

@@ -258,6 +258,7 @@ impl LayerKind {
                 | Self::Circle
                 | Self::Symbol
                 | Self::Raster
+                | Self::Heatmap
         )
     }
 }

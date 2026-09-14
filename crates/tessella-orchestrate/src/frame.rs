@@ -40,8 +40,8 @@ use tessella_tile::cover::{TileCoord, ViewTransform};
 use tessella_tile::renderables::DataTileId;
 
 use crate::binder::{
-    CIRCLE_FAMILY, FILL_EXTRUSION_FAMILY, FILL_FAMILY, LINE_FAMILY, SYMBOL_FAMILY, attribute_ids,
-    layout, permutation_key,
+    CIRCLE_FAMILY, FILL_EXTRUSION_FAMILY, FILL_FAMILY, HEATMAP_FAMILY, LINE_FAMILY, SYMBOL_FAMILY,
+    attribute_ids, layout, permutation_key,
 };
 use crate::camera::CameraBlock;
 use crate::emit::SlabArena;
@@ -2632,6 +2632,17 @@ fn encode_parts(
                 arena,
                 PLACEHOLDER,
                 circle,
+                &vertex_layout,
+                bucket.binder.data(),
+                key,
+            ))
+        }
+        Content::Heatmap(heatmap) => {
+            let (vertex_layout, key) = bind(HEATMAP_FAMILY, BuiltIn::HeatmapShader);
+            Some(emit::encode_heatmap(
+                arena,
+                PLACEHOLDER,
+                heatmap,
                 &vertex_layout,
                 bucket.binder.data(),
                 key,

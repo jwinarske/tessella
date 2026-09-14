@@ -342,6 +342,13 @@ pub const SYMBOL_FAMILY: &[BuiltIn] = &[BuiltIn::SymbolIconShader, BuiltIn::Symb
 /// never produces.
 pub const CIRCLE_FAMILY: &[BuiltIn] = &[BuiltIn::CircleShader];
 
+/// The heatmap shaders, kernels and texture pass alike.
+///
+/// Two entries and one id space, unlike the circle's one: `HeatmapShader` declares the position
+/// at 0 with weight and radius at 1 and 2, and `HeatmapTextureShader` declares a position at 0
+/// of its own. They are the two halves of one layer and the family is what resolves either.
+pub const HEATMAP_FAMILY: &[BuiltIn] = &[BuiltIn::HeatmapShader, BuiltIn::HeatmapTextureShader];
+
 /// The fill-extrusion shaders, which share one attribute id space.
 ///
 /// Both instanced variants are here because DR-16 settled this build on Vulkan, where mbgl's own
