@@ -478,7 +478,7 @@ pub fn resolve_manifests(
     for (id, source) in &style.sources {
         let tiles = match source {
             Source::Vector(tiles) | Source::Raster(tiles) | Source::RasterDem(tiles) => tiles,
-            Source::Geojson(_) | Source::Other(_) => continue,
+            Source::Annotation | Source::Geojson(_) | Source::Other(_) => continue,
         };
         let resolved = tileset::resolve(tiles, files).map_err(|source| DownloadError::Source {
             id: id.clone(),
