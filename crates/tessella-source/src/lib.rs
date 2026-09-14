@@ -19,6 +19,7 @@
 
 extern crate alloc;
 
+pub mod annotation;
 pub mod clip;
 pub mod cluster;
 pub mod geojson;
