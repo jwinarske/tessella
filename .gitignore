@@ -5,3 +5,9 @@
 # The render probe writes its tile cache into the working directory.
 cache.sqlite
 cache.sqlite-journal
+
+# Python bytecode, from the codegen tools. `collation.cpython-314.pyc` was tracked:
+# a compiled artifact keyed to one CPython version, which every other version
+# regenerates beside it.
+*.pyc
+__pycache__/
