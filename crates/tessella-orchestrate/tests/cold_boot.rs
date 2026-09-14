@@ -912,6 +912,7 @@ fn an_unaddressable_source_is_refused_without_a_fetch() {
 
     let outcome = tessella_orchestrate::boot::resolve_sources(
         style,
+        None,
         &files,
         Pool::shared(),
         Priority::Foreground,
@@ -961,6 +962,7 @@ fn two_failing_sources_blame_the_same_one_every_time() {
         let files = Arc::new(Coalescing::new(Dead));
         match tessella_orchestrate::boot::resolve_sources(
             style,
+            None,
             &files,
             Pool::shared(),
             Priority::Foreground,
