@@ -306,6 +306,25 @@ impl Map {
         self.mark_dirty();
     }
 
+    /// Puts the annotations' source and layers into the style this map draws.
+    ///
+    /// The same synthesis the tile source runs, against the style the *frame* walks. Both are
+    /// needed and they are not the same style: the source's decides which layer a bucket is built
+    /// for, and this one decides what is drawn and in what order. A synthesis that reached only
+    /// the source builds every annotation bucket correctly and draws none of them, with nothing
+    /// in any counter to say so.
+    ///
+    /// Before the first tick, beside `TileSource::set_annotations`, and for the same reason: the
+    /// source synthesizes during resolution, which happens once.
+    pub fn set_annotations(&mut self, annotations: &tessella_source::annotation::Annotations) {
+        annotations.synthesize(&mut self.style);
+        // The layer set changed, so anything keyed by a layer is keyed against a list that no
+        // longer means the same thing.
+        self.layouts.invalidate();
+        self.placement.invalidate();
+        self.mark_dirty();
+    }
+
     /// Hands the map the sprite atlas its patterns and icons draw from.
     pub fn set_sprites(&mut self, sprites: SpriteAtlas) {
         self.sprites = Some(sprites);

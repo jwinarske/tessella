@@ -1469,9 +1469,11 @@ version = "0.0.0"
 name = "tessella-ffi"
 version = "0.0.0"
 dependencies = [
+ "serde_json",
  "tessella-capture-abi",
  "tessella-glyph",
  "tessella-orchestrate",
+ "tessella-source",
  "tessella-storage",
  "tessella-style",
  "tessella-tile",

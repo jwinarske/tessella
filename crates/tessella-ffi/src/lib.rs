@@ -62,6 +62,12 @@ pub enum Status {
     /// map wanted [`tessella_create_hosted`]. A map created either way is otherwise identical, so
     /// there is nothing else that would tell a caller which one it has.
     NotHosted = 8,
+    /// An annotation document or image could not be read.
+    ///
+    /// Distinct from [`Self::Failed`] for [`Self::NotHosted`]'s reason: it is a fixable mistake in
+    /// what the caller passed, and the caller is the only one that can fix it. The document is not
+    /// a GeoJSON feature collection, or the image is not a picture this build decodes.
+    BadAnnotations = 9,
 }
 
 extern crate alloc;
@@ -287,6 +293,12 @@ pub struct MapState {
     /// frame idle and the tiles would sit in the source, built and never drawn. Comparing this is
     /// what turns a landing back into a frame worth emitting.
     generation: u64,
+    /// The annotations this map is carrying, before they are handed to the source.
+    ///
+    /// The master copy. `TileSource::set_annotations` takes a store whole -- which is what lets a
+    /// worker read one without a lock -- so the two calls that build one up need somewhere to
+    /// accumulate, and a snapshot goes down to the source after each.
+    annotations: tessella_source::annotation::Annotations,
     /// Whether the sprite sheet has been handed to the map.
     ///
     /// Once, not every tick: `set_sprites` copies the atlas and marks the map dirty, so repeating
@@ -517,6 +529,7 @@ unsafe fn create(
             producer,
             source,
             generation: 0,
+            annotations: tessella_source::annotation::Annotations::new(),
             sprites_set: false,
         });
         unsafe { *out = Box::into_raw(state) };
@@ -784,6 +797,122 @@ pub unsafe extern "C" fn tessella_set_projection(map: MapHandle, projection: Pro
 /// # Safety
 ///
 /// `map` must be a handle from [`tessella_create`] that has not been destroyed.
+/// Replaces a map's annotations from a GeoJSON feature collection.
+///
+/// Annotations are not a style layer -- there is no `"type": "annotation"` and no stylesheet can
+/// produce one. They are added here, and the source and layers they draw through are synthesized
+/// into the style the map renders.
+///
+/// The geometry type picks the annotation class the way mbgl's own three classes split: a point
+/// is a symbol, a line is a line annotation, a polygon is a fill. `icon` names the image a symbol
+/// draws; `opacity`, `width`, `color` and `outlineColor` become the matching paint property, and
+/// a feature silent about one gets the annotation class's own default.
+///
+/// Replaces rather than adds: the document is the whole set. Images are kept -- they are named
+/// by a symbol's `icon` and outlive any one set of annotations.
+///
+/// Must be called before the first [`tessella_tick`]. The layers are synthesized into the style
+/// during source resolution, which the first tick starts and which happens once, so a set
+/// arriving after it is in no style and draws nothing.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed, and `geojson`
+/// must be non-null and valid for reads of `geojson_len` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_set_annotations(
+    map: MapHandle,
+    geojson: *const u8,
+    geojson_len: usize,
+) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_mut() }) else {
+            return Status::NoSuchMap;
+        };
+        if geojson.is_null() {
+            return Status::NullArgument;
+        }
+        let Some(text) = (unsafe { borrowed(geojson, geojson_len) }) else {
+            return Status::NotUtf8;
+        };
+        let Ok(document) = serde_json::from_str::<tessella_style::Value>(&text) else {
+            return Status::BadAnnotations;
+        };
+        // Replaces the annotations and keeps the images: a symbol names one by id, and the ids
+        // outlive any one document.
+        if state.annotations.set_from_geojson(&document).is_err() {
+            return Status::BadAnnotations;
+        }
+        state.source.set_annotations(state.annotations.clone());
+        // Both styles, because they are two. The source's decides which layer a bucket is built
+        // for and the map's decides what is drawn; synthesizing into only one builds every
+        // annotation bucket correctly and draws none of them.
+        state.map.set_annotations(&state.annotations);
+        Status::Ok
+    })
+}
+
+/// Adds an image a symbol annotation's `icon` can name.
+///
+/// `image` is an encoded picture -- PNG, JPEG, or WebP where that decoder is built in -- rather
+/// than raw pixels, because every caller with an icon has a file and none of them has a
+/// premultiplied RGBA buffer.
+///
+/// `id` is the caller's own. `default_marker` is the id an annotation with no icon asks for, and
+/// a caller that supplies none draws nothing for those, which is mbgl's behavior too.
+///
+/// Must be called before the first [`tessella_tick`], for the reason
+/// [`tessella_set_annotations`] gives.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed; `id` must be
+/// non-null and valid for reads of `id_len` bytes, and `image` non-null and valid for reads of
+/// `image_len` bytes.
+#[cfg(feature = "image")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_add_annotation_image(
+    map: MapHandle,
+    id: *const u8,
+    id_len: usize,
+    image: *const u8,
+    image_len: usize,
+    pixel_ratio: f64,
+    sdf: bool,
+) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_mut() }) else {
+            return Status::NoSuchMap;
+        };
+        if id.is_null() || image.is_null() {
+            return Status::NullArgument;
+        }
+        let Some(id) = (unsafe { borrowed(id, id_len) }) else {
+            return Status::NotUtf8;
+        };
+        if !(pixel_ratio.is_finite() && pixel_ratio > 0.0) {
+            return Status::BadAnnotations;
+        }
+        // SAFETY: the caller guarantees `image_len` readable bytes at a non-null `image`.
+        let bytes = unsafe { core::slice::from_raw_parts(image, image_len) };
+        let Ok(decoded) = tessella_source::image::decode(bytes) else {
+            return Status::BadAnnotations;
+        };
+
+        state.annotations.add_image(
+            &id,
+            tessella_source::annotation::AnnotationImage {
+                image: decoded,
+                pixel_ratio,
+                sdf,
+            },
+        );
+        state.source.set_annotations(state.annotations.clone());
+        state.map.set_annotations(&state.annotations);
+        Status::Ok
+    })
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
     guarded(move || {

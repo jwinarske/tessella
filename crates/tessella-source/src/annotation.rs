@@ -37,10 +37,22 @@
 //! enough for a tolerance of 4 tile units to drop a vertex would diverge, and that is the first
 //! place to look if one ever does.
 //!
-//! **`fixupPolygons`.** mbgl applies it to geojson-vt's polygon output to repair
-//! geojson-vt#44, where a multi-polygon's rings come back flattened into one list with no record
-//! of which exterior owns which hole. The rings here are cut from the caller's own polygon and
-//! never lose that structure, so there is nothing to repair.
+//! **`fixupPolygons`.** It is named for repairing geojson-vt#44 -- a multi-polygon's rings come
+//! back flattened into one list with no record of which exterior owns which hole -- and the rings
+//! here are cut from the caller's own polygon and never lose that structure. That is not all it
+//! does, and the difference is measurable.
+//!
+//! It is a **wagyu union at `fill_type_even_odd`**. Even-odd decides a hole by *nesting* rather
+//! than by winding, so a ring inside another is a hole whichever way it is wound, and wagyu
+//! rewinds its output so that `classifyRings` downstream agrees. Nothing in this tree does that:
+//! [`crate::clip`] establishes that wagyu is an identity on well-formed input and defers the port
+//! on that basis, and `classify_rings` decides a hole by the sign of its area.
+//!
+//! So a polygon whose inner ring winds the *same* way as its outer -- which RFC 7946 forbids and
+//! real data contains anyway -- draws here as two overlapping polygons where the oracle draws a
+//! hole. Measured at 3,477 pixels on one small rectangle in `tools/parity/scenes/annot_p`, which
+//! is what corrected that scene's winding. It is the case `clip`'s note reserved: "worth
+//! revisiting if a real style turns up geometry where wagyu is not an identity".
 
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
@@ -271,8 +283,9 @@ pub struct AnnotationImage {
 
 /// Every annotation a map is carrying, and the tiles it cuts.
 ///
-/// Cloning is not offered: the index behind it is a cache, and a copy of a cache is a second
-/// thing to invalidate.
+/// A clone carries the annotations and the images and is *not* prepared, because the index is a
+/// cache and copying one gives two things to keep current. A caller that holds a master copy and
+/// hands snapshots out re-prepares the snapshot, which is what [`Self::prepare`] costs once.
 #[derive(Debug, Default)]
 pub struct Annotations {
     symbols: BTreeMap<AnnotationId, SymbolAnnotation>,
@@ -289,6 +302,18 @@ impl core::fmt::Debug for PointIndex {
         f.debug_struct("PointIndex")
             .field("points", &self.ids.len())
             .finish()
+    }
+}
+
+impl Clone for Annotations {
+    fn clone(&self) -> Self {
+        Self {
+            symbols: self.symbols.clone(),
+            shapes: self.shapes.clone(),
+            images: self.images.clone(),
+            next_id: self.next_id,
+            index: None,
+        }
     }
 }
 
@@ -397,6 +422,31 @@ impl Annotations {
         self.images.get(&Self::image_name(id)).map_or(0.0, |image| {
             -(f64::from(image.image.height) / image.pixel_ratio) / 2.0
         })
+    }
+
+    /// Replaces every annotation from a GeoJSON feature collection, keeping the images.
+    ///
+    /// The document is the whole set, the way `--annotations` is to the oracle. Images are not
+    /// part of it and are not touched: a symbol names one by id, and the ids outlive any one
+    /// document.
+    ///
+    /// Ids restart from zero, because the set does. An id from before this call names a different
+    /// annotation afterwards or none at all.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::geojson::GeoJsonError`] when the document is not a feature collection this reads.
+    /// The store is left as it was.
+    pub fn set_from_geojson(
+        &mut self,
+        document: &Value,
+    ) -> Result<(), crate::geojson::GeoJsonError> {
+        let read = from_geojson(document)?;
+        self.symbols = read.symbols;
+        self.shapes = read.shapes;
+        self.next_id = read.next_id;
+        self.index = read.index;
+        Ok(())
     }
 
     /// Every shape annotation, in id order, which is the order their layers are synthesized in.
@@ -595,6 +645,83 @@ fn tile_bounds(z: u8, x: u32, y: u32) -> (f64, f64, f64, f64) {
         east + BOUNDS_EPSILON,
         north + BOUNDS_EPSILON,
     )
+}
+
+/// Reads a GeoJSON feature collection as annotations.
+///
+/// The geometry type picks the class the same way mbgl's own three classes split: a point is a
+/// symbol, a line is a line annotation, a polygon is a fill. Nothing in the document says which
+/// class it wants, because nothing has to -- and the oracle's `mbgl-render --annotations` reads
+/// the same file by the same rule, which is what makes the two comparable at all.
+///
+/// A feature's `icon` names the image a symbol draws. `opacity`, `width`, `color` and
+/// `outlineColor` become the matching paint property; a feature silent about one gets the
+/// annotation class's own default rather than a substitute.
+///
+/// A property is passed through as the style value it was written as, so an expression is
+/// accepted where the oracle's reader takes only a number or a string. That is wider rather than
+/// different: everything the oracle accepts means the same thing here.
+///
+/// # What is skipped
+///
+/// A multi-point, which no annotation class holds -- mbgl's `SymbolAnnotation` takes a single
+/// `Point<double>` and its reader drops anything else. Accepting one here as several symbols
+/// would draw markers the oracle does not, and a parity run would report the difference without
+/// anything saying where it came from.
+///
+/// Reading is by geometry, so a feature with none contributes nothing.
+#[must_use]
+pub fn from_features(features: &[crate::geojson::GeoJsonFeature]) -> Annotations {
+    let mut annotations = Annotations::new();
+    for feature in features {
+        let paint = ShapePaint {
+            opacity: feature.properties.get("opacity").cloned(),
+            width: feature.properties.get("width").cloned(),
+            color: feature.properties.get("color").cloned(),
+            outline_color: feature.properties.get("outlineColor").cloned(),
+        };
+        match &feature.geometry {
+            crate::geojson::Geometry::Point(points) => {
+                // One, or it is a multi-point and no class holds it.
+                if let [point] = points.as_slice() {
+                    let icon = feature
+                        .properties
+                        .get("icon")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    annotations.add(Annotation::Symbol(SymbolAnnotation {
+                        geometry: *point,
+                        icon: String::from(icon),
+                    }));
+                }
+            }
+            crate::geojson::Geometry::LineString(lines) => {
+                annotations.add(Annotation::Shape(ShapeAnnotation::line(
+                    ShapeGeometry::Lines(lines.clone()),
+                    paint,
+                )));
+            }
+            crate::geojson::Geometry::Polygon(polygons) => {
+                annotations.add(Annotation::Shape(ShapeAnnotation::fill(
+                    ShapeGeometry::Polygons(polygons.clone()),
+                    paint,
+                )));
+            }
+        }
+    }
+    annotations.prepare();
+    annotations
+}
+
+/// Reads a GeoJSON document as annotations.
+///
+/// [`from_features`] over [`crate::geojson::read`].
+///
+/// # Errors
+///
+/// [`crate::geojson::GeoJsonError`] when the document is not a feature collection this reads.
+pub fn from_geojson(document: &Value) -> Result<Annotations, crate::geojson::GeoJsonError> {
+    Ok(from_features(&crate::geojson::read(document)?))
 }
 
 /// Builds a style value that is a call: `["op", ...args]`.

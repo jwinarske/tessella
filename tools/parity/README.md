@@ -43,9 +43,17 @@ The sweep's numbers as of 2026-09-13, which is the gate:
   design behind it had a referee rather than an argument; it stood at `gross 271571 (34.532%)`
   then and is at **0** now. Not in the sweep because the sweep is the five-camera gate.
 - `annot_p` — the three annotation classes over Berlin: symbols with and without an icon, a line
-  and a multi-line, a polygon with a hole and a multi-polygon. **This one does not pass and is
-  not meant to yet**, the same way `heat_p` did not: nothing here draws an annotation, so the run
-  reports the distance to go. It stands at `gross 39712 of 786432 (5.050%)` at z14 p0.
+  and a multi-line, a polygon with a hole and a multi-polygon. It stood at `gross 39712 (5.050%)`
+  the day it was written, when nothing drew an annotation, and now reads
+
+      annot_p  z14 p0     4 of 786432
+      annot_p  z16 p0     1
+      annot_p  z14 p60  576
+
+  z14 p60 is the one to look at, and it is not an annotation fault. It is the fill *outline*: on a
+  pitched edge our line covers about a third of what the oracle's does, over the same two rows.
+  No other scene here sets `fill-outline-color`, so this scene is the first thing to gate that
+  path at all. Not in the sweep until it is closed.
 
   An annotation is not a style layer -- there is no `"type": "annotation"` and no stylesheet can
   produce one. They arrive through `Map::addAnnotation`, and the manager synthesizes the source
@@ -56,7 +64,16 @@ The sweep's numbers as of 2026-09-13, which is the gate:
 
   Stock `mbgl-render` has no such flags and will fail the run. They are on the capture branch
   (`jwinarske/maplibre-gl-native`, `capture-backend-phase0`), which is the oracle these numbers
-  are measured against anyway.
+  are measured against anyway. This side takes the same two files through `TSF_ANNOTATIONS` and
+  `TSF_ANNOTATION_IMAGES`, because `render_probe`'s arguments are positional and a camera is what
+  they are for.
+
+  The scene's polygon winds its hole clockwise, which RFC 7946 requires and the first draft of
+  this file did not. It matters more than a formality: mbgl runs every polygon through
+  `fixupPolygons`, a wagyu union with **even-odd** fill, which makes a ring nested inside another
+  a hole whatever way it winds. Nothing here does, so a same-wound inner ring draws as a second
+  overlapping polygon rather than a hole — 3,477 pixels of it in this scene, before the winding
+  was corrected. See the note in `tessella-source`'s `annotation` module.
 
 ## Why the scenes are here and the frames are not
 
