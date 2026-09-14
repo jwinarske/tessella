@@ -341,3 +341,159 @@ fn both_color_ramps_match_the_oracle_byte_for_byte() {
     want.sort_unstable();
     assert_eq!(got, want);
 }
+
+/// The two passes' blocks reach the ring, in the two different views they belong to.
+///
+/// #99 checked the packers against the golden's bytes. This checks that a *frame* writes those
+/// bytes, and — the part no packer test can reach — that the kernels' blocks go to the layer's
+/// offscreen view while the quad's goes to the map's. Swap the two and every block is still
+/// byte-correct and the layer is still wrong: the kernel uniforms would configure a pass that
+/// is not there, and the ramp pass would read a matrix built for tiles.
+#[test]
+fn a_frame_writes_each_pass_block_to_its_own_view() {
+    use std::sync::Arc;
+
+    use tessella_capture_abi::envelope::{UboUpdate, ViewId, WireRecord};
+    use tessella_capture_abi::ring::Ring;
+    use tessella_capture_abi::{CameraMode, EnvelopeKind};
+    use tessella_orchestrate::SlabArena;
+    use tessella_orchestrate::frame::{self, Frame};
+    use tessella_orchestrate::tile::{TileId as BuildTile, build_sourceless, build_tile};
+    use tessella_orchestrate::view::{self, ViewSession};
+    use tessella_style::light::Light;
+    use tessella_style::{Source, Style};
+    use tessella_tile::cover;
+
+    const HEATMAP: &str = include_str!("../../tessella-style/tests/heatmap_style.json");
+
+    let style = Style::parse(HEATMAP).expect("style parses");
+    let Some(Source::Geojson(source)) = style.source("probe") else {
+        panic!("one geojson source");
+    };
+    let features = tessella_source::geojson::read(&source.data).expect("features read");
+
+    let camera = probe();
+    let tiles = cover::cover(&camera).expect("covers");
+    let mut buckets = Vec::new();
+    for tile in &tiles {
+        let id = BuildTile::new(tile.z, tile.x, tile.y);
+        let mut built = build_tile(
+            &style,
+            "probe",
+            id,
+            &features,
+            tessella_source::tiling::TilingOptions::default(),
+        )
+        .expect("tile builds");
+        built.extend(build_sourceless(&style, id).expect("background builds"));
+        built.sort_by_key(|bucket| bucket.layer_index);
+        buckets.push((id, Arc::new(built)));
+    }
+
+    let view_id = ViewId(0);
+    let mut ring = Ring::new(1 << 22);
+    let (producer, consumer) = ring.split();
+    let mut arena = SlabArena::new();
+    let mut session = ViewSession::new();
+    session
+        .declare(producer, view_id, CameraMode::Producer)
+        .expect("declares");
+
+    frame::emit(
+        producer,
+        &mut arena,
+        &Frame {
+            projection: ProjectionMode::Mercator,
+            style: &style,
+            view: &camera,
+            view_id,
+            tiles: &tiles,
+            buckets: &buckets,
+            origins: &[],
+            light: &Light::default(),
+            fonts: None,
+            patterns: None,
+        },
+    )
+    .expect("the frame emits");
+
+    // `(view, layer, slot) -> bytes`, for the uniform writes only.
+    let mut blocks: BTreeMap<(u32, i32, u32), Vec<u8>> = BTreeMap::new();
+    while let Some(record) = consumer.peek() {
+        let consumed = record.consumed();
+        if record.kind == EnvelopeKind::UboUpdate
+            && let Some(update) = UboUpdate::from_bytes(record.record)
+        {
+            let bytes = record.payload[update.data.offset as usize..][..update.data.count as usize]
+                .to_vec();
+            blocks.insert((update.view.0, update.layer_index, update.slot), bytes);
+        }
+        consumer.advance(consumed);
+    }
+
+    // The style's two heatmap layers are at indices 1 and 2.
+    for layer_index in [1i32, 2] {
+        #[allow(clippy::cast_sign_loss)]
+        let offscreen = view::offscreen_view(view_id, layer_index as u32).expect("encodes");
+        assert!(view::is_offscreen(offscreen));
+
+        let kernels = blocks
+            .get(&(offscreen.0, layer_index, ubo_slots::ID_HEATMAP_DRAWABLE_UBO))
+            .unwrap_or_else(|| panic!("layer {layer_index} writes its kernels' drawable block"));
+        assert_eq!(
+            kernels.len() % ubo_layouts::HEATMAP_DRAWABLE_UBO.stride as usize,
+            0,
+            "a whole number of entries"
+        );
+        assert!(
+            blocks.contains_key(&(
+                offscreen.0,
+                layer_index,
+                ubo_slots::ID_HEATMAP_EVALUATED_PROPS_UBO
+            )),
+            "and its evaluated properties, in the same view"
+        );
+
+        // The quad's block is in the map's view, not the offscreen one.
+        let texture_props = blocks
+            .get(&(
+                view_id.0,
+                layer_index,
+                ubo_slots::ID_HEATMAP_TEXTURE_PROPS_UBO,
+            ))
+            .unwrap_or_else(|| panic!("layer {layer_index} writes its texture-pass block"));
+        assert_eq!(texture_props.len(), 80);
+    }
+
+    // And the evaluated properties are the oracle's bytes, layer for layer.
+    let oracle = oracle_buffers();
+    for (layer_index, name) in [(1i32, "heatmap-constant"), (2, "heatmap-composite")] {
+        #[allow(clippy::cast_sign_loss)]
+        let offscreen = view::offscreen_view(view_id, layer_index as u32).expect("encodes");
+        let got = blocks
+            .get(&(
+                offscreen.0,
+                layer_index,
+                ubo_slots::ID_HEATMAP_EVALUATED_PROPS_UBO,
+            ))
+            .expect("the block was written");
+        let (_, want) = oracle
+            .get(&(
+                0,
+                name.to_owned(),
+                ubo_slots::ID_HEATMAP_EVALUATED_PROPS_UBO,
+            ))
+            .expect("the oracle writes it");
+        assert_eq!(&blocks_of_bytes(got), want, "{name}");
+    }
+}
+
+/// The probe's canonicalization, over bytes rather than the dump's hex.
+fn blocks_of_bytes(bytes: &[u8]) -> Vec<String> {
+    let mut out: Vec<String> = bytes
+        .chunks(16)
+        .map(|chunk| chunk.iter().map(|byte| format!("{byte:02x}")).collect())
+        .collect();
+    out.sort();
+    out
+}

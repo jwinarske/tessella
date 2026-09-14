@@ -1626,6 +1626,25 @@ pub fn heatmap_props_from_paint(
     )
 }
 
+/// A heatmap layer's second-pass block, from its resolved paint and the frame's size.
+///
+/// `heatmap-opacity` is the only paint property the pass reads: the color comes from the ramp
+/// texture and the density from what the first pass drew, so there is nothing else of the
+/// layer's in it.
+#[must_use]
+pub fn heatmap_texture_props_from_paint(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    zoom: f64,
+    width: u32,
+    height: u32,
+) -> Vec<u8> {
+    pack_heatmap_texture_props(
+        width,
+        height,
+        uniform_number(paint, "heatmap-opacity", zoom),
+    )
+}
+
 /// Packs `HeatmapTexturePropsUBO` — the second pass, which draws the offscreen target.
 ///
 /// Its matrix is not a tile matrix and takes no view: the pass is a screen-aligned quad, and
