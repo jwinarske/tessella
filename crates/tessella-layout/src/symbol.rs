@@ -187,6 +187,25 @@ pub fn icon_image(layer: &Layer, zoom: f64, feature: &dyn Feature) -> Option<Str
             let value = evaluate(expression.value(), zoom, feature)?;
             match value {
                 Value::String(name) => replace_tokens(&name, feature),
+                // `["image", …]` evaluates to mbgl's `Image`, which is an object carrying the
+                // name and whether the sheet holds it. Its `toString` is the name, and that is
+                // what `icon-image` is: mbgl's property is a `PropertyValue<expression::Image>`
+                // and the bucket asks the sheet for `image.id()`.
+                //
+                // Without this the object fell to `stringify`, which has no case for one and
+                // formats it -- so a style writing `["image", ["concat", …]]` asked the atlas for
+                // a Rust debug dump, found nothing, and drew no icon at all. The annotation point
+                // layer is written exactly that way, and so is any style that names a sprite by
+                // expression.
+                //
+                // Availability is not consulted here. mbgl does not either: the name goes to the
+                // atlas and an image the sheet does not hold has no position, which is the same
+                // missing icon by the same path. At layout time there is no sheet to consult in
+                // any case.
+                Value::Object(members) => match members.get("name") {
+                    Some(Value::String(name)) => replace_tokens(name, feature),
+                    _ => stringify(&Value::Object(members)),
+                },
                 other => stringify(&other),
             }
         }

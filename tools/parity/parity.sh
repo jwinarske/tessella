@@ -34,6 +34,19 @@ fi
     --pitch "$pitch" --bearing "$bearing" "${annot[@]}" >/dev/null 2>&1 \
     || { echo "ORACLE FAILED $tag" >&2; exit 1; }
 
+# The same two files to this side, through the environment rather than the command line: the
+# probe's arguments are positional and a camera is what they are for.
+if [ ${#annot[@]} -gt 0 ]; then
+  export TSF_ANNOTATIONS="$PARITY_DIR/scenes/$scene.geojson"
+  images=""
+  for png in "$PARITY_DIR"/scenes/*.png; do
+    [ -f "$png" ] || continue
+    images="${images:+$images,}$(basename "${png%.png}")=$png"
+  done
+  [ -f "$PARITY_DIR/scenes/marker.png" ] && images="$images,default_marker=$PARITY_DIR/scenes/marker.png"
+  export TSF_ANNOTATION_IMAGES="$images"
+fi
+
 # TSF_NO_FADES: a fade is time-dependent and the two renderers are not started at the same
 # instant, so comparing mid-fade measures the clock rather than the geometry.
 out=$(TSF_NO_FADES=1 "$PARITY_WORK/render_probe" "$style" "$PARITY_WORK/mat" \

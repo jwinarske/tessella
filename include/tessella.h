@@ -34,6 +34,7 @@
 #ifndef TESSELLA_H
 #define TESSELLA_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -77,7 +78,12 @@ typedef enum tessella_result {
      * because it is a fixable mistake with an obvious fix: the map wanted
      * tessella_create_hosted. A map created either way is otherwise identical, so nothing else
      * would tell a caller which one it has. */
-    TESSELLA_NOT_HOSTED = 8
+    TESSELLA_NOT_HOSTED = 8,
+    /* An annotation document or image could not be read. Distinct from TESSELLA_FAILED for
+     * TESSELLA_NOT_HOSTED's reason: it is a fixable mistake in what the caller passed, and the
+     * caller is the only one that can fix it. The document is not a GeoJSON feature collection,
+     * or the image is not a picture this build decodes. */
+    TESSELLA_BAD_ANNOTATIONS = 9
 } tessella_result;
 
 /* How far along a map's sources are.
@@ -346,6 +352,44 @@ typedef enum tessella_projection {
  * A consumer that sets this and draws nothing different has not implemented it, and the producer
  * cannot tell. */
 tessella_result tessella_set_projection(tessella_map* map, tessella_projection projection);
+
+/* Replaces a map's annotations from a GeoJSON feature collection.
+ *
+ * Annotations are not a style layer: there is no "type": "annotation" and no stylesheet can
+ * produce one. They are added here, and the source and layers they draw through are synthesized
+ * into the style the map renders.
+ *
+ * The geometry type picks the annotation class, the way mbgl's own three classes split: a point
+ * is a symbol, a line is a line annotation, a polygon is a fill. A feature's "icon" names the
+ * image a symbol draws; "opacity", "width", "color" and "outlineColor" become the matching paint
+ * property, and a feature silent about one gets the annotation class's own default.
+ *
+ * Replaces rather than adds -- the document is the whole set. Images are kept, because a symbol
+ * names one by id and the ids outlive any one document.
+ *
+ * Must be called before the first tessella_tick. The layers are synthesized into the style during
+ * source resolution, which the first tick starts and which happens once, so a set arriving after
+ * it is in no style and draws nothing.
+ *
+ * TESSELLA_BAD_ANNOTATIONS if the document is not a feature collection this reads. */
+tessella_result tessella_set_annotations(tessella_map* map, const uint8_t* geojson,
+                                         size_t geojson_len);
+
+/* Adds an image a symbol annotation's "icon" can name.
+ *
+ * `image` is an encoded picture -- PNG, JPEG, or WebP where that decoder is built in -- rather
+ * than raw pixels, because every caller with an icon has a file and none of them has a
+ * premultiplied RGBA buffer.
+ *
+ * `id` is the caller's own. "default_marker" is the id an annotation with no icon asks for, and a
+ * caller that supplies none draws nothing for those, which is mbgl's behavior too.
+ *
+ * Must be called before the first tessella_tick, for the reason tessella_set_annotations gives.
+ *
+ * TESSELLA_BAD_ANNOTATIONS if the image does not decode or the pixel ratio is not positive. */
+tessella_result tessella_add_annotation_image(tessella_map* map, const uint8_t* id, size_t id_len,
+                                              const uint8_t* image, size_t image_len,
+                                              double pixel_ratio, bool sdf);
 
 /* Emits a frame, if anything changed, and asks for what the next one needs.
  *

@@ -19,10 +19,15 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tessella-capture-abi = { path = "../tessella-capture-abi" }
 tessella-glyph = { path = "../tessella-glyph" }
 tessella-orchestrate = { path = "../tessella-orchestrate" }
+tessella-source = { path = "../tessella-source" }
 
 tessella-storage = { path = "../tessella-storage" }
 tessella-style = { path = "../tessella-style" }
 tessella-tile = { path = "../tessella-tile" }
+# The annotation document arrives as bytes across the ABI and has to become a style value before
+# anything can read it. The style crate parses a whole document and the storage crate parses a
+# fetched one; neither takes a caller's buffer.
+serde_json.workspace = true
 
 [dev-dependencies]
 tessella-capture-abi = { path = "../tessella-capture-abi" }
