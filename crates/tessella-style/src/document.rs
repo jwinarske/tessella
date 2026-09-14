@@ -108,6 +108,16 @@ pub enum Source {
     RasterDem(TileSource),
     /// GeoJSON, either inline or by URL.
     Geojson(GeojsonSource),
+    /// The annotations the caller added through the map's own API.
+    ///
+    /// Not a source a stylesheet declares. It is synthesized, carries no fields, and its tiles
+    /// are cut from the annotation store rather than fetched or parsed; mbgl keeps it in the
+    /// same enum as the rest for the same reason, as `SourceType::Annotations`.
+    ///
+    /// mbgl's parser rejects `"type": "annotation"` outright where this accepts it, which is the
+    /// one divergence and is not one a frame can see: what it produces is an annotation source
+    /// with nothing in it, and a source with nothing in it draws nothing either way.
+    Annotation,
     /// Anything else the spec defines and this build does not implement.
     #[serde(untagged)]
     Other(Value),
@@ -367,6 +377,22 @@ impl Serialize for ExpressionValue {
 }
 
 impl PropertyValue {
+    /// Classifies a raw value the way the deserializer does.
+    ///
+    /// The rule is the deserializer's, not a second one: a non-empty array whose first element
+    /// is a string is a call and everything else is data. Needed by anything that builds a layer
+    /// rather than parsing one — a synthesized annotation layer is the case — because
+    /// `ExpressionValue` holds its value privately and there is otherwise no way to say
+    /// "whatever this turns out to be".
+    #[must_use]
+    pub fn from_value(value: Value) -> Self {
+        if value.looks_like_expression() {
+            Self::Expression(ExpressionValue(value))
+        } else {
+            Self::Literal(value)
+        }
+    }
+
     /// The literal value, if this is one.
     #[must_use]
     pub fn as_literal(&self) -> Option<&Value> {

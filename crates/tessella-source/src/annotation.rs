@@ -493,6 +493,183 @@ fn tile_bounds(z: u8, x: u32, y: u32) -> (f64, f64, f64, f64) {
     )
 }
 
+/// Builds a style value that is a call: `["op", ...args]`.
+fn call(op: &str, args: Vec<Value>) -> Value {
+    let mut items = Vec::with_capacity(args.len() + 1);
+    items.push(Value::String(op.into()));
+    items.extend(args);
+    Value::Array(items)
+}
+
+/// The `icon-image` expression the point layer resolves its sprite through.
+///
+/// `["image", ["concat", "org.maplibre.annotations.", ["to-string", ["get", "sprite"]]]]`, which
+/// is mbgl's `image(concat(vec(literal(SourceID + "."), toString(get("sprite")))))` written out.
+/// The prefix is here rather than in the feature's property because the images are prefixed on
+/// the way in, so that an annotation image can never collide with one from the style's sheet.
+fn icon_image_expression() -> Value {
+    let mut prefix = String::from(SOURCE_ID);
+    prefix.push('.');
+    call(
+        "image",
+        alloc::vec![call(
+            "concat",
+            alloc::vec![
+                Value::String(prefix),
+                call(
+                    "to-string",
+                    alloc::vec![call(
+                        "get",
+                        alloc::vec![Value::String(SPRITE_PROPERTY.into())]
+                    )]
+                ),
+            ],
+        )],
+    )
+}
+
+/// Sets `key` from `value`, or leaves it unset so the spec's own default applies.
+///
+/// Unset and set-to-the-default are the same pixel here by construction: mbgl's annotation
+/// classes default opacity to 1, width to 1 and color to black, and the spec defaults
+/// `line-opacity`, `line-width`, `fill-opacity` and both colors to exactly those. Leaving the
+/// property out is what keeps that agreement checkable rather than restated.
+fn set_paint(
+    paint: &mut alloc::collections::BTreeMap<String, tessella_style::PropertyValue>,
+    key: &str,
+    value: &Option<Value>,
+) {
+    if let Some(value) = value {
+        paint.insert(
+            key.into(),
+            tessella_style::PropertyValue::from_value(value.clone()),
+        );
+    }
+}
+
+impl Annotations {
+    /// Puts the source and the layers into `style`, replacing any this put there before.
+    ///
+    /// This is mbgl's `AnnotationManager::updateStyle`, which runs on every style load and after
+    /// every mutation. Idempotent for the same reason: the caller's style is reloaded and
+    /// replaced underneath the annotations, and what was synthesized into the old one has to
+    /// arrive in the new one without the annotations being re-added.
+    ///
+    /// # Layer order
+    ///
+    /// The point layer is appended once and every shape layer is inserted *before* it, so the
+    /// style ends `[the caller's layers, shapes in id order, points]`. Shapes under points is
+    /// mbgl's order and not an accident: a marker is a label and belongs on top of the geometry
+    /// it marks.
+    ///
+    /// # Nothing is synthesized for an empty store
+    ///
+    /// mbgl adds the source and the point layer whether or not any annotation exists, because
+    /// `updateStyle` runs from `onStyleLoaded` unconditionally. This does not, and the frame
+    /// cannot tell: `getTileData` returns nothing for an empty store, so mbgl's version of those
+    /// tiles carries no features and its point layer draws nothing. What the divergence avoids is
+    /// covering a source that has nothing in it, which is a tile pyramid's worth of work for a
+    /// layer that is guaranteed to be empty.
+    pub fn synthesize(&self, style: &mut tessella_style::Style) {
+        style
+            .layers
+            .retain(|layer| !is_synthesized_layer(&layer.id));
+        if self.is_empty() {
+            style.sources.remove(SOURCE_ID);
+            return;
+        }
+
+        style
+            .sources
+            .insert(SOURCE_ID.into(), tessella_style::Source::Annotation);
+
+        for (id, shape) in &self.shapes {
+            style.layers.push(shape_style_layer(*id, shape));
+        }
+        style.layers.push(point_style_layer());
+    }
+}
+
+/// Whether `id` names a layer [`Annotations::synthesize`] put there.
+#[must_use]
+pub fn is_synthesized_layer(id: &str) -> bool {
+    id == POINT_LAYER_ID || id.starts_with(SHAPE_LAYER_PREFIX)
+}
+
+/// The one symbol layer every point annotation draws through.
+fn point_style_layer() -> tessella_style::Layer {
+    let mut layout = alloc::collections::BTreeMap::new();
+    layout.insert(
+        "icon-image".into(),
+        tessella_style::PropertyValue::from_value(icon_image_expression()),
+    );
+    // A marker is placed where the caller put it. Collision would move or drop it, and an
+    // annotation that is not where it was added is worse than one that overlaps another.
+    layout.insert(
+        "icon-allow-overlap".into(),
+        tessella_style::PropertyValue::Literal(Value::Bool(true)),
+    );
+    layout.insert(
+        "icon-ignore-placement".into(),
+        tessella_style::PropertyValue::Literal(Value::Bool(true)),
+    );
+
+    tessella_style::Layer {
+        id: POINT_LAYER_ID.into(),
+        kind: tessella_style::LayerKind::Symbol,
+        source: Some(SOURCE_ID.into()),
+        source_layer: Some(POINT_LAYER_ID.into()),
+        minzoom: None,
+        maxzoom: None,
+        filter: None,
+        paint: alloc::collections::BTreeMap::new(),
+        layout,
+        extra: alloc::collections::BTreeMap::new(),
+    }
+}
+
+/// One shape annotation's layer, which is a line or a fill and reads only its own source-layer.
+fn shape_style_layer(id: AnnotationId, shape: &ShapeAnnotation) -> tessella_style::Layer {
+    let name = ShapeAnnotation::layer_id(id);
+    let mut paint = alloc::collections::BTreeMap::new();
+    let mut layout = alloc::collections::BTreeMap::new();
+
+    let kind = match shape.kind {
+        ShapeKind::Line => {
+            set_paint(&mut paint, "line-opacity", &shape.paint.opacity);
+            set_paint(&mut paint, "line-width", &shape.paint.width);
+            set_paint(&mut paint, "line-color", &shape.paint.color);
+            // mbgl sets it on the layer rather than leaving the spec's `miter`: an annotation is
+            // a shape the caller drew, not a road, and a mitered corner on a hand-drawn polyline
+            // spikes.
+            layout.insert(
+                "line-join".into(),
+                tessella_style::PropertyValue::Literal(Value::String("round".into())),
+            );
+            tessella_style::LayerKind::Line
+        }
+        ShapeKind::Fill => {
+            set_paint(&mut paint, "fill-opacity", &shape.paint.opacity);
+            set_paint(&mut paint, "fill-color", &shape.paint.color);
+            set_paint(&mut paint, "fill-outline-color", &shape.paint.outline_color);
+            tessella_style::LayerKind::Fill
+        }
+    };
+
+    tessella_style::Layer {
+        id: name.clone(),
+        kind,
+        source: Some(SOURCE_ID.into()),
+        source_layer: Some(name),
+        minzoom: None,
+        maxzoom: None,
+        filter: None,
+        paint,
+        layout,
+        extra: alloc::collections::BTreeMap::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -705,6 +882,208 @@ mod tests {
             )]
         );
         assert!(!annotations.update(99, symbol(0.0, 0.0, "")));
+    }
+
+    fn empty_style() -> tessella_style::Style {
+        tessella_style::Style::parse(r#"{"version":8,"sources":{},"layers":[]}"#).expect("a style")
+    }
+
+    fn shape(kind: ShapeKind, paint: ShapePaint) -> Annotation {
+        let geometry = ShapeGeometry::Lines(alloc::vec![alloc::vec![[0.0, 0.0], [1.0, 1.0]]]);
+        Annotation::Shape(match kind {
+            ShapeKind::Line => ShapeAnnotation::line(geometry, paint),
+            ShapeKind::Fill => ShapeAnnotation::fill(geometry, paint),
+        })
+    }
+
+    #[test]
+    fn an_empty_store_synthesizes_nothing() {
+        let mut style = empty_style();
+        Annotations::new().synthesize(&mut style);
+        assert!(style.layers.is_empty());
+        assert!(style.source(SOURCE_ID).is_none());
+    }
+
+    #[test]
+    fn shapes_sit_under_the_point_layer_in_id_order() {
+        let mut annotations = Annotations::new();
+        annotations.add(symbol(0.0, 0.0, "marker"));
+        annotations.add(shape(ShapeKind::Line, ShapePaint::default()));
+        annotations.add(shape(ShapeKind::Fill, ShapePaint::default()));
+
+        let mut style = empty_style();
+        annotations.synthesize(&mut style);
+
+        let ids: Vec<&str> = style.layers.iter().map(|layer| layer.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "org.maplibre.annotations.shape.1",
+                "org.maplibre.annotations.shape.2",
+                POINT_LAYER_ID,
+            ]
+        );
+        assert_eq!(style.layers[0].kind, tessella_style::LayerKind::Line);
+        assert_eq!(style.layers[1].kind, tessella_style::LayerKind::Fill);
+        assert_eq!(style.layers[2].kind, tessella_style::LayerKind::Symbol);
+        assert_eq!(
+            style.source(SOURCE_ID),
+            Some(&tessella_style::Source::Annotation)
+        );
+    }
+
+    /// The caller's own layers are untouched, and the synthesized ones go after them.
+    #[test]
+    fn synthesis_appends_and_is_idempotent() {
+        let mut annotations = Annotations::new();
+        annotations.add(symbol(0.0, 0.0, "marker"));
+
+        let mut style = tessella_style::Style::parse(
+            r#"{"version":8,"sources":{},"layers":[{"id":"bg","type":"background"}]}"#,
+        )
+        .expect("a style");
+
+        annotations.synthesize(&mut style);
+        annotations.synthesize(&mut style);
+        annotations.synthesize(&mut style);
+
+        let ids: Vec<&str> = style.layers.iter().map(|layer| layer.id.as_str()).collect();
+        assert_eq!(ids, ["bg", POINT_LAYER_ID]);
+    }
+
+    /// Removing the last annotation takes the source and the layers back out with it.
+    #[test]
+    fn synthesis_undoes_itself_when_the_last_annotation_goes() {
+        let mut annotations = Annotations::new();
+        let id = annotations.add(symbol(0.0, 0.0, "marker"));
+        let mut style = empty_style();
+        annotations.synthesize(&mut style);
+        assert_eq!(style.layers.len(), 1);
+
+        annotations.remove(id);
+        annotations.synthesize(&mut style);
+        assert!(style.layers.is_empty());
+        assert!(style.source(SOURCE_ID).is_none());
+    }
+
+    /// The prefix is the manager's, so an annotation image can never collide with a style one.
+    #[test]
+    fn the_point_layer_resolves_its_icon_through_the_prefix() {
+        let mut annotations = Annotations::new();
+        annotations.add(symbol(0.0, 0.0, "marker"));
+        let mut style = empty_style();
+        annotations.synthesize(&mut style);
+
+        let layer = &style.layers[0];
+        let icon = layer.layout.get("icon-image").expect("an icon-image");
+        let expression = icon.as_expression().expect("an expression").value();
+        assert_eq!(
+            expression,
+            &call(
+                "image",
+                alloc::vec![call(
+                    "concat",
+                    alloc::vec![
+                        Value::String("org.maplibre.annotations.".into()),
+                        call(
+                            "to-string",
+                            alloc::vec![call("get", alloc::vec![Value::String("sprite".into())])]
+                        ),
+                    ],
+                )],
+            )
+        );
+        assert_eq!(
+            layer.layout.get("icon-allow-overlap"),
+            Some(&tessella_style::PropertyValue::Literal(Value::Bool(true)))
+        );
+        assert_eq!(
+            layer.layout.get("icon-ignore-placement"),
+            Some(&tessella_style::PropertyValue::Literal(Value::Bool(true)))
+        );
+    }
+
+    /// Absent paint stays absent, so the spec's default applies -- which is the annotation
+    /// class's default, and the two agreeing is the point.
+    #[test]
+    fn unset_paint_is_left_out_and_set_paint_is_written_through() {
+        let mut annotations = Annotations::new();
+        annotations.add(shape(ShapeKind::Line, ShapePaint::default()));
+        annotations.add(shape(
+            ShapeKind::Fill,
+            ShapePaint {
+                opacity: Some(Value::Number(0.5)),
+                color: Some(Value::String("#ff0000".into())),
+                outline_color: Some(call(
+                    "interpolate",
+                    alloc::vec![
+                        call("linear", Vec::new()),
+                        call("zoom", Vec::new()),
+                        Value::Number(0.0),
+                        Value::String("red".into()),
+                        Value::Number(10.0),
+                        Value::String("blue".into()),
+                    ],
+                )),
+                ..ShapePaint::default()
+            },
+        ));
+
+        let mut style = empty_style();
+        annotations.synthesize(&mut style);
+
+        assert!(style.layers[0].paint.is_empty());
+        assert_eq!(
+            style.layers[0].layout.get("line-join"),
+            Some(&tessella_style::PropertyValue::Literal(Value::String(
+                "round".into()
+            )))
+        );
+
+        let fill = &style.layers[1].paint;
+        assert_eq!(
+            fill.get("fill-opacity"),
+            Some(&tessella_style::PropertyValue::Literal(Value::Number(0.5)))
+        );
+        assert_eq!(
+            fill.get("fill-color"),
+            Some(&tessella_style::PropertyValue::Literal(Value::String(
+                "#ff0000".into()
+            )))
+        );
+        // An expression survives as an expression, which is what holding style values rather
+        // than floats buys.
+        assert!(
+            fill.get("fill-outline-color")
+                .expect("an outline")
+                .as_expression()
+                .is_some()
+        );
+        assert!(!fill.contains_key("fill-width"));
+    }
+
+    /// Every synthesized layer compiles. A layer the style drops is a layer that never draws,
+    /// and nothing else here would say so.
+    #[test]
+    fn the_synthesized_layers_compile() {
+        let mut annotations = Annotations::new();
+        annotations.add(symbol(0.0, 0.0, "marker"));
+        annotations.add(shape(
+            ShapeKind::Line,
+            ShapePaint {
+                width: Some(Value::Number(4.0)),
+                color: Some(Value::String("#ff9c00".into())),
+                ..ShapePaint::default()
+            },
+        ));
+        annotations.add(shape(ShapeKind::Fill, ShapePaint::default()));
+
+        let mut style = empty_style();
+        annotations.synthesize(&mut style);
+        let before = style.layers.len();
+        let rejected = style.reject_uncompilable();
+        assert_eq!(rejected, Vec::new());
+        assert_eq!(style.layers.len(), before);
     }
 
     /// The widening is what keeps a point exactly on a boundary in a tile at all.

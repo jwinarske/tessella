@@ -564,6 +564,9 @@ pub fn plan(
                 }
                 continue;
             }
+            // Nothing to download. The annotations are the caller's own, already in memory, and
+            // a region that omits them is not an incomplete region.
+            Source::Annotation => continue,
             // An image or video source, or something this build does not model. Its resources
             // cannot be named, so saying the plan is complete would be a lie.
             Source::Other(_) => {
