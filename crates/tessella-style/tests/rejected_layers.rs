@@ -155,3 +155,71 @@ fn the_camera_operators_are_filter_only_and_symbol_only() {
         "a symbol layer's filter is exactly where these belong"
     );
 }
+
+/// A color written as an `interpolate` over string stops is kept, which is the shape half of
+/// every real style uses.
+///
+/// It was rejected — whole layers dropped — because `compile_check` re-parsed every expression
+/// *untyped* after `resolve_paint` had already parsed it against its spec. Color stops are
+/// strings and a string is not interpolatable; the coercion to color is exactly what the
+/// expected type buys, and the second pass was throwing it away.
+///
+/// A `step` survived, because step interpolates nothing. That is what made the failure look
+/// like something about `interpolate` rather than something about types, and it is why this
+/// asserts both.
+#[test]
+fn an_interpolated_color_written_as_strings_compiles() {
+    for (kind, property) in [
+        ("fill", "fill-color"),
+        ("line", "line-color"),
+        ("circle", "circle-color"),
+        ("background", "background-color"),
+    ] {
+        let style = format!(
+            r#"{{"version": 8, "sources": {{}}, "layers": [
+                 {{"id": "x", "type": "{kind}", "source": "s", "paint": {{
+                   "{property}": ["interpolate", ["linear"], ["zoom"],
+                                  0, "red", 10, "rgba(0, 0, 255, 0.5)"]}}}}]}}"#
+        );
+        let mut parsed = Style::parse(&style).expect("style parses");
+        assert!(
+            parsed.reject_uncompilable().is_empty(),
+            "{kind}/{property} is a style anyone would write"
+        );
+    }
+
+    // And a heatmap's ramp, which reads its density rather than the zoom and is the property
+    // that found this.
+    let mut heat = Style::parse(
+        r#"{"version": 8, "sources": {}, "layers": [
+             {"id": "h", "type": "heatmap", "source": "s", "paint": {
+               "heatmap-color": ["interpolate", ["linear"], ["heatmap-density"],
+                                 0, "rgba(0, 0, 255, 0)", 1, "red"]}}]}"#,
+    )
+    .expect("style parses");
+    assert!(heat.reject_uncompilable().is_empty());
+
+    // The step form still compiles, so the fix did not trade one shape for another.
+    let mut stepped = Style::parse(
+        r#"{"version": 8, "sources": {}, "layers": [
+             {"id": "s", "type": "fill", "source": "s", "paint": {
+               "fill-color": ["step", ["zoom"], "red", 10, "blue"]}}]}"#,
+    )
+    .expect("style parses");
+    assert!(stepped.reject_uncompilable().is_empty());
+}
+
+/// And a property no spec table names is still parsed, and still refused when it reads the
+/// camera outside a filter.
+#[test]
+fn an_unspecced_property_is_still_checked() {
+    let mut style = Style::parse(
+        r#"{"version": 8, "sources": {}, "layers": [
+             {"id": "x", "type": "symbol", "source": "s",
+              "layout": {"text-field": ["to-string", ["pitch"]]}}]}"#,
+    )
+    .expect("style parses");
+    let rejected = style.reject_uncompilable();
+    assert_eq!(rejected.len(), 1, "the camera check still runs");
+    assert!(rejected[0].reason.contains("only allowed in a filter"));
+}

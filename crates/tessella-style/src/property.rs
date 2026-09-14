@@ -1041,7 +1041,7 @@ fn check_literal(spec: &PropertySpec, value: &Value) -> Result<(), PropertyError
 ///
 /// `PropertyKind` *is* the declared type. Reading it there needs no fallback and cannot drift
 /// from the default's spelling.
-fn expression_spec(spec: &PropertySpec) -> expression::PropertySpec {
+pub fn expression_spec(spec: &PropertySpec) -> expression::PropertySpec {
     expression::PropertySpec {
         default: Some(default_value(spec)),
         expected: Some(match spec.kind {

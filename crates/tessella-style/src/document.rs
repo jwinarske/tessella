@@ -543,10 +543,34 @@ fn compile_check(layer: &Layer) -> Result<(), alloc::string::String> {
     // `["coalesce", ["get", ["concat", "name_", ["config", …]]], ["get", "name"]]`, and `config`
     // is a Mapbox Standard style-config expression with no MapLibre counterpart — so twelve
     // label layers compiled clean and shaped no labels.
-    for value in layer.layout.values().chain(layer.paint.values()) {
+    // Against the property's own spec where there is one, and untyped only where there is not.
+    //
+    // This used to parse everything untyped, and that rejected whole layers for a shape half of
+    // every real style uses: `["interpolate", ["linear"], ["zoom"], 0, "red", 10, "blue"]`.
+    // Color stops are written as *strings*, and a string is not interpolatable — the coercion
+    // to color is what the expected type buys, which is exactly what `resolve_paint` passes and
+    // this loop was throwing away. A `step` survived because step interpolates nothing, so the
+    // failure looked like something about `interpolate` rather than something about types.
+    //
+    // The loop still runs over everything: its job is the camera check below, and the properties
+    // a spec table does not name are still the ones nobody else compiles.
+    let paint = crate::property::paint_specs(&layer.kind).unwrap_or(&[]);
+    let layout = crate::property::layout_specs(&layer.kind).unwrap_or(&[]);
+    let spec_for = |name: &str| {
+        paint
+            .iter()
+            .chain(layout.iter())
+            .find(|spec| spec.name == name)
+            .map(crate::property::expression_spec)
+    };
+
+    for (name, value) in layer.layout.iter().chain(layer.paint.iter()) {
         if let PropertyValue::Expression(expression) = value {
-            let parsed =
-                crate::Expression::parse(expression.value()).map_err(|error| error.to_string())?;
+            let parsed = match spec_for(name) {
+                Some(spec) => crate::Expression::parse_for(expression.value(), &spec),
+                None => crate::Expression::parse(expression.value()),
+            }
+            .map_err(|error| error.to_string())?;
             // And the first half: a filter, not a paint or layout property. Allowing one here
             // would be worse than refusing it, because it would appear to work — the value is
             // real, and §12.1's per-interval cache would then hold a camera-dependent number

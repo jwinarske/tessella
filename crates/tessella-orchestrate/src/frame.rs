@@ -360,20 +360,6 @@ const HEATMAP_TARGET_BASE: u64 = 5 << 60;
 /// can tell which of the two it is without knowing how many layers a style has.
 const HEATMAP_RAMP_BASE: u64 = 6 << 60;
 
-/// The first geometry id a heatmap's screen quad takes.
-///
-/// Derived from the offscreen view like its two textures, and for the third time for the same
-/// reason: the quad is per layer, so it has no tile to be keyed by and nothing in the per-tile
-/// numbering to take an id from. Keying it here also keeps it out of the drawable registry,
-/// which is right — a registry entry exists so a tile's geometry survives a pan, and this quad
-/// is four vertices that never change.
-const HEATMAP_QUAD_BASE: u64 = 7 << 60;
-
-/// The geometry id of the quad that samples a heatmap layer's offscreen view.
-fn heatmap_quad_id(offscreen: ViewId) -> tessella_capture_abi::envelope::GeometryId {
-    tessella_capture_abi::envelope::GeometryId(HEATMAP_QUAD_BASE | u64::from(offscreen.0))
-}
-
 /// The texture a heatmap layer's offscreen pass draws into.
 fn heatmap_target_id(offscreen: ViewId) -> tessella_capture_abi::envelope::TextureId {
     tessella_capture_abi::envelope::TextureId(HEATMAP_TARGET_BASE | u64::from(offscreen.0))
@@ -637,11 +623,8 @@ fn emit_group(
         let Some(offscreen) = crate::view::offscreen_view(view_id, layer_index) else {
             continue;
         };
-        if !declare {
-            continue;
-        }
         session
-            .declare_target(
+            .declare_target_if(
                 producer,
                 view_id,
                 CameraMode::Producer,
@@ -655,8 +638,13 @@ fn emit_group(
                     format: tessella_capture_abi::TexturePixelType::RGBA,
                     channel_type: tessella_capture_abi::TextureChannelDataType::HalfFloat,
                 },
+                declare,
             )
             .map_err(FrameError::from)?;
+
+        if !declare {
+            continue;
+        }
 
         // And the ramp the second pass samples, before anything names it — the rule every
         // other texture on this protocol follows, and the reason the glyph atlas goes up
@@ -964,7 +952,32 @@ fn emit_group(
         let Some(offscreen) = crate::view::offscreen_view(view_id, wide) else {
             continue;
         };
-        let geometry = heatmap_quad_id(offscreen);
+        // Keyed like any other drawable, with no tile because it has none. The registry is what
+        // makes its bytes retainable and releasable; an id derived outside the registry has
+        // nothing to free it, which is what filled the slab region a quad a frame.
+        let key = DrawableKey {
+            tile: None,
+            layer_index,
+            sub_layer_index: 0,
+        };
+        let geometry = match registry.as_deref_mut() {
+            Some(registry) => {
+                if registry.is_new(&key) {
+                    fresh.insert(key);
+                }
+                if registry.is_unused_by(&key) {
+                    unbound.insert(key);
+                }
+                let id = registry.id_for(key);
+                keyed.insert(id.0, key);
+                id
+            }
+            None => {
+                let id = tessella_capture_abi::envelope::GeometryId(next_id);
+                next_id += 1;
+                id
+            }
+        };
         heatmap_quads.insert(
             geometry.0,
             (heatmap_target_id(offscreen), heatmap_ramp_id(offscreen)),
@@ -1179,7 +1192,7 @@ fn emit_group(
             for reference in &refs {
                 arena.retain(*reference);
             }
-            // Where the announcement landed, for §13.2's acknowledgement. Inside an open group
+            // Where the announcement landed, for §13.2's acknowledgment. Inside an open group
             // `head` is where the record really is rather than what has been published, which is
             // the position the consumer's own counter will eventually pass.
             registry.record_refs(key, refs, producer.head());

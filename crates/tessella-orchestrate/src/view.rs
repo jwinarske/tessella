@@ -370,6 +370,50 @@ impl ViewSession {
         mode: CameraMode,
         spec: TargetSpec,
     ) -> Result<ViewId, ViewError> {
+        self.declare_target_if(producer, parent, mode, spec, true)
+    }
+
+    /// As [`Self::declare_target`], writing the records only when `write`.
+    ///
+    /// The counterpart of [`Self::declare_if`], and needed for the same reason: a stream that
+    /// has told the consumer about this target once need not repeat it, but the session still
+    /// has to know the view is legitimate or the very next `use_geometry` naming it is refused.
+    ///
+    /// Missing this is not a subtle failure. The first frame declared the target and drew; every
+    /// frame after it failed whole on `NotDeclared`, and the consumer sat on frame one for ever
+    /// — a map that reported ready, had every tile, and showed a background.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::declare_target`].
+    pub fn declare_target_if(
+        &mut self,
+        producer: &mut Producer,
+        parent: ViewId,
+        mode: CameraMode,
+        spec: TargetSpec,
+        write: bool,
+    ) -> Result<ViewId, ViewError> {
+        if !write {
+            if is_offscreen(parent) {
+                return Err(ViewError::NestedTarget(parent.0));
+            }
+            let view =
+                offscreen_view(parent, spec.layer_index).ok_or(ViewError::Reserved(parent.0))?;
+            self.declared.insert(view.0);
+            return Ok(view);
+        }
+        self.declare_target_now(producer, parent, mode, spec)
+    }
+
+    /// The writing half, which [`Self::declare_target_if`] reaches when it is writing.
+    fn declare_target_now(
+        &mut self,
+        producer: &mut Producer,
+        parent: ViewId,
+        mode: CameraMode,
+        spec: TargetSpec,
+    ) -> Result<ViewId, ViewError> {
         if is_offscreen(parent) {
             return Err(ViewError::NestedTarget(parent.0));
         }

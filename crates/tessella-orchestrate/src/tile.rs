@@ -1401,10 +1401,61 @@ pub fn build_mvt_tile_on_with_patterns(
                 }
                 Content::Circle(bucket)
             }
+            // The same features a circle takes, by the same rules -- including not checking the
+            // geometry type, which is mbgl's: a bucket takes whatever the feature has and a
+            // line's vertices each get a kernel.
+            LayerKind::Heatmap => {
+                let filter = match &layer.filter {
+                    Some(value) => Filter::parse(value).map_err(|source| TileError::Filter {
+                        layer: layer.id.clone(),
+                        source,
+                    })?,
+                    None => Filter::always(),
+                };
+
+                let named = layer
+                    .source_layer
+                    .as_deref()
+                    .and_then(|name| decoded.layer(name));
+
+                let mut bucket = HeatmapBucket::default();
+                if let Some(named) = named {
+                    for feature in named.features() {
+                        if !filter.matches_on(
+                            &feature,
+                            Some(bucket_zoom),
+                            Some((tile.z, tile.x, tile.y)),
+                        ) {
+                            continue;
+                        }
+                        let scaled = feature.rings_scaled(EXTENT);
+                        #[allow(clippy::cast_possible_truncation)]
+                        let points: Vec<Position> = scaled
+                            .rings()
+                            .flatten()
+                            .map(|point| [point[0] as i16, point[1] as i16])
+                            .collect();
+                        bucket.add_geometry(&points);
+                        binder
+                            .push(bucket.vertices.len(), &paint, &feature)
+                            .map_err(|source| TileError::Binder {
+                                layer: layer.id.clone(),
+                                source,
+                            })?;
+                    }
+                }
+                Content::Heatmap(bucket)
+            }
             // Every built type has an arm above. Spelled out rather than left to a wildcard:
             // a wildcard here is what let a layer type be enabled in `is_built` and silently
             // draw nothing from a vector tile, which is the quietest kind of gap.
-            LayerKind::Heatmap | LayerKind::Hillshade | LayerKind::Custom | LayerKind::Other(_) => {
+            //
+            // It is also the gap that actually happened. `Heatmap` sat in *this* list while
+            // `is_built` named it, so a heatmap over a GeoJSON source built kernels and one over
+            // a vector tile built none -- and no compiler could say so, because the arm is
+            // explicit by design. A type added to `is_built` has to be added here in the same
+            // change, and nothing but this comment enforces it.
+            LayerKind::Hillshade | LayerKind::Custom | LayerKind::Other(_) => {
                 continue;
             }
         };
