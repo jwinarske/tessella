@@ -1063,6 +1063,7 @@ wire_records!(
     GeometryAdd,
     GeometryRemove,
     ViewDeclare,
+    ViewTarget,
     ViewUndeclare,
     ViewUse,
     ViewRelease,
@@ -1115,6 +1116,7 @@ const _: () = {
     layout!(GeometryRemove, 8, 8);
     layout!(MeshAdd, 24, 8);
     layout!(ViewDeclare, 8, 4);
+    layout!(ViewTarget, 24, 8);
     layout!(ViewUndeclare, 4, 4);
     layout!(ViewUse, 40, 8);
     layout!(ViewRelease, 16, 8);

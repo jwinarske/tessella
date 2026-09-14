@@ -36,11 +36,13 @@
 use alloc::collections::BTreeSet;
 
 use tessella_capture_abi::envelope::{
-    DrawFlags, GeometryId, TileId, ViewDeclare, ViewId, ViewRelease, ViewUndeclare, ViewUse,
-    WireRecord,
+    DrawFlags, GeometryId, TileId, ViewDeclare, ViewId, ViewRelease, ViewTarget, ViewUndeclare,
+    ViewUse, WireRecord,
 };
 use tessella_capture_abi::ring::{Full, Producer};
-use tessella_capture_abi::{CameraMode, EnvelopeKind, RenderPass};
+use tessella_capture_abi::{
+    CameraMode, EnvelopeKind, RenderPass, TextureChannelDataType, TexturePixelType,
+};
 
 /// Draw state for a layer that covers the viewport rather than a tile.
 ///
@@ -171,12 +173,75 @@ pub enum ViewError {
     /// The ring could not take the record.
     #[error("the ring is full")]
     Full,
+    /// A caller declared a view in the offscreen half of the id space.
+    ///
+    /// [`offscreen_view`] owns everything with the top bit set, so a caller that declares one
+    /// would have its view silently aliased by a layer's render target. Refused rather than
+    /// left to collide: the collision would show up as a heatmap drawing into a pane.
+    #[error("view {0} is in the offscreen id space")]
+    Reserved(u32),
+    /// A target named a parent that is itself an offscreen view.
+    ///
+    /// A target is sized against its parent and drawn before it, and a chain of them would have
+    /// to be ordered rather than merely paired. Nothing in the style language asks for one.
+    #[error("view {0} cannot parent a render target")]
+    NestedTarget(u32),
 }
 
 impl From<Full> for ViewError {
     fn from(_: Full) -> Self {
         Self::Full
     }
+}
+
+/// What a layer's offscreen target is, apart from which view owns it.
+///
+/// A struct rather than five arguments because the five are one decision — the target a layer
+/// needs — and because [`ViewSession::declare_target`] is the only thing that takes them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TargetSpec {
+    /// The layer whose pass this is, which also derives the view's id.
+    pub layer_index: u32,
+    /// The id the target's output is bound by, in [`TextureUpdate`]'s space.
+    ///
+    /// [`TextureUpdate`]: tessella_capture_abi::envelope::TextureUpdate
+    pub texture: tessella_capture_abi::envelope::TextureId,
+    /// Size against the parent, as numerator and denominator. `(1, 2)` is mbgl's heatmap.
+    pub scale: (u16, u16),
+    /// Channel layout.
+    pub format: TexturePixelType,
+    /// Component type. `HalfFloat` for a heatmap, because the kernel sum runs past one.
+    pub channel_type: TextureChannelDataType,
+}
+
+/// The bit that marks a view as a layer's offscreen target rather than a caller's pane.
+///
+/// A caller's views are its own — Fluorite numbers the quad's panes 0 through 3 — and an
+/// offscreen pass needs a view too (DR-25). Rather than have the producer allocate from a pool
+/// and hope the caller does not collide, the top half of the id space is reserved and an
+/// offscreen view's id is *derived* from what it is for. Two consequences, both wanted: the
+/// same layer of the same view gets the same id in every frame, so re-declaring is idempotent
+/// and a consumer can key its render target by it; and a collision is impossible by
+/// construction rather than by bookkeeping.
+const OFFSCREEN_BIT: u32 = 1 << 31;
+
+/// The offscreen view that draws layer `layer_index` of `parent` into a texture.
+///
+/// `None` when either input is too large to encode — fifteen bits of parent and sixteen of
+/// layer — which is a refusal rather than a truncation, because a truncated id is a valid id
+/// that names the wrong pass.
+#[must_use]
+pub fn offscreen_view(parent: ViewId, layer_index: u32) -> Option<ViewId> {
+    if parent.0 >= (1 << 15) || layer_index >= (1 << 16) {
+        return None;
+    }
+    Some(ViewId(OFFSCREEN_BIT | (parent.0 << 16) | layer_index))
+}
+
+/// Whether a view is a layer's offscreen target.
+#[must_use]
+pub fn is_offscreen(view: ViewId) -> bool {
+    view.0 & OFFSCREEN_BIT != 0
 }
 
 /// Tracks which views have been declared, so a use cannot precede its declaration.
@@ -248,6 +313,19 @@ impl ViewSession {
         view: ViewId,
         mode: CameraMode,
     ) -> Result<(), ViewError> {
+        if is_offscreen(view) {
+            return Err(ViewError::Reserved(view.0));
+        }
+        self.declare_any(producer, view, mode)
+    }
+
+    /// Declares a view without the offscreen-space guard, for [`offscreen_view`]'s own ids.
+    fn declare_any(
+        &mut self,
+        producer: &mut Producer,
+        view: ViewId,
+        mode: CameraMode,
+    ) -> Result<(), ViewError> {
         let record = ViewDeclare {
             view,
             camera_mode: mode as u8,
@@ -256,6 +334,51 @@ impl ViewSession {
         producer.write(EnvelopeKind::ViewDeclare, record.as_bytes(), &[])?;
         self.declared.insert(view.0);
         Ok(())
+    }
+
+    /// Declares the offscreen view for one layer of `parent`, and the texture it draws into.
+    ///
+    /// Two records: the `ViewDeclare` the view needs like any other, then the `ViewTarget` that
+    /// makes it draw to a texture. In that order, because a target naming an undeclared view is
+    /// the same protocol fault a use would be.
+    ///
+    /// The camera mode is the parent's. An offscreen pass renders the same scene through the
+    /// same camera at a different resolution — that is the whole of what it is — so a mode of
+    /// its own would be a second camera nothing drives.
+    ///
+    /// # Errors
+    ///
+    /// [`ViewError::NotDeclared`] when `parent` has not been declared, [`ViewError::Reserved`]
+    /// when the layer index will not encode, [`ViewError::NestedTarget`] when `parent` is
+    /// itself offscreen, and [`ViewError::Full`] when the ring cannot take the records.
+    pub fn declare_target(
+        &mut self,
+        producer: &mut Producer,
+        parent: ViewId,
+        mode: CameraMode,
+        spec: TargetSpec,
+    ) -> Result<ViewId, ViewError> {
+        if is_offscreen(parent) {
+            return Err(ViewError::NestedTarget(parent.0));
+        }
+        if !self.declared.contains(&parent.0) {
+            return Err(ViewError::NotDeclared(parent.0));
+        }
+        let view = offscreen_view(parent, spec.layer_index).ok_or(ViewError::Reserved(parent.0))?;
+
+        self.declare_any(producer, view, mode)?;
+        let record = ViewTarget {
+            view,
+            parent,
+            texture: spec.texture,
+            scale_num: spec.scale.0,
+            scale_den: spec.scale.1,
+            format: spec.format as u8,
+            channel_type: spec.channel_type as u8,
+            _pad: [0; 2],
+        };
+        producer.write(EnvelopeKind::ViewTarget, record.as_bytes(), &[])?;
+        Ok(view)
     }
 
     /// Drops a view and everything scoped to it.
@@ -394,6 +517,180 @@ mod tests {
             .declare(producer, VIEW, CameraMode::Consumer)
             .expect("declares");
         assert!(session.use_geometry(producer, binding()).is_ok());
+    }
+
+    /// An offscreen view's id is derived, so the same layer of the same view is the same view
+    /// every frame and no two layers can collide.
+    #[test]
+    fn an_offscreen_view_id_is_derived_and_distinct() {
+        let first = offscreen_view(ViewId(0), 3).expect("encodes");
+        assert_eq!(first, offscreen_view(ViewId(0), 3).expect("encodes"));
+        assert_ne!(first, offscreen_view(ViewId(0), 4).expect("encodes"));
+        assert_ne!(first, offscreen_view(ViewId(1), 3).expect("encodes"));
+        assert!(is_offscreen(first));
+        assert!(!is_offscreen(ViewId(0)));
+        assert!(
+            !is_offscreen(ViewId(u32::MAX >> 1)),
+            "the top bit and only it"
+        );
+    }
+
+    /// Too large to encode is a refusal, not a truncation: a truncated id is a valid id naming
+    /// the wrong pass.
+    #[test]
+    fn an_unencodable_offscreen_view_is_refused() {
+        assert_eq!(offscreen_view(ViewId(1 << 15), 0), None);
+        assert_eq!(offscreen_view(ViewId(0), 1 << 16), None);
+        assert!(offscreen_view(ViewId((1 << 15) - 1), (1 << 16) - 1).is_some());
+    }
+
+    /// A caller cannot declare into the offscreen half. The collision it would cause reads as a
+    /// heatmap drawing into a pane, which is not a diagnosis anyone reaches from the symptom.
+    #[test]
+    fn a_caller_cannot_declare_an_offscreen_view() {
+        let mut ring = Ring::new(4096);
+        let (producer, consumer) = ring.split();
+        let mut session = ViewSession::new();
+
+        let reserved = offscreen_view(ViewId(0), 1).expect("encodes");
+        assert_eq!(
+            session.declare(producer, reserved, CameraMode::Consumer),
+            Err(ViewError::Reserved(reserved.0))
+        );
+        assert!(consumer.peek().is_none(), "and nothing was written");
+    }
+
+    /// A target writes its declaration first, then the target itself — the order a consumer
+    /// needs, since a target naming an undeclared view is the fault a use would be.
+    #[test]
+    fn a_target_declares_its_view_before_binding_it() {
+        let mut ring = Ring::new(4096);
+        let (producer, consumer) = ring.split();
+        let mut session = ViewSession::new();
+
+        session
+            .declare(producer, VIEW, CameraMode::Consumer)
+            .expect("declares the parent");
+        let offscreen = session
+            .declare_target(
+                producer,
+                VIEW,
+                CameraMode::Consumer,
+                TargetSpec {
+                    layer_index: 2,
+                    texture: tessella_capture_abi::envelope::TextureId(9),
+                    scale: (1, 2),
+                    format: TexturePixelType::RGBA,
+                    channel_type: TextureChannelDataType::HalfFloat,
+                },
+            )
+            .expect("declares the target");
+        assert_eq!(offscreen, offscreen_view(VIEW, 2).expect("encodes"));
+
+        let mut kinds = alloc::vec::Vec::new();
+        while let Some(record) = consumer.peek() {
+            let (kind, consumed) = (record.kind, record.consumed());
+            consumer.advance(consumed);
+            kinds.push(kind);
+        }
+        assert_eq!(
+            kinds,
+            [
+                EnvelopeKind::ViewDeclare,
+                EnvelopeKind::ViewDeclare,
+                EnvelopeKind::ViewTarget
+            ]
+        );
+    }
+
+    /// The target's own fields, which are the renderer's choices rather than the style's.
+    #[test]
+    fn a_target_carries_its_scale_and_both_type_fields() {
+        let mut ring = Ring::new(4096);
+        let (producer, consumer) = ring.split();
+        let mut session = ViewSession::new();
+
+        session
+            .declare(producer, VIEW, CameraMode::Consumer)
+            .expect("declares the parent");
+        session
+            .declare_target(
+                producer,
+                VIEW,
+                CameraMode::Consumer,
+                TargetSpec {
+                    layer_index: 2,
+                    texture: tessella_capture_abi::envelope::TextureId(9),
+                    scale: (1, 2),
+                    format: TexturePixelType::RGBA,
+                    channel_type: TextureChannelDataType::HalfFloat,
+                },
+            )
+            .expect("declares the target");
+
+        let mut target = None;
+        while let Some(record) = consumer.peek() {
+            let consumed = record.consumed();
+            if record.kind == EnvelopeKind::ViewTarget {
+                target = ViewTarget::from_bytes(record.record);
+            }
+            consumer.advance(consumed);
+        }
+        let target = target.expect("a target reached the ring");
+        assert_eq!(target.parent, VIEW);
+        assert_eq!(target.texture.0, 9);
+        assert_eq!((target.scale_num, target.scale_den), (1, 2));
+        assert_eq!(target.format(), Some(TexturePixelType::RGBA));
+        assert_eq!(
+            target.channel_type(),
+            Some(TextureChannelDataType::HalfFloat)
+        );
+        // mbgl's own numbers, from the heatmap golden.
+        assert_eq!(
+            target.size(1024, 768),
+            Some(tessella_capture_abi::envelope::Extent {
+                width: 512,
+                height: 384
+            })
+        );
+    }
+
+    /// A target needs its parent declared, and a parent may not itself be offscreen.
+    #[test]
+    fn a_target_refuses_an_undeclared_or_offscreen_parent() {
+        let mut ring = Ring::new(4096);
+        let producer = ring.producer();
+        let mut session = ViewSession::new();
+
+        let args = |session: &mut ViewSession, producer: &mut Producer, parent: ViewId| {
+            session.declare_target(
+                producer,
+                parent,
+                CameraMode::Consumer,
+                TargetSpec {
+                    layer_index: 0,
+                    texture: tessella_capture_abi::envelope::TextureId(1),
+                    scale: (1, 2),
+                    format: TexturePixelType::RGBA,
+                    channel_type: TextureChannelDataType::HalfFloat,
+                },
+            )
+        };
+
+        assert_eq!(
+            args(&mut session, producer, VIEW),
+            Err(ViewError::NotDeclared(0))
+        );
+
+        session
+            .declare(producer, VIEW, CameraMode::Consumer)
+            .expect("declares");
+        let offscreen = args(&mut session, producer, VIEW).expect("declares the target");
+        assert_eq!(
+            args(&mut session, producer, offscreen),
+            Err(ViewError::NestedTarget(offscreen.0)),
+            "a target cannot parent a target"
+        );
     }
 
     /// An undeclared view stops accepting uses, because the consumer has dropped everything
