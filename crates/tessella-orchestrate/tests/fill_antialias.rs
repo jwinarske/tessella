@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 //! Whether a fill draws an outline at all -- mbgl's `doOutline`.
 //!
 //! ```text
@@ -56,16 +57,26 @@ fn drawables(paint: &str) -> Vec<i32> {
     .expect("tile builds");
 
     let mut next_id = 0;
-    order::bindings_for(
+    let bindings = order::bindings_for(
         tessella_capture_abi::envelope::ViewId(0),
         order::tile_of(0, 0, 0),
         &buckets,
         &mut next_id,
         true,
-    )
-    .iter()
-    .map(|binding| binding.sub_layer_index)
-    .collect()
+    );
+    // Every case, not only the ones without an outline: the frame pairs a tile's bindings with its
+    // buckets by counting `drawable_count` off each, so the two disagreeing by one hands every
+    // later bucket in the tile its neighbor's ids. This asked only which sub-layers were bound,
+    // and the count said two throughout.
+    assert_eq!(
+        tessella_orchestrate::tile::drawable_count(&buckets),
+        bindings.len(),
+        "drawable_count is the number of bindings the frame pairs a bucket with"
+    );
+    bindings
+        .iter()
+        .map(|binding| binding.sub_layer_index)
+        .collect()
 }
 
 /// The default: triangles at sub-layer 1, outline at 2.
