@@ -373,12 +373,12 @@ fn heatmap_ramp_id(offscreen: ViewId) -> tessella_capture_abi::envelope::Texture
 
 /// The first texture id a dash atlas takes.
 ///
-/// Above the raster tiles' packed space rather than below it. A raster id is the tile packed into
-/// the low sixty bits of the word, so the range above [`RASTER_TEXTURE_BASE`] is claimed as far
-/// as `MAX_ZOOM` reaches; putting the dashes at the top of the word leaves both injective with
-/// nothing to check at run time. One per style layer, so a style would need 2^62 of them to
-/// collide.
-const DASH_TEXTURE_BASE: u64 = 1 << 62;
+/// A range of its own in the top four bits of the word, as every per-layer and per-tile family
+/// has. It was `1 << 62`, which is `4 << 60` -- the location indicator's base, when that arrived --
+/// so a dashed line at layer `n` and a puck at layer `n / 3` were handed one id, and whichever the
+/// consumer was sent last was drawn by both. `texture_id_ranges_are_disjoint` holds every base to
+/// its own range now.
+const DASH_TEXTURE_BASE: u64 = 8 << 60;
 
 /// The first texture id a gradient line's color ramp takes.
 ///
@@ -4893,4 +4893,89 @@ fn symbol_atlas_size(
     let (width, height) = atlas.size();
     #[allow(clippy::cast_precision_loss)]
     Some([width as f32, height as f32])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tessella_layout::location_indicator::PuckImage;
+    use tessella_tile::cover::MAX_ZOOM;
+
+    /// Every texture family keeps to its own ids, from its smallest input to its largest.
+    ///
+    /// A texture id is the only thing a drawable has to say which picture it samples, and the
+    /// consumer keeps one picture per id, so two families sharing an id draw one another's pixels
+    /// with nothing on the stream to say so. The dash atlases' base was `1 << 62` and the location
+    /// indicator's arrived at `4 << 60`, the same number: a dashed line at layer 3 and a puck's
+    /// shadow at layer 1 were one texture.
+    ///
+    /// The extremes are the inputs each family can be handed: any layer index, any view, and any
+    /// tile a cover can reach -- `MAX_ZOOM`, the last column and row, the furthest world copy.
+    #[test]
+    fn texture_id_ranges_are_disjoint() {
+        let last = (1u32 << MAX_ZOOM) - 1;
+        let tile_range =
+            |id: fn(u8, u32, u32, i32) -> tessella_capture_abi::envelope::TextureId| {
+                (id(0, 0, 0, -7).0, id(MAX_ZOOM, last, last, 7).0)
+            };
+        let layers = u64::from(u32::MAX);
+        let ranges = [
+            (
+                "glyph atlas",
+                (glyph_atlas_id(0).0, glyph_atlas_id(GLYPH_ATLAS_CAP - 1).0),
+            ),
+            ("raster tile", tile_range(raster_texture_id)),
+            ("hillshade tile", tile_range(hillshade_texture_id)),
+            ("relief tile", tile_range(relief_texture_id)),
+            (
+                "relief stops",
+                (
+                    relief_elevation_stops_id(0).0,
+                    relief_color_stops_id(i32::MAX).0,
+                ),
+            ),
+            (
+                "location indicator",
+                (
+                    puck_texture_id(0, PuckImage::Shadow).0,
+                    puck_texture_id(i32::MAX, PuckImage::Top).0,
+                ),
+            ),
+            (
+                "heatmap target",
+                (
+                    heatmap_target_id(ViewId(0)).0,
+                    heatmap_target_id(ViewId(u32::MAX)).0,
+                ),
+            ),
+            (
+                "heatmap ramp",
+                (
+                    heatmap_ramp_id(ViewId(0)).0,
+                    heatmap_ramp_id(ViewId(u32::MAX)).0,
+                ),
+            ),
+            (
+                "line gradient",
+                (
+                    LINE_GRADIENT_TEXTURE_BASE,
+                    LINE_GRADIENT_TEXTURE_BASE | layers,
+                ),
+            ),
+            (
+                "dash atlas",
+                (DASH_TEXTURE_BASE, DASH_TEXTURE_BASE + layers),
+            ),
+        ];
+
+        for (index, (name, (low, high))) in ranges.iter().enumerate() {
+            assert!(low <= high, "{name} runs backwards: {low:#x}..={high:#x}");
+            for (other, (other_low, other_high)) in &ranges[index + 1..] {
+                assert!(
+                    high < other_low || other_high < low,
+                    "{name} {low:#x}..={high:#x} overlaps {other} {other_low:#x}..={other_high:#x}"
+                );
+            }
+        }
+    }
 }
