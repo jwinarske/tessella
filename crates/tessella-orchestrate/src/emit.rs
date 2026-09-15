@@ -1876,6 +1876,101 @@ fn location_indicator_part(
     Encoded { record, payload }
 }
 
+/// Bytes per textured puck vertex: a position and a texture coordinate, two floats each.
+const PUCK_QUAD_STRIDE: u32 = 16;
+
+/// Puts one of a puck's textured quads into a slab and announces it.
+///
+/// The family's other shader. Where the circle reads a position and a color uniform, this reads a
+/// position, a texture coordinate and a picture -- and the color in its drawable block is written
+/// and never sampled, which is mbgl's arrangement and not this one's.
+///
+/// Four vertices and six indices, every time. The quad is square whatever the picture's aspect
+/// ratio, the corners are `puck_quad`'s, and the texture coordinates are the family's own
+/// literal: `v` runs down the image and up the quad, so the bottom left corner takes the top left
+/// of the picture.
+pub fn encode_location_indicator_quad(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    quad: &tessella_layout::location_indicator::PuckQuad,
+    image: TextureId,
+) -> Encoded {
+    use tessella_layout::location_indicator::{QUAD_INDICES, QUAD_TEXTURE_COORDS};
+
+    let mut interleaved = Vec::with_capacity(4 * PUCK_QUAD_STRIDE as usize);
+    for (corner, texture) in quad.corners.iter().zip(QUAD_TEXTURE_COORDS) {
+        for value in corner.iter().chain(texture.iter()) {
+            interleaved.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    let vertices = arena.alloc(&interleaved);
+    let indexes = alloc_u16(arena, &QUAD_INDICES);
+
+    let descriptors = [
+        AttributeDesc {
+            attr_id: ubo_slots::ID_LOCATION_INDICATOR_POS_VERTEX_ATTRIBUTE,
+            binding: 0,
+            source: vertices,
+            offset: 0,
+            vertex_offset: 0,
+            stride: PUCK_QUAD_STRIDE,
+            data_type: AttributeDataType::Float2 as u8,
+            declared_data_type: AttributeDataType::Float2 as u8,
+            _pad: [0; 2],
+        },
+        AttributeDesc {
+            attr_id: ubo_slots::ID_LOCATION_INDICATOR_TEX_VERTEX_ATTRIBUTE,
+            binding: 1,
+            source: vertices,
+            offset: 8,
+            vertex_offset: 0,
+            stride: PUCK_QUAD_STRIDE,
+            data_type: AttributeDataType::Float2 as u8,
+            declared_data_type: AttributeDataType::Float2 as u8,
+            _pad: [0; 2],
+        },
+    ];
+
+    let mut payload = Vec::new();
+    let attrs = push_span(&mut payload, &descriptors);
+    let segments = push_span(
+        &mut payload,
+        &[AbiSegment {
+            vertex_offset: 0,
+            index_offset: 0,
+            vertex_length: 4,
+            index_length: QUAD_INDICES.len() as u32,
+        }],
+    );
+    let textures = push_span(
+        &mut payload,
+        &texture_refs(
+            BuiltIn::LocationIndicatorTexturedShader,
+            &[image],
+            TextureFilter::Linear,
+        ),
+    );
+
+    let record = GeometryAdd {
+        geometry,
+        // Nothing data-driven: there is one puck and no feature for a property to vary over.
+        permutation_key: 0,
+        indexes,
+        vertex_count: 4,
+        attrs,
+        instance_attrs: Span::default(),
+        segments,
+        texture_refs: textures,
+        builtin_shader: BuiltIn::LocationIndicatorTexturedShader as i32,
+        vertex_type: AttributeDataType::Float2 as u8,
+        reason: AddReason::Created as u8,
+        topology: Topology::of(BuiltIn::LocationIndicatorTexturedShader) as u8,
+        _pad: [0; 1],
+    };
+
+    Encoded { record, payload }
+}
+
 /// Encodes a background's quad.
 ///
 /// # Why the producer sends this rather than the consumer inventing it
