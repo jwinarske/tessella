@@ -592,6 +592,10 @@ fn decode_and_build(
             let cells = match job.key.surface {
                 Surface::Plane => 1,
                 Surface::Sphere => tessella_layout::subdivide::edge_cells(job.tile.bucket_zoom()),
+                // A raster tile's quad follows the ground as a fill does, on the same grid the
+                // tile's own relief chose -- so imagery over a ridge bends with it instead of
+                // spanning it flat.
+                Surface::Terrain { cells } => cells.max(1),
             };
             build_raster_tile_on(
                 style,
@@ -637,6 +641,10 @@ fn decode_and_build(
             let cells = match job.key.surface {
                 Surface::Plane => 1,
                 Surface::Sphere => tessella_layout::subdivide::edge_cells(job.tile.bucket_zoom()),
+                // A raster tile's quad follows the ground as a fill does, on the same grid the
+                // tile's own relief chose -- so imagery over a ridge bends with it instead of
+                // spanning it flat.
+                Surface::Terrain { cells } => cells.max(1),
             };
             // Two layers can read one DEM tile and want different pictures of it: a hillshade
             // reads how the height is changing and a color relief reads the height. So both
