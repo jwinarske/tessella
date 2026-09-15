@@ -60,6 +60,8 @@ pub const DEFAULT_HEATMAP_COLOR: &str = r#"["interpolate",["linear"],["heatmap-d
 pub enum RampParameter {
     /// `["heatmap-density"]`, for `heatmap-color`.
     HeatmapDensity,
+    /// `["line-progress"]`, for `line-gradient`.
+    LineProgress,
 }
 
 /// The `heatmap-color` expression a layer's resolved paint means, default included.
@@ -109,8 +111,9 @@ pub fn bake(expression: &Expression, parameter: RampParameter) -> Result<Vec<u8>
         // `4 * texel / 1024`, as the module note explains, not `texel / 255`.
         #[allow(clippy::cast_precision_loss)]
         let parameter_value = (4 * texel) as f64 / RAMP_BYTES as f64;
+        // One slot for both, as mbgl's `colorRampParameter` is one.
         let value = match parameter {
-            RampParameter::HeatmapDensity => {
+            RampParameter::HeatmapDensity | RampParameter::LineProgress => {
                 expression.evaluate_at(None, None, None, None, None, Some(parameter_value))?
             }
         };
@@ -213,6 +216,28 @@ mod tests {
         )
         .expect("bakes");
         assert!(baked.chunks(4).all(|texel| texel == [10, 20, 30, 255]));
+    }
+
+    /// A `line-gradient` parses and bakes over `["line-progress"]`.
+    ///
+    /// The whole feature was missing at the first step: `line-progress` did not parse, so a
+    /// layer with a gradient failed to resolve its paint and its tile's build failed with it.
+    /// create-a-gradient-line-using-an-expression drew no line at all.
+    #[test]
+    fn a_line_gradient_bakes_over_the_progress() {
+        let gradient = ramp(
+            r#"["interpolate",["linear"],["line-progress"],
+                0,"rgb(0, 0, 255)",1,"rgb(255, 0, 0)"]"#,
+        );
+        let baked = bake(&gradient, RampParameter::LineProgress).expect("bakes");
+        assert_eq!(baked.len(), RAMP_BYTES);
+        assert_eq!(
+            &baked[..4],
+            &[0, 0, 255, 255],
+            "blue at the start of the line"
+        );
+        // The last texel is at 255/256 of the way along, as a heatmap's is.
+        assert_eq!(&baked[RAMP_BYTES - 4..], &[254, 0, 0, 255]);
     }
 
     /// An expression that is not a color is refused rather than narrowed to one.

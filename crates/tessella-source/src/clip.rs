@@ -281,6 +281,156 @@ pub fn clip_line_to_box(line: &[Position], lo: f64, hi: f64) -> Vec<Ring> {
     out
 }
 
+/// A piece of a clipped line, and where along the whole line it runs.
+///
+/// geojson-vt's `vt_line_string` with `lineMetrics` on: `seg_start` and `seg_end` are distances
+/// from the start of the *unclipped* line, in the units its points are in. Divided by that line's
+/// whole length they are the `mapbox_clip_start` and `mapbox_clip_end` a line bucket reads, which
+/// is how a gradient runs on across a tile boundary rather than starting over.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MeteredPiece {
+    /// The piece's points.
+    pub points: Ring,
+    /// Distance along the whole line at which the piece starts.
+    pub seg_start: f64,
+    /// Distance along the whole line at which the piece ends.
+    pub seg_end: f64,
+}
+
+/// A line's length, in the units its points are in.
+///
+/// geojson-vt's `dist`, summed over the points before anything is clipped.
+#[must_use]
+pub fn line_length(line: &[Position]) -> f64 {
+    line.windows(2)
+        .map(|pair| (pair[1][0] - pair[0][0]).hypot(pair[1][1] - pair[0][1]))
+        .sum()
+}
+
+/// [`clip_line`], carrying geojson-vt's `lineMetrics` bookkeeping.
+///
+/// The points are [`clip_line`]'s exactly. What this adds is `clipLine`'s running length: it starts
+/// at `seg_start`, grows by each segment's length, and marks where a piece enters and leaves the
+/// range at the intersection's fraction of the segment it falls on. A piece that runs to the end
+/// of the line ends where the running length stopped.
+#[must_use]
+pub fn clip_line_metered(
+    line: &[Position],
+    seg_start: f64,
+    seg_end: f64,
+    lo: f64,
+    hi: f64,
+    axis: Axis,
+) -> Vec<MeteredPiece> {
+    let mut slices: Vec<MeteredPiece> = Vec::new();
+    if line.len() < 2 {
+        return slices;
+    }
+
+    let new_slice = || MeteredPiece {
+        points: Vec::new(),
+        seg_start,
+        seg_end,
+    };
+    let mut slice = new_slice();
+    let mut line_len = seg_start;
+    let last_seg = line.len() - 2;
+    for (i, pair) in line.windows(2).enumerate() {
+        let (a, b) = (pair[0], pair[1]);
+        let (ak, bk) = (axis.of(a), axis.of(b));
+        let is_last_seg = i == last_seg;
+        let seg_len = (b[0] - a[0]).hypot(b[1] - a[1]);
+        let progress = |k: f64| (k - ak) / (bk - ak);
+        let at = |t: f64| [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+
+        if ak < lo {
+            if bk > hi {
+                let t = progress(lo);
+                slice.points.push(at(t));
+                slice.seg_start = line_len + seg_len * t;
+                let t = progress(hi);
+                slice.points.push(at(t));
+                slice.seg_end = line_len + seg_len * t;
+                slices.push(core::mem::replace(&mut slice, new_slice()));
+            } else if bk > lo {
+                let t = progress(lo);
+                slice.points.push(at(t));
+                slice.seg_start = line_len + seg_len * t;
+                if is_last_seg {
+                    slice.points.push(b);
+                }
+            } else if bk == lo && !is_last_seg {
+                slice.seg_start = line_len + seg_len;
+                slice.points.push(b);
+            }
+        } else if ak > hi {
+            if bk < lo {
+                let t = progress(hi);
+                slice.points.push(at(t));
+                slice.seg_start = line_len + seg_len * t;
+                let t = progress(lo);
+                slice.points.push(at(t));
+                slice.seg_end = line_len + seg_len * t;
+                slices.push(core::mem::replace(&mut slice, new_slice()));
+            } else if bk < hi {
+                let t = progress(hi);
+                slice.points.push(at(t));
+                slice.seg_start = line_len + seg_len * t;
+                if is_last_seg {
+                    slice.points.push(b);
+                }
+            } else if bk == hi && !is_last_seg {
+                slice.seg_start = line_len + seg_len;
+                slice.points.push(b);
+            }
+        } else {
+            slice.points.push(a);
+            if bk < lo {
+                let t = progress(lo);
+                slice.points.push(at(t));
+                slice.seg_end = line_len + seg_len * t;
+                slices.push(core::mem::replace(&mut slice, new_slice()));
+            } else if bk > hi {
+                let t = progress(hi);
+                slice.points.push(at(t));
+                slice.seg_end = line_len + seg_len * t;
+                slices.push(core::mem::replace(&mut slice, new_slice()));
+            } else if is_last_seg {
+                slice.points.push(b);
+            }
+        }
+
+        line_len += seg_len;
+    }
+
+    if !slice.points.is_empty() {
+        slice.seg_end = line_len;
+        slices.push(slice);
+    }
+    slices
+}
+
+/// [`clip_line_to_box`], carrying each piece's place along the whole line.
+///
+/// The y pass starts each x piece's running length where that piece starts, which is what
+/// geojson-vt's second `clip` does when it hands the first pass's slices back in.
+#[must_use]
+pub fn clip_line_to_box_metered(line: &[Position], lo: f64, hi: f64) -> Vec<MeteredPiece> {
+    let mut out = Vec::new();
+    let length = line_length(line);
+    for piece in clip_line_metered(line, 0.0, length, lo, hi, Axis::X) {
+        out.extend(clip_line_metered(
+            &piece.points,
+            piece.seg_start,
+            piece.seg_end,
+            lo,
+            hi,
+            Axis::Y,
+        ));
+    }
+    out
+}
+
 /// Clips a ring to a box on both axes.
 #[must_use]
 pub fn clip_ring_to_box(ring: &[Position], lo: f64, hi: f64) -> Ring {
@@ -312,6 +462,67 @@ mod tests {
     fn box_bounds() -> (f64, f64) {
         let (lo, hi) = TilingOptions::default().clip_range();
         (f64::from(lo), f64::from(hi))
+    }
+
+    /// The metered clip cuts exactly where the plain one does.
+    ///
+    /// It is a second transcription of the same `clipLine`, and the pieces a line is drawn as must
+    /// not depend on whether its source asked for metrics.
+    #[test]
+    fn metered_pieces_are_the_plain_clip_pieces() {
+        let (lo, hi) = box_bounds();
+        // In and out of the box across both axes, ending inside it.
+        let line: Ring = alloc::vec![
+            [lo - 300.0, 500.0],
+            [hi + 200.0, 700.0],
+            [4000.0, hi + 400.0],
+            [4100.0, 3000.0],
+            [lo - 50.0, lo - 50.0],
+            [2000.0, 2500.0],
+        ];
+        let plain = clip_line_to_box(&line, lo, hi);
+        let metered: Vec<Ring> = clip_line_to_box_metered(&line, lo, hi)
+            .into_iter()
+            .map(|piece| piece.points)
+            .collect();
+        assert_eq!(metered, plain);
+    }
+
+    /// A straight line through the box: its piece starts and ends where the box cuts it, measured
+    /// from the start of the whole line.
+    #[test]
+    fn a_piece_knows_where_it_runs_along_the_line() {
+        let (lo, hi) = box_bounds();
+        let line: Ring = alloc::vec![[lo - 100.0, 1000.0], [hi + 300.0, 1000.0]];
+        let pieces = clip_line_to_box_metered(&line, lo, hi);
+        assert_eq!(pieces.len(), 1);
+        let piece = &pieces[0];
+        assert!(
+            (piece.seg_start - 100.0).abs() < 1e-9,
+            "{}",
+            piece.seg_start
+        );
+        assert!(
+            (piece.seg_end - (100.0 + hi - lo)).abs() < 1e-9,
+            "{}",
+            piece.seg_end
+        );
+        assert!((line_length(&line) - (hi - lo + 400.0)).abs() < 1e-9);
+    }
+
+    /// A line wholly inside the box is one piece covering all of it.
+    #[test]
+    fn an_unclipped_line_runs_its_whole_length() {
+        let line: Ring = alloc::vec![[100.0, 100.0], [400.0, 500.0], [400.0, 900.0]];
+        let (lo, hi) = box_bounds();
+        let pieces = clip_line_to_box_metered(&line, lo, hi);
+        assert_eq!(pieces.len(), 1);
+        assert_eq!(pieces[0].seg_start, 0.0);
+        assert!(
+            (pieces[0].seg_end - 900.0).abs() < 1e-9,
+            "{}",
+            pieces[0].seg_end
+        );
     }
 
     /// The hermetic style's second polygon, projected into tile 13/4092/2723 — the numbers the

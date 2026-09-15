@@ -243,6 +243,15 @@ pub struct GeojsonSource {
     /// Douglas-Peucker simplification tolerance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tolerance: Option<f64>,
+    /// Whether each line records how far along the whole of itself a tile's piece of it runs.
+    /// Spelled `lineMetrics` in the document, and what `line-gradient` needs: without it every
+    /// piece of a line cut by a tile boundary would start its gradient over.
+    #[serde(
+        default,
+        rename = "lineMetrics",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub line_metrics: Option<bool>,
     /// Unrecognized keys, kept for a lossless round trip.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
