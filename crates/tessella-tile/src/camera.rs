@@ -501,6 +501,45 @@ pub fn proj_matrix(view: &ViewTransform) -> Result<Mat4, CameraError> {
     Ok(multiply(&camera_to_clip, &world_to_camera(view)))
 }
 
+/// [`proj_matrix`], shifted by under a pixel so a raster's texels land on the pixel grid.
+///
+/// mbgl's `getProjMatrix(..., aligned = true)`, which `PaintParameters` keeps beside the plain one
+/// as `alignedProjMatrix` and which the raster and hillshade tweakers alone ask for. The center
+/// is a fraction of a pixel off the grid at almost every camera, and a tile drawn through the
+/// plain matrix samples its texels a fraction of a pixel off with it: every thin line and every
+/// letter in a raster basemap comes out blended into its neighbors. The OSM base under
+/// draw-a-circle differed by 13,689 pixels at its example's camera and by none at a camera moved
+/// a fraction of a pixel onto the grid.
+///
+/// The shift is the fractional part of the center's offset, plus half a pixel along an odd
+/// viewport dimension, turned by the bearing so rasters at right angles stay crisp, and folded so
+/// it never exceeds half a pixel.
+///
+/// # Errors
+///
+/// [`CameraError::EmptyViewport`] when the view has no area.
+pub fn aligned_proj_matrix(view: &ViewTransform) -> Result<Mat4, CameraError> {
+    let mut matrix = proj_matrix(view)?;
+
+    let world = world_size(view.zoom);
+    let [x, y] = center_offset(view.longitude, view.latitude, view.zoom);
+    let dx = x - 0.5 * world;
+    let dy = y - 0.5 * world;
+
+    // `size.width % 2`: the viewport is whole pixels, so the dimensions are read as integers.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let odd = |dimension: f64| f64::from((dimension.round() as u32) % 2) / 2.0;
+    let (x_shift, y_shift) = (odd(view.width), odd(view.height));
+    let (cos, sin) = (bearing_radians(view).cos(), bearing_radians(view).sin());
+
+    // `-modf(dx)`: the fractional part, keeping the sign of `dx`.
+    let dxa = -(dx - dx.trunc()) + cos * x_shift + sin * y_shift;
+    let dya = -(dy - dy.trunc()) + cos * y_shift + sin * x_shift;
+    let fold = |shift: f64| if shift > 0.5 { shift - 1.0 } else { shift };
+    translate_in_place(&mut matrix, fold(dxa), fold(dya), 0.0);
+    Ok(matrix)
+}
+
 /// The inverse of a 4x4, or `None` when it is singular.
 ///
 /// mbgl's `matrix::invert`, which is the cofactor expansion gl-matrix uses. Transcribed rather
