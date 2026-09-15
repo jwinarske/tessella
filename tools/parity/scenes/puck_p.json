@@ -1,0 +1,22 @@
+{
+ "version": 8,
+ "name": "location-indicator-parity",
+ "sources": {
+  "berlin": { "type": "vector", "url": "http://127.0.0.1:8080/berlin_z15.json" }
+ },
+ "layers": [
+  { "id": "bg", "type": "background", "paint": { "background-color": "#101014" } },
+  { "id": "water", "type": "fill", "source": "berlin", "source-layer": "water",
+    "paint": { "fill-color": "#12243a" } },
+  { "id": "puck", "type": "location-indicator",
+    "paint": {
+      "location": [ 52.52, 13.405, 0 ],
+      "accuracy-radius": 240,
+      "accuracy-radius-color": "rgba(63,111,255,0.28)",
+      "accuracy-radius-border-color": "rgba(200,220,255,0.85)",
+      "bearing": 38,
+      "perspective-compensation": 0.9,
+      "image-tilt-displacement": 0
+    }}
+ ]
+}
