@@ -110,6 +110,11 @@ pub enum Surface {
     /// immediately and rises when the ground arrives.
     Terrain {
         /// Cells across the tile's edge. One is no subdivision, which is the flat build.
+        ///
+        /// Comes from `Relief::cells_within`, so it is a power of two no larger than the relief
+        /// pyramid's base. Nothing here enforces that -- the subdivision clamps to its own
+        /// `MAX_CELLS` and a larger value draws the same tile -- but two counts that draw
+        /// identically are still two cache entries, so a caller inventing one pays for it twice.
         cells: u32,
     },
 }

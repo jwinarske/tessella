@@ -428,15 +428,7 @@ pub fn build_tile_on_with_patterns(
     // The grid this tile's fills are split against, derived once. Zero on a plane -- which is the
     // flat path byte for byte, and what the oracle diff compares -- and zero on a sphere above
     // z10, where `edge_segments` asks for a single segment an edge.
-    let fill_step = match surface {
-        Surface::Plane => 0,
-        Surface::Sphere => subdivide::step_for_level(tile.bucket_zoom(), EXTENT),
-        // The grid the tile's own relief asked for, from `Relief::cells_within`. One cell is no
-        // subdivision at all -- flat ground, or a tile whose DEM has not arrived yet -- and is
-        // the flat path byte for byte, which is what lets a terrain map draw before its elevation
-        // does.
-        Surface::Terrain { cells } => subdivide::grid_step_or_none(EXTENT, cells),
-    };
+    let fill_step = subdivide::step_for_surface(surface, tile.bucket_zoom(), EXTENT);
     let (lo, hi) = options.clip_range();
     let (lo, hi) = (f64::from(lo), f64::from(hi));
     let mut buckets = Vec::new();
@@ -1591,15 +1583,7 @@ pub fn build_mvt_tile_on_with_patterns(
     // The grid this tile's fills are split against, derived once. Zero on a plane -- which is
     // the flat path byte for byte, and what the oracle diff compares -- and zero on a sphere
     // above z10, where `edge_segments` asks for a single segment an edge.
-    let fill_step = match surface {
-        Surface::Plane => 0,
-        Surface::Sphere => subdivide::step_for_level(tile.bucket_zoom(), EXTENT),
-        // The grid the tile's own relief asked for, from `Relief::cells_within`. One cell is no
-        // subdivision at all -- flat ground, or a tile whose DEM has not arrived yet -- and is
-        // the flat path byte for byte, which is what lets a terrain map draw before its elevation
-        // does.
-        Surface::Terrain { cells } => subdivide::grid_step_or_none(EXTENT, cells),
-    };
+    let fill_step = subdivide::step_for_surface(surface, tile.bucket_zoom(), EXTENT);
     let mut buckets = Vec::new();
 
     // Filters are evaluated at the tile's own zoom, as mbgl's layouts do — `zoom` there is
