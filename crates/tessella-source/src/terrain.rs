@@ -172,6 +172,11 @@ pub fn elevation(
 pub struct Relief {
     /// `[min, max]` per cell, coarsest level last. Level 0 is `base` cells on a side.
     levels: alloc::vec::Vec<alloc::vec::Vec<[f32; 2]>>,
+    /// The largest relief any one cell of each level holds, parallel to [`Self::levels`].
+    ///
+    /// Computed while the pyramid is built, because [`Self::cells_within`] asks for it once per
+    /// tile per layer and recomputing it would walk every cell of every level each time.
+    worst: alloc::vec::Vec<f32>,
     /// Cells on a side at level 0.
     base: u32,
 }
@@ -214,6 +219,12 @@ impl Relief {
             }
         }
 
+        let mut worst = alloc::vec![
+            level
+                .iter()
+                .map(|cell| cell[1] - cell[0])
+                .fold(0.0_f32, f32::max)
+        ];
         let mut levels = alloc::vec![level];
         let mut side = base;
         while side > 1 {
@@ -232,11 +243,63 @@ impl Relief {
                     coarser.push(range);
                 }
             }
+            worst.push(
+                coarser
+                    .iter()
+                    .map(|cell| cell[1] - cell[0])
+                    .fold(0.0_f32, f32::max),
+            );
             levels.push(coarser);
             side = half;
         }
 
-        Self { levels, base }
+        Self {
+            levels,
+            worst,
+            base,
+        }
+    }
+
+    /// The coarsest grid whose every cell rises and falls by at most `relief` meters.
+    ///
+    /// The step subdivision should use, as a cell count across the tile. One when the tile is
+    /// flat enough at its own scale to need no splitting at all, which is most tiles of most
+    /// maps -- a city is not a mountain range.
+    ///
+    /// [`Self::base`] is the floor and the answer whenever the bound cannot be met, which on
+    /// genuinely steep ground is most of the time. That is not a failure to meet it: the base is
+    /// the terrain mesh's own cell, the drawn surface is linear inside one, and a layer split to
+    /// the same grid follows that surface exactly. See [`split_relief`] for what the bound is
+    /// measured against.
+    ///
+    /// # Why the worst cell and not the tile's total relief
+    ///
+    /// A tile that climbs three hundred meters smoothly across its width has very little relief
+    /// in any one cell, and a triangle inside a cell chords across only that. Choosing from the
+    /// tile's total would split such a tile as finely as one with a cliff in it, which is most of
+    /// the alpine world subdivided for nothing.
+    ///
+    /// # Why one step for the whole tile
+    ///
+    /// Splitting a tile's mountain finer than its plain would be fewer triangles and would put a
+    /// T-junction along every boundary between the two: one side's edge has a vertex the other
+    /// does not, the two displace to different heights, and the surface cracks. Crack-free
+    /// adaptive subdivision is a restricted quadtree and an edge-matching pass; a uniform grid
+    /// has no junctions by construction, which is the same reason the terrain mesh itself is
+    /// uniform. The adaptivity that matters is *between* tiles, and this is per tile.
+    #[must_use]
+    pub fn cells_within(&self, relief: f32) -> u32 {
+        if !relief.is_finite() || relief <= 0.0 {
+            return self.base;
+        }
+        // Coarsest first: the last level is the single cell covering the tile.
+        for (level, worst) in self.worst.iter().enumerate().rev() {
+            if *worst <= relief {
+                #[allow(clippy::cast_possible_truncation)]
+                return self.base >> (level as u32);
+            }
+        }
+        self.base
     }
 
     /// The elevation range over a box in tile coordinates, as `[min, max]` meters.
@@ -305,6 +368,20 @@ impl Relief {
 /// footprint. Turn that into screen pixels and it is an error bound with an answer, the way
 /// `globe::edge_segments` bounds a chord against a sphere -- rather than a subdivision table
 /// chosen and then re-tuned.
+///
+/// # Wrong by comparison to what
+///
+/// To the *drawn* surface, not to the ground. The surface is piecewise linear over the terrain
+/// mesh's grid, so within one mesh cell it chords across the ground exactly as a layer's triangle
+/// does -- and the two chord together, which is the only agreement that shows. Below a mesh cell
+/// there is nothing left to gain, which is why [`Relief`]'s base is that cell and why
+/// [`Relief::cells_within`] saturates there rather than asking for more.
+///
+/// So on steep ground this bound is not met and the answer is the mesh's own grid. Measured on
+/// the parity harness's height field, which is 15% gradient at every wavelength by construction:
+/// a z14 tile has 361 m of relief and 7.5 m still inside a mesh cell, against a bound of 0.73 m.
+/// The layer follows the surface there exactly; both of them miss the ground by the same 7.5 m,
+/// and drawing the surface finer is a mesh question rather than a subdivision one.
 ///
 /// # Why no camera
 ///
@@ -642,6 +719,113 @@ mod tests {
         }
         // The surface has relief at tile scale, or none of the above is testing anything.
         assert!(whole[1] - whole[0] > 50.0, "{whole:?}");
+    }
+
+    /// The chosen grid is the coarsest whose cells all stay inside the bound.
+    ///
+    /// Checked against the pyramid's own cells rather than against a number: at the answer every
+    /// cell is within the bound, and at the next step coarser some cell is not. That is what
+    /// "coarsest" means and it is checkable without knowing which level it lands on.
+    #[test]
+    fn the_grid_is_the_coarsest_that_holds() {
+        let dem = tile(Z, X, Y, DIM);
+        let relief = Relief::new(&dem, 128);
+
+        for bound in [0.5_f32, 2.0, 8.0, 40.0, 200.0] {
+            let cells = relief.cells_within(bound);
+            assert!(cells.is_power_of_two() && cells <= relief.base(), "{cells}");
+
+            #[allow(clippy::cast_precision_loss)]
+            let step = EXTENT as f32 / cells as f32;
+            let worst_cell = (0..cells)
+                .flat_map(|row| (0..cells).map(move |column| (row, column)))
+                .map(|(row, column)| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let (x, y) = (column as f32 * step, row as f32 * step);
+                    relief.relief(x, y, x + step - 1.0, y + step - 1.0)
+                })
+                .fold(0.0_f32, f32::max);
+            // Either the bound holds, or the grid is the mesh's own and there is nothing finer
+            // to ask for. This surface is 15% gradient by construction, so the tight bounds land
+            // on the floor -- see `split_relief` for why that is the right answer and not a miss.
+            assert!(
+                worst_cell <= bound + 1e-3 || cells == relief.base(),
+                "{bound}: {cells} cells still hold {worst_cell}"
+            );
+
+            // And one step coarser does not hold -- unless the whole tile already fits, which is
+            // the answer of one cell.
+            if cells > 1 && worst_cell <= bound {
+                let coarser = cells / 2;
+                #[allow(clippy::cast_precision_loss)]
+                let wide = EXTENT as f32 / coarser as f32;
+                let worst = (0..coarser)
+                    .flat_map(|row| (0..coarser).map(move |column| (row, column)))
+                    .map(|(row, column)| {
+                        #[allow(clippy::cast_precision_loss)]
+                        let (x, y) = (column as f32 * wide, row as f32 * wide);
+                        relief.relief(x, y, x + wide - 1.0, y + wide - 1.0)
+                    })
+                    .fold(0.0_f32, f32::max);
+                assert!(
+                    worst > bound,
+                    "{bound}: {coarser} cells would have held at {worst}"
+                );
+            }
+        }
+    }
+
+    /// A tighter bound never asks for a coarser grid.
+    #[test]
+    fn a_tighter_bound_is_never_coarser() {
+        let dem = tile(Z, X, Y, DIM);
+        let relief = Relief::new(&dem, 128);
+        let mut previous = 0;
+        for bound in [1000.0_f32, 200.0, 40.0, 8.0, 2.0, 0.5, 0.01] {
+            let cells = relief.cells_within(bound);
+            assert!(cells >= previous, "{bound}: {cells} after {previous}");
+            previous = cells;
+        }
+        // A bound past the tile's whole relief needs no subdivision at all.
+        let whole = relief.relief(0.0, 0.0, 8191.0, 8191.0);
+        assert_eq!(relief.cells_within(whole + 1.0), 1);
+        // And a bound of nothing, or of nonsense, asks for everything rather than dividing.
+        assert_eq!(relief.cells_within(0.0), relief.base());
+        assert_eq!(relief.cells_within(f32::NAN), relief.base());
+    }
+
+    /// Flat ground needs no splitting, however tight the bound.
+    ///
+    /// The case that decides whether this is worth having: most tiles of most maps are a city
+    /// rather than a mountain range, and a grid chosen from the tile's own relief gives them one
+    /// cell where a fixed grid would give them sixteen thousand.
+    #[test]
+    fn flat_ground_is_one_cell() {
+        let flat = crate::image::Image {
+            width: DIM,
+            height: DIM,
+            // 500 m everywhere, in Terrain-RGB.
+            pixels: core::iter::repeat_n(
+                {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let units = ((500.0_f64 + 10000.0) / 0.1).round() as u32;
+                    #[allow(clippy::cast_possible_truncation)]
+                    [
+                        (units >> 16) as u8,
+                        ((units >> 8) & 0xFF) as u8,
+                        (units & 0xFF) as u8,
+                        255,
+                    ]
+                },
+                (DIM * DIM) as usize,
+            )
+            .flatten()
+            .collect(),
+        };
+        let dem = Dem::new(&flat, Encoding::Mapbox).expect("the tile decodes");
+        let relief = Relief::new(&dem, 128);
+        assert_eq!(relief.relief(0.0, 0.0, 8191.0, 8191.0), 0.0);
+        assert_eq!(relief.cells_within(0.01), 1);
     }
 
     /// A box outside the tile answers with the edge's relief rather than with nothing.
