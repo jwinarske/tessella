@@ -29,12 +29,12 @@ hundred wrong pixels among a million right ones, and the question is how many pi
 would call different. Pass 12 as a third argument to `gross.py` for the second lens, which is
 what to use when a change is supposed to move nothing at all.
 
-The sweep's numbers as of 2026-09-13, which is the gate:
+The sweep's numbers as of 2026-09-15, which is the gate:
 
     families_p  z14 p0    24 of 786432
     families_p  z14 p60   45
     families_p  z16 p0     5
-    families_p  z16 p60   52
+    families_p  z16 p60   50
     families_p  z9  p0    30 of 2160000
 
 ## The scenes
@@ -51,19 +51,18 @@ The sweep's numbers as of 2026-09-13, which is the gate:
 
       annot_p  z14 p0     3 of 786432
       annot_p  z16 p0     2
-      annot_p  z14 p60  558
+      annot_p  z14 p60   98
 
-  z14 p60 is the one to look at, and it is not an annotation fault. It is the fill *outline*: on a
-  pitched edge our line covers about half of what the oracle's does, and the gap widens with
-  pitch -- 0.96 of the oracle's coverage at p0, 0.75 at p40, 0.58 at p60. The oracle draws the
-  outline as a two-pixel GL line, which is two pixels on screen whatever the camera does; this
-  draws mbgl's own triangulated fallback, whose quad is extruded in *tile* units and foreshortens.
-  Both shaders are the same arithmetic and neither is wrong -- `MLN_TRIANGULATE_FILL_OUTLINES` is
-  what mbgl compiles on Metal and WebGPU, and it has this defect there too.
+  z14 p60 stood at 576 and then 558, and both were the fill *outline* rather than anything to do
+  with annotations. The oracle draws it as a two-pixel GL line, two pixels on screen whatever the
+  camera does; this draws mbgl's own triangulated fallback, whose quad is extruded in tile units
+  and foreshortened until the fade had no fragments left to spread across -- 0.58 of the oracle's
+  coverage at p60. The quad is widened to screen space now, which is what the GL path always did,
+  and what is left at p60 is sub-pixel placement on the two horizontal edges.
 
   No other scene here sets `fill-outline-color`, so this scene is the first thing to gate that
-  path at all -- and the outline runs on *every* antialiased fill, so whatever is true here is
-  true of every filled polygon in every style. Not in the sweep until it is closed.
+  path at all -- and the outline runs on *every* antialiased fill, so what was true here was true
+  of every filled polygon in every style. `families_p z16 p60` came down from 52 to 50 with it.
 
   An annotation is not a style layer -- there is no `"type": "annotation"` and no stylesheet can
   produce one. They arrive through `Map::addAnnotation`, and the manager synthesizes the source
