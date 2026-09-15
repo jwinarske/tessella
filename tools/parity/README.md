@@ -96,9 +96,13 @@ The sweep's numbers as of 2026-09-15, which is the gate:
   overlapping polygon rather than a hole — 3,477 pixels of it in this scene, before the winding
   was corrected. See the note in `tessella-source`'s `annotation` module.
 
-- `hill_p` — a hillshade over generated terrain. **This one does not pass and is not meant to
-  yet**, the way `heat_p` and `annot_p` did not: nothing here draws a hillshade, so the run reports
-  the distance to go. `gross 174053 of 786432 (22.132%)` at z14 p0 and `379466 (48.252%)` at z11.
+- `hill_p` — a hillshade over generated terrain. It stood at `gross 174053 (22.132%)` at z14 and
+  `379466 (48.252%)` at z11 the day it was written, when nothing drew a hillshade, and now reads
+
+      hill_p  z14 p0     0 of 786432
+      hill_p  z11 p0   151
+
+  Not in the sweep, which needs a fourth server running; run it by hand beside `dem.py`.
 
   The terrain is generated rather than fetched, by `scenes/dem.py`, for three reasons in the order
   they decided it. No archive here carries a DEM and every public one carries a license, so a

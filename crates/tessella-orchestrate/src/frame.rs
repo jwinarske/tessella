@@ -4310,6 +4310,73 @@ fn write_layer_state(
                 )?;
             }
         }
+        LayerKind::Hillshade => {
+            // A matrix a drawable, as a raster layer's is, and for the same reason: a hillshade
+            // tile carries no per-feature anything.
+            let placements: Vec<[f32; 16]> = matrices(0)
+                .filter_map(|tile| {
+                    DrawableEntry::for_tile(
+                        view,
+                        projection,
+                        tile.z,
+                        tile.x,
+                        tile.y,
+                        i32::from(tile.wrap),
+                        layer_index,
+                        0,
+                    )
+                    .ok()
+                    .map(|entry| entry.matrix)
+                })
+                .collect();
+            ubo::write(
+                producer,
+                view_id,
+                layer_index,
+                ubo_slots::ID_HILLSHADE_DRAWABLE_UBO,
+                &ubo::pack_raster_drawable_buffer(
+                    &placements,
+                    ubo_layouts::HILLSHADE_DRAWABLE_UBO.stride,
+                ),
+            )?;
+
+            // And a second per-drawable block, because `latrange` is the *tile's* -- the shader
+            // interpolates across it to undo Mercator's stretch, and one range for the layer
+            // would make every tile read the slope of whichever tile wrote it.
+            let exaggeration = ubo::uniform_number(&paint, "hillshade-exaggeration", view.zoom);
+            let tile_props: Vec<Vec<u8>> = bindings
+                .iter()
+                .filter(|binding| binding.sub_layer_index == 0)
+                .filter_map(|binding| binding.tile)
+                .map(|tile| {
+                    let lat_range = crate::tile::lat_range_of(tile.z, tile.x, tile.y);
+                    // Method zero and one light: the standard algorithm is the spec's default
+                    // and the only one built. The other four are in mbgl's shader and the
+                    // fields travel for them, so adding one is a material and not a format.
+                    ubo::pack_hillshade_tile_props(lat_range, exaggeration, 0, 1)
+                })
+                .collect();
+            ubo::write(
+                producer,
+                view_id,
+                layer_index,
+                ubo_slots::ID_HILLSHADE_TILE_PROPS_UBO,
+                &ubo::pack_hillshade_tile_props_buffer(
+                    &tile_props,
+                    ubo_layouts::HILLSHADE_TILE_PROPS_UBO.stride,
+                ),
+            )?;
+
+            // The light, which is the layer's. Rewritten every frame rather than when the paint
+            // changes, because a viewport-anchored light moves with the camera's bearing.
+            ubo::write(
+                producer,
+                view_id,
+                layer_index,
+                ubo_slots::ID_HILLSHADE_EVALUATED_PROPS_UBO,
+                &ubo::hillshade_props_from_paint(&paint, view.zoom, view.bearing),
+            )?;
+        }
         _ => {}
     }
     Ok(())

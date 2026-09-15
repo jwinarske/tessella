@@ -2699,3 +2699,119 @@ pub fn pack_globe_bend_buffer(blocks: &[GlobeBendUbo]) -> Vec<u8> {
     }
     out
 }
+
+/// Packs `HillshadeTilePropsUBO`, which is per drawable because `latrange` is per tile.
+///
+/// `method` and `num_lights` travel even though only the standard method is drawn: they are the
+/// block's shape, the consumer reads them, and a block that carried less would have to change
+/// format the day the other four arrive.
+#[must_use]
+pub fn pack_hillshade_tile_props(
+    lat_range: [f32; 2],
+    exaggeration: f32,
+    method: i32,
+    lights: i32,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(ubo_layouts::HILLSHADE_TILE_PROPS_UBO.size as usize);
+    push_f32s(&mut out, &lat_range);
+    push_f32s(&mut out, &[exaggeration]);
+    out.extend_from_slice(&method.to_le_bytes());
+    out.extend_from_slice(&lights.to_le_bytes());
+    push_f32s(&mut out, &[0.0, 0.0, 0.0]);
+    debug_assert_eq!(
+        out.len(),
+        ubo_layouts::HILLSHADE_TILE_PROPS_UBO.size as usize
+    );
+    out
+}
+
+/// The buffer of per-drawable tile props, one block a drawable at the layout's stride.
+#[must_use]
+pub fn pack_hillshade_tile_props_buffer(blocks: &[Vec<u8>], stride: u32) -> Vec<u8> {
+    let stride = stride as usize;
+    let mut out = Vec::with_capacity(blocks.len() * stride);
+    for block in blocks {
+        let start = out.len();
+        out.extend_from_slice(block);
+        out.resize(start + stride, 0);
+    }
+    out
+}
+
+/// Packs `HillshadeEvaluatedPropsUBO` from a layer's paint.
+///
+/// # The four lights
+///
+/// mbgl's `hillshade-illumination-direction`, `-altitude`, `-highlight-color` and `-shadow-color`
+/// are each a *list*, padded to the longest of the four, and up to four of them reach the shader.
+/// A style that writes a single value -- which is every style anyone has written -- gets one
+/// light, and the other three slots are zero.
+///
+/// Altitudes and azimuths travel in radians because the shader takes them that way;
+/// `getIlluminationProperties` converts once and this does the same.
+///
+/// # The viewport anchor
+///
+/// `hillshade-illumination-anchor: viewport` subtracts the camera's bearing from every azimuth,
+/// so the light stays where the screen is rather than where north is. mbgl does it in the tweaker,
+/// per frame, which is why `bearing` is a parameter here rather than something read from the
+/// paint: the block is rewritten whenever the camera turns.
+#[must_use]
+pub fn hillshade_props_from_paint(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    zoom: f64,
+    bearing: f64,
+) -> Vec<u8> {
+    let accent = uniform_color(paint, "hillshade-accent-color", zoom);
+    let shadow = uniform_color(paint, "hillshade-shadow-color", zoom);
+    let highlight = uniform_color(paint, "hillshade-highlight-color", zoom);
+
+    #[allow(clippy::cast_possible_truncation)]
+    let anchored_bearing = if hillshade_anchor_is_viewport(paint) {
+        bearing as f32
+    } else {
+        0.0
+    };
+    let azimuth = uniform_number(paint, "hillshade-illumination-direction", zoom).to_radians()
+        - anchored_bearing.to_radians();
+    let altitude = uniform_number(paint, "hillshade-illumination-altitude", zoom).to_radians();
+
+    let mut out = Vec::with_capacity(ubo_layouts::HILLSHADE_EVALUATED_PROPS_UBO.size as usize);
+    push_color(&mut out, accent);
+    push_f32s(&mut out, &[altitude, 0.0, 0.0, 0.0]);
+    push_f32s(&mut out, &[azimuth, 0.0, 0.0, 0.0]);
+    // Four slots each, because the block is `vec4[4]`. One light fills the first and leaves the
+    // rest transparent, which is what a shader reading past `num_lights` would find.
+    push_color(&mut out, shadow);
+    for _ in 0..3 {
+        push_color(&mut out, Color::transparent());
+    }
+    push_color(&mut out, highlight);
+    for _ in 0..3 {
+        push_color(&mut out, Color::transparent());
+    }
+    debug_assert_eq!(
+        out.len(),
+        ubo_layouts::HILLSHADE_EVALUATED_PROPS_UBO.size as usize
+    );
+    out
+}
+
+/// Whether the light is anchored to the viewport rather than to north.
+///
+/// The spec's default is `viewport`, which is why an absent property answers true: a style that
+/// says nothing wants the light to follow the screen.
+#[must_use]
+pub fn hillshade_anchor_is_viewport(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+) -> bool {
+    let Some(property) = paint.get("hillshade-illumination-anchor") else {
+        return true;
+    };
+    property
+        .expression
+        .evaluate(Some(0.0), None)
+        .ok()
+        .and_then(|value| value.as_str().map(alloc::string::ToString::to_string))
+        .is_none_or(|anchor| anchor != "map")
+}
