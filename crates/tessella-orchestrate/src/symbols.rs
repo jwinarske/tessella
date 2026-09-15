@@ -31,6 +31,19 @@ use tessella_place::feature::{
 use tessella_place::grid::GridIndex;
 use tessella_place::placement::{Alternative, Candidate, Placed, Rules, Shape, place};
 
+/// Whether an icon and a label are the two halves of one symbol instance.
+///
+/// The symbol *and* the anchor. A line-placed symbol is one pending and an instance per anchor
+/// along its road, and mbgl gives each anchor its own `SymbolInstance` holding both its icon and its
+/// text, placed and faded as a pair. Paired on the pending alone, every repetition along a road took
+/// the first anchor's icon: the numbers further along collided with a box already in the grid and
+/// were dropped, and every shield took the first number's fade -- so shields drew empty wherever
+/// their own number had not been placed.
+#[must_use]
+pub fn same_instance(text: &LaidOut, icon: &LaidOut) -> bool {
+    text.pending == icon.pending && text.anchor == icon.anchor
+}
+
 /// A label offered to placement this frame.
 #[derive(Debug, Clone)]
 pub struct FrameLabel<'a> {
