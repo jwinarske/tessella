@@ -471,6 +471,48 @@ fn relief_color_stops_id(layer_index: i32) -> tessella_capture_abi::envelope::Te
     tessella_capture_abi::envelope::TextureId(RELIEF_STOPS_BASE + index * 2 + 1)
 }
 
+/// Where a tile reads its elevation from, when the terrain's DEM is another source's tile.
+///
+/// A hillshade and a color relief hold their own: they draw *from* the DEM, so their bucket shares
+/// a tile with the ground. Everything else -- a fill, a line, imagery, a label -- is on a vector
+/// or raster tile at a coordinate the DEM source may not even have, and has to be told which DEM
+/// tile covers its ground and where in it.
+///
+/// `cover` is that relationship: how many zooms below the DEM this tile is, and which of the
+/// `2^dz` squares of it this tile occupies. `DemCover` is the arithmetic and has carried it since
+/// the elevation first landed.
+#[derive(Clone, Copy)]
+struct TerrainCover<'a> {
+    tile: TileId,
+    content: &'a crate::tile::TerrainContent,
+    cover: tessella_source::terrain::DemCover,
+}
+
+/// The ground covering `tile`, from the tiles this frame holds.
+///
+/// The deepest DEM tile that contains it, which at equal zooms is the tile itself. `None` when no
+/// ground covers it at all -- a cover reaching past the DEM source's own extent, or a frame whose
+/// elevation has not arrived, both of which draw flat rather than waiting.
+fn terrain_covering<'a>(
+    grounds: &'a [(TileId, &'a crate::tile::TerrainContent)],
+    tile: TileId,
+) -> Option<TerrainCover<'a>> {
+    grounds
+        .iter()
+        .filter_map(|(ground, content)| {
+            let cover = tessella_source::terrain::DemCover::new(tile.z, tile.x, tile.y, ground.z)?;
+            (cover.dem_tile(tile.z, tile.x, tile.y) == (ground.z, ground.x, ground.y)).then_some(
+                TerrainCover {
+                    tile: *ground,
+                    content,
+                    cover,
+                },
+            )
+        })
+        // The deepest, which is the one whose elevation is finest where this tile is.
+        .min_by_key(|found| found.cover.dz)
+}
+
 /// A tile's coordinate extent, as the terrain's sampling pair takes it.
 const EXTENT_UNITS: u16 = 8192;
 
@@ -997,6 +1039,22 @@ fn emit_group(
     let mut unbound: BTreeSet<DrawableKey> = BTreeSet::new();
     let mut keyed: BTreeMap<u64, DrawableKey> = BTreeMap::new();
 
+    // Every tile of the ground this frame holds, for the layers that are not on one. A fill is on
+    // a vector tile at a coordinate the DEM source may not even have, so it cannot find its
+    // elevation by looking at its own bucket list -- `terrain_covering` finds the DEM tile above
+    // it instead. Built once: the walk below asks per tile, and per layer after that.
+    let grounds: Vec<(TileId, &crate::tile::TerrainContent)> = buckets
+        .iter()
+        .flat_map(|(id, tile_buckets)| {
+            tile_buckets
+                .iter()
+                .filter_map(move |bucket| match &bucket.content {
+                    Content::Terrain(content) => Some((*id, content)),
+                    _ => None,
+                })
+        })
+        .collect();
+
     for (index, (tile, tile_buckets)) in buckets.iter().enumerate() {
         // The wrap comes from the cover, which is the only place that has it: a bucket's `TileId`
         // is canonical and carries no world copy. Read here rather than below because the texture
@@ -1053,7 +1111,13 @@ fn emit_group(
         // The ground's own elevation, which is the same bytes a relief uploads and a separate
         // texture: a style can have either, both or neither, and sharing the id would tie the
         // terrain's upload to whether a relief layer happened to be in the style.
-        let terrain_texture = terrain_texture_id(tile.z, tile.x, tile.y);
+        // The ground above this tile, which for a DEM tile is itself and for a vector or raster
+        // tile is a coarser tile of another source entirely.
+        let covering = terrain_covering(&grounds, *tile);
+        let terrain_texture = covering.map_or_else(
+            || terrain_texture_id(tile.z, tile.x, tile.y),
+            |found| terrain_texture_id(found.tile.z, found.tile.x, found.tile.y),
+        );
         for bucket in tile_buckets.iter() {
             if let Content::Terrain(terrain) = &bucket.content {
                 let size = tessella_capture_abi::envelope::Extent {
@@ -1098,9 +1162,12 @@ fn emit_group(
         let ground = tile_buckets.iter().find_map(|bucket| {
             matches!(bucket.content, Content::Terrain(_)).then_some(bucket.layer_index)
         });
-        if let Some(ground) = ground {
+        // Raised when a ground covers this tile, whether or not the ground is on it. A fill has no
+        // terrain bucket of its own -- its tile belongs to a vector source -- and is raised all
+        // the same, from the DEM tile above it.
+        if terrain_covering(&grounds, *tile).is_some() {
             #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-            let ground = ground as i32;
+            let ground = ground.map_or(-1, |index| index as i32);
             for binding in &mut bindings {
                 if binding.layer_index != ground {
                     binding.flags =
@@ -1421,11 +1488,9 @@ fn emit_group(
                         prepared: &prepared,
                         key: (tile_index, bucket_index),
                         terrain: terrain_mesh.as_ref(),
-                        raised: buckets.get(tile_index).is_some_and(|(_, tile_buckets)| {
-                            tile_buckets
-                                .iter()
-                                .any(|bucket| matches!(bucket.content, Content::Terrain(_)))
-                        }),
+                        raised: buckets
+                            .get(tile_index)
+                            .is_some_and(|(id, _)| terrain_covering(&grounds, *id).is_some()),
                         dashes: &dashes,
                         gradients: &gradients,
                         background_cells,
@@ -3366,11 +3431,14 @@ fn encode_parts(
                 None => return Some(text),
             }
         }
+        // Imagery is not a DEM, so unlike a color relief it has nothing of its own to displace
+        // by: the covering tile's elevation goes on as a second texture.
         Content::Raster(raster) => Some(emit::encode_raster(
             arena,
             PLACEHOLDER,
             &raster.bucket,
             textures.raster,
+            raised.then_some(textures.terrain),
         )),
         // The raster encoder over the slope field: same quad, same attributes, a different
         // shader and a different texture. mbgl's `HillshadeBucket` shares `RasterBucket`'s mask
@@ -5042,21 +5110,29 @@ fn terrain_blocks(
     layer_index: i32,
     color: [f32; 4],
 ) -> Vec<tessella_capture_abi::terrain_ubo::TerrainDrawableUbo> {
+    let grounds: Vec<(TileId, &crate::tile::TerrainContent)> = frame
+        .buckets
+        .iter()
+        .flat_map(|(id, tile_buckets)| {
+            tile_buckets
+                .iter()
+                .filter_map(move |bucket| match &bucket.content {
+                    Content::Terrain(content) => Some((*id, content)),
+                    _ => None,
+                })
+        })
+        .collect();
     bindings
         .iter()
         .filter(|binding| binding.sub_layer_index == 0)
         .filter_map(|binding| {
             let tile = binding.tile?;
-            let content = frame.buckets.iter().find_map(|(id, tile_buckets)| {
-                (id.z == tile.z && id.x == tile.x && id.y == tile.y).then(|| {
-                    tile_buckets
-                        .iter()
-                        .find_map(|bucket| match &bucket.content {
-                            Content::Terrain(terrain) => Some(terrain),
-                            _ => None,
-                        })
-                })?
-            })?;
+            // The ground above this tile, which for a layer drawing from the DEM is its own.
+            let found = terrain_covering(
+                &grounds,
+                crate::tile::TileId::overscaled(tile.z, tile.x, tile.y, tile.overscaled_z),
+            )?;
+            let content = found.content;
             let matrix = DrawableEntry::for_tile(
                 frame.view,
                 frame.projection,
@@ -5069,15 +5145,22 @@ fn terrain_blocks(
             )
             .ok()?
             .matrix;
-            let (scale, offset) = tessella_capture_abi::terrain_ubo::TerrainDrawableUbo::sampling(
-                content.dem.dim(),
-                EXTENT_UNITS,
-            );
+            // The square of the covering DEM this tile occupies, which for a layer drawing from
+            // the DEM is the whole of it.
+            let (scale, offset_x, offset_y) =
+                tessella_capture_abi::terrain_ubo::TerrainDrawableUbo::sampling_within(
+                    content.dem.dim(),
+                    EXTENT_UNITS,
+                    found.cover.dz,
+                    found.cover.dx,
+                    found.cover.dy,
+                );
             Some(tessella_capture_abi::terrain_ubo::TerrainDrawableUbo {
                 matrix,
                 unpack: content.dem.encoding().unpack(),
                 color,
-                params: [scale, offset, content.exaggeration, content.skirt],
+                params: [scale, offset_x, offset_y, content.exaggeration],
+                skirt: [content.skirt, 0.0, 0.0, 0.0],
             })
         })
         .collect()

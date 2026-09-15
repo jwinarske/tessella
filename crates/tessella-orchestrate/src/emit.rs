@@ -2807,11 +2807,15 @@ pub fn encode_symbol_indices(
 /// with no fade in progress it is this tile's own picture. Binding only slot 0 would leave the
 /// second sampler unbound, and what a shader reads from an unbound sampler is the backend's
 /// business rather than a defined black.
+/// `elevation` is the DEM tile covering this one, for imagery the terrain drapes. `None` on a flat
+/// map, and `None` is also what a family with no terrain variant wants -- an unbound sampler reads
+/// nothing and a quad raised by nothing is a quad on the ground.
 pub fn encode_raster(
     arena: &mut SlabArena,
     geometry: GeometryId,
     bucket: &RasterBucket,
     image: TextureId,
+    elevation: Option<TextureId>,
 ) -> Encoded {
     let vertex_bytes = as_raster_bytes(&bucket.vertices);
 
@@ -2857,14 +2861,21 @@ pub fn encode_raster(
             index_length: bucket.indices.len() as u32,
         }],
     );
-    let texture_refs = push_span(
-        &mut payload,
-        &texture_refs(
+    let texture_refs = push_span(&mut payload, &{
+        let mut refs = texture_refs(
             BuiltIn::RasterShader,
             &[image, image],
             TextureFilter::Linear,
-        ),
-    );
+        );
+        if let Some(elevation) = elevation {
+            refs.push(TextureRef {
+                texture: elevation,
+                slot: TERRAIN_ELEVATION_SLOT,
+                filter: TextureFilter::Linear as u32,
+            });
+        }
+        refs
+    });
 
     #[allow(clippy::cast_possible_truncation)]
     let record = GeometryAdd {
