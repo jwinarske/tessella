@@ -4369,9 +4369,12 @@ fn write_layer_state(
             // The smallest drawable block of any layer: a matrix and nothing else. A raster tile
             // carries no per-feature anything, so there is nothing to interpolate and nothing to
             // bind — the picture is the tile.
+            //
+            // Aligned to the pixel grid, as mbgl's raster tweaker asks for. See
+            // `camera::aligned_proj_matrix`.
             let placements: Vec<[f32; 16]> = matrices(0)
                 .filter_map(|tile| {
-                    DrawableEntry::for_tile(
+                    DrawableEntry::for_tile_aligned(
                         view,
                         projection,
                         tile.z,
@@ -4531,10 +4534,11 @@ fn write_layer_state(
         }
         LayerKind::Hillshade => {
             // A matrix a drawable, as a raster layer's is, and for the same reason: a hillshade
-            // tile carries no per-feature anything.
+            // tile carries no per-feature anything. And aligned to the pixel grid for the same
+            // reason: mbgl's hillshade tweaker passes `aligned` too, where color relief does not.
             let placements: Vec<[f32; 16]> = matrices(0)
                 .filter_map(|tile| {
-                    DrawableEntry::for_tile(
+                    DrawableEntry::for_tile_aligned(
                         view,
                         projection,
                         tile.z,
