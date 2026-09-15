@@ -42,6 +42,21 @@ pub enum SourceKind {
         /// Tile side in pixels, typically 256 or 512.
         tile_size: u16,
     },
+    /// Elevation packed into a raster tile's channels, for a hillshade to read.
+    ///
+    /// Covered exactly as a raster source of the same size is -- the tiles are fetched and
+    /// decoded the same way and the zoom shift is the same arithmetic. What differs is what is
+    /// in them, which is why it is a kind of its own rather than a flag: a raster tile becomes a
+    /// picture on a quad and this becomes a height field with a border, and nothing downstream
+    /// should have to guess which it was handed.
+    ///
+    /// How the channels are packed is not here. It is a property of the *source*, read from the
+    /// style at build time beside the tile, so there is one place that says it rather than a copy
+    /// riding along in every job.
+    RasterDem {
+        /// Tile side in pixels. 256 for every DEM anyone serves.
+        tile_size: u16,
+    },
 }
 
 impl SourceKind {
@@ -50,7 +65,7 @@ impl SourceKind {
     pub fn covering_zoom(self, zoom: f64) -> f64 {
         match self {
             Self::Vector => zoom.floor(),
-            Self::Raster { tile_size } => {
+            Self::Raster { tile_size } | Self::RasterDem { tile_size } => {
                 let adjusted = zoom + (512.0 / f64::from(tile_size.max(1))).log2();
                 adjusted.round()
             }
