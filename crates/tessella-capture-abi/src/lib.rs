@@ -69,6 +69,8 @@ pub mod ring;
 pub mod generated;
 /// The anchored bend's per-drawable block, which mbgl has no counterpart for.
 pub mod globe_ubo;
+/// The terrain surface's family and block, which mbgl has no counterpart for either.
+pub mod terrain_ubo;
 
 pub use generated::mbgl_enums::{
     AttributeDataType, BuiltIn, RenderPass, TextureChannelDataType, TexturePixelType,
