@@ -1883,6 +1883,9 @@ fn location_indicator_part(
     Encoded { record, payload }
 }
 
+/// Where the skirt flag rides, beside the position.
+const TERRAIN_SKIRT_ATTRIBUTE: u32 = 1;
+
 /// Bytes per terrain vertex: three `i16` -- the tile position and the skirt flag -- and a fourth
 /// that is padding.
 ///
@@ -1918,17 +1921,34 @@ pub fn encode_terrain(
     let vertices = arena.alloc(&bytes);
     let indexes = alloc_u16(arena, &mesh.indices);
 
-    let descriptors = [AttributeDesc {
-        attr_id: POSITION_ATTRIBUTE,
-        binding: 0,
-        source: vertices,
-        offset: 0,
-        vertex_offset: 0,
-        stride: TERRAIN_STRIDE,
-        data_type: AttributeDataType::Short3 as u8,
-        declared_data_type: AttributeDataType::Short3 as u8,
-        _pad: [0; 2],
-    }];
+    // Two attributes over one buffer rather than one of three components. Filament draws nothing
+    // at all from a `Short3` position -- 72 renderables, 72 primitives, zero fragments, with the
+    // vertex stage reading zeros -- while the same bytes declared `Short2` draw immediately. So
+    // the pair is the position and the skirt flag beside it, at an offset of four.
+    let descriptors = [
+        AttributeDesc {
+            attr_id: POSITION_ATTRIBUTE,
+            binding: 0,
+            source: vertices,
+            offset: 0,
+            vertex_offset: 0,
+            stride: TERRAIN_STRIDE,
+            data_type: AttributeDataType::Short2 as u8,
+            declared_data_type: AttributeDataType::Short2 as u8,
+            _pad: [0; 2],
+        },
+        AttributeDesc {
+            attr_id: TERRAIN_SKIRT_ATTRIBUTE,
+            binding: 1,
+            source: vertices,
+            offset: 4,
+            vertex_offset: 0,
+            stride: TERRAIN_STRIDE,
+            data_type: AttributeDataType::Short2 as u8,
+            declared_data_type: AttributeDataType::Short2 as u8,
+            _pad: [0; 2],
+        },
+    ];
 
     let mut payload = Vec::new();
     let attrs = push_span(&mut payload, &descriptors);
@@ -1966,7 +1986,7 @@ pub fn encode_terrain(
         segments,
         texture_refs: textures,
         builtin_shader: tessella_capture_abi::terrain_ubo::BUILTIN_TERRAIN_SHADER,
-        vertex_type: AttributeDataType::Short3 as u8,
+        vertex_type: AttributeDataType::Short2 as u8,
         reason: AddReason::Created as u8,
         topology: Topology::Triangles as u8,
         _pad: [0; 1],
