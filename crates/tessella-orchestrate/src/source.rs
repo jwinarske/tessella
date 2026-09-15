@@ -1272,8 +1272,17 @@ impl<D: TileTransport + 'static> Tiles for Arc<TileSource<D>> {
         let mut zooms: Vec<u8> = sources
             .sets
             .iter()
+            // A DEM as well as imagery. Both are tiled image sources whose covering zoom follows
+            // from their tile size, so a 256-pixel one of either sits at a zoom the view's own
+            // walk never asks about -- and this is the only walk that visits those. Filtering to
+            // `Raster` alone meant a hillshade, a color relief or the ground over a 256-pixel DEM
+            // was fetched, decoded, built and then never looked up.
             .filter(|(_, _, kind)| {
-                matches!(kind, tessella_storage::offline::SourceKind::Raster { .. })
+                matches!(
+                    kind,
+                    tessella_storage::offline::SourceKind::Raster { .. }
+                        | tessella_storage::offline::SourceKind::RasterDem { .. }
+                )
             })
             .map(|(_, _, kind)| boot::covering_zoom(*kind, view.zoom))
             .collect();
