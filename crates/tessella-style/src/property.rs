@@ -666,6 +666,73 @@ const RASTER_PAINT: &[PropertySpec] = &[
     },
 ];
 
+/// A hillshade layer's paint properties.
+///
+/// None is data-driven and none can be: a hillshade reads a height field, and a height field has
+/// no features for a property to vary over.
+///
+/// The four that are lists in mbgl -- direction, altitude, and the two colors -- are single
+/// values here. mbgl pads them to a common length and hands up to four lights to the shader; a
+/// style that writes one value gets one light, which is every style anyone has written. The
+/// uniform block carries the count, so the day a list arrives it is a parser change and not a
+/// format one.
+///
+/// `hillshade-illumination-anchor` defaults to `viewport`, so a style that says nothing gets a
+/// light that follows the screen rather than north -- which is why the evaluated block is
+/// rewritten whenever the camera turns.
+const HILLSHADE_PAINT: &[PropertySpec] = &[
+    PropertySpec {
+        name: "hillshade-accent-color",
+        kind: PropertyKind::Color,
+        default: DefaultValue::Color(Color::black()),
+        data_driven: false,
+    },
+    PropertySpec {
+        // Read as an *intensity* by the standard method rather than as a multiplier on the
+        // slope. mbgl's own note calls that out and does it anyway; transcribed as it is,
+        // because the picture is the thing being matched.
+        name: "hillshade-exaggeration",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.5),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "hillshade-highlight-color",
+        kind: PropertyKind::Color,
+        default: DefaultValue::Color(Color {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        }),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "hillshade-illumination-altitude",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(45.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "hillshade-illumination-anchor",
+        kind: PropertyKind::Enum,
+        default: DefaultValue::Enum("viewport"),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "hillshade-illumination-direction",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(335.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "hillshade-shadow-color",
+        kind: PropertyKind::Color,
+        default: DefaultValue::Color(Color::black()),
+        data_driven: false,
+    },
+];
+
 /// A symbol layer's paint properties.
 ///
 /// Ten of them reach the evaluated-props buffer, five for text and five for icons, and the icon
@@ -813,6 +880,7 @@ pub fn paint_specs(kind: &LayerKind) -> Option<&'static [PropertySpec]> {
         LayerKind::Raster => Some(RASTER_PAINT),
         LayerKind::FillExtrusion => Some(FILL_EXTRUSION_PAINT),
         LayerKind::Heatmap => Some(HEATMAP_PAINT),
+        LayerKind::Hillshade => Some(HILLSHADE_PAINT),
         _ => None,
     }
 }
