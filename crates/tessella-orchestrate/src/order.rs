@@ -505,6 +505,13 @@ pub fn bindings_for(
                     *next_id += 1;
                 }
             }
+            // The ground, under everything: sub-layer zero of the first layer in the style, which
+            // is where `synthesize_terrain` puts it. Stencilled like a tiled layer, because it is
+            // one -- a cover with an ancestor standing in for a missing child must not draw the
+            // ancestor's ground through the child's.
+            Content::Terrain(_) => {
+                emit(0, view::fill_pass(), view::tiled_flags());
+            }
             // The same quad a raster layer draws and the same pass, over a slope field rather
             // than a picture. mbgl gives it its own layer group and the same translucent pass.
             Content::Hillshade(_) | Content::ColorRelief(_) => {

@@ -122,6 +122,14 @@ pub enum Content {
     Hillshade(HillshadeContent),
     /// Extruded polygons: an outline and a roof, with the walls raised by the shader.
     Fill3d(FillExtrusionBucket),
+    /// The ground itself: a DEM tile, drawn on the shared terrain mesh.
+    ///
+    /// The only content that carries no geometry. Every tile of a terrain draws the *same* mesh --
+    /// `tessella_layout::terrain::mesh`, a tile's own coordinates and nothing about which tile --
+    /// because the height comes from the texture per vertex. So the surface is one geometry and N
+    /// uses of it (§5.3), and what differs between two tiles is the DEM named here and the block
+    /// that places it.
+    Terrain(TerrainContent),
     /// A location indicator's accuracy circle, in world pixels around the puck.
     ///
     /// The one content that belongs to the camera rather than to a tile. Its vertices are offsets
@@ -148,6 +156,23 @@ pub struct ColorReliefContent {
     ///
     /// Shared for the reason a slope field is: two relief layers over one source read one tile.
     pub dem: alloc::sync::Arc<tessella_source::dem::Dem>,
+}
+
+/// One terrain tile: the elevation it is raised by, and how far.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TerrainContent {
+    /// The DEM as it arrived, bordered, which the vertex stage samples per vertex.
+    ///
+    /// Shared, for the reason a slope field is: a style may draw a hillshade, a color relief and
+    /// the ground itself from one DEM tile, and that is one decode.
+    pub dem: alloc::sync::Arc<tessella_source::dem::Dem>,
+    /// The style's `terrain.exaggeration`, already clamped to the range the spec gives it.
+    pub exaggeration: f32,
+    /// How far a skirt vertex hangs below the surface, in meters.
+    ///
+    /// A function of the tile's own zoom -- `tessella_layout::terrain::skirt_length` -- so it is
+    /// per tile and not per frame, which is what keeps the bucket camera-free (§5.1).
+    pub skirt: f32,
 }
 
 /// The quad a hillshade's slope field is drawn on, and the field.
@@ -243,6 +268,8 @@ impl LayerBucket {
             Content::Hillshade(_) => 1,
             // And a color relief, which is that quad over the elevation itself.
             Content::ColorRelief(_) => 1,
+            // The ground is one drawable: the shared mesh, once per tile.
+            Content::Terrain(_) => 1,
             // A puck's accuracy circle is two -- the interior as a fan and the border as a strip,
             // over one vertex buffer, enabled and disabled together -- and then one per image
             // that resolved. The bucket decides, because it is what the encoder reads.
@@ -1477,6 +1504,57 @@ pub fn build_dem_tile_on(
     Ok(buckets)
 }
 
+/// Builds the ground's bucket from a decoded DEM.
+///
+/// [`build_dem_tile_on`]'s other sibling, and not its arm for the same reason: a style may want a
+/// hillshade, a relief and the ground from one tile, or any one of the three, and a builder that
+/// produced all of them would upload two pictures a style never asked for.
+///
+/// One bucket at most. The terrain layer is synthesized -- `Style::synthesize_terrain` -- so there
+/// is exactly one of it or none.
+///
+/// # Errors
+///
+/// [`TileError::Property`] when the layer's paint does not resolve, which for a synthesized layer
+/// with no paint at all is not reachable.
+pub fn build_terrain_tile_on(
+    style: &Style,
+    source: &str,
+    dem: &alloc::sync::Arc<tessella_source::dem::Dem>,
+    tile: TileId,
+) -> Result<Vec<LayerBucket>, TileError> {
+    let mut buckets = Vec::new();
+    let Some(terrain) = style.terrain.as_ref() else {
+        return Ok(buckets);
+    };
+    for (layer_index, layer) in style.layers.iter().enumerate() {
+        if layer.kind != LayerKind::Terrain || !draws_from(layer, source) {
+            continue;
+        }
+        let paint = resolve_paint(layer).map_err(|source| TileError::Property {
+            layer: layer.id.clone(),
+            source,
+        })?;
+        #[allow(clippy::cast_possible_truncation)]
+        buckets.push(LayerBucket {
+            layer_index,
+            layer_id: layer.id.clone(),
+            content: Content::Terrain(TerrainContent {
+                dem: alloc::sync::Arc::clone(dem),
+                exaggeration: terrain.exaggeration() as f32,
+                // The tile's own zoom, not the cover's: a skirt hides the seam between this tile
+                // and its neighbors, and how wide that seam can be is a property of the level.
+                skirt: tessella_layout::terrain::skirt_length(f64::from(tile.z)) as f32,
+            }),
+            paint,
+            binder: PaintBinder::default(),
+            outline_under_fill: false,
+            pattern_vertices: PatternVertices::default(),
+        });
+    }
+    Ok(buckets)
+}
+
 /// Builds a color relief tile's buckets from a decoded DEM.
 ///
 /// [`build_dem_tile_on`]'s sibling and deliberately not its arm: the two read the same tile and
@@ -2059,6 +2137,7 @@ impl Content {
             | Self::Hillshade(_)
             | Self::ColorRelief(_)
             | Self::LocationIndicator(_)
+            | Self::Terrain(_)
             | Self::Symbol(_) => None,
         }
     }
@@ -2077,7 +2156,8 @@ impl Content {
             Self::Raster(_)
             | Self::Hillshade(_)
             | Self::ColorRelief(_)
-            | Self::LocationIndicator(_) => None,
+            | Self::LocationIndicator(_)
+            | Self::Terrain(_) => None,
         }
     }
 
@@ -2095,6 +2175,7 @@ impl Content {
             | Self::Raster(_)
             | Self::ColorRelief(_)
             | Self::LocationIndicator(_)
+            | Self::Terrain(_)
             | Self::Symbol(_) => None,
         }
     }
@@ -2113,6 +2194,7 @@ impl Content {
             | Self::Hillshade(_)
             | Self::Raster(_)
             | Self::LocationIndicator(_)
+            | Self::Terrain(_)
             | Self::Symbol(_) => None,
         }
     }
@@ -2131,7 +2213,8 @@ impl Content {
             Self::Raster(_)
             | Self::Hillshade(_)
             | Self::ColorRelief(_)
-            | Self::LocationIndicator(_) => None,
+            | Self::LocationIndicator(_)
+            | Self::Terrain(_) => None,
         }
     }
 
@@ -2149,7 +2232,8 @@ impl Content {
             Self::Raster(_)
             | Self::Hillshade(_)
             | Self::ColorRelief(_)
-            | Self::LocationIndicator(_) => None,
+            | Self::LocationIndicator(_)
+            | Self::Terrain(_) => None,
         }
     }
 
@@ -2167,7 +2251,8 @@ impl Content {
             Self::Raster(_)
             | Self::Hillshade(_)
             | Self::ColorRelief(_)
-            | Self::LocationIndicator(_) => None,
+            | Self::LocationIndicator(_)
+            | Self::Terrain(_) => None,
         }
     }
 
@@ -2200,6 +2285,9 @@ impl Content {
             Self::Hillshade(content) => !content.bucket.is_empty(),
             Self::ColorRelief(content) => !content.bucket.is_empty(),
             Self::LocationIndicator(bucket) => !bucket.is_empty(),
+            // Always: the mesh is the same for every tile and the DEM is why this exists. A
+            // terrain tile with nothing to say is a tile that was never built.
+            Self::Terrain(_) => true,
             Self::Fill3d(bucket) => !bucket.segments.is_empty(),
         }
     }
