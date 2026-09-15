@@ -4828,6 +4828,22 @@ fn write_layer_state(
             )?;
         }
         LayerKind::Terrain => {
+            // What bare ground is painted: the style's background color, so a terrain with no
+            // layer over it reads continuous with the flat map. The spec gives terrain no paint
+            // of its own, and a background is what a flat map shows where nothing else draws.
+            //
+            // Black where the style has no background layer, which is `background-color`'s own
+            // default and so is what the flat map shows there too.
+            let ground = style
+                .layers
+                .iter()
+                .find(|layer| layer.kind == LayerKind::Background)
+                .and_then(|layer| tessella_style::property::resolve_paint(layer).ok())
+                .map_or([0.0, 0.0, 0.0, 1.0], |paint| {
+                    let color = ubo::uniform_color(&paint, "background-color", view.zoom);
+                    [color.r, color.g, color.b, color.a]
+                });
+
             // One block a tile: where the ground goes, how to read its height, and how far the
             // skirt hangs. The DEM's own numbers come off the bucket rather than the style,
             // because the tile that arrived is what says how wide it is -- a source whose
@@ -4868,6 +4884,7 @@ fn write_layer_state(
                     Some(tessella_capture_abi::terrain_ubo::TerrainDrawableUbo {
                         matrix,
                         unpack: content.dem.encoding().unpack(),
+                        color: ground,
                         params: [scale, offset, content.exaggeration, content.skirt],
                     })
                 })

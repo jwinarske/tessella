@@ -745,8 +745,23 @@ impl Map {
                     // style the frame carried 128 water drawables where it should carry 20, and 256
                     // background where it should carry 40. What that looks like is the imagery
                     // washing out everything under it, which is how it was first described.
-                    let raster =
-                        |bucket: &LayerBucket| matches!(bucket.content, Content::Raster(_));
+                    //
+                    // Everything a *tiled image source* builds, not imagery alone. A raster was
+                    // the only one of these when the walk was written, and `Content::Raster(_)`
+                    // has been the test ever since -- so a hillshade, a color relief or the
+                    // ground over a 256-pixel DEM was fetched, decoded, built and then dropped
+                    // here, because a 256-pixel source is covered one zoom deeper and this is the
+                    // only walk that visits that zoom. Terrain is how it surfaced: 72 tiles built
+                    // a bucket each and two renderables reached the frame.
+                    let raster = |bucket: &LayerBucket| {
+                        matches!(
+                            bucket.content,
+                            Content::Raster(_)
+                                | Content::Hillshade(_)
+                                | Content::ColorRelief(_)
+                                | Content::Terrain(_)
+                        )
+                    };
                     // A tile of the raster source alone -- the usual case -- is shared whole, and
                     // only a tile that mixes in something else is filtered into a list of its own.
                     let built = if ready.iter().all(raster) {

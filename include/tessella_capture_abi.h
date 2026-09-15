@@ -390,7 +390,7 @@ static inline uint32_t tsl_texture_pixel_size(int format) {
 #define TSL_UBO_ID_GLOBE_BEND_UBO 11u
 #define TSL_STRIDE_GLOBE_BEND_UBO 112u
 #define TSL_UBO_ID_TERRAIN_DRAWABLE_UBO 128u
-#define TSL_STRIDE_TERRAIN_DRAWABLE_UBO 96u
+#define TSL_STRIDE_TERRAIN_DRAWABLE_UBO 112u
 
 /*
  * Uniform block layouts.
