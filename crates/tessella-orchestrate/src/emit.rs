@@ -1883,6 +1883,90 @@ fn location_indicator_part(
     Encoded { record, payload }
 }
 
+/// Bytes per terrain vertex: three `i16` -- the tile position and the skirt flag.
+const TERRAIN_STRIDE: u32 = 6;
+
+/// Puts the terrain surface into a slab and announces it.
+///
+/// The mesh is the *same* for every tile -- `tessella_layout::terrain::mesh`, a tile's own
+/// coordinates and nothing about which tile -- so this is called once per distinct DEM and the
+/// vertices are the same bytes each time. What differs per tile is the texture named here and the
+/// block that places it.
+///
+/// Not an mbgl family. `BUILTIN_TERRAIN_SHADER` is tessella's, numbered past everything mbgl uses;
+/// see `tessella_capture_abi::terrain_ubo` for why that needs no ABI revision.
+pub fn encode_terrain(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    mesh: &tessella_layout::terrain::TerrainMesh,
+    elevation: TextureId,
+) -> Encoded {
+    let mut bytes = Vec::with_capacity(mesh.vertices.len() * TERRAIN_STRIDE as usize);
+    for vertex in &mesh.vertices {
+        for value in vertex {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    let vertices = arena.alloc(&bytes);
+    let indexes = alloc_u16(arena, &mesh.indices);
+
+    let descriptors = [AttributeDesc {
+        attr_id: POSITION_ATTRIBUTE,
+        binding: 0,
+        source: vertices,
+        offset: 0,
+        vertex_offset: 0,
+        stride: TERRAIN_STRIDE,
+        data_type: AttributeDataType::Short3 as u8,
+        declared_data_type: AttributeDataType::Short3 as u8,
+        _pad: [0; 2],
+    }];
+
+    let mut payload = Vec::new();
+    let attrs = push_span(&mut payload, &descriptors);
+    #[allow(clippy::cast_possible_truncation)]
+    let segments = push_span(
+        &mut payload,
+        &[AbiSegment {
+            vertex_offset: 0,
+            index_offset: 0,
+            vertex_length: mesh.vertices.len() as u32,
+            index_length: mesh.indices.len() as u32,
+        }],
+    );
+    // One texture and its slot is zero, because the family declares one and it is the elevation.
+    // Not through `texture_refs`, which reads mbgl's own table and has no row for a family mbgl
+    // does not have.
+    let textures = push_span(
+        &mut payload,
+        &[TextureRef {
+            texture: elevation,
+            slot: 0,
+            filter: TextureFilter::Linear as u32,
+        }],
+    );
+
+    #[allow(clippy::cast_possible_truncation)]
+    let record = GeometryAdd {
+        geometry,
+        // Nothing data-driven: the ground has no features for a property to vary over.
+        permutation_key: 0,
+        indexes,
+        vertex_count: mesh.vertices.len() as u32,
+        attrs,
+        instance_attrs: Span::default(),
+        segments,
+        texture_refs: textures,
+        builtin_shader: tessella_capture_abi::terrain_ubo::BUILTIN_TERRAIN_SHADER,
+        vertex_type: AttributeDataType::Short3 as u8,
+        reason: AddReason::Created as u8,
+        topology: Topology::Triangles as u8,
+        _pad: [0; 1],
+    };
+
+    Encoded { record, payload }
+}
+
 /// Bytes per textured puck vertex: a position and a texture coordinate, two floats each.
 const PUCK_QUAD_STRIDE: u32 = 16;
 

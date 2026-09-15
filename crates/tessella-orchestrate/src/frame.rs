@@ -376,9 +376,15 @@ fn heatmap_ramp_id(offscreen: ViewId) -> tessella_capture_abi::envelope::Texture
 /// Above the raster tiles' packed space rather than below it. A raster id is the tile packed into
 /// the low sixty bits of the word, so the range above [`RASTER_TEXTURE_BASE`] is claimed as far
 /// as `MAX_ZOOM` reaches; putting the dashes at the top of the word leaves both injective with
-/// nothing to check at run time. One per style layer, so a style would need 2^62 of them to
+/// nothing to check at run time. One per style layer, so a style would need 2^60 of them to
 /// collide.
-const DASH_TEXTURE_BASE: u64 = 1 << 62;
+///
+/// Written as a multiple of `1 << 60` like every other base, and that is not cosmetic: it was
+/// `1 << 62`, which *is* `4 << 60` and so was the same word as the location indicator's. A style
+/// with a dashed line and a puck handed them one id between them -- the dash atlas at the layer's
+/// index and the puck's shadow at the same one -- and whichever uploaded second won. Neither
+/// scene in the sweep has both, so nothing caught it. See `the_texture_spaces_are_disjoint`.
+const DASH_TEXTURE_BASE: u64 = 8 << 60;
 
 /// The first texture id a gradient line's color ramp takes.
 ///
@@ -439,6 +445,7 @@ struct TileTextures {
     raster: tessella_capture_abi::envelope::TextureId,
     hillshade: tessella_capture_abi::envelope::TextureId,
     relief: tessella_capture_abi::envelope::TextureId,
+    terrain: tessella_capture_abi::envelope::TextureId,
 }
 
 /// The first texture id a color relief's ramp tables take.
@@ -462,6 +469,24 @@ fn relief_color_stops_id(layer_index: i32) -> tessella_capture_abi::envelope::Te
     #[allow(clippy::cast_sign_loss)]
     let index = layer_index.max(0) as u64;
     tessella_capture_abi::envelope::TextureId(RELIEF_STOPS_BASE + index * 2 + 1)
+}
+
+/// A tile's coordinate extent, as the terrain's sampling pair takes it.
+const EXTENT_UNITS: u16 = 8192;
+
+/// The first texture id a terrain tile's elevation takes.
+///
+/// Its own space beside the color relief's, not shared with it. The two are the same bytes -- both
+/// want the raw DEM -- and a style can have one, the other, or both; sharing an id would tie a
+/// terrain's texture to whether a relief layer happened to be in the style.
+const TERRAIN_TEXTURE_BASE: u64 = 9 << 60;
+
+/// The texture id a terrain tile's elevation takes, derived from the tile.
+#[must_use]
+fn terrain_texture_id(z: u8, x: u32, y: u32) -> tessella_capture_abi::envelope::TextureId {
+    tessella_capture_abi::envelope::TextureId(
+        TERRAIN_TEXTURE_BASE | (u64::from(z) << 52) | (u64::from(x) << 26) | u64::from(y),
+    )
 }
 
 /// The first texture id a location indicator's three images take.
@@ -1025,10 +1050,32 @@ fn emit_group(
             }
         }
 
+        // The ground's own elevation, which is the same bytes a relief uploads and a separate
+        // texture: a style can have either, both or neither, and sharing the id would tie the
+        // terrain's upload to whether a relief layer happened to be in the style.
+        let terrain_texture = terrain_texture_id(tile.z, tile.x, tile.y);
+        for bucket in tile_buckets.iter() {
+            if let Content::Terrain(terrain) = &bucket.content {
+                let size = tessella_capture_abi::envelope::Extent {
+                    width: terrain.dem.stride(),
+                    height: terrain.dem.stride(),
+                };
+                let upload = texture::whole(
+                    terrain_texture,
+                    size,
+                    tessella_capture_abi::TexturePixelType::RGBA,
+                    terrain.dem.pixels(),
+                );
+                texture::write(producer, &upload)?;
+                break;
+            }
+        }
+
         let textures = TileTextures {
             raster: raster_texture,
             hillshade: hillshade_texture,
             relief: relief_texture,
+            terrain: terrain_texture,
         };
 
         // `Frame::buckets` is documented as being in cover order, and this is what depends on
@@ -1232,6 +1279,16 @@ fn emit_group(
 
     let mut packed: BTreeSet<u64> = BTreeSet::new();
     let mut open: Option<u32> = None;
+    // The ground's mesh, once for this emission. It is the same 17,415 vertices for every
+    // terrain tile of every view, so building it inside the loop below would rebuild a fixed
+    // 101,376-index array per drawable. Built only when something in the frame is terrain, so a
+    // style without one pays a scan of the buckets and nothing else.
+    let terrain_mesh = buckets
+        .iter()
+        .flat_map(|(_, tile_buckets)| tile_buckets.iter())
+        .any(|bucket| matches!(bucket.content, Content::Terrain(_)))
+        .then(tessella_layout::terrain::mesh);
+
     for entry in order.iter().copied() {
         // A drawable whose pass is a mask appears once per pass; its geometry is packed once.
         if !packed.insert(entry.geometry.0) {
@@ -1341,6 +1398,7 @@ fn emit_group(
                         stacks: &stacks,
                         prepared: &prepared,
                         key: (tile_index, bucket_index),
+                        terrain: terrain_mesh.as_ref(),
                         dashes: &dashes,
                         gradients: &gradients,
                         background_cells,
@@ -1766,6 +1824,13 @@ struct Encoding<'a> {
     prepared: &'a BTreeMap<(usize, usize), PreparedSymbols>,
     /// Which bucket this is, to address `prepared` with.
     key: (usize, usize),
+    /// The terrain surface, built once for this emission.
+    ///
+    /// The mesh is a tile's own coordinates and nothing about which tile, so every terrain tile
+    /// of every view draws the same 17,415 vertices. Built once and borrowed rather than per
+    /// bucket, which would rebuild a fixed 101,376-index array for each tile of each cover.
+    /// `None` when no bucket in this frame is terrain, which is every style without one.
+    terrain: Option<&'a tessella_layout::terrain::TerrainMesh>,
     /// The dash atlases, for a line layer that carries a `line-dasharray`.
     dashes: &'a crate::dash::Dashes,
     /// The gradient ramps, for a line layer that draws its `line-gradient`.
@@ -2971,6 +3036,7 @@ fn encode_parts(
         stacks,
         prepared,
         key,
+        terrain,
         dashes,
         gradients,
         background_cells,
@@ -3278,6 +3344,14 @@ fn encode_parts(
             textures.relief,
             relief_elevation_stops_id(i32::try_from(bucket.layer_index).unwrap_or(i32::MAX)),
             relief_color_stops_id(i32::try_from(bucket.layer_index).unwrap_or(i32::MAX)),
+        )),
+        // The same mesh for every tile -- see `Content::Terrain` -- so what this names is the
+        // tile's own elevation and nothing else.
+        Content::Terrain(_) => Some(emit::encode_terrain(
+            arena,
+            PLACEHOLDER,
+            terrain?,
+            textures.terrain,
         )),
         Content::Hillshade(hillshade) => Some(emit::encode_hillshade(
             arena,
@@ -4753,6 +4827,67 @@ fn write_layer_state(
                 &ubo::hillshade_props_from_paint(&paint, view.zoom, view.bearing),
             )?;
         }
+        LayerKind::Terrain => {
+            // One block a tile: where the ground goes, how to read its height, and how far the
+            // skirt hangs. The DEM's own numbers come off the bucket rather than the style,
+            // because the tile that arrived is what says how wide it is -- a source whose
+            // `tileSize` disagrees with its bytes would otherwise sample everything half a cell
+            // out.
+            let terrain: Vec<tessella_capture_abi::terrain_ubo::TerrainDrawableUbo> = bindings
+                .iter()
+                .filter(|binding| binding.sub_layer_index == 0)
+                .filter_map(|binding| {
+                    let tile = binding.tile?;
+                    let content = frame.buckets.iter().find_map(|(id, tile_buckets)| {
+                        (id.z == tile.z && id.x == tile.x && id.y == tile.y).then(|| {
+                            tile_buckets
+                                .iter()
+                                .find_map(|bucket| match &bucket.content {
+                                    Content::Terrain(terrain) => Some(terrain),
+                                    _ => None,
+                                })
+                        })?
+                    })?;
+                    let matrix = DrawableEntry::for_tile(
+                        view,
+                        projection,
+                        tile.z,
+                        tile.x,
+                        tile.y,
+                        i32::from(tile.wrap),
+                        layer_index,
+                        0,
+                    )
+                    .ok()?
+                    .matrix;
+                    let (scale, offset) =
+                        tessella_capture_abi::terrain_ubo::TerrainDrawableUbo::sampling(
+                            content.dem.dim(),
+                            EXTENT_UNITS,
+                        );
+                    Some(tessella_capture_abi::terrain_ubo::TerrainDrawableUbo {
+                        matrix,
+                        unpack: content.dem.encoding().unpack(),
+                        params: [scale, offset, content.exaggeration, content.skirt],
+                    })
+                })
+                .collect();
+
+            let mut buffer = Vec::with_capacity(
+                terrain.len()
+                    * tessella_capture_abi::terrain_ubo::TerrainDrawableUbo::STRIDE as usize,
+            );
+            for block in &terrain {
+                buffer.extend_from_slice(&block.to_bytes());
+            }
+            ubo::write(
+                producer,
+                view_id,
+                layer_index,
+                tessella_capture_abi::terrain_ubo::ID_TERRAIN_DRAWABLE_UBO,
+                &buffer,
+            )?;
+        }
         LayerKind::LocationIndicator => {
             let Some(location) = crate::tile::puck_location(&paint, view.zoom) else {
                 return Ok(());
@@ -4893,4 +5028,62 @@ fn symbol_atlas_size(
     let (width, height) = atlas.size();
     #[allow(clippy::cast_precision_loss)]
     Some([width as f32, height as f32])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// No two texture id spaces are the same word.
+    ///
+    /// They are written as multiples of `1 << 60` so that reading them down the file is reading
+    /// distinct numbers. One was not: the dash atlas was `1 << 62`, which is `4 << 60` and so was
+    /// the location indicator's, and a style with a dashed line and a puck handed the two one id
+    /// between them. Nothing caught it because no scene in the sweep has both -- which is exactly
+    /// the kind of collision a test rather than a scene has to find.
+    #[test]
+    fn the_texture_spaces_are_disjoint() {
+        let named = [
+            ("glyph atlas", GLYPH_ATLAS_BASE),
+            ("raster tile", RASTER_TEXTURE_BASE),
+            ("hillshade", HILLSHADE_TEXTURE_BASE),
+            ("relief tile", RELIEF_TEXTURE_BASE),
+            ("relief stops", RELIEF_STOPS_BASE),
+            ("puck image", PUCK_TEXTURE_BASE),
+            ("heatmap target", HEATMAP_TARGET_BASE),
+            ("heatmap ramp", HEATMAP_RAMP_BASE),
+            ("line gradient", LINE_GRADIENT_TEXTURE_BASE),
+            ("dash atlas", DASH_TEXTURE_BASE),
+            ("terrain", TERRAIN_TEXTURE_BASE),
+        ];
+        for (index, (name, base)) in named.iter().enumerate() {
+            for (other, other_base) in &named[index + 1..] {
+                assert_ne!(base, other_base, "{name} and {other} share {base:#x}");
+            }
+        }
+    }
+
+    /// A terrain tile's id is a function of the tile, and no two tiles share one.
+    ///
+    /// Packed the way a hillshade's and a relief's are -- zoom, then x, then y -- so that a tile
+    /// keeps its id across frames and a consumer can cache the upload against it.
+    #[test]
+    fn a_terrain_texture_is_its_tile() {
+        let mut seen = alloc::collections::BTreeSet::new();
+        for z in [0_u8, 1, 8, 14, 22] {
+            let span = 1u32 << z.min(4);
+            for x in 0..span {
+                for y in 0..span {
+                    assert!(
+                        seen.insert(terrain_texture_id(z, x, y).0),
+                        "{z}/{x}/{y} repeats an id"
+                    );
+                }
+            }
+        }
+        // And every one of them is inside the terrain's own space rather than a neighbor's.
+        for id in &seen {
+            assert_eq!(id & (15 << 60), TERRAIN_TEXTURE_BASE, "{id:#x}");
+        }
+    }
 }
