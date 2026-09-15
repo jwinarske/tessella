@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 //! The style spec's value type.
 //!
 //! A style document is JSON, but not every JSON value is a style value and the difference
@@ -147,6 +148,22 @@ impl Value {
             ),
             _ => false,
         }
+    }
+
+    /// True when this value is a pre-expression function: an object carrying `stops`, or an
+    /// `identity` function, which is the one form with no stops at all.
+    ///
+    /// A function is evaluated exactly as an expression is, and mbgl's property conversion
+    /// treats it as one -- `isExpression`, then `isObject` converted as a function, then a
+    /// constant. Classifying one as a literal instead hands a `{"stops": …}` object to the
+    /// literal type check, which refuses it for a number property and drops the layer.
+    #[must_use]
+    pub fn looks_like_function(&self) -> bool {
+        let Self::Object(object) = self else {
+            return false;
+        };
+        object.contains_key("stops")
+            || object.get("type").and_then(Self::as_str) == Some("identity")
     }
 }
 

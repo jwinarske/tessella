@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 //! The style document: sources, layers, and their properties.
 //!
 //! Parse only. Nothing here evaluates an expression, resolves a paint property against a zoom,
@@ -319,9 +320,9 @@ pub struct Layer {
 
 /// A property's value: either a literal or something to be evaluated.
 ///
-/// The distinction is made here rather than deferred because it is purely syntactic — a
-/// non-empty array whose first element is a string is a call, anything else is data — and
-/// because DR-11's classification consumes it. What this does *not* do is decide whether an
+/// The distinction is made here rather than deferred because it is purely syntactic — an array
+/// headed by a registered operator is a call, a pre-expression function object is evaluated the
+/// same way, and anything else is data — and because DR-11's classification consumes it. What this does *not* do is decide whether an
 /// expression is constant, camera-only, or data-driven; that needs the operator table and
 /// belongs to the compile step.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
@@ -333,7 +334,16 @@ pub enum PropertyValue {
     Literal(Value),
 }
 
-/// An unparsed expression.
+/// Whether a property value is evaluated rather than used as written.
+///
+/// One rule for the three places a value is classified -- the deserializer, [`PropertyValue::from_value`]
+/// and config resolution -- because two of them disagreeing is a property that parses as one
+/// thing and is rebuilt as another.
+fn is_evaluated(value: &Value) -> bool {
+    value.looks_like_expression() || value.looks_like_function()
+}
+
+/// An unparsed expression, or a pre-expression function the expression parser converts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExpressionValue(Value);
 
@@ -360,7 +370,7 @@ impl ExpressionValue {
 impl<'de> Deserialize<'de> for ExpressionValue {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = Value::deserialize(deserializer)?;
-        if value.looks_like_expression() {
+        if is_evaluated(&value) {
             Ok(Self(value))
         } else {
             // Not an error the caller sees: `PropertyValue` is untagged, so serde falls
@@ -379,14 +389,14 @@ impl Serialize for ExpressionValue {
 impl PropertyValue {
     /// Classifies a raw value the way the deserializer does.
     ///
-    /// The rule is the deserializer's, not a second one: a non-empty array whose first element
-    /// is a string is a call and everything else is data. Needed by anything that builds a layer
-    /// rather than parsing one — a synthesized annotation layer is the case — because
-    /// `ExpressionValue` holds its value privately and there is otherwise no way to say
-    /// "whatever this turns out to be".
+    /// The rule is the deserializer's, not a second one: a call or a pre-expression function is
+    /// evaluated and everything else is data. Needed by anything that builds a layer rather than
+    /// parsing one — a synthesized annotation layer is the case — because `ExpressionValue`
+    /// holds its value privately and there is otherwise no way to say "whatever this turns out
+    /// to be".
     #[must_use]
     pub fn from_value(value: Value) -> Self {
-        if value.looks_like_expression() {
+        if is_evaluated(&value) {
             Self::Expression(ExpressionValue(value))
         } else {
             Self::Literal(value)
@@ -501,7 +511,7 @@ impl Style {
                 // A property that *was* a config call is now a plain value, and has to stop
                 // being an expression or the compile step reads a literal as a call. One that
                 // merely contained a call is still an expression, with a literal inside it.
-                *value = if resolved.looks_like_expression() {
+                *value = if is_evaluated(&resolved) {
                     PropertyValue::Expression(ExpressionValue(resolved))
                 } else {
                     PropertyValue::Literal(resolved)
