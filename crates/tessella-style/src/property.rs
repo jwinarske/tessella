@@ -268,14 +268,23 @@ impl ResolvedProperty {
     /// with no dasharray resolves to null, and a pattern of strings was refused at load.
     #[must_use]
     pub fn numbers_at(&self, zoom: f64) -> Option<alloc::vec::Vec<f32>> {
+        #[allow(clippy::cast_possible_truncation)]
+        self.coordinates_at(zoom)
+            .map(|numbers| numbers.into_iter().map(|number| number as f32).collect())
+    }
+
+    /// As [`Self::numbers_at`], at the width the numbers were written in.
+    ///
+    /// `location` is the caller: a coordinate is not a dasharray. An `f32` longitude at Berlin
+    /// resolves to about a tenth of a meter, which is a fraction of a world pixel a puck is
+    /// looked at close enough to see, and the circle around it is built by projecting the
+    /// coordinate rather than by scaling a number.
+    #[must_use]
+    pub fn coordinates_at(&self, zoom: f64) -> Option<alloc::vec::Vec<f64>> {
         let Ok(Value::Array(items)) = self.expression.evaluate(Some(zoom), None) else {
             return None;
         };
-        #[allow(clippy::cast_possible_truncation)]
-        items
-            .iter()
-            .map(|item| item.as_number().map(|number| number as f32))
-            .collect()
+        items.iter().map(Value::as_number).collect()
     }
 }
 

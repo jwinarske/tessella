@@ -1260,7 +1260,14 @@ fn emit_group(
         // from a placement that is global, so a bucket held back here keeps opacity decided
         // against whatever cover existed when it was announced. That is what made the frame a
         // function of tile arrival order -- placement agreed run to run, emission did not.
-        let per_frame = matches!(bucket.content, Content::Symbol(_));
+        // A puck is the other one, and for a different reason: its vertices are offsets in world
+        // pixels at the current scale, so the geometry moves with the zoom rather than the matrix
+        // doing the moving. Held back as known, a circle built at one zoom would be drawn at
+        // every later one, and its accuracy radius would stop meaning what it says.
+        let per_frame = matches!(
+            bucket.content,
+            Content::Symbol(_) | Content::LocationIndicator(_)
+        );
         if registry.is_some() && !per_frame && !fresh_buckets.contains(&(tile_index, bucket_index))
         {
             continue;
@@ -2828,6 +2835,10 @@ fn part_of(bucket: &LayerBucket, sub_layer_index: i32) -> usize {
             }
         }
         Content::Fill3d(_) => sub % 2,
+        // The sub-layer is the part: the interior is announced first and drawn first, and the
+        // border second. Nothing reorders them, because neither is a fill with an outline that
+        // can change which side it sorts on.
+        Content::LocationIndicator(_) => sub,
         // The encoder returns one record per font stack and then the sprites. A stack's halo and
         // fill share its record, as an extrusion's depth and color passes share one; the sprites
         // are drawn under all of it and take the first sub-layer, which is mbgl's "text over
@@ -2908,6 +2919,9 @@ fn encode_parts(
     let mut fill_atlas = None;
     let mut extrusion_shared = None;
     let mut extrusion_atlas = None;
+    // The circle's vertices, once the interior has allocated them: its border draws over the
+    // same seventy-three points.
+    let mut puck_shared = None;
     let encoded = match &bucket.content {
         Content::Fill(fill) => {
             let (vertex_layout, key) = bind(FILL_FAMILY, BuiltIn::FillShader);
@@ -3190,6 +3204,11 @@ fn encode_parts(
             &hillshade.bucket,
             textures.hillshade,
         )),
+        Content::LocationIndicator(circle) => {
+            let (encoded, vertices) = emit::encode_location_indicator(arena, PLACEHOLDER, circle);
+            puck_shared = Some(vertices);
+            Some(encoded)
+        }
         Content::Background => {
             let atlas = patterns
                 .filter(|patterns| {
@@ -3250,6 +3269,14 @@ fn encode_parts(
                 .0,
             );
         }
+    }
+    if let (Some(vertices), Content::LocationIndicator(circle)) = (puck_shared, &bucket.content) {
+        parts.push(emit::encode_location_indicator_border(
+            arena,
+            PLACEHOLDER,
+            circle,
+            vertices,
+        ));
     }
     if let Some(shared) = extrusion_shared {
         let (wall_layout, key) = bind(FILL_EXTRUSION_FAMILY, BuiltIn::FillExtrusionInstancedShader);
@@ -4598,6 +4625,38 @@ fn write_layer_state(
                 layer_index,
                 ubo_slots::ID_HILLSHADE_EVALUATED_PROPS_UBO,
                 &ubo::hillshade_props_from_paint(&paint, view.zoom, view.bearing),
+            )?;
+        }
+        LayerKind::LocationIndicator => {
+            let Some(location) = crate::tile::puck_location(&paint, view.zoom) else {
+                return Ok(());
+            };
+            let Ok(matrix) = ubo::location_indicator_matrix(view, location) else {
+                return Ok(());
+            };
+            // The two drawables in sub-layer order, which is the order `ubo_index` counts them
+            // in: the interior's color then the border's. Counted off the bindings rather than
+            // written as a pair, so a layer that bound one and not the other does not hand it
+            // the other's block.
+            let entries: Vec<ubo::LocationIndicatorEntry> = [
+                (0, "accuracy-radius-color"),
+                (1, "accuracy-radius-border-color"),
+            ]
+            .into_iter()
+            .flat_map(|(sub, property)| {
+                let color = ubo::uniform_color(&paint, property, view.zoom);
+                matrices(sub).map(move |_| ubo::LocationIndicatorEntry { matrix, color })
+            })
+            .collect();
+            ubo::write(
+                producer,
+                view_id,
+                layer_index,
+                ubo_slots::ID_LOCATION_INDICATOR_DRAWABLE_UBO,
+                &ubo::pack_location_indicator_drawable_buffer(
+                    &entries,
+                    ubo_layouts::LOCATION_INDICATOR_DRAWABLE_UBO.stride,
+                ),
             )?;
         }
         _ => {}

@@ -1030,7 +1030,7 @@ fn uniform_value(property: &ResolvedProperty, zoom: f64) -> Option<Value> {
 }
 
 /// A color-typed property's uniform value, falling back to its spec default.
-fn uniform_color(
+pub(crate) fn uniform_color(
     paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
     name: &str,
     zoom: f64,
@@ -2589,6 +2589,68 @@ pub fn pack_raster_drawable_buffer(matrices: &[[f32; 16]], stride: u32) -> Vec<u
     for (matrix, slot) in matrices.iter().zip(out.chunks_mut(stride)) {
         for (index, value) in matrix.iter().enumerate() {
             slot[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+        }
+    }
+    out
+}
+
+/// One of a location indicator's drawables: where the puck is and what color this half is.
+///
+/// Both of the accuracy circle's drawables take the same matrix and differ only in the color,
+/// which is why mbgl keeps the color in the *drawable* block rather than in an evaluated-props
+/// one: the interior and the border are one shader over one vertex buffer, and the color is the
+/// only thing that tells them apart.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LocationIndicatorEntry {
+    /// World pixels around the puck to clip.
+    pub matrix: [f32; 16],
+    /// `accuracy-radius-color` for the interior, `accuracy-radius-border-color` for the border.
+    pub color: Color,
+}
+
+/// The matrix a puck's accuracy circle is placed by.
+///
+/// mbgl's three lines, in order: the camera's projection, then a translation to the puck's own
+/// position in world pixels, multiplied on the right so the vertices' offsets are applied first.
+///
+/// No depth nudge. mbgl hands the tweaker `params.projectionMatrix` untouched, and the layer's
+/// drawables are built with `setEnableDepth(false)` -- there is nothing for a sub-layer bias to
+/// separate them against.
+///
+/// # Errors
+///
+/// [`camera::CameraError`] when the view has no area, which is [`camera::proj_matrix`]'s.
+pub fn location_indicator_matrix(
+    view: &ViewTransform,
+    location: [f64; 2],
+) -> Result<[f32; 16], camera::CameraError> {
+    let world = camera::world_size(view.zoom);
+    let position = tessella_tile::projection::project(location[0], location[1], world);
+    let mut matrix = camera::proj_matrix(view)?;
+    camera::translate_in_place(&mut matrix, position[0], position[1], 0.0);
+    #[allow(clippy::cast_possible_truncation)]
+    Ok(core::array::from_fn(|index| matrix[index] as f32))
+}
+
+/// Where the color sits in `LocationIndicatorDrawableUBO`, after the matrix.
+const LOCATION_INDICATOR_COLOR_AT: usize = 64;
+
+/// Packs `LocationIndicatorDrawableUBO`: a matrix and a color.
+#[must_use]
+pub fn pack_location_indicator_drawable_buffer(
+    entries: &[LocationIndicatorEntry],
+    stride: u32,
+) -> Vec<u8> {
+    let stride = stride as usize;
+    let mut out = alloc::vec![0u8; entries.len() * stride];
+    for (entry, slot) in entries.iter().zip(out.chunks_mut(stride)) {
+        for (index, value) in entry.matrix.iter().enumerate() {
+            slot[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        let color = [entry.color.r, entry.color.g, entry.color.b, entry.color.a];
+        for (index, value) in color.iter().enumerate() {
+            let at = LOCATION_INDICATOR_COLOR_AT + index * 4;
+            slot[at..at + 4].copy_from_slice(&value.to_le_bytes());
         }
     }
     out
