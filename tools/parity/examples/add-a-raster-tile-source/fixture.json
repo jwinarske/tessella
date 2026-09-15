@@ -1,0 +1,29 @@
+{
+ "example": "add-a-raster-tile-source",
+ "base": null,
+ "sources": {
+  "raster-tiles": {
+   "type": "raster",
+   "tiles": [
+    "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+   ],
+   "tileSize": 256,
+   "minzoom": 0,
+   "maxzoom": 19
+  }
+ },
+ "layers": [
+  {
+   "id": "simple-tiles",
+   "type": "raster",
+   "source": "raster-tiles"
+  }
+ ],
+ "cameras": [
+  {
+   "lat": 0,
+   "lon": 0,
+   "zoom": 0
+  }
+ ]
+}
