@@ -42,6 +42,7 @@ pub mod mask;
 pub mod polygon;
 pub mod projection;
 pub mod renderables;
+pub mod ruler;
 pub mod store;
 
 pub use cover::{CoverError, TileCoord, ViewTransform, cover};
