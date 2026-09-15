@@ -25,6 +25,28 @@
    }
   },
   {
+   "id": "relief",
+   "type": "color-relief",
+   "source": "dem",
+   "paint": {
+    "color-relief-color": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "elevation"
+     ],
+     0,
+     "#2b3a55",
+     400,
+     "#6b7a55",
+     700,
+     "#e8e4d8"
+    ]
+   }
+  },
+  {
    "id": "shade",
    "type": "hillshade",
    "source": "dem",
