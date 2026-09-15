@@ -137,6 +137,39 @@ pub struct ClipDistances {
 }
 
 impl ClipDistances {
+    /// The distances for one piece of a line, from where it starts and ends along the whole line.
+    ///
+    /// mbgl's line bucket, reading `mapbox_clip_start` and `mapbox_clip_end`: the total is the
+    /// piece's own length in tile units, measured over the run left after duplicate points are
+    /// trimmed from both ends -- the same run [`LineBucket::add_geometry`] tessellates, so the
+    /// distance the generator walks and the total it is divided by cover the same points.
+    #[must_use]
+    pub fn for_piece(coordinates: &[Position], clip_start: f64, clip_end: f64) -> Self {
+        let mut len = coordinates.len();
+        while len >= 2 && coordinates[len - 1] == coordinates[len - 2] {
+            len -= 1;
+        }
+        let mut first = 0usize;
+        while first + 1 < len && coordinates[first] == coordinates[first + 1] {
+            first += 1;
+        }
+        // In f64 before subtracting: two tile coordinates either side of a buffered edge can be
+        // further apart than an i16 holds.
+        let total = coordinates.get(first..len).map_or(0.0, |run| {
+            run.windows(2)
+                .map(|pair| {
+                    (f64::from(pair[1][0]) - f64::from(pair[0][0]))
+                        .hypot(f64::from(pair[1][1]) - f64::from(pair[0][1]))
+                })
+                .sum()
+        });
+        Self {
+            clip_start,
+            clip_end,
+            total,
+        }
+    }
+
     /// Map a distance along this fragment onto the whole line's distance range.
     fn scale_to_max_line_distance(&self, tile_distance: f64) -> f64 {
         let mut relative = tile_distance / self.total;
@@ -820,6 +853,44 @@ mod tests {
     /// A straight two-point line: one segment, four vertices, two triangles.
     fn straight() -> Vec<Position> {
         alloc::vec![[0, 0], [100, 0]]
+    }
+
+    /// The distance a vertex carries, out of the two bytes it is split across.
+    fn linesofar(vertex: &LineVertex) -> i32 {
+        i32::from(vertex.data[2] >> 2) | (i32::from(vertex.data[3]) << 6)
+    }
+
+    /// A piece's total is its own length over the run duplicates are trimmed from, in f64 so a
+    /// piece reaching both buffered edges does not overflow the i16 difference.
+    #[test]
+    fn a_pieces_total_skips_duplicate_ends() {
+        let doubled = [[0, 0], [0, 0], [30, 40], [30, 40]];
+        assert_eq!(ClipDistances::for_piece(&doubled, 0.0, 1.0).total, 50.0);
+
+        let wide = [[-32000, 0], [32000, 0]];
+        assert_eq!(ClipDistances::for_piece(&wide, 0.0, 1.0).total, 64000.0);
+    }
+
+    /// With clip distances the line's distance field spans the piece's share of the whole line.
+    ///
+    /// The second half of a line, from 0.5 to 1.0: its first vertex carries half of the field's
+    /// top and its last vertex the top itself, which is what a gradient reads as its progress.
+    #[test]
+    fn clip_distances_spread_the_field_over_the_whole_line() {
+        let mut bucket = LineBucket::default();
+        let piece = straight();
+        bucket.add_geometry(
+            &piece,
+            &LineOptions {
+                clip_distances: Some(ClipDistances::for_piece(&piece, 0.5, 1.0)),
+                ..LineOptions::default()
+            },
+        );
+        let first = linesofar(&bucket.vertices[0]);
+        let last = linesofar(bucket.vertices.last().expect("vertices"));
+        // `(MAX_LINE_DISTANCE - 1) * LINE_DISTANCE_SCALE` is the field's top, 16383.
+        assert_eq!(first, 8191);
+        assert_eq!(last, 16383);
     }
 
     #[test]

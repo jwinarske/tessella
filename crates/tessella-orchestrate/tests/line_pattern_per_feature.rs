@@ -193,6 +193,7 @@ fn the_streams_land_where_the_oracle_puts_them() {
             permutation_key: key,
             pattern_atlas: Some(TextureId(20)),
             dash_atlas: None,
+            gradient_ramp: None,
             pattern_vertices: Some(&bucket.pattern_vertices),
         },
     );
@@ -245,6 +246,7 @@ fn an_unresolved_pattern_binds_nothing() {
             permutation_key: key,
             pattern_atlas: None,
             dash_atlas: None,
+            gradient_ramp: None,
             pattern_vertices: None,
         },
     );

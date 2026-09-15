@@ -909,6 +909,14 @@ pub enum Expr {
     /// Unlike a density it is not bounded: an elevation stop is meters above the sea, and a ramp
     /// over it is evaluated at the stops the style wrote rather than over a fixed range.
     Elevation,
+    /// `["line-progress"]`: how far along its whole line, from zero to one, a gradient is being
+    /// baked for.
+    ///
+    /// The third reader of the same slot. mbgl bakes `line-gradient` through
+    /// `ColorRampPropertyValue::evaluate`, which puts the progress in `colorRampParameter` exactly
+    /// as the heatmap puts its density there, so the expression is only ever evaluated while a
+    /// ramp is walked.
+    LineProgress,
     /// `["concat", …]`: the arguments, coerced to text and run together.
     Concat(Vec<Expr>),
     /// `["join", array, separator]`: an array of strings with a separator between.
@@ -1564,7 +1572,8 @@ impl Expr {
             | Self::Pitch
             | Self::DistanceFromCenter
             | Self::HeatmapDensity
-            | Self::Elevation => Type::Number,
+            | Self::Elevation
+            | Self::LineProgress => Type::Number,
             Self::GeometryType => Type::String,
             Self::Has { .. } | Self::Not(_) | Self::Compare { .. } => Type::Boolean,
             Self::All(_) | Self::Any(_) => Type::Boolean,
@@ -1980,8 +1989,10 @@ fn zoom_positions(expr: &Expr, at_curve: bool) -> (usize, usize) {
 /// `isZoomConstant` / `isFeatureConstant`, the suite checks them against the spec's answers, and
 /// a third bit would have to be masked out of every comparison to keep that working.
 fn reads_heatmap_density(expr: &Expr) -> bool {
-    matches!(expr, Expr::HeatmapDensity | Expr::Elevation)
-        || children(expr).into_iter().any(reads_heatmap_density)
+    matches!(
+        expr,
+        Expr::HeatmapDensity | Expr::Elevation | Expr::LineProgress
+    ) || children(expr).into_iter().any(reads_heatmap_density)
 }
 
 /// Every direct child of a node, for walks that treat all of them alike.
@@ -1993,6 +2004,7 @@ fn children(expr: &Expr) -> Vec<&Expr> {
         | Expr::DistanceFromCenter
         | Expr::HeatmapDensity
         | Expr::Elevation
+        | Expr::LineProgress
         | Expr::GeometryType
         | Expr::Id
         | Expr::Properties
@@ -2122,7 +2134,7 @@ fn classify(expr: &Expr) -> Dependency {
         // Neither zoom nor feature: the density is the renderer's, supplied per pixel while it
         // walks the ramp, and the spec's own classification says an expression reading it is
         // constant in both.
-        Expr::HeatmapDensity | Expr::Elevation => Dependency::NONE,
+        Expr::HeatmapDensity | Expr::Elevation | Expr::LineProgress => Dependency::NONE,
         Expr::Zoom => Dependency::ZOOM,
         // Not ZOOM. §12.1 holds a zoom-only value across a whole zoom interval, which is sound
         // because zoom does not change inside one; pitch and the distance from the center do,

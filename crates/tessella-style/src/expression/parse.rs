@@ -569,6 +569,13 @@ fn parse_rooted(
             expect_arity(operator, args, 0, 0)?;
             Ok(Expr::Elevation)
         }
+        // Legal inside `line-gradient` and nowhere else, and caught the same way again: only the
+        // gradient ramp supplies the progress. Refusing it here instead failed every layer that
+        // used one at load, which is a gradient line drawn as nothing.
+        "line-progress" => {
+            expect_arity(operator, args, 0, 0)?;
+            Ok(Expr::LineProgress)
+        }
         "zoom" => {
             expect_arity(operator, args, 0, 0)?;
             Ok(Expr::Zoom)

@@ -839,6 +839,25 @@ pub fn pack_line_drawable_buffer(entries: &[LineDrawableEntry], stride: u32) -> 
     out
 }
 
+/// A gradient line layer's consolidated drawable buffer.
+///
+/// `LineGradientDrawableUBO`: the plain block with its first mix factor, the color's, left out --
+/// the ramp is the color, so there is no attribute for a factor to mix. Blur, opacity, gap width,
+/// offset and width follow the ratio at 68 through 84, one slot earlier than a plain line's.
+#[must_use]
+pub fn pack_line_gradient_drawable_buffer(entries: &[LineDrawableEntry], stride: u32) -> Vec<u8> {
+    let stride = stride as usize;
+    let mut out = Vec::with_capacity(entries.len() * stride);
+    for entry in entries {
+        let start = out.len();
+        push_f32s(&mut out, &entry.matrix);
+        push_f32s(&mut out, &[entry.ratio]);
+        push_f32s(&mut out, &entry.interpolations[1..]);
+        out.resize(start + stride, 0);
+    }
+    out
+}
+
 /// One dashed line drawable's entry.
 ///
 /// `LineSDFDrawableUBO`, which is the plain line's block with the dash texture's placement
