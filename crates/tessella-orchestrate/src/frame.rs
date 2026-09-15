@@ -2158,20 +2158,23 @@ fn place_symbols(
     // draw order is left alone here and only the placement walk is resorted.
     //
     // The comparator is `tie(b.z, par.y, par.x) < tie(a.z, pbr.y, pbr.x)`, where `par` is *a*'s
-    // rotated position and `pbr` is *b*'s. Mixing the two sides like that looks like a slip, but
-    // with one zoom on screen the `z` terms are equal and it reduces to ascending `(y, x)`: row
-    // by row, left to right. At a bearing the rotation turns it into "by distance down the
-    // screen", which is the point of the sort.
+    // position rotated by the bearing and `pbr` is *b*'s. See `placement_tile_order`, which is it.
     //
     // It decides contention. Two tiles' labels compete for the same strip of screen along their
-    // shared edge, and whichever tile is offered first keeps it.
-    let mut walk: Vec<(&tessella_capture_abi::envelope::OrderEntry, u8, u32, u32)> = Vec::new();
+    // shared edge, and whichever tile is offered first keeps it -- which is why the rotation is
+    // not optional. This sorted the unrotated `(z, y, x)`, which is the same order north-up and the
+    // reverse of mbgl's with the map turned around: at a bearing of 180 the southern tile is at the
+    // top of the screen and is offered first there, and variable-label-placement's East Riverdale
+    // lost the space it keeps in the oracle to Riverdale Park in the tile north of it.
+    #[allow(clippy::cast_possible_truncation)]
+    let bearing = tessella_tile::camera::bearing_radians(view) as f32;
+    let mut walk: Vec<(&tessella_capture_abi::envelope::OrderEntry, (u8, u32, u32))> = Vec::new();
     for entry in order {
         let key = source
             .get(&entry.geometry.0)
             .and_then(|&(tile_index, _, _)| tiles.get(tile_index))
-            .map_or((0, 0, 0), |coord| (coord.z, coord.y, coord.x));
-        walk.push((entry, key.0, key.1, key.2));
+            .map_or((0, 0, 0), |coord| (coord.z, coord.x, coord.y));
+        walk.push((entry, key));
     }
     // Stable, and within one layer's contiguous run only: `sort_key` has already put the layers
     // in the order they place in, and that must not move.
@@ -2189,7 +2192,7 @@ fn place_symbols(
             .iter()
             .position(|(entry, ..)| entry.layer_index != layer)
             .map_or(walk.len(), |offset| at + offset);
-        walk[at..end].sort_by_key(|&(_, z, y, x)| (z, y, x));
+        walk[at..end].sort_by(|a, b| placement_tile_order(bearing, a.1, b.1));
         at = end;
     }
 
@@ -5030,9 +5033,47 @@ fn symbol_atlas_size(
     Some([width as f32, height as f32])
 }
 
+/// The order a symbol layer offers its tiles for placement, for tiles given as `(z, x, y)`.
+///
+/// mbgl's `getRenderTilesSortedByYPosition`: the deeper zoom first, then each tile's canonical
+/// position rotated by the bearing (`util::rotate`), by its rotated y and then its rotated x. The
+/// bearing is the internal one, in radians and negated from the style's degrees, so at 180 the
+/// southernmost row sorts first. The positions are `f32` because mbgl's are.
+fn placement_tile_order(bearing: f32, a: (u8, u32, u32), b: (u8, u32, u32)) -> core::cmp::Ordering {
+    let (sin, cos) = (bearing.sin(), bearing.cos());
+    #[allow(clippy::cast_precision_loss)]
+    let rotate = |(_, x, y): (u8, u32, u32)| {
+        let (x, y) = (x as f32, y as f32);
+        (cos * x - sin * y, sin * x + cos * y)
+    };
+    let (ax, ay) = rotate(a);
+    let (bx, by) = rotate(b);
+    b.0.cmp(&a.0)
+        .then(ay.total_cmp(&by))
+        .then(ax.total_cmp(&bx))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// North-up, a symbol layer's tiles place row by row from the top; turned around, from the
+    /// bottom, which is the top of the screen. The deeper zoom always goes first.
+    #[test]
+    fn placement_offers_tiles_from_the_top_of_the_screen() {
+        use core::cmp::Ordering::{Greater, Less};
+        let north = (12, 100, 40);
+        let south = (12, 100, 41);
+        let west = (12, 99, 40);
+        let up = 0.0;
+        let around = -core::f32::consts::PI;
+        assert_eq!(placement_tile_order(up, north, south), Less);
+        assert_eq!(placement_tile_order(around, north, south), Greater);
+        assert_eq!(placement_tile_order(up, west, north), Less);
+        assert_eq!(placement_tile_order(around, west, north), Greater);
+        assert_eq!(placement_tile_order(up, (13, 400, 400), north), Less);
+        assert_eq!(placement_tile_order(around, (11, 0, 0), south), Greater);
+    }
 
     /// No two texture id spaces are the same word.
     ///
