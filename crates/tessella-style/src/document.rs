@@ -240,6 +240,8 @@ pub enum LayerKind {
     Hillshade,
     /// Elevation mapped to color through a ramp.
     ColorRelief,
+    /// Where the device is, and which way it points.
+    LocationIndicator,
     /// A host-drawn layer.
     Custom,
     /// A type this build does not implement.

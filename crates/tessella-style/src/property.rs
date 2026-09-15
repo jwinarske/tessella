@@ -666,6 +666,128 @@ const RASTER_PAINT: &[PropertySpec] = &[
     },
 ];
 
+/// A location indicator layer's paint and layout properties.
+///
+/// A puck: where the device is, how sure it is, and which way it is pointing. Thirteen properties
+/// across the two tables, and not one of them is data-driven -- there is exactly one puck, and a
+/// property that varied per feature would have no feature to vary over.
+///
+/// `location` is three numbers, latitude then longitude then altitude, which is the *other* order
+/// from every coordinate in a style document. mbgl's `std::array<double, 3>` is filled that way
+/// and the layer reads `location[0]` as a latitude, so a scene writing longitude first puts the
+/// puck somewhere else entirely -- and at Berlin's latitude "somewhere else" is still on land,
+/// which is what makes it worth saying here.
+///
+/// `accuracy-radius` defaults to zero, so a layer that names no radius draws no circle. That is
+/// the spec's and mbgl's: a position with no stated accuracy is not a position with perfect
+/// accuracy.
+///
+/// `bearing` is a `Rotation` in mbgl rather than a float, which is a number that wraps at 360
+/// rather than a number that happens to be in degrees. Nothing here wraps it yet; the puck's own
+/// arithmetic does, and the property is a number until something needs otherwise.
+const LOCATION_INDICATOR_PAINT: &[PropertySpec] = &[
+    PropertySpec {
+        name: "accuracy-radius",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "accuracy-radius-border-color",
+        kind: PropertyKind::Color,
+        default: DefaultValue::Color(Color {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        }),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "accuracy-radius-color",
+        kind: PropertyKind::Color,
+        default: DefaultValue::Color(Color {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        }),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "bearing",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "bearing-image-size",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(1.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "image-tilt-displacement",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        // Latitude, longitude, altitude -- in that order, which is not the order the rest of a
+        // style writes a coordinate in.
+        name: "location",
+        kind: PropertyKind::NumberArray(Some(3)),
+        default: DefaultValue::None,
+        data_driven: false,
+    },
+    PropertySpec {
+        // How much of the perspective foreshortening the puck resists when the camera pitches.
+        // One leaves it flat on the ground and zero leaves it facing the camera; mbgl's default
+        // is most of the way to flat.
+        name: "perspective-compensation",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(0.85),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "shadow-image-size",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(1.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "top-image-size",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(1.0),
+        data_driven: false,
+    },
+];
+
+/// A location indicator's layout properties: the three images it draws.
+///
+/// Layout rather than paint because they are sprite *names*, and a name decides which quads exist
+/// rather than what color they are -- which is the same split `icon-image` is on.
+const LOCATION_INDICATOR_LAYOUT: &[PropertySpec] = &[
+    PropertySpec {
+        name: "bearing-image",
+        kind: PropertyKind::Image,
+        default: DefaultValue::None,
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "shadow-image",
+        kind: PropertyKind::Image,
+        default: DefaultValue::None,
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "top-image",
+        kind: PropertyKind::Image,
+        default: DefaultValue::None,
+        data_driven: false,
+    },
+];
+
 /// A color relief layer's paint properties.
 ///
 /// Two, and one of them is not a value. `color-relief-color` is a *ramp*: an expression over
@@ -908,6 +1030,7 @@ pub fn paint_specs(kind: &LayerKind) -> Option<&'static [PropertySpec]> {
         LayerKind::Heatmap => Some(HEATMAP_PAINT),
         LayerKind::Hillshade => Some(HILLSHADE_PAINT),
         LayerKind::ColorRelief => Some(COLOR_RELIEF_PAINT),
+        LayerKind::LocationIndicator => Some(LOCATION_INDICATOR_PAINT),
         _ => None,
     }
 }
@@ -916,6 +1039,7 @@ pub fn paint_specs(kind: &LayerKind) -> Option<&'static [PropertySpec]> {
 #[must_use]
 pub fn layout_specs(kind: &LayerKind) -> Option<&'static [PropertySpec]> {
     match kind {
+        LayerKind::LocationIndicator => Some(LOCATION_INDICATOR_LAYOUT),
         LayerKind::Background => Some(&[]),
         LayerKind::Fill => Some(FILL_LAYOUT),
         LayerKind::Line => Some(LINE_LAYOUT),
