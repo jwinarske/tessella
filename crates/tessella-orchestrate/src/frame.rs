@@ -459,6 +459,32 @@ fn relief_color_stops_id(layer_index: i32) -> tessella_capture_abi::envelope::Te
     tessella_capture_abi::envelope::TextureId(RELIEF_STOPS_BASE + index * 2 + 1)
 }
 
+/// The first texture id a location indicator's three images take.
+///
+/// One triple per *layer*, in a word the tile packings cannot reach. Not the sprite atlas the
+/// symbols sample: mbgl gives a puck's images textures of their own -- `getSharedImage` returns
+/// the whole picture and `texture->upload(image)` puts it up on its own -- and it is right to
+/// follow. A quad's texture coordinates run the full `0..1` over its picture, and an atlas
+/// rectangle is not `0..1` of anything.
+const PUCK_TEXTURE_BASE: u64 = 4 << 60;
+
+/// Where one of a layer's three puck images lives.
+#[must_use]
+fn puck_texture_id(
+    layer_index: i32,
+    image: tessella_layout::location_indicator::PuckImage,
+) -> tessella_capture_abi::envelope::TextureId {
+    use tessella_layout::location_indicator::PuckImage;
+    #[allow(clippy::cast_sign_loss)]
+    let index = layer_index.max(0) as u64;
+    let slot = match image {
+        PuckImage::Shadow => 0,
+        PuckImage::Bearing => 1,
+        PuckImage::Top => 2,
+    };
+    tessella_capture_abi::envelope::TextureId(PUCK_TEXTURE_BASE + index * 3 + slot)
+}
+
 /// The first texture id a color relief tile's elevation takes.
 ///
 /// Its own space, because a style may draw a hillshade and a relief over one tile and the slope
@@ -3204,8 +3230,26 @@ fn encode_parts(
             &hillshade.bucket,
             textures.hillshade,
         )),
-        Content::LocationIndicator(circle) => {
-            let (encoded, vertices) = emit::encode_location_indicator(arena, PLACEHOLDER, circle);
+        Content::LocationIndicator(puck) => {
+            // The interior, when there is a circle at all. A puck that names images and no
+            // accuracy radius starts at its shadow, and the parts after this one are appended
+            // below whether or not this produced anything -- which is why the arm answers with
+            // an empty list rather than `None` for that case: `None` drops the whole bucket.
+            if !puck.has_circle() {
+                let mut parts = alloc::vec::Vec::new();
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                let layer_index = bucket.layer_index as i32;
+                for quad in &puck.quads {
+                    parts.push(emit::encode_location_indicator_quad(
+                        arena,
+                        PLACEHOLDER,
+                        quad,
+                        puck_texture_id(layer_index, quad.image),
+                    ));
+                }
+                return Some(parts);
+            }
+            let (encoded, vertices) = emit::encode_location_indicator(arena, PLACEHOLDER, puck);
             puck_shared = Some(vertices);
             Some(encoded)
         }
@@ -3270,13 +3314,28 @@ fn encode_parts(
             );
         }
     }
-    if let (Some(vertices), Content::LocationIndicator(circle)) = (puck_shared, &bucket.content) {
-        parts.push(emit::encode_location_indicator_border(
-            arena,
-            PLACEHOLDER,
-            circle,
-            vertices,
-        ));
+    if let Content::LocationIndicator(puck) = &bucket.content {
+        if let Some(vertices) = puck_shared {
+            parts.push(emit::encode_location_indicator_border(
+                arena,
+                PLACEHOLDER,
+                puck,
+                vertices,
+            ));
+        }
+        // Then the images, in painter order. Each is its own four vertices and its own picture:
+        // they share the puck's position and nothing else, and the shadow is a different size
+        // from the hat by construction.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+        let layer_index = bucket.layer_index as i32;
+        for quad in &puck.quads {
+            parts.push(emit::encode_location_indicator_quad(
+                arena,
+                PLACEHOLDER,
+                quad,
+                puck_texture_id(layer_index, quad.image),
+            ));
+        }
     }
     if let Some(shared) = extrusion_shared {
         let (wall_layout, key) = bind(FILL_EXTRUSION_FAMILY, BuiltIn::FillExtrusionInstancedShader);
@@ -4634,20 +4693,53 @@ fn write_layer_state(
             let Ok(matrix) = ubo::location_indicator_matrix(view, location) else {
                 return Ok(());
             };
-            // The two drawables in sub-layer order, which is the order `ubo_index` counts them
-            // in: the interior's color then the border's. Counted off the bindings rather than
-            // written as a pair, so a layer that bound one and not the other does not hand it
-            // the other's block.
-            let entries: Vec<ubo::LocationIndicatorEntry> = [
-                (0, "accuracy-radius-color"),
-                (1, "accuracy-radius-border-color"),
-            ]
-            .into_iter()
-            .flat_map(|(sub, property)| {
-                let color = ubo::uniform_color(&paint, property, view.zoom);
-                matrices(sub).map(move |_| ubo::LocationIndicatorEntry { matrix, color })
-            })
-            .collect();
+
+            let has_circle = crate::tile::puck_draws_circle(&paint, view);
+
+            // The images, cut out of the sheet and sent as textures of their own, before any
+            // drawable names one. See `puck_texture_id` for why they are not sampled in place.
+            if let Some(patterns) = patterns {
+                for image in tessella_layout::location_indicator::PuckImage::ALL {
+                    let Some(cut) = puck_image(style, layer_index, image, patterns, view.zoom)
+                    else {
+                        continue;
+                    };
+                    texture::write(
+                        producer,
+                        &texture::whole(
+                            puck_texture_id(layer_index, image),
+                            cut.size,
+                            tessella_capture_abi::TexturePixelType::RGBA,
+                            &cut.pixels,
+                        ),
+                    )?;
+                }
+            }
+
+            // The drawables in sub-layer order, which is the order `ubo_index` counts them in:
+            // the circle's interior, its border, then a quad per image. Counted off the bindings
+            // rather than written out, so a layer that bound one and not another does not hand it
+            // the other's block -- a puck with no accuracy radius binds no circle at all and its
+            // first quad takes slot zero.
+            //
+            // A quad's color is black, which mbgl writes and which the textured shader multiplies
+            // by nothing: it samples the picture and ignores the block's color entirely. It is
+            // written because the block has the field and mbgl fills it.
+            let mut entries: Vec<ubo::LocationIndicatorEntry> = Vec::new();
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            for sub in 0..bindings.len() as i32 {
+                let color = match sub {
+                    0 if has_circle => {
+                        ubo::uniform_color(&paint, "accuracy-radius-color", view.zoom)
+                    }
+                    1 if has_circle => {
+                        ubo::uniform_color(&paint, "accuracy-radius-border-color", view.zoom)
+                    }
+                    _ => tessella_style::Color::black(),
+                };
+                entries
+                    .extend(matrices(sub).map(|_| ubo::LocationIndicatorEntry { matrix, color }));
+            }
             ubo::write(
                 producer,
                 view_id,
@@ -4662,6 +4754,48 @@ fn write_layer_state(
         _ => {}
     }
     Ok(())
+}
+
+/// One of a puck's images, lifted out of the sprite sheet.
+///
+/// The sheet packs every sprite with a pixel of padding on each side, so the picture itself is the
+/// padded rectangle inset by one. Copied row by row rather than referenced: a texture upload names
+/// a contiguous run of bytes and a sprite's rows are `atlas_width` apart.
+struct PuckImagePixels {
+    size: tessella_capture_abi::envelope::Extent,
+    pixels: Vec<u8>,
+}
+
+/// Cuts one image out, or nothing when the layer does not name it or the sheet has not got it.
+fn puck_image(
+    style: &Style,
+    layer_index: i32,
+    image: tessella_layout::location_indicator::PuckImage,
+    patterns: &Patterns<'_>,
+    zoom: f64,
+) -> Option<PuckImagePixels> {
+    let layer = usize::try_from(layer_index)
+        .ok()
+        .and_then(|index| style.layers.get(index))?;
+    let name = tessella_style::property::layout_value(layer, image.layout_property(), zoom, None)?;
+    let position = patterns.positions.get(name.as_str()?)?;
+
+    let rect = position.padded_rect;
+    let (width, height) = (rect.width.saturating_sub(2), rect.height.saturating_sub(2));
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let sheet_width = u32::from(patterns.size[0]);
+    let row_bytes = width as usize * 4;
+    let mut pixels = Vec::with_capacity(row_bytes * height as usize);
+    for row in 0..height {
+        let start = ((rect.y + 1 + row) * sheet_width + rect.x + 1) as usize * 4;
+        pixels.extend_from_slice(patterns.pixels.get(start..start + row_bytes)?);
+    }
+    Some(PuckImagePixels {
+        size: tessella_capture_abi::envelope::Extent { width, height },
+        pixels,
+    })
 }
 
 /// The glyph atlas a symbol layer samples, in pixels.
