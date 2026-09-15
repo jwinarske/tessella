@@ -517,6 +517,15 @@ pub fn bindings_for(
             Content::Raster(_) => {
                 emit(0, view::fill_pass(), view::raster_flags());
             }
+            // Two drawables over one vertex buffer: the accuracy circle's interior as a fan,
+            // then its border as a strip. mbgl sets no sub-layer index on either -- it orders
+            // its puck's drawables by the order it adds them -- so they are numbered here, the
+            // way a symbol layout's parts are, because the sub-layer index is what orders a
+            // layer's drawables on this wire.
+            Content::LocationIndicator(_) => {
+                emit(0, view::fill_pass(), view::location_indicator_flags());
+                emit(1, view::fill_pass(), view::location_indicator_flags());
+            }
             // Two drawables, and the order between them is load-bearing. mbgl builds a
             // depth-only pass at sub-layer 0 and a color pass at 1 whenever the layer is not
             // opaque — `doDepthPass = (!opaque || hasPattern)`, with `opaque` meaning an opacity

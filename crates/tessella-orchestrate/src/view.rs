@@ -130,6 +130,17 @@ pub fn symbol_flags() -> DrawFlags {
     DrawFlags::ENABLE_DEPTH | DrawFlags::ENABLE_COLOR
 }
 
+/// Draw state for a location indicator.
+///
+/// Color and nothing else. mbgl's builder says both halves out loud -- `setEnableDepth(false)`
+/// and `setEnableStencil(false)` on every one of the puck's five drawables -- where a circle and
+/// a symbol only decline the stencil. A puck is drawn last and over everything, and it is one
+/// object at one place rather than anything a tile mask has an opinion about.
+#[must_use]
+pub fn location_indicator_flags() -> DrawFlags {
+    DrawFlags::ENABLE_COLOR
+}
+
 /// The depth-only pass of a fill extrusion.
 ///
 /// A translucent extrusion is drawn twice: once writing depth and no color, then once writing

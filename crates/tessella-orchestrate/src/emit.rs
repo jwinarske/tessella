@@ -45,6 +45,7 @@ use tessella_layout::fill::Segment;
 use tessella_layout::fill_extrusion::FillExtrusionBucket;
 use tessella_layout::heatmap::HeatmapBucket;
 use tessella_layout::line::LineBucket;
+use tessella_layout::location_indicator::LocationIndicatorBucket;
 use tessella_layout::raster::{RasterBucket, RasterVertex};
 use tessella_layout::symbol_bucket::{SymbolBuffers, SymbolVertex};
 
@@ -65,6 +66,13 @@ const SYMBOL_STRIDE: u32 = 24;
 
 /// A raster vertex: a tile position and a texture position, two shorts each.
 const RASTER_STRIDE: u32 = 8;
+
+/// A location indicator's vertex: two floats.
+///
+/// Floats, not the shorts every tiled family uses, because the value is not a tile coordinate. A
+/// puck's circle is offsets in world pixels from the puck, which at z22 reaches eight figures --
+/// mbgl declares it `gfx::AttributeDataType::Float2` for that reason.
+const LOCATION_INDICATOR_STRIDE: u32 = 8;
 
 /// A slab's starting capacity, so a frame of a few small buckets does not rebuild its buffer on
 /// every allocation. It is not a ceiling — see [`SlabArena::alloc`].
@@ -1759,6 +1767,113 @@ pub fn encode_fill_outline_triangulated(
         None,
         TextureFilter::Linear,
     )
+}
+
+/// Puts a location indicator's accuracy circle into a slab and announces its interior.
+///
+/// Returns the vertex allocation beside the record, because the border is the *same* vertices
+/// with its own indices over them -- mbgl shares one `VertexAttributeArray` between the two
+/// circle drawables -- and copying seventy-three points a second time to say so would be the
+/// whole geometry again.
+pub fn encode_location_indicator(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    bucket: &LocationIndicatorBucket,
+) -> (Encoded, SlabRef) {
+    let vertices = alloc_f32(arena, bucket.vertices.as_flattened());
+    let indexes = alloc_u16(arena, &bucket.fill_indices);
+    let encoded = location_indicator_part(
+        geometry,
+        vertices,
+        bucket.vertices.len(),
+        indexes,
+        bucket.fill_indices.len(),
+        Topology::Triangles,
+    );
+    (encoded, vertices)
+}
+
+/// As [`encode_location_indicator`], for the border drawn over the interior's vertices.
+///
+/// A line *strip*, which is the one place on this wire the topology is not the family's: the
+/// interior and the border are both `LocationIndicatorShader`. Read as a list of pairs, its
+/// seventy-two indices would draw thirty-six disconnected chords.
+#[must_use]
+pub fn encode_location_indicator_border(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    bucket: &LocationIndicatorBucket,
+    vertices: SlabRef,
+) -> Encoded {
+    let indexes = alloc_u16(arena, &bucket.border_indices);
+    location_indicator_part(
+        geometry,
+        vertices,
+        bucket.vertices.len(),
+        indexes,
+        bucket.border_indices.len(),
+        Topology::LineStrip,
+    )
+}
+
+/// One of the accuracy circle's two drawables.
+///
+/// One attribute and no texture: `LocationIndicatorShader` reads a position and a color uniform
+/// and does nothing else. The textured half of the family -- the shadow, the puck and its hat --
+/// is a different shader with a second attribute, so it is not this.
+fn location_indicator_part(
+    geometry: GeometryId,
+    vertices: SlabRef,
+    vertex_count: usize,
+    indexes: SlabRef,
+    index_count: usize,
+    topology: Topology,
+) -> Encoded {
+    let descriptors = [AttributeDesc {
+        attr_id: ubo_slots::ID_LOCATION_INDICATOR_POS_VERTEX_ATTRIBUTE,
+        binding: 0,
+        source: vertices,
+        offset: 0,
+        vertex_offset: 0,
+        stride: LOCATION_INDICATOR_STRIDE,
+        data_type: AttributeDataType::Float2 as u8,
+        declared_data_type: AttributeDataType::Float2 as u8,
+        _pad: [0; 2],
+    }];
+
+    let mut payload = Vec::new();
+    let attrs = push_span(&mut payload, &descriptors);
+    #[allow(clippy::cast_possible_truncation)]
+    let segments = push_span(
+        &mut payload,
+        &[AbiSegment {
+            vertex_offset: 0,
+            index_offset: 0,
+            vertex_length: vertex_count as u32,
+            index_length: index_count as u32,
+        }],
+    );
+
+    #[allow(clippy::cast_possible_truncation)]
+    let record = GeometryAdd {
+        geometry,
+        // Nothing data-driven: a puck's paint has no feature to vary over, and the spec says so
+        // -- not one of the thirteen properties is data-driven.
+        permutation_key: 0,
+        indexes,
+        vertex_count: vertex_count as u32,
+        attrs,
+        instance_attrs: Span::default(),
+        segments,
+        texture_refs: Span::default(),
+        builtin_shader: BuiltIn::LocationIndicatorShader as i32,
+        vertex_type: AttributeDataType::Float2 as u8,
+        reason: AddReason::Created as u8,
+        topology: topology as u8,
+        _pad: [0; 1],
+    };
+
+    Encoded { record, payload }
 }
 
 /// Encodes a background's quad.
