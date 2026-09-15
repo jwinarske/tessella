@@ -589,10 +589,10 @@ fn decode_and_build(
             // Gridded for a sphere, flat for a plane, on the tile's own level -- the same rule
             // and the same function a fill's subdivision uses, so the two agree about how much
             // curvature a level has without either knowing the camera.
-            let cells = match job.key.surface {
-                Surface::Plane => 1,
-                Surface::Sphere => tessella_layout::subdivide::edge_cells(job.tile.bucket_zoom()),
-            };
+            let cells = tessella_layout::subdivide::cells_for_surface(
+                job.key.surface,
+                job.tile.bucket_zoom(),
+            );
             build_raster_tile_on(
                 style,
                 &job.source,
@@ -634,10 +634,10 @@ fn decode_and_build(
                     message: error.to_string(),
                 })?;
             // The whole tile, as a raster tile is, and gridded on a sphere for the same reason.
-            let cells = match job.key.surface {
-                Surface::Plane => 1,
-                Surface::Sphere => tessella_layout::subdivide::edge_cells(job.tile.bucket_zoom()),
-            };
+            let cells = tessella_layout::subdivide::cells_for_surface(
+                job.key.surface,
+                job.tile.bucket_zoom(),
+            );
             // Two layers can read one DEM tile and want different pictures of it: a hillshade
             // reads how the height is changing and a color relief reads the height. So both
             // builders run over the same decode, and a style with only one of them pays for only

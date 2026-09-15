@@ -152,7 +152,13 @@ pub fn cover_on(
     surface: crate::store::Surface,
 ) -> Result<Vec<TileCoord>, CoverError> {
     match surface {
-        crate::store::Surface::Plane => cover_at_with(view, z, copies),
+        // Terrain covers the plane's tiles: raising the ground moves geometry in z and does not
+        // change which ground is under the camera. What it *does* change is how much of that
+        // ground is visible past a ridge, which is a horizon question the cover does not ask on a
+        // plane either -- see the note on `cover_at_with` about the frustum being the bound.
+        crate::store::Surface::Plane | crate::store::Surface::Terrain { .. } => {
+            cover_at_with(view, z, copies)
+        }
         // A globe folds by construction rather than by policy: every wrap of a tile bends to the
         // same patch, so the walk cannot produce a second copy to fold.
         crate::store::Surface::Sphere => cover_globe(view, z),

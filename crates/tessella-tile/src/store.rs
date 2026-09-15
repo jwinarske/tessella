@@ -93,6 +93,30 @@ pub enum Surface {
     /// A sphere. Fill geometry is split against a grid fine enough that a bent chord stays within
     /// half a pixel of the surface.
     Sphere,
+    /// Terrain. Fill geometry is split against a grid of `cells` across the tile, so that a
+    /// triangle raised from the DEM follows the drawn surface rather than chording across it.
+    ///
+    /// # Why the count is in the key and not derived
+    ///
+    /// A sphere's grid follows from the tile's zoom, so [`Surface::Sphere`] carries nothing: two
+    /// builds of one tile agree by construction. A terrain's follows from the tile's *elevation*,
+    /// which arrives separately and later -- so one tile is genuinely built twice, flat at
+    /// `cells` of one while its DEM is in flight and split once it lands, and the two are
+    /// different geometry that has to be different cache entries. Carrying the count here is what
+    /// makes them so.
+    ///
+    /// That is also the behavior MapLibre GL JS has, arrived at from the other direction: a
+    /// covered tile whose DEM has not loaded is drawn flat rather than withheld, so a map paints
+    /// immediately and rises when the ground arrives.
+    Terrain {
+        /// Cells across the tile's edge. One is no subdivision, which is the flat build.
+        ///
+        /// Comes from `Relief::cells_within`, so it is a power of two no larger than the relief
+        /// pyramid's base. Nothing here enforces that -- the subdivision clamps to its own
+        /// `MAX_CELLS` and a larger value draws the same tile -- but two counts that draw
+        /// identically are still two cache entries, so a caller inventing one pays for it twice.
+        cells: u32,
+    },
 }
 
 impl TileKey {
