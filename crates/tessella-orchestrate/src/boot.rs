@@ -1149,6 +1149,17 @@ pub(crate) fn plan_resolution(
         .filter(|layer| layer.kind != LayerKind::Background)
         .filter_map(|layer| layer.source.as_deref())
         .collect();
+    // And the terrain's, which no layer draws from. It is named at the top level of the document
+    // rather than by a layer, so the walk above cannot see it -- a style whose only use of a DEM
+    // is its terrain fetched nothing at all and drew flat, with every other part of the build
+    // working and nothing to say why.
+    //
+    // Only when the terrain is usable: `terrain_dem` is what decides that, and a terrain naming a
+    // vector source or one the style does not declare adds no ask, because there is nothing there
+    // to fetch.
+    if let Some((name, _)) = style.terrain_dem() {
+        wanted.push(name);
+    }
     wanted.sort_unstable();
     wanted.dedup();
 
