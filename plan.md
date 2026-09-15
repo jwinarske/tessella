@@ -597,7 +597,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   envelope kind is emitted and diffed against the probe on the hermetic style: geometry,
   `ViewDeclare`/`ViewUse`/`ViewRelease`, `UboUpdate` (all six buffers, byte-exact),
   `TextureUpdate`, `StencilTiles` (matrix hashes), `OrderUpdate` (painter order element for
-  element) and `CameraUpdate` (all sixteen projection elements plus light and centre, bit-exact).
+  element) and `CameraUpdate` (all sixteen projection elements plus light and center, bit-exact).
   Parked bytes are zero over five hundred settled frames. Qualification: GeoJSON polygon vertex
   *order* is a rotation of the oracle's, which DR-19 explains and declines to chase.
   The second qualification is discharged. `proj_matrix` refused bearing and pitch, so the
@@ -924,7 +924,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   turns out to be two mechanisms — a reach along the line and the thinning of the circles — that
   had been described here as one.
   What that qualification cost came due when a building was first drawn at a pitch. The pitched
-  camera had never been *evaluated*, let alone compared: it hovered over the map's centre instead
+  camera had never been *evaluated*, let alone compared: it hovered over the map's center instead
   of orbiting back along its own forward direction, and the pitch was read as radians where it is
   documented and passed in degrees. Both are the identity at zero, so every golden held over
   both. The lesson is not that transcription failed — it is that arithmetic nothing runs is
@@ -1180,8 +1180,8 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   name should appear once rather than march along the feature. It deliberately has *no*
   tile-bounds test, unlike the repeating case — a centred label belongs to its feature rather
   than to a position, so a line whose middle falls outside this tile still gets its name, which
-  mbgl's own expectation of an anchor at (-3, -3) pins. And a bend at the centre refuses the
-  label outright rather than sliding it along: the caller asked for the centre, and answering
+  mbgl's own expectation of an anchor at (-3, -3) pins. And a bend at the center refuses the
+  label outright rather than sliding it along: the caller asked for the center, and answering
   with somewhere else would silently answer a different question.
   `build_line_symbols` wires it through. One shaping serves every repetition — the glyphs, their
   corners and their texels are identical at every anchor and only the anchor differs, so shaping
@@ -1261,7 +1261,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   the way — three existing tests were hand-decoding spans out of the payload.
   The two halves then join: `ViewSymbols::frame` runs per view per frame — project the anchors,
   compete for space, advance the fades — and writes the result back into the two per-frame
-  buffers. Layout runs once per tile and is shared (§5.1); this is the per-view cost centre §5.2
+  buffers. Layout runs once per tile and is shared (§5.1); this is the per-view cost center §5.2
   names. The projection is the caller's, because placement happens in screen space and the
   camera is per view: the same two labels collide at z5 and not at z14, and on a phone and not
   on a wall display, which is asserted as behaviour rather than described. A label's per-frame
@@ -1861,14 +1861,14 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   then pitch, then roll, and the product does not commute: pitching a rotated camera is not
   rotating a pitched one.
   The far plane is the rest of it, and the whole of what pitch changes about the frustum. Tilting
-  puts the top of the screen further away than its centre, so the far plane must reach it or the
+  puts the top of the screen further away than its center, so the far plane must reach it or the
   horizon is clipped; the reach is `tan(fov/2)` in the units mbgl uses, and the pitch's tangent
   turns it into a fraction of the distance the top edge adds. Two clamps, and neither is
   redundant: `MAX_PITCH` at 89.25 degrees bounds the *angle*, and 0.99 bounds the *arithmetic*,
   because at ninety degrees the top of the screen is the horizon and the far distance diverges.
   What stands in for the capture that does not exist is that the unrotated path is *unchanged*.
   The quaternion is exactly the identity at zero bearing and zero pitch, so the rotation matrix
-  is exactly the identity matrix and the far plane collapses to the centre distance — every
+  is exactly the identity matrix and the far plane collapses to the center distance — every
   golden still holds to the bit, and the rotated path is the same arithmetic with a rotation that
   is no longer the identity. That is weaker than a diff against a rotated dump and it is not
   nothing: it says the change added a term rather than moved one.
@@ -1944,7 +1944,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   The thinning is the half that pays now. A run's circles overlap by construction — they step by
   half a box so the run is a covering rather than a dotted line — so adjacent circles are often
   nearly coincident on screen, most of all where a pitched map squeezes the far end of a road into
-  a few pixels. mbgl drops one when its centre is within √2 radii of the last kept, with two rules
+  a few pixels. mbgl drops one when its center is within √2 radii of the last kept, with two rules
   that are not optional: never two in a row, and never the last. A run that thinned itself away
   would reserve a single point of the road it covers, and the *end* of a label is where it meets
   the next one, so dropping the final circle is how two labels come to overlap at their ends while
@@ -3855,7 +3855,7 @@ a subdivision and a draw the consumer no longer makes.
 
   Against mbgl afterwards, on water area and centroid: z13 1.02 at (+1, -1), z14 0.98 at
   (-16, -10), z15 0.99 at (+7, -19). z16 is the same ground at the same scale, confirmed by
-  matching it against the centre quarter of both z14 renders.
+  matching it against the center quarter of both z14 renders.
 
   The lesson is in how long it hid. Green, water and grey pixel counts were matching mbgl to a few
   percent and that was read as the frame being right; a histogram cannot see a translation, still
@@ -5137,7 +5137,7 @@ a subdivision and a draw the consumer no longer makes.
   *Fixed.* `Anchoring::Line` holds a feature's lines rather than one of them, `merge_lines` keys
   and splices only the first, and the collection is clipped in one pass as `clipLines` does --
   its `clippedLines` is shared across rings, so the run-continuation test spans ring boundaries.
-  `line-center` stayed per ring, which is mbgl's own arm: it loops the geometry and takes a centre
+  `line-center` stayed per ring, which is mbgl's own arm: it loops the geometry and takes a center
   on each line longer than a point.
 
   The instrumented counts, after:
@@ -5425,7 +5425,7 @@ against; none is scheduled.
 
   It does not have to be. `pmtiles serve / --bucket=https://build.protomaps.com` proxies the whole
   planet over HTTP range requests with no local copy at all, and a style pointed at
-  `http://127.0.0.1:8091/<date>.json` draws the centre of Paris at zero gross pixels against the
+  `http://127.0.0.1:8091/<date>.json` draws the center of Paris at zero gross pixels against the
   oracle, four runs the same. The format is designed for exactly this; it is only *this* reader
   that insists on a file.
 
@@ -6675,7 +6675,7 @@ matrices by the path a pan takes. What survives is everything a resize does not 
 tiles, their buckets, the layouts, and the label identities with the fades keyed on them.
 
 **The half that was easy to miss.** A resize has to *register*, and it did not. Nothing else in
-`CameraKey` moves when a window is resized: the centre, zoom, bearing, pitch and `pixels_per_meter`
+`CameraKey` moves when a window is resized: the center, zoom, bearing, pitch and `pixels_per_meter`
 are all functions of where the camera points and how far away it is, not of how large the surface
 is. A map that merely accepted a new size would have reported a settled camera and gone on drawing
 through the matrices of the old viewport. The viewport is a field of the key for that reason, and
@@ -7484,7 +7484,7 @@ space each time.
 ### The run moves into tile units, and the placements nearly agree
 
 The structural fix the last entry called for. `collision_circles` is walked against the tile's own
-line now and each circle projected afterwards -- centre through the same projection every anchor
+line now and each circle projected afterwards -- center through the same projection every anchor
 takes, radius by the ratio that built it -- rather than walking a line already flattened by the
 camera.
 
@@ -7818,7 +7818,7 @@ specks along the coastline, not a region. `one_buildings` is 41 runs with a maxi
 
 Nor is it antialiasing. Where the two differ, this side is the fill's flat colour and mbgl's is the
 background's -- both pure, neither blended -- so the polygon edge simply lands on the other side of
-a pixel centre. One pixel of coverage, on boundaries thousands of pixels long.
+a pixel center. One pixel of coverage, on boundaries thousands of pixels long.
 
 Two things were checked against mbgl and ruled out on the way, because the far-field concentration
 looked like a horizon problem: `tanFovAboveCenter` is `tan(fov/2)` on both sides once offset and
@@ -7939,12 +7939,12 @@ sphere between z1 and z2.5, nothing outside it -- reproduces to the tile:
 
 | | z0 | z1 | z2 | z2.5 | z3+ |
 | --- | --- | --- | --- | --- | --- |
-| tiles whose *centre* is behind | 1 of 1 | 2 of 4 | 3 of 9 | 0 | 0 |
+| tiles whose *center* is behind | 1 of 1 | 2 of 4 | 3 of 9 | 0 | 0 |
 | tiles with *no corner* visible | 0 | 0 | 0 | 0 | 0 |
 
 The first row is what was measured and the second is what can be culled. A z1 tile spans ninety
-degrees of longitude, so its centre passes behind the horizon while a third of it is still on
-screen; culling on the centre leaves a hole in the planet. Asked safely -- is *any* part of this
+degrees of longitude, so its center passes behind the horizon while a third of it is still on
+screen; culling on the center leaves a hole in the planet. Asked safely -- is *any* part of this
 tile visible -- nothing is ever removed, because at the zooms where a horizon exists the tiles are
 enormous.
 
@@ -8007,7 +8007,7 @@ hand check would have missed:
   faces. Caught by "north is up".
 
 And one test was wrong rather than the code. "The antipode is behind the camera" is false: it sits
-on the view axis *inside* the frustum, projects to the centre of the screen, and is merely further
+on the view axis *inside* the frustum, projects to the center of the screen, and is merely further
 away in depth. A projection cannot express occlusion — which is the whole reason `faces_camera`
 exists, and the test now asserts the two agreeing instead.
 
