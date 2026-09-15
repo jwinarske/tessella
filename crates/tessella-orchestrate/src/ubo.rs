@@ -477,6 +477,28 @@ pub fn fill_outline_triangulates(
     constant("fill-outline-color") && constant("fill-opacity")
 }
 
+/// Whether a fill layer's outline draws *under* its triangles rather than over them.
+///
+/// mbgl's, from `render_fill_layer.cpp`:
+///
+/// ```text
+/// builder->setSubLayerIndex(unevaluated.get<FillOutlineColor>().isUndefined() ? 2 : 0);
+/// ```
+///
+/// A fill's triangles are sublayer 1. An outline the style did not ask for is sublayer 2 -- it
+/// is the fill's own antialiasing, drawn in the fill's color over the fill's edge, and it
+/// belongs on top. An outline the style *did* ask for is sublayer 0, underneath: it is a
+/// different color from the fill, and mbgl draws it first so the fill covers its inner half.
+/// Drawn on top instead, that inner half sits over the fill and the line reads twice as wide.
+///
+/// `unevaluated` is the style's own value, so this asks whether the layer wrote the property --
+/// not what it evaluates to. A layer that sets `fill-outline-color` to the same color as its
+/// fill still takes the first branch.
+#[must_use]
+pub fn fill_outline_under_fill(layer: &tessella_style::Layer) -> bool {
+    layer.paint.contains_key("fill-outline-color")
+}
+
 /// Whether a fill layer draws an outline at all.
 ///
 /// mbgl's `doOutline`, from `render_fill_layer.cpp`:
