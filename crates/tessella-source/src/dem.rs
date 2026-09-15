@@ -267,6 +267,45 @@ impl Dem {
         )
     }
 
+    /// The elevation at a fractional pixel position, bilinear between the four around it.
+    ///
+    /// MapLibre GL JS's `DEMData.sampleBilinear`, which is what a terrain reads and what
+    /// `get_elevation` in its vertex prelude reproduces on the GPU. Its own DEM carries a
+    /// two-pixel border where this carries one; the difference does not reach the arithmetic,
+    /// because a sample anywhere in `[-1, dim)` needs neighbors no further out than `dim`, and
+    /// one pixel of border supplies exactly that.
+    ///
+    /// # Pixel positions, not tile coordinates
+    ///
+    /// `x` and `y` are in DEM pixels, already offset so that pixel `i` sits at the *center* of
+    /// its cell. See [`crate::terrain`], which is where a tile coordinate becomes one of these
+    /// and where the half-pixel lives. Passing a tile coordinate straight in samples the right
+    /// tile at the wrong place, by half a cell, which is a terrain shifted by a few meters and
+    /// looks like nothing at all.
+    ///
+    /// `None` outside the border, which is `floor(x)` or `floor(y)` below -1 or at `dim`. GL JS
+    /// throws there; the caller here decides, because a terrain reading past a tile's edge is
+    /// asking about a neighbor it should have looked up instead.
+    #[must_use]
+    pub fn sample_bilinear(&self, x: f32, y: f32) -> Option<f32> {
+        let (cx, cy) = (libm::floorf(x), libm::floorf(y));
+        #[allow(clippy::cast_possible_truncation)]
+        let (ix, iy) = (cx as i32, cy as i32);
+        let (tx, ty) = (x - cx, y - cy);
+
+        let z00 = self.elevation_exact(ix, iy)?;
+        let z10 = self.elevation_exact(ix + 1, iy)?;
+        let z01 = self.elevation_exact(ix, iy + 1)?;
+        let z11 = self.elevation_exact(ix + 1, iy + 1)?;
+
+        Some(
+            z00 * (1.0 - tx) * (1.0 - ty)
+                + z10 * tx * (1.0 - ty)
+                + z01 * (1.0 - tx) * ty
+                + z11 * tx * ty,
+        )
+    }
+
     /// The tile's own width, without the border.
     #[must_use]
     pub const fn dim(&self) -> u32 {
