@@ -1,0 +1,30 @@
+{
+ "version": 8,
+ "name": "color-relief-parity",
+ "sources": {
+  "dem": {
+   "type": "raster-dem",
+   "tiles": [ "http://127.0.0.1:8084/dem/{z}/{x}/{y}.png" ],
+   "tileSize": 256,
+   "encoding": "mapbox",
+   "minzoom": 0,
+   "maxzoom": 15
+  }
+ },
+ "layers": [
+  { "id": "bg", "type": "background", "paint": { "background-color": "#101014" } },
+  { "id": "relief", "type": "color-relief", "source": "dem",
+    "paint": {
+      "color-relief-opacity": 0.9,
+      "color-relief-color": [
+        "interpolate", ["linear"], ["elevation"],
+        0,   "#0b3d2e",
+        150, "#1f7a4d",
+        300, "#a8c66c",
+        450, "#c9a227",
+        600, "#8c5a2b",
+        750, "#f2f2f2"
+      ]
+    }}
+ ]
+}

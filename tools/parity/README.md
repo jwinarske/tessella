@@ -118,6 +118,18 @@ The sweep's numbers as of 2026-09-15, which is the gate:
   Serve it with `python3 scenes/dem.py`, which listens on `PARITY_DEM_PORT` -- 8084, because 8083
   was taken on the machine this was written on. Stop it when the scene is not in use.
 
+- `relief_p` — a color relief over the same generated terrain, elevation mapped to color through
+  six stops. **This one does not pass and is not meant to yet**, the way the three before it did
+  not: `gross 786432 of 786432 (100.000%)` at both z14 and z11, which is every pixel, because the
+  layer covers the frame opaquely and nothing here draws one.
+
+  It reads the *raw* DEM rather than the slope field a hillshade reads, and it needs two textures
+  no other family does: the elevation stops as floats and the colors at them. mbgl takes the
+  stops from the `interpolate` expression itself when `color-relief-color` is one, and samples 256
+  points over -500..9000 meters when it is not.
+
+  Same server as `hill_p`: `python3 scenes/dem.py`.
+
 ## Why the scenes are here and the frames are not
 
 A scene is a question and belongs with the code it asks about. A rendered frame is an answer to
