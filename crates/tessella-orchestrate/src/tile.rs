@@ -431,6 +431,11 @@ pub fn build_tile_on_with_patterns(
     let fill_step = match surface {
         Surface::Plane => 0,
         Surface::Sphere => subdivide::step_for_level(tile.bucket_zoom(), EXTENT),
+        // The grid the tile's own relief asked for, from `Relief::cells_within`. One cell is no
+        // subdivision at all -- flat ground, or a tile whose DEM has not arrived yet -- and is
+        // the flat path byte for byte, which is what lets a terrain map draw before its elevation
+        // does.
+        Surface::Terrain { cells } => subdivide::grid_step_or_none(EXTENT, cells),
     };
     let (lo, hi) = options.clip_range();
     let (lo, hi) = (f64::from(lo), f64::from(hi));
@@ -1589,6 +1594,11 @@ pub fn build_mvt_tile_on_with_patterns(
     let fill_step = match surface {
         Surface::Plane => 0,
         Surface::Sphere => subdivide::step_for_level(tile.bucket_zoom(), EXTENT),
+        // The grid the tile's own relief asked for, from `Relief::cells_within`. One cell is no
+        // subdivision at all -- flat ground, or a tile whose DEM has not arrived yet -- and is
+        // the flat path byte for byte, which is what lets a terrain map draw before its elevation
+        // does.
+        Surface::Terrain { cells } => subdivide::grid_step_or_none(EXTENT, cells),
     };
     let mut buckets = Vec::new();
 

@@ -81,6 +81,22 @@ pub fn grid_step(extent: i32, segments: u32) -> i32 {
     (extent + segments - 1) / segments
 }
 
+/// [`grid_step`], or zero where `cells` asks for no subdivision at all.
+///
+/// The two answers are not the same number and the difference matters: `grid_step` returns
+/// `extent` for a single cell, which is a grid one cell wide and makes every triangle test its
+/// bounds against it, while zero is the path that copies the triangle list through untouched.
+/// A terrain whose ground is flat, or whose DEM has not arrived, asks for one cell on every tile
+/// of the cover -- so the difference between those two is the whole cost of drawing a flat map
+/// with a terrain in the style.
+#[must_use]
+pub fn grid_step_or_none(extent: i32, cells: u32) -> i32 {
+    if cells <= 1 {
+        return 0;
+    }
+    grid_step(extent, cells)
+}
+
 /// The grid a tile of level `z` is built against, or zero where it needs none.
 ///
 /// A function of the tile's *level*, never of the camera. §5.1 makes a bucket a function of
