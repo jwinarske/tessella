@@ -497,65 +497,72 @@ pub fn build_tile_on_with_patterns(
                 };
 
                 let mut layout = SymbolLayout::new(layer, bucket_zoom, tile.overscale_factor());
-                let project =
-                    |p: &[f64; 2]| projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
-
-                for feature in features {
-                    if !filter.matches_on(
-                        feature,
-                        Some(bucket_zoom),
-                        Some((tile.z, tile.x, tile.y)),
-                    ) {
-                        continue;
-                    }
-
-                    // A label is clipped by whether its *anchor* is on the tile, not by cutting
-                    // its geometry: half a road name is not a label, and a point label has no
-                    // geometry to cut. So the rings go in whole and placement decides.
-                    //
-                    // Rounded to tile units, as every other geometry kind here is. A fill or a
-                    // line goes through `to_tile_ring`, which rounds because that is what
-                    // geojson-vt does to a tile's coordinates before mbgl ever sees them; this
-                    // path did not, and the symbol vertex packs its anchor by *truncating*. So a
-                    // label whose anchor fell at 6317.68 was drawn at 6317 where the capture has
-                    // 6318 — every point label up to a tile unit out, in a way no test could see
-                    // until the probe emitted a per-attribute hash and the parity test stopped
-                    // using its own projection.
-                    #[allow(clippy::cast_possible_truncation)]
-                    let to_tile_units = |p: &[f64; 2]| {
-                        let at = project(p);
-                        (at[0].round() as f32, at[1].round() as f32)
-                    };
-                    let rings: Vec<Vec<(f32, f32)>> = match &feature.geometry {
-                        Geometry::Point(points) => points
-                            .iter()
-                            .map(|point| alloc::vec![to_tile_units(point)])
-                            .collect(),
-                        Geometry::LineString(lines) => lines
-                            .iter()
-                            .map(|line| line.iter().map(&to_tile_units).collect())
-                            .collect(),
-                        // A polygon labels at its rings, which is what mbgl does when a symbol
-                        // layer reads an area source: the outline is what a line-placed label
-                        // follows, and the first vertex is what a point-placed one anchors to.
-                        Geometry::Polygon(polygons) => polygons
-                            .iter()
-                            .flatten()
-                            .map(|ring| ring.iter().map(&to_tile_units).collect())
-                            .collect(),
+                for shift in WORLD_COPIES {
+                    let offset = world_offset(tile, shift);
+                    let project = |p: &[f64; 2]| {
+                        let at = projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
+                        [at[0] + offset, at[1]]
                     };
 
-                    // Evaluated here, where the feature is, and written when `build_symbols`
-                    // has decided the vertex order. Absent paint is empty rather than an error:
-                    // the binder has no slot for a property the layer does not drive.
-                    let paint_values =
-                        binder
-                            .evaluate(&paint, feature)
-                            .map_err(|source| TileError::Binder {
+                    for feature in features {
+                        if !copy_reaches(feature, tile, shift, lo, hi) {
+                            continue;
+                        }
+                        if !filter.matches_on(
+                            feature,
+                            Some(bucket_zoom),
+                            Some((tile.z, tile.x, tile.y)),
+                        ) {
+                            continue;
+                        }
+
+                        // A label is clipped by whether its *anchor* is on the tile, not by cutting
+                        // its geometry: half a road name is not a label, and a point label has no
+                        // geometry to cut. So the rings go in whole and placement decides.
+                        //
+                        // Rounded to tile units, as every other geometry kind here is. A fill or a
+                        // line goes through `to_tile_ring`, which rounds because that is what
+                        // geojson-vt does to a tile's coordinates before mbgl ever sees them; this
+                        // path did not, and the symbol vertex packs its anchor by *truncating*. So a
+                        // label whose anchor fell at 6317.68 was drawn at 6317 where the capture has
+                        // 6318 — every point label up to a tile unit out, in a way no test could see
+                        // until the probe emitted a per-attribute hash and the parity test stopped
+                        // using its own projection.
+                        #[allow(clippy::cast_possible_truncation)]
+                        let to_tile_units = |p: &[f64; 2]| {
+                            let at = project(p);
+                            (at[0].round() as f32, at[1].round() as f32)
+                        };
+                        let rings: Vec<Vec<(f32, f32)>> = match &feature.geometry {
+                            Geometry::Point(points) => points
+                                .iter()
+                                .map(|point| alloc::vec![to_tile_units(point)])
+                                .collect(),
+                            Geometry::LineString(lines) => lines
+                                .iter()
+                                .map(|line| line.iter().map(&to_tile_units).collect())
+                                .collect(),
+                            // A polygon labels at its rings, which is what mbgl does when a symbol
+                            // layer reads an area source: the outline is what a line-placed label
+                            // follows, and the first vertex is what a point-placed one anchors to.
+                            Geometry::Polygon(polygons) => polygons
+                                .iter()
+                                .flatten()
+                                .map(|ring| ring.iter().map(&to_tile_units).collect())
+                                .collect(),
+                        };
+
+                        // Evaluated here, where the feature is, and written when `build_symbols`
+                        // has decided the vertex order. Absent paint is empty rather than an error:
+                        // the binder has no slot for a property the layer does not drive.
+                        let paint_values = binder.evaluate(&paint, feature).map_err(|source| {
+                            TileError::Binder {
                                 layer: layer.id.clone(),
                                 source,
-                            })?;
-                    layout.push(layer, bucket_zoom, feature, &rings, paint_values);
+                            }
+                        })?;
+                        layout.push(layer, bucket_zoom, feature, &rings, paint_values);
+                    }
                 }
 
                 // A road is rarely one feature; joining its segments before anything is placed
@@ -587,48 +594,60 @@ pub fn build_tile_on_with_patterns(
                 // feature's exterior, having nothing in the list to say where one ended.
                 let mut per_feature: Vec<Vec<Ring>> = Vec::new();
                 let mut kept: Vec<&GeoJsonFeature> = Vec::new();
-                for feature in features {
-                    if !filter.matches_on(
-                        feature,
-                        Some(bucket_zoom),
-                        Some((tile.z, tile.x, tile.y)),
-                    ) {
-                        continue;
-                    }
-                    // Every geometry type, not just polygons. mbgl's `FillBucket::addFeature`
-                    // makes no type check — see the note in `build_mvt_tile` — so a point or a
-                    // line in a fill layer becomes a degenerate ring, and `classify_rings`
-                    // keeps a lone one because it short-circuits before the area filter.
-                    let parts: Vec<&[[f64; 2]]> = match &feature.geometry {
-                        Geometry::Polygon(polygons) => polygons
-                            .iter()
-                            .flat_map(|polygon| polygon.iter().map(Vec::as_slice))
-                            .collect(),
-                        Geometry::LineString(lines) => lines.iter().map(Vec::as_slice).collect(),
-                        Geometry::Point(points) => alloc::vec![points.as_slice()],
-                    };
-                    let points_only = matches!(feature.geometry, Geometry::Point(_));
-                    let mut rings: Vec<Ring> = Vec::new();
-                    for ring in parts {
-                        let projected: Vec<[f64; 2]> = ring
-                            .iter()
-                            .map(|p| projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y))
-                            .collect();
-                        // A point set has no edges to intersect the box with, so the ring clip
-                        // would drop it entirely rather than keep the ones inside.
-                        let clipped = if points_only {
-                            clip_points_to_box(&projected, lo, hi)
-                        } else {
-                            clip_ring_to_box(&projected, lo, hi)
-                        };
-                        if clipped.is_empty() {
+                for shift in WORLD_COPIES {
+                    let offset = world_offset(tile, shift);
+                    for feature in features {
+                        if !copy_reaches(feature, tile, shift, lo, hi) {
                             continue;
                         }
-                        rings.push(to_tile_ring(&clipped));
-                    }
-                    if !rings.is_empty() {
-                        per_feature.push(rings);
-                        kept.push(feature);
+                        if !filter.matches_on(
+                            feature,
+                            Some(bucket_zoom),
+                            Some((tile.z, tile.x, tile.y)),
+                        ) {
+                            continue;
+                        }
+                        // Every geometry type, not just polygons. mbgl's `FillBucket::addFeature`
+                        // makes no type check — see the note in `build_mvt_tile` — so a point or a
+                        // line in a fill layer becomes a degenerate ring, and `classify_rings`
+                        // keeps a lone one because it short-circuits before the area filter.
+                        let parts: Vec<&[[f64; 2]]> = match &feature.geometry {
+                            Geometry::Polygon(polygons) => polygons
+                                .iter()
+                                .flat_map(|polygon| polygon.iter().map(Vec::as_slice))
+                                .collect(),
+                            Geometry::LineString(lines) => {
+                                lines.iter().map(Vec::as_slice).collect()
+                            }
+                            Geometry::Point(points) => alloc::vec![points.as_slice()],
+                        };
+                        let points_only = matches!(feature.geometry, Geometry::Point(_));
+                        let mut rings: Vec<Ring> = Vec::new();
+                        for ring in parts {
+                            let projected: Vec<[f64; 2]> = ring
+                                .iter()
+                                .map(|p| {
+                                    let at =
+                                        projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
+                                    [at[0] + offset, at[1]]
+                                })
+                                .collect();
+                            // A point set has no edges to intersect the box with, so the ring clip
+                            // would drop it entirely rather than keep the ones inside.
+                            let clipped = if points_only {
+                                clip_points_to_box(&projected, lo, hi)
+                            } else {
+                                clip_ring_to_box(&projected, lo, hi)
+                            };
+                            if clipped.is_empty() {
+                                continue;
+                            }
+                            rings.push(to_tile_ring(&clipped));
+                        }
+                        if !rings.is_empty() {
+                            per_feature.push(rings);
+                            kept.push(feature);
+                        }
                     }
                 }
                 let borrowed: Vec<&[Ring]> = per_feature.iter().map(Vec::as_slice).collect();
@@ -677,97 +696,106 @@ pub fn build_tile_on_with_patterns(
                         if geojson.line_metrics == Some(true)
                 );
                 let mut bucket = LineBucket::default();
-                let project =
-                    |p: &[f64; 2]| projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
                 // The same two lists the fill arm keeps, and for the same reason: a data-driven
                 // `line-pattern` needs to know which vertices belong to which feature, and the
                 // boundary is already being computed here for the binder — it was simply not
                 // being kept.
                 let mut kept: Vec<&GeoJsonFeature> = Vec::new();
                 let mut ends: Vec<usize> = Vec::new();
-                for feature in features {
-                    if !filter.matches_on(
-                        feature,
-                        Some(bucket_zoom),
-                        Some((tile.z, tile.x, tile.y)),
-                    ) {
-                        continue;
-                    }
-                    match &feature.geometry {
-                        Geometry::LineString(lines) => {
-                            for line in lines {
-                                let projected: Vec<[f64; 2]> = line.iter().map(project).collect();
-                                if metered {
-                                    // Measured in tile-local units where geojson-vt measures in
-                                    // its projected world. The two differ by a uniform scale, so
-                                    // the fraction of the line a piece covers is the same number.
-                                    let length = tessella_source::clip::line_length(&projected);
-                                    for piece in tessella_source::clip::clip_line_to_box_metered(
-                                        &projected, lo, hi,
-                                    ) {
-                                        let ring = to_tile_ring(&piece.points);
-                                        // A line of no length has no fraction to give, and mbgl's
-                                        // division would carry a NaN into every vertex.
-                                        let clip_distances = (length > 0.0).then(|| {
-                                            tessella_layout::line::ClipDistances::for_piece(
-                                                &ring,
-                                                piece.seg_start / length,
-                                                piece.seg_end / length,
-                                            )
-                                        });
-                                        bucket.add_geometry(
-                                            &ring,
-                                            &LineOptions {
-                                                clip_distances,
-                                                ..options
-                                            },
-                                        );
-                                    }
-                                    continue;
-                                }
-                                // Each piece the clip returns is a separate polyline with its
-                                // own caps, not a continuation: a line that leaves the buffered
-                                // box and comes back must not be joined across the gap.
-                                for piece in clip_line_to_box(&projected, lo, hi) {
-                                    bucket.add_geometry(&to_tile_ring(&piece), &options);
-                                }
-                            }
+                for shift in WORLD_COPIES {
+                    let offset = world_offset(tile, shift);
+                    let project = |p: &[f64; 2]| {
+                        let at = projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
+                        [at[0] + offset, at[1]]
+                    };
+                    for feature in features {
+                        if !copy_reaches(feature, tile, shift, lo, hi) {
+                            continue;
                         }
-                        // A line layer over polygons draws their outlines. mbgl takes the
-                        // feature's own type rather than the layer's, so this is not an odd
-                        // case to tolerate — it is how a style strokes a fill without a second
-                        // source. The rings clip as rings, not as lines: a ring that leaves the
-                        // box re-enters along the box edge, and clipping it open would draw the
-                        // detour as a visible chord.
-                        Geometry::Polygon(polygons) => {
-                            let options = LineOptions {
-                                closed: true,
-                                ..options
-                            };
-                            for polygon in polygons {
-                                for ring in polygon {
+                        if !filter.matches_on(
+                            feature,
+                            Some(bucket_zoom),
+                            Some((tile.z, tile.x, tile.y)),
+                        ) {
+                            continue;
+                        }
+                        match &feature.geometry {
+                            Geometry::LineString(lines) => {
+                                for line in lines {
                                     let projected: Vec<[f64; 2]> =
-                                        ring.iter().map(project).collect();
-                                    let clipped = clip_ring_to_box(&projected, lo, hi);
-                                    if !clipped.is_empty() {
-                                        bucket.add_geometry(&to_tile_ring(&clipped), &options);
+                                        line.iter().map(project).collect();
+                                    if metered {
+                                        // Measured in tile-local units where geojson-vt measures in
+                                        // its projected world. The two differ by a uniform scale, so
+                                        // the fraction of the line a piece covers is the same number.
+                                        let length = tessella_source::clip::line_length(&projected);
+                                        for piece in tessella_source::clip::clip_line_to_box_metered(
+                                            &projected, lo, hi,
+                                        ) {
+                                            let ring = to_tile_ring(&piece.points);
+                                            // A line of no length has no fraction to give, and mbgl's
+                                            // division would carry a NaN into every vertex.
+                                            let clip_distances = (length > 0.0).then(|| {
+                                                tessella_layout::line::ClipDistances::for_piece(
+                                                    &ring,
+                                                    piece.seg_start / length,
+                                                    piece.seg_end / length,
+                                                )
+                                            });
+                                            bucket.add_geometry(
+                                                &ring,
+                                                &LineOptions {
+                                                    clip_distances,
+                                                    ..options
+                                                },
+                                            );
+                                        }
+                                        continue;
+                                    }
+                                    // Each piece the clip returns is a separate polyline with its
+                                    // own caps, not a continuation: a line that leaves the buffered
+                                    // box and comes back must not be joined across the gap.
+                                    for piece in clip_line_to_box(&projected, lo, hi) {
+                                        bucket.add_geometry(&to_tile_ring(&piece), &options);
                                     }
                                 }
                             }
+                            // A line layer over polygons draws their outlines. mbgl takes the
+                            // feature's own type rather than the layer's, so this is not an odd
+                            // case to tolerate — it is how a style strokes a fill without a second
+                            // source. The rings clip as rings, not as lines: a ring that leaves the
+                            // box re-enters along the box edge, and clipping it open would draw the
+                            // detour as a visible chord.
+                            Geometry::Polygon(polygons) => {
+                                let options = LineOptions {
+                                    closed: true,
+                                    ..options
+                                };
+                                for polygon in polygons {
+                                    for ring in polygon {
+                                        let projected: Vec<[f64; 2]> =
+                                            ring.iter().map(project).collect();
+                                        let clipped = clip_ring_to_box(&projected, lo, hi);
+                                        if !clipped.is_empty() {
+                                            bucket.add_geometry(&to_tile_ring(&clipped), &options);
+                                        }
+                                    }
+                                }
+                            }
+                            // A point has no length to extrude.
+                            Geometry::Point(_) => continue,
                         }
-                        // A point has no length to extrude.
-                        Geometry::Point(_) => continue,
+                        // After the feature's geometry, not before: the count is what says which
+                        // vertices are this feature's, and a clip may have produced none.
+                        binder
+                            .push(bucket.vertices.len(), &paint, feature)
+                            .map_err(|source| TileError::Binder {
+                                layer: layer.id.clone(),
+                                source,
+                            })?;
+                        kept.push(feature);
+                        ends.push(bucket.vertices.len());
                     }
-                    // After the feature's geometry, not before: the count is what says which
-                    // vertices are this feature's, and a clip may have produced none.
-                    binder
-                        .push(bucket.vertices.len(), &paint, feature)
-                        .map_err(|source| TileError::Binder {
-                            layer: layer.id.clone(),
-                            source,
-                        })?;
-                    kept.push(feature);
-                    ends.push(bucket.vertices.len());
                 }
                 // A `line-pattern` that varies with the feature, exactly as a `fill-pattern`
                 // does. The oracle settles what it binds: ids nine and ten at bindings seven and
@@ -798,34 +826,41 @@ pub fn build_tile_on_with_patterns(
                 };
 
                 let mut bucket = CircleBucket::default();
-                for feature in features {
-                    if !filter.matches_on(
-                        feature,
-                        Some(bucket_zoom),
-                        Some((tile.z, tile.x, tile.y)),
-                    ) {
-                        continue;
+                for shift in WORLD_COPIES {
+                    let offset = world_offset(tile, shift);
+                    for feature in features {
+                        if !copy_reaches(feature, tile, shift, lo, hi) {
+                            continue;
+                        }
+                        if !filter.matches_on(
+                            feature,
+                            Some(bucket_zoom),
+                            Some((tile.z, tile.x, tile.y)),
+                        ) {
+                            continue;
+                        }
+                        let Geometry::Point(points) = &feature.geometry else {
+                            continue;
+                        };
+                        // Projected but *not* clipped: `add_geometry` drops points outside the tile
+                        // proper itself, and the buffered box a clip would use is wider than that.
+                        let projected: Vec<Position> = points
+                            .iter()
+                            .map(|p| {
+                                let local =
+                                    projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
+                                #[allow(clippy::cast_possible_truncation)]
+                                [(local[0] + offset).round() as i16, local[1].round() as i16]
+                            })
+                            .collect();
+                        bucket.add_geometry(&projected);
+                        binder
+                            .push(bucket.vertices.len(), &paint, feature)
+                            .map_err(|source| TileError::Binder {
+                                layer: layer.id.clone(),
+                                source,
+                            })?;
                     }
-                    let Geometry::Point(points) = &feature.geometry else {
-                        continue;
-                    };
-                    // Projected but *not* clipped: `add_geometry` drops points outside the tile
-                    // proper itself, and the buffered box a clip would use is wider than that.
-                    let projected: Vec<Position> = points
-                        .iter()
-                        .map(|p| {
-                            let local = projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
-                            #[allow(clippy::cast_possible_truncation)]
-                            [local[0].round() as i16, local[1].round() as i16]
-                        })
-                        .collect();
-                    bucket.add_geometry(&projected);
-                    binder
-                        .push(bucket.vertices.len(), &paint, feature)
-                        .map_err(|source| TileError::Binder {
-                            layer: layer.id.clone(),
-                            source,
-                        })?;
                 }
                 Content::Circle(bucket)
             }
@@ -843,32 +878,39 @@ pub fn build_tile_on_with_patterns(
                 };
 
                 let mut bucket = HeatmapBucket::default();
-                for feature in features {
-                    if !filter.matches_on(
-                        feature,
-                        Some(bucket_zoom),
-                        Some((tile.z, tile.x, tile.y)),
-                    ) {
-                        continue;
+                for shift in WORLD_COPIES {
+                    let offset = world_offset(tile, shift);
+                    for feature in features {
+                        if !copy_reaches(feature, tile, shift, lo, hi) {
+                            continue;
+                        }
+                        if !filter.matches_on(
+                            feature,
+                            Some(bucket_zoom),
+                            Some((tile.z, tile.x, tile.y)),
+                        ) {
+                            continue;
+                        }
+                        let Geometry::Point(points) = &feature.geometry else {
+                            continue;
+                        };
+                        let projected: Vec<Position> = points
+                            .iter()
+                            .map(|p| {
+                                let local =
+                                    projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
+                                #[allow(clippy::cast_possible_truncation)]
+                                [(local[0] + offset).round() as i16, local[1].round() as i16]
+                            })
+                            .collect();
+                        bucket.add_geometry(&projected);
+                        binder
+                            .push(bucket.vertices.len(), &paint, feature)
+                            .map_err(|source| TileError::Binder {
+                                layer: layer.id.clone(),
+                                source,
+                            })?;
                     }
-                    let Geometry::Point(points) = &feature.geometry else {
-                        continue;
-                    };
-                    let projected: Vec<Position> = points
-                        .iter()
-                        .map(|p| {
-                            let local = projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
-                            #[allow(clippy::cast_possible_truncation)]
-                            [local[0].round() as i16, local[1].round() as i16]
-                        })
-                        .collect();
-                    bucket.add_geometry(&projected);
-                    binder
-                        .push(bucket.vertices.len(), &paint, feature)
-                        .map_err(|source| TileError::Binder {
-                            layer: layer.id.clone(),
-                            source,
-                        })?;
                 }
                 Content::Heatmap(bucket)
             }
@@ -921,6 +963,49 @@ fn draws_at(layer: &tessella_style::Layer, zoom: f64) -> bool {
 
 fn draws_from(layer: &tessella_style::Layer, source: &str) -> bool {
     layer.source.as_deref() == Some(source)
+}
+
+/// The world copies a GeoJSON feature is offered to a tile in, as whole worlds east.
+///
+/// geojson-vt's `wrap`, which mbgl's `GeoJSONVT` runs unconditionally: before any tile is cut, the
+/// features are clipped to the world west of this one, to this one and to the one east of it, and
+/// the outer two are moved one world across -- the western copy first and the eastern one last,
+/// which is the order a tile's buckets receive them in. So a line drawn on past the antimeridian,
+/// or a point at longitude 190, lands in this world too and every world copy on screen draws it.
+/// Without it, display-line-that-crosses-180th-meridian drew its route only as far as 180.
+///
+/// Each of those three clips is wider than any tile's buffered box inside it, so clipping a moved
+/// copy straight to the tile is the same geometry, and it can be done one tile at a time.
+const WORLD_COPIES: [i8; 3] = [1, 0, -1];
+
+/// How far a copy `shift` worlds east sits, in this tile's units.
+fn world_offset(tile: TileId, shift: i8) -> f64 {
+    f64::from(shift) * f64::from(EXTENT) * 2f64.powi(i32::from(tile.z))
+}
+
+/// Whether a feature's copy `shift` worlds east reaches the tile's buffered box.
+///
+/// This world's copy is always offered, as it was before there were copies, and its own clip
+/// decides. The moved copies are tested first so that a tile away from the antimeridian costs one
+/// pass over the longitudes rather than two more builds of nothing.
+fn copy_reaches(feature: &GeoJsonFeature, tile: TileId, shift: i8, lo: f64, hi: f64) -> bool {
+    if shift == 0 {
+        return true;
+    }
+    let span = |(west, east): (f64, f64), p: &[f64; 2]| (west.min(p[0]), east.max(p[0]));
+    let empty = (f64::INFINITY, f64::NEG_INFINITY);
+    let (west, east) = match &feature.geometry {
+        Geometry::Point(points) => points.iter().fold(empty, span),
+        Geometry::LineString(lines) => lines.iter().flatten().fold(empty, span),
+        Geometry::Polygon(polygons) => polygons.iter().flatten().flatten().fold(empty, span),
+    };
+    if west > east {
+        return false;
+    }
+    // Mercator's x does not depend on latitude, so the longitudes' extremes are the copy's.
+    let offset = world_offset(tile, shift);
+    let x = |longitude| projection::tile_local(longitude, 0.0, tile.z, tile.x, tile.y)[0] + offset;
+    x(west) <= hi && x(east) >= lo
 }
 
 /// Whether the style's background is the one the oracle replaces with a clear.
