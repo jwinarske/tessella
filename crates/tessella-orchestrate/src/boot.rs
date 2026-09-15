@@ -1136,6 +1136,11 @@ pub(crate) fn plan_resolution(
     if let Some(annotations) = annotations {
         annotations.synthesize(&mut style);
     }
+    // And the terrain's, for the same reason and in the same place: the spec puts terrain at the
+    // top level of the document rather than in the layer list, so nothing downstream would see a
+    // layer for the ground unless one is made here. After the annotations, because both insert
+    // and the terrain's goes first -- it is what everything else is drawn on.
+    style.synthesize_terrain();
     // As mbgl's parser does, and before anything reads a layer: a document that names one thing
     // this build does not have still draws every layer that does.
     let rejected_layers = style.reject_uncompilable();
@@ -1149,17 +1154,10 @@ pub(crate) fn plan_resolution(
         .filter(|layer| layer.kind != LayerKind::Background)
         .filter_map(|layer| layer.source.as_deref())
         .collect();
-    // And the terrain's, which no layer draws from. It is named at the top level of the document
-    // rather than by a layer, so the walk above cannot see it -- a style whose only use of a DEM
-    // is its terrain fetched nothing at all and drew flat, with every other part of the build
-    // working and nothing to say why.
-    //
-    // Only when the terrain is usable: `terrain_dem` is what decides that, and a terrain naming a
-    // vector source or one the style does not declare adds no ask, because there is nothing there
-    // to fetch.
-    if let Some((name, _)) = style.terrain_dem() {
-        wanted.push(name);
-    }
+    // The terrain's DEM is in that walk because `synthesize_terrain` above put a layer there to
+    // name it. It used to be pushed here separately -- the spec puts terrain at the top level, so
+    // the walk could not see it -- and that is exactly the special case the synthesized layer
+    // removes. Two mechanisms for one source is one of them free to be wrong.
     wanted.sort_unstable();
     wanted.dedup();
 
