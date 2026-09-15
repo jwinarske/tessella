@@ -1,0 +1,26 @@
+{
+ "version": 8,
+ "name": "hillshade-parity",
+ "sources": {
+  "dem": {
+   "type": "raster-dem",
+   "tiles": [ "http://127.0.0.1:8084/dem/{z}/{x}/{y}.png" ],
+   "tileSize": 256,
+   "encoding": "mapbox",
+   "minzoom": 0,
+   "maxzoom": 15
+  }
+ },
+ "layers": [
+  { "id": "bg", "type": "background", "paint": { "background-color": "#101014" } },
+  { "id": "hill", "type": "hillshade", "source": "dem",
+    "paint": {
+      "hillshade-exaggeration": 0.6,
+      "hillshade-illumination-direction": 335,
+      "hillshade-illumination-anchor": "viewport",
+      "hillshade-shadow-color": "#13233f",
+      "hillshade-highlight-color": "#fff5e0",
+      "hillshade-accent-color": "#2b3a4a"
+    }}
+ ]
+}
