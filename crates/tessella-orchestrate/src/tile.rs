@@ -540,7 +540,9 @@ pub fn build_tile_on_with_patterns(
             // A color relief reads a height field, so an MVT tile has nothing for it -- the same
             // reason a hillshade is absent from this builder. A location indicator reads neither:
             // it is at a place, and a tile has nothing to say about where the device is.
-            LayerKind::ColorRelief | LayerKind::LocationIndicator => continue,
+            // And a terrain reads a height field too: its layer names the DEM source, so the
+            // DEM builder is what produces its bucket, not this one.
+            LayerKind::ColorRelief | LayerKind::LocationIndicator | LayerKind::Terrain => continue,
             // Extrusions share the arm: they take the same features, the same clipping and the
             // same ring classification, and differ only in what the vertices are packed into.
             // mbgl's two buckets diverge at exactly the same point.
@@ -1649,7 +1651,9 @@ pub fn build_mvt_tile_on_with_patterns(
             // A color relief reads a height field, so an MVT tile has nothing for it -- the same
             // reason a hillshade is absent from this builder. A location indicator reads neither:
             // it is at a place, and a tile has nothing to say about where the device is.
-            LayerKind::ColorRelief | LayerKind::LocationIndicator => continue,
+            // And a terrain reads a height field too: its layer names the DEM source, so the
+            // DEM builder is what produces its bucket, not this one.
+            LayerKind::ColorRelief | LayerKind::LocationIndicator | LayerKind::Terrain => continue,
             // Extrusions share the arm: they take the same features, the same clipping and the
             // same ring classification, and differ only in what the vertices are packed into.
             // mbgl's two buckets diverge at exactly the same point.

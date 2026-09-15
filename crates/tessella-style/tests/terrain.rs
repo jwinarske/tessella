@@ -109,6 +109,75 @@ fn a_terrain_naming_the_wrong_thing_is_inert() {
     assert!(none.terrain_dem().is_none());
 }
 
+/// A usable terrain becomes a layer over its DEM, first in the list.
+///
+/// The spec puts terrain at the top level rather than in the layer list. Synthesizing a layer is
+/// what lets everything downstream treat the ground as what it is -- an index, a bucket per tile,
+/// a place in painter order, a uniform block -- instead of branching for the one thing that is
+/// drawn and is not a layer. `Annotations::synthesize` settled the same question the same way.
+#[test]
+fn a_terrain_becomes_a_layer() {
+    use tessella_style::{LayerKind, TERRAIN_LAYER_ID};
+    let mut style = style(r#"{"source":"dem","exaggeration":1.5}"#);
+    assert!(style.layers.is_empty());
+    style.synthesize_terrain();
+
+    assert_eq!(style.layers.len(), 1);
+    let layer = &style.layers[0];
+    assert_eq!(layer.id, TERRAIN_LAYER_ID);
+    assert_eq!(layer.kind, LayerKind::Terrain);
+    assert_eq!(layer.source.as_deref(), Some("dem"));
+    // First, because it is the ground and everything else is drawn on it.
+    assert_eq!(
+        style.layers.first().map(|l| l.id.as_str()),
+        Some(TERRAIN_LAYER_ID)
+    );
+}
+
+/// It is idempotent, and it takes the layer away when the terrain does.
+///
+/// A style whose terrain changed -- or was removed -- must not keep the layer the last one made.
+#[test]
+fn synthesizing_twice_makes_one_layer() {
+    use tessella_style::TERRAIN_LAYER_ID;
+    let mut style = style(r#"{"source":"dem"}"#);
+    style.synthesize_terrain();
+    style.synthesize_terrain();
+    style.synthesize_terrain();
+    assert_eq!(style.layers.len(), 1);
+
+    style.terrain = None;
+    style.synthesize_terrain();
+    assert!(style.layers.is_empty());
+
+    // And an inert terrain makes none either: there is no DEM behind it to read.
+    let mut inert =
+        Style::parse(r#"{"version":8,"sources":{},"terrain":{"source":"gone"},"layers":[]}"#)
+            .expect("style parses");
+    inert.synthesize_terrain();
+    assert!(
+        inert
+            .layers
+            .iter()
+            .all(|layer| layer.id != TERRAIN_LAYER_ID)
+    );
+}
+
+/// The synthesized layer goes under the style's own, whatever they are.
+#[test]
+fn the_ground_is_under_everything() {
+    use tessella_style::TERRAIN_LAYER_ID;
+    let text = r##"{"version":8,
+      "sources":{"dem":{"type":"raster-dem","url":"http://x/d.json"}},
+      "terrain":{"source":"dem"},
+      "layers":[{"id":"bg","type":"background","paint":{"background-color":"#101014"}},
+                {"id":"water","type":"fill","source":"dem"}]}"##;
+    let mut style = Style::parse(text).expect("style parses");
+    style.synthesize_terrain();
+    let ids: Vec<&str> = style.layers.iter().map(|layer| layer.id.as_str()).collect();
+    assert_eq!(ids, [TERRAIN_LAYER_ID, "bg", "water"]);
+}
+
 /// It survives a round trip, so a style read and written back still asks for its terrain.
 #[test]
 fn a_terrain_round_trips() {

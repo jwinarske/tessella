@@ -303,6 +303,14 @@ pub enum LayerKind {
     ColorRelief,
     /// Where the device is, and which way it points.
     LocationIndicator,
+    /// The ground itself, raised from a DEM.
+    ///
+    /// Not a type a style document writes. The spec puts terrain at the top level rather than in
+    /// the layer list, and [`Style::synthesize_terrain`] turns that member into a layer of this
+    /// kind over the DEM the terrain names -- the same move `Annotations::synthesize` makes for a
+    /// source nothing declares. Everything downstream then treats the ground as what it is: a
+    /// layer with an index, a bucket per tile, a place in painter order, and a uniform block.
+    Terrain,
     /// A host-drawn layer.
     Custom,
     /// A type this build does not implement.
@@ -338,6 +346,7 @@ impl LayerKind {
                 | Self::Hillshade
                 | Self::ColorRelief
                 | Self::LocationIndicator
+                | Self::Terrain
         )
     }
 }
@@ -622,6 +631,57 @@ impl Style {
             Source::RasterDem(tiles) => Some((id.as_str(), tiles)),
             _ => None,
         }
+    }
+}
+
+/// The id [`Style::synthesize_terrain`] gives the layer it makes.
+///
+/// Dotted, like the annotation source's, so it cannot collide with anything a document writes:
+/// the spec's layer ids are author-chosen strings and nobody writes one of these by accident.
+pub const TERRAIN_LAYER_ID: &str = "org.maplibre.terrain";
+
+impl Style {
+    /// Turns the style's `terrain` member into a layer over the DEM it names.
+    ///
+    /// Idempotent: the layer it made last time is removed first, so a style whose terrain changed
+    /// -- or went away -- does not keep the old one. Called wherever a style is (re)compiled, as
+    /// `Annotations::synthesize` is.
+    ///
+    /// # Why a layer and not a special case
+    ///
+    /// The ground is drawn geometry with a texture, a place in painter order and a uniform block,
+    /// which is what a layer is. Carrying it as anything else means every one of those -- the
+    /// index, the bucket lookup, the draw order, the UBO keying -- needs a branch for the one
+    /// thing that is not a layer. The annotation source settled the same question the same way.
+    ///
+    /// # Why first
+    ///
+    /// It is the ground: everything else is drawn on it. A style's own first layer is
+    /// conventionally its background, and under a terrain the background is what this replaces --
+    /// see `encode_background_on`, which already grids that quad so a globe can bend it.
+    pub fn synthesize_terrain(&mut self) {
+        use alloc::string::ToString as _;
+
+        self.layers.retain(|layer| layer.id != TERRAIN_LAYER_ID);
+        let Some((source, _)) = self.terrain_dem() else {
+            return;
+        };
+        let source = source.to_string();
+        self.layers.insert(
+            0,
+            Layer {
+                id: TERRAIN_LAYER_ID.to_string(),
+                kind: LayerKind::Terrain,
+                source: Some(source),
+                source_layer: None,
+                minzoom: None,
+                maxzoom: None,
+                filter: None,
+                layout: BTreeMap::new(),
+                paint: BTreeMap::new(),
+                extra: BTreeMap::new(),
+            },
+        );
     }
 }
 
