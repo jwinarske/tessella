@@ -1883,8 +1883,14 @@ fn location_indicator_part(
     Encoded { record, payload }
 }
 
-/// Bytes per terrain vertex: three `i16` -- the tile position and the skirt flag.
-const TERRAIN_STRIDE: u32 = 6;
+/// Bytes per terrain vertex: three `i16` -- the tile position and the skirt flag -- and a fourth
+/// that is padding.
+///
+/// Eight, not six. Filament refuses a vertex attribute whose stride is not a multiple of four --
+/// "attribute 0 stride=6 is not multiple of 4", raised as a precondition panic rather than a
+/// return -- so the three shorts are written into four. The cost is two bytes a vertex over a mesh
+/// the whole frame shares: 35 KB once, against a buffer per tile.
+const TERRAIN_STRIDE: u32 = 8;
 
 /// Puts the terrain surface into a slab and announces it.
 ///
@@ -1906,6 +1912,8 @@ pub fn encode_terrain(
         for value in vertex {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
+        // The fourth short, which nothing reads. See `TERRAIN_STRIDE`.
+        bytes.extend_from_slice(&0i16.to_le_bytes());
     }
     let vertices = arena.alloc(&bytes);
     let indexes = alloc_u16(arena, &mesh.indices);

@@ -65,6 +65,17 @@ pub struct TerrainDrawableUbo {
     /// The DEM's unpack vector: `red`, `green`, `blue`, `base_shift`, as
     /// `tessella_source::dem::Encoding::unpack` gives it.
     pub unpack: [f32; 4],
+    /// What the ground is painted, where no layer covers it.
+    ///
+    /// The style's `background-color`, so bare terrain reads continuous with the flat map. The
+    /// spec gives terrain no paint of its own, and a background is what a flat map shows where
+    /// nothing else draws -- which makes it the nearest thing to a ground color the style has.
+    ///
+    /// Per layer rather than per drawable, strictly: every tile of the ground takes the same four
+    /// numbers. It rides here anyway, because the alternative is a second uniform slot and a
+    /// second thing for the two sides to agree on, against sixteen bytes a tile that nothing
+    /// measures.
+    pub color: [f32; 4],
     /// `uv_scale`, `uv_offset`, `exaggeration`, `skirt`.
     ///
     /// `skirt` is how far a flagged vertex drops below the surface, in meters -- the curtain that
@@ -75,14 +86,20 @@ pub struct TerrainDrawableUbo {
 
 impl TerrainDrawableUbo {
     /// Bytes on the wire, and the stride a buffer of these packs at.
-    pub const STRIDE: u32 = 96;
+    pub const STRIDE: u32 = 112;
 
     /// The block as little-endian bytes.
     #[must_use]
     pub fn to_bytes(&self) -> [u8; Self::STRIDE as usize] {
         let mut out = [0u8; Self::STRIDE as usize];
         let mut at = 0;
-        for value in self.matrix.iter().chain(&self.unpack).chain(&self.params) {
+        for value in self
+            .matrix
+            .iter()
+            .chain(&self.unpack)
+            .chain(&self.color)
+            .chain(&self.params)
+        {
             out[at..at + 4].copy_from_slice(&value.to_le_bytes());
             at += 4;
         }
@@ -111,21 +128,26 @@ mod tests {
     /// The block is the size it says, and its fields are in the order the shader reads them.
     #[test]
     fn the_block_packs_to_its_stride() {
+        #[allow(clippy::cast_precision_loss)]
         let block = TerrainDrawableUbo {
             matrix: core::array::from_fn(|index| index as f32),
             unpack: [6553.6, 25.6, 0.1, 10000.0],
+            color: [0.1, 0.2, 0.3, 1.0],
             params: [1.0, 2.0, 3.0, 4.0],
         };
         let bytes = block.to_bytes();
+        let at = |offset: usize| f32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
         assert_eq!(bytes.len(), TerrainDrawableUbo::STRIDE as usize);
-        assert_eq!(f32::from_le_bytes(bytes[0..4].try_into().unwrap()), 0.0);
-        assert_eq!(f32::from_le_bytes(bytes[60..64].try_into().unwrap()), 15.0);
-        assert_eq!(
-            f32::from_le_bytes(bytes[64..68].try_into().unwrap()),
-            6553.6
-        );
-        assert_eq!(f32::from_le_bytes(bytes[80..84].try_into().unwrap()), 1.0);
-        assert_eq!(f32::from_le_bytes(bytes[92..96].try_into().unwrap()), 4.0);
+        assert_eq!(at(0), 0.0);
+        assert_eq!(at(60), 15.0);
+        assert_eq!(at(64), 6553.6);
+        // The color sits between the unpack vector and the scalars, which is the order the
+        // shader declares them in -- a block whose fields agree in size and disagree in order is
+        // a mispack nothing rejects.
+        assert_eq!(at(80), 0.1);
+        assert_eq!(at(92), 1.0);
+        assert_eq!(at(96), 1.0);
+        assert_eq!(at(108), 4.0);
     }
 
     /// The sampling pair lands a tile coordinate on the DEM cell that owns it.
