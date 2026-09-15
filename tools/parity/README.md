@@ -49,14 +49,21 @@ The sweep's numbers as of 2026-09-13, which is the gate:
   and a multi-line, a polygon with a hole and a multi-polygon. It stood at `gross 39712 (5.050%)`
   the day it was written, when nothing drew an annotation, and now reads
 
-      annot_p  z14 p0     4 of 786432
-      annot_p  z16 p0     1
-      annot_p  z14 p60  576
+      annot_p  z14 p0     3 of 786432
+      annot_p  z16 p0     2
+      annot_p  z14 p60  558
 
   z14 p60 is the one to look at, and it is not an annotation fault. It is the fill *outline*: on a
-  pitched edge our line covers about a third of what the oracle's does, over the same two rows.
+  pitched edge our line covers about half of what the oracle's does, and the gap widens with
+  pitch -- 0.96 of the oracle's coverage at p0, 0.75 at p40, 0.58 at p60. The oracle draws the
+  outline as a two-pixel GL line, which is two pixels on screen whatever the camera does; this
+  draws mbgl's own triangulated fallback, whose quad is extruded in *tile* units and foreshortens.
+  Both shaders are the same arithmetic and neither is wrong -- `MLN_TRIANGULATE_FILL_OUTLINES` is
+  what mbgl compiles on Metal and WebGPU, and it has this defect there too.
+
   No other scene here sets `fill-outline-color`, so this scene is the first thing to gate that
-  path at all. Not in the sweep until it is closed.
+  path at all -- and the outline runs on *every* antialiased fill, so whatever is true here is
+  true of every filled polygon in every style. Not in the sweep until it is closed.
 
   An annotation is not a style layer -- there is no `"type": "annotation"` and no stylesheet can
   produce one. They arrive through `Map::addAnnotation`, and the manager synthesizes the source

@@ -461,8 +461,15 @@ pub fn bindings_for(
                 // the paint; the bucket is where it was decided here, so what the bucket carries
                 // is the answer -- and `encode_parts` reads the same thing, which is what keeps
                 // the two from disagreeing about how many drawables a fill has.
+                //
+                // Zero or two, which is `setSubLayerIndex(FillOutlineColor.isUndefined() ? 2 : 0)`
+                // and is painter order within the layer: an outline the style did not ask for is
+                // the fill's own antialiasing and goes on top, and one it did ask for is a
+                // different color and goes underneath, so the fill covers its inner half. On top
+                // instead, that half is not covered and the line reads twice as wide.
                 if !fill.line_indices.is_empty() || !fill.outline.indices.is_empty() {
-                    emit(2, view::fill_pass(), view::tiled_flags());
+                    let sub = if bucket.outline_under_fill { 0 } else { 2 };
+                    emit(sub, view::fill_pass(), view::tiled_flags());
                 }
             }
             // Sublayer 0, not 1: a fill's triangles and outline occupy 1 and 2 so that the

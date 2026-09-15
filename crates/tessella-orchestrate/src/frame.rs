@@ -1144,7 +1144,7 @@ fn emit_group(
         // Which of the bucket's records this drawable draws. Out of range is a disagreement
         // between `drawable_count` and the encoder about how many a bucket makes, and drawing
         // the wrong part would be worse than drawing none.
-        let Some(record) = records.get(part_of(&bucket.content, entry.sub_layer_index)) else {
+        let Some(record) = records.get(part_of(bucket, entry.sub_layer_index)) else {
             continue;
         };
         let mut encoded = record.clone();
@@ -2646,13 +2646,25 @@ fn frame_labels<'a>(
 /// Which of a bucket's records a drawable draws.
 ///
 /// The sub-layer says it, because the sub-layer is what `DrawOrder` assigns and it is already
-/// what separates the drawables. A fill's are one and two — its triangles and its outline. An
+/// what separates the drawables. A fill's are one and two — its triangles and its outline — or
+/// one and zero, where the style set `fill-outline-color` and mbgl sorts the outline under. An
 /// extrusion's are zero to three, roof and walls in the depth pass then roof and walls in the
 /// color pass, so the part alternates and the pass does not change which record is drawn.
-fn part_of(content: &Content, sub_layer_index: i32) -> usize {
+fn part_of(bucket: &LayerBucket, sub_layer_index: i32) -> usize {
     let sub = usize::try_from(sub_layer_index).unwrap_or(0);
-    match content {
-        Content::Fill(_) => sub.saturating_sub(1),
+    match &bucket.content {
+        // Triangles then outline, and which sub-layer each takes depends on where the outline
+        // sorts: `1, 2` when it draws over the fill and `1, 0` when it draws under. Both give
+        // the outline part 1 and the triangles part 0, which is the order `encode_parts` writes
+        // them in -- the sub-layer is painter order and the part is which record, and they stop
+        // being the same number the moment the outline moves underneath.
+        Content::Fill(_) => {
+            if bucket.outline_under_fill {
+                usize::from(sub == 0)
+            } else {
+                sub.saturating_sub(1)
+            }
+        }
         Content::Fill3d(_) => sub % 2,
         // The encoder returns one record per font stack and then the sprites. A stack's halo and
         // fill share its record, as an extrusion's depth and color passes share one; the sprites
@@ -3258,9 +3270,21 @@ fn write_layer_state(
             )?;
         }
         LayerKind::Fill => {
-            // Triangles then outline, which is the order the oracle's buffer is in.
-            let mut all = entries(1);
-            all.extend(entries(2));
+            // The layer's two sub-layers in ascending order, which is the order `DrawOrder`
+            // sorts them in and therefore the order `ubo_index` counts them in -- dense from
+            // zero within a layer. Not "triangles then outline": where the style set
+            // `fill-outline-color` the outline is sub-layer 0 and sorts *first*, and a buffer
+            // still packed triangles-first hands each drawable the other one's block. The
+            // symptom is not subtle and the cause is invisible: every outline drew with the
+            // fill's matrix, which at this layer's scale is the whole viewport in white, and
+            // the last drawable read past the end and was dropped as unplaced.
+            let subs: [i32; 2] = if ubo::fill_outline_under_fill(layer) {
+                [0, 1]
+            } else {
+                [1, 2]
+            };
+            let mut all = entries(subs[0]);
+            all.extend(entries(subs[1]));
             let placement =
                 patterns.and_then(|patterns| patterns.placement(&paint, "fill-pattern", view.zoom));
 
@@ -3278,7 +3302,7 @@ fn write_layer_state(
                 // Borrowed, not moved: the closures below are `move` so the factor's source has
                 // to be something they can copy.
                 let paint_ref = &paint;
-                let pattern: Vec<ubo::PatternDrawableEntry> = [1, 2]
+                let pattern: Vec<ubo::PatternDrawableEntry> = subs
                     .into_iter()
                     .flat_map(|sub| {
                         matrices(sub).filter_map(move |tile| {
@@ -3315,10 +3339,16 @@ fn write_layer_state(
             } else if ubo::fill_outline_triangulates(&paint, false) {
                 // The outline is a polyline, and its block is `FillOutlineTriangulatedDrawableUBO`
                 // -- matrix and ratio -- at the same union stride the fill's own block sits at.
-                // Only sub-layer 2's half changes; the interior is still a fill.
+                // Only the outline's half changes; the interior is still a fill.
+                //
+                // In sub-layer order, like the plain path and for the same reason: `ubo_index` is
+                // dense from zero in draw order, and where the style set `fill-outline-color` the
+                // outline sorts first. Packed interior-first regardless, the outline reads the
+                // fill's block -- and a fill's matrix under an outline's shader is a white sheet
+                // over the viewport.
                 let stride = ubo_layouts::FILL_DRAWABLE_UNION_UBO.stride;
-                let mut buffer = ubo::pack_drawable_buffer(&entries(1), stride);
-                let outline: Vec<ubo::FillOutlineTriangulatedEntry> = matrices(2)
+                let outline_sub = subs[usize::from(!ubo::fill_outline_under_fill(layer))];
+                let outline: Vec<ubo::FillOutlineTriangulatedEntry> = matrices(outline_sub)
                     .filter_map(|tile| {
                         ubo::FillOutlineTriangulatedEntry::for_tile(
                             view,
@@ -3328,12 +3358,19 @@ fn write_layer_state(
                             tile.y,
                             i32::from(tile.wrap),
                             layer_index,
-                            2,
+                            outline_sub,
                         )
                         .ok()
                     })
                     .collect();
-                buffer.extend(ubo::pack_fill_outline_triangulated_buffer(&outline, stride));
+                let interior = ubo::pack_drawable_buffer(&entries(1), stride);
+                let outline = ubo::pack_fill_outline_triangulated_buffer(&outline, stride);
+                let (mut buffer, second) = if ubo::fill_outline_under_fill(layer) {
+                    (outline, interior)
+                } else {
+                    (interior, outline)
+                };
+                buffer.extend(second);
                 buffer
             } else {
                 ubo::pack_drawable_buffer(&all, ubo_layouts::FILL_DRAWABLE_UNION_UBO.stride)
@@ -3358,7 +3395,7 @@ fn write_layer_state(
             // Mercator material declares it, and a buffer nobody reads is a buffer nobody should
             // have paid to pack.
             if projection == ProjectionMode::Globe {
-                let bend: Vec<GlobeBendUbo> = [1, 2]
+                let bend: Vec<GlobeBendUbo> = subs
                     .into_iter()
                     .flat_map(|sub| {
                         matrices(sub).map(move |tile| {
