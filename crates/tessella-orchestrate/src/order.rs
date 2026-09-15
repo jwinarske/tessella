@@ -505,12 +505,18 @@ pub fn bindings_for(
                     *next_id += 1;
                 }
             }
-            // The ground, under everything: sub-layer zero of the first layer in the style, which
-            // is where `synthesize_terrain` puts it. Stencilled like a tiled layer, because it is
-            // one -- a cover with an ancestor standing in for a missing child must not draw the
-            // ancestor's ground through the child's.
+            // The ground. Unstencilled, for the reason `view::raster_flags` gives at length: the
+            // DEM is its own source and is covered at its own zoom, so a 256-pixel one puts z15
+            // tiles in a frame whose vector layers are z14. Asking for a stencil writes those
+            // into the mask buffer over the z14 masks covering the same screen, and then every
+            // drawable at either zoom fails its own test. Measured here as 72 ordered drawables
+            // and two renderables -- the whole ground gone, with the background left behind it
+            // looking like a terrain that had not loaded.
+            //
+            // The clip would be a no-op in any case: the surface is a mesh covering exactly its
+            // own tile, so there is nothing outside the tile square to cut.
             Content::Terrain(_) => {
-                emit(0, view::fill_pass(), view::tiled_flags());
+                emit(0, view::fill_pass(), view::raster_flags());
             }
             // The same quad a raster layer draws and the same pass, over a slope field rather
             // than a picture. mbgl gives it its own layer group and the same translucent pass.
