@@ -1,0 +1,7 @@
+{
+ "example": "display-a-map",
+ "base": "https://demotiles.maplibre.org/style.json",
+ "cameras": [
+  {"lat": 0, "lon": 0, "zoom": 1}
+ ]
+}

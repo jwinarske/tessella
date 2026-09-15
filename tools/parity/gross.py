@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: BSD-2-Clause
 """Gross pixels: per-channel difference over 48, the §9.1 metric.
 
 Not a percentage of a percentage and not a mean: a mean hides a hundred wrong pixels in a
