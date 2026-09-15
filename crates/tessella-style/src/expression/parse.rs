@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 //! Turns style values into expression trees.
 
 use alloc::boxed::Box;
@@ -1063,14 +1064,12 @@ fn parse_array_assertion(
 /// literal path. The shape is what identifies it: an object carrying `stops`, or an `identity`
 /// function, which is the one form with no stops at all.
 fn parse_legacy_function(value: &Value, spec: &PropertySpec) -> Result<Option<Expr>, ParseError> {
-    let Some(object) = value.as_object() else {
+    // The same predicate the document classifies by, so a value is a function here exactly when
+    // the style parser held it as something to evaluate.
+    let Some(object) = value.as_object().filter(|_| value.looks_like_function()) else {
         return Ok(None);
     };
     let declared_type = object.get("type").and_then(Value::as_str);
-    let has_stops = object.contains_key("stops");
-    if !has_stops && declared_type != Some("identity") {
-        return Ok(None);
-    }
 
     let kind = match declared_type {
         // No `type` means exponential, which is the spec's default and the reason a bare
