@@ -42,7 +42,7 @@ pub mod value;
 
 pub use document::{
     ExpressionValue, GeojsonSource, Layer, LayerKind, PropertyValue, RejectedLayer, Source, Style,
-    TileSource, Transition,
+    Terrain, TileSource, Transition,
 };
 pub use expression::{Dependency, Expression};
 pub use filter::{Filter, FilterError};
