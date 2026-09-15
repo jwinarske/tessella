@@ -1883,6 +1883,12 @@ fn location_indicator_part(
     Encoded { record, payload }
 }
 
+/// Where a raised family samples the elevation.
+///
+/// Past every slot mbgl's own families use, so a terrain variant's second texture cannot land on
+/// one the flat variant already reads.
+const TERRAIN_ELEVATION_SLOT: u32 = 8;
+
 /// Where the skirt flag rides, beside the position.
 const TERRAIN_SKIRT_ATTRIBUTE: u32 = 1;
 
@@ -2893,11 +2899,18 @@ pub fn encode_raster(
 /// Written out rather than sharing a body with [`encode_raster`] behind a flag. The two agree
 /// today and are not the same thing, and a shared body would make the next difference between
 /// them a parameter rather than a decision.
+/// `elevation` is the tile's raw DEM, for a hillshade the terrain raises. `None` on a flat map,
+/// where the quad lies on the ground and has no height to read.
+///
+/// A second texture on a family mbgl gives one. Its slot is named directly rather than through
+/// `texture_refs`, which reads mbgl's generated table -- and mbgl, having no terrain, has no row
+/// for the slot a raised hillshade samples.
 pub fn encode_hillshade(
     arena: &mut SlabArena,
     geometry: GeometryId,
     bucket: &RasterBucket,
     image: TextureId,
+    elevation: Option<TextureId>,
 ) -> Encoded {
     let vertex_bytes = as_raster_bytes(&bucket.vertices);
 
@@ -2943,10 +2956,15 @@ pub fn encode_hillshade(
             index_length: bucket.indices.len() as u32,
         }],
     );
-    let texture_refs = push_span(
-        &mut payload,
-        &texture_refs(BuiltIn::HillshadeShader, &[image], TextureFilter::Linear),
-    );
+    let mut refs = texture_refs(BuiltIn::HillshadeShader, &[image], TextureFilter::Linear);
+    if let Some(elevation) = elevation {
+        refs.push(TextureRef {
+            texture: elevation,
+            slot: TERRAIN_ELEVATION_SLOT,
+            filter: TextureFilter::Linear as u32,
+        });
+    }
+    let texture_refs = push_span(&mut payload, &refs);
 
     #[allow(clippy::cast_possible_truncation)]
     let record = GeometryAdd {
