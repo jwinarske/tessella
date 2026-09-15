@@ -1421,6 +1421,11 @@ fn emit_group(
                         prepared: &prepared,
                         key: (tile_index, bucket_index),
                         terrain: terrain_mesh.as_ref(),
+                        raised: buckets.get(tile_index).is_some_and(|(_, tile_buckets)| {
+                            tile_buckets
+                                .iter()
+                                .any(|bucket| matches!(bucket.content, Content::Terrain(_)))
+                        }),
                         dashes: &dashes,
                         gradients: &gradients,
                         background_cells,
@@ -1853,6 +1858,14 @@ struct Encoding<'a> {
     /// bucket, which would rebuild a fixed 101,376-index array for each tile of each cover.
     /// `None` when no bucket in this frame is terrain, which is every style without one.
     terrain: Option<&'a tessella_layout::terrain::TerrainMesh>,
+    /// Whether *this tile* carries an elevation, which is what a family's terrain variant reads
+    /// to raise itself.
+    ///
+    /// Per tile and not per frame: a style can have a terrain over one DEM source and a hillshade
+    /// over another, and only the tile that carries the ground has a height to read. Taken from
+    /// the frame instead, a hillshade on the other source would name an elevation texture nothing
+    /// uploaded.
+    raised: bool,
     /// The dash atlases, for a line layer that carries a `line-dasharray`.
     dashes: &'a crate::dash::Dashes,
     /// The gradient ramps, for a line layer that draws its `line-gradient`.
@@ -3062,6 +3075,7 @@ fn encode_parts(
         prepared,
         key,
         terrain,
+        raised,
         dashes,
         gradients,
         background_cells,
@@ -3378,11 +3392,15 @@ fn encode_parts(
             terrain?,
             textures.terrain,
         )),
+        // The elevation beside the slope field, where this frame has one: a raised hillshade
+        // reads the first to displace itself and the second to shade. `textures.terrain` is that
+        // tile's own DEM, which is the same tile the slope field was cut from.
         Content::Hillshade(hillshade) => Some(emit::encode_hillshade(
             arena,
             PLACEHOLDER,
             &hillshade.bucket,
             textures.hillshade,
+            raised.then_some(textures.terrain),
         )),
         Content::LocationIndicator(puck) => {
             // The interior, when there is a circle at all. A puck that names images and no
@@ -3645,6 +3663,12 @@ fn write_layer_state(
             })
             .collect()
     };
+
+    // The elevation, for whatever family the terrain raises. Before the match, because an arm
+    // that returns early -- a color relief with no ramp does -- would otherwise take the block
+    // with it, and a drawable marked raised whose block never arrived is dropped by the consumer
+    // with nothing to say why.
+    write_terrain_block(producer, frame, view_id, layer_index, bindings)?;
 
     match layer.kind {
         LayerKind::Background => {
@@ -4874,46 +4898,7 @@ fn write_layer_state(
             // because the tile that arrived is what says how wide it is -- a source whose
             // `tileSize` disagrees with its bytes would otherwise sample everything half a cell
             // out.
-            let terrain: Vec<tessella_capture_abi::terrain_ubo::TerrainDrawableUbo> = bindings
-                .iter()
-                .filter(|binding| binding.sub_layer_index == 0)
-                .filter_map(|binding| {
-                    let tile = binding.tile?;
-                    let content = frame.buckets.iter().find_map(|(id, tile_buckets)| {
-                        (id.z == tile.z && id.x == tile.x && id.y == tile.y).then(|| {
-                            tile_buckets
-                                .iter()
-                                .find_map(|bucket| match &bucket.content {
-                                    Content::Terrain(terrain) => Some(terrain),
-                                    _ => None,
-                                })
-                        })?
-                    })?;
-                    let matrix = DrawableEntry::for_tile(
-                        view,
-                        projection,
-                        tile.z,
-                        tile.x,
-                        tile.y,
-                        i32::from(tile.wrap),
-                        layer_index,
-                        0,
-                    )
-                    .ok()?
-                    .matrix;
-                    let (scale, offset) =
-                        tessella_capture_abi::terrain_ubo::TerrainDrawableUbo::sampling(
-                            content.dem.dim(),
-                            EXTENT_UNITS,
-                        );
-                    Some(tessella_capture_abi::terrain_ubo::TerrainDrawableUbo {
-                        matrix,
-                        unpack: content.dem.encoding().unpack(),
-                        color: ground,
-                        params: [scale, offset, content.exaggeration, content.skirt],
-                    })
-                })
-                .collect();
+            let terrain = terrain_blocks(frame, bindings, layer_index, ground);
 
             let mut buffer = Vec::with_capacity(
                 terrain.len()
@@ -5040,6 +5025,105 @@ fn puck_image(
         size: tessella_capture_abi::envelope::Extent { width, height },
         pixels,
     })
+}
+
+/// One elevation block per drawable of a layer the terrain raises.
+///
+/// Parallel to the layer's bindings at sub-layer zero, which is the order `ubo_index` counts them
+/// in. Every family that is raised today has one sub-layer; a family with more needs the walk the
+/// fill arm does, one sub-layer at a time in ascending order, for the reason that arm gives.
+///
+/// The DEM's numbers come off the *bucket* rather than the style: the tile that arrived is what
+/// says how wide it is, and a source whose `tileSize` disagrees with its bytes would otherwise
+/// sample everything half a cell out.
+fn terrain_blocks(
+    frame: &Frame<'_>,
+    bindings: &[GeometryBinding],
+    layer_index: i32,
+    color: [f32; 4],
+) -> Vec<tessella_capture_abi::terrain_ubo::TerrainDrawableUbo> {
+    bindings
+        .iter()
+        .filter(|binding| binding.sub_layer_index == 0)
+        .filter_map(|binding| {
+            let tile = binding.tile?;
+            let content = frame.buckets.iter().find_map(|(id, tile_buckets)| {
+                (id.z == tile.z && id.x == tile.x && id.y == tile.y).then(|| {
+                    tile_buckets
+                        .iter()
+                        .find_map(|bucket| match &bucket.content {
+                            Content::Terrain(terrain) => Some(terrain),
+                            _ => None,
+                        })
+                })?
+            })?;
+            let matrix = DrawableEntry::for_tile(
+                frame.view,
+                frame.projection,
+                tile.z,
+                tile.x,
+                tile.y,
+                i32::from(tile.wrap),
+                layer_index,
+                0,
+            )
+            .ok()?
+            .matrix;
+            let (scale, offset) = tessella_capture_abi::terrain_ubo::TerrainDrawableUbo::sampling(
+                content.dem.dim(),
+                EXTENT_UNITS,
+            );
+            Some(tessella_capture_abi::terrain_ubo::TerrainDrawableUbo {
+                matrix,
+                unpack: content.dem.encoding().unpack(),
+                color,
+                params: [scale, offset, content.exaggeration, content.skirt],
+            })
+        })
+        .collect()
+}
+
+/// Writes the elevation block for a layer the terrain raises, whatever family it is.
+///
+/// The ground's own arm writes its own; this is for everything standing on it. One block shape
+/// serves them all, so a family's terrain variant reads the same uniform whatever it draws --
+/// which is what keeps adding the next variant a material and not a format.
+///
+/// # Errors
+///
+/// [`FrameError`] when the ring will not take the record.
+fn write_terrain_block(
+    producer: &mut Producer,
+    frame: &Frame<'_>,
+    view_id: ViewId,
+    layer_index: i32,
+    bindings: &[GeometryBinding],
+) -> Result<(), FrameError> {
+    let raised = bindings.iter().any(|binding| {
+        binding
+            .flags
+            .contains(tessella_capture_abi::envelope::DrawFlags::ON_TERRAIN)
+    });
+    if !raised {
+        return Ok(());
+    }
+    // Black rather than the background's: the color is what paints *bare* ground, and a layer
+    // standing on the ground paints itself. It travels because the block is one shape.
+    let blocks = terrain_blocks(frame, bindings, layer_index, [0.0, 0.0, 0.0, 1.0]);
+    let mut buffer = Vec::with_capacity(
+        blocks.len() * tessella_capture_abi::terrain_ubo::TerrainDrawableUbo::STRIDE as usize,
+    );
+    for block in &blocks {
+        buffer.extend_from_slice(&block.to_bytes());
+    }
+    ubo::write(
+        producer,
+        view_id,
+        layer_index,
+        tessella_capture_abi::terrain_ubo::ID_TERRAIN_DRAWABLE_UBO,
+        &buffer,
+    )?;
+    Ok(())
 }
 
 /// The glyph atlas a symbol layer samples, in pixels.
