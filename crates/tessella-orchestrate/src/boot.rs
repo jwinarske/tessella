@@ -391,6 +391,8 @@ pub(crate) enum Work {
     Vector { url: String },
     /// Fetch, decode the picture, then build the quad it goes on.
     Raster { url: String },
+    /// Fetch, decode, then read as a height field rather than a picture.
+    Dem { url: String },
     /// Build from the document the source already resolved to.
     Geojson {
         features: alloc::sync::Arc<Vec<GeoJsonFeature>>,
@@ -421,7 +423,7 @@ impl Job {
     /// spent during resolution — so it names the tile instead.
     fn what(&self) -> String {
         match &self.work {
-            Work::Vector { url } | Work::Raster { url } => url.clone(),
+            Work::Vector { url } | Work::Raster { url } | Work::Dem { url } => url.clone(),
             Work::Geojson { .. } | Work::Annotation { .. } => {
                 alloc::format!("{}/{}", self.source, self.tile)
             }
@@ -501,7 +503,7 @@ pub(crate) struct BuildProbe<'a> {
 /// nothing left to ask any origin for. And for an annotation job, which never had an origin.
 pub(crate) fn fetch_url(job: &Job) -> Option<&str> {
     match &job.work {
-        Work::Vector { url } | Work::Raster { url } => Some(url),
+        Work::Vector { url } | Work::Raster { url } | Work::Dem { url } => Some(url),
         Work::Geojson { .. } | Work::Annotation { .. } => None,
     }
 }
@@ -599,6 +601,40 @@ fn decode_and_build(
                 url: url.clone(),
                 message: error.to_string(),
             })
+        }
+        // The same bytes a raster tile arrives as, read as a height field rather than as a
+        // picture. How the channels are packed is the source's, so it is looked up here rather
+        // than carried in the job: one place says it, and a job that carried a copy would be a
+        // second place for it to be wrong.
+        Work::Dem { url } => {
+            let response = body(job, fetched)?;
+            (probe.fetched)();
+            probe
+                .bytes
+                .fetch_add(response.body.len(), Ordering::Relaxed);
+
+            // A hole rather than a failure, as everywhere else: a DEM source's coverage is not a
+            // rectangle either, and the sea has no elevation tiles.
+            if response.is_absent() {
+                return Ok(Vec::new());
+            }
+
+            let image = tessella_source::image::decode(&response.body).map_err(|error| {
+                BootError::Decode {
+                    url: url.clone(),
+                    message: error.to_string(),
+                }
+            })?;
+            let dem = tessella_source::dem::Dem::new(&image, dem_encoding(style, &job.source))
+                .map_err(|error| BootError::Build {
+                    url: url.clone(),
+                    message: error.to_string(),
+                })?;
+            // Decoded and kept, and drawn by nothing yet: the prepare pass a hillshade needs is
+            // not built. A tile that lands and draws nothing is the state this is in, and it is
+            // deliberate -- the source half is worth having correct on its own.
+            let _ = dem;
+            Ok(Vec::new())
         }
         // Nothing to fetch and nothing to decode: the document arrived during source
         // resolution, and this cuts a tile out of it.
@@ -749,7 +785,7 @@ pub(crate) fn plan(
     let mut raster_covers: alloc::collections::BTreeMap<u8, Vec<cover::TileCoord>> =
         alloc::collections::BTreeMap::new();
     for (_, _, kind) in sets {
-        if let SourceKind::Raster { .. } = kind {
+        if let SourceKind::Raster { .. } | SourceKind::RasterDem { .. } = kind {
             let z = covering_zoom(*kind, view.zoom);
             if let alloc::collections::btree_map::Entry::Vacant(slot) = raster_covers.entry(z) {
                 slot.insert(cover::cover_at(view, z).map_err(|_| BootError::Uncovered)?);
@@ -767,6 +803,12 @@ pub(crate) fn plan(
             SourceKind::Raster { .. } => (
                 raster_covers[&covering_zoom(*kind, view.zoom)].as_slice(),
                 |url| Work::Raster { url },
+            ),
+            // Covered at the raster zoom, because that is what it is: the tiles are the same
+            // size and fetched the same way, and only what is inside them differs.
+            SourceKind::RasterDem { .. } => (
+                raster_covers[&covering_zoom(*kind, view.zoom)].as_slice(),
+                |url| Work::Dem { url },
             ),
         };
 
@@ -990,6 +1032,9 @@ pub(crate) enum Ask {
         url: String,
         source: tessella_style::TileSource,
         raster: bool,
+        /// Whether the raster is elevation rather than a picture, which the manifest does not
+        /// say and only the style does.
+        dem: bool,
     },
     /// A GeoJSON document named by URL rather than written inline.
     Geojson {
@@ -1103,11 +1148,12 @@ pub(crate) fn plan_resolution(
         };
         let name = name.to_string();
         match &source {
-            Source::Vector(tiles) | Source::Raster(tiles) => {
-                let raster = matches!(source, Source::Raster(_));
+            Source::Vector(tiles) | Source::Raster(tiles) | Source::RasterDem(tiles) => {
+                let raster = matches!(source, Source::Raster(_) | Source::RasterDem(_));
+                let dem = matches!(source, Source::RasterDem(_));
                 match tileset::plan(tiles) {
                     Ok(tileset::Planned::Ready(set)) => {
-                        let kind = tile_kind(raster, &set);
+                        let kind = tile_kind(raster, dem, &set);
                         ready.push((name, Resolved::Tiles(set, kind)));
                     }
                     Ok(tileset::Planned::Manifest(url)) => asks.push(Ask::Tiles {
@@ -1115,6 +1161,7 @@ pub(crate) fn plan_resolution(
                         url,
                         source: tiles.clone(),
                         raster,
+                        dem,
                     }),
                     Err(error) => {
                         return Err(BootError::Source {
@@ -1161,17 +1208,37 @@ pub(crate) fn plan_resolution(
 }
 
 /// The kind a resolved tileset is, which raster carries its tile size in.
-fn tile_kind(raster: bool, set: &TileSet) -> SourceKind {
-    if raster {
+fn tile_kind(raster: bool, dem: bool, set: &TileSet) -> SourceKind {
+    match (raster, dem) {
         // The same manifest, the same templates: TileJSON does not distinguish, and a raster
         // source is addressed exactly as a vector one is. What differs is the zoom its tiles are
         // asked for at and what arrives in them.
-        SourceKind::Raster {
+        (true, true) => SourceKind::RasterDem {
             tile_size: set.tile_size,
-        }
-    } else {
-        SourceKind::Vector
+        },
+        (true, false) => SourceKind::Raster {
+            tile_size: set.tile_size,
+        },
+        _ => SourceKind::Vector,
     }
+}
+
+/// How a raster-dem source packs elevation into its channels.
+///
+/// The style's, not the manifest's: TileJSON may carry an `encoding` and mbgl reads it there too,
+/// but the style is what a scene writes and what both renderers are handed. An unknown name and
+/// an absent one both fall to the spec's default, which is Mapbox Terrain-RGB -- the same thing
+/// mbgl does with a name it does not know.
+fn dem_encoding(style: &Style, source: &str) -> tessella_source::dem::Encoding {
+    let Some(tessella_style::Source::RasterDem(tiles)) = style.source(source) else {
+        return tessella_source::dem::Encoding::default();
+    };
+    tiles
+        .extra
+        .get("encoding")
+        .and_then(tessella_style::Value::as_str)
+        .and_then(tessella_source::dem::Encoding::parse)
+        .unwrap_or_default()
 }
 
 /// Reads a GeoJSON document into features, clustering it if the source asked.
@@ -1252,9 +1319,10 @@ pub(crate) fn assemble(
                 url,
                 source,
                 raster,
+                dem,
             } => match tileset::accept(source, url, response) {
                 Ok(set) => {
-                    let kind = tile_kind(*raster, &set);
+                    let kind = tile_kind(*raster, *dem, &set);
                     resolved.push((name.clone(), Resolved::Tiles(set, kind)));
                 }
                 Err(error) => {
