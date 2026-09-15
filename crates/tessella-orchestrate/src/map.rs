@@ -242,11 +242,22 @@ impl Map {
     /// [`SlabArena::pack`] and, on a moving map, most of the frame.
     #[must_use]
     pub fn with_arena(
-        style: Style,
+        mut style: Style,
         view: ViewTransform,
         view_id: ViewId,
         arena: SlabArena,
     ) -> Self {
+        // The ground, before anything reads the layer list. `plan_resolution` synthesizes into the
+        // style it plans with, which is where a bucket's `layer_index` comes from; this is the
+        // style the *frame* reads, which decides what is drawn and in what order. A synthesis
+        // reaching only one of the two builds every terrain bucket correctly and draws none of
+        // them -- see `set_annotations`, which says the same thing about the same hazard, and
+        // which is where this was found: 72 buckets built, 72 drawables ordered, and the layer
+        // they name holding no uniforms at all because the frame's style had no layer there.
+        //
+        // Unlike an annotation, a terrain is in the style document, so it is synthesized here
+        // rather than by a setter.
+        style.synthesize_terrain();
         Self {
             style,
             view,
