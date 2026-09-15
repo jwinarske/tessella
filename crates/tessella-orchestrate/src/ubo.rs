@@ -2815,3 +2815,70 @@ pub fn hillshade_anchor_is_viewport(
         .and_then(|value| value.as_str().map(alloc::string::ToString::to_string))
         .is_none_or(|anchor| anchor != "map")
 }
+
+/// Packs `ColorReliefTilePropsUBO`.
+///
+/// Every field is the *source's* rather than the tile's -- the unpack vector, the padded width,
+/// and how many stops the ramp has -- so every drawable of a layer gets the same block. It is
+/// per drawable anyway, because that is the slot mbgl writes it in and the consumer indexes it by
+/// `ubo_index` like any other.
+#[must_use]
+pub fn pack_color_relief_tile_props(unpack: [f32; 4], stride: f32, stops: i32) -> Vec<u8> {
+    let mut out = Vec::with_capacity(ubo_layouts::COLOR_RELIEF_TILE_PROPS_UBO.size as usize);
+    push_f32s(&mut out, &unpack);
+    push_f32s(&mut out, &[stride, stride]);
+    out.extend_from_slice(&stops.to_le_bytes());
+    push_f32s(&mut out, &[0.0]);
+    debug_assert_eq!(
+        out.len(),
+        ubo_layouts::COLOR_RELIEF_TILE_PROPS_UBO.size as usize
+    );
+    out
+}
+
+/// Packs `ColorReliefEvaluatedPropsUBO`, which is an opacity and three words of padding.
+#[must_use]
+pub fn pack_color_relief_props(opacity: f32) -> Vec<u8> {
+    let mut out = Vec::with_capacity(ubo_layouts::COLOR_RELIEF_EVALUATED_PROPS_UBO.size as usize);
+    push_f32s(&mut out, &[opacity, 0.0, 0.0, 0.0]);
+    debug_assert_eq!(
+        out.len(),
+        ubo_layouts::COLOR_RELIEF_EVALUATED_PROPS_UBO.size as usize
+    );
+    out
+}
+
+/// The elevation stops as the float texture the shader searches.
+///
+/// RGBA with the elevation in red and the other three zero, which is mbgl's "RGBA float for
+/// compatibility" -- a one-channel float texture is not something every backend has, and a stop
+/// table is a few hundred texels at most, so the three wasted channels cost nothing worth the
+/// portability.
+#[must_use]
+pub fn pack_relief_elevation_stops(ramp: &tessella_style::ramp::ReliefRamp) -> Vec<u8> {
+    let mut out = Vec::with_capacity(ramp.len() * 16);
+    for elevation in &ramp.elevations {
+        push_f32s(&mut out, &[*elevation, 0.0, 0.0, 0.0]);
+    }
+    out
+}
+
+/// The colors at those stops, as the bytes of a one-row texture.
+///
+/// Straight RGBA, not premultiplied: the shader mixes two of them against each other and then
+/// scales by opacity, which is a blend between colors rather than a composite over anything.
+#[must_use]
+pub fn pack_relief_color_stops(ramp: &tessella_style::ramp::ReliefRamp) -> Vec<u8> {
+    let mut out = Vec::with_capacity(ramp.len() * 4);
+    for color in &ramp.colors {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let channel = |component: f32| (component.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        out.extend_from_slice(&[
+            channel(color.r),
+            channel(color.g),
+            channel(color.b),
+            channel(color.a),
+        ]);
+    }
+    out
+}

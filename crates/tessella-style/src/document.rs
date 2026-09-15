@@ -273,6 +273,7 @@ impl LayerKind {
                 | Self::Raster
                 | Self::Heatmap
                 | Self::Hillshade
+                | Self::ColorRelief
         )
     }
 }

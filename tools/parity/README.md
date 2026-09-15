@@ -119,9 +119,9 @@ The sweep's numbers as of 2026-09-15, which is the gate:
   was taken on the machine this was written on. Stop it when the scene is not in use.
 
 - `relief_p` — a color relief over the same generated terrain, elevation mapped to color through
-  six stops. **This one does not pass and is not meant to yet**, the way the three before it did
-  not: `gross 786432 of 786432 (100.000%)` at both z14 and z11, which is every pixel, because the
-  layer covers the frame opaquely and nothing here draws one.
+  six stops. It opened at `gross 786432 of 786432 (100.000%)` at both z14 and z11 -- every pixel,
+  because the layer covers the frame opaquely -- and now reads **0 at both**, and 0 at the strict
+  12 lens as well.
 
   It reads the *raw* DEM rather than the slope field a hillshade reads, and it needs two textures
   no other family does: the elevation stops as floats and the colors at them. mbgl takes the

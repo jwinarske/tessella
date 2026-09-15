@@ -2633,6 +2633,98 @@ pub fn encode_hillshade(
     Encoded { record, payload }
 }
 
+/// Puts a color relief tile's quad into a slab and announces it.
+///
+/// [`encode_hillshade`] with three textures rather than one: the tile's own elevation, the
+/// elevations a stop sits at, and the colors there. The shader unpacks the first per pixel and
+/// searches the other two for the pair that bracket it, which is why they are textures at all --
+/// the count is the style's, so it cannot be a uniform array.
+///
+/// The two stop textures are the *layer's* and the elevation is the *tile's*, so a cover of
+/// twenty tiles announces twenty drawables naming the same two stop textures and twenty
+/// different elevations.
+pub fn encode_color_relief(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    bucket: &RasterBucket,
+    image: TextureId,
+    elevation_stops: TextureId,
+    color_stops: TextureId,
+) -> Encoded {
+    let vertex_bytes = as_raster_bytes(&bucket.vertices);
+
+    let interleaved = arena.alloc(&vertex_bytes);
+    let indexes = alloc_u16(arena, &bucket.indices);
+
+    let descriptors = alloc::vec![
+        AttributeDesc {
+            attr_id: 0,
+            binding: 0,
+            source: interleaved,
+            offset: 0,
+            vertex_offset: 0,
+            stride: RASTER_STRIDE,
+            data_type: AttributeDataType::Short2 as u8,
+            declared_data_type: AttributeDataType::Short2 as u8,
+            _pad: [0; 2],
+        },
+        AttributeDesc {
+            attr_id: 1,
+            binding: 1,
+            source: interleaved,
+            offset: 4,
+            vertex_offset: 0,
+            stride: RASTER_STRIDE,
+            data_type: AttributeDataType::Short2 as u8,
+            declared_data_type: AttributeDataType::Short2 as u8,
+            _pad: [0; 2],
+        },
+    ];
+
+    let mut payload = Vec::new();
+    let attrs = push_span(&mut payload, &descriptors);
+    // One segment however many quads the mask produced. They share a buffer, and a raster
+    // tile's four indices per quad cannot approach what a u16 reaches.
+    #[allow(clippy::cast_possible_truncation)]
+    let segments = push_span(
+        &mut payload,
+        &[AbiSegment {
+            vertex_offset: 0,
+            index_offset: 0,
+            vertex_length: bucket.vertices.len() as u32,
+            index_length: bucket.indices.len() as u32,
+        }],
+    );
+    let texture_refs = push_span(
+        &mut payload,
+        &texture_refs(
+            BuiltIn::ColorReliefShader,
+            &[image, elevation_stops, color_stops],
+            TextureFilter::Linear,
+        ),
+    );
+
+    #[allow(clippy::cast_possible_truncation)]
+    let record = GeometryAdd {
+        geometry,
+        // No data-driven attributes: a raster tile has no features for a property to vary over,
+        // so there is one permutation and its key is zero.
+        permutation_key: 0,
+        indexes,
+        vertex_count: bucket.vertices.len() as u32,
+        attrs,
+        instance_attrs: Span::default(),
+        segments,
+        texture_refs,
+        builtin_shader: BuiltIn::ColorReliefShader as i32,
+        vertex_type: AttributeDataType::Short2 as u8,
+        reason: AddReason::Created as u8,
+        _pad: [0; 2],
+    };
+
+    Encoded { record, payload }
+}
+
 /// Puts an authored model into a slab and announces it.
 ///
 /// # What this deliberately does not do

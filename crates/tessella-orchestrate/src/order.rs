@@ -507,7 +507,7 @@ pub fn bindings_for(
             }
             // The same quad a raster layer draws and the same pass, over a slope field rather
             // than a picture. mbgl gives it its own layer group and the same translucent pass.
-            Content::Hillshade(_) => {
+            Content::Hillshade(_) | Content::ColorRelief(_) => {
                 emit(0, view::fill_pass(), view::tiled_flags());
             }
             // Translucent, whatever `raster-opacity` is: mbgl draws a raster layer in the
