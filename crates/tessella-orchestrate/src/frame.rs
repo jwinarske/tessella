@@ -1087,6 +1087,28 @@ fn emit_group(
         let mut bindings =
             order::bindings_for(view_id, at, tile_buckets, &mut next_id, fonts.is_some());
 
+        // Raised, where this tile carries an elevation to raise it from. Marked here rather than
+        // inside `bindings_for` because it is a property of the *frame* -- which style is drawn
+        // and on what surface -- and a bucket is built knowing neither. The consumer reads it to
+        // choose the family's terrain variant; one with no such variant draws the flat material,
+        // which is the picture it drew before terrain existed.
+        //
+        // The ground itself is left alone: it is the surface rather than something standing on
+        // it, and its own family raises it.
+        let ground = tile_buckets.iter().find_map(|bucket| {
+            matches!(bucket.content, Content::Terrain(_)).then_some(bucket.layer_index)
+        });
+        if let Some(ground) = ground {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            let ground = ground as i32;
+            for binding in &mut bindings {
+                if binding.layer_index != ground {
+                    binding.flags =
+                        binding.flags | tessella_capture_abi::envelope::DrawFlags::ON_TERRAIN;
+                }
+            }
+        }
+
         // With a registry the id belongs to the drawable rather than to its place in this
         // frame's cover, so `bindings_for`'s sequential numbering is replaced. It still runs:
         // it is what decides how many drawables a bucket makes and which sub-layers they take,
