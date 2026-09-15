@@ -201,6 +201,49 @@ fn the_along_line_position_is_recorded_per_glyph() {
     );
 }
 
+/// A line-placed label that stands upright carries its glyphs' places in the corners.
+///
+/// mbgl's `getGlyphQuads` takes the along-line branch only for `textAlongLine`, which needs
+/// `text-rotation-alignment: map` as well as a line placement. With the rotation the viewport's --
+/// bright's highway shields -- nothing walks the label, so each glyph's offset in the word is
+/// built into its quad as a point label's is, and there is no along-line distance to record.
+/// Taking the along-line branch anyway drew every glyph of a shield's number on the same spot.
+#[test]
+fn an_upright_line_label_keeps_its_glyph_offsets_in_the_corners() {
+    let font = Font::new("Main Street");
+    let (buffers, laid) = build_line_symbols(
+        &[label("Main Street", road())],
+        &font,
+        None,
+        &LineOptions {
+            along_line: false,
+            ..LineOptions::default()
+        },
+    );
+    assert!(!laid.is_empty(), "the road still carries the name");
+
+    // The corners of one repetition span the word, where a walked label's span one glyph.
+    let first = laid[0].vertices.clone();
+    let corners: Vec<i16> = buffers.vertices[first.clone()]
+        .iter()
+        .map(|vertex| vertex.pos_offset[2])
+        .collect();
+    let spread =
+        f32::from(*corners.iter().max().expect("some") - *corners.iter().min().expect("some"))
+            / 32.0;
+    assert!(
+        spread > 100.0,
+        "the corners span {spread} units, one glyph rather than the word"
+    );
+
+    // And nothing along the line for a walk to read.
+    let offsets = &buffers.glyph_offsets[first.start / 4..first.end / 4];
+    assert!(
+        offsets.iter().all(|offset| *offset == 0.0),
+        "{offsets:?} records a walk nothing will do"
+    );
+}
+
 /// One shaping serves every repetition.
 ///
 /// Asserted through its consequence: every repetition is byte-identical but for its anchor. If

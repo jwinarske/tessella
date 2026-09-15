@@ -787,6 +787,13 @@ pub struct LineOptions {
     /// tile's zoom. mbgl says why: one size for every zoom is what stops labels jumping around
     /// as the map zooms, because every tile then anchors them in the same place.
     pub max_box_scale: f32,
+    /// Whether the text follows the line, or stands upright at each anchor.
+    ///
+    /// mbgl's `textAlongLine`: `symbol-placement` other than `point` *and*
+    /// `text-rotation-alignment: map`. With the rotation the viewport's -- bright's highway
+    /// shields -- the anchors still come from the line, but each glyph's quad carries its own
+    /// offset as a point label's does, because nothing walks it.
+    pub along_line: bool,
 }
 
 impl Default for LineOptions {
@@ -797,6 +804,7 @@ impl Default for LineOptions {
             max_angle: core::f32::consts::PI / 4.0,
             overscaling: 1.0,
             centered: false,
+            along_line: true,
             // Sixteen tile units to the pixel at the default 512-pixel tile, and a default
             // `text-size` of 16 against a 24-unit em.
             max_box_scale: 16.0 * 16.0 / tessella_glyph::text::ONE_EM,
@@ -941,11 +949,17 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
                 metrics,
             })
         };
+        // No `text_offset` along a line: a label following a line takes its offset perpendicular
+        // to the line, which `project` applies, and mbgl's `getGlyphQuads` ignores the property
+        // on the along-line branch for the same reason. An upright label takes it in its quads,
+        // as a point label does.
         let quad_options = quads::Options {
-            along_line: true,
-            // No `text_offset`: a label following a line takes its offset perpendicular to the
-            // line, which `project` applies, and mbgl's `getGlyphQuads` ignores the property on
-            // the along-line branch for the same reason.
+            along_line: options.along_line,
+            text_offset: if options.along_line {
+                [0.0, 0.0]
+            } else {
+                options.symbol.offset
+            },
             allow_vertical_placement: options.symbol.allow_vertical_placement,
             ..quads::Options::default()
         };
@@ -958,7 +972,8 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
         // writing mode says — mbgl gates this on `textAlongLine` alone. A road name in CJK
         // running down the screen is the case: the line decides the direction and the shaping
         // decides whether the characters turn with it.
-        let turned = if tessella_glyph::vertical::allows_vertical_writing_mode(&codepoints(&chars))
+        let turned = if options.along_line
+            && tessella_glyph::vertical::allows_vertical_writing_mode(&codepoints(&chars))
         {
             let shaped = shaping::shape(
                 &verticalized(&chars),

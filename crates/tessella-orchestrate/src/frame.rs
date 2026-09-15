@@ -2773,7 +2773,19 @@ fn frame_labels<'a>(
             // the unclipped geometry: on any road the tile boundary cut -- which at this zoom is
             // most of the long ones -- the segment index then named a different pair of vertices
             // and the glyphs marched off along the wrong stretch.
-            line: instance.line.as_slice(),
+            //
+            // And only for a label that follows its line. `symbol-placement: line` with
+            // `text-rotation-alignment: viewport` -- bright's highway shields -- stands the text
+            // upright at each anchor instead: mbgl collides it as a point (`textPlacement` is
+            // `Point` unless the rotation is the map's) and never reprojects it, and
+            // `SymbolDrawableEntry` already gives it a real label plane on that basis. Walking it
+            // anyway wrote label-plane positions into the dynamic buffer, the plane projected them
+            // a second time, and every shield's number drew in a heap at its tile's corner.
+            line: if layout.text_alignments.along_line(layout.placement) {
+                instance.line.as_slice()
+            } else {
+                &[]
+            },
             // Four vertices to a glyph, and one offset per glyph, which is how
             // `write_line_positions` indexes the same buffer.
             glyph_reach: {
