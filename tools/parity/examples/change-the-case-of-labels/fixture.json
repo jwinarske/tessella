@@ -1,0 +1,60 @@
+{
+ "example": "change-the-case-of-labels",
+ "base": "https://tiles.openfreemap.org/styles/bright",
+ "sources": {
+  "off-leash-areas": {
+   "type": "geojson",
+   "data": "https://maplibre.org/maplibre-gl-js/docs/assets/boise.geojson"
+  }
+ },
+ "layers": [
+  {
+   "id": "off-leash-areas",
+   "type": "symbol",
+   "source": "off-leash-areas",
+   "layout": {
+    "icon-image": "dog_park",
+    "text-field": [
+     "format",
+     [
+      "upcase",
+      [
+       "get",
+       "FacilityName"
+      ]
+     ],
+     {
+      "font-scale": 0.8
+     },
+     "\n",
+     {},
+     [
+      "downcase",
+      [
+       "get",
+       "Comments"
+      ]
+     ],
+     {
+      "font-scale": 0.6
+     }
+    ],
+    "text-font": [
+     "Noto Sans Regular"
+    ],
+    "text-offset": [
+     0,
+     0.6
+    ],
+    "text-anchor": "top"
+   }
+  }
+ ],
+ "cameras": [
+  {
+   "lat": 43.604,
+   "lon": -116.231,
+   "zoom": 11
+  }
+ ]
+}
