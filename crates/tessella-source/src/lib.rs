@@ -22,6 +22,7 @@ extern crate alloc;
 pub mod annotation;
 pub mod clip;
 pub mod cluster;
+pub mod dem;
 pub mod geojson;
 #[cfg(feature = "gltf")]
 pub mod gltf;
