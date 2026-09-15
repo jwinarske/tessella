@@ -28,12 +28,17 @@
 //! it over a third time. At zoom 14 over Berlin, a point 0.03 degrees north of a 768-pixel
 //! viewport's center comes back at y 1533 and one the same distance south at -764.
 //!
-//! mbgl's own comment in `hatShadowShiftVector` reads the other way -- it sets `y = height - 1`
-//! and calls that "moving it to bottom" -- but the arithmetic above is what the code does, and
-//! `screenCoordinateToTileCoordinate` flips back with the matching `size.height - point.y`, so
-//! the pair is an inverse either way. It is transcribed rather than corrected for exactly that
-//! reason: the puck's shadow is shifted by a difference taken in this space, and a space that
-//! differed from mbgl's by a flip would shift it the wrong way with nothing to say so.
+//! Checked against mbgl rather than derived: `TransformState::latLngToScreenCoordinate` answers
+//! `512, 1533.2315` and `512, -764.4470` for those two points, which is this to eight figures.
+//!
+//! This is `TransformState`'s convention and not the one a caller is likely to expect, because
+//! mbgl's *public* pair is the other one -- `Transform::latLngToScreenCoordinate` takes the
+//! state's answer and subtracts it from the height again, and `Map::pixelForLatLng` is that.
+//! Anything working in viewport pixels, y down from the top left, is one `height - y` away from
+//! here, and callers that transcribe mbgl code have to know which of the two that code is in.
+//! The location indicator is the example: it declares its own flipped pair beside the state's
+//! and works in viewport coordinates throughout, which is why its "moving it to bottom" comment
+//! means the bottom even though `y = height - 1` is the top of this space.
 
 use crate::camera::{self, CameraError, Mat4};
 use crate::cover::ViewTransform;

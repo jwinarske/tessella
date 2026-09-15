@@ -80,6 +80,112 @@ pub fn accuracy_circle(
     out
 }
 
+/// Where a quad's four corners sit, as bearings from the puck.
+///
+/// Bottom left, top left, top right, bottom right -- mbgl's own comment, and the order its
+/// triangle fan expects. Read as a compass, 225 is southwest, which is the bottom left of a
+/// north-up square.
+const CORNER_BEARINGS: [f64; 4] = [225.0, 315.0, 45.0, 135.0];
+
+/// The texture coordinates of those four corners, in the same order.
+///
+/// `v` runs down: the bottom left of the quad is the *top* of the image, because an image's rows
+/// start at its top and the quad's do not. mbgl writes these out as a literal and so does this.
+pub const QUAD_TEXTURE_COORDS: [[f32; 2]; 4] = [[0.0, 1.0], [0.0, 0.0], [1.0, 0.0], [1.0, 1.0]];
+
+/// Two triangles over those corners, which is what mbgl's `indices.emplace_back` pair builds.
+pub const QUAD_INDICES: [u16; 6] = [0, 1, 2, 0, 2, 3];
+
+/// One of a puck's three textured quads, as offsets in world pixels from the puck.
+///
+/// `half_diagonal` is what mbgl calls a radius and then says is not one: it is half the quad's
+/// diagonal, so a corner is exactly that far from the center and the quad's side is `sqrt(2)`
+/// times smaller. That is where the `M_SQRT2 * 0.5` in `updatePuckPerspective` goes.
+///
+/// `bearing_degrees` is the *puck's* -- which way the device is pointing -- and not the map's.
+/// The accuracy circle reads the map's; these two numbers are different properties and mbgl
+/// keeps them in different fields.
+///
+/// `shift` displaces every corner equally, which is how the shadow sinks and the hat rises when
+/// the camera pitches. It is zero for the bearing image, which is the one that lies on the
+/// ground.
+#[must_use]
+pub fn puck_quad(half_diagonal: f64, bearing_degrees: f64, shift: [f64; 2]) -> [[f32; 2]; 4] {
+    core::array::from_fn(|corner| {
+        let bearing = (bearing_degrees + CORNER_BEARINGS[corner]).rem_euclid(360.0);
+        let radians = bearing.to_radians();
+        // North is -y in world pixels, which is where the minus on the cosine comes from.
+        let direction = [radians.sin(), -radians.cos()];
+        #[allow(clippy::cast_possible_truncation)]
+        [
+            (direction[0] * half_diagonal + shift[0]) as f32,
+            (direction[1] * half_diagonal + shift[1]) as f32,
+        ]
+    })
+}
+
+/// Which of a puck's three images a quad draws.
+///
+/// The order is painter order and is mbgl's own: the shadow underneath, the bearing image on the
+/// ground, and the hat over both. They are three drawables rather than one because each has its
+/// own picture, its own size and -- when the camera pitches -- its own displacement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum PuckImage {
+    /// `shadow-image`, displaced *down* the screen as the camera pitches.
+    Shadow,
+    /// `bearing-image`, which lies on the ground and is never displaced.
+    Bearing,
+    /// `top-image`, displaced up the screen by the same amount the shadow goes down.
+    Top,
+}
+
+impl PuckImage {
+    /// The three, in painter order.
+    pub const ALL: [Self; 3] = [Self::Shadow, Self::Bearing, Self::Top];
+
+    /// The layout property that names this image.
+    #[must_use]
+    pub const fn layout_property(self) -> &'static str {
+        match self {
+            Self::Shadow => "shadow-image",
+            Self::Bearing => "bearing-image",
+            Self::Top => "top-image",
+        }
+    }
+
+    /// The paint property that scales it.
+    #[must_use]
+    pub const fn size_property(self) -> &'static str {
+        match self {
+            Self::Shadow => "shadow-image-size",
+            Self::Bearing => "bearing-image-size",
+            Self::Top => "top-image-size",
+        }
+    }
+
+    /// Which way `image-tilt-displacement` moves this one, in multiples of the displacement.
+    ///
+    /// mbgl's two signs: the shadow takes `-puckLayersDisplacement` and the hat `+`, and the
+    /// bearing image takes neither because it is the thing the other two are displaced from.
+    #[must_use]
+    pub const fn displacement_sign(self) -> f64 {
+        match self {
+            Self::Shadow => -1.0,
+            Self::Bearing => 0.0,
+            Self::Top => 1.0,
+        }
+    }
+}
+
+/// One of a puck's textured quads, placed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PuckQuad {
+    /// Which image it samples.
+    pub image: PuckImage,
+    /// Its four corners in world pixels from the puck, bottom left first.
+    pub corners: [[f32; 2]; 4],
+}
+
 /// A location indicator's geometry, ready to encode.
 ///
 /// One vertex buffer and two index buffers over it, which is what mbgl builds: the dump shows two
@@ -100,12 +206,18 @@ pub fn accuracy_circle(
 /// `LocationIndicatorShader` family means on this wire.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LocationIndicatorBucket {
-    /// The circle, center first, in world pixels from the puck.
+    /// The circle, center first, in world pixels from the puck. Empty where the layer draws none.
     pub vertices: Vec<[f32; 2]>,
     /// Triangles over [`Self::vertices`], three indices each, fanning from the center.
     pub fill_indices: Vec<u16>,
     /// The border, as a line strip over the circumference.
     pub border_indices: Vec<u16>,
+    /// The textured quads the layer's images resolved to, in painter order.
+    ///
+    /// Independent of the circle: mbgl disables the two circle drawables when there is no
+    /// accuracy radius and leaves the quads alone, and a layer that names images but no radius is
+    /// an ordinary way to draw a puck.
+    pub quads: Vec<PuckQuad>,
 }
 
 impl LocationIndicatorBucket {
@@ -145,13 +257,41 @@ impl LocationIndicatorBucket {
             vertices,
             fill_indices,
             border_indices,
+            quads: Vec::new(),
         }
     }
 
-    /// Whether this drew nothing, which is a puck with no accuracy radius.
+    /// A puck with no accuracy circle, for a layer that draws only its images.
+    #[must_use]
+    pub fn without_circle() -> Self {
+        Self {
+            vertices: Vec::new(),
+            fill_indices: Vec::new(),
+            border_indices: Vec::new(),
+            quads: Vec::new(),
+        }
+    }
+
+    /// Whether the accuracy circle is here, which is two of the layer's drawables.
+    #[must_use]
+    pub fn has_circle(&self) -> bool {
+        self.vertices.len() == CIRCLE_VERTICES
+    }
+
+    /// Whether this drew nothing at all: no circle and no image that resolved.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.vertices.len() < CIRCLE_VERTICES
+        !self.has_circle() && self.quads.is_empty()
+    }
+
+    /// How many drawables this becomes: the circle's two, then one per quad.
+    ///
+    /// The one place the count is decided. Both the binding pass and the encoder ask, because a
+    /// layer that bound more drawables than it encodes spends the extra ones on nothing and a
+    /// layer that encodes more than it bound announces geometry no view ever uses.
+    #[must_use]
+    pub fn drawables(&self) -> usize {
+        usize::from(self.has_circle()) * 2 + self.quads.len()
     }
 }
 
@@ -315,6 +455,80 @@ mod tests {
         let c = accuracy_circle(BERLIN, 240.0, -323.0, WORLD);
         assert_eq!(a, b);
         assert_eq!(a, c);
+    }
+
+    /// The four corners are a square about the puck, at the half diagonal from it.
+    #[test]
+    fn a_quad_is_a_square_about_the_puck() {
+        let quad = puck_quad(40.0, 0.0, [0.0, 0.0]);
+        for corner in quad {
+            let radius = f64::from(corner[0]).hypot(f64::from(corner[1]));
+            assert!((radius - 40.0).abs() < 1e-6, "{corner:?}");
+        }
+        // Bottom left, top left, top right, bottom right -- in world pixels, where down is +y.
+        let side = 40.0 * core::f64::consts::SQRT_2 / 2.0;
+        let want = [[-side, side], [-side, -side], [side, -side], [side, side]];
+        for (corner, expected) in quad.iter().zip(want) {
+            assert!(
+                (f64::from(corner[0]) - expected[0]).abs() < 1e-5,
+                "{quad:?}"
+            );
+            assert!(
+                (f64::from(corner[1]) - expected[1]).abs() < 1e-5,
+                "{quad:?}"
+            );
+        }
+    }
+
+    /// The puck's bearing turns the square, and turning it a full circle is turning it not at all.
+    #[test]
+    fn a_quad_turns_with_the_pucks_bearing() {
+        let flat = puck_quad(40.0, 0.0, [0.0, 0.0]);
+        let quarter = puck_quad(40.0, 90.0, [0.0, 0.0]);
+        // A quarter turn clockwise moves the bottom-left corner to where the top-left was.
+        assert!(
+            (f64::from(quarter[0][0]) - f64::from(flat[1][0])).abs() < 1e-5,
+            "{quarter:?}"
+        );
+        assert!(
+            (f64::from(quarter[0][1]) - f64::from(flat[1][1])).abs() < 1e-5,
+            "{quarter:?}"
+        );
+        assert_eq!(
+            puck_quad(40.0, 397.0, [0.0, 0.0]),
+            puck_quad(40.0, 37.0, [0.0, 0.0])
+        );
+    }
+
+    /// A shift moves every corner and changes nothing else, which is what lets the shadow sink
+    /// and the hat rise without either becoming a different shape.
+    #[test]
+    fn a_shift_moves_the_whole_quad() {
+        let flat = puck_quad(40.0, 17.0, [0.0, 0.0]);
+        let shifted = puck_quad(40.0, 17.0, [3.0, -11.0]);
+        for (corner, moved) in flat.iter().zip(shifted) {
+            assert!((moved[0] - corner[0] - 3.0).abs() < 1e-4, "{moved:?}");
+            assert!((moved[1] - corner[1] + 11.0).abs() < 1e-4, "{moved:?}");
+        }
+    }
+
+    /// An image with no size is a quad with no area, which is mbgl's answer for a layer whose
+    /// image never resolved: the radius is `width / pixelRatio` and the width is zero.
+    #[test]
+    fn no_image_is_no_quad() {
+        assert_eq!(puck_quad(0.0, 38.0, [0.0, 0.0]), [[0.0, 0.0]; 4]);
+    }
+
+    /// The texture coordinates put the image the right way up.
+    ///
+    /// `v` runs down an image and up a quad, so the corner at the bottom left of the square takes
+    /// the top left of the picture. Flipped, every puck points backwards -- which on a symmetric
+    /// sprite is invisible and on an arrow is the whole point of the layer.
+    #[test]
+    fn the_texture_coordinates_turn_the_image_over() {
+        assert_eq!(QUAD_TEXTURE_COORDS[0], [0.0, 1.0]);
+        assert_eq!(QUAD_TEXTURE_COORDS[2], [1.0, 0.0]);
+        assert_eq!(QUAD_INDICES, [0, 1, 2, 0, 2, 3]);
     }
 
     /// No accuracy is no circle, which is the spec's default: every point collapses onto the

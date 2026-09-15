@@ -867,9 +867,13 @@ impl Map {
         // at the camera's scale, so a zoom changes the geometry rather than only the matrix.
         {
             let anchor = TileId::new(0, 0, 0);
-            let built =
-                crate::tile::build_location_indicators(&self.style, &self.view, self.projection)
-                    .unwrap_or_default();
+            let built = crate::tile::build_location_indicators(
+                &self.style,
+                &self.view,
+                self.projection,
+                self.sprites.as_ref().map(|sprites| &sprites.positions),
+            )
+            .unwrap_or_default();
             if !built.is_empty() {
                 buckets.push((anchor, Arc::new(built)));
                 // No symbols, as a background has none.

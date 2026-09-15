@@ -12,6 +12,8 @@
 //! triangle list is twenty-four triangles over a ring, which fills pixels and looks like a
 //! shading bug rather than a topology one.
 
+extern crate alloc;
+
 use tessella_capture_abi::envelope::{DrawFlags, Topology, ViewId};
 use tessella_capture_abi::{ProjectionMode, generated::ubo_layouts};
 use tessella_orchestrate::order::bindings_for;
@@ -49,7 +51,8 @@ fn view() -> ViewTransform {
 }
 
 fn build(style: &Style) -> Vec<LayerBucket> {
-    build_location_indicators(style, &view(), ProjectionMode::Mercator).expect("the paint compiles")
+    build_location_indicators(style, &view(), ProjectionMode::Mercator, None)
+        .expect("the paint compiles")
 }
 
 /// The circle is built where the paint puts it, with the counts the oracle's dump carries.
@@ -143,8 +146,8 @@ fn a_disabled_puck_builds_no_bucket() {
 #[test]
 fn a_globe_draws_no_puck() {
     let style = Style::parse(STYLE).expect("style parses");
-    let built =
-        build_location_indicators(&style, &view(), ProjectionMode::Globe).expect("compiles");
+    let built = build_location_indicators(&style, &view(), ProjectionMode::Globe, Some(&sheet()))
+        .expect("compiles");
     assert!(built.is_empty());
 }
 
@@ -227,6 +230,129 @@ fn each_drawable_gets_its_own_color() {
     // And the matrix is where the shader reads it, before the color rather than after.
     let first = f32::from_le_bytes(packed[0..4].try_into().expect("four bytes"));
     assert_eq!(first, matrix[0]);
+}
+
+/// A sheet holding the three images the quad tests name, packed the way the atlas packs one.
+///
+/// Built here rather than parsed: what these tests need from a sprite is its padded rectangle and
+/// its pixel ratio, and a fixture would put a JSON parser and an atlas packer between the test and
+/// the thing it is checking.
+fn sheet() -> alloc::collections::BTreeMap<String, tessella_glyph::sprite::IconPosition> {
+    use tessella_glyph::atlas::Rect;
+    use tessella_glyph::sprite::IconPosition;
+    let mut out = alloc::collections::BTreeMap::new();
+    for (name, size, x) in [("shadow", 50, 0), ("bearing", 40, 60), ("top", 20, 120)] {
+        out.insert(
+            name.to_string(),
+            IconPosition {
+                // Padded: the rectangle is the picture plus a pixel on every side.
+                padded_rect: Rect {
+                    x,
+                    y: 0,
+                    width: size + 2,
+                    height: size + 2,
+                },
+                pixel_ratio: 1.0,
+                sdf: false,
+                content: None,
+                text_fit_width: None,
+                text_fit_height: None,
+            },
+        );
+    }
+    out
+}
+
+const IMAGED: &str = r#"{
+ "version": 8,
+ "sources": {},
+ "layers": [
+  { "id": "puck", "type": "location-indicator",
+    "layout": { "shadow-image": "shadow", "bearing-image": "bearing", "top-image": "top" },
+    "paint": {
+      "location": [ 52.52, 13.405, 0 ],
+      "accuracy-radius": 0,
+      "bearing": 0,
+      "shadow-image-size": 1.0,
+      "bearing-image-size": 1.0,
+      "top-image-size": 1.0,
+      "perspective-compensation": 0,
+      "image-tilt-displacement": 8
+    }}
+ ]
+}"#;
+
+fn quads(pitch: f64) -> Vec<tessella_layout::location_indicator::PuckQuad> {
+    let style = Style::parse(IMAGED).expect("style parses");
+    let mut camera = view();
+    camera.pitch = pitch;
+    let built =
+        build_location_indicators(&style, &camera, ProjectionMode::Mercator, Some(&sheet()))
+            .expect("the paint compiles");
+    let Content::LocationIndicator(puck) = &built[0].content else {
+        panic!("a location indicator");
+    };
+    // No accuracy radius, so the circle is absent and the quads are the whole layer.
+    assert!(!puck.has_circle());
+    puck.quads.clone()
+}
+
+/// A puck with images and no accuracy radius is three drawables, and they are the quads.
+#[test]
+fn images_draw_without_a_circle() {
+    let quads = quads(0.0);
+    assert_eq!(quads.len(), 3);
+    use tessella_layout::location_indicator::PuckImage;
+    assert_eq!(
+        quads.iter().map(|quad| quad.image).collect::<Vec<_>>(),
+        [PuckImage::Shadow, PuckImage::Bearing, PuckImage::Top]
+    );
+}
+
+/// Each quad is its image's own size: half a diagonal is the logical width times `sqrt(2) / 2`.
+#[test]
+fn a_quad_is_the_size_of_its_image() {
+    for (quad, width) in quads(0.0).iter().zip([50.0_f64, 40.0, 20.0]) {
+        let half = f64::from(quad.corners[2][0] - quad.corners[0][0])
+            .hypot(f64::from(quad.corners[2][1] - quad.corners[0][1]))
+            / 2.0;
+        assert!(
+            (half - width * core::f64::consts::SQRT_2 / 2.0).abs() < 1e-3,
+            "{:?} {half}",
+            quad.image
+        );
+    }
+}
+
+/// The shadow sinks and the hat rises when the camera pitches, and nothing moves when it does not.
+///
+/// The sign is the thing. mbgl works in viewport coordinates with y down -- the layer declares its
+/// own flipped `latLngToScreenCoordinate` -- while `tessella_tile::screen` is `TransformState`'s,
+/// where y is up. Transcribing mbgl's two lines across that flip without it put the shadow above
+/// the thing casting it, for 72 gross pixels at a pitched camera and none at a flat one.
+#[test]
+fn the_shadow_sinks_and_the_hat_rises_under_pitch() {
+    let centers = |pitch: f64| -> Vec<f32> {
+        quads(pitch)
+            .iter()
+            .map(|quad| quad.corners.iter().map(|corner| corner[1]).sum::<f32>() / 4.0)
+            .collect()
+    };
+    // Flat: every quad is centered on the puck, whatever the displacement says.
+    for center in centers(0.0) {
+        assert!(center.abs() < 1e-4, "{center}");
+    }
+    // Pitched: north is a smaller y in world pixels, so the hat's center is negative.
+    let [shadow, bearing, top] = centers(60.0)[..] else {
+        panic!("three quads")
+    };
+    assert!(shadow > 0.0, "the shadow sinks: {shadow}");
+    assert!(bearing.abs() < 1e-4, "the bearing image stays: {bearing}");
+    assert!(top < 0.0, "the hat rises: {top}");
+    // And by the same amount, which is `pitch * image-tilt-displacement` either way.
+    assert!((shadow + top).abs() < 1e-4, "{shadow} {top}");
+    let want = 60.0_f64.to_radians() * 8.0;
+    assert!((f64::from(shadow) - want).abs() < 1e-3, "{shadow} {want}");
 }
 
 fn alloc_style(paint: &str) -> String {
