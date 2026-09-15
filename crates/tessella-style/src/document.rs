@@ -654,11 +654,18 @@ impl Style {
     /// index, the bucket lookup, the draw order, the UBO keying -- needs a branch for the one
     /// thing that is not a layer. The annotation source settled the same question the same way.
     ///
-    /// # Why first
+    /// # Where it goes, and why not first
     ///
-    /// It is the ground: everything else is drawn on it. A style's own first layer is
-    /// conventionally its background, and under a terrain the background is what this replaces --
-    /// see `encode_background_on`, which already grids that quad so a globe can bend it.
+    /// Under every layer that draws on the ground, and *over* a leading background. A background
+    /// is not ground -- it is the void the map is painted on, mbgl's clear color -- so the terrain
+    /// sits on it the way every other layer sits on the terrain.
+    ///
+    /// Inserting at zero instead was wrong twice. The background then draws *after* the ground
+    /// and paints over it, which is a flat map with a terrain hidden behind it. And it stops the
+    /// background being the style's first layer, which is the test
+    /// `tile::background_covers_viewport` makes: a solid first-layer background is one viewport
+    /// quad, and demoted to second it silently becomes a quad per cover tile instead. A style
+    /// would have changed how its background draws by gaining a terrain.
     pub fn synthesize_terrain(&mut self) {
         use alloc::string::ToString as _;
 
@@ -667,8 +674,14 @@ impl Style {
             return;
         };
         let source = source.to_string();
+        // Past the backgrounds the style opens with, and before anything else.
+        let at = self
+            .layers
+            .iter()
+            .position(|layer| layer.kind != LayerKind::Background)
+            .unwrap_or(self.layers.len());
         self.layers.insert(
-            0,
+            at,
             Layer {
                 id: TERRAIN_LAYER_ID.to_string(),
                 kind: LayerKind::Terrain,

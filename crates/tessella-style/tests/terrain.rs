@@ -109,7 +109,7 @@ fn a_terrain_naming_the_wrong_thing_is_inert() {
     assert!(none.terrain_dem().is_none());
 }
 
-/// A usable terrain becomes a layer over its DEM, first in the list.
+/// A usable terrain becomes a layer over its DEM.
 ///
 /// The spec puts terrain at the top level rather than in the layer list. Synthesizing a layer is
 /// what lets everything downstream treat the ground as what it is -- an index, a bucket per tile,
@@ -127,11 +127,6 @@ fn a_terrain_becomes_a_layer() {
     assert_eq!(layer.id, TERRAIN_LAYER_ID);
     assert_eq!(layer.kind, LayerKind::Terrain);
     assert_eq!(layer.source.as_deref(), Some("dem"));
-    // First, because it is the ground and everything else is drawn on it.
-    assert_eq!(
-        style.layers.first().map(|l| l.id.as_str()),
-        Some(TERRAIN_LAYER_ID)
-    );
 }
 
 /// It is idempotent, and it takes the layer away when the terrain does.
@@ -163,9 +158,13 @@ fn synthesizing_twice_makes_one_layer() {
     );
 }
 
-/// The synthesized layer goes under the style's own, whatever they are.
+/// The ground goes under every layer that draws on it, and over a leading background.
+///
+/// A background is not ground: it is the void the map is painted on -- mbgl's clear color -- so
+/// the terrain sits on it the way every other layer sits on the terrain. Under it instead, the
+/// background draws second and paints the ground out.
 #[test]
-fn the_ground_is_under_everything() {
+fn the_ground_is_over_the_background_and_under_the_rest() {
     use tessella_style::TERRAIN_LAYER_ID;
     let text = r##"{"version":8,
       "sources":{"dem":{"type":"raster-dem","url":"http://x/d.json"}},
@@ -175,7 +174,47 @@ fn the_ground_is_under_everything() {
     let mut style = Style::parse(text).expect("style parses");
     style.synthesize_terrain();
     let ids: Vec<&str> = style.layers.iter().map(|layer| layer.id.as_str()).collect();
-    assert_eq!(ids, [TERRAIN_LAYER_ID, "bg", "water"]);
+    assert_eq!(ids, ["bg", TERRAIN_LAYER_ID, "water"]);
+}
+
+/// The background stays the style's first layer, which is what keeps it one viewport quad.
+///
+/// `tile::background_covers_viewport` tests for a solid background *first in the list*. A terrain
+/// inserted above it would demote it to second and silently turn one quad into a quad per cover
+/// tile -- a style changing how its background draws by gaining a terrain.
+#[test]
+fn a_terrain_does_not_demote_the_background() {
+    use tessella_style::LayerKind;
+    let text = r##"{"version":8,
+      "sources":{"dem":{"type":"raster-dem","url":"http://x/d.json"}},
+      "terrain":{"source":"dem"},
+      "layers":[{"id":"bg","type":"background","paint":{"background-color":"#101014"}}]}"##;
+    let mut style = Style::parse(text).expect("style parses");
+    style.synthesize_terrain();
+    assert_eq!(
+        style.layers.first().map(|layer| layer.kind.clone()),
+        Some(LayerKind::Background)
+    );
+
+    // A style with no background at all puts the ground first, because there is nothing under it.
+    let mut bare = style_with_layers(r#"[{"id":"water","type":"fill","source":"dem"}]"#);
+    bare.synthesize_terrain();
+    assert_eq!(
+        bare.layers.first().map(|layer| layer.kind.clone()),
+        Some(LayerKind::Terrain)
+    );
+    // And a style with nothing at all still gets its ground.
+    let mut empty = style_with_layers("[]");
+    empty.synthesize_terrain();
+    assert_eq!(empty.layers.len(), 1);
+}
+
+fn style_with_layers(layers: &str) -> Style {
+    let text = format!(
+        r#"{{"version":8,"sources":{{"dem":{{"type":"raster-dem","url":"http://x/d.json"}}}},
+           "terrain":{{"source":"dem"}},"layers":{layers}}}"#
+    );
+    Style::parse(&text).expect("style parses")
 }
 
 /// It survives a round trip, so a style read and written back still asks for its terrain.
