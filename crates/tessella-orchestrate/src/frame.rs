@@ -878,7 +878,9 @@ fn emit_group(
         // `Frame::buckets` is documented as being in cover order, and this is what depends on
         // that -- at low zooms the same `z/x/y` appears in several copies and only the wrap tells
         // them apart.
-        let at = order::wrapped_tile_of(tile.z, tile.x, tile.y, wrap);
+        // And the zoom the bucket was built for, which the zoom-mix factors below are measured
+        // against. See `bound_tile_of`.
+        let at = order::bound_tile_of(*tile, wrap);
         let mut bindings =
             order::bindings_for(view_id, at, tile_buckets, &mut next_id, fonts.is_some());
 
@@ -3285,7 +3287,12 @@ fn write_layer_state(
                     i32::from(tile.wrap),
                     layer_index,
                     sub_layer_index,
-                    ubo::fill_interpolations(&paint, f64::from(tile.z), view.zoom, sub_layer_index),
+                    ubo::fill_interpolations(
+                        &paint,
+                        f64::from(tile.overscaled_z),
+                        view.zoom,
+                        sub_layer_index,
+                    ),
                 )
                 .ok()
             })
@@ -3394,7 +3401,7 @@ fn write_layer_state(
                                     0.0,
                                     ubo::fill_interpolations(
                                         paint_ref,
-                                        f64::from(tile.z),
+                                        f64::from(tile.overscaled_z),
                                         view.zoom,
                                         sub,
                                     )[1],
@@ -3527,7 +3534,7 @@ fn write_layer_state(
             // The tile beside its block, because a dashed line needs both: the pattern is scaled
             // by the tile's own level against the camera's, and a parent standing in for a finer
             // tile is stretched.
-            let placed: Vec<(u8, ubo::LineDrawableEntry)> = matrices(0)
+            let placed: Vec<(u8, u8, ubo::LineDrawableEntry)> = matrices(0)
                 .filter_map(|tile| {
                     let entry = ubo::LineDrawableEntry::for_tile(
                         view,
@@ -3538,14 +3545,14 @@ fn write_layer_state(
                         i32::from(tile.wrap),
                         layer_index,
                         0,
-                        ubo::line_interpolations(&paint, f64::from(tile.z), view.zoom),
+                        ubo::line_interpolations(&paint, f64::from(tile.overscaled_z), view.zoom),
                     )
                     .ok()?;
-                    Some((tile.z, entry))
+                    Some((tile.z, tile.overscaled_z, entry))
                 })
                 .collect();
             let line: Vec<ubo::LineDrawableEntry> =
-                placed.iter().map(|&(_, entry)| entry).collect();
+                placed.iter().map(|&(_, _, entry)| entry).collect();
             // The dash atlas this layer resolved, which decides both blocks below:
             // `LineSDFDrawableUBO` is `LineDrawableUBO` with the pattern's placement between the
             // matrix and the ratio, and the tile props carry the distance field's gamma rather
@@ -3563,7 +3570,7 @@ fn write_layer_state(
                 Some(placement) => {
                     let sdf: Vec<ubo::LineSdfDrawableEntry> = placed
                         .iter()
-                        .map(|&(z, entry)| {
+                        .map(|&(z, overscaled_z, entry)| {
                             #[allow(clippy::cast_possible_truncation)]
                             let units =
                                 tessella_tile::camera::pixels_to_tile_units(z, view.zoom.floor())
@@ -3578,7 +3585,7 @@ fn write_layer_state(
                                 tex_y_b: placement.to.y,
                                 interpolations: ubo::line_sdf_interpolations(
                                     &paint,
-                                    f64::from(z),
+                                    f64::from(overscaled_z),
                                     view.zoom,
                                 ),
                             }
@@ -3704,7 +3711,11 @@ fn write_layer_state(
                         tile.x,
                         tile.y,
                         i32::from(tile.wrap),
-                        ubo::heatmap_interpolations(&paint, f64::from(tile.z), view.zoom),
+                        ubo::heatmap_interpolations(
+                            &paint,
+                            f64::from(tile.overscaled_z),
+                            view.zoom,
+                        ),
                     )
                     .ok()
                 })
@@ -3762,7 +3773,7 @@ fn write_layer_state(
                         layer_index,
                         0,
                         ubo::circle_extrude_scale(pitch_with_map, tile.z, view),
-                        ubo::circle_interpolations(&paint, f64::from(tile.z), view.zoom),
+                        ubo::circle_interpolations(&paint, f64::from(tile.overscaled_z), view.zoom),
                     )
                     .ok()
                 })
@@ -3830,10 +3841,13 @@ fn write_layer_state(
                 patterns.placement(&paint, "fill-extrusion-pattern", view.zoom)
             });
 
-            let interpolations = ubo::extrusion_interpolations(&paint, view.zoom, view.zoom);
             let entry = |sub_layer_index: i32| -> Vec<ubo::ExtrusionDrawableEntry> {
                 matrices(sub_layer_index)
                     .filter_map(|tile| {
+                        // Per tile, from the zoom its bucket was built at, as every other family
+                        // mixes. Taken from the view's zoom for both ends, the factor was always
+                        // zero, and a height that rises with zoom -- `["interpolate", ["linear"],
+                        // ["zoom"], 15, 0, 16, ...]` -- stood at its lower stop between the two.
                         ubo::ExtrusionDrawableEntry::for_tile(
                             view,
                             projection,
@@ -3841,7 +3855,11 @@ fn write_layer_state(
                             tile.x,
                             tile.y,
                             i32::from(tile.wrap),
-                            interpolations,
+                            ubo::extrusion_interpolations(
+                                &paint,
+                                f64::from(tile.overscaled_z),
+                                view.zoom,
+                            ),
                         )
                         .ok()
                     })
