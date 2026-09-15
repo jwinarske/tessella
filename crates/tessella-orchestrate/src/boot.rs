@@ -66,7 +66,9 @@ use tessella_tile::store::Surface;
 
 use crate::cache::TileCache;
 use crate::pool::{Pool, Priority};
-use crate::tile::{LayerBucket, TileId, build_mvt_tile_on, build_raster_tile_on, build_tile};
+use crate::tile::{
+    LayerBucket, TileId, build_dem_tile_on, build_mvt_tile_on, build_raster_tile_on, build_tile,
+};
 
 /// The tile zoom a source is covered at.
 ///
@@ -630,11 +632,23 @@ fn decode_and_build(
                     url: url.clone(),
                     message: error.to_string(),
                 })?;
-            // Decoded and kept, and drawn by nothing yet: the prepare pass a hillshade needs is
-            // not built. A tile that lands and draws nothing is the state this is in, and it is
-            // deliberate -- the source half is worth having correct on its own.
-            let _ = dem;
-            Ok(Vec::new())
+            // The whole tile, as a raster tile is, and gridded on a sphere for the same reason.
+            let cells = match job.key.surface {
+                Surface::Plane => 1,
+                Surface::Sphere => tessella_layout::subdivide::edge_cells(job.tile.bucket_zoom()),
+            };
+            build_dem_tile_on(
+                style,
+                &job.source,
+                &dem,
+                job.tile,
+                &[tessella_tile::mask::WHOLE_TILE],
+                cells,
+            )
+            .map_err(|error| BootError::Build {
+                url: url.clone(),
+                message: error.to_string(),
+            })
         }
         // Nothing to fetch and nothing to decode: the document arrived during source
         // resolution, and this cuts a tile out of it.
