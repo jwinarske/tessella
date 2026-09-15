@@ -58,6 +58,7 @@ fn encode(kind: &str, extra: &str, family: &[BuiltIn], shader: BuiltIn) -> Encod
                 permutation_key: key,
                 pattern_atlas: None,
                 dash_atlas: None,
+                gradient_ramp: None,
                 pattern_vertices: None,
             },
         ),

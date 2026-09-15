@@ -1633,6 +1633,11 @@ pub struct LineDraw<'a> {
     /// textures behind the same sampler and which one a drawable gets is decided by which shader
     /// it names. A layer that sets both draws dashed, as mbgl's does.
     pub dash_atlas: Option<TextureId>,
+    /// The color ramp, when the layer draws its `line-gradient`.
+    ///
+    /// Behind the same sampler again, and taken only when neither of the two above is: mbgl
+    /// tests a dasharray, then a pattern, then a gradient.
+    pub gradient_ramp: Option<TextureId>,
     /// Per-vertex pattern rectangles, when the pattern is data-driven.
     pub pattern_vertices: Option<&'a PatternVertices>,
 }
@@ -1661,6 +1666,7 @@ pub fn encode_line(
         permutation_key,
         pattern_atlas,
         dash_atlas,
+        gradient_ramp,
         pattern_vertices,
     } = draw;
     let vertices = alloc_line_vertices(arena, &bucket.vertices);
@@ -1692,12 +1698,13 @@ pub fn encode_line(
         bucket.vertices.len(),
         &descriptors,
         &bucket.segments,
-        match (dash_atlas, pattern_atlas) {
-            (Some(_), _) => BuiltIn::LineSDFShader,
-            (None, Some(_)) => BuiltIn::LinePatternShader,
-            (None, None) => BuiltIn::LineShader,
+        match (dash_atlas, pattern_atlas, gradient_ramp) {
+            (Some(_), _, _) => BuiltIn::LineSDFShader,
+            (None, Some(_), _) => BuiltIn::LinePatternShader,
+            (None, None, Some(_)) => BuiltIn::LineGradientShader,
+            (None, None, None) => BuiltIn::LineShader,
         },
-        dash_atlas.or(pattern_atlas),
+        dash_atlas.or(pattern_atlas).or(gradient_ramp),
         TextureFilter::Linear,
     )
 }

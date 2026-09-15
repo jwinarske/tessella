@@ -380,6 +380,11 @@ fn heatmap_ramp_id(offscreen: ViewId) -> tessella_capture_abi::envelope::Texture
 /// collide.
 const DASH_TEXTURE_BASE: u64 = 1 << 62;
 
+/// The first texture id a gradient line's color ramp takes.
+///
+/// One per style layer, as a dash atlas is, in a range of its own above the heatmap's.
+const LINE_GRADIENT_TEXTURE_BASE: u64 = 7 << 60;
+
 /// The first texture id a raster tile's picture takes.
 ///
 /// One per tile rather than one per layer: a raster tile *is* its picture, and two raster layers
@@ -885,6 +890,29 @@ fn emit_group(
         texture::write(producer, &texture::dash_atlas(entry.texture, &entry.atlas))?;
     }
 
+    // And the gradient ramps, after the dashes because a dashed layer takes none. Re-sent every
+    // frame on the dashes' terms: a kilobyte a layer, and the same bytes to the same id collapse
+    // on a latest-wins consumer.
+    let gradients = crate::gradient::Gradients::for_buckets(
+        style,
+        buckets,
+        &dashes,
+        LINE_GRADIENT_TEXTURE_BASE,
+    );
+    for entry in gradients.iter() {
+        #[allow(clippy::cast_possible_truncation)]
+        let upload = texture::whole(
+            entry.texture,
+            tessella_capture_abi::envelope::Extent {
+                width: tessella_style::ramp::RAMP_TEXELS as u32,
+                height: 1,
+            },
+            tessella_capture_abi::TexturePixelType::RGBA,
+            &entry.pixels,
+        );
+        texture::write(producer, &upload)?;
+    }
+
     // Derived from the viewport, so it moves when the camera does and not otherwise -- and
     // `camera_key` covers the viewport, so a resize counts as a move. Sound where the per-layer
     // gate below was not, because this slot is durable on the consumer and `declare` guarantees
@@ -1314,6 +1342,7 @@ fn emit_group(
                         prepared: &prepared,
                         key: (tile_index, bucket_index),
                         dashes: &dashes,
+                        gradients: &gradients,
                         background_cells,
                     },
                 ) else {
@@ -1518,7 +1547,15 @@ fn emit_group(
                     .copied()
                     .unwrap_or(u32::MAX)
             });
-            write_layer_state(producer, frame, *layer_index, &ordered, tiles, &dashes)?;
+            write_layer_state(
+                producer,
+                frame,
+                *layer_index,
+                &ordered,
+                tiles,
+                &dashes,
+                &gradients,
+            )?;
         }
     }
 
@@ -1731,6 +1768,8 @@ struct Encoding<'a> {
     key: (usize, usize),
     /// The dash atlases, for a line layer that carries a `line-dasharray`.
     dashes: &'a crate::dash::Dashes,
+    /// The gradient ramps, for a line layer that draws its `line-gradient`.
+    gradients: &'a crate::gradient::Gradients,
     /// How many cells a background's quad is split into, per side.
     ///
     /// One on a plane, which is mbgl's four-vertex quad and what the goldens hash. On a globe it
@@ -2929,6 +2968,7 @@ fn encode_parts(
         prepared,
         key,
         dashes,
+        gradients,
         background_cells,
     } = context;
     let bind = |family: &[BuiltIn], shader: BuiltIn| {
@@ -2989,13 +3029,23 @@ fn encode_parts(
                         .is_some()
                 })
                 .map(|patterns| patterns.texture);
+            // And a gradient only after both, which is the order mbgl's `update` tests them in.
+            let gradient = gradients
+                .get(bucket.layer_index)
+                .filter(|_| dash.is_none() && atlas.is_none())
+                .map(|gradient| gradient.texture);
             // A pattern binds against the plain shader's table, which is what it did before the
             // SDF branch existed and is left alone here: `LinePatternShader` drops the color
             // attribute and shifts every binding after it down one, so switching to its table
             // would move a patterned line's slots for reasons that have nothing to do with
             // dashes. The SDF table differs only by *adding* `floorwidth` at binding eight.
+            //
+            // A gradient binds against its own: the ramp is its color, so it declares no color
+            // attribute, and a data-driven `line-color` is supplied and simply not bound.
             let shader = if dash.is_some() {
                 BuiltIn::LineSDFShader
+            } else if gradient.is_some() {
+                BuiltIn::LineGradientShader
             } else {
                 BuiltIn::LineShader
             };
@@ -3010,6 +3060,7 @@ fn encode_parts(
                     permutation_key: key,
                     pattern_atlas: atlas,
                     dash_atlas: dash.map(|dash| dash.texture),
+                    gradient_ramp: gradient,
                     // Only where the atlas resolved: a pattern the sprite sheet does not hold
                     // draws as a plain line, and rectangles for a pattern nothing will bind are
                     // bytes on the wire that no shader reads.
@@ -3366,6 +3417,7 @@ fn write_layer_state(
     bindings: &[GeometryBinding],
     tiles: &[TileCoord],
     dashes: &crate::dash::Dashes,
+    gradients: &crate::gradient::Gradients,
 ) -> Result<(), FrameError> {
     let Frame {
         projection,
@@ -3785,6 +3837,17 @@ fn write_layer_state(
                         .collect();
                     ubo::pack_line_sdf_drawable_buffer(
                         &sdf,
+                        ubo_layouts::LINE_DRAWABLE_UNION_UBO.stride,
+                    )
+                }
+                // `LineGradientDrawableUBO`, for a layer drawing its ramp: the plain block without
+                // the color's mix factor, which the ramp replaces.
+                None if usize::try_from(layer_index)
+                    .ok()
+                    .is_some_and(|index| gradients.get(index).is_some()) =>
+                {
+                    ubo::pack_line_gradient_drawable_buffer(
+                        &line,
                         ubo_layouts::LINE_DRAWABLE_UNION_UBO.stride,
                     )
                 }
