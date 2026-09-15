@@ -2546,6 +2546,93 @@ pub fn encode_raster(
     Encoded { record, payload }
 }
 
+/// Puts a hillshade tile's quad into a slab and announces it.
+///
+/// [`encode_raster`] over the slope field: the same quad, the same two attributes, the same one
+/// segment however many the mask made. What differs is the shader and that there is one texture
+/// rather than two -- a raster tile binds its picture twice for the cross-fade between zooms, and
+/// a hillshade has nothing to fade between: the slope field is a property of the tile, not of the
+/// moment.
+///
+/// Written out rather than sharing a body with [`encode_raster`] behind a flag. The two agree
+/// today and are not the same thing, and a shared body would make the next difference between
+/// them a parameter rather than a decision.
+pub fn encode_hillshade(
+    arena: &mut SlabArena,
+    geometry: GeometryId,
+    bucket: &RasterBucket,
+    image: TextureId,
+) -> Encoded {
+    let vertex_bytes = as_raster_bytes(&bucket.vertices);
+
+    let interleaved = arena.alloc(&vertex_bytes);
+    let indexes = alloc_u16(arena, &bucket.indices);
+
+    let descriptors = alloc::vec![
+        AttributeDesc {
+            attr_id: 0,
+            binding: 0,
+            source: interleaved,
+            offset: 0,
+            vertex_offset: 0,
+            stride: RASTER_STRIDE,
+            data_type: AttributeDataType::Short2 as u8,
+            declared_data_type: AttributeDataType::Short2 as u8,
+            _pad: [0; 2],
+        },
+        AttributeDesc {
+            attr_id: 1,
+            binding: 1,
+            source: interleaved,
+            offset: 4,
+            vertex_offset: 0,
+            stride: RASTER_STRIDE,
+            data_type: AttributeDataType::Short2 as u8,
+            declared_data_type: AttributeDataType::Short2 as u8,
+            _pad: [0; 2],
+        },
+    ];
+
+    let mut payload = Vec::new();
+    let attrs = push_span(&mut payload, &descriptors);
+    // One segment however many quads the mask produced. They share a buffer, and a raster
+    // tile's four indices per quad cannot approach what a u16 reaches.
+    #[allow(clippy::cast_possible_truncation)]
+    let segments = push_span(
+        &mut payload,
+        &[AbiSegment {
+            vertex_offset: 0,
+            index_offset: 0,
+            vertex_length: bucket.vertices.len() as u32,
+            index_length: bucket.indices.len() as u32,
+        }],
+    );
+    let texture_refs = push_span(
+        &mut payload,
+        &texture_refs(BuiltIn::HillshadeShader, &[image], TextureFilter::Linear),
+    );
+
+    #[allow(clippy::cast_possible_truncation)]
+    let record = GeometryAdd {
+        geometry,
+        // No data-driven attributes: a raster tile has no features for a property to vary over,
+        // so there is one permutation and its key is zero.
+        permutation_key: 0,
+        indexes,
+        vertex_count: bucket.vertices.len() as u32,
+        attrs,
+        instance_attrs: Span::default(),
+        segments,
+        texture_refs,
+        builtin_shader: BuiltIn::HillshadeShader as i32,
+        vertex_type: AttributeDataType::Short2 as u8,
+        reason: AddReason::Created as u8,
+        _pad: [0; 2],
+    };
+
+    Encoded { record, payload }
+}
+
 /// Puts an authored model into a slab and announces it.
 ///
 /// # What this deliberately does not do
