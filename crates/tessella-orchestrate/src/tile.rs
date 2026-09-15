@@ -507,6 +507,9 @@ pub fn build_tile_on_with_patterns(
                 Content::Symbol(layout)
             }
             LayerKind::Background => Content::Background,
+            // A color relief reads a height field, so an MVT tile has nothing for it -- the same
+            // reason a hillshade is absent from this builder.
+            LayerKind::ColorRelief => continue,
             // Extrusions share the arm: they take the same features, the same clipping and the
             // same ring classification, and differ only in what the vertices are packed into.
             // mbgl's two buckets diverge at exactly the same point.
@@ -1284,6 +1287,9 @@ pub fn build_mvt_tile_on_with_patterns(
 
         let content = match layer.kind {
             LayerKind::Background => Content::Background,
+            // A color relief reads a height field, so an MVT tile has nothing for it -- the same
+            // reason a hillshade is absent from this builder.
+            LayerKind::ColorRelief => continue,
             // Extrusions share the arm: they take the same features, the same clipping and the
             // same ring classification, and differ only in what the vertices are packed into.
             // mbgl's two buckets diverge at exactly the same point.
