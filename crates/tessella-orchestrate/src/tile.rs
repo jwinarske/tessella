@@ -1160,11 +1160,20 @@ pub fn build_dem_tile_on(
 /// before it reads the encoded slope as a real one -- without it a hillshade at high latitude
 /// reads far steeper than the ground is.
 fn lat_range(tile: TileId) -> [f32; 2] {
-    let scale = f64::from(1u32 << tile.z);
-    let (_, north) =
-        tessella_tile::projection::unproject([f64::from(tile.x), f64::from(tile.y)], scale);
+    lat_range_of(tile.z, tile.x, tile.y)
+}
+
+/// A tile's north and south edges in degrees, from its coordinate.
+///
+/// Public because the uniform that carries it is written where the *bindings* are, a frame later
+/// and a file away from where the bucket was built, and a second derivation of one number is a
+/// second thing to keep in agreement.
+#[must_use]
+pub fn lat_range_of(z: u8, x: u32, y: u32) -> [f32; 2] {
+    let scale = f64::from(1u32 << z);
+    let (_, north) = tessella_tile::projection::unproject([f64::from(x), f64::from(y)], scale);
     let (_, south) =
-        tessella_tile::projection::unproject([f64::from(tile.x), f64::from(tile.y) + 1.0], scale);
+        tessella_tile::projection::unproject([f64::from(x), f64::from(y) + 1.0], scale);
     #[allow(clippy::cast_possible_truncation)]
     [north as f32, south as f32]
 }
