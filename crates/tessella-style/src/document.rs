@@ -590,6 +590,30 @@ impl Style {
     pub fn source(&self, id: &str) -> Option<&Source> {
         self.sources.get(id)
     }
+
+    /// The terrain's DEM, when the style has a terrain that names one.
+    ///
+    /// `Some((id, source))` only when all three hold: the style has a `terrain`, its `source`
+    /// names a source the style declares, and that source is a `raster-dem`. A terrain naming a
+    /// vector source or a source that is not there is inert -- the map draws flat -- because
+    /// there is no elevation to read and inventing one is worse than drawing the map the style
+    /// otherwise describes.
+    ///
+    /// # Why one accessor answers two questions
+    ///
+    /// "Is this terrain usable" and "what do I fetch" have the same answer, and they are asked
+    /// from opposite ends of the build: the resolve plan asks the second before any layer is
+    /// compiled, and the frame asks the first every tick. Two accessors would be two places for
+    /// the definition of a usable terrain to drift apart.
+    #[must_use]
+    pub fn terrain_dem(&self) -> Option<(&str, &TileSource)> {
+        let terrain = self.terrain.as_ref()?;
+        let (id, source) = self.sources.get_key_value(terrain.source.as_str())?;
+        match source {
+            Source::RasterDem(tiles) => Some((id.as_str(), tiles)),
+            _ => None,
+        }
+    }
 }
 
 /// A layer that could not be compiled, and the reason.
