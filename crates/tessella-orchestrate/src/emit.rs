@@ -33,7 +33,7 @@ use alloc::vec::Vec;
 use tessella_capture_abi::envelope::{
     AddReason, AttributeDesc, GeometryAdd, GeometryId, GeometryRemove, MeshAdd, MeshFormat,
     Segment as AbiSegment, SlabEntry, SlabRef, SlabRegion, Span, TextureFilter, TextureId,
-    TextureRef, WireRecord,
+    TextureRef, Topology, WireRecord,
 };
 use tessella_capture_abi::generated::{shader_attributes, texture_slots, ubo_slots};
 use tessella_capture_abi::mapping::Mapping;
@@ -1389,7 +1389,8 @@ pub fn encode_fill(
         builtin_shader: shader as i32,
         vertex_type: AttributeDataType::Short2 as u8,
         reason: AddReason::Created as u8,
-        _pad: [0; 2],
+        topology: Topology::of(shader) as u8,
+        _pad: [0; 1],
     };
 
     (
@@ -1593,7 +1594,11 @@ fn geometry_add_textured(
         builtin_shader: shader as i32,
         vertex_type: AttributeDataType::Short2 as u8,
         reason: AddReason::Created as u8,
-        _pad: [0; 2],
+        // The family's default, which every family but one is. The exception is the location
+        // indicator's circle -- a fan and a strip of one family over one vertex buffer -- and
+        // it overwrites this on the record it gets back.
+        topology: Topology::of(shader) as u8,
+        _pad: [0; 1],
     };
 
     Encoded { record, payload }
@@ -2447,7 +2452,8 @@ pub fn encode_symbol_indices(
         builtin_shader: shader as i32,
         vertex_type: AttributeDataType::Short4 as u8,
         reason: AddReason::Created as u8,
-        _pad: [0; 2],
+        topology: Topology::of(shader) as u8,
+        _pad: [0; 1],
     };
 
     Encoded { record, payload }
@@ -2540,7 +2546,8 @@ pub fn encode_raster(
         builtin_shader: BuiltIn::RasterShader as i32,
         vertex_type: AttributeDataType::Short2 as u8,
         reason: AddReason::Created as u8,
-        _pad: [0; 2],
+        topology: Topology::of(BuiltIn::RasterShader) as u8,
+        _pad: [0; 1],
     };
 
     Encoded { record, payload }
@@ -2627,7 +2634,8 @@ pub fn encode_hillshade(
         builtin_shader: BuiltIn::HillshadeShader as i32,
         vertex_type: AttributeDataType::Short2 as u8,
         reason: AddReason::Created as u8,
-        _pad: [0; 2],
+        topology: Topology::of(BuiltIn::HillshadeShader) as u8,
+        _pad: [0; 1],
     };
 
     Encoded { record, payload }
@@ -2719,7 +2727,8 @@ pub fn encode_color_relief(
         builtin_shader: BuiltIn::ColorReliefShader as i32,
         vertex_type: AttributeDataType::Short2 as u8,
         reason: AddReason::Created as u8,
-        _pad: [0; 2],
+        topology: Topology::of(BuiltIn::ColorReliefShader) as u8,
+        _pad: [0; 1],
     };
 
     Encoded { record, payload }
