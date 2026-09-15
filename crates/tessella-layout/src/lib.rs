@@ -41,6 +41,7 @@ pub mod subdivide;
 pub mod symbol;
 pub mod symbol_bucket;
 pub mod symbol_layout;
+pub mod terrain;
 
 pub use circle::CircleBucket;
 pub use fill::{FillBucket, Segment};
