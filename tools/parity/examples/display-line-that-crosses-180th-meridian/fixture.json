@@ -1,0 +1,97 @@
+{
+ "example": "display-line-that-crosses-180th-meridian",
+ "base": "https://demotiles.maplibre.org/style.json",
+ "sources": {
+  "route": {
+   "type": "geojson",
+   "data": {
+    "type": "Feature",
+    "properties": {},
+    "geometry": {
+     "type": "LineString",
+     "coordinates": [
+      [
+       -72.42187,
+       -16.59408
+      ],
+      [
+       140.27343,
+       35.67514
+      ]
+     ]
+    }
+   }
+  },
+  "route-two": {
+   "type": "geojson",
+   "data": {
+    "type": "Feature",
+    "properties": {},
+    "geometry": {
+     "type": "LineString",
+     "coordinates": [
+      [
+       -72.42187,
+       -16.59408
+      ],
+      [
+       -219.72657,
+       35.67514
+      ]
+     ]
+    }
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "route",
+   "type": "line",
+   "source": "route",
+   "layout": {
+    "line-cap": "round"
+   },
+   "paint": {
+    "line-color": "#007296",
+    "line-width": 4
+   }
+  },
+  {
+   "id": "route-label",
+   "type": "symbol",
+   "source": "route",
+   "layout": {
+    "symbol-placement": "line-center",
+    "text-field": "Crosses the world"
+   }
+  },
+  {
+   "id": "route-two",
+   "type": "line",
+   "source": "route-two",
+   "layout": {
+    "line-cap": "round"
+   },
+   "paint": {
+    "line-color": "#F06317",
+    "line-width": 4
+   }
+  },
+  {
+   "id": "route-two-label",
+   "type": "symbol",
+   "source": "route-two",
+   "layout": {
+    "symbol-placement": "line-center",
+    "text-field": "Crosses 180th meridian"
+   }
+  }
+ ],
+ "cameras": [
+  {
+   "lat": 26.11598,
+   "lon": -41.62667,
+   "zoom": 0
+  }
+ ]
+}
