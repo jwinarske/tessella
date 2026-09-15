@@ -77,6 +77,15 @@ typedef enum tsl_add_reason {
     TSL_ADD_REASON_ATTRIBUTES_MODIFIED = 3,
 } tsl_add_reason;
 
+/* What a tsl_geometry_add's indices describe. The shader family used to settle this and no */
+/* longer can: the location indicator draws one family as both a triangle fan and a line strip */
+/* over one vertex buffer. */
+typedef enum tsl_topology {
+    TSL_TOPOLOGY_TRIANGLES = 0,
+    TSL_TOPOLOGY_LINES = 1,
+    TSL_TOPOLOGY_LINE_STRIP = 2,
+} tsl_topology;
+
 /* What a mesh's bytes are. A consumer meeting a value it does not know must skip the mesh rather */
 /* than guess at the bytes. */
 typedef enum tsl_mesh_format {
@@ -1774,8 +1783,10 @@ typedef struct tsl_geometry_add {
     uint8_t vertex_type;
     /* tsl_add_reason. A steady stream of ATTRIBUTES_MODIFIED on a static scene is a bug. */
     uint8_t reason;
+    /* tsl_topology. What the indices describe. Padding through rev 3; zero is TRIANGLES. */
+    uint8_t topology;
     /* Must be zero. */
-    uint8_t _pad[2];
+    uint8_t _pad[1];
 } tsl_geometry_add;
 
 TSL_ASSERT(sizeof(tsl_geometry_add) == 72, "tsl_geometry_add size differs from the Rust definition");
@@ -1791,7 +1802,8 @@ TSL_ASSERT(offsetof(tsl_geometry_add, texture_refs) == 56, "tsl_geometry_add.tex
 TSL_ASSERT(offsetof(tsl_geometry_add, builtin_shader) == 64, "tsl_geometry_add.builtin_shader moved");
 TSL_ASSERT(offsetof(tsl_geometry_add, vertex_type) == 68, "tsl_geometry_add.vertex_type moved");
 TSL_ASSERT(offsetof(tsl_geometry_add, reason) == 69, "tsl_geometry_add.reason moved");
-TSL_ASSERT(offsetof(tsl_geometry_add, _pad) == 70, "tsl_geometry_add._pad moved");
+TSL_ASSERT(offsetof(tsl_geometry_add, topology) == 70, "tsl_geometry_add.topology moved");
+TSL_ASSERT(offsetof(tsl_geometry_add, _pad) == 71, "tsl_geometry_add._pad moved");
 
 /*
  * Announces a process-scoped, refcounted mesh: an authored model the consumer's own loader
