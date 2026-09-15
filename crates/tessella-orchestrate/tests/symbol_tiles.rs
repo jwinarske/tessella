@@ -1232,6 +1232,22 @@ fn a_line_placed_icon_repeats_with_its_label() {
         anchors.is_subset(&label_anchors),
         "an icon is drawn at the instance it belongs to"
     );
+
+    // And each icon is the other half of exactly one label, even on a road that repeats. Paired on
+    // the feature alone, every icon along a road answered to the first of its labels: placement
+    // collided the later numbers against that first icon's box, and every shield took the first
+    // number's fade, so shields drew empty wherever their own number was not placed.
+    for icon in &laid {
+        let halves = instances
+            .iter()
+            .filter(|instance| tessella_orchestrate::symbols::same_instance(instance, icon))
+            .count();
+        assert_eq!(
+            halves, 1,
+            "the icon at {:?} pairs with {halves} labels",
+            icon.anchor
+        );
+    }
 }
 
 /// A line-placed symbol with an icon and no text draws its icons.

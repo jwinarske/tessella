@@ -2526,9 +2526,10 @@ fn place_symbols(
             let paired: Vec<crate::symbols::FrameLabel<'_>> = placed
                 .iter()
                 .filter_map(|icon| {
+                    // Its own anchor's label. See `symbols::same_instance`.
                     labels
                         .iter()
-                        .find(|label| label.laid_out.pending == icon.pending)
+                        .find(|label| crate::symbols::same_instance(&label.laid_out, icon))
                         .map(|label| crate::symbols::FrameLabel {
                             cross_tile_id: label.cross_tile_id,
                             laid_out: icon.clone(),
@@ -2831,10 +2832,13 @@ fn frame_labels<'a>(
             // Its icon's box, so the pair is decided together: `text-optional` and
             // `icon-optional` are about exactly this, and a shield that cannot have its number
             // should not keep its shield.
+            //
+            // This instance's own icon, matched on its anchor as well as its symbol. See
+            // `symbols::same_instance`.
             icon: icons.and_then(|(_, placed)| {
                 placed
                     .iter()
-                    .find(|icon| icon.pending == instance.pending)
+                    .find(|icon| crate::symbols::same_instance(instance, icon))
                     .cloned()
             }),
             perspective: perspective(instance.anchor),
