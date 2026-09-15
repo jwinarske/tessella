@@ -1418,6 +1418,12 @@ fn generate() -> String {
         DrawFlags::ENABLE_COLOR.bits()
     )
     .unwrap();
+    writeln!(
+        w,
+        "#define TSL_DRAW_FLAG_ON_TERRAIN {}u",
+        DrawFlags::ON_TERRAIN.bits()
+    )
+    .unwrap();
     writeln!(w).unwrap();
 
     for s in structs() {
