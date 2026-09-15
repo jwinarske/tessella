@@ -118,6 +118,59 @@ fn splitting_does_not_move_geometry() {
     );
 }
 
+/// A map whose style has a usable terrain keys its tiles on the terrain surface.
+///
+/// Terrain is not a third projection: a caller picks a globe or a plane, and the ground being
+/// raised follows from the style. So the surface reads both, and a globe wins -- this build has no
+/// terrain on one.
+#[test]
+fn the_surface_follows_the_style() {
+    use tessella_capture_abi::ProjectionMode;
+    use tessella_capture_abi::envelope::ViewId;
+    use tessella_orchestrate::map::Map;
+    use tessella_tile::cover::ViewTransform;
+
+    let view = ViewTransform {
+        longitude: 13.405,
+        latitude: 52.52,
+        zoom: 14.0,
+        width: 1024.0,
+        height: 768.0,
+        bearing: 0.0,
+        pitch: 0.0,
+    };
+    let with_terrain = r##"{"version":8,
+      "sources":{"dem":{"type":"raster-dem","url":"http://x/d.json"}},
+      "terrain":{"source":"dem"},
+      "layers":[{"id":"bg","type":"background","paint":{"background-color":"#101014"}}]}"##;
+    let flat = r##"{"version":8,"sources":{},
+      "layers":[{"id":"bg","type":"background","paint":{"background-color":"#101014"}}]}"##;
+
+    let mut map = Map::new(
+        Style::parse(with_terrain).expect("style parses"),
+        view,
+        ViewId(0),
+    );
+    assert_eq!(
+        map.surface(),
+        Surface::Terrain {
+            cells: u32::from(tessella_layout::terrain::MESH_SIZE)
+        },
+        "a style with a usable terrain"
+    );
+
+    // The ground is drawn as the terrain mesh, which is uniform, so anything drawn on it takes
+    // the same grid -- finer chords against the surface's own chords, coarser floats above it.
+    let mut plain = Map::new(Style::parse(flat).expect("style parses"), view, ViewId(0));
+    assert_eq!(plain.surface(), Surface::Plane, "no terrain");
+
+    // A globe wins: there is no terrain on one here.
+    map.project_on(ProjectionMode::Globe);
+    assert_eq!(map.surface(), Surface::Sphere);
+    plain.project_on(ProjectionMode::Globe);
+    assert_eq!(plain.surface(), Surface::Sphere);
+}
+
 /// The cell count is part of the tile's identity, so two grids are two cache entries.
 ///
 /// Without it, a tile built flat while its DEM was in flight would be found in the cache and

@@ -101,7 +101,6 @@ use tessella_storage::source::{Coalescing, RangeFetch, Router};
 use tessella_style::Style;
 use tessella_tile::camera;
 use tessella_tile::cover::{self, ViewTransform};
-use tessella_tile::store::Surface;
 
 /// The texture the sprite atlas is uploaded as.
 ///
@@ -1023,10 +1022,10 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
             // process, so the surface a tile is split for belongs to whoever asked for it and
             // travels in the key. A globe pane and a flat one beside it share the fetch and
             // not the buckets.
-            match state.map.projection() {
-                ProjectionMode::Mercator => Surface::Plane,
-                ProjectionMode::Globe => Surface::Sphere,
-            },
+            // The map's own answer, not a second copy of the rule. It reads the style as well as
+            // the projection now -- a terrain is the plane with the ground raised -- and two
+            // places deciding what a tile is keyed by is one of them free to disagree.
+            state.map.surface(),
         );
         outcome
     })
