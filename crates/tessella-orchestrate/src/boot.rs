@@ -655,6 +655,17 @@ fn decode_and_build(
                 url: url.clone(),
                 message: error.to_string(),
             })?;
+            // And the ground, which is a layer `Style::synthesize_terrain` made over this very
+            // source. Three builders over one decode: a style asking for a hillshade, a relief
+            // and a terrain pays for one tile and gets three pictures of it.
+            buckets.extend(
+                crate::tile::build_terrain_tile_on(style, &job.source, &dem, job.tile).map_err(
+                    |error| BootError::Build {
+                        url: url.clone(),
+                        message: error.to_string(),
+                    },
+                )?,
+            );
             buckets.extend(
                 build_relief_tile_on(
                     style,

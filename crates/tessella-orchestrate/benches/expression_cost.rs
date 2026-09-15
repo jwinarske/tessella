@@ -232,6 +232,9 @@ fn build(style: &Style, decoded: &mvt::Tile, tile: tessella_orchestrate::tile::T
             // features and so never reaches this at all.
             tessella_orchestrate::tile::Content::Symbol(_)
             | tessella_orchestrate::tile::Content::LocationIndicator(_)
+            // The ground carries no vertices of its own: every terrain tile draws the shared
+            // mesh, so there is nothing here that an MVT tile's features produced.
+            | tessella_orchestrate::tile::Content::Terrain(_)
             | tessella_orchestrate::tile::Content::Background => 0,
         })
         .sum()
