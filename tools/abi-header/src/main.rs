@@ -627,7 +627,12 @@ fn structs() -> Vec<Struct> {
                     "uint8_t reason",
                     "tsl_add_reason. A steady stream of ATTRIBUTES_MODIFIED on a static scene is a bug."
                 ),
-                (_pad, "uint8_t _pad[2]", "Must be zero."),
+                (
+                    topology,
+                    "uint8_t topology",
+                    "tsl_topology. What the indices describe. Padding through rev 3; zero is TRIANGLES."
+                ),
+                (_pad, "uint8_t _pad[1]", "Must be zero."),
             ]
         ),
         c_struct!(
@@ -1276,6 +1281,14 @@ fn generate() -> String {
         "Why geometry was announced. A steady stream of ATTRIBUTES_MODIFIED on a static scene \
          is a visible bug, not a hint.",
         &AddReason::ALL.map(|r| (screaming(&format!("{r:?}")), r as i64)),
+    );
+    emit_enum(
+        w,
+        "topology",
+        "What a tsl_geometry_add's indices describe. The shader family used to settle this and \
+         no longer can: the location indicator draws one family as both a triangle fan and a \
+         line strip over one vertex buffer.",
+        &Topology::ALL.map(|t| (screaming(&format!("{t:?}")), t as i64)),
     );
     emit_enum(
         w,
