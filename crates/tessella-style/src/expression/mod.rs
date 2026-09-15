@@ -898,6 +898,17 @@ pub enum Expr {
     /// inside `heatmap-color`, where the renderer evaluates the ramp over the range; anywhere
     /// else there is no density to read and evaluation says so rather than inventing one.
     HeatmapDensity,
+    /// `["elevation"]`: the elevation in meters at the point a color relief is being baked for.
+    ///
+    /// The same third axis `["heatmap-density"]` reads, and mbgl says so by giving it the same
+    /// slot -- `elevationCompoundExpression` returns `*(params.colorRampParameter)`, with a
+    /// comment that reads "For color-relief, elevation is passed via colorRampParameter". So the
+    /// two never appear together and one channel carries both, which is why this is a variant
+    /// beside it rather than a parameter of it.
+    ///
+    /// Unlike a density it is not bounded: an elevation stop is meters above the sea, and a ramp
+    /// over it is evaluated at the stops the style wrote rather than over a fixed range.
+    Elevation,
     /// `["concat", …]`: the arguments, coerced to text and run together.
     Concat(Vec<Expr>),
     /// `["join", array, separator]`: an array of strings with a separator between.
@@ -1355,10 +1366,11 @@ impl Expression {
         // ["literal", {"y": 0}]]]` reads a key that is not in a literal object, which is a
         // compile error there and would otherwise be an evaluation error here — once per
         // feature, forever, for a mistake that is visible on sight.
-        // Except where it reads the heatmap density. That is constant in both the axes
-        // `Dependency` tracks -- the spec says so, and the suite asserts it -- and still varies,
-        // per pixel, while the renderer walks the ramp. Folding it here would turn every
-        // `heatmap-color` into a load error for want of an input no caller has yet.
+        // Except where it reads the ramp parameter -- the heatmap's density or a color relief's
+        // elevation, which share one slot. That is constant in both the axes `Dependency` tracks
+        // -- the spec says so, and the suite asserts it -- and still varies, per pixel, while the
+        // renderer walks the ramp. Folding it here would turn every `heatmap-color` and every
+        // `color-relief-color` into a load error for want of an input no caller has yet.
         if dependency.is_constant()
             && !reads_heatmap_density(&parsed.root)
             && let Err(source) = evaluate::evaluate(&parsed.root, &evaluate::Context::empty())
@@ -1548,9 +1560,11 @@ impl Expr {
     pub fn result_type(&self) -> Type {
         match self {
             Self::Literal(value) => Type::of(value),
-            Self::Zoom | Self::Pitch | Self::DistanceFromCenter | Self::HeatmapDensity => {
-                Type::Number
-            }
+            Self::Zoom
+            | Self::Pitch
+            | Self::DistanceFromCenter
+            | Self::HeatmapDensity
+            | Self::Elevation => Type::Number,
             Self::GeometryType => Type::String,
             Self::Has { .. } | Self::Not(_) | Self::Compare { .. } => Type::Boolean,
             Self::All(_) | Self::Any(_) => Type::Boolean,
@@ -1960,13 +1974,14 @@ fn zoom_positions(expr: &Expr, at_curve: bool) -> (usize, usize) {
     }
 }
 
-/// Whether anything in this tree reads the heatmap density.
+/// Whether anything in this tree reads the ramp parameter.
 ///
 /// Its own walk rather than a `Dependency` bit: the two bits are the spec's own
 /// `isZoomConstant` / `isFeatureConstant`, the suite checks them against the spec's answers, and
 /// a third bit would have to be masked out of every comparison to keep that working.
 fn reads_heatmap_density(expr: &Expr) -> bool {
-    matches!(expr, Expr::HeatmapDensity) || children(expr).into_iter().any(reads_heatmap_density)
+    matches!(expr, Expr::HeatmapDensity | Expr::Elevation)
+        || children(expr).into_iter().any(reads_heatmap_density)
 }
 
 /// Every direct child of a node, for walks that treat all of them alike.
@@ -1977,6 +1992,7 @@ fn children(expr: &Expr) -> Vec<&Expr> {
         | Expr::Pitch
         | Expr::DistanceFromCenter
         | Expr::HeatmapDensity
+        | Expr::Elevation
         | Expr::GeometryType
         | Expr::Id
         | Expr::Properties
@@ -2106,7 +2122,7 @@ fn classify(expr: &Expr) -> Dependency {
         // Neither zoom nor feature: the density is the renderer's, supplied per pixel while it
         // walks the ramp, and the spec's own classification says an expression reading it is
         // constant in both.
-        Expr::HeatmapDensity => Dependency::NONE,
+        Expr::HeatmapDensity | Expr::Elevation => Dependency::NONE,
         Expr::Zoom => Dependency::ZOOM,
         // Not ZOOM. §12.1 holds a zoom-only value across a whole zoom interval, which is sound
         // because zoom does not change inside one; pitch and the distance from the center do,

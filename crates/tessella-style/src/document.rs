@@ -238,6 +238,8 @@ pub enum LayerKind {
     Heatmap,
     /// Hillshading.
     Hillshade,
+    /// Elevation mapped to color through a ramp.
+    ColorRelief,
     /// A host-drawn layer.
     Custom,
     /// A type this build does not implement.
