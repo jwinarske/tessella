@@ -20,11 +20,14 @@
 #                      for the reason the README gives, and outside PARITY_WORK because it is
 #                      recorded once rather than rebuilt.
 #   PARITY_PROXY_PORT  where examples/proxy.py listens; beside the 8080 and 8081 servers.
+#   PARITY_DEM_PORT    where scenes/dem.py listens. 8083 was taken on the machine this was
+#                      written on, which is the whole reason it is a variable.
 : "${PARITY_EXAMPLES_DATA:=${XDG_CACHE_HOME:-$HOME/.cache}/tessella-parity-examples}"
 : "${PARITY_PROXY_PORT:=8082}"
+: "${PARITY_DEM_PORT:=8084}"
 
 PARITY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TESSELLA_DIR="$(cd "$PARITY_DIR/../.." && pwd)"
 export MBGL_RENDER TESSELLA_FLUORITE FILAMENT_STAGING PARITY_WORK PARITY_DIR TESSELLA_DIR
-export PARITY_EXAMPLES_DATA PARITY_PROXY_PORT
+export PARITY_EXAMPLES_DATA PARITY_PROXY_PORT PARITY_DEM_PORT
 mkdir -p "$PARITY_WORK"

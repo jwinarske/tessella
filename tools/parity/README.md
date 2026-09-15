@@ -96,6 +96,24 @@ The sweep's numbers as of 2026-09-15, which is the gate:
   overlapping polygon rather than a hole — 3,477 pixels of it in this scene, before the winding
   was corrected. See the note in `tessella-source`'s `annotation` module.
 
+- `hill_p` — a hillshade over generated terrain. **This one does not pass and is not meant to
+  yet**, the way `heat_p` and `annot_p` did not: nothing here draws a hillshade, so the run reports
+  the distance to go. `gross 174053 of 786432 (22.132%)` at z14 p0 and `379466 (48.252%)` at z11.
+
+  The terrain is generated rather than fetched, by `scenes/dem.py`, for three reasons in the order
+  they decided it. No archive here carries a DEM and every public one carries a license, so a
+  height field written here is nobody's data and redistributes nothing. A procedural field is the
+  *same* field on both sides by construction. And it has an analytic derivative, so the normals a
+  hillshade computes can be checked against what the surface actually does rather than only
+  against the other renderer.
+
+  It is one global function of world position sampled per tile, not a per-tile picture. A
+  hillshade's prepare pass backfills each tile's border from its neighbours, and a field with a
+  seam at a tile edge would make a correct backfill look broken and a broken one look fine.
+
+  Serve it with `python3 scenes/dem.py`, which listens on `PARITY_DEM_PORT` -- 8084, because 8083
+  was taken on the machine this was written on. Stop it when the scene is not in use.
+
 ## Why the scenes are here and the frames are not
 
 A scene is a question and belongs with the code it asks about. A rendered frame is an answer to
