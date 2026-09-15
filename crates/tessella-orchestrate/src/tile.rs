@@ -105,6 +105,13 @@ pub enum Content {
     /// hillshade drawn from the same imagery, or the same source at two opacities — are two
     /// buckets and one picture, and a raster tile is a quarter of a megabyte (§11.5).
     Raster(RasterContent),
+    /// A color relief's elevation on the tile's own quad.
+    ///
+    /// The same quad again, over the *raw* DEM rather than the slope field: a relief reads the
+    /// height at a pixel and looks it up in a ramp, where a hillshade reads how the height is
+    /// changing. So a style with both draws two layers from one DEM tile and uploads two
+    /// pictures of it, which is what mbgl does.
+    ColorRelief(ColorReliefContent),
     /// A hillshade's slope field on the tile's own quad.
     ///
     /// The same quad a raster layer draws, over a different picture: not the tile's imagery but
@@ -124,6 +131,17 @@ pub enum Content {
 }
 
 /// A raster layer's contribution to one tile: where the picture goes, and the picture.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ColorReliefContent {
+    /// The quad, or one per entry of the tile's mask.
+    pub bucket: RasterBucket,
+    /// The DEM as it arrived, bordered, which the shader unpacks per pixel.
+    ///
+    /// Shared for the reason a slope field is: two relief layers over one source read one tile.
+    pub dem: alloc::sync::Arc<tessella_source::dem::Dem>,
+}
+
+/// The quad a hillshade's slope field is drawn on, and the field.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HillshadeContent {
     /// The quad, or one per entry of the tile's mask.
@@ -214,6 +232,8 @@ impl LayerBucket {
             Content::Raster(_) => 1,
             // And a hillshade, which is that quad over a slope field instead of a picture.
             Content::Hillshade(_) => 1,
+            // And a color relief, which is that quad over the elevation itself.
+            Content::ColorRelief(_) => 1,
             // An extrusion is two geometries — the roof and the walls raised over it — each
             // drawn once per pass. The depth pass is what stops every wall alpha-blending
             // against the walls behind it, and mbgl's `doDepthPass = (!opaque || hasPattern)`
@@ -1157,6 +1177,50 @@ pub fn build_dem_tile_on(
     Ok(buckets)
 }
 
+/// Builds a color relief tile's buckets from a decoded DEM.
+///
+/// [`build_dem_tile_on`]'s sibling and deliberately not its arm: the two read the same tile and
+/// want different pictures of it, and a builder that produced both would upload a slope field for
+/// a style that asked only for a relief.
+///
+/// # Errors
+///
+/// [`TileError::Property`] when a layer's paint does not resolve.
+pub fn build_relief_tile_on(
+    style: &Style,
+    source: &str,
+    dem: &alloc::sync::Arc<tessella_source::dem::Dem>,
+    mask: &[tessella_tile::mask::MaskEntry],
+    cells: u32,
+) -> Result<Vec<LayerBucket>, TileError> {
+    let mut buckets = Vec::new();
+
+    for (layer_index, layer) in style.layers.iter().enumerate() {
+        if layer.kind != LayerKind::ColorRelief || !draws_from(layer, source) {
+            continue;
+        }
+
+        let paint = resolve_paint(layer).map_err(|source| TileError::Property {
+            layer: layer.id.clone(),
+            source,
+        })?;
+
+        buckets.push(LayerBucket {
+            layer_index,
+            layer_id: layer.id.clone(),
+            content: Content::ColorRelief(ColorReliefContent {
+                bucket: RasterBucket::masked_on(mask, cells),
+                dem: alloc::sync::Arc::clone(dem),
+            }),
+            paint,
+            binder: PaintBinder::default(),
+            outline_under_fill: false,
+            pattern_vertices: PatternVertices::default(),
+        });
+    }
+    Ok(buckets)
+}
+
 /// A tile's north and south edges in degrees, which is mbgl's `getLatRange`.
 ///
 /// North first. The shader interpolates between them across the tile to undo Mercator's stretch
@@ -1693,6 +1757,7 @@ impl Content {
             | Self::Circle(_)
             | Self::Heatmap(_)
             | Self::Hillshade(_)
+            | Self::ColorRelief(_)
             | Self::Symbol(_) => None,
         }
     }
@@ -1708,7 +1773,7 @@ impl Content {
             | Self::Circle(_)
             | Self::Heatmap(_)
             | Self::Fill3d(_) => None,
-            Self::Raster(_) | Self::Hillshade(_) => None,
+            Self::Raster(_) | Self::Hillshade(_) | Self::ColorRelief(_) => None,
         }
     }
 
@@ -1723,6 +1788,24 @@ impl Content {
             | Self::Line(_)
             | Self::Circle(_)
             | Self::Heatmap(_)
+            | Self::Raster(_)
+            | Self::ColorRelief(_)
+            | Self::Symbol(_) => None,
+        }
+    }
+
+    /// The color relief's elevation and quad, if this is one.
+    #[must_use]
+    pub fn as_color_relief(&self) -> Option<&ColorReliefContent> {
+        match self {
+            Self::ColorRelief(content) => Some(content),
+            Self::Background
+            | Self::Fill(_)
+            | Self::Fill3d(_)
+            | Self::Line(_)
+            | Self::Circle(_)
+            | Self::Heatmap(_)
+            | Self::Hillshade(_)
             | Self::Raster(_)
             | Self::Symbol(_) => None,
         }
@@ -1739,7 +1822,7 @@ impl Content {
             | Self::Heatmap(_)
             | Self::Symbol(_)
             | Self::Fill3d(_) => None,
-            Self::Raster(_) | Self::Hillshade(_) => None,
+            Self::Raster(_) | Self::Hillshade(_) | Self::ColorRelief(_) => None,
         }
     }
 
@@ -1754,7 +1837,7 @@ impl Content {
             | Self::Heatmap(_)
             | Self::Symbol(_)
             | Self::Fill3d(_) => None,
-            Self::Raster(_) | Self::Hillshade(_) => None,
+            Self::Raster(_) | Self::Hillshade(_) | Self::ColorRelief(_) => None,
         }
     }
 
@@ -1769,7 +1852,7 @@ impl Content {
             | Self::Heatmap(_)
             | Self::Symbol(_)
             | Self::Fill3d(_) => None,
-            Self::Raster(_) | Self::Hillshade(_) => None,
+            Self::Raster(_) | Self::Hillshade(_) | Self::ColorRelief(_) => None,
         }
     }
 
@@ -1800,6 +1883,7 @@ impl Content {
             Self::Symbol(layout) => !layout.is_empty(),
             Self::Raster(content) => !content.bucket.is_empty(),
             Self::Hillshade(content) => !content.bucket.is_empty(),
+            Self::ColorRelief(content) => !content.bucket.is_empty(),
             Self::Fill3d(bucket) => !bucket.segments.is_empty(),
         }
     }
