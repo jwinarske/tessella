@@ -108,6 +108,46 @@ fn a_terrain_source_is_fetched() {
     assert!(urls.iter().any(|url| url.contains("/vector/")), "{urls:?}");
 }
 
+/// The DEM's tiles carry a terrain bucket, which is the ground itself.
+///
+/// `synthesize_terrain` makes a layer over the DEM source and `build_terrain_tile_on` gives it a
+/// bucket per tile, so a booted terrain style should hold one per DEM tile. Checked here rather
+/// than through a render, because everything between this and a picture -- the cover walk, the
+/// encoder, the material -- can only be reasoned about once this much is known.
+#[test]
+fn a_dem_tile_carries_the_ground() {
+    let (booted, _) = boot(&style(
+        r#""terrain": {"source": "dem", "exaggeration": 1.4},"#,
+    ));
+    let booted = booted.expect("boots");
+
+    let dem_tiles: Vec<&tessella_orchestrate::boot::BuiltTile> = booted
+        .tiles
+        .iter()
+        .filter(|built| built.source == "dem")
+        .collect();
+    assert!(
+        !dem_tiles.is_empty(),
+        "the DEM was fetched but built no tiles"
+    );
+
+    let ground = dem_tiles
+        .iter()
+        .filter(|built| {
+            built
+                .buckets
+                .iter()
+                .any(|bucket| matches!(bucket.content, tessella_orchestrate::Content::Terrain(_)))
+        })
+        .count();
+    assert_eq!(
+        ground,
+        dem_tiles.len(),
+        "{ground} of {} DEM tiles carry the ground",
+        dem_tiles.len()
+    );
+}
+
 /// Without the terrain, nothing asks for that source -- which is what makes the test above a
 /// test of the terrain rather than of a style that would have fetched it anyway.
 #[test]
