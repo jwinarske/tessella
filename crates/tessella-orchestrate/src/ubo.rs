@@ -228,6 +228,37 @@ pub struct DrawableEntry {
     pub interpolations: [f32; 2],
 }
 
+/// [`tile_matrix`] through the projection snapped to the pixel grid.
+///
+/// For the two families mbgl draws through `alignedProjMatrix`: raster and hillshade. See
+/// [`camera::aligned_proj_matrix`]. A globe has no pixel grid to snap a tile to, so it takes the
+/// plain placement.
+///
+/// # Errors
+///
+/// [`camera::CameraError`] when the view has no area.
+pub fn aligned_tile_matrix(
+    view: &ViewTransform,
+    projection: ProjectionMode,
+    z: u8,
+    x: u32,
+    y: u32,
+    wrap: i32,
+    depth: f32,
+) -> Result<camera::Mat4, camera::CameraError> {
+    match projection {
+        ProjectionMode::Mercator => {
+            let mut clip = camera::aligned_proj_matrix(view)?;
+            clip[14] -= f64::from(depth);
+            Ok(camera::multiply(
+                &clip,
+                &camera::matrix_for_tile(z, x, y, wrap, view.zoom),
+            ))
+        }
+        ProjectionMode::Globe => tile_matrix(view, projection, z, x, y, wrap, depth),
+    }
+}
+
 impl DrawableEntry {
     /// The entry for a tile under a view, biased for its layer and sublayer.
     ///
@@ -262,6 +293,42 @@ impl DrawableEntry {
             sub_layer_index,
             [0.0, 0.0],
         )
+    }
+
+    /// As [`Self::for_tile`], through the projection snapped to the pixel grid.
+    ///
+    /// Raster and hillshade only, which are the tweakers mbgl hands `alignedProjMatrix`. See
+    /// [`aligned_tile_matrix`].
+    ///
+    /// # Errors
+    ///
+    /// [`camera::CameraError`] when the view has no area.
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_tile_aligned(
+        view: &ViewTransform,
+        projection: ProjectionMode,
+        z: u8,
+        x: u32,
+        y: u32,
+        wrap: i32,
+        layer_index: i32,
+        sub_layer_index: i32,
+    ) -> Result<Self, camera::CameraError> {
+        let matrix = aligned_tile_matrix(
+            view,
+            projection,
+            z,
+            x,
+            y,
+            wrap,
+            depth_offset(layer_index, sub_layer_index),
+        )?;
+
+        #[allow(clippy::cast_possible_truncation)]
+        Ok(Self {
+            matrix: core::array::from_fn(|index| matrix[index] as f32),
+            interpolations: [0.0, 0.0],
+        })
     }
 
     /// As [`Self::for_tile`], with the layer's zoom-mix factors.
