@@ -15,7 +15,14 @@
 # the oracle draws the outline at the far end of it and nothing below. Held to a pitched camera
 # this scene would gate a defect, and the number could only get worse by fixing something.
 #
-# The numbers to hold, as of 2026-09-15: 24 / 45 / 5 / 50 / 30, then 3 / 2.
+# The location indicator joins it north-up too, at two zooms and a pitched camera -- its accuracy
+# circle has no outline to catch the defect above. Not with a bearing, and again the reason is the
+# oracle: `prepare` puts the map bearing into the render parameters in degrees and `updateRadius`
+# then calls `rad2deg` on it a second time, so a bearing of 38 turns the oracle's ring by 17.2.
+# The picture barely differs -- the ring is a 72-gon and turning one is nearly itself, 17 gross
+# pixels at z14 -- but it differs for a reason nothing on this side can fix.
+#
+# The numbers to hold, as of 2026-09-15: 24 / 45 / 5 / 50 / 30, then 3 / 2, then 0 / 0 / 0.
 set -euo pipefail
 P="$(dirname "${BASH_SOURCE[0]}")"
 for args in "14 1024 768 0" "14 1024 768 60" "16 1024 768 0" "16 1024 768 60"; do
@@ -26,4 +33,8 @@ bash "$P/parity.sh" families_p 52.52 13.405 9 2400 900 0
 for args in "14 1024 768 0" "16 1024 768 0"; do
   # shellcheck disable=SC2086 # four words by construction: zoom, width, height, pitch
   bash "$P/parity.sh" annot_p 52.52 13.405 $args
+done
+for args in "14 1024 768 0" "16 1024 768 0" "14 1024 768 60"; do
+  # shellcheck disable=SC2086 # four words by construction: zoom, width, height, pitch
+  bash "$P/parity.sh" puck_p 52.52 13.405 $args
 done

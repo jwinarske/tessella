@@ -276,6 +276,7 @@ impl LayerKind {
                 | Self::Heatmap
                 | Self::Hillshade
                 | Self::ColorRelief
+                | Self::LocationIndicator
         )
     }
 }
