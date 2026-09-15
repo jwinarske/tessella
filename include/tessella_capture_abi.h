@@ -1511,6 +1511,7 @@ typedef enum tsl_builtin {
 #define TSL_DRAW_FLAG_ENABLE_STENCIL 2u
 #define TSL_DRAW_FLAG_ENABLE_DEPTH 4u
 #define TSL_DRAW_FLAG_ENABLE_COLOR 8u
+#define TSL_DRAW_FLAG_ON_TERRAIN 16u
 
 /*
  * A tile address.

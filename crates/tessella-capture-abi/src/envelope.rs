@@ -295,6 +295,18 @@ impl DrawFlags {
     pub const ENABLE_DEPTH: Self = Self(1 << 2);
     /// Draw writes color. Cleared for depth- or stencil-only passes.
     pub const ENABLE_COLOR: Self = Self(1 << 3);
+    /// This drawable's geometry is raised from a terrain's elevation.
+    ///
+    /// Not a render state like the four above it -- it says which *variant* of the family's
+    /// material draws this, the way a globe's bend does. A consumer without a terrain variant for
+    /// the family draws the flat one, which is the picture it drew before terrain existed.
+    ///
+    /// On the drawable rather than derived from the camera, because it is not a property of the
+    /// camera: a globe is a projection the caller picks and terrain follows from the style, so two
+    /// layers of one frame can differ -- a symbol is drawn at its anchor's height and a fill is
+    /// raised along its whole extent, and a layer whose source has no elevation is not raised at
+    /// all.
+    pub const ON_TERRAIN: Self = Self(1 << 4);
 
     /// Every bit this protocol defines.
     pub const VALID_BITS: u8 = 0b1111;
