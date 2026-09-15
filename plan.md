@@ -65,8 +65,23 @@ wrong frame. Every one of these six features adds a pass, a source kind, or a dr
 has no precedent for, and that is exactly where that class of bug lives.
 
 Two of the six have no oracle, which changes their shape rather than their priority.
-**Terrain**: maplibre-native's support has not been checked at the pinned revision, and whether
-it exists decides between transcription and argument -- establish that before estimating.
+**Terrain**: maplibre-native has none, at the pinned revision or anywhere. Checked three ways and
+they agree. There is no `style/terrain.hpp`, no `render_terrain*`, no `setTerrain`, no
+`TerrainProperties` and no `elevationAt`; the style parser's top-level members are `roll`,
+`transition`, `light`, `sources`, `layers`, `sprite` and `glyphs`, and `terrain` is not among
+them; and a style carrying `{"terrain": {"source": "dem", "exaggeration": 1.5}}` renders
+*identically* to one without it -- zero pixels of 196,608 differ at pitch 60, where a raised
+surface would be most visible. The only mention of the word outside raster-dem is a comment in
+`compound_expression.cpp` reading "For 3D terrain, elevation is passed directly", which is a note
+about a future rather than an implementation. Upstream `origin/main` and the `capture-backend-mln`
+branch that tracks it have no more than the pinned revision does, so this is not a version
+question and adopting newer upstream would not answer it.
+
+So terrain is the globe's situation (§13.4): a feature this build may want and that
+`mbgl-render` cannot be asked about. Whoever takes it is designing against the style spec and
+MapLibre GL JS, and is measuring against a picture somebody judges rather than a number. That is
+a different kind of work from the five features before it, and the order should say so rather
+than leave it third.
 **Custom-layer/custom-drawable**: upstream *removed* `CustomDrawableLayer` (#4611), so there is
 nothing left to transcribe and nothing to diff against. It stays on the list as a capability
 this build may want, not as parity work, and whoever takes it is designing rather than porting.
