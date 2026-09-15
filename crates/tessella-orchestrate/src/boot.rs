@@ -67,7 +67,8 @@ use tessella_tile::store::Surface;
 use crate::cache::TileCache;
 use crate::pool::{Pool, Priority};
 use crate::tile::{
-    LayerBucket, TileId, build_dem_tile_on, build_mvt_tile_on, build_raster_tile_on, build_tile,
+    LayerBucket, TileId, build_dem_tile_on, build_mvt_tile_on, build_raster_tile_on,
+    build_relief_tile_on, build_tile,
 };
 
 /// The tile zoom a source is covered at.
@@ -637,7 +638,12 @@ fn decode_and_build(
                 Surface::Plane => 1,
                 Surface::Sphere => tessella_layout::subdivide::edge_cells(job.tile.bucket_zoom()),
             };
-            build_dem_tile_on(
+            // Two layers can read one DEM tile and want different pictures of it: a hillshade
+            // reads how the height is changing and a color relief reads the height. So both
+            // builders run over the same decode, and a style with only one of them pays for only
+            // that one.
+            let dem = alloc::sync::Arc::new(dem);
+            let mut buckets = build_dem_tile_on(
                 style,
                 &job.source,
                 &dem,
@@ -648,7 +654,21 @@ fn decode_and_build(
             .map_err(|error| BootError::Build {
                 url: url.clone(),
                 message: error.to_string(),
-            })
+            })?;
+            buckets.extend(
+                build_relief_tile_on(
+                    style,
+                    &job.source,
+                    &dem,
+                    &[tessella_tile::mask::WHOLE_TILE],
+                    cells,
+                )
+                .map_err(|error| BootError::Build {
+                    url: url.clone(),
+                    message: error.to_string(),
+                })?,
+            );
+            Ok(buckets)
         }
         // Nothing to fetch and nothing to decode: the document arrived during source
         // resolution, and this cuts a tile out of it.

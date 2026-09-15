@@ -396,6 +396,89 @@ const RASTER_TEXTURE_BASE: u64 = 16;
 /// the heatmap's, which starts at `5 << 60`.
 const HILLSHADE_TEXTURE_BASE: u64 = 1 << 60;
 
+/// A color relief source's unpack vector and its padded tile width.
+///
+/// Both are the *source's* rather than any tile's, so they are read from the style: the encoding
+/// says how a channel is packed and `tileSize` says how wide a tile is, and the DEM adds a pixel
+/// on each side for the border a slope needs. An unknown encoding is Mapbox Terrain-RGB, which is
+/// the spec's default and what mbgl does with a name it does not know.
+fn relief_source(style: &Style, layer: &tessella_style::Layer) -> ([f32; 4], f32) {
+    let source = layer.source.as_deref().and_then(|name| style.source(name));
+    let Some(tessella_style::Source::RasterDem(tiles)) = source else {
+        return (
+            tessella_source::dem::Encoding::default().unpack(),
+            f32::from(u16::try_from(tessella_source::dem::DEFAULT_TILE_SIZE + 2).unwrap_or(514)),
+        );
+    };
+    let encoding = tiles
+        .extra
+        .get("encoding")
+        .and_then(tessella_style::Value::as_str)
+        .and_then(tessella_source::dem::Encoding::parse)
+        .unwrap_or_default();
+    let size = tiles
+        .tile_size
+        .unwrap_or(tessella_source::dem::DEFAULT_TILE_SIZE);
+    #[allow(clippy::cast_precision_loss)]
+    (encoding.unpack(), (size + 2) as f32)
+}
+
+/// The textures a tile's own pictures went to, whichever of them it has.
+///
+/// One struct rather than a widening tuple. Three families now put a per-tile picture on the
+/// stream -- a raster tile's imagery, a hillshade's slope field and a color relief's elevation --
+/// and the map from geometry to tile carried them positionally until the third made the
+/// destructures unreadable.
+#[derive(Clone, Copy)]
+struct TileTextures {
+    raster: tessella_capture_abi::envelope::TextureId,
+    hillshade: tessella_capture_abi::envelope::TextureId,
+    relief: tessella_capture_abi::envelope::TextureId,
+}
+
+/// The first texture id a color relief's ramp tables take.
+///
+/// One pair per *layer*, not per tile: the stops are the style's and every tile of the layer
+/// searches the same two. Above the hillshade's tile-packed space, in a word the tile packing
+/// cannot reach.
+const RELIEF_STOPS_BASE: u64 = 3 << 60;
+
+/// Where a layer's elevation stops live.
+#[must_use]
+fn relief_elevation_stops_id(layer_index: i32) -> tessella_capture_abi::envelope::TextureId {
+    #[allow(clippy::cast_sign_loss)]
+    let index = layer_index.max(0) as u64;
+    tessella_capture_abi::envelope::TextureId(RELIEF_STOPS_BASE + index * 2)
+}
+
+/// Where a layer's colors live, beside its elevations.
+#[must_use]
+fn relief_color_stops_id(layer_index: i32) -> tessella_capture_abi::envelope::TextureId {
+    #[allow(clippy::cast_sign_loss)]
+    let index = layer_index.max(0) as u64;
+    tessella_capture_abi::envelope::TextureId(RELIEF_STOPS_BASE + index * 2 + 1)
+}
+
+/// The first texture id a color relief tile's elevation takes.
+///
+/// Its own space, because a style may draw a hillshade and a relief over one tile and the slope
+/// field is not the elevation.
+const RELIEF_TEXTURE_BASE: u64 = 2 << 60;
+
+/// The texture id a color relief tile's elevation takes, derived from the tile.
+#[must_use]
+fn relief_texture_id(
+    z: u8,
+    x: u32,
+    y: u32,
+    wrap: i32,
+) -> tessella_capture_abi::envelope::TextureId {
+    #[allow(clippy::cast_sign_loss)]
+    let copy = u64::from((wrap.clamp(-7, 7) + 8) as u8);
+    let packed = (u64::from(z) << 52) | (u64::from(x) << 28) | (u64::from(y) << 4) | copy;
+    tessella_capture_abi::envelope::TextureId(RELIEF_TEXTURE_BASE + packed)
+}
+
 /// The texture id a hillshade tile's slope field takes, derived from the tile.
 ///
 /// The same packing [`raster_texture_id`] uses and for the same reasons; see its note, which is
@@ -822,15 +905,7 @@ fn emit_group(
     let mut emitted = Emitted::default();
     // Which bucket each geometry id came from, so the packing pass below can revisit them in
     // draw order rather than in the order the tiles arrived.
-    let mut source: BTreeMap<
-        u64,
-        (
-            usize,
-            usize,
-            tessella_capture_abi::envelope::TextureId,
-            tessella_capture_abi::envelope::TextureId,
-        ),
-    > = BTreeMap::new();
+    let mut source: BTreeMap<u64, (usize, usize, TileTextures)> = BTreeMap::new();
     let mut bound: Vec<GeometryBinding> = Vec::new();
     // One entry per bucket that reached the arena, so a bucket's second drawable reuses the
     // bytes rather than copying them.
@@ -874,6 +949,33 @@ fn emit_group(
                 break;
             }
         }
+
+        // And the elevation itself, which a color relief reads rather than the slope. Bordered:
+        // the shader's texture coordinates are scaled and offset for the ring the DEM carries, so
+        // what goes up is the padded image and not the tile's own square.
+        let relief_texture = relief_texture_id(tile.z, tile.x, tile.y, wrap);
+        for bucket in tile_buckets.iter() {
+            if let Content::ColorRelief(relief) = &bucket.content {
+                let size = tessella_capture_abi::envelope::Extent {
+                    width: relief.dem.stride(),
+                    height: relief.dem.stride(),
+                };
+                let upload = texture::whole(
+                    relief_texture,
+                    size,
+                    tessella_capture_abi::TexturePixelType::RGBA,
+                    relief.dem.pixels(),
+                );
+                texture::write(producer, &upload)?;
+                break;
+            }
+        }
+
+        let textures = TileTextures {
+            raster: raster_texture,
+            hillshade: hillshade_texture,
+            relief: relief_texture,
+        };
 
         // `Frame::buckets` is documented as being in cover order, and this is what depends on
         // that -- at low zooms the same `z/x/y` appears in several copies and only the wrap tells
@@ -927,10 +1029,7 @@ fn emit_group(
                     break;
                 };
                 binding_index += 1;
-                source.insert(
-                    binding.geometry.0,
-                    (index, bucket_index, raster_texture, hillshade_texture),
-                );
+                source.insert(binding.geometry.0, (index, bucket_index, textures));
             }
         }
 
@@ -976,7 +1075,7 @@ fn emit_group(
     let fresh_buckets: BTreeSet<(usize, usize)> = source
         .iter()
         .filter(|(geometry, _)| keyed.get(geometry).is_some_and(|key| fresh.contains(key)))
-        .map(|(_, &(tile_index, bucket_index, _, _))| (tile_index, bucket_index))
+        .map(|(_, &(tile_index, bucket_index, _))| (tile_index, bucket_index))
         .collect();
 
     // Built once for the frame and handed to every bucket, so the labels compete with each other
@@ -1102,9 +1201,7 @@ fn emit_group(
             continue;
         }
 
-        let Some(&(tile_index, bucket_index, raster_texture, hillshade_texture)) =
-            source.get(&entry.geometry.0)
-        else {
+        let Some(&(tile_index, bucket_index, textures)) = source.get(&entry.geometry.0) else {
             continue;
         };
         let Some(bucket) = buckets
@@ -1177,8 +1274,7 @@ fn emit_group(
                     bucket,
                     &Encoding {
                         patterns,
-                        raster_texture,
-                        hillshade_texture,
+                        textures,
                         pitched: view.pitch.abs() > f64::EPSILON,
                         zoom: view.zoom,
                         stacks: &stacks,
@@ -1580,10 +1676,8 @@ fn camera_key(view: &ViewTransform) -> crate::damage::CameraKey {
 struct Encoding<'a> {
     /// Sprites, for a layer with a pattern.
     patterns: Option<&'a Patterns<'a>>,
-    /// The texture this tile's raster picture went to.
-    raster_texture: tessella_capture_abi::envelope::TextureId,
-    /// The texture this tile's slope field went to, for a hillshade layer over it.
-    hillshade_texture: tessella_capture_abi::envelope::TextureId,
+    /// Where this tile's own pictures went -- imagery, slope field, elevation.
+    textures: TileTextures,
     /// Whether the camera is pitched at all, which decides an icon's sampler.
     ///
     /// mbgl's `iconTransformed`: `rotationAlignment == Map || state.getPitch() != 0`. A pitched
@@ -1868,15 +1962,7 @@ fn placement_rules(
 #[allow(clippy::too_many_arguments)]
 fn place_symbols(
     order: &[tessella_capture_abi::envelope::OrderEntry],
-    source: &BTreeMap<
-        u64,
-        (
-            usize,
-            usize,
-            tessella_capture_abi::envelope::TextureId,
-            tessella_capture_abi::envelope::TextureId,
-        ),
-    >,
+    source: &BTreeMap<u64, (usize, usize, TileTextures)>,
     buckets: &[(TileId, alloc::sync::Arc<Vec<LayerBucket>>)],
     origins: &[Option<alloc::sync::Arc<Vec<LayerBucket>>>],
     layouts: &mut SymbolCache,
@@ -1946,7 +2032,7 @@ fn place_symbols(
     for entry in order {
         let key = source
             .get(&entry.geometry.0)
-            .and_then(|&(tile_index, _, _, _)| tiles.get(tile_index))
+            .and_then(|&(tile_index, _, _)| tiles.get(tile_index))
             .map_or((0, 0, 0), |coord| (coord.z, coord.y, coord.x));
         walk.push((entry, key.0, key.1, key.2));
     }
@@ -1971,7 +2057,7 @@ fn place_symbols(
     }
 
     for (entry, ..) in walk {
-        let Some(&(tile_index, bucket_index, _, _)) = source.get(&entry.geometry.0) else {
+        let Some(&(tile_index, bucket_index, _)) = source.get(&entry.geometry.0) else {
             continue;
         };
         if !seen.insert((tile_index, bucket_index)) {
@@ -2787,8 +2873,7 @@ fn encode_parts(
 ) -> Option<alloc::vec::Vec<emit::Encoded>> {
     let &Encoding {
         patterns,
-        raster_texture,
-        hillshade_texture,
+        textures,
         pitched,
         zoom,
         stacks,
@@ -3073,16 +3158,25 @@ fn encode_parts(
             arena,
             PLACEHOLDER,
             &raster.bucket,
-            raster_texture,
+            textures.raster,
         )),
         // The raster encoder over the slope field: same quad, same attributes, a different
         // shader and a different texture. mbgl's `HillshadeBucket` shares `RasterBucket`'s mask
         // handling for exactly this reason, which `tessella_tile::mask` already records.
+        // Three textures: this tile's elevation, and the layer's two stop tables.
+        Content::ColorRelief(relief) => Some(emit::encode_color_relief(
+            arena,
+            PLACEHOLDER,
+            &relief.bucket,
+            textures.relief,
+            relief_elevation_stops_id(i32::try_from(bucket.layer_index).unwrap_or(i32::MAX)),
+            relief_color_stops_id(i32::try_from(bucket.layer_index).unwrap_or(i32::MAX)),
+        )),
         Content::Hillshade(hillshade) => Some(emit::encode_hillshade(
             arena,
             PLACEHOLDER,
             &hillshade.bucket,
-            hillshade_texture,
+            textures.hillshade,
         )),
         Content::Background => {
             let atlas = patterns
@@ -4327,6 +4421,101 @@ fn write_layer_state(
                     &ubo::pack_globe_bend_buffer(&bend),
                 )?;
             }
+        }
+        LayerKind::ColorRelief => {
+            // The ramp, which is the layer's rather than any tile's. Uploaded here beside the
+            // uniforms that describe it, and before any drawable names it -- a texture reference
+            // the consumer has not been given samples whatever was last at that slot.
+            let ramp = paint
+                .get("color-relief-color")
+                .map(|property| tessella_style::ramp::relief_ramp(&property.expression));
+            let Some(Ok(ramp)) = ramp else {
+                // No ramp, or one that will not evaluate. mbgl returns early on an undefined
+                // `color-relief-color` and draws nothing, which is the same frame as a layer
+                // that is not there -- and is right, because there is no ramp that suits every
+                // terrain for the spec to have defaulted to.
+                return Ok(());
+            };
+            if ramp.is_empty() {
+                return Ok(());
+            }
+
+            #[allow(clippy::cast_possible_truncation)]
+            let width = ramp.len() as u32;
+            texture::write(
+                producer,
+                &texture::whole_float(
+                    relief_elevation_stops_id(layer_index),
+                    tessella_capture_abi::envelope::Extent { width, height: 1 },
+                    &ubo::pack_relief_elevation_stops(&ramp),
+                ),
+            )?;
+            texture::write(
+                producer,
+                &texture::whole(
+                    relief_color_stops_id(layer_index),
+                    tessella_capture_abi::envelope::Extent { width, height: 1 },
+                    tessella_capture_abi::TexturePixelType::RGBA,
+                    &ubo::pack_relief_color_stops(&ramp),
+                ),
+            )?;
+
+            let placements: Vec<[f32; 16]> = matrices(0)
+                .filter_map(|tile| {
+                    DrawableEntry::for_tile(
+                        view,
+                        projection,
+                        tile.z,
+                        tile.x,
+                        tile.y,
+                        i32::from(tile.wrap),
+                        layer_index,
+                        0,
+                    )
+                    .ok()
+                    .map(|entry| entry.matrix)
+                })
+                .collect();
+            let drawables = placements.len();
+            ubo::write(
+                producer,
+                view_id,
+                layer_index,
+                ubo_slots::ID_COLOR_RELIEF_DRAWABLE_UBO,
+                &ubo::pack_raster_drawable_buffer(
+                    &placements,
+                    ubo_layouts::COLOR_RELIEF_DRAWABLE_UBO.stride,
+                ),
+            )?;
+
+            // Every field of the tile props is the *source's*, so it is read from the style
+            // rather than from a bucket: the unpack vector, the padded width, and how many stops
+            // the ramp has. Every drawable of the layer then gets the same block, which is per
+            // drawable because that is the slot mbgl writes it in.
+            let (unpack, stride) = relief_source(style, layer);
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            let block = ubo::pack_color_relief_tile_props(unpack, stride, ramp.len() as i32);
+            let blocks: Vec<Vec<u8>> = core::iter::repeat_n(block, drawables).collect();
+            ubo::write(
+                producer,
+                view_id,
+                layer_index,
+                ubo_slots::ID_COLOR_RELIEF_TILE_PROPS_UBO,
+                &ubo::pack_hillshade_tile_props_buffer(
+                    &blocks,
+                    ubo_layouts::COLOR_RELIEF_TILE_PROPS_UBO.stride,
+                ),
+            )?;
+
+            #[allow(clippy::cast_possible_truncation)]
+            let opacity = ubo::uniform_number(&paint, "color-relief-opacity", view.zoom);
+            ubo::write(
+                producer,
+                view_id,
+                layer_index,
+                ubo_slots::ID_COLOR_RELIEF_EVALUATED_PROPS_UBO,
+                &ubo::pack_color_relief_props(opacity),
+            )?;
         }
         LayerKind::Hillshade => {
             // A matrix a drawable, as a raster layer's is, and for the same reason: a hillshade
