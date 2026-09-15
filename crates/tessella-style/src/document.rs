@@ -67,6 +67,9 @@ pub struct Style {
     /// are here so `["config", name, import-id]` can name one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub imports: Vec<crate::config::Import>,
+    /// The terrain the map is draped over, when the style asks for one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terrain: Option<Terrain>,
     /// Sources by id.
     #[serde(default)]
     pub sources: BTreeMap<String, Source>,
@@ -80,6 +83,55 @@ pub struct Style {
     /// vanished between parse and use.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
+}
+
+/// The style's terrain: which DEM to read, and how far to stretch it.
+///
+/// Two properties and that is the whole of the spec -- `source` is required and `exaggeration`
+/// defaults to one with a minimum of zero. There is no maplibre-native counterpart to check this
+/// against: the C++ tree has no `style/terrain.hpp`, no `setTerrain` and no parser member for it
+/// at the pinned revision or upstream, and a style carrying one renders identically to a style
+/// without. So this is the style spec and MapLibre GL JS, which is the reference plan.md §1 names
+/// for the two features that have no oracle.
+///
+/// # Why a zero exaggeration is not the same as no terrain
+///
+/// It flattens the surface and keeps everything else: the mesh, the draping, and the elevation
+/// queries that return zero. A style that means "no terrain" omits the member. Keeping the two
+/// distinct is what lets a map animate an exaggeration to zero without the layer set changing
+/// under it.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct Terrain {
+    /// The id of the `raster-dem` source the elevation is read from.
+    pub source: String,
+    /// How far the elevation is stretched. One is the ground's own height.
+    ///
+    /// Absent is one, which is what the spec's default means and why this is not an `Option`: a
+    /// caller asking for the exaggeration wants a number, and "the style did not say" and "the
+    /// style said one" are the same terrain.
+    #[serde(default = "one")]
+    pub exaggeration: f64,
+}
+
+/// The spec's default exaggeration.
+fn one() -> f64 {
+    1.0
+}
+
+impl Terrain {
+    /// The exaggeration, clamped to the range the spec gives it.
+    ///
+    /// Negative is not "upside-down terrain", it is a value the spec's `minimum: 0` excludes, and
+    /// a style that writes one has said something it has no meaning for. Clamped rather than
+    /// refused, because the rest of the style is still a map.
+    #[must_use]
+    pub fn exaggeration(&self) -> f64 {
+        if self.exaggeration.is_finite() {
+            self.exaggeration.max(0.0)
+        } else {
+            1.0
+        }
+    }
 }
 
 /// Transition timing, in milliseconds.
