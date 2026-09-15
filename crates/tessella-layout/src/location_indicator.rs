@@ -14,6 +14,18 @@
 //! that cached the circle across a zoom would draw an accuracy radius that no longer means what
 //! it says.
 //!
+//! # The oracle turns the ring twice as far as it means to
+//!
+//! `bearing` here is the map's, in degrees. mbgl's is too -- `prepare` writes
+//! `rad2deg(-state.getBearing())` into the render parameters -- and then `updateRadius` calls
+//! `rad2deg` on it a second time before subtracting it, so a map bearing of 38 turns the oracle's
+//! ring by `wrap(38 * 57.2958, 0, 360)` = 17.2 degrees. This does it once.
+//!
+//! The picture barely differs, which is why it went unnoticed: a 72-gon turned about its center is
+//! nearly itself, and only the vertex phase and the quarter-percent ellipticity below move at all
+//! -- 17 gross pixels at z14 against a scene otherwise identical. It is recorded here because a
+//! bearing is the one camera the puck scene is held out of, and this is why.
+//!
 //! # Why the last point is the first
 //!
 //! The step is `360 / 71` over 72 circumference points, so the 72nd lands exactly 360 degrees

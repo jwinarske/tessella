@@ -227,8 +227,11 @@ fn build(style: &Style, decoded: &mvt::Tile, tile: tessella_orchestrate::tile::T
             }
             tessella_orchestrate::tile::Content::Fill3d(extrusion) => extrusion.vertices.len(),
             // A symbol layer has no vertices until glyphs arrive, so it contributes none to a
-            // measurement of how long turning features into geometry takes.
+            // measurement of how long turning features into geometry takes. Neither does a
+            // location indicator, which is built from a camera rather than from a tile's
+            // features and so never reaches this at all.
             tessella_orchestrate::tile::Content::Symbol(_)
+            | tessella_orchestrate::tile::Content::LocationIndicator(_)
             | tessella_orchestrate::tile::Content::Background => 0,
         })
         .sum()

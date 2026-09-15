@@ -54,6 +54,7 @@ use tessella_source::geojson::{GeoJsonFeature, Geometry};
 use tessella_source::tiling::{EXTENT, TilingOptions};
 use tessella_style::property::{ResolvedProperty, paint_specs, resolve_paint};
 use tessella_style::{Filter, LayerKind, Style};
+use tessella_tile::cover::ViewTransform;
 use tessella_tile::projection;
 use tessella_tile::store::{Lookup, Surface, TileKey, TileStore};
 
@@ -121,6 +122,14 @@ pub enum Content {
     Hillshade(HillshadeContent),
     /// Extruded polygons: an outline and a roof, with the walls raised by the shader.
     Fill3d(FillExtrusionBucket),
+    /// A location indicator's accuracy circle, in world pixels around the puck.
+    ///
+    /// The one content that belongs to the camera rather than to a tile. Its vertices are offsets
+    /// in world pixels at the *current* scale -- mbgl projects the ring at `state.getScale()`, so
+    /// a zoom rebuilds the geometry where every other family leaves it alone and changes the
+    /// matrix. It is built at a fixed anchor, the way a viewport background is, and rebuilt every
+    /// frame.
+    LocationIndicator(tessella_layout::location_indicator::LocationIndicatorBucket),
     /// A symbol layer's labels, resolved but not yet shaped.
     ///
     /// The only content that is not geometry. Shaping needs glyph metrics, and the glyphs are a
@@ -234,6 +243,10 @@ impl LayerBucket {
             Content::Hillshade(_) => 1,
             // And a color relief, which is that quad over the elevation itself.
             Content::ColorRelief(_) => 1,
+            // A puck's accuracy circle is two: the interior as a fan and the border as a strip,
+            // over one vertex buffer. mbgl builds exactly those two drawables and enables or
+            // disables them together.
+            Content::LocationIndicator(_) => 2,
             // An extrusion is two geometries — the roof and the walls raised over it — each
             // drawn once per pass. The depth pass is what stops every wall alpha-blending
             // against the walls behind it, and mbgl's `doDepthPass = (!opaque || hasPattern)`
@@ -968,6 +981,108 @@ pub fn build_sourceless(style: &Style, tile: TileId) -> Result<Vec<LayerBucket>,
         });
     }
     Ok(buckets)
+}
+
+/// Builds every location indicator the style draws at this camera.
+///
+/// Not a tile build, and it takes a camera where every other builder takes a coordinate. A puck's
+/// accuracy circle is a ring of offsets in world pixels at the current scale -- mbgl projects it
+/// through `state.getScale()` in `updateRadius` -- so the zoom is in the vertices rather than in
+/// the matrix and the geometry is rebuilt every frame. The layer is also sourceless and singular:
+/// there is one puck, wherever the cover happens to be.
+///
+/// Empty for a layer mbgl would disable rather than draw: no accuracy radius, or an interior and
+/// a border that are both fully transparent. Both circle drawables go together, which is
+/// `updateCircleDrawable`'s own test.
+///
+/// Empty on a globe as well, and that is a decision rather than an omission. The circle is a ring
+/// of world-pixel offsets placed by the plane's projection; a sphere has neither. mbgl has no
+/// globe and so no puck on one, which leaves nothing to be at parity with -- so this draws none
+/// rather than inventing a bend for it.
+///
+/// # Errors
+///
+/// [`TileError`] when a layer's paint properties do not compile.
+pub fn build_location_indicators(
+    style: &Style,
+    view: &ViewTransform,
+    projection: ProjectionMode,
+) -> Result<Vec<LayerBucket>, TileError> {
+    let mut buckets = Vec::new();
+    if projection == ProjectionMode::Globe {
+        return Ok(buckets);
+    }
+    for (layer_index, layer) in style.layers.iter().enumerate() {
+        if layer.kind != LayerKind::LocationIndicator || !draws_at(layer, view.zoom) {
+            continue;
+        }
+        let paint = resolve_paint(layer).map_err(|source| TileError::Property {
+            layer: layer.id.clone(),
+            source,
+        })?;
+        let Some(bucket) = accuracy_circle(&paint, view) else {
+            continue;
+        };
+        let binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint, view.zoom);
+        buckets.push(LayerBucket {
+            layer_index,
+            layer_id: layer.id.clone(),
+            content: Content::LocationIndicator(bucket),
+            paint,
+            binder,
+            outline_under_fill: false,
+            // No features, so nothing to vary a pattern over -- and the family has no pattern.
+            pattern_vertices: PatternVertices::default(),
+        });
+    }
+    Ok(buckets)
+}
+
+/// The accuracy circle a puck's paint asks for, or nothing where mbgl would draw none.
+fn accuracy_circle(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    view: &ViewTransform,
+) -> Option<tessella_layout::location_indicator::LocationIndicatorBucket> {
+    let radius = f64::from(crate::ubo::uniform_number(
+        paint,
+        "accuracy-radius",
+        view.zoom,
+    ));
+    if radius <= 0.0 {
+        return None;
+    }
+    let interior = crate::ubo::uniform_color(paint, "accuracy-radius-color", view.zoom);
+    let border = crate::ubo::uniform_color(paint, "accuracy-radius-border-color", view.zoom);
+    if interior.a == 0.0 && border.a == 0.0 {
+        return None;
+    }
+    let location = puck_location(paint, view.zoom)?;
+    Some(
+        tessella_layout::location_indicator::LocationIndicatorBucket::new(
+            location,
+            radius,
+            view.bearing,
+            tessella_tile::camera::world_size(view.zoom),
+        ),
+    )
+}
+
+/// Where a puck is, as longitude then latitude.
+///
+/// `location` is latitude, longitude, altitude -- the order mbgl's `std::array<double, 3>` is
+/// filled in and not the order the rest of a style writes a coordinate in. It is turned over here,
+/// once, so that nothing downstream has to remember. The altitude is read and discarded: mbgl's
+/// puck is placed by `LatLng` and its third number reaches no geometry.
+///
+/// Read in both places the puck needs it -- the circle's vertices and the matrix that places them
+/// -- so that the two cannot disagree about which number is which.
+pub(crate) fn puck_location(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    zoom: f64,
+) -> Option<[f64; 2]> {
+    let location = paint.get("location")?.coordinates_at(zoom)?;
+    let [latitude, longitude] = location.get(..2)?.try_into().ok()?;
+    Some([longitude, latitude])
 }
 
 /// Builds a flat fill or an extrusion from the same classified rings.
@@ -1760,6 +1875,7 @@ impl Content {
             | Self::Heatmap(_)
             | Self::Hillshade(_)
             | Self::ColorRelief(_)
+            | Self::LocationIndicator(_)
             | Self::Symbol(_) => None,
         }
     }
@@ -1775,7 +1891,10 @@ impl Content {
             | Self::Circle(_)
             | Self::Heatmap(_)
             | Self::Fill3d(_) => None,
-            Self::Raster(_) | Self::Hillshade(_) | Self::ColorRelief(_) => None,
+            Self::Raster(_)
+            | Self::Hillshade(_)
+            | Self::ColorRelief(_)
+            | Self::LocationIndicator(_) => None,
         }
     }
 
@@ -1792,6 +1911,7 @@ impl Content {
             | Self::Heatmap(_)
             | Self::Raster(_)
             | Self::ColorRelief(_)
+            | Self::LocationIndicator(_)
             | Self::Symbol(_) => None,
         }
     }
@@ -1809,6 +1929,7 @@ impl Content {
             | Self::Heatmap(_)
             | Self::Hillshade(_)
             | Self::Raster(_)
+            | Self::LocationIndicator(_)
             | Self::Symbol(_) => None,
         }
     }
@@ -1824,7 +1945,10 @@ impl Content {
             | Self::Heatmap(_)
             | Self::Symbol(_)
             | Self::Fill3d(_) => None,
-            Self::Raster(_) | Self::Hillshade(_) | Self::ColorRelief(_) => None,
+            Self::Raster(_)
+            | Self::Hillshade(_)
+            | Self::ColorRelief(_)
+            | Self::LocationIndicator(_) => None,
         }
     }
 
@@ -1839,7 +1963,10 @@ impl Content {
             | Self::Heatmap(_)
             | Self::Symbol(_)
             | Self::Fill3d(_) => None,
-            Self::Raster(_) | Self::Hillshade(_) | Self::ColorRelief(_) => None,
+            Self::Raster(_)
+            | Self::Hillshade(_)
+            | Self::ColorRelief(_)
+            | Self::LocationIndicator(_) => None,
         }
     }
 
@@ -1854,7 +1981,10 @@ impl Content {
             | Self::Heatmap(_)
             | Self::Symbol(_)
             | Self::Fill3d(_) => None,
-            Self::Raster(_) | Self::Hillshade(_) | Self::ColorRelief(_) => None,
+            Self::Raster(_)
+            | Self::Hillshade(_)
+            | Self::ColorRelief(_)
+            | Self::LocationIndicator(_) => None,
         }
     }
 
@@ -1886,6 +2016,7 @@ impl Content {
             Self::Raster(content) => !content.bucket.is_empty(),
             Self::Hillshade(content) => !content.bucket.is_empty(),
             Self::ColorRelief(content) => !content.bucket.is_empty(),
+            Self::LocationIndicator(bucket) => !bucket.is_empty(),
             Self::Fill3d(bucket) => !bucket.segments.is_empty(),
         }
     }

@@ -857,6 +857,32 @@ impl Map {
             }
         }
 
+        // And the puck, which is not on any tile either and is not on the cover.
+        //
+        // The same fixed anchor a viewport background takes, for a different reason. A background
+        // is pinned because its quad is the viewport and does not move; a puck is pinned because
+        // it is one object at one coordinate and there is no tile whose ground it belongs to --
+        // its vertices are offsets in world pixels from the location the paint names, so the
+        // cover has nothing to say about where it draws. Rebuilt every frame: those offsets are
+        // at the camera's scale, so a zoom changes the geometry rather than only the matrix.
+        {
+            let anchor = TileId::new(0, 0, 0);
+            let built =
+                crate::tile::build_location_indicators(&self.style, &self.view, self.projection)
+                    .unwrap_or_default();
+            if !built.is_empty() {
+                buckets.push((anchor, Arc::new(built)));
+                // No symbols, as a background has none.
+                origins.push(None);
+                placed.push(TileCoord {
+                    z: anchor.z,
+                    x: anchor.x,
+                    y: anchor.y,
+                    wrap: 0,
+                });
+            }
+        }
+
         // Updated before the frame reads it, so a pattern crossing an integer zoom this tick
         // fades from the image it was actually showing rather than from the one it is arriving
         // at. `update` reports whether a crossing happened, which nothing here needs — the
