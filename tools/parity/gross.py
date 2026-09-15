@@ -11,9 +11,27 @@ import sys
 
 from PIL import Image
 
+
+def over_black(path: str) -> bytes:
+    """An image as the probe would show it: composited over its opaque black clear.
+
+    `mbgl-render` writes an RGBA PNG and un-premultiplies it on the way out, so a frame with no
+    background keeps its color at full strength however transparent the pixel is. `convert("RGB")`
+    drops that alpha rather than applying it, and a hillshade -- whose shade is mostly alpha --
+    then read as twice as bright as the same picture on the probe's black. A frame with no alpha
+    is unchanged.
+    """
+    image = Image.open(path)
+    if "A" not in image.getbands():
+        return image.convert("RGB").tobytes()
+    rgba = image.convert("RGBA")
+    black = Image.new("RGBA", rgba.size, (0, 0, 0, 255))
+    return Image.alpha_composite(black, rgba).convert("RGB").tobytes()
+
+
 threshold = int(sys.argv[3]) if len(sys.argv) > 3 else 48
-a = Image.open(sys.argv[1]).convert("RGB").tobytes()
-b = Image.open(sys.argv[2]).convert("RGB").tobytes()
+a = over_black(sys.argv[1])
+b = over_black(sys.argv[2])
 if len(a) != len(b):
     sys.exit(f"different sizes: {len(a) // 3} against {len(b) // 3} pixels")
 n = sum(
