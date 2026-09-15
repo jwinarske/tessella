@@ -62,6 +62,13 @@ impl Encoding {
     }
 }
 
+/// A DEM tile's width when the source does not say.
+///
+/// The style spec's `tileSize` default for a raster source, which a raster-dem source is one of.
+/// Every DEM anyone serves is 256, and the default is 512 -- which is why a scene that means 256
+/// has to write it down.
+pub const DEFAULT_TILE_SIZE: u32 = 512;
+
 /// A decoded DEM tile, one pixel larger on every side than the tile it came from.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Dem {

@@ -666,6 +666,32 @@ const RASTER_PAINT: &[PropertySpec] = &[
     },
 ];
 
+/// A color relief layer's paint properties.
+///
+/// Two, and one of them is not a value. `color-relief-color` is a *ramp*: an expression over
+/// `["elevation"]` whose stops become two textures, the way `heatmap-color` is an expression over
+/// `["heatmap-density"]` whose output becomes one. mbgl gives it its own property kind --
+/// `ColorRampProperty` rather than `PaintProperty<Color>` -- for that reason.
+///
+/// Its default is empty, not a ramp. `getDefaultColorReliefColor()` returns `{{}}` where
+/// `HeatmapColor::defaultValue()` returns a six-stop expression, so a layer that names no colors
+/// draws nothing rather than a default relief -- which is right: there is no ramp that suits every
+/// terrain, and mbgl's own renderer returns early when the value is undefined.
+const COLOR_RELIEF_PAINT: &[PropertySpec] = &[
+    PropertySpec {
+        name: "color-relief-color",
+        kind: PropertyKind::Color,
+        default: DefaultValue::None,
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "color-relief-opacity",
+        kind: PropertyKind::Number,
+        default: DefaultValue::Number(1.0),
+        data_driven: false,
+    },
+];
+
 /// A hillshade layer's paint properties.
 ///
 /// None is data-driven and none can be: a hillshade reads a height field, and a height field has
@@ -881,6 +907,7 @@ pub fn paint_specs(kind: &LayerKind) -> Option<&'static [PropertySpec]> {
         LayerKind::FillExtrusion => Some(FILL_EXTRUSION_PAINT),
         LayerKind::Heatmap => Some(HEATMAP_PAINT),
         LayerKind::Hillshade => Some(HILLSHADE_PAINT),
+        LayerKind::ColorRelief => Some(COLOR_RELIEF_PAINT),
         _ => None,
     }
 }

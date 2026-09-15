@@ -319,18 +319,19 @@ fn a_literal_of_the_wrong_type_is_rejected() {
 /// line and circle layers, and they must not stop the fill layers from drawing (§1).
 #[test]
 fn an_unimplemented_layer_type_resolves_empty() {
-    // The hermetic style no longer contains one, and neither does this: background, fill, line,
-    // circle, symbol, raster, fill-extrusion, heatmap and hillshade are all implemented, so the
-    // type this reaches for is one nothing has built yet. A layer type with no spec table
-    // resolves to nothing rather than to guessed defaults — the difference between "this build
-    // does not know what a color-relief layer's properties are" and "it thinks they are empty".
+    // The hermetic style contains no such layer and neither does this: every type the style spec
+    // names that this build draws has a table now, so the type reached for here is one the spec
+    // names and nothing has built — `sky`, which parses to `LayerKind::Other`. A layer type with
+    // no spec table resolves to nothing rather than to guessed defaults: the difference between
+    // "this build does not know what a sky layer's properties are" and "it thinks they are
+    // empty".
     let style = Style::parse(
         r#"{"version": 8, "sources": {}, "layers": [
-             {"id": "e", "type": "color-relief", "source": "s"}]}"#,
+             {"id": "e", "type": "sky", "source": "s"}]}"#,
     )
     .expect("style parses");
     let paint = resolve_paint(style.layer("e").expect("e")).expect("resolves");
-    assert!(paint.is_empty(), "color-relief has no table");
+    assert!(paint.is_empty(), "sky has no table");
     assert!(is_all_uniform(&paint), "vacuously");
 
     // Heatmap used to be the in-between case — a table without a renderer, so its properties
@@ -359,6 +360,18 @@ fn an_unimplemented_layer_type_resolves_empty() {
     assert!(layer.kind.is_built(), "hillshade draws now");
     let paint = resolve_paint(layer).expect("resolves");
     assert!(!paint.is_empty(), "hillshade has a table");
+
+    // And color relief, which was the last of them.
+    let relief = Style::parse(
+        r#"{"version": 8, "sources": {}, "layers": [
+             {"id": "r", "type": "color-relief", "source": "d",
+              "paint": {"color-relief-opacity": 0.9}}]}"#,
+    )
+    .expect("style parses");
+    let layer = relief.layer("r").expect("r");
+    assert!(layer.kind.is_built(), "color relief draws now");
+    let paint = resolve_paint(layer).expect("resolves");
+    assert!(!paint.is_empty(), "color relief has a table");
 
     // And an implemented one does not resolve empty, which is what stops this passing for the
     // wrong reason once every type in the style spec has a table.
