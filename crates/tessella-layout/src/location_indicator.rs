@@ -68,6 +68,81 @@ pub fn accuracy_circle(
     out
 }
 
+/// A location indicator's geometry, ready to encode.
+///
+/// One vertex buffer and two index buffers over it, which is what mbgl builds: the dump shows two
+/// drawables of `LocationIndicatorShader` sharing 73 vertices, one with 216 indices and one with
+/// 72. The first is the accuracy circle's interior as triangles and the second is its border as a
+/// line strip.
+///
+/// # Why the fan is expanded into indices
+///
+/// It already is in mbgl: the drawable path builds `{0, i, i + 1}` triples rather than asking for
+/// a `GL_TRIANGLE_FAN`, and this carries them as they are. This protocol has no topology field --
+/// a family implies it, the way the fill-outline family implies lines -- so triangles that say
+/// what they are in their own indices need nothing added.
+///
+/// The border does not have that luxury. mbgl gives it `gfx::LineStrip(1.0f)` and 72 indices
+/// walking the ring, and a strip is not a list of pairs: read as `Lines` it would draw 36
+/// disconnected chords. The family has to carry the topology, which is what the
+/// `LocationIndicatorShader` family means on this wire.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocationIndicatorBucket {
+    /// The circle, center first, in world pixels from the puck.
+    pub vertices: Vec<[f32; 2]>,
+    /// Triangles over [`Self::vertices`], three indices each, fanning from the center.
+    pub fill_indices: Vec<u16>,
+    /// The border, as a line strip over the circumference.
+    pub border_indices: Vec<u16>,
+}
+
+impl LocationIndicatorBucket {
+    /// Builds the geometry for a puck at a location.
+    ///
+    /// `location` is longitude then latitude, already turned over from the style's order.
+    #[must_use]
+    pub fn new(
+        location: [f64; 2],
+        radius_meters: f64,
+        bearing_degrees: f64,
+        world_size: f64,
+    ) -> Self {
+        let vertices = accuracy_circle(location, radius_meters, bearing_degrees, world_size);
+
+        // A fan from the center: triangle `i` is `0, i, i + 1`, for `i` up to the second-to-last
+        // vertex. Seventy-one of those cover the disc.
+        //
+        // And then mbgl adds one more, `{0, vertexCount - 1, 1}`, closing the fan from the last
+        // vertex back to the first. It is degenerate -- those two vertices are the same point,
+        // which is what the 360/71 step arranges -- so it rasterizes nothing. It is here because
+        // it is in the oracle's index buffer, and 216 rather than 213 is what the dump says.
+        let mut fill_indices = Vec::with_capacity(CIRCUMFERENCE_VERTICES * 3);
+        for index in 1..CIRCUMFERENCE_VERTICES {
+            #[allow(clippy::cast_possible_truncation)]
+            fill_indices.extend_from_slice(&[0, index as u16, (index + 1) as u16]);
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        fill_indices.extend_from_slice(&[0, CIRCUMFERENCE_VERTICES as u16, 1]);
+
+        // The border skips the center and walks the ring. It closes because the last point is the
+        // first, which is why the step is 360/71 -- see the module note.
+        #[allow(clippy::cast_possible_truncation)]
+        let border_indices = (1..=CIRCUMFERENCE_VERTICES).map(|i| i as u16).collect();
+
+        Self {
+            vertices,
+            fill_indices,
+            border_indices,
+        }
+    }
+
+    /// Whether this drew nothing, which is a puck with no accuracy radius.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.vertices.len() < CIRCLE_VERTICES
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,6 +243,56 @@ mod tests {
                 .fold(0.0, f64::max)
         };
         assert!((extent(&flat) - extent(&turned)).abs() / extent(&flat) < 0.001);
+    }
+
+    /// The two index buffers are the oracle's two: 216 and 72.
+    ///
+    /// Those numbers are read off the dump rather than derived here -- `ilen=216` and `ilen=72`
+    /// on two drawables of `sh0028` sharing `vlen=73` -- which is what makes them a check on this
+    /// rather than a restatement of it.
+    #[test]
+    fn the_index_counts_are_the_oracles() {
+        let bucket = LocationIndicatorBucket::new(BERLIN, 240.0, 0.0, WORLD);
+        assert_eq!(bucket.vertices.len(), 73);
+        assert_eq!(bucket.fill_indices.len(), 216);
+        assert_eq!(bucket.border_indices.len(), 72);
+    }
+
+    /// Every triangle of the fan starts at the center and walks one step round.
+    #[test]
+    fn the_fill_fans_from_the_center() {
+        let bucket = LocationIndicatorBucket::new(BERLIN, 240.0, 0.0, WORLD);
+        let triangles = bucket.fill_indices.as_chunks::<3>().0;
+        for (triangle, chunk) in triangles[..71].iter().enumerate() {
+            let step = u16::try_from(triangle).expect("71 triangles");
+            assert_eq!(*chunk, [0, step + 1, step + 2], "triangle {triangle}");
+        }
+        // And the closing one, which mbgl emits and which is degenerate: vertex 72 is vertex 1.
+        assert_eq!(triangles[71], [0, 72, 1]);
+        let first = bucket.vertices[1];
+        let last = bucket.vertices[72];
+        assert!((first[0] - last[0]).abs() < 1e-3 && (first[1] - last[1]).abs() < 1e-3);
+    }
+
+    /// The border walks the ring and skips the center. Including index zero would draw a spoke
+    /// from the middle to the rim, which is a line the oracle does not have.
+    #[test]
+    fn the_border_skips_the_center() {
+        let bucket = LocationIndicatorBucket::new(BERLIN, 240.0, 0.0, WORLD);
+        assert!(!bucket.border_indices.contains(&0));
+        assert_eq!(bucket.border_indices[0], 1);
+        assert_eq!(bucket.border_indices[71], 72);
+    }
+
+    /// The strip closes, which is the whole reason the step is 360/71: the vertex the border ends
+    /// on is the vertex it started on.
+    #[test]
+    fn the_border_closes_on_itself() {
+        let bucket = LocationIndicatorBucket::new(BERLIN, 240.0, 0.0, WORLD);
+        let first = bucket.vertices[usize::from(bucket.border_indices[0])];
+        let last = bucket.vertices[usize::from(bucket.border_indices[71])];
+        assert!((first[0] - last[0]).abs() < 1e-3);
+        assert!((first[1] - last[1]).abs() < 1e-3);
     }
 
     /// A bearing past a full turn is the same ring as the bearing inside one.
