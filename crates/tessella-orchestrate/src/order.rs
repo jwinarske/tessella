@@ -517,14 +517,17 @@ pub fn bindings_for(
             Content::Raster(_) => {
                 emit(0, view::fill_pass(), view::raster_flags());
             }
-            // Two drawables over one vertex buffer: the accuracy circle's interior as a fan,
-            // then its border as a strip. mbgl sets no sub-layer index on either -- it orders
-            // its puck's drawables by the order it adds them -- so they are numbered here, the
-            // way a symbol layout's parts are, because the sub-layer index is what orders a
-            // layer's drawables on this wire.
-            Content::LocationIndicator(_) => {
-                emit(0, view::fill_pass(), view::location_indicator_flags());
-                emit(1, view::fill_pass(), view::location_indicator_flags());
+            // The accuracy circle's interior and border over one vertex buffer, then the
+            // shadow, the bearing image and the hat. mbgl sets no sub-layer index on any of
+            // them -- it orders its puck's drawables by the order it adds them -- so they are
+            // numbered here, the way a symbol layout's parts are, because the sub-layer index is
+            // what orders a layer's drawables on this wire.
+            Content::LocationIndicator(ref puck) =>
+            {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                for sub in 0..puck.drawables() as i32 {
+                    emit(sub, view::fill_pass(), view::location_indicator_flags());
+                }
             }
             // Two drawables, and the order between them is load-bearing. mbgl builds a
             // depth-only pass at sub-layer 0 and a color pass at 1 whenever the layer is not

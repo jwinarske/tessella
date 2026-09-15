@@ -243,10 +243,10 @@ impl LayerBucket {
             Content::Hillshade(_) => 1,
             // And a color relief, which is that quad over the elevation itself.
             Content::ColorRelief(_) => 1,
-            // A puck's accuracy circle is two: the interior as a fan and the border as a strip,
-            // over one vertex buffer. mbgl builds exactly those two drawables and enables or
-            // disables them together.
-            Content::LocationIndicator(_) => 2,
+            // A puck's accuracy circle is two -- the interior as a fan and the border as a strip,
+            // over one vertex buffer, enabled and disabled together -- and then one per image
+            // that resolved. The bucket decides, because it is what the encoder reads.
+            Content::LocationIndicator(ref puck) => puck.drawables(),
             // An extrusion is two geometries — the roof and the walls raised over it — each
             // drawn once per pass. The depth pass is what stops every wall alpha-blending
             // against the walls behind it, and mbgl's `doDepthPass = (!opaque || hasPattern)`
@@ -1007,6 +1007,7 @@ pub fn build_location_indicators(
     style: &Style,
     view: &ViewTransform,
     projection: ProjectionMode,
+    sprites: Option<&tessella_glyph::sprite::Positions>,
 ) -> Result<Vec<LayerBucket>, TileError> {
     let mut buckets = Vec::new();
     if projection == ProjectionMode::Globe {
@@ -1020,9 +1021,13 @@ pub fn build_location_indicators(
             layer: layer.id.clone(),
             source,
         })?;
-        let Some(bucket) = accuracy_circle(&paint, view) else {
+        let mut bucket = accuracy_circle(&paint, view).unwrap_or_else(
+            tessella_layout::location_indicator::LocationIndicatorBucket::without_circle,
+        );
+        bucket.quads = puck_quads(layer, &paint, view, sprites);
+        if bucket.is_empty() {
             continue;
-        };
+        }
         let binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint, view.zoom);
         buckets.push(LayerBucket {
             layer_index,
@@ -1038,24 +1043,45 @@ pub fn build_location_indicators(
     Ok(buckets)
 }
 
-/// The accuracy circle a puck's paint asks for, or nothing where mbgl would draw none.
-fn accuracy_circle(
+/// Whether a puck's paint draws an accuracy circle at all.
+///
+/// mbgl's `updateCircleDrawable` test, which enables and disables both circle drawables together:
+/// a radius of nothing, or an interior and a border that are both fully transparent.
+///
+/// Public within the crate because the frame asks the same question from the other end. It has
+/// the paint and the bindings but not the bucket, and it has to know whether sub-layers zero and
+/// one are the circle's or the first two quads' -- a puck with images and no radius starts its
+/// shadow at zero. Asking the paint twice is what keeps the two answers one answer.
+pub(crate) fn puck_draws_circle(
     paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
     view: &ViewTransform,
-) -> Option<tessella_layout::location_indicator::LocationIndicatorBucket> {
+) -> bool {
     let radius = f64::from(crate::ubo::uniform_number(
         paint,
         "accuracy-radius",
         view.zoom,
     ));
     if radius <= 0.0 {
-        return None;
+        return false;
     }
     let interior = crate::ubo::uniform_color(paint, "accuracy-radius-color", view.zoom);
     let border = crate::ubo::uniform_color(paint, "accuracy-radius-border-color", view.zoom);
-    if interior.a == 0.0 && border.a == 0.0 {
+    interior.a != 0.0 || border.a != 0.0
+}
+
+/// The accuracy circle a puck's paint asks for, or nothing where mbgl would draw none.
+fn accuracy_circle(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    view: &ViewTransform,
+) -> Option<tessella_layout::location_indicator::LocationIndicatorBucket> {
+    if !puck_draws_circle(paint, view) {
         return None;
     }
+    let radius = f64::from(crate::ubo::uniform_number(
+        paint,
+        "accuracy-radius",
+        view.zoom,
+    ));
     let location = puck_location(paint, view.zoom)?;
     Some(
         tessella_layout::location_indicator::LocationIndicatorBucket::new(
@@ -1065,6 +1091,128 @@ fn accuracy_circle(
             tessella_tile::camera::world_size(view.zoom),
         ),
     )
+}
+
+/// The three textured quads a puck's images resolve to, in painter order.
+///
+/// Empty for every image the sheet has not got, rather than a quad with no area. mbgl builds all
+/// three drawables always and lets a missing image give one a width of zero, which rasterizes
+/// nothing; skipping it here is the same picture with one fewer drawable, and the bucket is the
+/// one place the count is decided so nothing downstream can disagree.
+///
+/// # Why this needs the camera
+///
+/// Because the size does. `horizontal` is mbgl's `horizontalScaleFactor`, which mixes one toward
+/// the world-pixel size of a *screen* pixel measured at the puck by `perspective-compensation`.
+/// At zero the puck is a fixed number of world pixels and shrinks with the perspective like the
+/// ground it sits on; at one it is a fixed number of screen pixels and stays the size of a
+/// fingertip. The clamp to 0.8 is mbgl's own, with its own reason: a puck close to the camera
+/// would otherwise grow without bound.
+fn puck_quads(
+    layer: &tessella_style::Layer,
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    view: &ViewTransform,
+    sprites: Option<&tessella_glyph::sprite::Positions>,
+) -> Vec<tessella_layout::location_indicator::PuckQuad> {
+    use tessella_layout::location_indicator::{PuckImage, PuckQuad, puck_quad};
+
+    let mut quads = Vec::new();
+    let (Some(positions), Some(location)) = (sprites, puck_location(paint, view.zoom)) else {
+        return quads;
+    };
+    let Some(screen_pixel) =
+        tessella_tile::screen::world_pixels_per_screen_pixel(view, location[0], location[1])
+    else {
+        return quads;
+    };
+
+    let compensation = f64::from(crate::ubo::uniform_number(
+        paint,
+        "perspective-compensation",
+        view.zoom,
+    ));
+    let horizontal = (1.0 - compensation) + screen_pixel.clamp(0.8, 10.1) * compensation;
+    let displacement = f64::from(crate::ubo::uniform_number(
+        paint,
+        "image-tilt-displacement",
+        view.zoom,
+    ));
+    let bearing = f64::from(crate::ubo::uniform_number(paint, "bearing", view.zoom));
+    let tilt = tessella_tile::camera::pitch_radians(view);
+    let shift = vertical_shift(view, location).unwrap_or([0.0, 0.0]);
+
+    for image in PuckImage::ALL {
+        let Some(name) =
+            tessella_style::property::layout_value(layer, image.layout_property(), view.zoom, None)
+        else {
+            continue;
+        };
+        let Some(position) = name.as_str().and_then(|name| positions.get(name)) else {
+            continue;
+        };
+        // The image's *logical* width, which is its pixels over its pixel ratio -- a sprite drawn
+        // at twice the density is the same size on the map. Width alone, as mbgl reads it: the
+        // quad is square whatever the picture's aspect, so a tall image is squashed into it.
+        let (width, _) = position.display_size();
+        let size = f64::from(crate::ubo::uniform_number(
+            paint,
+            image.size_property(),
+            view.zoom,
+        ));
+        let half_diagonal = width * size * core::f64::consts::SQRT_2 * 0.5 * horizontal;
+        let along = tilt * image.displacement_sign() * displacement * horizontal;
+        quads.push(PuckQuad {
+            image,
+            corners: puck_quad(half_diagonal, bearing, [shift[0] * along, shift[1] * along]),
+        });
+    }
+    quads
+}
+
+/// Which way is up the screen, expressed in world pixels, measured at the bottom of the viewport.
+///
+/// mbgl's `hatShadowShiftVector`, and its comment is the explanation: the obvious answer -- the
+/// bearing's own up vector -- is only right down the vertical center line of the map, because the
+/// perspective skews every other column toward the vanishing point. So the direction is found in
+/// *screen* space, where up is up everywhere, and converted back.
+///
+/// The measurement is taken at the bottom edge rather than at the puck. mbgl says why: going
+/// further from the convergence point gives a more convincing lift, and the bottom of the window
+/// is the furthest it can go without picking up the wide skew near the top.
+///
+/// # Two screen conventions, one flip apart
+///
+/// [`tessella_tile::screen`] is `TransformState`'s, where y grows *up* from the bottom edge --
+/// checked against mbgl's own numbers, which agree to eight figures. The location indicator layer
+/// does not use that one. It declares its own `latLngToScreenCoordinate` and
+/// `screenCoordinateToLatLng` beside it, each flipping y by `height - y`, so everything inside
+/// that file is in viewport coordinates with y down from the top. That is why its comments read
+/// the way they do: `posScreen.y = params.height - 1` really is "moving it to bottom" there.
+///
+/// So the flip is written out here and mbgl's two lines are transcribed literally on the other
+/// side of it. Taken without the flip the puck's shadow rises and its hat sinks -- which at a
+/// pitched camera is 72 gross pixels and a shadow above the thing casting it.
+///
+/// `None` when the view will not project, which is the same view that has no puck.
+fn vertical_shift(view: &ViewTransform, location: [f64; 2]) -> Option<[f64; 2]> {
+    // Into the layer's own convention, and back out of it when asking `screen` anything.
+    let viewport = |y: f64| view.height - y;
+
+    let screen = tessella_tile::screen::to_screen(view, location[0], location[1])?;
+    // mbgl's `posScreen.y = params.height - 1`: the bottom row of the viewport.
+    let bottom = [screen[0], view.height - 1.0];
+    // And its `screenDy.y -= 1`: one pixel up the screen from there.
+    let above = [bottom[0], bottom[1] - 1.0];
+
+    let world = tessella_tile::camera::world_size(view.zoom);
+    let at = tessella_tile::screen::from_screen(view, [bottom[0], viewport(bottom[1])])?;
+    let here = projection::project(at[0], at[1], world);
+    let up = tessella_tile::screen::from_screen(view, [above[0], viewport(above[1])])?;
+    let there = projection::project(up[0], up[1], world);
+
+    let delta = [there[0] - here[0], there[1] - here[1]];
+    let length = delta[0].hypot(delta[1]);
+    (length > 0.0).then(|| [delta[0] / length, delta[1] / length])
 }
 
 /// Where a puck is, as longitude then latitude.
