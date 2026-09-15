@@ -855,6 +855,7 @@ impl SymbolLayout {
                 overscaling,
                 centered: placement == Placement::LineCenter,
                 max_box_scale: tile_pixel_ratio * max_text_size / tessella_glyph::text::ONE_EM,
+                along_line: Alignments::of(layer, zoom, placement, "text").along_line(placement),
             },
             text_alignments: Alignments::of(layer, zoom, placement, "text"),
             icon_alignments: Alignments::of(layer, zoom, placement, "icon"),
