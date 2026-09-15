@@ -460,11 +460,33 @@ impl Map {
     /// The two are the same fact in the two vocabularies either side of the seam: a `ProjectionMode`
     /// is what a caller asks for and what travels on the wire, and a `Surface` is what a cover and
     /// a bucket are keyed by.
+    /// # Why terrain is not a third projection
+    ///
+    /// A globe and a plane are two projections and a caller picks one. Terrain is neither: it is
+    /// the plane with the ground raised, so it follows from the *style* having a usable terrain
+    /// rather than from what the caller asked for. A globe wins, because this build has no terrain
+    /// on one -- see `build_location_indicators` for the same call taken for the same reason.
+    ///
+    /// # Why the mesh's own grid and not the relief's
+    ///
+    /// The ground is drawn as `tessella_layout::terrain::mesh`, which is uniform at
+    /// [`MESH_SIZE`](tessella_layout::terrain::MESH_SIZE) cells. Anything drawn *on* the ground
+    /// has to land on that surface, so it takes the same grid: a hillshade split more finely than
+    /// the surface chords against the surface's own chords, and one split more coarsely floats
+    /// above it or sinks below.
+    ///
+    /// `Relief::cells_within` is the other answer and it is for the other case -- a *vector* tile,
+    /// whose geometry is not the ground and whose DEM is a different source's tile. That one still
+    /// has to wait for the elevation to arrive before the tile can be keyed, which is why it is
+    /// not here.
     #[must_use]
-    pub const fn surface(&self) -> Surface {
+    pub fn surface(&self) -> Surface {
         match self.projection {
-            ProjectionMode::Mercator => Surface::Plane,
             ProjectionMode::Globe => Surface::Sphere,
+            ProjectionMode::Mercator if self.style.terrain_dem().is_some() => Surface::Terrain {
+                cells: u32::from(tessella_layout::terrain::MESH_SIZE),
+            },
+            ProjectionMode::Mercator => Surface::Plane,
         }
     }
 
