@@ -231,20 +231,32 @@ impl Dem {
 
     /// The elevation at a tile coordinate, in the units the encoding carries.
     ///
-    /// mbgl's `DEMData::get`, truncating the same way: the shader reads this as a float and
-    /// nothing on this side rounds it, so the integer is for tests and for anything that wants a
-    /// number rather than a picture.
+    /// mbgl's `DEMData::get`, truncating the same way. The truncation is mbgl's and is *not* what
+    /// the prepare pass sees -- its `getElevation` is a float dot product with no rounding at all
+    /// -- so this is for tests and for anything that wants a whole number of meters, and
+    /// [`Self::elevation_exact`] is what the arithmetic uses.
     #[must_use]
     pub fn elevation(&self, x: i32, y: i32) -> Option<i32> {
+        #[allow(clippy::cast_possible_truncation)]
+        self.elevation_exact(x, y).map(|meters| meters as i32)
+    }
+
+    /// The elevation at a tile coordinate, unrounded.
+    ///
+    /// The shader's `getElevation`: the texel times 255, its alpha replaced by -1, dotted with the
+    /// unpack vector. Written as the three products and the bias because that is the same
+    /// arithmetic in the same order, and the channels are already bytes here where the shader has
+    /// to scale them back up from normalized floats.
+    #[must_use]
+    pub fn elevation_exact(&self, x: i32, y: i32) -> Option<f32> {
         let index = self.index(x, y)?;
         let unpack = self.encoding.unpack();
         let texel = &self.pixels[index * 4..index * 4 + 4];
-        #[allow(clippy::cast_possible_truncation)]
         Some(
-            (f32::from(texel[0]) * unpack[0]
+            f32::from(texel[0]) * unpack[0]
                 + f32::from(texel[1]) * unpack[1]
                 + f32::from(texel[2]) * unpack[2]
-                - unpack[3]) as i32,
+                - unpack[3],
         )
     }
 
@@ -271,6 +283,106 @@ impl Dem {
     pub fn pixels(&self) -> &[u8] {
         &self.pixels
     }
+
+    /// The slope field a hillshade reads, as a `dim` by `dim` image.
+    ///
+    /// mbgl's hillshade *prepare* pass, which it runs on the GPU into a render target of its own
+    /// per tile. This runs it here instead, once, on the thread that just decoded the tile.
+    ///
+    /// # Why this is not an offscreen pass
+    ///
+    /// Because it does not depend on the camera. `HillshadePrepareLayerTweaker` sets
+    /// `.zoom = tileID.canonical.z` and the matrix to a fixed `ortho(0, EXTENT, -EXTENT, 0)`;
+    /// every other uniform it writes -- the unpack vector, the dimension, the maxzoom -- is a
+    /// property of the tile. So the pass is a pure function of the DEM tile and its zoom, and
+    /// mbgl runs it on the GPU because the DEM is already a texture there, not because anything
+    /// about it needs to be.
+    ///
+    /// Run here it costs one Sobel per tile on a worker that is already decoding a PNG, and it
+    /// costs no render target per tile, no offscreen view, and no second pass per frame. What a
+    /// hillshade layer then draws is a tile quad sampling an ordinary texture, which is the shape
+    /// of a raster layer and already at parity.
+    ///
+    /// # The arithmetic
+    ///
+    /// A Sobel operator over the eight neighbors, scaled from pixel slope to world slope and
+    /// encoded into two channels:
+    ///
+    /// ```text
+    /// deriv = ((c + 2f + i) - (a + 2d + g), (g + 2h + i) - (a + 2b + c))
+    ///       * dim / 2^(exaggeration + 28.2562 - zoom)
+    /// r, g  = clamp(deriv / 8 + 0.5, 0, 1)
+    /// ```
+    ///
+    /// The center sample `e` is not read -- a Sobel's center weight is zero, and mbgl leaves the
+    /// line commented out to say so. `28.2562` is the log2 of the meters per pixel at zoom zero,
+    /// and the exaggeration is the zoom-dependent softening mapbox-gl-js#5286 settled on. The
+    /// division by eight assumes a world slope no steeper than four, which is what makes the
+    /// range fit in a byte.
+    ///
+    /// `u_maxzoom` is in mbgl's uniform block and no shader reads it, so nothing here carries it.
+    ///
+    /// The neighbors reach one pixel outside the tile, into the border -- which is the whole
+    /// reason the border exists, and the reason this has to be re-run when
+    /// [`Self::backfill_border`] replaces it.
+    #[must_use]
+    pub fn prepare(&self, zoom: u8) -> crate::image::Image {
+        let dim = self.dim;
+        let zoom = f32::from(zoom);
+
+        // mapbox-gl-js#5286: the effect is softened at low zoom, where a pixel covers enough
+        // ground that the true slope reads as noise.
+        let factor = if zoom < 2.0 {
+            0.4
+        } else if zoom < 4.5 {
+            0.35
+        } else {
+            0.3
+        };
+        let exaggeration = if zoom < 15.0 {
+            (zoom - 15.0) * factor
+        } else {
+            0.0
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let scale = dim as f32 / libm::powf(2.0, exaggeration + (28.2562 - zoom));
+
+        let mut pixels = Vec::with_capacity((dim as usize) * (dim as usize) * 4);
+        for y in 0..dim {
+            for x in 0..dim {
+                #[allow(clippy::cast_possible_wrap)]
+                let (x, y) = (x as i32, y as i32);
+                let at = |dx: i32, dy: i32| self.elevation_exact(x + dx, y + dy).unwrap_or(0.0);
+                let (a, b, c) = (at(-1, -1), at(0, -1), at(1, -1));
+                let (d, f) = (at(-1, 0), at(1, 0));
+                let (g, h, i) = (at(-1, 1), at(0, 1), at(1, 1));
+
+                let dx = ((c + f + f + i) - (a + d + d + g)) * scale;
+                let dy = ((g + h + h + i) - (a + b + b + c)) * scale;
+                pixels.extend_from_slice(&[
+                    quantize(dx / 8.0 + 0.5),
+                    quantize(dy / 8.0 + 0.5),
+                    255,
+                    255,
+                ]);
+            }
+        }
+
+        crate::image::Image {
+            width: dim,
+            height: dim,
+            pixels,
+        }
+    }
+}
+
+/// A clamped channel, as writing to an eight-bit render target produces one.
+///
+/// Rounds, which is what a GPU does storing a float into a `UnsignedByte` attachment, and what
+/// truncating here would differ from by a whole level on half the values.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn quantize(value: f32) -> u8 {
+    (value.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
 }
 
 #[cfg(test)]
@@ -408,6 +520,110 @@ mod tests {
         assert_eq!(Encoding::parse("srtm"), None);
         // The spec's default, which is what a source naming no encoding gets.
         assert_eq!(Encoding::default(), Encoding::Mapbox);
+    }
+
+    /// A flat tile has no slope, so both derivative channels land on the middle of the range.
+    ///
+    /// The exact byte matters: 0.5 quantizes to 128, and a `quantize` that truncated would give
+    /// 127 -- a whole level of bias on every flat pixel of every hillshade.
+    #[test]
+    fn flat_ground_encodes_to_the_middle_of_the_range() {
+        let image = crate::image::Image {
+            width: 8,
+            height: 8,
+            // Whatever elevation, as long as it is the same everywhere.
+            pixels: [1u8, 2, 3, 255].repeat(8 * 8),
+        };
+        let dem = Dem::new(&image, Encoding::Mapbox).expect("square");
+        let prepared = dem.prepare(14);
+
+        assert_eq!(prepared.width, 8);
+        assert_eq!(prepared.height, 8);
+        for texel in prepared.pixels.as_chunks::<4>().0 {
+            assert_eq!(texel, &[128, 128, 255, 255]);
+        }
+    }
+
+    /// A ramp in x tilts the red channel and leaves green alone, and the other way for a ramp in
+    /// y. Which channel is which is the kind of thing that is invisible in a picture -- a
+    /// hillshade with x and y swapped is lit from the wrong quarter and still looks like terrain.
+    #[test]
+    fn a_ramp_tilts_the_channel_it_runs_along() {
+        let east = dem(8).prepare(14);
+        // The ramp's texel at (x, y) is x * 1000 + y meters, so x rises by 1000 m a pixel and y
+        // by 1 m -- a thousand to one, which no rounding can blur.
+        let texel = &east.pixels[(3 * 8 + 3) * 4..(3 * 8 + 3) * 4 + 4];
+        assert!(texel[0] > 200, "x runs uphill and saturates red: {texel:?}");
+        assert!((127..=129).contains(&texel[1]), "y barely moves: {texel:?}");
+    }
+
+    /// The border is what the edge pixels read, so replacing it changes the slope there and
+    /// nowhere else. This is why `prepare` has to be re-run after a backfill.
+    #[test]
+    fn a_backfilled_border_changes_the_edge_and_only_the_edge() {
+        let before = dem(8).prepare(14);
+
+        let mut after = dem(8);
+        // A neighbor to the east whose elevations are a long way from this tile's.
+        let mut far = ramp(8);
+        for texel in far.pixels.as_chunks_mut::<4>().0 {
+            texel[0] = texel[0].saturating_add(8);
+        }
+        after.backfill_border(&Dem::new(&far, Encoding::Mapbox).expect("square"), 1, 0);
+        let after = after.prepare(14);
+
+        let column = |image: &crate::image::Image, x: usize| -> Vec<u8> {
+            (0..8).map(|y| image.pixels[(y * 8 + x) * 4]).collect()
+        };
+        assert_ne!(
+            column(&before, 7),
+            column(&after, 7),
+            "the last column reads the border"
+        );
+        for x in 0..6 {
+            assert_eq!(
+                column(&before, x),
+                column(&after, x),
+                "column {x} is interior"
+            );
+        }
+    }
+
+    /// The zoom-dependent softening from mapbox-gl-js#5286, at the breakpoints mbgl uses.
+    ///
+    /// Same terrain, five zooms. The scale is `dim / 2^(exaggeration + 28.2562 - zoom)` and the
+    /// exaggeration stops at 15, so the encoded slope rises with zoom the whole way -- steeply up
+    /// to 15 and then at half the rate.
+    ///
+    /// The slope is 300 m a pixel, which is absurd terrain and the point: at the ramp fixture's
+    /// 1000 m the channel saturates at every zoom and the curve is invisible, and at anything
+    /// gentle it rounds to 128 at every zoom and the curve is invisible the other way. A fixture
+    /// that shows nothing passes whatever the arithmetic does.
+    #[test]
+    fn the_exaggeration_follows_the_zoom() {
+        let mut image = ramp(8);
+        for (index, texel) in image.pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            #[allow(clippy::cast_precision_loss)]
+            let meters = (index % 8) as f64 * 300.0;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let units = ((meters + 10000.0) / 0.1).round() as u32;
+            texel[0] = u8::try_from(units >> 16).unwrap_or(255);
+            texel[1] = u8::try_from((units >> 8) & 0xFF).unwrap_or(255);
+            texel[2] = u8::try_from(units & 0xFF).unwrap_or(255);
+        }
+        let dem = Dem::new(&image, Encoding::Mapbox).expect("square");
+        let at = |zoom: u8| dem.prepare(zoom).pixels[(4 * 8 + 4) * 4];
+
+        let curve: Vec<u8> = [10, 12, 14, 15, 16].into_iter().map(at).collect();
+        assert!(
+            curve.windows(2).all(|pair| pair[0] < pair[1]),
+            "the encoded slope rises with zoom: {curve:?}"
+        );
+        // And none of it is against a stop, which is what would make the comparison vacuous.
+        assert!(
+            curve.iter().all(|level| (1..255).contains(level)),
+            "{curve:?}"
+        );
     }
 
     #[test]
