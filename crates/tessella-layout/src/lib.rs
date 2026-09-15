@@ -33,6 +33,7 @@ pub mod fill_extrusion;
 pub mod heatmap;
 mod libstdcxx;
 pub mod line;
+pub mod location_indicator;
 pub mod paint;
 pub mod raster;
 pub mod size;
