@@ -378,6 +378,21 @@ static inline uint32_t tsl_texture_pixel_size(int format) {
 #define TSL_UBO_MAX_VERTEX_ATTRIBUTE_COUNT_PER_SHADER 11u
 
 /*
+ * Families and slots beyond mbgl's.
+ *
+ * mbgl has no globe and no terrain, so it declares no shader family and no uniform slot for
+ * either. These are tessella's own, numbered past everything mbgl uses so that a value it adds
+ * later cannot reach them -- its families stop at 35 and its slots at 10. A block on one of
+ * these slots travels on tsl_ubo_update like any other; what has to be agreed is the number, and
+ * this is where it is agreed.
+ */
+#define TSL_BUILTIN_TERRAIN_SHADER 128
+#define TSL_UBO_ID_GLOBE_BEND_UBO 11u
+#define TSL_STRIDE_GLOBE_BEND_UBO 112u
+#define TSL_UBO_ID_TERRAIN_DRAWABLE_UBO 128u
+#define TSL_STRIDE_TERRAIN_DRAWABLE_UBO 96u
+
+/*
  * Uniform block layouts.
  *
  * One struct per block mbgl declares, with every field's offset and the whole size asserted
