@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 //! One settled frame, emitted onto the ring.
 //!
 //! # Why this is a module and not a caller's business
@@ -3036,7 +3037,7 @@ fn encode_parts(
         // A layer that draws no outline carries no outline geometry, which is `doOutline` read
         // back off the bucket. `bindings_for` asks the same question, and has to: a drawable
         // here with no binding there is a record naming a view that never bound it.
-        if fill.line_indices.is_empty() && fill.outline.indices.is_empty() {
+        if !fill.has_outline() {
             return Some(parts);
         }
         // A backend that cannot widen a line draws the outline as a polyline instead, where the

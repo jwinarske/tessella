@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 //! Building one tile's buckets from a style and a set of features.
 //!
 //! This is where the pieces meet: the style's layers, their filters, the projection, the clip,
@@ -159,7 +160,16 @@ pub struct LayerBucket {
 impl LayerBucket {
     /// How many drawables this becomes on the stream.
     ///
-    /// A fill is two — triangles and outline — and a background is one.
+    /// A fill is its triangles and, where it draws one, its outline; a background is one.
+    ///
+    /// This has to be the number `order::bindings_for` emits, bucket for bucket, because the
+    /// frame pairs a tile's bindings with its buckets by counting: each bucket takes the next
+    /// `drawable_count` bindings. A fill counted as two while binding one handed its missing
+    /// outline's slot to the *next* bucket's first drawable, and every bucket after it in the
+    /// tile was encoded under its neighbor's ids. OpenFreeMap's `bright` writes
+    /// `fill-antialias: false` on four fills, so its later layers drew each other's geometry --
+    /// a transit layer's labels encoded as a dashed stream, placed by a symbol's matrices,
+    /// covering the whole frame.
     #[must_use]
     pub fn drawable_count(&self) -> usize {
         if !self.content.has_data() {
@@ -167,7 +177,7 @@ impl LayerBucket {
         }
         match self.content {
             Content::Background => 1,
-            Content::Fill(_) => 2,
+            Content::Fill(ref fill) => 1 + usize::from(fill.has_outline()),
             // A line layer is one drawable per tile: unlike a fill it has no outline
             // sublayer, because the extrusion already is the stroke.
             Content::Line(_) => 1,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 //! Fill buckets: rings in, vertices and triangles out.
 //!
 //! Every rule here is transcribed from mbgl — `classifyRings` and `signedArea` in
@@ -99,6 +100,21 @@ pub struct FillBucket {
     /// Empty where the layer's outline is data-driven and takes the line-primitive path instead,
     /// or where it draws no outline at all. The caller's decision: [`Outlines`].
     pub outline: crate::line::LineBucket,
+}
+
+impl FillBucket {
+    /// Whether this fill draws an outline, in either of its two forms.
+    ///
+    /// mbgl's `doOutline`, read back off the bucket: a layer that draws no outline -- because
+    /// `fill-antialias` is false, or a patterned fill wrote its own outline color -- builds no
+    /// outline geometry of either kind. One predicate because three places ask it: how many
+    /// drawables the bucket counts as, how many bindings it is given, and whether the outline is
+    /// encoded. They are paired by counting, so any two of them answering differently hands a
+    /// neighboring bucket's ids to this one's geometry.
+    #[must_use]
+    pub fn has_outline(&self) -> bool {
+        !self.line_indices.is_empty() || !self.outline.indices.is_empty()
+    }
 }
 
 /// Which forms of a fill's outline a bucket carries.

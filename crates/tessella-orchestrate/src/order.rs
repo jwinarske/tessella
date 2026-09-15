@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 //! Per-view draw order, and the epoch that names it (§6.3, DR-4, R-5).
 //!
 //! # Why order is its own envelope
@@ -467,7 +468,7 @@ pub fn bindings_for(
                 // the fill's own antialiasing and goes on top, and one it did ask for is a
                 // different color and goes underneath, so the fill covers its inner half. On top
                 // instead, that half is not covered and the line reads twice as wide.
-                if !fill.line_indices.is_empty() || !fill.outline.indices.is_empty() {
+                if fill.has_outline() {
                     let sub = if bucket.outline_under_fill { 0 } else { 2 };
                     emit(sub, view::fill_pass(), view::tiled_flags());
                 }
