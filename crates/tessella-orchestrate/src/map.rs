@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 //! A running map: the loop that turns a camera into frames.
 //!
 //! # What was missing
@@ -101,14 +102,17 @@ pub trait Tiles {
     /// Called once per cover entry per frame *that emits*, and never on an idle tick.
     fn buckets(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>>;
 
-    /// The tile actually serving `cover`, and its buckets.
+    /// Every tile serving `cover`, and its buckets.
     ///
     /// Defaults to a coordinate serving itself, which is right for any source that can produce
     /// the zoom asked for. A source with a maxzoom cannot, above it, and answers with the coarser
     /// tile standing in -- whose local frame is the one the geometry is really in, and so the one
-    /// that has to place it.
-    fn serving(&self, cover: TileId) -> Option<(TileId, Arc<Vec<LayerBucket>>)> {
-        self.buckets(cover).map(|buckets| (cover, buckets))
+    /// that has to place it. A store whose sources disagree about zoom answers with more than one:
+    /// a GeoJSON source's tile at the cover's own coordinate beside a vector source's coarser one.
+    fn serving(&self, cover: TileId) -> Vec<(TileId, Arc<Vec<LayerBucket>>)> {
+        self.buckets(cover)
+            .map(|buckets| alloc::vec![(cover, buckets)])
+            .unwrap_or_default()
     }
 
     /// Layers that draw from no source — a background — for a tile of the cover.
@@ -678,26 +682,34 @@ impl Map {
             // local frame, so it is what places it, clips it, and identifies it. Drawing a z14
             // tile as though it were the z16 tile that asked for it shrinks it to a sixteenth and
             // puts sixteen times too much world on screen.
+            //
+            // More than one where the sources disagree about zoom: past a vector source's maxzoom
+            // the coordinate holds a GeoJSON source's tile directly and the vector one through its
+            // alias, and each is placed by its own coordinate.
             let holding = tiles.serving(cover);
-            let id = holding.as_ref().map_or(cover, |(id, _)| *id);
-            // One z14 tile answers all sixteen z16 coordinates inside it. Drawn once: a second
-            // draw is the same geometry under the same matrix, which blends twice and darkens
-            // every translucent fill it touches.
-            if !served.insert((id, entry.wrap)) {
+            if holding.is_empty() {
+                // Recorded as it always was, so what is deduped against `served` below -- the
+                // raster walk and the background -- sees an unserved coordinate the same way.
+                served.insert((cover, entry.wrap));
                 continue;
             }
-            let Some((_, ready)) = &holding else {
-                continue;
-            };
-            if !ready.is_empty() {
-                buckets.push((id, in_layer_order(ready)));
-                origins.push(Some(Arc::clone(ready)));
-                placed.push(TileCoord {
-                    z: id.z,
-                    x: id.x,
-                    y: id.y,
-                    wrap: entry.wrap,
-                });
+            for (id, ready) in holding {
+                // One z14 tile answers all sixteen z16 coordinates inside it. Drawn once: a second
+                // draw is the same geometry under the same matrix, which blends twice and darkens
+                // every translucent fill it touches.
+                if !served.insert((id, entry.wrap)) {
+                    continue;
+                }
+                if !ready.is_empty() {
+                    buckets.push((id, in_layer_order(&ready)));
+                    origins.push(Some(Arc::clone(&ready)));
+                    placed.push(TileCoord {
+                        z: id.z,
+                        x: id.x,
+                        y: id.y,
+                        wrap: entry.wrap,
+                    });
+                }
             }
         }
 
@@ -719,49 +731,49 @@ impl Map {
             };
             for entry in &extra {
                 let cover = TileId::new(entry.z, entry.x, entry.y);
-                let Some((id, ready)) = tiles.serving(cover) else {
-                    continue;
-                };
-                if !served.insert((id, entry.wrap)) {
-                    continue;
+                for (id, ready) in tiles.serving(cover) {
+                    if !served.insert((id, entry.wrap)) {
+                        continue;
+                    }
+                    // The raster buckets alone, which is the whole reason this walk exists.
+                    //
+                    // Taking every bucket on the tile draws the vector layers a second time. These
+                    // tiles are at the raster's zoom, not the view's, so `served` does not dedupe
+                    // them against the walk above -- they are different tiles -- and a z16 cover
+                    // holds four tiles for every z15 one. Water, roads and buildings were each drawn
+                    // at both zooms and composited over themselves: with the raster layer in the
+                    // style the frame carried 128 water drawables where it should carry 20, and 256
+                    // background where it should carry 40. What that looks like is the imagery
+                    // washing out everything under it, which is how it was first described.
+                    let raster =
+                        |bucket: &LayerBucket| matches!(bucket.content, Content::Raster(_));
+                    // A tile of the raster source alone -- the usual case -- is shared whole, and
+                    // only a tile that mixes in something else is filtered into a list of its own.
+                    let built = if ready.iter().all(raster) {
+                        in_layer_order(&ready)
+                    } else {
+                        let mut kept: Vec<LayerBucket> = ready
+                            .iter()
+                            .filter(|bucket| raster(bucket))
+                            .cloned()
+                            .collect();
+                        kept.sort_by_key(|bucket| bucket.layer_index);
+                        Arc::new(kept)
+                    };
+                    if built.is_empty() {
+                        continue;
+                    }
+                    buckets.push((id, built));
+                    // No identity to key on: filtered, it is not the store's list, and whole, it has no
+                    // symbols -- a raster layer has none to lay out.
+                    origins.push(None);
+                    placed.push(TileCoord {
+                        z: id.z,
+                        x: id.x,
+                        y: id.y,
+                        wrap: entry.wrap,
+                    });
                 }
-                // The raster buckets alone, which is the whole reason this walk exists.
-                //
-                // Taking every bucket on the tile draws the vector layers a second time. These
-                // tiles are at the raster's zoom, not the view's, so `served` does not dedupe
-                // them against the walk above -- they are different tiles -- and a z16 cover
-                // holds four tiles for every z15 one. Water, roads and buildings were each drawn
-                // at both zooms and composited over themselves: with the raster layer in the
-                // style the frame carried 128 water drawables where it should carry 20, and 256
-                // background where it should carry 40. What that looks like is the imagery
-                // washing out everything under it, which is how it was first described.
-                let raster = |bucket: &LayerBucket| matches!(bucket.content, Content::Raster(_));
-                // A tile of the raster source alone -- the usual case -- is shared whole, and
-                // only a tile that mixes in something else is filtered into a list of its own.
-                let built = if ready.iter().all(raster) {
-                    in_layer_order(&ready)
-                } else {
-                    let mut kept: Vec<LayerBucket> = ready
-                        .iter()
-                        .filter(|bucket| raster(bucket))
-                        .cloned()
-                        .collect();
-                    kept.sort_by_key(|bucket| bucket.layer_index);
-                    Arc::new(kept)
-                };
-                if built.is_empty() {
-                    continue;
-                }
-                buckets.push((id, built));
-                // No identity to key on: filtered, it is not the store's list, and whole, it has no
-                // symbols -- a raster layer has none to lay out.
-                origins.push(None);
-                placed.push(TileCoord {
-                    z: id.z,
-                    x: id.x,
-                    y: id.y,
-                    wrap: entry.wrap,
-                });
             }
         }
 
