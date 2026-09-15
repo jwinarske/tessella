@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: BSD-2-Clause
 //! Where a warm map's tiles come from (§5.5, §16).
 //!
 //! # Why this is not part of a map
@@ -98,6 +99,28 @@ impl Landed {
         self.alias
             .get(&tile)
             .and_then(|data| self.by_tile.get(data).map(|held| (*data, Arc::clone(held))))
+    }
+
+    /// Every tile serving `cover`: the one built at that coordinate, and the coarser one standing
+    /// in for a source whose maxzoom the cover is past.
+    ///
+    /// Both, not the first found. A tile is one thing *per source*, and the sources do not agree
+    /// about zoom: a GeoJSON source is cut at the cover's own zoom while a vector source stops at
+    /// its maxzoom, so past it one coordinate holds the GeoJSON buckets directly and aliases the
+    /// vector ones to a coarser tile. Answering with the direct hit alone drew an example's own
+    /// lines over no basemap at all -- OpenFreeMap's `bright` stops at 14, and at 15 and 16 the
+    /// frame carried the lines and nothing else.
+    fn serving(&self, cover: TileId) -> Vec<(TileId, Arc<Vec<LayerBucket>>)> {
+        let mut found = Vec::with_capacity(2);
+        if let Some(buckets) = self.by_tile.get(&cover) {
+            found.push((cover, Arc::clone(buckets)));
+        }
+        if let Some(data) = self.alias.get(&cover).filter(|data| **data != cover)
+            && let Some(buckets) = self.by_tile.get(data)
+        {
+            found.push((*data, Arc::clone(buckets)));
+        }
+        found
     }
 }
 
@@ -1222,11 +1245,11 @@ impl<D: TileTransport + 'static> Tiles for Arc<TileSource<D>> {
     /// not cosmetic: the buckets hold tile-local coordinates over the *data* tile's ground, so
     /// placing them by the cover's coordinate draws a z14 tile's contents into a z16 tile's box
     /// -- a sixteenth of the size, which puts sixteen times too much world on screen.
-    fn serving(&self, cover: TileId) -> Option<(TileId, Arc<Vec<LayerBucket>>)> {
+    fn serving(&self, cover: TileId) -> Vec<(TileId, Arc<Vec<LayerBucket>>)> {
         self.landed
             .read()
             .unwrap_or_else(PoisonError::into_inner)
-            .lookup(cover)
+            .serving(cover)
     }
 
     fn sourceless(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
@@ -1299,5 +1322,30 @@ mod tests {
         landed.by_tile.insert(tile, Arc::new(Vec::new()));
         assert_eq!(landed.lookup(tile).map(|(id, _)| id), Some(tile));
         assert!(landed.alias.is_empty());
+    }
+
+    /// A GeoJSON source is cut at the cover's own zoom and a vector source stops at its maxzoom,
+    /// so past it one coordinate holds the GeoJSON buckets directly and aliases the vector ones.
+    /// Both serve it: answering with the direct hit alone drew an example's lines over no basemap.
+    #[test]
+    fn a_cover_served_directly_and_through_an_alias_answers_with_both() {
+        let cover = TileId::new(15, 5234, 12659);
+        let data = TileId::overscaled(14, 2617, 6329, 15);
+        let mut landed = Landed::default();
+        landed.by_tile.insert(cover, Arc::new(Vec::new()));
+        landed.alias.insert(cover, data);
+
+        let ids = |landed: &Landed| -> Vec<TileId> {
+            landed
+                .serving(cover)
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect()
+        };
+        // The vector tile has not landed yet, so only what is here serves.
+        assert_eq!(ids(&landed), [cover]);
+
+        landed.by_tile.insert(data, Arc::new(Vec::new()));
+        assert_eq!(ids(&landed), [cover, data]);
     }
 }
