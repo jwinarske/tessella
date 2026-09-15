@@ -1575,6 +1575,64 @@ fn emit_ubo_slots(w: &mut String) {
         writeln!(w, "#define TSL_UBO_{} {value}u", screaming(name)).unwrap();
     }
     writeln!(w).unwrap();
+
+    extensions(w);
+}
+
+/// The families and slots tessella has that mbgl does not.
+///
+/// Emitted here rather than left to each consumer to hard-code. The globe bend's slot was the
+/// first of these and it *is* hard-coded on the consumer side, with a comment explaining the
+/// number -- which is one copy of a value the producer owns, free to drift the moment either side
+/// is edited. Terrain would have been the second, so both are here instead.
+fn extensions(w: &mut String) {
+    use tessella_capture_abi::{globe_ubo, terrain_ubo};
+
+    writeln!(w, "/*").unwrap();
+    writeln!(w, " * Families and slots beyond mbgl's.").unwrap();
+    writeln!(w, " *").unwrap();
+    for line in wrap(
+        "mbgl has no globe and no terrain, so it declares no shader family and no uniform slot          for either. These are tessella's own, numbered past everything mbgl uses so that a          value it adds later cannot reach them -- its families stop at 35 and its slots at 10.          A block on one of these slots travels on tsl_ubo_update like any other; what has to be          agreed is the number, and this is where it is agreed.",
+        94,
+    ) {
+        if line.is_empty() {
+            writeln!(w, " *").unwrap();
+        } else {
+            writeln!(w, " * {line}").unwrap();
+        }
+    }
+    writeln!(w, " */").unwrap();
+    writeln!(
+        w,
+        "#define TSL_BUILTIN_TERRAIN_SHADER {}",
+        terrain_ubo::BUILTIN_TERRAIN_SHADER
+    )
+    .unwrap();
+    writeln!(
+        w,
+        "#define TSL_UBO_ID_GLOBE_BEND_UBO {}u",
+        globe_ubo::ID_GLOBE_BEND_UBO
+    )
+    .unwrap();
+    writeln!(
+        w,
+        "#define TSL_STRIDE_GLOBE_BEND_UBO {}u",
+        globe_ubo::GlobeBendUbo::STRIDE
+    )
+    .unwrap();
+    writeln!(
+        w,
+        "#define TSL_UBO_ID_TERRAIN_DRAWABLE_UBO {}u",
+        terrain_ubo::ID_TERRAIN_DRAWABLE_UBO
+    )
+    .unwrap();
+    writeln!(
+        w,
+        "#define TSL_STRIDE_TERRAIN_DRAWABLE_UBO {}u",
+        terrain_ubo::TerrainDrawableUbo::STRIDE
+    )
+    .unwrap();
+    writeln!(w).unwrap();
 }
 
 /// The C declarator for one uniform-block field.
