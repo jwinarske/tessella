@@ -130,6 +130,26 @@ The sweep's numbers as of 2026-09-15, which is the gate:
 
   Same server as `hill_p`: `python3 scenes/dem.py`.
 
+- `puck_p` — a location indicator over Berlin: an accuracy circle, a bearing, and the perspective
+  compensation that decides how the puck leans when the camera pitches. **This one does not pass
+  and is not meant to yet**: `gross 21586 of 786432 (2.745%)` at z14 p0 and `188573 (23.978%)` at
+  z16 p60.
+
+  It is the first family that is neither tiled nor a viewport quad. Its drawables carry `tnone` --
+  no tile at all -- because a puck is at a *place*, not in a tile, and there is exactly one of it
+  however many tiles the cover has.
+
+  Two shaders and four drawables. `LocationIndicatorShader` draws the accuracy circle from 73
+  vertices -- "72 points + position", which is mbgl's own comment -- as a fan of 216 indices for
+  the fill and a strip of 72 for the border. `LocationIndicatorTexturedShader` draws three quads:
+  the shadow, the bearing image and the top image, in that order.
+
+  mbgl has *two* implementations of this layer and the header picks one unconditionally:
+  `#define MLN_DRAWABLE_LOCATION_INDICATOR` at the top of
+  `render_location_indicator_layer.hpp`, which leaves the raw-GL branch below it dead. That is
+  what makes this transcription rather than argument -- the live branch produces drawables, so the
+  capture backend records them and there is a stream to diff as well as a picture.
+
 ## Why the scenes are here and the frames are not
 
 A scene is a question and belongs with the code it asks about. A rendered frame is an answer to
