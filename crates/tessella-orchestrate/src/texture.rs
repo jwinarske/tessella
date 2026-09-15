@@ -62,7 +62,9 @@ pub fn whole(texture: TextureId, size: Extent, format: TexturePixelType, pixels:
         },
         format: format as u8,
         rect_count: 0,
-        _pad: [0; 6],
+        // Bytes, which every texture but a color relief's elevation stops is.
+        channel_type: tessella_capture_abi::TextureChannelDataType::UnsignedByte as u8,
+        _pad: [0; 5],
     };
     Upload {
         record,
@@ -107,7 +109,9 @@ pub fn regions(
         },
         format: format as u8,
         rect_count: dirty.len() as u8,
-        _pad: [0; 6],
+        // Bytes, which every texture but a color relief's elevation stops is.
+        channel_type: tessella_capture_abi::TextureChannelDataType::UnsignedByte as u8,
+        _pad: [0; 5],
     };
     Ok(Upload {
         record,
@@ -334,6 +338,27 @@ pub fn pattern_atlas(texture: TextureId, size: [u16; 2], pixels: &[u8]) -> Optio
         return None;
     }
     Some(whole(texture, extent, SPRITE_SHEET_FORMAT, pixels))
+}
+
+/// A whole-texture upload whose channels are floats rather than bytes.
+///
+/// [`whole`] with the other half of mbgl's two-part format. `Texture2D::setFormat` takes a pixel
+/// type *and* a channel type, and until a color relief there was nothing on this wire that needed
+/// the second: every atlas, sheet and tile is bytes.
+///
+/// A color relief's elevation stops are not. A stop is meters above the sea over a range that
+/// spans the planet, and eight bits across it is a forty-meter step -- so the whole ramp would
+/// quantize to the nearest forty meters and a style whose stops are ten apart would collapse to
+/// one. mbgl says the same thing in one line:
+/// `setFormat(TexturePixelType::RGBA, TextureChannelDataType::Float)`.
+///
+/// `pixels` is the little-endian bytes of the floats, four channels a texel, which is what the
+/// producer has and what the consumer uploads.
+#[must_use]
+pub fn whole_float(texture: TextureId, size: Extent, pixels: &[u8]) -> Upload {
+    let mut upload = whole(texture, size, TexturePixelType::RGBA, pixels);
+    upload.record.channel_type = tessella_capture_abi::TextureChannelDataType::Float as u8;
+    upload
 }
 
 #[cfg(test)]

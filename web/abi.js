@@ -1125,7 +1125,8 @@ export const LAYOUT = Object.freeze({
       pixels: 48,
       format: 56,
       rect_count: 57,
-      _pad: 58,
+      channel_type: 58,
+      _pad: 59,
     },
   },
   tsl_stencil_tile: {
