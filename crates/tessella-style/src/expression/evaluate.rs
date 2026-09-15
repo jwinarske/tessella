@@ -281,7 +281,11 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
     match expr {
         Expr::Literal(value) => Ok(value.clone()),
         Expr::Zoom => Ok(Value::Number(context.zoom()?)),
-        Expr::HeatmapDensity => Ok(Value::Number(
+        // The same slot, because mbgl gives them the same one: a color relief passes the
+        // elevation through `colorRampParameter` and reads it back with `["elevation"]`. The two
+        // never appear in one expression -- a heatmap has no elevation and a relief has no
+        // density -- so one channel carries both.
+        Expr::HeatmapDensity | Expr::Elevation => Ok(Value::Number(
             context
                 .heatmap_density
                 .ok_or(EvaluationError::MissingHeatmapDensity)?,

@@ -562,6 +562,13 @@ fn parse_rooted(
             expect_arity(operator, args, 0, 0)?;
             Ok(Expr::HeatmapDensity)
         }
+        // Legal inside `color-relief-color` and nowhere else, and caught the same way: nothing
+        // but the relief ramp supplies the parameter it reads, so reading one elsewhere fails at
+        // evaluation rather than at parse.
+        "elevation" => {
+            expect_arity(operator, args, 0, 0)?;
+            Ok(Expr::Elevation)
+        }
         "zoom" => {
             expect_arity(operator, args, 0, 0)?;
             Ok(Expr::Zoom)
