@@ -47,6 +47,51 @@ fn centered(max_width_in_chars: f32) -> Options {
     }
 }
 
+/// A line whose sections are all smaller than the text size is a shorter line.
+///
+/// mbgl's `TaggedString::getMaxScale` starts from zero, so a line at `font-scale` 0.8 advances by
+/// 0.8 of the line height. Seeded at one, it advanced a full line, and a two-line `format` label
+/// -- change-the-case-of-labels upcases a name at 0.8 over a comment at 0.6 -- stood taller than
+/// the oracle's.
+#[test]
+fn a_line_advances_by_its_largest_section_scale() {
+    let options = Options {
+        line_height: 1.2 * ONE_EM,
+        ..centered(20.0)
+    };
+    let scaled = |text: &str, scale: f32| -> Vec<Char> {
+        latin(text, 10.0)
+            .into_iter()
+            .map(|character| character.at_scale(scale))
+            .collect()
+    };
+    let first_y = |shaping: &tessella_glyph::shaping::Shaping, line: usize| {
+        shaping.lines[line].glyphs.first().expect("a glyph").y
+    };
+
+    let small = shape(&scaled("ab\ncd", 0.8), &options);
+    assert_eq!(small.lines.len(), 2);
+    let step = first_y(&small, 1) - first_y(&small, 0);
+    assert!(
+        (step - 0.8 * options.line_height).abs() < 1e-3,
+        "a line at 0.8 advances 0.8 of a line, not {step}"
+    );
+
+    // An empty line between them is one ordinary line whatever the text around it is scaled to.
+    let gapped = shape(&scaled("ab\n\ncd", 0.8), &options);
+    assert_eq!(gapped.lines.len(), 3);
+    let step = first_y(&gapped, 2) - first_y(&gapped, 0);
+    assert!(
+        (step - (0.8 * options.line_height + options.line_height)).abs() < 1e-3,
+        "the blank line is unscaled: {step}"
+    );
+
+    // And at the text's own size nothing changes.
+    let plain = shape(&scaled("ab\ncd", 1.0), &options);
+    let step = first_y(&plain, 1) - first_y(&plain, 0);
+    assert!((step - options.line_height).abs() < 1e-3, "{step}");
+}
+
 /// mbgl `Shaping.ZWSP`, all four boxes.
 #[test]
 fn the_bounding_box_matches_mbgl() {
