@@ -884,10 +884,19 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
         // glyph on it is offset against. mbgl's `line.getMaxScale()`: a line holding one
         // double-size word is a double-height line, and the small text on it sits on the same
         // baseline rather than floating at the top of it.
-        let line_scale = line
-            .iter()
-            .map(|character| character.scale)
-            .fold(1.0f32, f32::max);
+        //
+        // From zero, as `getMaxScale` starts, and not from one. Seeded at one, a line whose every
+        // section is smaller than the text size -- `{"font-scale": 0.8}` -- still advanced a full
+        // line, so a two-line `format` label stood a fifth taller than the oracle's and changed
+        // which of its neighbors survived collision. A line with nothing on it takes one ordinary
+        // line, which is mbgl's `y += lineHeight` before it ever asks the line for a scale.
+        let line_scale = if line.is_empty() {
+            1.0
+        } else {
+            line.iter()
+                .map(|character| character.scale)
+                .fold(0.0f32, f32::max)
+        };
 
         // `(lineMaxScale - 1) * ONE_EM`: how far the line's baseline has already dropped to make
         // room for its largest text, which an image has to clear as well as its own height.
@@ -992,8 +1001,8 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
     let height = y - Y_OFFSET;
     let shift_x = (justify - horizontal_align) * max_line_length;
     // With every line the same height the offset is a whole number of lines from the middle;
-    // the other branch is for lines that grew, which needs the per-section scaling this does
-    // not implement yet.
+    // otherwise -- a line grew or shrank with its sections' `font-scale` -- the block is aligned
+    // by its measured height, which is mbgl's `align` term for term.
     let shift_y = if (max_line_height - options.line_height).abs() > f32::EPSILON {
         -height * vertical_align - Y_OFFSET
     } else {
