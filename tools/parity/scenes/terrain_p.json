@@ -2,11 +2,35 @@
  "version": 8,
  "name": "terrain-look",
  "sources": {
-  "dem": { "type": "raster-dem", "encoding": "mapbox", "tileSize": 256,
-           "tiles": ["http://127.0.0.1:8084/dem/{z}/{x}/{y}.png"], "maxzoom": 15 }
+  "dem": {
+   "type": "raster-dem",
+   "encoding": "mapbox",
+   "tileSize": 256,
+   "tiles": [
+    "http://127.0.0.1:8084/dem/{z}/{x}/{y}.png"
+   ],
+   "maxzoom": 15
+  }
  },
- "terrain": { "source": "dem", "exaggeration": 1.5 },
+ "terrain": {
+  "source": "dem",
+  "exaggeration": 1.5
+ },
  "layers": [
-  { "id": "bg", "type": "background", "paint": { "background-color": "#6b7a55" } }
+  {
+   "id": "bg",
+   "type": "background",
+   "paint": {
+    "background-color": "#6b7a55"
+   }
+  },
+  {
+   "id": "shade",
+   "type": "hillshade",
+   "source": "dem",
+   "paint": {
+    "hillshade-exaggeration": 0.6
+   }
+  }
  ]
 }
