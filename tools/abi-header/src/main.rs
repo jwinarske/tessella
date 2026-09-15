@@ -842,7 +842,13 @@ fn structs() -> Vec<Struct> {
                     "uint8_t rect_count",
                     "Meaningful entries in rects; zero means whole texture."
                 ),
-                (_pad, "uint8_t _pad[6]", "Must be zero."),
+                (
+                    channel_type,
+                    "uint8_t channel_type",
+                    "tsl_texture_channel_data_type. Not implied by the layout: a color relief's \
+                     elevation stops are RGBA and Float together."
+                ),
+                (_pad, "uint8_t _pad[5]", "Must be zero."),
             ]
         ),
         c_struct!(
