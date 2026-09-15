@@ -36,6 +36,8 @@ The sweep's numbers as of 2026-09-15, which is the gate:
     families_p  z16 p0     5
     families_p  z16 p60   50
     families_p  z9  p0    30 of 2160000
+    annot_p     z14 p0     3 of 786432
+    annot_p     z16 p0     2
 
 ## The scenes
 
@@ -53,12 +55,22 @@ The sweep's numbers as of 2026-09-15, which is the gate:
       annot_p  z16 p0     2
       annot_p  z14 p60   98
 
-  z14 p60 stood at 576 and then 558, and both were the fill *outline* rather than anything to do
-  with annotations. The oracle draws it as a two-pixel GL line, two pixels on screen whatever the
-  camera does; this draws mbgl's own triangulated fallback, whose quad is extruded in tile units
-  and foreshortened until the fade had no fragments left to spread across -- 0.58 of the oracle's
-  coverage at p60. The quad is widened to screen space now, which is what the GL path always did,
-  and what is left at p60 is sub-pixel placement on the two horizontal edges.
+  In the sweep north-up at both zooms, and deliberately not at a pitched camera. `z14 p60` reads
+  98 and `p40` reads 137, and that is the *oracle*: mbgl's fill outline is a GL line whose
+  fragment measures its distance from `v_pos`, a screen-space varying, and a screen-space varying
+  interpolated perspective-correctly -- which is all GLSL ES offers -- drifts from the truth
+  toward the near end of any edge running away from the camera. A polygon's vertical edge runs
+  exactly that way, so the oracle draws the outline at the far end of it and nothing below.
+  Measured on a rectangle inside one tile: the oracle's coverage down that edge is 0.65 at the
+  top row and 0.00 for every row under it, where this side holds 0.1 to 1.0 the whole way. Gating
+  a pitched camera here would gate a defect, and the number could only get worse by fixing
+  something.
+
+  `z14 p60` stood at 576 and then 558 before any of that, and both were the fill outline too --
+  the other half of it. The oracle's GL line is two pixels on screen whatever the camera does;
+  this draws mbgl's own triangulated fallback, whose quad is extruded in tile units and
+  foreshortened until the fade had no fragments left to spread across. The quad is widened to
+  screen space now, which is what the GL path always did.
 
   No other scene here sets `fill-outline-color`, so this scene is the first thing to gate that
   path at all -- and the outline runs on *every* antialiased fill, so what was true here was true
