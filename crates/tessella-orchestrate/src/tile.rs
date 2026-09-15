@@ -641,6 +641,15 @@ pub fn build_tile_on_with_patterns(
                 };
 
                 let options = line_options(layer);
+                // geojson-vt's `lineMetrics`: each piece of a line learns where along the whole
+                // line it runs, and the bucket spreads its distances over that stretch instead of
+                // over the piece alone. Only for a GeoJSON source that asks, and only for lines --
+                // geojson-vt gives a polygon's rings no metrics, so its outlines keep their own.
+                let metered = matches!(
+                    style.source(source),
+                    Some(tessella_style::document::Source::Geojson(geojson))
+                        if geojson.line_metrics == Some(true)
+                );
                 let mut bucket = LineBucket::default();
                 let project =
                     |p: &[f64; 2]| projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
@@ -662,6 +671,34 @@ pub fn build_tile_on_with_patterns(
                         Geometry::LineString(lines) => {
                             for line in lines {
                                 let projected: Vec<[f64; 2]> = line.iter().map(project).collect();
+                                if metered {
+                                    // Measured in tile-local units where geojson-vt measures in
+                                    // its projected world. The two differ by a uniform scale, so
+                                    // the fraction of the line a piece covers is the same number.
+                                    let length = tessella_source::clip::line_length(&projected);
+                                    for piece in tessella_source::clip::clip_line_to_box_metered(
+                                        &projected, lo, hi,
+                                    ) {
+                                        let ring = to_tile_ring(&piece.points);
+                                        // A line of no length has no fraction to give, and mbgl's
+                                        // division would carry a NaN into every vertex.
+                                        let clip_distances = (length > 0.0).then(|| {
+                                            tessella_layout::line::ClipDistances::for_piece(
+                                                &ring,
+                                                piece.seg_start / length,
+                                                piece.seg_end / length,
+                                            )
+                                        });
+                                        bucket.add_geometry(
+                                            &ring,
+                                            &LineOptions {
+                                                clip_distances,
+                                                ..options
+                                            },
+                                        );
+                                    }
+                                    continue;
+                                }
                                 // Each piece the clip returns is a separate polyline with its
                                 // own caps, not a continuation: a line that leaves the buffered
                                 // box and comes back must not be joined across the gap.

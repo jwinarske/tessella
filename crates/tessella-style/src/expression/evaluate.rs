@@ -284,8 +284,9 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
         // The same slot, because mbgl gives them the same one: a color relief passes the
         // elevation through `colorRampParameter` and reads it back with `["elevation"]`. The two
         // never appear in one expression -- a heatmap has no elevation and a relief has no
-        // density -- so one channel carries both.
-        Expr::HeatmapDensity | Expr::Elevation => Ok(Value::Number(
+        // density -- so one channel carries both. `line-gradient` reads its progress through the
+        // same parameter in mbgl, and so here.
+        Expr::HeatmapDensity | Expr::Elevation | Expr::LineProgress => Ok(Value::Number(
             context
                 .heatmap_density
                 .ok_or(EvaluationError::MissingHeatmapDensity)?,
