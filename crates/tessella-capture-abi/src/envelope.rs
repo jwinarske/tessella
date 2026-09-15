@@ -430,6 +430,59 @@ pub struct TextureRef {
     pub filter: u32,
 }
 
+/// What a geometry's indices describe.
+///
+/// mbgl carries this per drawable as a `gfx::DrawMode` and rev 1 did not, on the reasoning that
+/// the shader family settles it: a fill outline's indices are pairs because `FillOutlineShader`
+/// draws lines, and everything else is triangles. The location indicator is where that stops
+/// working. Its accuracy circle is two drawables of one family over one vertex buffer -- the
+/// interior as a triangle fan expanded into indices, and the border as a line strip -- so the
+/// family answers for both and is wrong for one of them.
+///
+/// Zero is [`Topology::Triangles`], so a producer that never sets it and a consumer that never
+/// reads it keep the behavior they had.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[repr(u8)]
+pub enum Topology {
+    /// Three indices per triangle. Every family but the outlines and the puck's border.
+    #[default]
+    Triangles = 0,
+    /// Two indices per line. mbgl's `gfx::Lines`, which is what a fill outline is drawn with.
+    Lines = 1,
+    /// A polyline, each index continuing from the last. mbgl's `gfx::LineStrip`, used by the
+    /// location indicator's accuracy border and by nothing else.
+    LineStrip = 2,
+}
+
+impl Topology {
+    /// Every topology, in declaration order.
+    pub const ALL: [Self; 3] = [Self::Triangles, Self::Lines, Self::LineStrip];
+
+    /// Converts a wire value, rejecting anything unrecognized.
+    #[must_use]
+    pub const fn from_repr(value: u8) -> Option<Self> {
+        match value {
+            0 => Some(Self::Triangles),
+            1 => Some(Self::Lines),
+            2 => Some(Self::LineStrip),
+            _ => None,
+        }
+    }
+
+    /// What a family draws when nothing says otherwise.
+    ///
+    /// The two untriangulated outline families and nothing else. `FillOutlineTriangulatedShader`
+    /// is the near miss: its indices are a polyline's, over its own extruded vertices rather
+    /// than the fill's, and they are triangles.
+    #[must_use]
+    pub const fn of(shader: BuiltIn) -> Self {
+        match shader {
+            BuiltIn::FillOutlineShader | BuiltIn::FillOutlinePatternShader => Self::Lines,
+            _ => Self::Triangles,
+        }
+    }
+}
+
 /// Announces a piece of geometry, for the emission that carries it.
 ///
 /// Carries no view, no layer, and no tile: those are per-view facts and live on [`ViewUse`].
@@ -461,8 +514,12 @@ pub struct GeometryAdd {
     /// Why this was announced, as an [`AddReason`] discriminant. Watch
     /// [`AddReason::AttributesModified`] (§6.1).
     pub reason: u8,
+    /// What the indices describe, as a [`Topology`] discriminant.
+    ///
+    /// Padding through rev 3, and zero is [`Topology::Triangles`].
+    pub topology: u8,
     /// Padding. Must be zero.
-    pub _pad: [u8; 2],
+    pub _pad: [u8; 1],
 }
 
 /// What a mesh's bytes are.
@@ -959,6 +1016,12 @@ impl GeometryAdd {
     pub const fn reason(&self) -> Option<AddReason> {
         AddReason::from_repr(self.reason)
     }
+
+    /// What the indices describe, or `None` if the discriminant is unrecognized.
+    #[must_use]
+    pub const fn topology(&self) -> Option<Topology> {
+        Topology::from_repr(self.topology)
+    }
 }
 
 impl ViewDeclare {
@@ -1119,6 +1182,7 @@ const _: () = {
     layout!(SlabEntry, 16, 8);
     layout!(SlabRegion, 16, 8);
     layout!(AddReason, 1, 1);
+    layout!(Topology, 1, 1);
     layout!(DrawFlags, 1, 1);
     layout!(AttributeDesc, 36, 4);
     layout!(Segment, 16, 4);
@@ -1175,6 +1239,8 @@ mod tests {
         assert_eq!(offset_of!(GeometryAdd, instance_attrs), 40);
         assert_eq!(offset_of!(GeometryAdd, segments), 48);
         assert_eq!(offset_of!(GeometryAdd, texture_refs), 56);
+        // Taken from the padding that followed `reason`, so everything before it stayed put.
+        assert_eq!(offset_of!(GeometryAdd, topology), 70);
 
         assert_eq!(offset_of!(ViewUse, geometry), 0);
         assert_eq!(offset_of!(ViewUse, view), 8);
@@ -1192,6 +1258,32 @@ mod tests {
         assert_eq!(offset_of!(CameraUpdate, pitch), 280);
         assert_eq!(offset_of!(CameraUpdate, pixels_per_meter), 288);
         assert_eq!(offset_of!(CameraUpdate, projection), 396);
+    }
+
+    /// The two untriangulated outline families draw lines and nothing else does by default.
+    ///
+    /// `FillOutlineTriangulatedShader` is the trap: it is an outline, its indices walk a
+    /// polyline, and it is triangles -- over its own extruded vertices rather than the fill's.
+    #[test]
+    fn a_family_answers_for_its_own_topology() {
+        for shader in BuiltIn::ALL {
+            let expected = match shader {
+                BuiltIn::FillOutlineShader | BuiltIn::FillOutlinePatternShader => Topology::Lines,
+                _ => Topology::Triangles,
+            };
+            assert_eq!(Topology::of(shader), expected, "{shader:?}");
+        }
+    }
+
+    /// Every discriminant round-trips, and nothing outside the set is accepted -- a consumer
+    /// that met an unknown value and drew triangles anyway would rasterize a strip as a fan.
+    #[test]
+    fn a_topology_round_trips() {
+        for topology in Topology::ALL {
+            assert_eq!(Topology::from_repr(topology as u8), Some(topology));
+        }
+        assert_eq!(Topology::from_repr(3), None);
+        assert_eq!(Topology::default(), Topology::Triangles);
     }
 
     /// The reserved bytes are the whole reason DR-18 lands before the freeze rather than

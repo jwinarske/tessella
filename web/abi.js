@@ -1038,7 +1038,8 @@ export const LAYOUT = Object.freeze({
       builtin_shader: 64,
       vertex_type: 68,
       reason: 69,
-      _pad: 70,
+      topology: 70,
+      _pad: 71,
     },
   },
   tsl_mesh_add: {
