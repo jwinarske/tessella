@@ -2049,8 +2049,11 @@ typedef struct tsl_texture_update {
     uint8_t format;
     /* Meaningful entries in rects; zero means whole texture. */
     uint8_t rect_count;
+    /* tsl_texture_channel_data_type. Not implied by the layout: a color relief's elevation */
+    /* stops are RGBA and Float together. */
+    uint8_t channel_type;
     /* Must be zero. */
-    uint8_t _pad[6];
+    uint8_t _pad[5];
 } tsl_texture_update;
 
 TSL_ASSERT(sizeof(tsl_texture_update) == 64, "tsl_texture_update size differs from the Rust definition");
@@ -2061,7 +2064,8 @@ TSL_ASSERT(offsetof(tsl_texture_update, rects) == 16, "tsl_texture_update.rects 
 TSL_ASSERT(offsetof(tsl_texture_update, pixels) == 48, "tsl_texture_update.pixels moved");
 TSL_ASSERT(offsetof(tsl_texture_update, format) == 56, "tsl_texture_update.format moved");
 TSL_ASSERT(offsetof(tsl_texture_update, rect_count) == 57, "tsl_texture_update.rect_count moved");
-TSL_ASSERT(offsetof(tsl_texture_update, _pad) == 58, "tsl_texture_update._pad moved");
+TSL_ASSERT(offsetof(tsl_texture_update, channel_type) == 58, "tsl_texture_update.channel_type moved");
+TSL_ASSERT(offsetof(tsl_texture_update, _pad) == 59, "tsl_texture_update._pad moved");
 
 /*
  * One tile of a clip set, with the matrix placing its mask quad.

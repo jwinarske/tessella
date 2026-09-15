@@ -743,13 +743,24 @@ pub struct TextureUpdate {
     pub format: u8,
     /// Number of meaningful entries in `rects`. Zero means a whole-texture upload.
     pub rect_count: u8,
+    /// What a channel holds, as a [`TextureChannelDataType`] discriminant.
+    ///
+    /// Not implied by the layout, which is why mbgl's `Texture2D::setFormat` takes both: a
+    /// color relief's elevation stops are `RGBA` and `Float` together, because a stop is meters
+    /// above the sea and eight bits over that range is a forty-meter step.
+    ///
+    /// Taken from the padding rather than added to the record, so the size does not move and a
+    /// consumer that has never read it keeps working: zero is `UnsignedByte`, every producer
+    /// before this one zeroed the padding, and every texture before the relief's stops is one.
+    pub channel_type: u8,
     /// Padding. Must be zero.
     ///
-    /// Six bytes, not two, for the reason [`ViewUse::_pad`] is five: the fields before it end at
-    /// 58 and the record is 64, so two left four of compiler tail padding that `as_bytes` copied
-    /// to the ring uninitialized. Two runs of the same producer then disagreed about the first
-    /// frame, by the bytes of its stack that went out with it.
-    pub _pad: [u8; 6],
+    /// Five bytes, and six before the channel type took one. Not two, for the reason
+    /// [`ViewUse::_pad`] is five: the fields before it end at 58 and the record is 64, so two
+    /// left four of compiler tail padding that `as_bytes` copied to the ring uninitialized. Two
+    /// runs of the same producer then disagreed about the first frame, by the bytes of its stack
+    /// that went out with it.
+    pub _pad: [u8; 5],
 }
 
 /// One tile of a clip set: which tile, and the matrix that places its mask quad.
