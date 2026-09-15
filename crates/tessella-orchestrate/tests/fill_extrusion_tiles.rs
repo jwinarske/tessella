@@ -249,6 +249,41 @@ fn color_height_and_base_are_data_driven() {
     );
 }
 
+/// A height that rises with zoom mixes by the zoom its bucket was built at.
+///
+/// `display-buildings-in-3d` raises its buildings over one zoom level --
+/// `["interpolate", ["linear"], ["zoom"], 15, 0, 16, ["get", "render_height"]]` -- and at 15.5 over
+/// a bucket built for 15 mbgl writes `height_t = 0.5`. The frame passed the camera's zoom as the
+/// bucket's, which measures the camera against a range that starts at itself: zero at every zoom,
+/// so the buildings stood at their lower stop and drew flat.
+#[test]
+fn a_zoom_varying_height_mixes_by_the_buckets_zoom() {
+    use tessella_orchestrate::ubo::extrusion_interpolations;
+    use tessella_style::property::resolve_paint;
+
+    let style = style_with(
+        r#", "paint": {"fill-extrusion-height":
+                ["interpolate", ["linear"], ["zoom"], 15, 0, 16, ["get", "render_height"]]}"#,
+    );
+    let paint = resolve_paint(style.layer("buildings").expect("the layer")).expect("resolves");
+
+    // Base, height, color: only the height varies with zoom.
+    assert_eq!(
+        extrusion_interpolations(&paint, 15.0, 15.5),
+        [0.0, 0.5, 0.0]
+    );
+    // A bucket of the level below is past the end of its range, and clamps.
+    assert_eq!(
+        extrusion_interpolations(&paint, 14.0, 15.5),
+        [0.0, 1.0, 0.0]
+    );
+    // What the frame computed.
+    assert_eq!(
+        extrusion_interpolations(&paint, 15.5, 15.5),
+        [0.0, 0.0, 0.0]
+    );
+}
+
 /// A filter is evaluated at the tile's own zoom, as mbgl's layouts evaluate it.
 ///
 /// mbgl's `zoom` there is `parameters.tileID.overscaledZ`, and it reaches the filter through the

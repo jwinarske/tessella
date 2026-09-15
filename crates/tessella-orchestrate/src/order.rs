@@ -611,6 +611,24 @@ pub fn wrapped_tile_of(z: u8, x: u32, y: u32, wrap: i32) -> TileId {
     }
 }
 
+/// The wire's name for a built tile drawn in world copy `wrap`.
+///
+/// # Why the overscaled zoom has to travel
+///
+/// Above a source's maxzoom a tile is built for a zoom deeper than its own, and that zoom is what
+/// its zoom-varying paint was evaluated at: a z14 tile standing in at 15 holds its endpoints at
+/// 15 and 16. The frame measures each drawable's mix factors against the zoom its binding names,
+/// so a binding that named 14 read the upper endpoint at any camera past 15. The consumer bands
+/// its stencil masks by the same field, and a z14 tile under z16 tiles was banded as the
+/// coarsest thing on screen rather than as the z15 tile it stands in for.
+#[must_use]
+pub fn bound_tile_of(tile: crate::tile::TileId, wrap: i32) -> TileId {
+    TileId {
+        overscaled_z: tile.overscaled_z,
+        ..wrapped_tile_of(tile.z, tile.x, tile.y, wrap)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -634,6 +652,18 @@ mod tests {
             pass,
             flags,
         }
+    }
+
+    /// A tile built past its source's maxzoom keeps that zoom on the wire.
+    #[test]
+    fn a_bound_tile_carries_the_zoom_it_was_built_for() {
+        let stood_in = bound_tile_of(crate::tile::TileId::overscaled(14, 4826, 6157, 15), -1);
+        assert_eq!((stood_in.z, stood_in.x, stood_in.y), (14, 4826, 6157));
+        assert_eq!(stood_in.overscaled_z, 15);
+        assert_eq!(stood_in.wrap, -1);
+
+        let own = bound_tile_of(crate::tile::TileId::new(14, 4826, 6157), 0);
+        assert_eq!(own, tile_of(14, 4826, 6157));
     }
 
     fn fill(layer: i32, sub: i32, x: u32) -> GeometryBinding {
