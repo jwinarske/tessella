@@ -152,6 +152,190 @@ pub fn elevation(
         .map(|meters| meters * exaggeration)
 }
 
+/// The elevation range over any region of a tile, in meters, answered in constant time.
+///
+/// # Why a pyramid and not a walk
+///
+/// Subdivision asks this once per candidate triangle, recursively. Walking the DEM pixels under a
+/// box costs the box's area, and the recursion's boxes sum to the whole tile at every depth -- a
+/// 256-pixel tile subdivided eight levels deep reads half a million pixels per layer per tile,
+/// which at a twenty-tile cover is tens of millions of reads in a tile build. A pyramid costs a
+/// third again over the base level once, and answers every query with four reads.
+///
+/// # Why the base is the mesh's cell and not the DEM's pixel
+///
+/// Nothing ever needs finer. The drawn surface is piecewise linear over the terrain mesh's grid,
+/// so a triangle inside one mesh cell already agrees with the surface; asking about a region
+/// smaller than a cell is asking about detail that is not drawn. Starting at the cell rather than
+/// the pixel is a quarter of the memory for a 256-pixel DEM and a sixteenth for a 1024-pixel one.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Relief {
+    /// `[min, max]` per cell, coarsest level last. Level 0 is `base` cells on a side.
+    levels: alloc::vec::Vec<alloc::vec::Vec<[f32; 2]>>,
+    /// Cells on a side at level 0.
+    base: u32,
+}
+
+impl Relief {
+    /// Builds the pyramid over `dem`, with `cells` cells on a side at the base.
+    ///
+    /// `cells` is the terrain mesh's own grid -- see the type note for why that is the floor.
+    /// Rounded down to a power of two so every level halves exactly; a DEM whose dimension is not
+    /// a multiple of the cell count has its last row and column of pixels fold into the edge
+    /// cells, which widens a cell rather than losing ground.
+    #[must_use]
+    pub fn new(dem: &Dem, cells: u32) -> Self {
+        let base = cells.max(1).next_power_of_two().min(dem.dim().max(1));
+        #[allow(clippy::cast_possible_wrap)]
+        let span = (dem.dim().div_ceil(base)) as i32;
+
+        // Level zero, straight off the DEM: each cell is the range over the pixels it covers.
+        let mut level = alloc::vec::Vec::with_capacity((base * base) as usize);
+        for row in 0..base {
+            for column in 0..base {
+                #[allow(clippy::cast_possible_wrap)]
+                let (x0, y0) = ((column as i32) * span, (row as i32) * span);
+                let mut range = [f32::MAX, f32::MIN];
+                for y in y0..y0 + span {
+                    for x in x0..x0 + span {
+                        if let Some(meters) = dem.elevation_exact(x, y) {
+                            range[0] = range[0].min(meters);
+                            range[1] = range[1].max(meters);
+                        }
+                    }
+                }
+                // A cell entirely outside the tile has no elevation at all. Flat at zero rather
+                // than `[MAX, MIN]`, which would widen every range that touched it to the whole
+                // float line and split the geometry over it to the finest grid there is.
+                if range[0] > range[1] {
+                    range = [0.0, 0.0];
+                }
+                level.push(range);
+            }
+        }
+
+        let mut levels = alloc::vec![level];
+        let mut side = base;
+        while side > 1 {
+            let previous = levels.last().expect("a level was just pushed");
+            let half = side / 2;
+            let mut coarser = alloc::vec::Vec::with_capacity((half * half) as usize);
+            for row in 0..half {
+                for column in 0..half {
+                    let mut range = [f32::MAX, f32::MIN];
+                    for (dy, dx) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
+                        let at = ((row * 2 + dy) * side + column * 2 + dx) as usize;
+                        let cell = previous[at];
+                        range[0] = range[0].min(cell[0]);
+                        range[1] = range[1].max(cell[1]);
+                    }
+                    coarser.push(range);
+                }
+            }
+            levels.push(coarser);
+            side = half;
+        }
+
+        Self { levels, base }
+    }
+
+    /// The elevation range over a box in tile coordinates, as `[min, max]` meters.
+    ///
+    /// The box is clamped into the tile: geometry is buffered past a tile's edge and those
+    /// vertices are real, but the elevation out there belongs to the neighbor and is that tile's
+    /// question. Clamping answers with the edge's own relief, which is what the surface does
+    /// there too.
+    #[must_use]
+    pub fn range(&self, x0: f32, y0: f32, x1: f32, y1: f32) -> [f32; 2] {
+        #[allow(clippy::cast_precision_loss)]
+        let scale = self.base as f32 / EXTENT as f32;
+        let last = self.base.saturating_sub(1);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let cell = |value: f32| (value * scale).clamp(0.0, last as f32) as u32;
+        let (left, right) = (cell(x0.min(x1)), cell(x0.max(x1)));
+        let (top, bottom) = (cell(y0.min(y1)), cell(y0.max(y1)));
+
+        // The coarsest level at which the box still spans at most two cells on each axis, so the
+        // answer is four reads rather than the box's area. `>> level` is the cell index there.
+        let mut level = 0;
+        while level + 1 < self.levels.len()
+            && ((right >> level) - (left >> level) > 1 || (bottom >> level) - (top >> level) > 1)
+        {
+            level += 1;
+        }
+        let side = self.base >> level;
+        let cells = &self.levels[level];
+
+        let mut range = [f32::MAX, f32::MIN];
+        for y in (top >> level)..=(bottom >> level).min(side - 1) {
+            for x in (left >> level)..=(right >> level).min(side - 1) {
+                let at = (y * side + x) as usize;
+                let Some(cell) = cells.get(at) else { continue };
+                range[0] = range[0].min(cell[0]);
+                range[1] = range[1].max(cell[1]);
+            }
+        }
+        if range[0] > range[1] {
+            [0.0, 0.0]
+        } else {
+            range
+        }
+    }
+
+    /// How far the ground rises and falls over a box, which is what subdivision asks.
+    #[must_use]
+    pub fn relief(&self, x0: f32, y0: f32, x1: f32, y1: f32) -> f32 {
+        let [low, high] = self.range(x0, y0, x1, y1);
+        high - low
+    }
+
+    /// Cells on a side at the base level.
+    #[must_use]
+    pub const fn base(&self) -> u32 {
+        self.base
+    }
+}
+
+/// The relief, in meters, a triangle may span before it has to be split.
+///
+/// # What is being bounded
+///
+/// A flat triangle over displaced ground chords across whatever the ground does between its
+/// corners, and the worst that chord can be wrong by is the relief over the triangle's own
+/// footprint. Turn that into screen pixels and it is an error bound with an answer, the way
+/// `globe::edge_segments` bounds a chord against a sphere -- rather than a subdivision table
+/// chosen and then re-tuned.
+///
+/// # Why no camera
+///
+/// §5.1 makes a bucket a function of `(tile, layer, tile zoom)` and camera-free, which is what
+/// lets one set of vertices serve four views at four fractional zooms and what stops the sweep
+/// app rebuilding every bucket every frame. So this takes the worst case within the level instead:
+/// the zoom at the top of it, where a meter is the most pixels it will ever be, and a pitch at the
+/// horizon, where a vertical displacement projects most directly onto the screen. At a pitch of
+/// zero the camera looks straight down and elevation is invisible -- bounding at that would split
+/// nothing and be wrong the moment anybody tilted.
+///
+/// `latitude` is the tile's own, because a world pixel is a different number of meters at Berlin
+/// than at the equator and the tile knows which it is.
+#[must_use]
+pub fn split_relief(z: u8, latitude: f64, exaggeration: f64, tolerance: f64) -> f64 {
+    // The top of the level, as `subdivide::step_for_level` evaluates at.
+    let world = tessella_tile::camera::world_size(f64::from(z) + 1.0);
+    let meters_across = (latitude.to_radians()).cos().abs()
+        * core::f64::consts::TAU
+        * tessella_tile::camera::EARTH_RADIUS_M;
+    if meters_across <= 0.0 || world <= 0.0 {
+        return f64::MAX;
+    }
+    let pixels_per_meter = world / meters_across;
+    // A vertical displacement projects onto the screen by the sine of the pitch. At the clamp the
+    // sine is one to four decimal places, so this is the worst case and not an estimate of it.
+    let projected = pixels_per_meter * tessella_tile::camera::MAX_PITCH.sin();
+    let stretched = projected * exaggeration.max(f64::MIN_POSITIVE);
+    tolerance / stretched
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +527,174 @@ mod tests {
     #[test]
     fn a_deeper_dem_is_no_cover() {
         assert_eq!(DemCover::new(Z, X, Y, Z + 1), None);
+    }
+
+    /// The pyramid's answer is the DEM's own for a cell-aligned box, and never tighter for any
+    /// other.
+    ///
+    /// The levels hold *aligned* blocks, so a box that straddles a block boundary is answered at
+    /// a coarser level and covers up to twice the ground it asked about. That is the trade a
+    /// pyramid makes against a sparse table, which would answer any box exactly and cost a level
+    /// per position rather than per power of two. It is the right way round for what asks: a
+    /// range that is too wide splits geometry that did not need splitting, which is a cost, where
+    /// one that was too tight would leave a triangle chording across a ridge, which is the defect.
+    ///
+    /// And subdivision's own boxes are cell-aligned -- it splits against a grid anchored at the
+    /// tile origin with the base cell as its step -- so the conservative case is the one nothing
+    /// actually asks for.
+    ///
+    /// Checked against a walk of the pixels rather than against another pyramid: the whole point
+    /// of the structure is that it answers in four reads what the walk answers in an area, and a
+    /// test that agreed with it by construction would only be checking the query arithmetic
+    /// against itself.
+    #[test]
+    fn the_pyramid_is_the_dems_own_range() {
+        let dem = tile(Z, X, Y, DIM);
+        let relief = Relief::new(&dem, 128);
+        assert_eq!(relief.base(), 128);
+
+        let walk = |x0: f32, y0: f32, x1: f32, y1: f32| {
+            // Every DEM pixel whose cell the box touches, which is what the pyramid aggregates.
+            #[allow(clippy::cast_precision_loss)]
+            let to_cell = |value: f32| {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                {
+                    (value * 128.0 / EXTENT as f32).clamp(0.0, 127.0) as i32
+                }
+            };
+            let span = i32::try_from(DIM / 128).expect("two pixels a cell");
+            let (left, right) = (to_cell(x0.min(x1)), to_cell(x0.max(x1)));
+            let (top, bottom) = (to_cell(y0.min(y1)), to_cell(y0.max(y1)));
+            let mut range = [f32::MAX, f32::MIN];
+            for cy in top..=bottom {
+                for cx in left..=right {
+                    for y in cy * span..(cy + 1) * span {
+                        for x in cx * span..(cx + 1) * span {
+                            if let Some(meters) = dem.elevation_exact(x, y) {
+                                range[0] = range[0].min(meters);
+                                range[1] = range[1].max(meters);
+                            }
+                        }
+                    }
+                }
+            }
+            range
+        };
+
+        // Cell-aligned, which is what subdivision asks: exact.
+        for box_ in [
+            [0.0, 0.0, 8191.0, 8191.0],
+            [0.0, 0.0, 63.0, 63.0],
+            [4096.0, 4096.0, 4159.0, 4159.0],
+            [2048.0, 512.0, 2111.0, 575.0],
+            [4096.0, 0.0, 8191.0, 4095.0],
+        ] {
+            let [x0, y0, x1, y1] = box_;
+            let got = relief.range(x0, y0, x1, y1);
+            let want = walk(x0, y0, x1, y1);
+            assert!(
+                (got[0] - want[0]).abs() < 1e-3 && (got[1] - want[1]).abs() < 1e-3,
+                "{box_:?}: {got:?} against {want:?}"
+            );
+        }
+
+        // Straddling a boundary: never tighter than the truth, which is the property that
+        // matters. It is wider here -- 432.2 against 501.7 on the first of these -- because the
+        // answer comes off a coarser level than the box.
+        for box_ in [
+            [100.0, 200.0, 2000.0, 3000.0],
+            [7000.0, 100.0, 8191.0, 900.0],
+            [33.0, 33.0, 97.0, 97.0],
+        ] {
+            let [x0, y0, x1, y1] = box_;
+            let got = relief.range(x0, y0, x1, y1);
+            let want = walk(x0, y0, x1, y1);
+            assert!(
+                got[0] <= want[0] + 1e-3,
+                "{box_:?}: {got:?} against {want:?}"
+            );
+            assert!(
+                got[1] >= want[1] - 1e-3,
+                "{box_:?}: {got:?} against {want:?}"
+            );
+        }
+    }
+
+    /// A coarser box is never tighter than a finer one inside it, which is what makes the
+    /// pyramid safe to descend: a subdivision that stops on a coarse answer has not been told
+    /// the ground is flatter than it is.
+    #[test]
+    fn a_coarser_range_contains_a_finer_one() {
+        let dem = tile(Z, X, Y, DIM);
+        let relief = Relief::new(&dem, 128);
+        let whole = relief.range(0.0, 0.0, 8191.0, 8191.0);
+        for (x, y) in [
+            (0.0, 0.0),
+            (2048.0, 512.0),
+            (6000.0, 7000.0),
+            (4096.0, 4096.0),
+        ] {
+            let part = relief.range(x, y, x + 64.0, y + 64.0);
+            assert!(part[0] >= whole[0] - 1e-3, "{part:?} {whole:?}");
+            assert!(part[1] <= whole[1] + 1e-3, "{part:?} {whole:?}");
+            // And a cell's relief is a real number rather than the sentinel an empty box gets.
+            assert!(part[1] >= part[0], "{part:?}");
+        }
+        // The surface has relief at tile scale, or none of the above is testing anything.
+        assert!(whole[1] - whole[0] > 50.0, "{whole:?}");
+    }
+
+    /// A box outside the tile answers with the edge's relief rather than with nothing.
+    ///
+    /// Geometry is buffered past a tile's edge and those vertices are real; the ground out there
+    /// belongs to the neighbor and is its question. An empty answer would read as flat and stop
+    /// the geometry being split at exactly the edge where two tiles have to agree.
+    #[test]
+    fn a_box_outside_the_tile_clamps_to_its_edge() {
+        let dem = tile(Z, X, Y, DIM);
+        let relief = Relief::new(&dem, 128);
+        let outside = relief.range(-2048.0, -2048.0, -1024.0, -1024.0);
+        let corner = relief.range(0.0, 0.0, 63.0, 63.0);
+        assert_eq!(outside, corner);
+    }
+
+    /// The split bound is meters of relief, and it tightens as the ground gets bigger on screen.
+    ///
+    /// Half a pixel of error at z14 over Berlin is under a meter of ground, which is the right
+    /// order: a z14 tile is about 1.9 km of ground across 512 world pixels at the top of its
+    /// level, so a world pixel is a few meters and half of one is a fraction of that.
+    #[test]
+    fn the_split_bound_tightens_with_the_zoom() {
+        let berlin = 52.52;
+        let mut previous = f64::MAX;
+        for z in 4..18 {
+            let meters = split_relief(z, berlin, 1.0, 0.5);
+            assert!(meters < previous, "z{z}: {meters} against {previous}");
+            previous = meters;
+        }
+        let at14 = split_relief(14, berlin, 1.0, 0.5);
+        assert!(at14 > 0.05 && at14 < 5.0, "{at14}");
+
+        // Exaggeration stretches the ground, so the same tolerance admits proportionally less of
+        // it -- a terrain at twice the height needs twice the subdivision to stay as accurate.
+        let doubled = split_relief(14, berlin, 2.0, 0.5);
+        assert!((doubled * 2.0 - at14).abs() < 1e-9, "{at14} {doubled}");
+
+        // And a flattened terrain never needs splitting, rather than dividing by zero.
+        assert!(split_relief(14, berlin, 0.0, 0.5).is_finite());
+        assert!(split_relief(14, berlin, 0.0, 0.5) > 1e30);
+    }
+
+    /// Latitude is the tile's, because a world pixel is fewer meters the further from the equator
+    /// it is -- so the same relief is more pixels at Tromso than at Nairobi, and the bound is
+    /// correspondingly tighter.
+    #[test]
+    fn the_split_bound_follows_the_latitude() {
+        let equator = split_relief(14, 0.0, 1.0, 0.5);
+        let berlin = split_relief(14, 52.52, 1.0, 0.5);
+        let tromso = split_relief(14, 69.65, 1.0, 0.5);
+        assert!(berlin < equator, "{berlin} {equator}");
+        assert!(tromso < berlin, "{tromso} {berlin}");
     }
 
     /// A sample past the border is refused rather than clamped: it is a question about the
