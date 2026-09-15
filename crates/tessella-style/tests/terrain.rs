@@ -73,6 +73,42 @@ fn a_value_outside_the_spec_is_clamped() {
     assert!((nan.exaggeration() - 1.0).abs() < f64::EPSILON);
 }
 
+/// A usable terrain is one whose source is declared and is a `raster-dem`.
+#[test]
+fn a_terrain_resolves_to_its_dem() {
+    let usable = style(r#"{"source":"dem","exaggeration":1}"#);
+    let (id, tiles) = usable.terrain_dem().expect("a usable terrain");
+    assert_eq!(id, "dem");
+    assert_eq!(tiles.url.as_deref(), Some("http://x/d.json"));
+}
+
+/// And one that names something else is inert rather than an error.
+///
+/// The map draws flat. There is no elevation to read, and inventing one -- treating a vector
+/// source as a DEM, or defaulting to sea level and drawing a terrain that is not there -- is
+/// worse than drawing the map the rest of the style describes.
+#[test]
+fn a_terrain_naming_the_wrong_thing_is_inert() {
+    for terrain in [
+        // A source the style does not declare.
+        r#"{"source":"missing"}"#,
+        // One it declares, that is not a DEM.
+        r#"{"source":"vector"}"#,
+    ] {
+        let text = format!(
+            r#"{{"version":8,"sources":{{"vector":{{"type":"vector","url":"http://x/v.json"}}}},
+               "terrain":{terrain},"layers":[]}}"#
+        );
+        let parsed = Style::parse(&text).expect("style parses");
+        // The member is kept -- a round trip is lossless -- and it resolves to nothing.
+        assert!(parsed.terrain.is_some(), "{terrain}");
+        assert!(parsed.terrain_dem().is_none(), "{terrain}");
+    }
+    // And a style with no terrain at all resolves to nothing either.
+    let none = Style::parse(r#"{"version":8,"sources":{},"layers":[]}"#).expect("style parses");
+    assert!(none.terrain_dem().is_none());
+}
+
 /// It survives a round trip, so a style read and written back still asks for its terrain.
 #[test]
 fn a_terrain_round_trips() {
