@@ -270,6 +270,7 @@ impl LayerKind {
                 | Self::Symbol
                 | Self::Raster
                 | Self::Heatmap
+                | Self::Hillshade
         )
     }
 }

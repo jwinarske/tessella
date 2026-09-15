@@ -105,6 +105,13 @@ pub enum Content {
     /// hillshade drawn from the same imagery, or the same source at two opacities — are two
     /// buckets and one picture, and a raster tile is a quarter of a megabyte (§11.5).
     Raster(RasterContent),
+    /// A hillshade's slope field on the tile's own quad.
+    ///
+    /// The same quad a raster layer draws, over a different picture: not the tile's imagery but
+    /// the slope field `Dem::prepare` cut from its elevation. A hillshade layer is a raster layer
+    /// whose texture nobody served -- which is why the geometry is a `RasterBucket` and only the
+    /// shader and the uniforms differ.
+    Hillshade(HillshadeContent),
     /// Extruded polygons: an outline and a roof, with the walls raised by the shader.
     Fill3d(FillExtrusionBucket),
     /// A symbol layer's labels, resolved but not yet shaped.
@@ -117,6 +124,22 @@ pub enum Content {
 }
 
 /// A raster layer's contribution to one tile: where the picture goes, and the picture.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HillshadeContent {
+    /// The quad, or one per entry of the tile's mask.
+    pub bucket: RasterBucket,
+    /// The slope field, `dim` by `dim` RGBA, as the prepare pass encodes it.
+    ///
+    /// Shared, for the reason a raster tile's picture is: two hillshade layers over one DEM
+    /// source -- a shaded relief and a steeper one for a contour overlay -- are two buckets and
+    /// one slope field.
+    pub prepared: alloc::sync::Arc<tessella_source::image::Image>,
+    /// The tile's latitude range, north then south, which the shader needs to undo Mercator's
+    /// stretch before it reads the slope as a real one.
+    pub lat_range: [f32; 2],
+}
+
+/// The quad a raster tile's picture is drawn on, and the picture.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RasterContent {
     /// The quad, or one per entry of the tile's mask.
@@ -189,6 +212,8 @@ impl LayerBucket {
             Content::Heatmap(_) => 1,
             // And a raster tile, whose quads share one drawable however many the mask made.
             Content::Raster(_) => 1,
+            // And a hillshade, which is that quad over a slope field instead of a picture.
+            Content::Hillshade(_) => 1,
             // An extrusion is two geometries — the roof and the walls raised over it — each
             // drawn once per pass. The depth pass is what stops every wall alpha-blending
             // against the walls behind it, and mbgl's `doDepthPass = (!opaque || hasPattern)`
@@ -1065,6 +1090,85 @@ pub fn build_raster_tile_on(
     Ok(buckets)
 }
 
+/// Builds a hillshade tile's buckets from a decoded DEM.
+///
+/// [`build_raster_tile_on`] over a slope field. The quad and the mask are the raster path's --
+/// mbgl's `HillshadeBucket` shares `RasterBucket`'s mask handling, which is what
+/// `tessella_tile::mask` already records -- and what differs is which layers ask for it and that
+/// the picture is cut here rather than served.
+///
+/// The prepare pass runs once per tile, here, rather than per layer: two hillshade layers over one
+/// DEM source read the same slope field, the same way two raster layers over one source read the
+/// same picture.
+///
+/// # Errors
+///
+/// [`TileError::Property`] when a layer's paint does not resolve.
+pub fn build_dem_tile_on(
+    style: &Style,
+    source: &str,
+    dem: &tessella_source::dem::Dem,
+    tile: TileId,
+    mask: &[tessella_tile::mask::MaskEntry],
+    cells: u32,
+) -> Result<Vec<LayerBucket>, TileError> {
+    let mut buckets = Vec::new();
+    let wants = style
+        .layers
+        .iter()
+        .any(|layer| layer.kind == LayerKind::Hillshade && draws_from(layer, source));
+    if !wants {
+        return Ok(buckets);
+    }
+
+    // The tile's own zoom, not the cover's: the prepare pass reads `tileID.canonical.z`, and an
+    // overscaled tile's slope field is the one its own level produced.
+    let prepared = alloc::sync::Arc::new(dem.prepare(tile.z));
+    let lat_range = lat_range(tile);
+
+    for (layer_index, layer) in style.layers.iter().enumerate() {
+        if layer.kind != LayerKind::Hillshade || !draws_from(layer, source) {
+            continue;
+        }
+
+        let paint = resolve_paint(layer).map_err(|source| TileError::Property {
+            layer: layer.id.clone(),
+            source,
+        })?;
+
+        buckets.push(LayerBucket {
+            layer_index,
+            layer_id: layer.id.clone(),
+            content: Content::Hillshade(HillshadeContent {
+                bucket: RasterBucket::masked_on(mask, cells),
+                prepared: alloc::sync::Arc::clone(&prepared),
+                lat_range,
+            }),
+            paint,
+            // A hillshade's paint has no feature to vary over, for a raster layer's reason.
+            binder: PaintBinder::default(),
+            outline_under_fill: false,
+            pattern_vertices: PatternVertices::default(),
+        });
+    }
+    Ok(buckets)
+}
+
+/// A tile's north and south edges in degrees, which is mbgl's `getLatRange`.
+///
+/// North first. The shader interpolates between them across the tile to undo Mercator's stretch
+/// before it reads the encoded slope as a real one -- without it a hillshade at high latitude
+/// reads far steeper than the ground is.
+fn lat_range(tile: TileId) -> [f32; 2] {
+    let scale = f64::from(1u32 << tile.z);
+    let (_, north) =
+        tessella_tile::projection::unproject([f64::from(tile.x), f64::from(tile.y)], scale);
+    let (_, south) =
+        tessella_tile::projection::unproject([f64::from(tile.x), f64::from(tile.y) + 1.0], scale);
+    #[allow(clippy::cast_possible_truncation)]
+    [north as f32, south as f32]
+}
+
 /// Builds a tile's buckets from a decoded vector tile.
 ///
 /// # Why this is not `build_tile` with a different feature type
@@ -1573,6 +1677,7 @@ impl Content {
             | Self::Line(_)
             | Self::Circle(_)
             | Self::Heatmap(_)
+            | Self::Hillshade(_)
             | Self::Symbol(_) => None,
         }
     }
@@ -1588,7 +1693,23 @@ impl Content {
             | Self::Circle(_)
             | Self::Heatmap(_)
             | Self::Fill3d(_) => None,
-            Self::Raster(_) => None,
+            Self::Raster(_) | Self::Hillshade(_) => None,
+        }
+    }
+
+    /// The hillshade's slope field and quad, if this is one.
+    #[must_use]
+    pub fn as_hillshade(&self) -> Option<&HillshadeContent> {
+        match self {
+            Self::Hillshade(content) => Some(content),
+            Self::Background
+            | Self::Fill(_)
+            | Self::Fill3d(_)
+            | Self::Line(_)
+            | Self::Circle(_)
+            | Self::Heatmap(_)
+            | Self::Raster(_)
+            | Self::Symbol(_) => None,
         }
     }
 
@@ -1603,7 +1724,7 @@ impl Content {
             | Self::Heatmap(_)
             | Self::Symbol(_)
             | Self::Fill3d(_) => None,
-            Self::Raster(_) => None,
+            Self::Raster(_) | Self::Hillshade(_) => None,
         }
     }
 
@@ -1618,7 +1739,7 @@ impl Content {
             | Self::Heatmap(_)
             | Self::Symbol(_)
             | Self::Fill3d(_) => None,
-            Self::Raster(_) => None,
+            Self::Raster(_) | Self::Hillshade(_) => None,
         }
     }
 
@@ -1633,7 +1754,7 @@ impl Content {
             | Self::Heatmap(_)
             | Self::Symbol(_)
             | Self::Fill3d(_) => None,
-            Self::Raster(_) => None,
+            Self::Raster(_) | Self::Hillshade(_) => None,
         }
     }
 
@@ -1663,6 +1784,7 @@ impl Content {
             // not the glyphs to shape it with have arrived.
             Self::Symbol(layout) => !layout.is_empty(),
             Self::Raster(content) => !content.bucket.is_empty(),
+            Self::Hillshade(content) => !content.bucket.is_empty(),
             Self::Fill3d(bucket) => !bucket.segments.is_empty(),
         }
     }

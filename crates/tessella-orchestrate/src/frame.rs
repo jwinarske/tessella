@@ -387,6 +387,32 @@ const DASH_TEXTURE_BASE: u64 = 1 << 62;
 /// raster texture and a glyph atlas never collide.
 const RASTER_TEXTURE_BASE: u64 = 16;
 
+/// The first texture id a hillshade tile's slope field takes.
+///
+/// One per tile, packed exactly as a raster tile's picture is, because it is the same question:
+/// the field is the tile's, it outlives the frame that announced it, and an id derived from a
+/// position in this frame's list would be handed to a different tile later. The base is above
+/// anything the raster packing reaches -- a raster id tops out near `MAX_ZOOM << 52` -- and below
+/// the heatmap's, which starts at `5 << 60`.
+const HILLSHADE_TEXTURE_BASE: u64 = 1 << 60;
+
+/// The texture id a hillshade tile's slope field takes, derived from the tile.
+///
+/// The same packing [`raster_texture_id`] uses and for the same reasons; see its note, which is
+/// the one this would otherwise repeat.
+#[must_use]
+fn hillshade_texture_id(
+    z: u8,
+    x: u32,
+    y: u32,
+    wrap: i32,
+) -> tessella_capture_abi::envelope::TextureId {
+    #[allow(clippy::cast_sign_loss)]
+    let copy = u64::from((wrap.clamp(-7, 7) + 8) as u8);
+    let packed = (u64::from(z) << 52) | (u64::from(x) << 28) | (u64::from(y) << 4) | copy;
+    tessella_capture_abi::envelope::TextureId(HILLSHADE_TEXTURE_BASE + packed)
+}
+
 /// The texture id a raster tile's picture takes, derived from the tile itself.
 ///
 /// # Not the tile's position in this frame
@@ -796,8 +822,15 @@ fn emit_group(
     let mut emitted = Emitted::default();
     // Which bucket each geometry id came from, so the packing pass below can revisit them in
     // draw order rather than in the order the tiles arrived.
-    let mut source: BTreeMap<u64, (usize, usize, tessella_capture_abi::envelope::TextureId)> =
-        BTreeMap::new();
+    let mut source: BTreeMap<
+        u64,
+        (
+            usize,
+            usize,
+            tessella_capture_abi::envelope::TextureId,
+            tessella_capture_abi::envelope::TextureId,
+        ),
+    > = BTreeMap::new();
     let mut bound: Vec<GeometryBinding> = Vec::new();
     // One entry per bucket that reached the arena, so a bucket's second drawable reuses the
     // bytes rather than copying them.
@@ -823,6 +856,19 @@ fn emit_group(
         for bucket in tile_buckets.iter() {
             if let Content::Raster(raster) = &bucket.content
                 && let Some(upload) = texture::raster_tile(raster_texture, &raster.image)
+            {
+                texture::write(producer, &upload)?;
+                break;
+            }
+        }
+
+        // And the slope field, which goes up the same way for the same reason. Its own id space,
+        // because a style may draw imagery and a hillshade over the same tile and the two
+        // pictures are not the same picture.
+        let hillshade_texture = hillshade_texture_id(tile.z, tile.x, tile.y, wrap);
+        for bucket in tile_buckets.iter() {
+            if let Content::Hillshade(hillshade) = &bucket.content
+                && let Some(upload) = texture::raster_tile(hillshade_texture, &hillshade.prepared)
             {
                 texture::write(producer, &upload)?;
                 break;
@@ -879,7 +925,10 @@ fn emit_group(
                     break;
                 };
                 binding_index += 1;
-                source.insert(binding.geometry.0, (index, bucket_index, raster_texture));
+                source.insert(
+                    binding.geometry.0,
+                    (index, bucket_index, raster_texture, hillshade_texture),
+                );
             }
         }
 
@@ -925,7 +974,7 @@ fn emit_group(
     let fresh_buckets: BTreeSet<(usize, usize)> = source
         .iter()
         .filter(|(geometry, _)| keyed.get(geometry).is_some_and(|key| fresh.contains(key)))
-        .map(|(_, &(tile_index, bucket_index, _))| (tile_index, bucket_index))
+        .map(|(_, &(tile_index, bucket_index, _, _))| (tile_index, bucket_index))
         .collect();
 
     // Built once for the frame and handed to every bucket, so the labels compete with each other
@@ -1051,7 +1100,8 @@ fn emit_group(
             continue;
         }
 
-        let Some(&(tile_index, bucket_index, raster_texture)) = source.get(&entry.geometry.0)
+        let Some(&(tile_index, bucket_index, raster_texture, hillshade_texture)) =
+            source.get(&entry.geometry.0)
         else {
             continue;
         };
@@ -1126,6 +1176,7 @@ fn emit_group(
                     &Encoding {
                         patterns,
                         raster_texture,
+                        hillshade_texture,
                         pitched: view.pitch.abs() > f64::EPSILON,
                         zoom: view.zoom,
                         stacks: &stacks,
@@ -1529,6 +1580,8 @@ struct Encoding<'a> {
     patterns: Option<&'a Patterns<'a>>,
     /// The texture this tile's raster picture went to.
     raster_texture: tessella_capture_abi::envelope::TextureId,
+    /// The texture this tile's slope field went to, for a hillshade layer over it.
+    hillshade_texture: tessella_capture_abi::envelope::TextureId,
     /// Whether the camera is pitched at all, which decides an icon's sampler.
     ///
     /// mbgl's `iconTransformed`: `rotationAlignment == Map || state.getPitch() != 0`. A pitched
@@ -1813,7 +1866,15 @@ fn placement_rules(
 #[allow(clippy::too_many_arguments)]
 fn place_symbols(
     order: &[tessella_capture_abi::envelope::OrderEntry],
-    source: &BTreeMap<u64, (usize, usize, tessella_capture_abi::envelope::TextureId)>,
+    source: &BTreeMap<
+        u64,
+        (
+            usize,
+            usize,
+            tessella_capture_abi::envelope::TextureId,
+            tessella_capture_abi::envelope::TextureId,
+        ),
+    >,
     buckets: &[(TileId, alloc::sync::Arc<Vec<LayerBucket>>)],
     origins: &[Option<alloc::sync::Arc<Vec<LayerBucket>>>],
     layouts: &mut SymbolCache,
@@ -1883,7 +1944,7 @@ fn place_symbols(
     for entry in order {
         let key = source
             .get(&entry.geometry.0)
-            .and_then(|&(tile_index, _, _)| tiles.get(tile_index))
+            .and_then(|&(tile_index, _, _, _)| tiles.get(tile_index))
             .map_or((0, 0, 0), |coord| (coord.z, coord.y, coord.x));
         walk.push((entry, key.0, key.1, key.2));
     }
@@ -1908,7 +1969,7 @@ fn place_symbols(
     }
 
     for (entry, ..) in walk {
-        let Some(&(tile_index, bucket_index, _)) = source.get(&entry.geometry.0) else {
+        let Some(&(tile_index, bucket_index, _, _)) = source.get(&entry.geometry.0) else {
             continue;
         };
         if !seen.insert((tile_index, bucket_index)) {
@@ -2725,6 +2786,7 @@ fn encode_parts(
     let &Encoding {
         patterns,
         raster_texture,
+        hillshade_texture,
         pitched,
         zoom,
         stacks,
@@ -3010,6 +3072,15 @@ fn encode_parts(
             PLACEHOLDER,
             &raster.bucket,
             raster_texture,
+        )),
+        // The raster encoder over the slope field: same quad, same attributes, a different
+        // shader and a different texture. mbgl's `HillshadeBucket` shares `RasterBucket`'s mask
+        // handling for exactly this reason, which `tessella_tile::mask` already records.
+        Content::Hillshade(hillshade) => Some(emit::encode_hillshade(
+            arena,
+            PLACEHOLDER,
+            &hillshade.bucket,
+            hillshade_texture,
         )),
         Content::Background => {
             let atlas = patterns
