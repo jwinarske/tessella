@@ -82,8 +82,11 @@ fi
 # instant, so comparing mid-fade measures the clock rather than the geometry.
 out=$(TSF_NO_FADES=1 "$PARITY_WORK/render_probe" "$style" "$PARITY_WORK/mat" \
   "$PARITY_WORK/t_$tag.ppm" "$lat" "$lon" "$z" "$W" "$H" "$pitch" "$bearing" 2>&1)
-grep -q "materials_loaded 17" <<<"$out" || {
-  echo "MATERIALS NOT LOADED $tag" >&2
+# Every package the probe found loaded, and there was at least one. Not a count: a directory with no
+# usable packages renders black and two black frames agree, which is what this guards, but a fixed
+# number fails every scene the day the consumer gains a material.
+grep -qE "^materials_loaded [1-9][0-9]* rejected 0$" <<<"$out" || {
+  echo "MATERIALS NOT LOADED $tag: $(grep -m1 '^materials_loaded' <<<"$out")" >&2
   exit 1
 }
 
