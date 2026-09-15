@@ -81,6 +81,63 @@ pub fn grid_step(extent: i32, segments: u32) -> i32 {
     (extent + segments - 1) / segments
 }
 
+/// The grid a tile is split against on a surface, in tile units, or zero for no split at all.
+///
+/// # Why this is a function and not a `match` at each site
+///
+/// There were four of them, two asking for a step and two for a cell count, and every surface
+/// that exists has to be answered the same way in all four -- a fill and the raster quad over it
+/// disagreeing about how finely a tile is cut is a seam between the imagery and the ground it
+/// sits on. Adding terrain made that four places to remember rather than two, which is where a
+/// rule stops being one.
+///
+/// `zoom` is the tile's bucket zoom, which is what a sphere's grid is derived from; a terrain
+/// carries its own answer and a plane needs none.
+#[must_use]
+pub fn step_for_surface(surface: tessella_tile::store::Surface, zoom: u8, extent: i32) -> i32 {
+    use tessella_tile::store::Surface;
+    match surface {
+        Surface::Plane => 0,
+        Surface::Sphere => step_for_level(zoom, extent),
+        // The grid the tile's own relief asked for, from `Relief::cells_within`. One cell is no
+        // subdivision -- flat ground, or a tile whose DEM has not arrived -- and is the flat path
+        // byte for byte, which is what lets a terrain map draw before its elevation does.
+        Surface::Terrain { cells } => grid_step_or_none(extent, cells),
+    }
+}
+
+/// The same answer as [`step_for_surface`], as a cell count.
+///
+/// What a builder whose geometry is a grid rather than a triangle list wants: a raster tile's
+/// quad, and a hillshade's or a color relief's over it. One is the undivided quad.
+#[must_use]
+pub fn cells_for_surface(surface: tessella_tile::store::Surface, zoom: u8) -> u32 {
+    use tessella_tile::store::Surface;
+    match surface {
+        Surface::Plane => 1,
+        Surface::Sphere => edge_cells(zoom),
+        // A raster tile's quad follows the ground as a fill does, on the same grid the tile's own
+        // relief chose -- so imagery over a ridge bends with it instead of spanning it flat.
+        Surface::Terrain { cells } => cells.max(1),
+    }
+}
+
+/// [`grid_step`], or zero where `cells` asks for no subdivision at all.
+///
+/// The two answers are not the same number and the difference matters: `grid_step` returns
+/// `extent` for a single cell, which is a grid one cell wide and makes every triangle test its
+/// bounds against it, while zero is the path that copies the triangle list through untouched.
+/// A terrain whose ground is flat, or whose DEM has not arrived, asks for one cell on every tile
+/// of the cover -- so the difference between those two is the whole cost of drawing a flat map
+/// with a terrain in the style.
+#[must_use]
+pub fn grid_step_or_none(extent: i32, cells: u32) -> i32 {
+    if cells <= 1 {
+        return 0;
+    }
+    grid_step(extent, cells)
+}
+
 /// The grid a tile of level `z` is built against, or zero where it needs none.
 ///
 /// A function of the tile's *level*, never of the camera. §5.1 makes a bucket a function of
