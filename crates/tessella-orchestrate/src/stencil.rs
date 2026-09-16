@@ -89,6 +89,37 @@ pub fn clip_set(
     Ok(ClipSet { layer_index, tiles })
 }
 
+/// [`clip_set`] for tiles already named the way their drawables are.
+///
+/// A [`TileCoord`] is `z/x/y/wrap`, so a mask built from one can only say `overscaled_z = z`.
+/// Above a source's maxzoom a drawable is bound as the tile that serves it -- `{z: 14,
+/// overscaled_z: 15}` -- and the consumer finds a mask by that whole address. This takes the
+/// addresses as the bindings carry them and places each mask over the tile's own extent, which
+/// is where its geometry is drawn.
+///
+/// # Errors
+///
+/// [`CameraError::EmptyViewport`] when the view has no area.
+pub fn clip_set_for_ids(
+    view: &ViewTransform,
+    layer_index: i32,
+    ids: &[TileId],
+    projection: ProjectionMode,
+) -> Result<ClipSet, CameraError> {
+    let mut tiles = Vec::with_capacity(ids.len());
+    for id in ids {
+        let matrix =
+            crate::ubo::tile_matrix(view, projection, id.z, id.x, id.y, i32::from(id.wrap), 0.0)?;
+        #[allow(clippy::cast_possible_truncation)]
+        let narrowed = core::array::from_fn(|index| matrix[index] as f32);
+        tiles.push(StencilTile {
+            matrix: narrowed,
+            tile: *id,
+        });
+    }
+    Ok(ClipSet { layer_index, tiles })
+}
+
 /// Writes a clip set to the ring.
 ///
 /// # Errors
