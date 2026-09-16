@@ -2247,6 +2247,34 @@ pub fn bucket_for<'a>(buckets: &'a [LayerBucket], layer_id: &str) -> Option<&'a 
 }
 
 impl Content {
+    /// How many vertices the build produced, for the geometry a surface splits.
+    ///
+    /// What tells a retained drawable that its tile was rebuilt on a different grid: the key it
+    /// is retained under is the tile, the layer and the sub-layer, none of which a rebuild
+    /// changes, so without this the consumer kept the geometry of the grid the first frame
+    /// guessed. A rebuild that leaves the count alone split nothing differently -- a polygon
+    /// inside one cell is the same polygon on either grid -- and needs no re-announcement.
+    ///
+    /// Zero for what no surface splits.
+    #[must_use]
+    pub fn split_size(&self) -> u64 {
+        let count = match self {
+            Self::Fill(bucket) => bucket.vertices.len(),
+            Self::Fill3d(bucket) => bucket.vertices.len(),
+            Self::Line(bucket) => bucket.vertices.len(),
+            Self::Raster(content) => content.bucket.vertices.len(),
+            Self::Hillshade(content) => content.bucket.vertices.len(),
+            Self::ColorRelief(content) => content.bucket.vertices.len(),
+            Self::Background
+            | Self::Circle(_)
+            | Self::Heatmap(_)
+            | Self::LocationIndicator(_)
+            | Self::Terrain(_)
+            | Self::Symbol(_) => 0,
+        };
+        u64::try_from(count).unwrap_or(u64::MAX)
+    }
+
     /// The raster quad, if this is one.
     #[must_use]
     pub fn as_raster(&self) -> Option<&RasterContent> {

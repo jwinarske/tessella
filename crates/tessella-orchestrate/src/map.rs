@@ -145,6 +145,20 @@ pub trait Tiles {
     fn terrain_cells(&self) -> Option<u32> {
         None
     }
+
+    /// Whether what is held for `tile` was built for a different surface than `surface`.
+    ///
+    /// A surface is part of a tile's key, so a refined terrain grid makes every tile in hand the
+    /// wrong build. Such a tile is still drawn -- a coarse grid is a better frame than a hole --
+    /// and is also wanted, until the build for the current surface lands and replaces it.
+    /// Reported as not wanted, it was never asked for again, and a terrain style drew every
+    /// layer on the one-cell grid its first frame guessed.
+    ///
+    /// `false` for a store that keys nothing by surface, and for a tile it does not hold.
+    fn stale(&self, tile: TileId, surface: Surface) -> bool {
+        let _ = (tile, surface);
+        false
+    }
 }
 
 /// A map being drawn: one style, one view, and the state that makes a frame incremental.
@@ -681,6 +695,7 @@ impl Map {
         if moved == Update::Changed || work.geometry || self.drawn.is_empty() {
             let mut pass = Substitution {
                 tiles,
+                surface,
                 drawn: Vec::new(),
                 wanted: Vec::new(),
                 uncovered: 0,
@@ -696,7 +711,10 @@ impl Map {
                 pass.wanted.iter().copied().collect();
             self.wanted = onion(&pass.wanted, self.prefetch_levels())
                 .into_iter()
-                .filter(|tile| tiles.buckets(TileId::new(tile.z, tile.x, tile.y)).is_none())
+                .filter(|tile| {
+                    let id = TileId::new(tile.z, tile.x, tile.y);
+                    tiles.buckets(id).is_none() || tiles.stale(id, surface)
+                })
                 .collect();
             self.speculative = self
                 .wanted
@@ -1115,6 +1133,8 @@ fn onion(ideal: &[TileCoord], levels: u8) -> Vec<TileCoord> {
 /// It reports what it wants instead, and something above it decides what that is worth.
 struct Substitution<'a, T: Tiles + ?Sized> {
     tiles: &'a T,
+    /// What the tiles have to have been built for to count as done.
+    surface: Surface,
     /// What to draw, in the order the algorithm chose it. Duplicates are possible — one ancestor
     /// can stand in for several missing children — and are collapsed when it finishes.
     drawn: Vec<TileCoord>,
@@ -1141,12 +1161,17 @@ impl<T: Tiles + ?Sized> Pyramid for Substitution<'_, T> {
         // consumer-*acknowledged* rather than merely built, which is where mbgl's single-frame
         // holes come from — it retains an ancestor until its descendants are built, and built is
         // not uploaded. The registry can answer that; wiring it is the next turn of this screw.
-        self.tiles
-            .buckets(TileId::new(id.z, id.x, id.y))
-            .map(|_| TileState {
-                renderable: true,
-                ..TileState::default()
-            })
+        let tile = TileId::new(id.z, id.x, id.y);
+        let held = self.tiles.buckets(tile)?;
+        // Drawn as it is, and asked for again: see `Tiles::stale`.
+        if self.tiles.stale(tile, self.surface) {
+            self.wanted.push(Self::coord(id));
+        }
+        drop(held);
+        Some(TileState {
+            renderable: true,
+            ..TileState::default()
+        })
     }
 
     fn create(&mut self, id: DataTileId) -> Option<TileState> {

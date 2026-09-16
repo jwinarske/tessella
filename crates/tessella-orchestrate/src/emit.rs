@@ -3053,6 +3053,12 @@ pub fn encode_hillshade(
 /// The two stop textures are the *layer's* and the elevation is the *tile's*, so a cover of
 /// twenty tiles announces twenty drawables naming the same two stop textures and twenty
 /// different elevations.
+///
+/// `ground` is the elevation the terrain raises this tile from, when it does. Not `image`,
+/// although both are the DEM: `image` is this tile's own, at the zoom a relief is shaded at,
+/// and the ground is covered a level coarser -- see `boot::DemReads`. A relief raised by its
+/// own picture sat on a different height field from everything else on the terrain, and read
+/// it with offsets meant for the ground's.
 pub fn encode_color_relief(
     arena: &mut SlabArena,
     geometry: GeometryId,
@@ -3060,6 +3066,7 @@ pub fn encode_color_relief(
     image: TextureId,
     elevation_stops: TextureId,
     color_stops: TextureId,
+    ground: Option<TextureId>,
 ) -> Encoded {
     let vertex_bytes = as_raster_bytes(&bucket.vertices);
 
@@ -3105,14 +3112,21 @@ pub fn encode_color_relief(
             index_length: bucket.indices.len() as u32,
         }],
     );
-    let texture_refs = push_span(
-        &mut payload,
-        &texture_refs(
+    let texture_refs = push_span(&mut payload, &{
+        let mut refs = texture_refs(
             BuiltIn::ColorReliefShader,
             &[image, elevation_stops, color_stops],
             TextureFilter::Linear,
-        ),
-    );
+        );
+        if let Some(ground) = ground {
+            refs.push(TextureRef {
+                texture: ground,
+                slot: TERRAIN_ELEVATION_SLOT,
+                filter: TextureFilter::Linear as u32,
+            });
+        }
+        refs
+    });
 
     #[allow(clippy::cast_possible_truncation)]
     let record = GeometryAdd {
