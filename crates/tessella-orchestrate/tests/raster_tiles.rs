@@ -332,7 +332,7 @@ fn the_encoded_raster_binds_its_picture_to_both_samplers() {
     let picture = TextureId(17);
     let bucket = RasterBucket::whole_tile();
     let mut arena = SlabArena::default();
-    let encoded = encode_raster(&mut arena, GeometryId(2), &bucket, picture);
+    let encoded = encode_raster(&mut arena, GeometryId(2), &bucket, picture, None);
 
     assert_eq!(encoded.record.builtin_shader, BuiltIn::RasterShader as i32);
     assert_eq!(encoded.record.vertex_count, 4);
@@ -371,6 +371,7 @@ fn the_raster_attributes_share_one_interleaved_buffer() {
         GeometryId(2),
         &RasterBucket::whole_tile(),
         TextureId(1),
+        None,
     );
 
     let attributes = encoded.attributes();
@@ -483,6 +484,7 @@ fn the_picture_reaches_the_ring_before_the_geometry_that_binds_it() {
         GeometryId(2),
         &RasterBucket::whole_tile(),
         picture,
+        None,
     );
     emit::write(producer, &encoded).expect("writes");
 

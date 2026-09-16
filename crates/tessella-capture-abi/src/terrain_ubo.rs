@@ -76,17 +76,26 @@ pub struct TerrainDrawableUbo {
     /// second thing for the two sides to agree on, against sixteen bytes a tile that nothing
     /// measures.
     pub color: [f32; 4],
-    /// `uv_scale`, `uv_offset`, `exaggeration`, `skirt`.
+    /// `uv_scale`, `uv_offset_x`, `uv_offset_y`, `exaggeration`.
     ///
-    /// `skirt` is how far a flagged vertex drops below the surface, in meters -- the curtain that
-    /// hides the crack between two tiles at different zooms. The flag is the mesh vertex's third
-    /// component; see `tessella_layout::terrain`.
+    /// Two offsets and not one. A layer drawing *from* the DEM reads the whole tile and they are
+    /// equal; a fill or a line is one of `2^dz` squares of a coarser DEM tile and they are not.
     pub params: [f32; 4],
+    /// `skirt`, and three that are spare.
+    ///
+    /// How far a flagged vertex drops below the surface, in meters -- the curtain hiding the crack
+    /// between two tiles at different zooms. The flag is the mesh vertex's own component; see
+    /// `tessella_layout::terrain`.
+    ///
+    /// Its own row because the four before it are spoken for, and a row rather than a corner of
+    /// one because std140 aligns a `vec4` and the next thing to need one will find it here. Only
+    /// the ground reads it: a layer *on* the terrain has no skirt, being a surface on a surface.
+    pub skirt: [f32; 4],
 }
 
 impl TerrainDrawableUbo {
     /// Bytes on the wire, and the stride a buffer of these packs at.
-    pub const STRIDE: u32 = 112;
+    pub const STRIDE: u32 = 128;
 
     /// The block as little-endian bytes.
     #[must_use]
@@ -99,11 +108,52 @@ impl TerrainDrawableUbo {
             .chain(&self.unpack)
             .chain(&self.color)
             .chain(&self.params)
+            .chain(&self.skirt)
         {
             out[at..at + 4].copy_from_slice(&value.to_le_bytes());
             at += 4;
         }
         out
+    }
+
+    /// The sampling pair for a tile that is one of `2^dz` squares of the DEM tile covering it.
+    ///
+    /// [`Self::sampling`] is the `dz` of zero case -- a layer drawing *from* the DEM, whose tile is
+    /// the DEM's own. Everything else is on a vector or raster tile at a coordinate the DEM source
+    /// may not have, and reads the square of a coarser tile that covers its ground.
+    ///
+    /// `column` and `row` are which square, in `0 .. 2^dz`.
+    #[must_use]
+    pub fn sampling_within(
+        dim: u32,
+        extent: u16,
+        dz: u8,
+        column: u32,
+        row: u32,
+    ) -> (f32, f32, f32) {
+        #[allow(clippy::cast_precision_loss)]
+        let dim_f = dim as f32;
+        let stride = dim_f + 2.0;
+        if stride <= 0.0 || extent == 0 || dz >= 32 {
+            return (0.0, 0.0, 0.0);
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let tiles = (1u32 << dz) as f32;
+        // Pixels first, as `tessella_source::terrain::DemSampler` computes them: the tile's own
+        // coordinates scaled into its share of the DEM, then moved to its square, then back half a
+        // texel so a cell sits at its own center.
+        let scale = dim_f / (f32::from(extent) * tiles);
+        #[allow(clippy::cast_precision_loss)]
+        let offset_x = column as f32 * dim_f / tiles - 0.5;
+        #[allow(clippy::cast_precision_loss)]
+        let offset_y = row as f32 * dim_f / tiles - 0.5;
+        // Then into texture coordinates: one for the border, and the half texel a bilinear fetch
+        // reads around. See [`Self::sampling`] for the chain written out.
+        (
+            scale / stride,
+            (offset_x + 1.5) / stride,
+            (offset_y + 1.5) / stride,
+        )
     }
 
     /// The sampling pair for a DEM of `dim` pixels stored with a pixel of border on each side.
@@ -134,6 +184,7 @@ mod tests {
             unpack: [6553.6, 25.6, 0.1, 10000.0],
             color: [0.1, 0.2, 0.3, 1.0],
             params: [1.0, 2.0, 3.0, 4.0],
+            skirt: [5.0, 0.0, 0.0, 0.0],
         };
         let bytes = block.to_bytes();
         let at = |offset: usize| f32::from_le_bytes(bytes[offset..offset + 4].try_into().unwrap());
@@ -148,6 +199,7 @@ mod tests {
         assert_eq!(at(92), 1.0);
         assert_eq!(at(96), 1.0);
         assert_eq!(at(108), 4.0);
+        assert_eq!(at(112), 5.0);
     }
 
     /// The sampling pair lands a tile coordinate on the DEM cell that owns it.
@@ -187,6 +239,32 @@ mod tests {
             "{}",
             texel(first_center)
         );
+    }
+
+    /// A tile inside a coarser DEM samples its own square of it, and the whole-tile case agrees
+    /// with [`TerrainDrawableUbo::sampling`] exactly.
+    ///
+    /// Checked against the pixel arithmetic `tessella_source::terrain::DemSampler` uses rather than
+    /// against constants: the two have to place a coordinate on the same cell, and a test carrying
+    /// its own copy of the answer would agree with a wrong one.
+    #[test]
+    fn a_tile_samples_its_own_square_of_a_coarser_dem() {
+        const DIM: u32 = 256;
+        const EXTENT: u16 = 8192;
+        let (whole_scale, whole_offset) = TerrainDrawableUbo::sampling(DIM, EXTENT);
+        let (scale, x, y) = TerrainDrawableUbo::sampling_within(DIM, EXTENT, 0, 0, 0);
+        assert!((scale - whole_scale).abs() < 1e-9);
+        assert!((x - whole_offset).abs() < 1e-9 && (y - whole_offset).abs() < 1e-9);
+
+        // One zoom deeper, the square at column one row zero: the tile's own center should land
+        // where three quarters across and one quarter down the parent does.
+        let (scale, x, y) = TerrainDrawableUbo::sampling_within(DIM, EXTENT, 1, 1, 0);
+        let child = 4096.0 * scale + x;
+        let parent = 6144.0 * whole_scale + whole_offset;
+        assert!((child - parent).abs() < 1e-6, "{child} {parent}");
+        let child_y = 4096.0 * scale + y;
+        let parent_y = 2048.0 * whole_scale + whole_offset;
+        assert!((child_y - parent_y).abs() < 1e-6, "{child_y} {parent_y}");
     }
 
     /// A degenerate DEM samples nothing rather than dividing by it.
