@@ -199,3 +199,57 @@ fn a_moved_camera_changes_the_clip_set() {
         "so it is re-sent"
     );
 }
+
+/// A clip set built from drawables' addresses keeps those addresses whole.
+///
+/// Above a source's maxzoom a drawable is bound as the tile that serves it -- canonical z14,
+/// drawn at 15 -- and the consumer finds its mask by that whole address. A set built from cover
+/// coordinates could only say `overscaled_z = z`, so no mask ever matched such a drawable and its
+/// clip passed everywhere: 274 unmasked drawables on display-buildings-in-3d. The placement is
+/// the canonical tile's, which is where that geometry is drawn, so it must agree with
+/// [`stencil::clip_set`] for the same `z/x/y/wrap`.
+#[test]
+fn a_clip_set_from_ids_keeps_the_drawn_zoom_and_the_wrap() {
+    use tessella_capture_abi::envelope::TileId;
+
+    let view = probe();
+    let ids = [
+        TileId {
+            x: 4091,
+            y: 2723,
+            z: 13,
+            overscaled_z: 15,
+            wrap: 0,
+        },
+        TileId {
+            x: 4092,
+            y: 2723,
+            z: 13,
+            overscaled_z: 13,
+            wrap: -1,
+        },
+    ];
+    let set = stencil::clip_set_for_ids(&view, 7, &ids, ProjectionMode::Mercator)
+        .expect("an unrotated camera");
+    assert_eq!(set.layer_index, 7);
+    let named: Vec<TileId> = set.tiles.iter().map(|tile| tile.tile).collect();
+    assert_eq!(named, ids, "the addresses are the drawables', untouched");
+
+    let coords: Vec<cover::TileCoord> = ids
+        .iter()
+        .map(|id| cover::TileCoord {
+            z: id.z,
+            x: id.x,
+            y: id.y,
+            wrap: i32::from(id.wrap),
+        })
+        .collect();
+    let placed = stencil::clip_set(&view, 7, &coords, ProjectionMode::Mercator)
+        .expect("an unrotated camera");
+    for (from_ids, from_cover) in set.tiles.iter().zip(&placed.tiles) {
+        assert_eq!(
+            from_ids.matrix, from_cover.matrix,
+            "a mask sits over its canonical tile"
+        );
+    }
+}
