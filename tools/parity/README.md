@@ -31,10 +31,10 @@ what to use when a change is supposed to move nothing at all.
 
 The sweep's numbers as of 2026-09-15, which is the gate:
 
-    families_p  z14 p0    24 of 786432
-    families_p  z14 p60   45
-    families_p  z16 p0     5
-    families_p  z16 p60   50
+    families_p  z14 p0     4 of 786432
+    families_p  z14 p60   16
+    families_p  z16 p0     0
+    families_p  z16 p60    2
     families_p  z9  p0    30 of 2160000
     annot_p     z14 p0     3 of 786432
     annot_p     z16 p0     2
