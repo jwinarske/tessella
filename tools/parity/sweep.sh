@@ -22,7 +22,7 @@
 # The picture barely differs -- the ring is a 72-gon and turning one is nearly itself, 17 gross
 # pixels at z14 -- but it differs for a reason nothing on this side can fix.
 #
-# The numbers to hold, as of 2026-09-15: 24 / 45 / 5 / 50 / 30, then 3 / 2, then 0 / 0 / 0.
+# The numbers to hold, as of 2026-09-15: 4 / 16 / 0 / 2 / 30, then 3 / 2, then 0 / 0 / 0.
 set -euo pipefail
 P="$(dirname "${BASH_SOURCE[0]}")"
 for args in "14 1024 768 0" "14 1024 768 60" "16 1024 768 0" "16 1024 768 60"; do
