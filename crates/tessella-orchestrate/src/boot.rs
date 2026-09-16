@@ -88,6 +88,17 @@ pub(crate) fn covering_zoom(kind: SourceKind, zoom: f64) -> u8 {
     }
 }
 
+/// The zoom a DEM read as a *surface* covers at: the view's own, the way a vector source does.
+///
+/// Not [`covering_zoom`], which shifts a 256-pixel source up a level so its texels land on
+/// screen pixels one to one. That rule is about how an image is magnified and says nothing about
+/// a height field sampled once per mesh vertex -- see [`DemReads`] for why the extra level is
+/// resolution the mesh cannot carry, and why the ground has to share a grid with what stands on
+/// it.
+pub(crate) fn surface_zoom(zoom: f64) -> u8 {
+    covering_zoom(SourceKind::Vector, zoom)
+}
+
 /// When each stage of a cold start finished, measured from the moment it began.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct BootTrace {
@@ -389,13 +400,36 @@ fn clustering_for(
 /// into the style — so its work is tessellation and nothing else. The distinction is here
 /// rather than in the worker because it is a property of the *source*, decided once, not
 /// something to re-derive per tile.
+/// How a style reads a DEM tile, which decides both its covering zoom and what is built from it.
+///
+/// A hillshade and a color relief read it as an *image*: their shading is per fragment, so they
+/// want a texel per screen pixel, and the 256-pixel rule in `SourceKind::covering_zoom` is what
+/// gives them one. The terrain reads it as a *surface*, sampled once per mesh vertex, and
+/// `tessella_layout::terrain::MESH_SIZE` already puts two texels in every cell at the view's own
+/// zoom -- the level above that is resolution the geometry cannot carry, bought with four times
+/// the tiles.
+///
+/// So the two consumptions cover at different zooms, and a style asking for both gets both. They
+/// coincide for a 512-pixel DEM, where one cover serves both and one job does both jobs.
+///
+/// This is also what puts the ground on the same grid as the vector tiles standing on it: a fill
+/// at the view's zoom and a ground one level finer have no tile in common, and `terrain_covering`
+/// -- which looks for a ground *containing* a tile -- finds nothing to raise it from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DemReads {
+    /// A hillshade or a color relief draws from this tile.
+    pub(crate) image: bool,
+    /// The terrain's ground is built from it.
+    pub(crate) surface: bool,
+}
+
 pub(crate) enum Work {
     /// Fetch, decode, then build.
     Vector { url: String },
     /// Fetch, decode the picture, then build the quad it goes on.
     Raster { url: String },
     /// Fetch, decode, then read as a height field rather than a picture.
-    Dem { url: String },
+    Dem { url: String, reads: DemReads },
     /// Build from the document the source already resolved to.
     Geojson {
         features: alloc::sync::Arc<Vec<GeoJsonFeature>>,
@@ -426,7 +460,7 @@ impl Job {
     /// spent during resolution — so it names the tile instead.
     fn what(&self) -> String {
         match &self.work {
-            Work::Vector { url } | Work::Raster { url } | Work::Dem { url } => url.clone(),
+            Work::Vector { url } | Work::Raster { url } | Work::Dem { url, .. } => url.clone(),
             Work::Geojson { .. } | Work::Annotation { .. } => {
                 alloc::format!("{}/{}", self.source, self.tile)
             }
@@ -506,7 +540,7 @@ pub(crate) struct BuildProbe<'a> {
 /// nothing left to ask any origin for. And for an annotation job, which never had an origin.
 pub(crate) fn fetch_url(job: &Job) -> Option<&str> {
     match &job.work {
-        Work::Vector { url } | Work::Raster { url } | Work::Dem { url } => Some(url),
+        Work::Vector { url } | Work::Raster { url } | Work::Dem { url, .. } => Some(url),
         Work::Geojson { .. } | Work::Annotation { .. } => None,
     }
 }
@@ -609,7 +643,7 @@ fn decode_and_build(
         // picture. How the channels are packed is the source's, so it is looked up here rather
         // than carried in the job: one place says it, and a job that carried a copy would be a
         // second place for it to be wrong.
-        Work::Dem { url } => {
+        Work::Dem { url, reads } => {
             let response = body(job, fetched)?;
             (probe.fetched)();
             probe
@@ -643,42 +677,50 @@ fn decode_and_build(
             // builders run over the same decode, and a style with only one of them pays for only
             // that one.
             let dem = alloc::sync::Arc::new(dem);
-            let mut buckets = build_dem_tile_on(
-                style,
-                &job.source,
-                &dem,
-                job.tile,
-                &[tessella_tile::mask::WHOLE_TILE],
-                cells,
-            )
-            .map_err(|error| BootError::Build {
-                url: url.clone(),
-                message: error.to_string(),
-            })?;
+            let mut buckets = Vec::new();
+            if reads.image {
+                buckets.extend(
+                    build_dem_tile_on(
+                        style,
+                        &job.source,
+                        &dem,
+                        job.tile,
+                        &[tessella_tile::mask::WHOLE_TILE],
+                        cells,
+                    )
+                    .map_err(|error| BootError::Build {
+                        url: url.clone(),
+                        message: error.to_string(),
+                    })?,
+                );
+            }
             // And the ground, which is a layer `Style::synthesize_terrain` made over this very
             // source. Three builders over one decode: a style asking for a hillshade, a relief
             // and a terrain pays for one tile and gets three pictures of it.
-            buckets.extend(
-                crate::tile::build_terrain_tile_on(style, &job.source, &dem, job.tile).map_err(
-                    |error| BootError::Build {
+            if reads.surface {
+                buckets.extend(
+                    crate::tile::build_terrain_tile_on(style, &job.source, &dem, job.tile)
+                        .map_err(|error| BootError::Build {
+                            url: url.clone(),
+                            message: error.to_string(),
+                        })?,
+                );
+            }
+            if reads.image {
+                buckets.extend(
+                    build_relief_tile_on(
+                        style,
+                        &job.source,
+                        &dem,
+                        &[tessella_tile::mask::WHOLE_TILE],
+                        cells,
+                    )
+                    .map_err(|error| BootError::Build {
                         url: url.clone(),
                         message: error.to_string(),
-                    },
-                )?,
-            );
-            buckets.extend(
-                build_relief_tile_on(
-                    style,
-                    &job.source,
-                    &dem,
-                    &[tessella_tile::mask::WHOLE_TILE],
-                    cells,
-                )
-                .map_err(|error| BootError::Build {
-                    url: url.clone(),
-                    message: error.to_string(),
-                })?,
-            );
+                    })?,
+                );
+            }
             Ok(buckets)
         }
         // Nothing to fetch and nothing to decode: the document arrived during source
@@ -812,6 +854,17 @@ pub(crate) struct Resolution<'a> {
         alloc::sync::Arc<tessella_source::cluster::Clustered>,
     )],
     pub(crate) annotations: Option<&'a alloc::sync::Arc<tessella_source::annotation::Annotations>>,
+    /// The source the style's terrain reads, when it has a usable one.
+    ///
+    /// Named rather than inferred from the kind: a style can declare several DEM sources and
+    /// raise its ground from one of them, and only that one is covered as a surface.
+    pub(crate) terrain: Option<&'a str>,
+    /// The DEM sources some layer draws a picture of -- a hillshade or a color relief.
+    ///
+    /// Empty is the common terrain style, and it is worth the field: the image cover is a zoom
+    /// finer than the surface one, so four tiles for every ground tile, fetched and decoded to
+    /// build buckets no layer would have asked for.
+    pub(crate) shaded: &'a [&'a str],
 }
 
 pub(crate) fn plan(
@@ -826,15 +879,26 @@ pub(crate) fn plan(
         documents,
         clustered,
         annotations,
+        terrain,
+        shaded,
     } = resolution;
     let mut raster_covers: alloc::collections::BTreeMap<u8, Vec<cover::TileCoord>> =
         alloc::collections::BTreeMap::new();
-    for (_, _, kind) in sets {
-        if let SourceKind::Raster { .. } | SourceKind::RasterDem { .. } = kind {
-            let z = covering_zoom(*kind, view.zoom);
-            if let alloc::collections::btree_map::Entry::Vacant(slot) = raster_covers.entry(z) {
-                slot.insert(cover::cover_at(view, z).map_err(|_| BootError::Uncovered)?);
+    let want = |zooms: &mut alloc::collections::BTreeMap<u8, Vec<cover::TileCoord>>, z: u8| {
+        if let alloc::collections::btree_map::Entry::Vacant(slot) = zooms.entry(z) {
+            slot.insert(cover::cover_at(view, z).map_err(|_| BootError::Uncovered)?);
+        }
+        Ok::<(), BootError>(())
+    };
+    for (name, _, kind) in sets {
+        match kind {
+            SourceKind::Raster { .. } => want(&mut raster_covers, covering_zoom(*kind, view.zoom))?,
+            // Only where a layer draws a picture of it. A DEM nothing shades is read as a
+            // surface alone, and the surface's cover is the frame's own.
+            SourceKind::RasterDem { .. } if shaded.contains(&name.as_str()) => {
+                want(&mut raster_covers, covering_zoom(*kind, view.zoom))?;
             }
+            SourceKind::RasterDem { .. } | SourceKind::Vector => {}
         }
     }
 
@@ -843,45 +907,88 @@ pub(crate) fn plan(
     // way mbgl has a render tile per source-tile, and a style that overlays a local extract on
     // a world basemap wants both at the same address.
     for (name, set, kind) in sets {
-        let (tiles, work): (&[cover::TileCoord], fn(String) -> Work) = match kind {
-            SourceKind::Vector => (cover, |url| Work::Vector { url }),
-            SourceKind::Raster { .. } => (
+        // Usually one cover and one kind of work. A DEM the ground is raised from is the
+        // exception: it is read as an image at one zoom and as a surface at another, and when
+        // those differ it is planned at both -- see `DemReads`. They are the same list when the
+        // source is 512 pixels, and then the single job carries both readings.
+        let mut planned: Vec<(&[cover::TileCoord], Work)> = Vec::new();
+        match kind {
+            SourceKind::Vector => planned.push((cover, Work::Vector { url: String::new() })),
+            SourceKind::Raster { .. } => planned.push((
                 raster_covers[&covering_zoom(*kind, view.zoom)].as_slice(),
-                |url| Work::Raster { url },
-            ),
+                Work::Raster { url: String::new() },
+            )),
             // Covered at the raster zoom, because that is what it is: the tiles are the same
             // size and fetched the same way, and only what is inside them differs.
-            SourceKind::RasterDem { .. } => (
-                raster_covers[&covering_zoom(*kind, view.zoom)].as_slice(),
-                |url| Work::Dem { url },
-            ),
-        };
+            SourceKind::RasterDem { .. } => {
+                let image = covering_zoom(*kind, view.zoom);
+                let raises = terrain == Some(name.as_str());
+                let shades = shaded.contains(&name.as_str());
+                let surface_at = surface_zoom(view.zoom);
+                if shades {
+                    planned.push((
+                        raster_covers[&image].as_slice(),
+                        Work::Dem {
+                            url: String::new(),
+                            reads: DemReads {
+                                image: true,
+                                surface: raises && surface_at == image,
+                            },
+                        },
+                    ));
+                }
+                if raises && (!shades || surface_at != image) {
+                    planned.push((
+                        // The frame's own cover, not a cover recomputed at the same zoom. The
+                        // ground has to exist on exactly the tiles the frame is drawing -- a
+                        // layer is raised by finding a ground tile that contains it, and a ground
+                        // planned for a nearly-identical list leaves the difference flat.
+                        cover,
+                        Work::Dem {
+                            url: String::new(),
+                            reads: DemReads {
+                                image: false,
+                                surface: true,
+                            },
+                        },
+                    ));
+                }
+            }
+        }
 
-        for tile in tiles {
-            let Some(z) = fetch_zoom(tile.z, set.zooms) else {
-                continue;
-            };
-            let shift = tile.z - z;
-            let (x, y) = (tile.x >> shift, tile.y >> shift);
-            let Some(url) = set.url_for(z, x, y, 1.0) else {
-                continue;
-            };
-            let id = TileId::overscaled(z, x, y, tile.z);
-            jobs.push(Job {
-                cover: TileId::new(tile.z, tile.x, tile.y),
-                source: name.clone(),
-                key: tessella_tile::store::TileKey::overscaled(
-                    name.as_str(),
-                    id.z,
-                    id.x,
-                    id.y,
-                    id.overscaled_z,
-                    style_rev,
-                )
-                .on(surface),
-                tile: id,
-                work: work(url),
-            });
+        for (tiles, shape) in planned {
+            for tile in tiles {
+                let Some(z) = fetch_zoom(tile.z, set.zooms) else {
+                    continue;
+                };
+                let shift = tile.z - z;
+                let (x, y) = (tile.x >> shift, tile.y >> shift);
+                let Some(url) = set.url_for(z, x, y, 1.0) else {
+                    continue;
+                };
+                let id = TileId::overscaled(z, x, y, tile.z);
+                jobs.push(Job {
+                    cover: TileId::new(tile.z, tile.x, tile.y),
+                    source: name.clone(),
+                    key: tessella_tile::store::TileKey::overscaled(
+                        name.as_str(),
+                        id.z,
+                        id.x,
+                        id.y,
+                        id.overscaled_z,
+                        style_rev,
+                    )
+                    .on(surface),
+                    tile: id,
+                    work: match &shape {
+                        Work::Vector { .. } => Work::Vector { url },
+                        Work::Raster { .. } => Work::Raster { url },
+                        Work::Dem { reads, .. } => Work::Dem { url, reads: *reads },
+                        // The two document kinds are never planned here.
+                        Work::Geojson { .. } | Work::Annotation { .. } => continue,
+                    },
+                });
+            }
         }
     }
 
@@ -1547,12 +1654,21 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
     // A cold start is a plane. A globe is a runtime toggle, so the first frame is drawn
     // before anything could have asked for one -- and a boot that guessed otherwise would
     // build every tile twice for the case nobody asked for.
+    // The DEM sources a layer draws a picture of, which decides whether they are covered at the
+    // image zoom as well as the surface one.
+    let shaded: Vec<&str> = sets
+        .iter()
+        .map(|(name, _, _)| name.as_str())
+        .filter(|name| style.shades(name))
+        .collect();
     let jobs = plan(
         &Resolution {
             sets: &sets,
             documents: &documents,
             clustered: &clustered,
             annotations: None,
+            terrain: style.terrain_dem().map(|(id, _)| id),
+            shaded: &shaded,
         },
         view,
         &cover,
@@ -1814,6 +1930,8 @@ mod annotation_plan_tests {
                 documents: &[],
                 clustered: &[],
                 annotations: None,
+                terrain: None,
+                shaded: &[],
             },
             &view(),
             &cover_at(14),
@@ -1833,6 +1951,8 @@ mod annotation_plan_tests {
                 documents: &[],
                 clustered: &[],
                 annotations: Some(&store),
+                terrain: None,
+                shaded: &[],
             },
             &view(),
             &cover_at(14),
@@ -1867,6 +1987,8 @@ mod annotation_plan_tests {
                 documents: &[],
                 clustered: &[],
                 annotations: Some(&store),
+                terrain: None,
+                shaded: &[],
             },
             &view(),
             &cover,

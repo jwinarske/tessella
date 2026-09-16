@@ -131,7 +131,20 @@ fn a_dem_tile_carries_the_ground() {
         "the DEM was fetched but built no tiles"
     );
 
-    let ground = dem_tiles
+    // The ones at the *surface* cover, which is not all of them: a 256-pixel DEM is covered
+    // twice over, once at the view's zoom for the ground and once a level finer for the layers
+    // that read it as an image. The finer tiles carry a hillshade or a relief and no ground --
+    // see `boot::DemReads` -- so this counts the coarsest zoom the DEM landed at.
+    let surface = dem_tiles
+        .iter()
+        .map(|built| built.tile.z)
+        .min()
+        .expect("a DEM tile");
+    let at_surface: Vec<_> = dem_tiles
+        .iter()
+        .filter(|built| built.tile.z == surface)
+        .collect();
+    let ground = at_surface
         .iter()
         .filter(|built| {
             built
@@ -142,9 +155,21 @@ fn a_dem_tile_carries_the_ground() {
         .count();
     assert_eq!(
         ground,
-        dem_tiles.len(),
-        "{ground} of {} DEM tiles carry the ground",
-        dem_tiles.len()
+        at_surface.len(),
+        "{ground} of {} DEM tiles at z{surface} carry the ground",
+        at_surface.len()
+    );
+    // And none of the finer ones does, so the ground is on one grid rather than two.
+    assert!(
+        dem_tiles
+            .iter()
+            .filter(|built| built.tile.z != surface)
+            .all(|built| {
+                !built.buckets.iter().any(|bucket| {
+                    matches!(bucket.content, tessella_orchestrate::Content::Terrain(_))
+                })
+            }),
+        "a DEM tile past the surface cover carries a ground"
     );
 }
 
@@ -181,4 +206,86 @@ fn an_inert_terrain_asks_for_nothing() {
             "{terrain}: {urls:?}"
         );
     }
+}
+
+/// The ground lands on the same tiles the layers standing on it do.
+///
+/// A layer is raised by finding a ground tile that *contains* it, so a ground one zoom finer than
+/// the vector tiles has no tile in common with them and raises nothing. That is what a 256-pixel
+/// DEM does under the imagery rule -- it covers at `view.zoom + 1` -- and why a DEM read as a
+/// surface covers at the view's own zoom instead. See `boot::DemReads`.
+///
+/// Checked as a set comparison rather than a count: the two covers have to be the same tiles, not
+/// merely the same number of them.
+#[test]
+fn the_ground_shares_the_cover_with_what_stands_on_it() {
+    let (booted, _) = boot(&style(
+        r#""terrain": {"source": "dem", "exaggeration": 1.4},"#,
+    ));
+    let booted = booted.expect("boots");
+
+    let at = |source: &str, ground: bool| -> std::collections::BTreeSet<(u8, u32, u32)> {
+        booted
+            .tiles
+            .iter()
+            .filter(|built| built.source == source)
+            .filter(|built| {
+                !ground
+                    || built.buckets.iter().any(|bucket| {
+                        matches!(bucket.content, tessella_orchestrate::Content::Terrain(_))
+                    })
+            })
+            .map(|built| (built.tile.z, built.tile.x, built.tile.y))
+            .collect()
+    };
+
+    let vector = at("base", false);
+    let ground = at("dem", true);
+    assert!(!vector.is_empty(), "no vector tiles were built");
+    assert!(!ground.is_empty(), "no ground was built");
+    assert_eq!(
+        ground, vector,
+        "the ground and the tiles standing on it are on different grids"
+    );
+}
+
+/// The ground's grid comes from its own relief, not from the mesh's ceiling.
+///
+/// `MESH_SIZE` is the floor a *steep* tile falls back to, and splitting every tile at it is what
+/// makes terrain unaffordable: 16,384 cells a tile, and every fill covering one becomes tens of
+/// thousands of triangles. Smooth ground has to reach one cell — a ground drawn as two triangles,
+/// and the layers standing on it split not at all.
+///
+/// The fixture is a photographic PNG read as a DEM, so its "elevation" is noise at every scale
+/// and it lands at the ceiling. What this pins is that the number is *derived* rather than
+/// constant: it is a power of two no larger than the mesh's grid, which is the shape
+/// `Relief::cells_within` promises and the shape everything downstream indexes by.
+#[test]
+fn the_grounds_grid_is_derived_from_its_relief() {
+    let (booted, _) = boot(&style(
+        r#""terrain": {"source": "dem", "exaggeration": 1.4},"#,
+    ));
+    let booted = booted.expect("boots");
+    let base = u32::from(tessella_layout::terrain::MESH_SIZE);
+
+    let mut seen = 0;
+    for built in &booted.tiles {
+        for bucket in built.buckets.iter() {
+            if let tessella_orchestrate::Content::Terrain(ground) = &bucket.content {
+                seen += 1;
+                assert!(ground.cells >= 1, "a ground with no cells at all");
+                assert!(
+                    ground.cells <= base,
+                    "{} cells is finer than the mesh's own {base}",
+                    ground.cells
+                );
+                assert!(
+                    ground.cells.is_power_of_two(),
+                    "{} cells is not a halving of the mesh's grid",
+                    ground.cells
+                );
+            }
+        }
+    }
+    assert!(seen > 0, "no ground was built");
 }

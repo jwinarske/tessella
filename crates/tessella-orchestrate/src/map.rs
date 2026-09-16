@@ -135,6 +135,16 @@ pub trait Tiles {
         let _ = view;
         alloc::vec::Vec::new()
     }
+
+    /// How finely the terrain under this view has to be split, in cells a tile side.
+    ///
+    /// The worst of the ground tiles in hand -- each carries the count its own relief asked for,
+    /// and one number has to serve the frame because the grid is part of a tile's key. `None`
+    /// while no ground has landed, which is every style without a terrain and every terrain style
+    /// before its DEM arrives; the map draws flat until then and has nothing to follow anyway.
+    fn terrain_cells(&self) -> Option<u32> {
+        None
+    }
 }
 
 /// A map being drawn: one style, one view, and the state that makes a frame incremental.
@@ -143,6 +153,16 @@ pub trait Tiles {
 /// writing to it would be the one thing the ring's lock-free discipline does not survive.
 pub struct Map {
     style: Style,
+    /// How finely the ground under this view is split, in cells a tile side.
+    ///
+    /// Remembered rather than asked for per call, because `surface()` is read from places that
+    /// hold no store and because it is part of every tile's key: a change re-keys the cover and
+    /// rebuilds it, which is the mechanism that makes it safe to refine.
+    ///
+    /// Starts at one — a ground with no DEM in hand is not drawn, so there is nothing to follow
+    /// and nothing to split for. It steps up when the first ground lands and its relief asks for
+    /// more, which is one rebuild wave and bounded by the mesh's own grid.
+    terrain_cells: u32,
     view: ViewTransform,
     view_id: ViewId,
     light: Light,
@@ -259,6 +279,7 @@ impl Map {
         // rather than by a setter.
         style.synthesize_terrain();
         Self {
+            terrain_cells: 1,
             style,
             view,
             view_id,
@@ -484,7 +505,7 @@ impl Map {
         match self.projection {
             ProjectionMode::Globe => Surface::Sphere,
             ProjectionMode::Mercator if self.style.terrain_dem().is_some() => Surface::Terrain {
-                cells: u32::from(tessella_layout::terrain::MESH_SIZE),
+                cells: self.terrain_cells,
             },
             ProjectionMode::Mercator => Surface::Plane,
         }
@@ -608,6 +629,12 @@ impl Map {
             if let Some(step) = *STEP {
                 self.advance(step);
             }
+        }
+        // What the ground in hand asks for. Read before the cover, because the cover is keyed on
+        // it: a finer answer re-keys the tiles and rebuilds them at the grid the ground needs,
+        // and a store with no ground yet leaves it where it is.
+        if let Some(cells) = tiles.terrain_cells() {
+            self.terrain_cells = cells;
         }
         let key = crate::frame::camera_key_of(&self.view);
         let work = self.damage.begin_frame(self.view_id, key);

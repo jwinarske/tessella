@@ -1185,6 +1185,12 @@ pub struct FillDraw<'a> {
     pub pattern_atlas: Option<TextureId>,
     /// Per-vertex rectangles, when the pattern varies with the feature.
     pub pattern_vertices: Option<&'a PatternVertices>,
+    /// The DEM this drawable stands on, when the terrain raises it.
+    ///
+    /// The covering tile's rather than its own: a fill is on a vector tile and has no elevation
+    /// of its own to read, so this is whatever ground the frame found above it. `None` on a flat
+    /// map, and on a tile no ground covers.
+    pub elevation: Option<TextureId>,
 }
 
 impl<'a> FillDraw<'a> {
@@ -1204,6 +1210,7 @@ impl<'a> FillDraw<'a> {
             shared,
             pattern_atlas,
             pattern_vertices: None,
+            elevation: None,
         }
     }
 
@@ -1211,6 +1218,13 @@ impl<'a> FillDraw<'a> {
     #[must_use]
     pub fn with_pattern_vertices(mut self, vertices: &'a PatternVertices) -> Self {
         self.pattern_vertices = Some(vertices);
+        self
+    }
+
+    /// The same, standing on the ground a terrain put under it.
+    #[must_use]
+    pub fn on_terrain(mut self, elevation: Option<TextureId>) -> Self {
+        self.elevation = elevation;
         self
     }
 }
@@ -1279,6 +1293,7 @@ pub fn encode_fill(
         shared,
         pattern_atlas,
         pattern_vertices,
+        elevation,
     } = draw;
     let part = if shared.is_some() {
         FillPart::Outline
@@ -1365,12 +1380,22 @@ pub fn encode_fill(
 
     let mut payload = Vec::new();
     let attrs = push_span(&mut payload, &descriptors);
-    let textures = push_span(
-        &mut payload,
-        &pattern_atlas.map_or_else(Vec::new, |atlas| {
+    // The pattern's atlas, where there is one, and the ground's elevation where the terrain
+    // raises this drawable. The elevation's slot is named directly rather than read out of
+    // `texture_refs`, whose table is mbgl's -- and mbgl, having no terrain, has no row for it.
+    let textures = push_span(&mut payload, &{
+        let mut refs = pattern_atlas.map_or_else(Vec::new, |atlas| {
             texture_refs(shader, &[atlas], TextureFilter::Linear)
-        }),
-    );
+        });
+        if let Some(elevation) = elevation {
+            refs.push(TextureRef {
+                texture: elevation,
+                slot: TERRAIN_ELEVATION_SLOT,
+                filter: TextureFilter::Linear as u32,
+            });
+        }
+        refs
+    });
     let segments = push_span(
         &mut payload,
         &draw_segments
@@ -1544,6 +1569,7 @@ fn geometry_add_instanced(
         shader,
         atlas.as_slice(),
         filter,
+        None,
     )
 }
 
@@ -1551,6 +1577,10 @@ fn geometry_add_instanced(
 ///
 /// The heatmap's texture pass is the first: it reads what the offscreen pass drew *and* the
 /// color ramp, so the single-atlas shape every other family uses cannot express it.
+///
+/// `elevation` is the ground this drawable stands on, where the terrain raises it. Apart from
+/// `bound`, whose slots come from the shader's own table: that table is mbgl's, and mbgl has no
+/// terrain and so no row for the slot a raised family samples.
 #[allow(clippy::too_many_arguments)]
 fn geometry_add_textured(
     geometry: GeometryId,
@@ -1563,19 +1593,27 @@ fn geometry_add_textured(
     shader: BuiltIn,
     bound: &[TextureId],
     filter: TextureFilter,
+    elevation: Option<TextureId>,
 ) -> Encoded {
     let mut payload = Vec::new();
     let attrs = push_span(&mut payload, descriptors);
     let instance_attrs = push_span(&mut payload, instances);
     // The slot comes from the shader's own table, never from the caller — see `texture_refs`.
-    let textures = push_span(
-        &mut payload,
-        &if bound.is_empty() {
+    let textures = push_span(&mut payload, &{
+        let mut refs = if bound.is_empty() {
             Vec::new()
         } else {
             texture_refs(shader, bound, filter)
-        },
-    );
+        };
+        if let Some(elevation) = elevation {
+            refs.push(TextureRef {
+                texture: elevation,
+                slot: TERRAIN_ELEVATION_SLOT,
+                filter: filter as u32,
+            });
+        }
+        refs
+    });
     let segments = push_span(
         &mut payload,
         &segments
@@ -1734,6 +1772,7 @@ pub fn encode_fill_outline_triangulated(
     geometry: GeometryId,
     bucket: &tessella_layout::fill::FillBucket,
     permutation_key: u64,
+    elevation: Option<TextureId>,
 ) -> Encoded {
     let outline = &bucket.outline;
     let vertices = alloc_line_vertices(arena, &outline.vertices);
@@ -1763,16 +1802,18 @@ pub fn encode_fill_outline_triangulated(
             _pad: [0; 2],
         },
     ];
-    geometry_add(
+    geometry_add_textured(
         geometry,
         permutation_key,
         indexes,
         outline.vertices.len(),
         &descriptors,
+        &[],
         &outline.segments,
         BuiltIn::FillOutlineTriangulatedShader,
-        None,
+        &[],
         TextureFilter::Linear,
+        elevation,
     )
 }
 
@@ -2315,6 +2356,9 @@ pub fn encode_heatmap_texture(
         BuiltIn::HeatmapTextureShader,
         &[target, ramp],
         TextureFilter::Linear,
+        // The heatmap's texture pass is a viewport quad, not geometry on the map, so there is no
+        // ground under it to stand on.
+        None,
     )
 }
 
