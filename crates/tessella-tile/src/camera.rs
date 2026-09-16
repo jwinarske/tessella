@@ -459,6 +459,39 @@ fn world_to_camera(view: &ViewTransform) -> Mat4 {
 ///
 /// [`CameraError::EmptyViewport`] when the view has no area.
 pub fn proj_matrix(view: &ViewTransform) -> Result<Mat4, CameraError> {
+    proj_matrix_with(view, 1.0)
+}
+
+/// [`proj_matrix`] with its near plane pushed out, which is what a fill-extrusion draws through.
+///
+/// mbgl keeps two projections a frame. `PaintParameters` builds the plain one with a near plane of
+/// one, and `nearClippedProjMatrix` with `0.1 * getCameraToCenterDistance()` -- "near plane moved
+/// further, to enhance depth buffer precision", as `LayerTweaker` puts it. `FillExtrusionLayerTweaker`
+/// is the one tweaker that asks for it, with `constexpr bool nearClipped = true`, because an
+/// extrusion is the one family that resolves against the depth buffer rather than by paint order.
+///
+/// The near plane is what sets that buffer's resolution. Depth is distributed as `1/z`, so almost
+/// all of it sits near the camera and what is left for the far half falls with the ratio of the two
+/// planes. At this build's default camera the distance is 1152 pixels and the far plane under a
+/// pitch of forty-five degrees is about 1745, so mbgl spans 115 to 1745 where a near plane of one
+/// spans 1 to 1745 -- an order of magnitude less resolution at the horizon, and it is spent exactly
+/// where a pitched view puts the most geometry. Drawn that way, display-buildings-in-3d matched the
+/// oracle pixel for pixel in the foreground and lost a quarter of its walls in the distance, where
+/// the depth test could no longer separate one building's face from another's.
+///
+/// `as u16` is not a rounding choice: mbgl's parameter is a `uint16_t`, so 115.2 arrives as 115.
+///
+/// # Errors
+///
+/// [`CameraError::EmptyViewport`] when the view has no area.
+pub fn near_clipped_proj_matrix(view: &ViewTransform) -> Result<Mat4, CameraError> {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let near_z = f64::from((0.1 * camera_to_center_distance(view.height)) as u16);
+    proj_matrix_with(view, near_z)
+}
+
+/// [`proj_matrix`], with the near plane the caller asks for.
+fn proj_matrix_with(view: &ViewTransform, near_z: f64) -> Result<Mat4, CameraError> {
     // Negated `>` rather than `<=`, and not for style: `<= 0` *accepts* a NaN, since every
     // comparison against one is false, and a NaN viewport would then divide into the aspect
     // ratio and put a NaN in every matrix the frame produces. A resize that arrived mid-flight
@@ -491,7 +524,6 @@ pub fn proj_matrix(view: &ViewTransform) -> Result<Mat4, CameraError> {
     // test. With no pitch `tan_multiple` is zero and this is the center distance, which is what
     // the unrotated path computed before pitch existed.
     let far_z = furthest * 1.01;
-    let near_z = 1.0;
 
     // The f32 field of view, which is what `getFieldOfView()` returns.
     #[allow(clippy::cast_possible_truncation)]
@@ -1035,6 +1067,44 @@ pub const fn identity() -> Mat4 {
 
 #[cfg(test)]
 mod tests {
+    /// An extrusion's projection puts its near plane a tenth of the way to the center.
+    ///
+    /// mbgl's `0.1 * getCameraToCenterDistance()`, through a `uint16_t`: at a viewport 768 pixels
+    /// tall the distance is 1152 and the plane lands at 115, not 115.2. The far plane and
+    /// everything the matrix does to x and y are the plain projection's -- only the depth
+    /// distribution moves, which is the whole point of it.
+    #[test]
+    fn the_near_clipped_projection_moves_only_the_near_plane() {
+        let view = super::ViewTransform {
+            longitude: -74.0066,
+            latitude: 40.7135,
+            zoom: 15.5,
+            width: 1024.0,
+            height: 768.0,
+            bearing: -17.6,
+            pitch: 45.0,
+        };
+        assert_eq!(super::camera_to_center_distance(view.height), 1152.0);
+        let near = super::near_clipped_proj_matrix(&view).expect("a matrix");
+        assert_eq!(
+            near,
+            super::proj_matrix_with(&view, 115.0).expect("a matrix"),
+            "the near plane is mbgl's, truncated as its uint16_t truncates"
+        );
+
+        // Same frustum sideways, different depth: the first two columns are what carry x and y.
+        let plain = super::proj_matrix(&view).expect("a matrix");
+        for index in [0, 1, 4, 5, 12, 13] {
+            assert!(
+                (near[index] - plain[index]).abs() < f64::EPSILON,
+                "column {index} moved: {} against {}",
+                near[index],
+                plain[index]
+            );
+        }
+        assert_ne!(near[10], plain[10], "the depth scale is what changes");
+    }
+
     use super::*;
 
     /// The oracle's projection matrix, as sixteen f64 bit patterns from the golden dump.

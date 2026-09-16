@@ -192,6 +192,31 @@ pub fn tile_matrix(
     }
 }
 
+/// [`tile_matrix`] through the near-clipped projection, with no sublayer nudge.
+///
+/// What mbgl draws a fill-extrusion through, and only a fill-extrusion:
+/// `FillExtrusionLayerTweaker` passes `nearClipped = true` where every other tweaker leaves it
+/// false. See [`camera::near_clipped_proj_matrix`] for what the plane buys and what it cost here.
+///
+/// A globe takes the plain path. Its tiles are placed by the sphere's own clip matrix rather than
+/// by a perspective projection, so there is no near plane in it to move.
+fn near_clipped_tile_matrix(
+    view: &ViewTransform,
+    projection: ProjectionMode,
+    z: u8,
+    x: u32,
+    y: u32,
+    wrap: i32,
+) -> Result<camera::Mat4, camera::CameraError> {
+    match projection {
+        ProjectionMode::Mercator => Ok(camera::multiply(
+            &camera::near_clipped_proj_matrix(view)?,
+            &camera::matrix_for_tile(z, x, y, wrap, view.zoom),
+        )),
+        ProjectionMode::Globe => tile_matrix(view, projection, z, x, y, wrap, 0.0),
+    }
+}
+
 /// How far a drawable's depth is nudged toward the viewer.
 ///
 /// # The same field name, two different numbers
@@ -432,7 +457,7 @@ impl DrawableEntry {
         y: u32,
         wrap: i32,
     ) -> Result<Self, camera::CameraError> {
-        let matrix = tile_matrix(view, projection, z, x, y, wrap, 0.0)?;
+        let matrix = near_clipped_tile_matrix(view, projection, z, x, y, wrap)?;
 
         #[allow(clippy::cast_possible_truncation)]
         Ok(Self {
