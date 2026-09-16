@@ -173,6 +173,17 @@ pub struct TerrainContent {
     /// A function of the tile's own zoom -- `tessella_layout::terrain::skirt_length` -- so it is
     /// per tile and not per frame, which is what keeps the bucket camera-free (§5.1).
     pub skirt: f32,
+    /// How finely this tile's ground has to be split, in cells a side.
+    ///
+    /// From `Relief::cells_within` over the tile's own DEM: the mesh's grid where the ground is
+    /// steep, and halved for every level the relief lets it coarsen. Smooth ground reaches one
+    /// cell, which is a ground drawn as two triangles and layers on it split not at all.
+    ///
+    /// This is the number that makes terrain affordable. Split at the mesh's own grid regardless
+    /// -- 128 cells a side, 16,384 per tile -- every fill covering a tile becomes tens of
+    /// thousands of triangles, and a z14 cover of that took the renderer from settling in 224
+    /// ticks to 1,200 and stopped it settling to the same picture twice.
+    pub cells: u32,
 }
 
 /// The quad a hillshade's slope field is drawn on, and the field.
@@ -1589,6 +1600,33 @@ pub fn build_dem_tile_on(
     Ok(buckets)
 }
 
+/// How finely a DEM tile's ground has to be split, in cells a side.
+///
+/// The mesh's own grid where the ground is steep, halved for every level the tile's relief lets
+/// it coarsen — `Relief::cells_within` against the bound `split_relief` computes for this zoom
+/// and latitude. Both were written for this and nothing asked until now.
+///
+/// The bound is a screen-space one: half a pixel of vertical error at the worst pitch the camera
+/// allows, at the top of the zoom level, so it holds for every camera a bucket built here will be
+/// drawn under (§5.1). Smooth ground reaches one cell, which is a ground drawn as two triangles
+/// and the layers standing on it split not at all.
+fn terrain_cells(dem: &tessella_source::dem::Dem, tile: TileId, exaggeration: f64) -> u32 {
+    /// Half a pixel of vertical error, which is the tolerance every other split in this build is
+    /// solved for — `globe::edge_segments` uses the same one.
+    const TOLERANCE: f64 = 0.5;
+    let base = u32::from(tessella_layout::terrain::MESH_SIZE);
+    // The tile's own center, because a world pixel is a different number of meters at Berlin
+    // than at the equator.
+    let side = 1u32 << tile.z;
+    #[allow(clippy::cast_precision_loss)]
+    let latitude =
+        tessella_tile::camera::latitude_of((f64::from(tile.y) + 0.5) / f64::from(side).max(1.0));
+    let relief = tessella_source::terrain::split_relief(tile.z, latitude, exaggeration, TOLERANCE);
+    #[allow(clippy::cast_possible_truncation)]
+    let relief = relief as f32;
+    tessella_source::terrain::Relief::new(dem, base).cells_within(relief)
+}
+
 /// Builds the ground's bucket from a decoded DEM.
 ///
 /// [`build_dem_tile_on`]'s other sibling, and not its arm for the same reason: a style may want a
@@ -1627,6 +1665,7 @@ pub fn build_terrain_tile_on(
             content: Content::Terrain(TerrainContent {
                 dem: alloc::sync::Arc::clone(dem),
                 exaggeration: terrain.exaggeration() as f32,
+                cells: terrain_cells(dem, tile, terrain.exaggeration()),
                 // The tile's own zoom, not the cover's: a skirt hides the seam between this tile
                 // and its neighbors, and how wide that seam can be is a property of the level.
                 skirt: tessella_layout::terrain::skirt_length(f64::from(tile.z)) as f32,

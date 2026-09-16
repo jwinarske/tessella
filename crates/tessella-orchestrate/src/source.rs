@@ -81,6 +81,22 @@ struct Landed {
     /// A second index rather than a change of key, because the key is shared across sources -- a
     /// raster source covers at its own zoom, and re-keying merged buckets that belong apart.
     alias: BTreeMap<TileId, TileId>,
+    /// Which *source* has landed at each address, which `by_tile` cannot say.
+    ///
+    /// Two sources at one coordinate merge their buckets into one list, which is what the frame
+    /// wants and what the comment above describes. It leaves the map unable to answer "has this
+    /// source's tile arrived", and the dispatcher asks exactly that before deciding a job is
+    /// already done. Asked of `by_tile` the answer is yes as soon as *any* source has landed
+    /// there, so the second source's job is dropped and its buckets never built.
+    ///
+    /// Only a terrain has made the two disagree so far: every other pair of sources at one
+    /// coordinate covers at a different zoom, so their tiles are at different addresses. The
+    /// ground is covered at the view's own zoom, deliberately -- see `boot::DemReads` -- which
+    /// puts a DEM tile at the same address as the vector tile standing on it.
+    /// By address *and* source, which is what `by_tile` cannot express and `TileKey` gets wrong
+    /// in the other direction: a key carries the style revision and the surface but not the world
+    /// copy, so deduping on one lets whichever wrap landed first suppress the others.
+    keys: BTreeMap<TileId, alloc::collections::BTreeSet<alloc::string::String>>,
     sourceless: BTreeMap<TileId, Arc<Vec<LayerBucket>>>,
 }
 
@@ -946,12 +962,20 @@ impl<D: TileTransport + 'static> TileSource<D> {
         speculative: &[TileCoord],
         surface: Surface,
     ) {
+        let shaded: Vec<&str> = sources
+            .sets
+            .iter()
+            .map(|(name, _, _)| name.as_str())
+            .filter(|name| sources.style.shades(name))
+            .collect();
         let Ok(jobs) = boot::plan(
             &boot::Resolution {
                 sets: &sources.sets,
                 documents: &sources.documents,
                 clustered: &sources.clustered,
                 annotations: sources.annotations.as_ref(),
+                terrain: sources.style.terrain_dem().map(|(id, _)| id),
+                shaded: &shaded,
             },
             view,
             coords,
@@ -1019,7 +1043,16 @@ impl<D: TileTransport + 'static> TileSource<D> {
             let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
             jobs.into_iter()
                 .filter(|job| {
-                    !landed.by_tile.contains_key(&job.tile)
+                    // By address *and* source: a coordinate can hold one tile per source --
+                    // a terrain's ground sits at the same address as the vector tile standing
+                    // on it -- and asking `by_tile` alone answers yes as soon as either has
+                    // landed, so the second source's job is dropped and never built.
+                    // Borrowed, not cloned: this runs per job per tick, and the source name is
+                    // only being compared.
+                    !landed
+                        .keys
+                        .get(&job.tile)
+                        .is_some_and(|sources| sources.contains(job.source.as_str()))
                         && inner.inflight.insert(job.key.clone())
                 })
                 .collect()
@@ -1129,6 +1162,10 @@ impl<D: TileTransport + 'static> TileSource<D> {
         // Keyed by the data tile, which is the thing that was built. What the cover asked for
         // reaches it through `alias`, so one tile serving many coordinates is stored and decoded
         // once.
+        held.keys
+            .entry(job.tile)
+            .or_default()
+            .insert(job.source.clone());
         held.by_tile
             .entry(job.tile)
             .and_modify(|existing| {
@@ -1250,6 +1287,18 @@ impl<D: TileTransport + 'static> Tiles for Arc<TileSource<D>> {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .serving(cover)
+    }
+
+    fn terrain_cells(&self) -> Option<u32> {
+        let held = self.landed.read().unwrap_or_else(PoisonError::into_inner);
+        held.by_tile
+            .values()
+            .flat_map(|buckets| buckets.iter())
+            .filter_map(|bucket| match &bucket.content {
+                crate::tile::Content::Terrain(ground) => Some(ground.cells),
+                _ => None,
+            })
+            .max()
     }
 
     fn sourceless(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
