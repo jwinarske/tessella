@@ -1202,13 +1202,22 @@ fn emit_group(
                 // which gates the binding. A second view picking up a tile the first already
                 // draws needs a `ViewUse` and no `GeometryAdd`. The third is whether what the
                 // geometry says has changed under a drawable that is neither.
-                if registry.is_new(&key) || registry.content_changed(&key, ground_stamp) {
+                // And the size of the build it comes from, which a rebuild on a refined grid
+                // changes under the same key. See `Content::split_size`.
+                let size = tile_buckets
+                    .iter()
+                    .find(|bucket| {
+                        i32::try_from(bucket.layer_index).is_ok_and(|at| at == binding.layer_index)
+                    })
+                    .map_or(0, |bucket| bucket.content.split_size());
+                let stamp = [ground_stamp, size];
+                if registry.is_new(&key) || registry.content_changed(&key, stamp) {
                     fresh.insert(key);
                 }
                 if registry.is_unused_by(&key) {
                     unbound.insert(key);
                 }
-                binding.geometry = registry.id_for(key, ground_stamp);
+                binding.geometry = registry.id_for(key, stamp);
                 keyed.insert(binding.geometry.0, key);
             }
         }
@@ -1322,7 +1331,7 @@ fn emit_group(
                 }
                 // A heatmap's second pass is a viewport quad on no tile, so there is no ground
                 // under it and nothing frame-dependent for a stamp to carry.
-                let id = registry.id_for(key, 0);
+                let id = registry.id_for(key, [0, 0]);
                 keyed.insert(id.0, key);
                 id
             }
@@ -3464,7 +3473,9 @@ fn encode_parts(
         // The raster encoder over the slope field: same quad, same attributes, a different
         // shader and a different texture. mbgl's `HillshadeBucket` shares `RasterBucket`'s mask
         // handling for exactly this reason, which `tessella_tile::mask` already records.
-        // Three textures: this tile's elevation, and the layer's two stop tables.
+        // Three textures: this tile's elevation, and the layer's two stop tables. And a fourth
+        // where the terrain raises it: the ground's elevation, which it stands on as every raised
+        // layer does -- its own is at the zoom a relief is shaded at, not the ground's.
         Content::ColorRelief(relief) => Some(emit::encode_color_relief(
             arena,
             PLACEHOLDER,
@@ -3472,6 +3483,7 @@ fn encode_parts(
             textures.relief,
             relief_elevation_stops_id(i32::try_from(bucket.layer_index).unwrap_or(i32::MAX)),
             relief_color_stops_id(i32::try_from(bucket.layer_index).unwrap_or(i32::MAX)),
+            raised.then_some(textures.terrain),
         )),
         // The same mesh for every tile -- see `Content::Terrain` -- so what this names is the
         // tile's own elevation and nothing else.

@@ -33,6 +33,11 @@ use alloc::vec::Vec;
 
 use tessella_capture_abi::envelope::{GeometryId, SlabRef, TileId, ViewId};
 
+/// What a retained drawable's content was built from, beyond its key: the ground it stands on
+/// and the size of its build. Two numbers rather than one mixed from them, so no pair of
+/// different builds can compare equal. See [`GeometryRegistry::content_changed`].
+pub type ContentStamp = [u64; 2];
+
 /// What names one drawable across frames.
 ///
 /// Ordered so a registry's iteration is stable, which keeps the removals it reports in a fixed
@@ -87,9 +92,9 @@ struct Entry {
     /// its own schedule. Announced before it, the drawable carries no elevation reference, and
     /// marking it raised afterwards gives it nothing to read.
     ///
-    /// The stamp is whatever the caller decides identifies the content. Zero means "nothing
-    /// frame-dependent", which is every drawable on a flat map.
-    stamp: u64,
+    /// The stamp is whatever the caller decides identifies the content. Zeros mean nothing
+    /// beyond the key does.
+    stamp: ContentStamp,
 }
 
 /// Hands out geometry ids and remembers which drawable each belongs to.
@@ -144,7 +149,7 @@ impl GeometryRegistry {
     ///
     /// Records the key as seen, so a drawable this frame did not ask for is reported by
     /// [`Self::retired`].
-    pub fn id_for(&mut self, key: DrawableKey, stamp: u64) -> GeometryId {
+    pub fn id_for(&mut self, key: DrawableKey, stamp: ContentStamp) -> GeometryId {
         self.seen.insert(key);
         let view = self.view;
         if let Some(existing) = self.live.get_mut(&key) {
@@ -242,13 +247,13 @@ impl GeometryRegistry {
     /// `false` for one it does not have, which [`Self::is_new`] answers instead: the two are
     /// asked together and a new drawable is announced for being new.
     ///
-    /// A stamp is whatever the caller decides identifies a drawable's content — today the
-    /// covering ground's texture id, and zero for one standing on nothing. It exists because a
+    /// A stamp is whatever the caller decides identifies a drawable's content -- today the
+    /// covering ground's texture id and the vertex count of its build. It exists because a
     /// retained drawable is never re-encoded, which holds only while everything its encode reads
-    /// is a property of its tile; a layer the terrain raises names another source's elevation,
-    /// arriving on its own schedule.
+    /// is unchanged; a layer the terrain raises names another source's elevation, arriving on its
+    /// own schedule, and a refined grid rebuilds a tile under the same key.
     #[must_use]
-    pub fn content_changed(&self, key: &DrawableKey, stamp: u64) -> bool {
+    pub fn content_changed(&self, key: &DrawableKey, stamp: ContentStamp) -> bool {
         self.live.get(key).is_some_and(|entry| entry.stamp != stamp)
     }
 

@@ -33,11 +33,15 @@ fn a_tile_that_stays_keeps_its_id() {
     let mut registry = GeometryRegistry::new();
 
     registry.begin_frame(ViewId(0));
-    let first: Vec<_> = [1, 2, 3].map(|x| registry.id_for(key(x, 0, 1), 0)).to_vec();
+    let first: Vec<_> = [1, 2, 3]
+        .map(|x| registry.id_for(key(x, 0, 1), [0, 0]))
+        .to_vec();
 
     // Pan by one: tile 1 leaves, tile 4 arrives, tiles 2 and 3 stay.
     registry.begin_frame(ViewId(0));
-    let second: Vec<_> = [2, 3, 4].map(|x| registry.id_for(key(x, 0, 1), 0)).to_vec();
+    let second: Vec<_> = [2, 3, 4]
+        .map(|x| registry.id_for(key(x, 0, 1), [0, 0]))
+        .to_vec();
 
     assert_eq!(
         (&first[1], &first[2]),
@@ -55,8 +59,8 @@ fn a_tile_that_stays_keeps_its_id() {
 fn sub_layers_are_separate_drawables() {
     let mut registry = GeometryRegistry::new();
     registry.begin_frame(ViewId(0));
-    let triangles = registry.id_for(key(1, 0, 1), 0);
-    let outline = registry.id_for(key(1, 0, 2), 0);
+    let triangles = registry.id_for(key(1, 0, 1), [0, 0]);
+    let outline = registry.id_for(key(1, 0, 2), [0, 0]);
     assert_ne!(triangles, outline);
     assert_eq!(registry.len(), 2);
 }
@@ -70,11 +74,11 @@ fn sub_layers_are_separate_drawables() {
 fn what_a_frame_stops_using_is_reported_before_it_is_dropped() {
     let mut registry = GeometryRegistry::new();
     registry.begin_frame(ViewId(0));
-    let leaving = registry.id_for(key(1, 0, 1), 0);
-    registry.id_for(key(2, 0, 1), 0);
+    let leaving = registry.id_for(key(1, 0, 1), [0, 0]);
+    registry.id_for(key(2, 0, 1), [0, 0]);
 
     registry.begin_frame(ViewId(0));
-    registry.id_for(key(2, 0, 1), 0);
+    registry.id_for(key(2, 0, 1), [0, 0]);
 
     let retired = registry.retired();
     assert_eq!(retired.len(), 1, "one drawable left the cover: {retired:?}");
@@ -94,18 +98,18 @@ fn what_a_frame_stops_using_is_reported_before_it_is_dropped() {
 fn an_id_is_never_reused() {
     let mut registry = GeometryRegistry::new();
     registry.begin_frame(ViewId(0));
-    let first = registry.id_for(key(1, 0, 1), 0);
+    let first = registry.id_for(key(1, 0, 1), [0, 0]);
     registry.begin_frame(ViewId(0));
     registry.retire();
     assert!(registry.is_empty());
 
     registry.begin_frame(ViewId(0));
-    let second = registry.id_for(key(9, 0, 1), 0);
+    let second = registry.id_for(key(9, 0, 1), [0, 0]);
     assert_ne!(first, second, "a retired id is not handed out again");
 
     // Not even to the very drawable that had it.
     registry.begin_frame(ViewId(0));
-    let again = registry.id_for(key(1, 0, 1), 0);
+    let again = registry.id_for(key(1, 0, 1), [0, 0]);
     assert_ne!(first, again, "the key came back, the id did not");
 }
 
@@ -120,9 +124,9 @@ fn a_viewport_drawable_has_a_key_too() {
             layer_index: 0,
             sub_layer_index: 0,
         },
-        0,
+        [0, 0],
     );
-    let tiled = registry.id_for(key(1, 0, 0), 0);
+    let tiled = registry.id_for(key(1, 0, 0), [0, 0]);
     assert_ne!(background, tiled);
 
     registry.begin_frame(ViewId(0));
@@ -133,7 +137,7 @@ fn a_viewport_drawable_has_a_key_too() {
                 layer_index: 0,
                 sub_layer_index: 0,
             },
-            0
+            [0, 0]
         ),
         background,
         "it is stable across frames like anything else"
@@ -148,7 +152,7 @@ fn a_new_drawable_is_distinguishable_from_a_known_one() {
 
     registry.begin_frame(ViewId(0));
     assert!(registry.is_new(&first));
-    registry.id_for(first, 0);
+    registry.id_for(first, [0, 0]);
     assert!(!registry.is_new(&first), "asking for it makes it known");
 
     registry.begin_frame(ViewId(0));
@@ -176,7 +180,7 @@ mod views {
         registry.begin_frame(ViewId(0));
         assert!(registry.is_new(&shared), "nobody has it");
         assert!(registry.is_unused_by(&shared));
-        let id = registry.id_for(shared, 0);
+        let id = registry.id_for(shared, [0, 0]);
         registry.retire();
 
         registry.begin_frame(ViewId(1));
@@ -186,7 +190,7 @@ mod views {
             "but this view is not bound to it"
         );
         assert_eq!(
-            registry.id_for(shared, 0),
+            registry.id_for(shared, [0, 0]),
             id,
             "and it is the same geometry"
         );
@@ -202,10 +206,10 @@ mod views {
         let shared = key(1, 0, 1);
 
         registry.begin_frame(ViewId(0));
-        registry.id_for(shared, 0);
+        registry.id_for(shared, [0, 0]);
         registry.retire();
         registry.begin_frame(ViewId(1));
-        registry.id_for(shared, 0);
+        registry.id_for(shared, [0, 0]);
         registry.retire();
 
         // View 0 pans away from it.
@@ -236,14 +240,14 @@ mod views {
         let mut registry = GeometryRegistry::new();
 
         registry.begin_frame(ViewId(0));
-        registry.id_for(key(1, 0, 1), 0);
-        registry.id_for(key(2, 0, 1), 0);
+        registry.id_for(key(1, 0, 1), [0, 0]);
+        registry.id_for(key(2, 0, 1), [0, 0]);
         registry.retire();
 
         // A different cover entirely.
         registry.begin_frame(ViewId(1));
-        registry.id_for(key(8, 0, 1), 0);
-        registry.id_for(key(9, 0, 1), 0);
+        registry.id_for(key(8, 0, 1), [0, 0]);
+        registry.id_for(key(9, 0, 1), [0, 0]);
         assert!(
             registry.released().is_empty(),
             "view 1 never used view 0's tiles, so it releases none of them"
