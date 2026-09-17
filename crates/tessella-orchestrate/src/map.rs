@@ -135,6 +135,30 @@ pub trait Tiles {
         let _ = view;
         alloc::vec::Vec::new()
     }
+
+    /// How finely the terrain under this view has to be split, in cells a tile side.
+    ///
+    /// The worst of the ground tiles in hand -- each carries the count its own relief asked for,
+    /// and one number has to serve the frame because the grid is part of a tile's key. `None`
+    /// while no ground has landed, which is every style without a terrain and every terrain style
+    /// before its DEM arrives; the map draws flat until then and has nothing to follow anyway.
+    fn terrain_cells(&self) -> Option<u32> {
+        None
+    }
+
+    /// Whether what is held for `tile` was built for a different surface than `surface`.
+    ///
+    /// A surface is part of a tile's key, so a refined terrain grid makes every tile in hand the
+    /// wrong build. Such a tile is still drawn -- a coarse grid is a better frame than a hole --
+    /// and is also wanted, until the build for the current surface lands and replaces it.
+    /// Reported as not wanted, it was never asked for again, and a terrain style drew every
+    /// layer on the one-cell grid its first frame guessed.
+    ///
+    /// `false` for a store that keys nothing by surface, and for a tile it does not hold.
+    fn stale(&self, tile: TileId, surface: Surface) -> bool {
+        let _ = (tile, surface);
+        false
+    }
 }
 
 /// A map being drawn: one style, one view, and the state that makes a frame incremental.
@@ -143,6 +167,16 @@ pub trait Tiles {
 /// writing to it would be the one thing the ring's lock-free discipline does not survive.
 pub struct Map {
     style: Style,
+    /// How finely the ground under this view is split, in cells a tile side.
+    ///
+    /// Remembered rather than asked for per call, because `surface()` is read from places that
+    /// hold no store and because it is part of every tile's key: a change re-keys the cover and
+    /// rebuilds it, which is the mechanism that makes it safe to refine.
+    ///
+    /// Starts at one — a ground with no DEM in hand is not drawn, so there is nothing to follow
+    /// and nothing to split for. It steps up when the first ground lands and its relief asks for
+    /// more, which is one rebuild wave and bounded by the mesh's own grid.
+    terrain_cells: u32,
     view: ViewTransform,
     view_id: ViewId,
     light: Light,
@@ -259,6 +293,7 @@ impl Map {
         // rather than by a setter.
         style.synthesize_terrain();
         Self {
+            terrain_cells: 1,
             style,
             view,
             view_id,
@@ -484,7 +519,7 @@ impl Map {
         match self.projection {
             ProjectionMode::Globe => Surface::Sphere,
             ProjectionMode::Mercator if self.style.terrain_dem().is_some() => Surface::Terrain {
-                cells: u32::from(tessella_layout::terrain::MESH_SIZE),
+                cells: self.terrain_cells,
             },
             ProjectionMode::Mercator => Surface::Plane,
         }
@@ -609,6 +644,12 @@ impl Map {
                 self.advance(step);
             }
         }
+        // What the ground in hand asks for. Read before the cover, because the cover is keyed on
+        // it: a finer answer re-keys the tiles and rebuilds them at the grid the ground needs,
+        // and a store with no ground yet leaves it where it is.
+        if let Some(cells) = tiles.terrain_cells() {
+            self.terrain_cells = cells;
+        }
         let key = crate::frame::camera_key_of(&self.view);
         let work = self.damage.begin_frame(self.view_id, key);
         if work.is_idle() {
@@ -654,6 +695,7 @@ impl Map {
         if moved == Update::Changed || work.geometry || self.drawn.is_empty() {
             let mut pass = Substitution {
                 tiles,
+                surface,
                 drawn: Vec::new(),
                 wanted: Vec::new(),
                 uncovered: 0,
@@ -669,7 +711,10 @@ impl Map {
                 pass.wanted.iter().copied().collect();
             self.wanted = onion(&pass.wanted, self.prefetch_levels())
                 .into_iter()
-                .filter(|tile| tiles.buckets(TileId::new(tile.z, tile.x, tile.y)).is_none())
+                .filter(|tile| {
+                    let id = TileId::new(tile.z, tile.x, tile.y);
+                    tiles.buckets(id).is_none() || tiles.stale(id, surface)
+                })
                 .collect();
             self.speculative = self
                 .wanted
@@ -1088,6 +1133,8 @@ fn onion(ideal: &[TileCoord], levels: u8) -> Vec<TileCoord> {
 /// It reports what it wants instead, and something above it decides what that is worth.
 struct Substitution<'a, T: Tiles + ?Sized> {
     tiles: &'a T,
+    /// What the tiles have to have been built for to count as done.
+    surface: Surface,
     /// What to draw, in the order the algorithm chose it. Duplicates are possible — one ancestor
     /// can stand in for several missing children — and are collapsed when it finishes.
     drawn: Vec<TileCoord>,
@@ -1114,12 +1161,17 @@ impl<T: Tiles + ?Sized> Pyramid for Substitution<'_, T> {
         // consumer-*acknowledged* rather than merely built, which is where mbgl's single-frame
         // holes come from — it retains an ancestor until its descendants are built, and built is
         // not uploaded. The registry can answer that; wiring it is the next turn of this screw.
-        self.tiles
-            .buckets(TileId::new(id.z, id.x, id.y))
-            .map(|_| TileState {
-                renderable: true,
-                ..TileState::default()
-            })
+        let tile = TileId::new(id.z, id.x, id.y);
+        let held = self.tiles.buckets(tile)?;
+        // Drawn as it is, and asked for again: see `Tiles::stale`.
+        if self.tiles.stale(tile, self.surface) {
+            self.wanted.push(Self::coord(id));
+        }
+        drop(held);
+        Some(TileState {
+            renderable: true,
+            ..TileState::default()
+        })
     }
 
     fn create(&mut self, id: DataTileId) -> Option<TileState> {

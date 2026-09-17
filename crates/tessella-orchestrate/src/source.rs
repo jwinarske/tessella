@@ -63,6 +63,15 @@ pub enum Readiness {
     Failed(String),
 }
 
+/// One source's build at one address.
+struct Build {
+    /// The dispatch that produced it. See `Landed::by_source`.
+    seq: u64,
+    /// What it was split for, which `Tiles::stale` compares with what the map now draws on.
+    surface: Surface,
+    buckets: Arc<Vec<LayerBucket>>,
+}
+
 /// What has landed, by address.
 ///
 /// A tile is one thing per *source*, so a style overlaying a local extract on a world basemap
@@ -81,6 +90,32 @@ struct Landed {
     /// A second index rather than a change of key, because the key is shared across sources -- a
     /// raster source covers at its own zoom, and re-keying merged buckets that belong apart.
     alias: BTreeMap<TileId, TileId>,
+    /// Each source's own build at each address, and the dispatch that produced it.
+    ///
+    /// `by_tile` is the merge the frame reads; this is what it is merged from. Kept apart because
+    /// a source can land at one address more than once -- a terrain's grid is part of every
+    /// tile's key, so a refined grid rebuilds the whole cover -- and a second landing has to
+    /// *replace* the first. Appended instead, every tile carried its buckets twice, every layer
+    /// bound each tile twice, and a layer's per-drawable buffer came out twice as long as its
+    /// draw order: each drawable after the first read a neighbor's placement, and half the
+    /// cover stacked onto the other half.
+    ///
+    /// The sequence number is the dispatch's, so a build that finishes after a newer one for the
+    /// same tile is dropped rather than put back over it.
+    by_source: BTreeMap<TileId, BTreeMap<String, Build>>,
+    /// Which builds have landed at each address.
+    ///
+    /// By address *and* key, because neither alone is the identity of a build. `by_tile` cannot
+    /// tell two sources apart, and a terrain puts the ground at the same address as the vector
+    /// tile standing on it -- deduping on the address alone drops the second source's job as
+    /// already done. A `TileKey` cannot tell two world copies apart, because it carries no wrap,
+    /// and deduping on that alone lets whichever copy landed first suppress the others.
+    ///
+    /// The key carries the surface, which is what makes a refinement take effect: when the ground
+    /// that has landed asks for a finer grid the map's surface changes, every tile's key changes
+    /// with it, and this stops reporting them as already built so they are rebuilt at the grid the
+    /// ground needs.
+    keys: BTreeMap<TileId, alloc::collections::BTreeSet<tessella_tile::store::TileKey>>,
     sourceless: BTreeMap<TileId, Arc<Vec<LayerBucket>>>,
 }
 
@@ -238,6 +273,8 @@ struct InFlight {
     job: boot::Job,
     sources: Arc<Sources>,
     priority: Priority,
+    /// When this was dispatched, so a late build cannot replace a newer one. See `Landed`.
+    seq: u64,
 }
 
 /// The tiles a warm map draws from.
@@ -288,6 +325,8 @@ pub struct TileSource<D> {
     /// return idle for ever and the tiles would sit here, built and undrawn. One atomic read per
     /// tick is what turns "a tile landed" back into "the frame is worth drawing".
     generation: AtomicU64,
+    /// Numbers each dispatch, for `Landed::by_source`.
+    dispatched: AtomicU64,
 }
 
 /// A [`FileSource`] over the coalescing store.
@@ -383,6 +422,7 @@ impl<D: TileTransport + 'static> TileSource<D> {
             annotations: RwLock::new(None),
             glyphs: Mutex::new(Glyphs::default()),
             generation: AtomicU64::new(0),
+            dispatched: AtomicU64::new(0),
             failures: Mutex::new((0, None)),
         })
     }
@@ -946,12 +986,20 @@ impl<D: TileTransport + 'static> TileSource<D> {
         speculative: &[TileCoord],
         surface: Surface,
     ) {
+        let shaded: Vec<&str> = sources
+            .sets
+            .iter()
+            .map(|(name, _, _)| name.as_str())
+            .filter(|name| sources.style.shades(name))
+            .collect();
         let Ok(jobs) = boot::plan(
             &boot::Resolution {
                 sets: &sources.sets,
                 documents: &sources.documents,
                 clustered: &sources.clustered,
                 annotations: sources.annotations.as_ref(),
+                terrain: sources.style.terrain_dem().map(|(id, _)| id),
+                shaded: &shaded,
             },
             view,
             coords,
@@ -1019,7 +1067,16 @@ impl<D: TileTransport + 'static> TileSource<D> {
             let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
             jobs.into_iter()
                 .filter(|job| {
-                    !landed.by_tile.contains_key(&job.tile)
+                    // By address *and* source: a coordinate can hold one tile per source --
+                    // a terrain's ground sits at the same address as the vector tile standing
+                    // on it -- and asking `by_tile` alone answers yes as soon as either has
+                    // landed, so the second source's job is dropped and never built.
+                    // Borrowed, not cloned: this runs per job per tick and the key is only
+                    // being compared.
+                    !landed
+                        .keys
+                        .get(&job.tile)
+                        .is_some_and(|built| built.contains(&job.key))
                         && inner.inflight.insert(job.key.clone())
                 })
                 .collect()
@@ -1050,7 +1107,11 @@ impl<D: TileTransport + 'static> TileSource<D> {
             // this check happens *before* the network, and the round trip it saves is the whole
             // reason a second view over the same cover is cheap.
             if let Some(buckets) = self.cache.peek(&job.key) {
-                self.land(&job, buckets);
+                self.land(
+                    &job,
+                    self.dispatched.fetch_add(1, Ordering::AcqRel),
+                    buckets,
+                );
                 self.finish(&job.key);
                 continue;
             }
@@ -1074,6 +1135,7 @@ impl<D: TileTransport + 'static> TileSource<D> {
                                 job,
                                 sources: Arc::clone(sources),
                                 priority,
+                                seq: self.dispatched.fetch_add(1, Ordering::AcqRel),
                             },
                         );
                 }
@@ -1084,6 +1146,7 @@ impl<D: TileTransport + 'static> TileSource<D> {
                         job,
                         sources: Arc::clone(sources),
                         priority,
+                        seq: self.dispatched.fetch_add(1, Ordering::AcqRel),
                     },
                     None,
                 ),
@@ -1117,26 +1180,40 @@ impl<D: TileTransport + 'static> TileSource<D> {
                 &probe,
             );
             match outcome {
-                Ok(buckets) => this.land(&work.job, buckets),
+                Ok(buckets) => this.land(&work.job, work.seq, buckets),
                 Err(ref error) => this.fail(&alloc::format!("{error}")),
             }
         });
     }
 
     /// Files a tile's buckets under the tile that was built, and says the frame is worth redrawing.
-    fn land(&self, job: &boot::Job, buckets: Arc<Vec<LayerBucket>>) {
+    fn land(&self, job: &boot::Job, seq: u64, buckets: Arc<Vec<LayerBucket>>) {
         let mut held = self.landed.write().unwrap_or_else(PoisonError::into_inner);
+        let builds = held.by_source.entry(job.tile).or_default();
+        if builds.get(&job.source).is_some_and(|held| held.seq > seq) {
+            // A build dispatched before the one already here, finishing after it.
+            return;
+        }
+        builds.insert(
+            job.source.clone(),
+            Build {
+                seq,
+                surface: job.key.surface,
+                buckets,
+            },
+        );
         // Keyed by the data tile, which is the thing that was built. What the cover asked for
         // reaches it through `alias`, so one tile serving many coordinates is stored and decoded
-        // once.
-        held.by_tile
+        // once. Remerged whole: landing is rare next to drawing, and the frame reads the merge.
+        let merged: Vec<LayerBucket> = builds
+            .values()
+            .flat_map(|build| build.buckets.iter().cloned())
+            .collect();
+        held.by_tile.insert(job.tile, Arc::new(merged));
+        held.keys
             .entry(job.tile)
-            .and_modify(|existing| {
-                let mut merged = existing.as_ref().clone();
-                merged.extend(buckets.iter().cloned());
-                *existing = Arc::new(merged);
-            })
-            .or_insert(buckets);
+            .or_default()
+            .insert(job.key.clone());
         drop(held);
         self.generation.fetch_add(1, Ordering::AcqRel);
     }
@@ -1250,6 +1327,33 @@ impl<D: TileTransport + 'static> Tiles for Arc<TileSource<D>> {
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .serving(cover)
+    }
+
+    fn terrain_cells(&self) -> Option<u32> {
+        let held = self.landed.read().unwrap_or_else(PoisonError::into_inner);
+        held.by_tile
+            .values()
+            .flat_map(|buckets| buckets.iter())
+            .filter_map(|bucket| match &bucket.content {
+                crate::tile::Content::Terrain(ground) => Some(ground.cells),
+                _ => None,
+            })
+            .max()
+    }
+
+    fn stale(&self, tile: TileId, surface: Surface) -> bool {
+        let held = self.landed.read().unwrap_or_else(PoisonError::into_inner);
+        let data = if held.by_tile.contains_key(&tile) {
+            tile
+        } else {
+            match held.alias.get(&tile) {
+                Some(data) => *data,
+                None => return false,
+            }
+        };
+        held.by_source
+            .get(&data)
+            .is_some_and(|builds| builds.values().any(|build| build.surface != surface))
     }
 
     fn sourceless(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {
