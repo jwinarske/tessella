@@ -479,7 +479,10 @@ pub fn build_tile_on_with_patterns(
     let bucket_zoom = f64::from(tile.bucket_zoom());
 
     for (layer_index, layer) in style.layers.iter().enumerate() {
-        if !layer.kind.is_built() || !draws_from(layer, source) || !draws_at(layer, bucket_zoom) {
+        if !layer.kind.is_built()
+            || !draws_from(layer, source)
+            || !builds_at(layer, tile.bucket_zoom())
+        {
             continue;
         }
 
@@ -956,20 +959,39 @@ pub fn build_tile_on_with_patterns(
 ///
 /// A layer with no source at all — a background — belongs to none of them and is built by
 /// [`build_sourceless`] instead, once per tile rather than once per source.
-/// Whether a layer draws at this zoom.
+/// Whether a tile at this zoom builds a layer.
 ///
-/// mbgl's rule, and its asymmetry is the point: `minzoom` is inclusive and `maxzoom` exclusive, so
-/// a layer with `maxzoom: 14` is the last thing drawn at 13.9 and gone at 14, while one with
-/// `minzoom: 14` starts exactly there. The pair is what lets a style hand a feature from one layer
-/// to another at a zoom without drawing it twice or dropping it.
+/// mbgl's rule for a tile (`GeometryTile`'s layer loop), and its asymmetry is the point: `minzoom`
+/// is inclusive and `maxzoom` exclusive, so a layer with `maxzoom: 14` has no bucket in a z14 tile,
+/// while one with `minzoom: 14` does. The pair is what lets a style hand a feature from one layer
+/// to another at a zoom without building it twice or dropping it.
+///
+/// Against the bounds rounded outward, because a tile's zoom is a whole number and the view's is
+/// not. A layer with `minzoom: 15.5` draws at a view zoom of 15.5, which a z15 tile serves; asked
+/// whether 15 reaches 15.5, the tile said no, and the layer was never built at the one zoom range
+/// it exists for. bright's path names are that layer, and a street of them went missing from
+/// display-buildings-in-3d. Whether the view is inside the bounds exactly is [`shown_at`]'s
+/// question, asked per frame.
 ///
 /// Not applying this at all was worth about nine thousand labels a frame. liberty's POI layers
 /// start at 15, 16 and 17; at z14 they were laid out, shaped, placed and drawn, which is why the
 /// map was captioned with shop names the oracle does not show and why the visible type looked
 /// larger -- a POI label is set larger than a street label, so drawing the wrong layers changes
 /// the apparent size of the text as much as the amount of it.
-fn draws_at(layer: &tessella_style::Layer, zoom: f64) -> bool {
-    layer.minzoom.is_none_or(|min| zoom >= min) && layer.maxzoom.is_none_or(|max| zoom < max)
+fn builds_at(layer: &tessella_style::Layer, tile_zoom: u8) -> bool {
+    let zoom = f64::from(tile_zoom);
+    layer.minzoom.is_none_or(|min| zoom >= min.floor())
+        && layer.maxzoom.is_none_or(|max| zoom < max.ceil())
+}
+
+/// Whether a layer draws at this view zoom.
+///
+/// mbgl's `RenderLayer::supportsZoom`, inclusive at both ends: a layer outside it is not a render
+/// item that frame, so it neither draws nor takes part in placement. Its buckets stay built -- a
+/// tile covers a whole zoom and the view moves inside one -- which is why this is asked of the
+/// frame rather than of the tile.
+pub(crate) fn shown_at(layer: &tessella_style::Layer, zoom: f64) -> bool {
+    layer.minzoom.is_none_or(|min| min <= zoom) && layer.maxzoom.is_none_or(|max| max >= zoom)
 }
 
 fn draws_from(layer: &tessella_style::Layer, source: &str) -> bool {
@@ -1068,7 +1090,7 @@ pub fn background_covers_viewport(style: &Style, zoom: f64, projection: Projecti
     let Some(layer) = style.layers.first() else {
         return false;
     };
-    if !matches!(layer.kind, LayerKind::Background) || !draws_at(layer, zoom) {
+    if !matches!(layer.kind, LayerKind::Background) || !shown_at(layer, zoom) {
         return false;
     }
     let Ok(paint) = resolve_paint(layer) else {
@@ -1108,9 +1130,7 @@ pub fn build_sourceless(style: &Style, tile: TileId) -> Result<Vec<LayerBucket>,
     let _ = tile;
     let mut buckets = Vec::new();
     for (layer_index, layer) in style.layers.iter().enumerate() {
-        if layer.source.is_some()
-            || !layer.kind.is_built()
-            || !draws_at(layer, f64::from(tile.bucket_zoom()))
+        if layer.source.is_some() || !layer.kind.is_built() || !builds_at(layer, tile.bucket_zoom())
         {
             continue;
         }
@@ -1173,7 +1193,7 @@ pub fn build_location_indicators(
         return Ok(buckets);
     }
     for (layer_index, layer) in style.layers.iter().enumerate() {
-        if layer.kind != LayerKind::LocationIndicator || !draws_at(layer, view.zoom) {
+        if layer.kind != LayerKind::LocationIndicator || !shown_at(layer, view.zoom) {
             continue;
         }
         let paint = resolve_paint(layer).map_err(|source| TileError::Property {
@@ -1835,7 +1855,10 @@ pub fn build_mvt_tile_on_with_patterns(
     let bucket_zoom = f64::from(tile.bucket_zoom());
 
     for (layer_index, layer) in style.layers.iter().enumerate() {
-        if !layer.kind.is_built() || !draws_from(layer, source) || !draws_at(layer, bucket_zoom) {
+        if !layer.kind.is_built()
+            || !draws_from(layer, source)
+            || !builds_at(layer, tile.bucket_zoom())
+        {
             continue;
         }
 
