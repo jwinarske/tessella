@@ -179,6 +179,13 @@ struct Glyphs {
     /// arrival timing -- the render probe's icon scene drew between 145 and 298 glyph quads over
     /// twelve identical runs.
     asked: tessella_glyph::fonts::Dependencies,
+    /// What the last successful fetch built its atlas from.
+    ///
+    /// `asked` is recorded before a fetch goes out, so a fetch that fails has to hand it back:
+    /// left as it was, the next walk found every codepoint already asked for, never asked
+    /// again, and every label on the map stayed withheld for as long as the map lived. One
+    /// failed range under load was enough.
+    delivered: tessella_glyph::fonts::Dependencies,
     /// The landed generation the dependency walk last ran at.
     ///
     /// The walk is over every bucket of every landed tile, calling `dependencies()` on each --
@@ -832,9 +839,19 @@ impl<D: TileTransport + 'static> TileSource<D> {
             {
                 let mut held = this.glyphs.lock().unwrap_or_else(PoisonError::into_inner);
                 if ok {
+                    held.delivered = fetch.wanted;
                     held.ready = Some(fonts);
+                } else {
+                    // Asked for and not delivered, so not asked for: the next walk wants it again.
+                    // And walked again at the next tick rather than the next landing, which on a
+                    // settled map may never come.
+                    held.asked = held.delivered.clone();
+                    held.surveyed = None;
                 }
                 held.running = false;
+            }
+            if !ok {
+                this.fail("glyphs: a range did not load; asking again");
             }
             if ok {
                 this.generation.fetch_add(1, Ordering::AcqRel);
