@@ -254,3 +254,46 @@ fn subdivision_counts() {
         );
     }
 }
+
+/// A fill split at a terrain's grid keeps every triangle, in segments a u16 index can address.
+///
+/// The segment used to be chosen against a polygon's ring vertices alone, with the interior a cut
+/// adds counted only afterwards. On a globe's grid -- forty-one cells at most -- that never
+/// mattered. A terrain splits at a hundred and twenty-eight, so a handful of tile-covering
+/// polygons ran past the limit and were cut off part-way, some mid-triangle: a z9 tile's lakes
+/// and parks drew as speckle on a terrain with no height at all.
+#[test]
+fn a_terrain_grid_keeps_every_triangle_in_addressable_segments() {
+    use tessella_layout::fill::{Outlines, build_features_tracked_on};
+
+    let square: Vec<Position> = vec![[0, 0], [8192, 0], [8192, 8192], [0, 8192], [0, 0]];
+    let rings: Vec<Vec<Position>> = vec![square];
+    // Five tile-covering polygons, each about seventeen thousand vertices once cut: more than
+    // one segment's worth together, and each within one alone.
+    let features: Vec<&[Vec<Position>]> = (0..5).map(|_| rings.as_slice()).collect();
+    let step = grid_step(8192, MAX_CELLS as u32);
+    let (bucket, _) = build_features_tracked_on(&features, step, Outlines::default());
+
+    assert!(
+        bucket.segments.len() > 1,
+        "{} segments",
+        bucket.segments.len()
+    );
+    for segment in &bucket.segments {
+        assert!(segment.vertex_length as usize <= usize::from(u16::MAX));
+        assert_eq!(segment.index_length % 3, 0, "a segment ends mid-triangle");
+        let start = segment.index_offset as usize;
+        let indices = &bucket.indices[start..start + segment.index_length as usize];
+        assert!(
+            indices
+                .iter()
+                .all(|&index| u32::from(index) < segment.vertex_length),
+            "an index past its segment"
+        );
+    }
+    // Every polygon whole: five times what one polygon alone produces, not fewer. Area is not
+    // the measure -- cut points on earcut's slivers round to whole units, which the module
+    // documents -- but a triangle is either emitted or it is not.
+    let (one, _) = build_features_tracked_on(&[rings.as_slice()], step, Outlines::default());
+    assert_eq!(bucket.indices.len(), 5 * one.indices.len());
+}

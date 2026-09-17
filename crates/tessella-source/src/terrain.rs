@@ -289,7 +289,12 @@ impl Relief {
     /// uniform. The adaptivity that matters is *between* tiles, and this is per tile.
     #[must_use]
     pub fn cells_within(&self, relief: f32) -> u32 {
-        if !relief.is_finite() || relief <= 0.0 {
+        // NaN and a bound of nothing ask for everything. An *unbounded* bound is not nonsense:
+        // it is what `split_relief` answers when the exaggeration is zero, because no relief is
+        // visible at all, and it asks for nothing. Treated as unknown it split a terrain drawn
+        // flat at the mesh's finest grid -- five times the geometry of the same map with no
+        // terrain, which was enough to run the slab region out and lose every label.
+        if relief.is_nan() || relief <= 0.0 {
             return self.base;
         }
         // Coarsest first: the last level is the single cell covering the tile.
@@ -792,6 +797,21 @@ mod tests {
         // And a bound of nothing, or of nonsense, asks for everything rather than dividing.
         assert_eq!(relief.cells_within(0.0), relief.base());
         assert_eq!(relief.cells_within(f32::NAN), relief.base());
+        // An unbounded one asks for nothing: it is what a zero exaggeration produces.
+        assert_eq!(relief.cells_within(f32::INFINITY), 1);
+    }
+
+    /// No exaggeration, no splitting: the bound is unbounded and the grid is one cell.
+    #[test]
+    fn a_flat_terrain_asks_for_one_cell() {
+        let bound = split_relief(14, 52.5, 0.0, 0.5);
+        assert!(
+            bound.is_infinite() || bound > f64::from(f32::MAX),
+            "{bound}"
+        );
+        #[allow(clippy::cast_possible_truncation)]
+        let as_f32 = bound as f32;
+        assert!(as_f32.is_infinite());
     }
 
     /// Flat ground needs no splitting, however tight the bound.

@@ -428,13 +428,66 @@ fn build_polygons_on(
         if total_vertices == 0 {
             continue;
         }
+
+        // Triangulated before anything is pushed, and cut before a segment is chosen: the
+        // interior vertices a cut adds are vertices of this polygon, and a segment chosen
+        // against the rings alone fills up with polygons whose interiors do not fit. That
+        // was never reached on a globe's grid, forty-one cells at the most; a terrain splits
+        // at a hundred and twenty-eight, and a z9 tile's lakes ran past the limit and were
+        // cut off part-way.
+        let mut flat: Vec<f64> = Vec::with_capacity(total_vertices * 2);
+        let mut holes: Vec<usize> = Vec::new();
+        for (index, ring) in polygon.iter().enumerate() {
+            if index > 0 {
+                holes.push(flat.len() / 2);
+            }
+            for point in ring {
+                flat.push(f64::from(point[0]));
+                flat.push(f64::from(point[1]));
+            }
+        }
+        let triangles = earcutr::earcut(&flat, &holes, 2).unwrap_or_default();
+        let ring_points: Vec<Position> = polygon.iter().flatten().copied().collect();
+        let split = (step > 0).then(|| {
+            let soup: Vec<[Position; 3]> = triangles
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|corner| {
+                    [
+                        ring_points[corner[0]],
+                        ring_points[corner[1]],
+                        ring_points[corner[2]],
+                    ]
+                })
+                .collect();
+            crate::subdivide::subdivide_triangles(&soup, step)
+        });
+        // The vertices a cut adds, in the order they first appear. A cut that lands on a ring
+        // vertex reuses it rather than adding a duplicate -- which matters for more than size:
+        // the outline indexes those vertices, and a second copy at the same position would be a
+        // seam the fill and its outline disagree about.
+        let mut local: BTreeMap<Position, usize> = BTreeMap::new();
+        for (offset, point) in ring_points.iter().enumerate() {
+            local.entry(*point).or_insert(offset);
+        }
+        let mut interior: Vec<Position> = Vec::new();
+        for triangle in split.iter().flatten() {
+            for point in triangle {
+                if !local.contains_key(point) {
+                    local.insert(*point, total_vertices + interior.len());
+                    interior.push(*point);
+                }
+            }
+        }
+        let polygon_vertices = total_vertices + interior.len();
         let start_vertices = bucket.vertices.len();
 
         // A segment opens when there is none, or when this polygon would push the current one
-        // past what a u16 index can reach. The check is against the whole polygon rather than
-        // each ring, because a polygon's triangles index across its rings.
+        // past what a u16 index can reach. The check is against the whole polygon, interior
+        // included, because a polygon's triangles index across its rings and its cuts.
         let needs_segment = bucket.segments.last().is_none_or(|segment| {
-            segment.vertex_length as usize + total_vertices > MAX_SEGMENT_VERTICES
+            segment.vertex_length as usize + polygon_vertices > MAX_SEGMENT_VERTICES
         });
         if needs_segment {
             #[allow(clippy::cast_possible_truncation)]
@@ -452,20 +505,11 @@ fn build_polygons_on(
         let base = bucket
             .segments
             .last()
-            .map_or(0, |segment| segment.vertex_length);
+            .map_or(0, |segment| segment.vertex_length) as usize;
 
-        let mut flat: Vec<f64> = Vec::with_capacity(total_vertices * 2);
-        let mut holes: Vec<usize> = Vec::new();
-        for (index, ring) in polygon.iter().enumerate() {
-            if index > 0 {
-                holes.push(flat.len() / 2);
-            }
-            let ring_base = bucket.vertices.len() - start_vertices + base as usize;
-            for point in ring {
-                bucket.vertices.push(*point);
-                flat.push(f64::from(point[0]));
-                flat.push(f64::from(point[1]));
-            }
+        for ring in &polygon {
+            let ring_base = bucket.vertices.len() - start_vertices + base;
+            bucket.vertices.extend_from_slice(ring);
             if outlines.lines {
                 outline_indices(bucket, ring_base, ring.len());
             }
@@ -490,14 +534,11 @@ fn build_polygons_on(
                 );
             }
         }
-        debug_assert_eq!(flat.len(), total_vertices * 2);
 
-        let triangles = earcutr::earcut(&flat, &holes, 2).unwrap_or_default();
-
-        if step <= 0 {
+        let Some(split) = split else {
             #[allow(clippy::cast_possible_truncation)]
             for index in &triangles {
-                bucket.indices.push(base as u16 + *index as u16);
+                bucket.indices.push((base + *index) as u16);
             }
             if let Some(segment) = bucket.segments.last_mut() {
                 #[allow(clippy::cast_possible_truncation)]
@@ -507,60 +548,30 @@ fn build_polygons_on(
                 }
             }
             continue;
-        }
+        };
 
-        // The interior. Ring cuts put vertices on the boundary; earcut then spans the inside with
-        // triangles as large as the polygon allows, and those are what chord through the planet.
-        let soup: Vec<[Position; 3]> = triangles
-            .as_chunks::<3>()
-            .0
-            .iter()
-            .map(|corner| {
-                [
-                    bucket.vertices[start_vertices + corner[0]],
-                    bucket.vertices[start_vertices + corner[1]],
-                    bucket.vertices[start_vertices + corner[2]],
-                ]
-            })
-            .collect();
-        let split = crate::subdivide::subdivide_triangles(&soup, step);
-
-        // Back into a shared buffer. The map is seeded with the ring vertices already pushed, so a
-        // cut that landed on one reuses it rather than adding a duplicate -- which matters for more
-        // than size: the outline indexes those vertices, and a second copy at the same position
-        // would be a seam the fill and its outline disagree about.
-        let mut seen: BTreeMap<Position, u16> = BTreeMap::new();
-        #[allow(clippy::cast_possible_truncation)]
-        for (offset, point) in bucket.vertices[start_vertices..].iter().enumerate() {
-            seen.entry(*point).or_insert(base as u16 + offset as u16);
-        }
+        // A polygon that does not fit even a segment of its own is cut short rather than
+        // wrapped -- a wrapped index is a triangle through another polygon's vertices, which
+        // draws a shape from two features. mbgl drops such a polygon outright. Short by whole
+        // triangles: an index run that ends mid-triangle shifts every triangle after it in the
+        // segment onto the wrong corners.
+        let fits = MAX_SEGMENT_VERTICES.saturating_sub(base);
         let mut added = 0usize;
         let mut emitted = 0usize;
-        'triangles: for triangle in &split {
-            for point in triangle {
-                let index = match seen.get(point) {
-                    Some(index) => *index,
-                    None => {
-                        let next = base as usize + total_vertices + added;
-                        // A polygon that subdivides past what a u16 index can reach stops here
-                        // rather than wrapping. It cannot arise from the grids this is called with
-                        // -- z0's is 41 cells a side, so 42*42 vertices for a tile-covering ring --
-                        // and a wrap would be a triangle indexing another polygon's vertices, which
-                        // draws a shape from two features and looks like a decoder fault.
-                        if next > MAX_SEGMENT_VERTICES {
-                            break 'triangles;
-                        }
-                        #[allow(clippy::cast_possible_truncation)]
-                        let index = next as u16;
-                        seen.insert(*point, index);
-                        bucket.vertices.push(*point);
-                        added += 1;
-                        index
-                    }
-                };
-                bucket.indices.push(index);
-                emitted += 1;
+        for triangle in &split {
+            let corners = triangle.map(|point| local[&point]);
+            if corners.iter().any(|&corner| corner >= fits) {
+                continue;
             }
+            #[allow(clippy::cast_possible_truncation)]
+            for corner in corners {
+                bucket.indices.push((base + corner) as u16);
+            }
+            emitted += 3;
+        }
+        for point in interior.iter().take(fits.saturating_sub(total_vertices)) {
+            bucket.vertices.push(*point);
+            added += 1;
         }
 
         if let Some(segment) = bucket.segments.last_mut() {
