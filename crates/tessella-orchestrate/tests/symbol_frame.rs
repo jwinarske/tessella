@@ -755,3 +755,164 @@ fn a_label_with_no_room_for_a_run_is_offered_but_not_placed() {
         "and it is still a symbol that was decided about, not one that was never offered"
     );
 }
+
+/// A line label's collision run is laid out at its tile's scale, not the view's.
+///
+/// mbgl builds `CollisionFeature`'s circles once, at layout, in tile units at `tilePixelRatio`,
+/// and only the reach they are compared against -- `approximateTileDistance` -- follows the view.
+/// Between whole zooms the two scales differ, and a run laid out at the view's scale ends its
+/// covered circles somewhere else on screen. display-buildings-in-3d, at z15.5, lost a bus stop's
+/// label to half a pixel of North Moore Street that way.
+///
+/// So this asks where a label beside the end of a road name is first free to place, and checks it
+/// against the edge mbgl's arithmetic puts the road's last covered circle at: `bboxifyLabel` for
+/// the run, `placeLineFeature` for which circles count.
+#[test]
+fn a_line_labels_run_is_laid_out_at_the_tiles_scale() {
+    use tessella_layout::symbol_bucket::{LineLabel, LineOptions, build_line_symbols};
+
+    // A view half a zoom above its tile: the tile draws 1/16 of a pixel per unit, which the view
+    // reads as 16 units a pixel, while the tile was laid out at 16 * sqrt(2).
+    const VIEW: f32 = 16.0;
+    const LAYOUT: f32 = VIEW * core::f32::consts::SQRT_2;
+    // How far the first and last glyph reach, in ems either side of the anchor.
+    const REACH: f32 = 100.0;
+    let road: Vec<(f32, f32)> = vec![(0.0, 4000.0), (8000.0, 4000.0)];
+    let font = Font::new("North Moore Street Stop");
+    let (_, laid) = build_line_symbols(
+        &[LineLabel {
+            pending: 0,
+            sections: vec![tessella_layout::symbol::Section {
+                text: "North Moore Street".to_string(),
+                scale: 1.0,
+                image: None,
+            }],
+            icon: (0.0, 0.0),
+            text: "North Moore Street".to_string(),
+            lines: vec![road.clone()],
+        }],
+        &font,
+        None,
+        &LineOptions {
+            centered: true,
+            ..LineOptions::default()
+        },
+    );
+    let road_label = laid[0].clone();
+    let stop_at = |x: f32| {
+        let (_, stop) = build_symbols(
+            &[Label {
+                pending: 0,
+                sections: vec![tessella_layout::symbol::Section {
+                    text: "Stop".to_string(),
+                    scale: 1.0,
+                    image: None,
+                }],
+                text: "Stop".to_string(),
+                anchor: (x, 4000.0),
+            }],
+            &font,
+            None,
+            &SymbolOptions::default(),
+        );
+        stop[0].clone()
+    };
+    let options = FrameOptions::default();
+    let font_scale = options.font_scale;
+    let padding = options.padding.left;
+
+    // mbgl's screen edge of the last circle it tests, for a run laid out at `units` a pixel.
+    let expected_edge = |units: f32| {
+        let (top, bottom, left, right) = road_label.extent;
+        let length = (right - left) * font_scale * units + 2.0 * padding * units;
+        let height = ((bottom - top) * font_scale * units + 2.0 * padding * units)
+            .max(10.0 * font_scale * units);
+        let step = height / 2.0;
+        let count = (length / step).floor() as i32;
+        let reach = REACH * font_scale * VIEW;
+        // Each circle's center is `from_anchor` along the road from the anchor -- the walk starts
+        // at `firstBoxOffset`, half a box back, at the anchor itself -- and the reach is compared
+        // against that distance with a fifth taken off.
+        let last = (0..count)
+            .map(|i| -length / 2.0 + i as f32 * step + height / 2.0)
+            .filter(|from_anchor| {
+                let slackened = if from_anchor.abs() < step {
+                    0.0
+                } else {
+                    from_anchor * 0.8
+                };
+                slackened <= reach
+            })
+            .fold(f32::MIN, f32::max);
+        let anchor = to_screen(road_label.anchor).0;
+        // Into the screen at the view's scale, the radius back out of the layout's.
+        anchor + last / VIEW + height / 2.0 / units
+    };
+    // Where the stop's box begins, for a stop anchored at `x`.
+    let stop_left = |x: f32| {
+        let (_, _, left, _) = stop_at(x).extent;
+        to_screen((x, 0.0)).0 + left * font_scale - padding
+    };
+
+    // The first whole tile unit past the anchor at which the stop places.
+    let first_free = |layout: f32| {
+        (0..4000)
+            .map(|step| road_label.anchor.0 + step as f32)
+            .find(|&x| {
+                let stop = stop_at(x);
+                let labels = vec![
+                    FrameLabel {
+                        perspective: 1.0,
+                        glyph_reach: Some((-REACH, REACH)),
+                        cross_tile_id: 1,
+                        laid_out: road_label.clone(),
+                        icon: None,
+                        line: &road,
+                        variable: &[],
+                        variable_offset: [0.0, 0.0],
+                        variable_radial: false,
+                    },
+                    FrameLabel {
+                        perspective: 1.0,
+                        glyph_reach: None,
+                        cross_tile_id: 2,
+                        laid_out: stop,
+                        icon: None,
+                        line: &[],
+                        variable: &[],
+                        variable_offset: [0.0, 0.0],
+                        variable_radial: false,
+                    },
+                ];
+                let mut view = ViewSymbols::new();
+                let result = view.frame(
+                    &labels,
+                    to_screen,
+                    &FrameOptions {
+                        tile_units_per_pixel: VIEW,
+                        layout_tile_units_per_pixel: layout,
+                        ..FrameOptions::default()
+                    },
+                );
+                assert!(result.placed[0].text, "the road name places first");
+                result.placed[1].text
+            })
+            .expect("the stop places somewhere past the road name")
+    };
+
+    let at_layout = first_free(LAYOUT);
+    assert!(
+        stop_left(at_layout) >= expected_edge(LAYOUT)
+            && stop_left(at_layout - 1.0) < expected_edge(LAYOUT),
+        "the stop frees at {} with its box at {}, and mbgl's run ends at {}",
+        at_layout,
+        stop_left(at_layout),
+        expected_edge(LAYOUT)
+    );
+    // And the view's scale would have put that edge somewhere else, which is the defect.
+    assert!(
+        (expected_edge(VIEW) - expected_edge(LAYOUT)).abs() > 1.0,
+        "the two scales agree here, so the check above says nothing"
+    );
+    assert_ne!(first_free(0.0), at_layout, "laid out at the view's scale");
+}
