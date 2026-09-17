@@ -151,16 +151,23 @@ fn the_surface_follows_the_style() {
         view,
         ViewId(0),
     );
+    // One cell until a ground lands, and that is not a placeholder: a terrain with no DEM in
+    // hand draws no ground, so there is no surface to follow and nothing to split for. The count
+    // steps up when the first ground arrives and its relief asks for more, which re-keys the
+    // cover and rebuilds it -- `Surface` is part of `TileKey` precisely so that is safe.
+    //
+    // Split at the mesh's ceiling regardless, every tile of a terrain style carries 16,384 cells
+    // and a fill covering one becomes tens of thousands of triangles: measured on the parity
+    // harness, a z14 cover went from settling in 224 ticks to 1,200 and stopped settling to the
+    // same picture twice.
     assert_eq!(
         map.surface(),
-        Surface::Terrain {
-            cells: u32::from(tessella_layout::terrain::MESH_SIZE)
-        },
-        "a style with a usable terrain"
+        Surface::Terrain { cells: 1 },
+        "a style with a usable terrain, before any ground has landed"
     );
 
-    // The ground is drawn as the terrain mesh, which is uniform, so anything drawn on it takes
-    // the same grid -- finer chords against the surface's own chords, coarser floats above it.
+    // The ground is drawn as the terrain mesh, so anything drawn on it takes the same grid --
+    // finer chords against the surface's own chords, coarser floats above it.
     let mut plain = Map::new(Style::parse(flat).expect("style parses"), view, ViewId(0));
     assert_eq!(plain.surface(), Surface::Plane, "no terrain");
 

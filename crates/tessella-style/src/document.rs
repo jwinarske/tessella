@@ -632,6 +632,21 @@ impl Style {
             _ => None,
         }
     }
+
+    /// Whether a layer draws a *picture* of this source rather than standing on it.
+    ///
+    /// A hillshade and a color relief shade the DEM per fragment, so they want it at the zoom
+    /// that puts a texel on a screen pixel. The terrain does not: it samples once per mesh
+    /// vertex, and the level that rule asks for is finer than the geometry can carry. The two
+    /// therefore cover at different zooms, and a style with no such layer should not fetch the
+    /// finer cover at all -- which for a terrain-only style is most of the tiles it asks for.
+    #[must_use]
+    pub fn shades(&self, source: &str) -> bool {
+        self.layers.iter().any(|layer| {
+            matches!(layer.kind, LayerKind::Hillshade | LayerKind::ColorRelief)
+                && layer.source.as_deref() == Some(source)
+        })
+    }
 }
 
 /// The id [`Style::synthesize_terrain`] gives the layer it makes.

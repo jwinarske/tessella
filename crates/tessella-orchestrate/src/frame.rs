@@ -1180,6 +1180,16 @@ fn emit_group(
         // frame's cover, so `bindings_for`'s sequential numbering is replaced. It still runs:
         // it is what decides how many drawables a bucket makes and which sub-layers they take,
         // and only the number it stamped is wrong for a retained stream.
+        // The ground under this tile, as one number a retained drawable can be compared against.
+        // Zero where nothing covers it, which is every drawable on a flat map and every tile a
+        // terrain style has not fetched the DEM for yet.
+        //
+        // This is what a raised drawable's encode depends on that is not a property of its tile:
+        // the elevation it names belongs to another source, arriving on its own schedule, and a
+        // fill announced before its ground has no reference to add later.
+        let ground_stamp = covering.map_or(0, |found| {
+            terrain_texture_id(found.tile.z, found.tile.x, found.tile.y).0
+        });
         if let Some(registry) = registry.as_deref_mut() {
             for binding in &mut bindings {
                 let key = DrawableKey {
@@ -1187,17 +1197,27 @@ fn emit_group(
                     layer_index: binding.layer_index,
                     sub_layer_index: binding.sub_layer_index,
                 };
-                // Two questions, and §5.3 makes them different: whether any view has the
-                // geometry, which gates the announcement, and whether *this* view uses it,
+                // Three questions, and §5.3 makes the first two different: whether any view has
+                // the geometry, which gates the announcement, and whether *this* view uses it,
                 // which gates the binding. A second view picking up a tile the first already
-                // draws needs a `ViewUse` and no `GeometryAdd`.
-                if registry.is_new(&key) {
+                // draws needs a `ViewUse` and no `GeometryAdd`. The third is whether what the
+                // geometry says has changed under a drawable that is neither.
+                // And the size of the build it comes from, which a rebuild on a refined grid
+                // changes under the same key. See `Content::split_size`.
+                let size = tile_buckets
+                    .iter()
+                    .find(|bucket| {
+                        i32::try_from(bucket.layer_index).is_ok_and(|at| at == binding.layer_index)
+                    })
+                    .map_or(0, |bucket| bucket.content.split_size());
+                let stamp = [ground_stamp, size];
+                if registry.is_new(&key) || registry.content_changed(&key, stamp) {
                     fresh.insert(key);
                 }
                 if registry.is_unused_by(&key) {
                     unbound.insert(key);
                 }
-                binding.geometry = registry.id_for(key);
+                binding.geometry = registry.id_for(key, stamp);
                 keyed.insert(binding.geometry.0, key);
             }
         }
@@ -1309,7 +1329,9 @@ fn emit_group(
                 if registry.is_unused_by(&key) {
                     unbound.insert(key);
                 }
-                let id = registry.id_for(key);
+                // A heatmap's second pass is a viewport quad on no tile, so there is no ground
+                // under it and nothing frame-dependent for a stamp to carry.
+                let id = registry.id_for(key, [0, 0]);
                 keyed.insert(id.0, key);
                 id
             }
@@ -1578,10 +1600,17 @@ fn emit_group(
 
     // Every geometry is announced before any drawable names one.
     //
-    // A `ViewUse` is as durable as the geometry it names — the view, layer, sub-layer, tile,
-    // pass and flags do not change while a drawable is in the cover — so with a registry it is
+    // A `ViewUse` is nearly as durable as the geometry it names — the view, layer, sub-layer,
+    // tile and pass do not change while a drawable is in the cover — so with a registry it is
     // sent once and released when the drawable goes. Without one it is sent every frame, beside
     // the `GeometryAdd` it accompanies.
+    //
+    // The flags are the exception, and they are why `fresh` is in the gate below beside
+    // `unbound`. `ON_TERRAIN` says a ground covers this drawable, which is a fact about the
+    // *frame*: the DEM is another source's tile and arrives on its own schedule, so a fill bound
+    // before its ground was told it stands on nothing and would never be told otherwise. What
+    // made that hard to see is that the picture is right either way — the layer simply draws
+    // flat, which is what it drew before terrain existed.
     for binding in bound {
         let key = DrawableKey {
             tile: binding.tile,
@@ -1592,7 +1621,7 @@ fn emit_group(
         // id is derived rather than allocated, so there is no registry entry to say the consumer
         // already has it, and skipping the use would bind nothing to an id just announced.
         let is_quad = heatmap_quads.contains_key(&binding.geometry.0);
-        if !is_quad && registry.is_some() && !unbound.contains(&key) {
+        if !is_quad && registry.is_some() && !unbound.contains(&key) && !fresh.contains(&key) {
             emitted.drawables += 1;
             continue;
         }
@@ -3177,7 +3206,8 @@ fn encode_parts(
             fill_atlas = atlas;
             let (encoded, buffers) = emit::encode_fill(arena, PLACEHOLDER, fill, &{
                 let draw =
-                    emit::FillDraw::new(&vertex_layout, bucket.binder.data(), key, None, atlas);
+                    emit::FillDraw::new(&vertex_layout, bucket.binder.data(), key, None, atlas)
+                        .on_terrain(raised.then_some(textures.terrain));
                 // A data-driven pattern's rectangles, when the bucket build resolved any.
                 if bucket.pattern_vertices.covers(fill.vertices.len()) {
                     draw.with_pattern_vertices(&bucket.pattern_vertices)
@@ -3443,7 +3473,9 @@ fn encode_parts(
         // The raster encoder over the slope field: same quad, same attributes, a different
         // shader and a different texture. mbgl's `HillshadeBucket` shares `RasterBucket`'s mask
         // handling for exactly this reason, which `tessella_tile::mask` already records.
-        // Three textures: this tile's elevation, and the layer's two stop tables.
+        // Three textures: this tile's elevation, and the layer's two stop tables. And a fourth
+        // where the terrain raises it: the ground's elevation, which it stands on as every raised
+        // layer does -- its own is at the zoom a relief is shaded at, not the ground's.
         Content::ColorRelief(relief) => Some(emit::encode_color_relief(
             arena,
             PLACEHOLDER,
@@ -3451,6 +3483,7 @@ fn encode_parts(
             textures.relief,
             relief_elevation_stops_id(i32::try_from(bucket.layer_index).unwrap_or(i32::MAX)),
             relief_color_stops_id(i32::try_from(bucket.layer_index).unwrap_or(i32::MAX)),
+            raised.then_some(textures.terrain),
         )),
         // The same mesh for every tile -- see `Content::Terrain` -- so what this names is the
         // tile's own elevation and nothing else.
@@ -3533,6 +3566,7 @@ fn encode_parts(
                 // The shader declares the line family's two attributes and no paint, so there is
                 // nothing for a permutation to select between.
                 0,
+                raised.then_some(textures.terrain),
             ));
         } else {
             let (vertex_layout, key) = bind(FILL_FAMILY, BuiltIn::FillOutlineShader);
@@ -3548,6 +3582,9 @@ fn encode_parts(
                         shared: Some(shared),
                         pattern_atlas: fill_atlas,
                         pattern_vertices: None,
+                        // The same ground the triangles stand on. An outline raised from a
+                        // different height than the fill it edges would peel off it.
+                        elevation: raised.then_some(textures.terrain),
                     },
                 )
                 .0,
@@ -5057,9 +5094,17 @@ fn puck_image(
 
 /// One elevation block per drawable of a layer the terrain raises.
 ///
-/// Parallel to the layer's bindings at sub-layer zero, which is the order `ubo_index` counts them
-/// in. Every family that is raised today has one sub-layer; a family with more needs the walk the
-/// fill arm does, one sub-layer at a time in ascending order, for the reason that arm gives.
+/// One per binding, in the order they arrive, which is the order `ubo_index` counts them in --
+/// `write_layer_state` is handed them already sorted by it. That is the whole of the alignment
+/// rule, and it is what a family with more than one sub-layer needs: a fill's outline is a second
+/// drawable of the same layer at the next sub-layer, and its slot is its position in this
+/// sequence rather than its position among outlines.
+///
+/// Dense, including the bindings that raise nothing. A binding with no tile or no ground above it
+/// still takes a slot, because the slot is a position and dropping one shifts every block after
+/// it onto the wrong drawable. Its block is inert -- nothing samples it, since a drawable is only
+/// marked `ON_TERRAIN` where a ground covers it -- and that is cheaper than a sparse array the
+/// consumer would have to be taught to read.
 ///
 /// The DEM's numbers come off the *bucket* rather than the style: the tile that arrived is what
 /// says how wide it is, and a source whose `tileSize` disagrees with its bytes would otherwise
@@ -5084,16 +5129,33 @@ fn terrain_blocks(
         .collect();
     bindings
         .iter()
-        .filter(|binding| binding.sub_layer_index == 0)
-        .filter_map(|binding| {
-            let tile = binding.tile?;
+        .map(|binding| {
+            // Inert, for a binding that raises nothing: a zero scale and a zero exaggeration
+            // sample the elevation's first texel and multiply it away, so a block reached in
+            // error draws flat rather than somewhere unrelated.
+            let flat = tessella_capture_abi::terrain_ubo::TerrainDrawableUbo {
+                matrix: [0.0; 16],
+                unpack: [0.0; 4],
+                color,
+                params: [0.0; 4],
+                skirt: [0.0; 4],
+            };
+            let Some(tile) = binding.tile else {
+                return flat;
+            };
             // The ground above this tile, which for a layer drawing from the DEM is its own.
-            let found = terrain_covering(
+            let Some(found) = terrain_covering(
                 &grounds,
                 crate::tile::TileId::overscaled(tile.z, tile.x, tile.y, tile.overscaled_z),
-            )?;
+            ) else {
+                return flat;
+            };
             let content = found.content;
-            let matrix = DrawableEntry::for_tile(
+            // The drawable's own matrix, at its own sub-layer: the depth offset is baked into
+            // it, and a fill's outline sorts over its triangles by exactly that offset. Raised
+            // with the triangles' matrix, the outline would land on the fill's plane and the
+            // one-pixel fade it draws would be a coin toss per fragment.
+            let Ok(entry) = DrawableEntry::for_tile(
                 frame.view,
                 frame.projection,
                 tile.z,
@@ -5101,10 +5163,11 @@ fn terrain_blocks(
                 tile.y,
                 i32::from(tile.wrap),
                 layer_index,
-                0,
-            )
-            .ok()?
-            .matrix;
+                binding.sub_layer_index,
+            ) else {
+                return flat;
+            };
+            let matrix = entry.matrix;
             // The square of the covering DEM this tile occupies, which for a layer drawing from
             // the DEM is the whole of it.
             let (scale, offset_x, offset_y) =
@@ -5115,13 +5178,13 @@ fn terrain_blocks(
                     found.cover.dx,
                     found.cover.dy,
                 );
-            Some(tessella_capture_abi::terrain_ubo::TerrainDrawableUbo {
+            tessella_capture_abi::terrain_ubo::TerrainDrawableUbo {
                 matrix,
                 unpack: content.dem.encoding().unpack(),
                 color,
                 params: [scale, offset_x, offset_y, content.exaggeration],
                 skirt: [content.skirt, 0.0, 0.0, 0.0],
-            })
+            }
         })
         .collect()
 }

@@ -33,6 +33,11 @@ use alloc::vec::Vec;
 
 use tessella_capture_abi::envelope::{GeometryId, SlabRef, TileId, ViewId};
 
+/// What a retained drawable's content was built from, beyond its key: the ground it stands on
+/// and the size of its build. Two numbers rather than one mixed from them, so no pair of
+/// different builds can compare equal. See [`GeometryRegistry::content_changed`].
+pub type ContentStamp = [u64; 2];
+
 /// What names one drawable across frames.
 ///
 /// Ordered so a registry's iteration is stable, which keeps the removals it reports in a fixed
@@ -78,6 +83,18 @@ struct Entry {
     /// Re-announcing moves it forward, which is right: a displaced drawable's bytes are in a
     /// different slab and the consumer has to upload them again.
     announced_at: u64,
+    /// What the drawable's content was when it was announced.
+    ///
+    /// A retained drawable is not re-encoded -- that is what retention is -- and that holds
+    /// while everything its encode reads is a property of the tile. It stops holding the moment
+    /// one of them is a property of the *frame*: a layer the terrain raises names the elevation
+    /// of whichever ground tile covers it, and that ground is another source's tile arriving on
+    /// its own schedule. Announced before it, the drawable carries no elevation reference, and
+    /// marking it raised afterwards gives it nothing to read.
+    ///
+    /// The stamp is whatever the caller decides identifies the content. Zeros mean nothing
+    /// beyond the key does.
+    stamp: ContentStamp,
 }
 
 /// Hands out geometry ids and remembers which drawable each belongs to.
@@ -132,11 +149,15 @@ impl GeometryRegistry {
     ///
     /// Records the key as seen, so a drawable this frame did not ask for is reported by
     /// [`Self::retired`].
-    pub fn id_for(&mut self, key: DrawableKey) -> GeometryId {
+    pub fn id_for(&mut self, key: DrawableKey, stamp: ContentStamp) -> GeometryId {
         self.seen.insert(key);
         let view = self.view;
         if let Some(existing) = self.live.get_mut(&key) {
             existing.users.insert(view);
+            // Taken as the current content even when it changed: the caller asked
+            // `content_changed` first and put the key in this frame's fresh set, so the
+            // announcement that follows is the one this stamp describes.
+            existing.stamp = stamp;
             return existing.id;
         }
         let id = GeometryId(self.next);
@@ -152,6 +173,7 @@ impl GeometryRegistry {
                 // lands. Until then the drawable is not acknowledged, which is correct: an id
                 // handed out in the binding pass names nothing the consumer has seen.
                 announced_at: u64::MAX,
+                stamp,
             },
         );
         id
@@ -218,6 +240,21 @@ impl GeometryRegistry {
     #[must_use]
     pub fn is_new(&self, key: &DrawableKey) -> bool {
         !self.live.contains_key(key)
+    }
+
+    /// Whether a drawable this registry already has would encode differently now.
+    ///
+    /// `false` for one it does not have, which [`Self::is_new`] answers instead: the two are
+    /// asked together and a new drawable is announced for being new.
+    ///
+    /// A stamp is whatever the caller decides identifies a drawable's content -- today the
+    /// covering ground's texture id and the vertex count of its build. It exists because a
+    /// retained drawable is never re-encoded, which holds only while everything its encode reads
+    /// is unchanged; a layer the terrain raises names another source's elevation, arriving on its
+    /// own schedule, and a refined grid rebuilds a tile under the same key.
+    #[must_use]
+    pub fn content_changed(&self, key: &DrawableKey, stamp: ContentStamp) -> bool {
+        self.live.get(key).is_some_and(|entry| entry.stamp != stamp)
     }
 
     /// Whether the current frame's view is not already using this drawable.
