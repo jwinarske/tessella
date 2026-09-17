@@ -17,7 +17,9 @@ render cannot. It holds at `22 / 22 / 22 / 32` primitives with `image_stable 1`.
 
 Needs three things the tree does not carry: maplibre-native's `mbgl-render` as the oracle, a
 Filament build, and the tile and asset servers the scenes name (`serve.sh` on 8080 and
-`assets.py` on 8081). `env.sh` says where each is expected and every path is an override.
+`assets.py` on 8081). `env.sh` says where each is expected and every path is an override. The
+terrain scenes read `scenes/dem.py` as well, which the sweep starts when nothing is listening on
+its port and stops again when it is done.
 
 `examples.sh` runs the MapLibre GL JS documentation examples the same way, from a recorded
 snapshot of what their origins serve; see [`examples/README.md`](examples/README.md).
@@ -29,15 +31,35 @@ hundred wrong pixels among a million right ones, and the question is how many pi
 would call different. Pass 12 as a third argument to `gross.py` for the second lens, which is
 what to use when a change is supposed to move nothing at all.
 
-The sweep's numbers as of 2026-09-15, which is the gate:
+The sweep's numbers as of 2026-09-16, which is the gate:
 
-    families_p  z14 p0     4 of 786432
-    families_p  z14 p60   16
-    families_p  z16 p0     0
-    families_p  z16 p60    2
-    families_p  z9  p0    30 of 2160000
-    annot_p     z14 p0     3 of 786432
-    annot_p     z16 p0     2
+    families_p          z14 p0     4 of 786432
+    families_p          z14 p60   16
+    families_p          z16 p0     0
+    families_p          z16 p60    2
+    families_p          z9  p0    30 of 2160000
+    annot_p             z14 p0     3 of 786432
+    annot_p             z16 p0     2
+    puck_p              z14 p0     0 of 786432
+    puck_p              z16 p0     0
+    puck_p              z14 p60    0
+    hill_p              z14 p0     0 of 786432
+    relief_p            z14 p0     0
+    hill_p              z11 p0   190
+    relief_p            z11 p0     0
+    terrain_flat_p      z14 p0     0 of 786432
+    terrain_flat_p      z14 p60   28
+    terrain_flat_p      z16 p60    0
+    terrain_families_p  z14 p0     4 of 786432
+    terrain_families_p  z14 p60   16
+    terrain_families_p  z16 p0     0
+    terrain_families_p  z16 p60    2
+    terrain_families_p  z9  p0    30 of 2160000
+    terrain_cover_p     z14 p0   holes 62 of 786432
+    terrain_cover_p     z14 p45  holes 622
+
+`holes` is the other measure, for the one scene nothing can be compared against: pixels of a color
+the scene uses for nothing but its background. See `terrain_cover_p` below.
 
 ## The scenes
 
@@ -100,9 +122,10 @@ The sweep's numbers as of 2026-09-15, which is the gate:
   `379466 (48.252%)` at z11 the day it was written, when nothing drew a hillshade, and now reads
 
       hill_p  z14 p0     0 of 786432
-      hill_p  z11 p0   151
+      hill_p  z11 p0   190
 
-  Not in the sweep, which needs a fourth server running; run it by hand beside `dem.py`.
+  z11 read 151 when it was written and 190 by 2026-09-16, with nothing on the terrain branch able
+  to reach it -- the scene has no terrain. The drift is recorded rather than explained.
 
   The terrain is generated rather than fetched, by `scenes/dem.py`, for three reasons in the order
   they decided it. No archive here carries a DEM and every public one carries a license, so a
@@ -112,11 +135,12 @@ The sweep's numbers as of 2026-09-15, which is the gate:
   against the other renderer.
 
   It is one global function of world position sampled per tile, not a per-tile picture. A
-  hillshade's prepare pass backfills each tile's border from its neighbours, and a field with a
+  hillshade's prepare pass backfills each tile's border from its neighbors, and a field with a
   seam at a tile edge would make a correct backfill look broken and a broken one look fine.
 
-  Serve it with `python3 scenes/dem.py`, which listens on `PARITY_DEM_PORT` -- 8084, because 8083
-  was taken on the machine this was written on. Stop it when the scene is not in use.
+  `python3 scenes/dem.py` listens on `PARITY_DEM_PORT` -- 8084, because 8083 was taken on the
+  machine this was written on. The sweep starts it when nothing is listening there; to run a scene
+  by hand, start it yourself and stop it when you are done.
 
 - `relief_p` — a color relief over the same generated terrain, elevation mapped to color through
   six stops. It opened at `gross 786432 of 786432 (100.000%)` at both z14 and z11 -- every pixel,
@@ -129,6 +153,21 @@ The sweep's numbers as of 2026-09-15, which is the gate:
   points over -500..9000 meters when it is not.
 
   Same server as `hill_p`: `python3 scenes/dem.py`.
+
+- `terrain_flat_p` — `terrain_p`'s hillshade and relief on a terrain with an exaggeration of zero.
+  maplibre-native has no terrain -- a style carrying one renders exactly as the style without it
+  -- so at zero it is an exact oracle for everything the terrain adds: the raised variants, the
+  raised clip masks, the grid and the rebuilds all have to come out flat.
+
+- `terrain_families_p` — `families_p` over the same DEM with a terrain of zero, held to
+  `families_p`'s own numbers. It is what found that a zero exaggeration still split every vector
+  tile at the mesh's finest grid: shredded fills at z9, and five times the geometry, which ran the
+  slab region out and lost every label.
+
+- `terrain_cover_p` — `terrain_p` raised by 1.5 over a magenta background. There is nothing to
+  compare a raised terrain against, so what is held is that it is covered: the ground takes the
+  background's color, and every magenta pixel is somewhere the ground shows through the layers on
+  it. `coverage.sh` counts them. What remains are hairlines at some tile seams.
 
 - `puck_p` — a location indicator over Berlin: an accuracy circle, a bearing, and the perspective
   compensation that decides how the puck leans when the camera pitches. **This one does not pass
