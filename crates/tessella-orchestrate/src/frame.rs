@@ -2505,6 +2505,12 @@ fn place_symbols(
             #[allow(clippy::cast_possible_truncation)]
             tile_units_per_pixel: tessella_tile::camera::pixels_to_tile_units(tile.z, view.zoom)
                 as f32,
+            // And at the zoom the bucket was built for, which the run is laid out at.
+            #[allow(clippy::cast_possible_truncation)]
+            layout_tile_units_per_pixel: tessella_tile::camera::pixels_to_tile_units(
+                tile.z,
+                f64::from(tile.bucket_zoom()),
+            ) as f32,
             ..crate::symbols::FrameOptions::default()
         };
         let labels = frame_labels(
