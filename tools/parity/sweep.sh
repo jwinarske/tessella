@@ -22,9 +22,24 @@
 # The picture barely differs -- the ring is a 72-gon and turning one is nearly itself, 17 gross
 # pixels at z14 -- but it differs for a reason nothing on this side can fix.
 #
-# The numbers to hold, as of 2026-09-15: 4 / 16 / 0 / 2 / 30, then 3 / 2, then 0 / 0 / 0.
+# Then the terrain, which maplibre-native does not draw: a style carrying one renders there exactly
+# as the same style without it. That is an oracle for exaggeration zero, where every raised path
+# -- the variants, the raised clip masks, the grid, the rebuilds -- has to come out flat and
+# identical, so the DEM scenes and the families scene are held against it with a terrain of no
+# height. Above zero nothing can be compared, and what is held instead is that the ground is
+# covered; see coverage.sh. The hillshade and color relief scenes join here too, since they read
+# the same generated elevation.
+#
+# Those need `scenes/dem.py`. Started here when nothing is listening on its port, and stopped by
+# the process this started -- never by name, because another run on the machine may be using one.
+#
+# The numbers to hold, as of 2026-09-16: 4 / 16 / 0 / 2 / 30, then 3 / 2, then 0 / 0 / 0; then
+# 0 / 190 and 0 / 0 for the hillshade and relief; 0 / 28 / 0 for the flat terrain; 4 / 16 / 0 / 2
+# / 30 for the families on a flat terrain, the same as without one; and holes of 0.008% and
+# 0.079% for the raised cover, which are hairlines at tile seams.
 set -euo pipefail
 P="$(dirname "${BASH_SOURCE[0]}")"
+source "$P/env.sh"
 for args in "14 1024 768 0" "14 1024 768 60" "16 1024 768 0" "16 1024 768 60"; do
   # shellcheck disable=SC2086 # four words by construction: zoom, width, height, pitch
   bash "$P/parity.sh" families_p 52.52 13.405 $args
@@ -37,4 +52,31 @@ done
 for args in "14 1024 768 0" "16 1024 768 0" "14 1024 768 60"; do
   # shellcheck disable=SC2086 # four words by construction: zoom, width, height, pitch
   bash "$P/parity.sh" puck_p 52.52 13.405 $args
+done
+
+if ! curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PARITY_DEM_PORT/"; then
+  python3 "$P/scenes/dem.py" >/dev/null 2>&1 &
+  dem=$!
+  trap 'kill "$dem" 2>/dev/null' EXIT
+  for _ in $(seq 1 50); do
+    curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PARITY_DEM_PORT/" && break
+    python3 -c "import time; time.sleep(0.1)"
+  done
+fi
+
+for z in 14 11; do
+  bash "$P/parity.sh" hill_p 52.52 13.405 "$z" 1024 768 0
+  bash "$P/parity.sh" relief_p 52.52 13.405 "$z" 1024 768 0
+done
+for args in "14 1024 768 0" "14 1024 768 60" "16 1024 768 60"; do
+  # shellcheck disable=SC2086 # four words by construction: zoom, width, height, pitch
+  bash "$P/parity.sh" terrain_flat_p 52.52 13.405 $args
+done
+for args in "14 1024 768 0" "14 1024 768 60" "16 1024 768 0" "16 1024 768 60"; do
+  # shellcheck disable=SC2086 # four words by construction: zoom, width, height, pitch
+  bash "$P/parity.sh" terrain_families_p 52.52 13.405 $args
+done
+bash "$P/parity.sh" terrain_families_p 52.52 13.405 9 2400 900 0
+for pitch in 0 45; do
+  bash "$P/coverage.sh" terrain_cover_p 52.52 13.405 14 1024 768 "$pitch" ff00ff
 done
