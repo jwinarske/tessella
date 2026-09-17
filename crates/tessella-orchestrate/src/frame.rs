@@ -1022,6 +1022,19 @@ fn emit_group(
         }
     };
     let mut next_id = 0;
+    // Which layers this view's zoom reaches. A tile builds a layer across the whole zoom it serves
+    // (see `tile::builds_at`), so one with `minzoom: 15.5` has buckets at 15.2 that must not draw
+    // there, and one with `maxzoom: 15.5` has buckets at 15.7. mbgl leaves such a layer out of the
+    // frame's render items, which keeps it out of placement too; here its drawables are left
+    // unbound, and the registry retires them until the view comes back.
+    //
+    // An index past the style's layers is not a style layer's, and is not the style's to hide.
+    let shown = |layer_index: i32| {
+        usize::try_from(layer_index)
+            .ok()
+            .and_then(|at| style.layers.get(at))
+            .is_none_or(|layer| crate::tile::shown_at(layer, view.zoom))
+    };
     let mut by_layer: BTreeMap<i32, Vec<GeometryBinding>> = BTreeMap::new();
     let mut emitted = Emitted::default();
     // Which bucket each geometry id came from, so the packing pass below can revisit them in
@@ -1192,6 +1205,9 @@ fn emit_group(
         });
         if let Some(registry) = registry.as_deref_mut() {
             for binding in &mut bindings {
+                if !shown(binding.layer_index) {
+                    continue;
+                }
                 let key = DrawableKey {
                     tile: binding.tile,
                     layer_index: binding.layer_index,
@@ -1239,11 +1255,16 @@ fn emit_group(
                     break;
                 };
                 binding_index += 1;
-                source.insert(binding.geometry.0, (index, bucket_index, textures));
+                if shown(binding.layer_index) {
+                    source.insert(binding.geometry.0, (index, bucket_index, textures));
+                }
             }
         }
 
-        for binding in bindings {
+        for binding in bindings
+            .into_iter()
+            .filter(|binding| shown(binding.layer_index))
+        {
             by_layer
                 .entry(binding.layer_index)
                 .or_default()
@@ -1305,7 +1326,11 @@ fn emit_group(
     );
     let mut heatmap_quads: BTreeMap<u64, QuadTextures> = BTreeMap::new();
     for (index, layer) in style.layers.iter().enumerate() {
-        if layer.kind != tessella_style::LayerKind::Heatmap {
+        // Out of the view's zoom, the layer's kernels are unbound above and its quad would
+        // composite an empty pass; mbgl draws neither.
+        if layer.kind != tessella_style::LayerKind::Heatmap
+            || !crate::tile::shown_at(layer, view.zoom)
+        {
             continue;
         }
         #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
