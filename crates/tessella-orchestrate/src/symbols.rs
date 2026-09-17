@@ -144,7 +144,23 @@ pub struct FrameOptions {
     /// tile units, and scales each by `tileToViewport` when it tests them -- so this is what turns
     /// a screen-space box size into the tile-space one the walk needs. Zero means "walk in screen
     /// space", which is what a caller with no tile has.
+    ///
+    /// The view's scale, so it is what a label's reach is measured in: mbgl's
+    /// `approximateTileDistance` turns the first and last glyph's walk into tile units with it.
     pub tile_units_per_pixel: f32,
+    /// Tile units per screen pixel at the bucket's own zoom, which is what the collision run is
+    /// laid out in.
+    ///
+    /// mbgl's `tilePixelRatio`. `CollisionFeature` builds its circles once, at layout, in tile
+    /// units at the zoom the bucket was built for, and nothing about the camera reaches them
+    /// until each is projected. Only the reach they are compared against follows the view. At a
+    /// whole zoom the two scales agree; between zooms they do not, and a run laid out at the
+    /// view's scale packs its circles closer along the road than mbgl's, so the ones inside the
+    /// reach end somewhere else on screen. At z15.5 that was half a pixel of North Moore Street
+    /// over the bus stop beside it, and the stop's label went undrawn.
+    ///
+    /// Zero means "the same as [`Self::tile_units_per_pixel`]".
+    pub layout_tile_units_per_pixel: f32,
 }
 
 /// How far outside the viewport a label still collides, in pixels, at pitch zero.
@@ -186,6 +202,7 @@ impl Default for FrameOptions {
             // the spec's and this one was not.
             icon_padding: Padding::uniform(2.0),
             tile_units_per_pixel: 0.0,
+            layout_tile_units_per_pixel: 0.0,
         }
     }
 }
@@ -405,20 +422,25 @@ impl ViewSymbols {
                     // 45 had no run at all against mbgl's six -- and a label with no run cannot be
                     // placed, so the far field went bare where over-drawing had been.
                     let to_tile = options.tile_units_per_pixel;
+                    let layout_units = if options.layout_tile_units_per_pixel > 0.0 {
+                        options.layout_tile_units_per_pixel
+                    } else {
+                        to_tile
+                    };
                     // At *layout* scale, with no camera in it. mbgl builds `CollisionFeature`'s
                     // circles once per bucket, in tile units, and the camera enters only as
                     // `tileToViewport` when a circle is projected to be tested. Folding the
                     // perspective ratio into the run instead moved every circle's
                     // `signedDistanceFromAnchor` with the camera, so the reach window and the
                     // distances it is compared against scaled against each other.
-                    let tile_scale = options.font_scale * to_tile;
+                    let tile_scale = options.font_scale * layout_units;
                     // Padding too: mbgl adds it in tile units before `tileToViewport`, which is
                     // what the point path's `scaled()` above reproduces by hand.
                     let tile_padding = Padding {
-                        top: options.padding.top * to_tile,
-                        bottom: options.padding.bottom * to_tile,
-                        left: options.padding.left * to_tile,
-                        right: options.padding.right * to_tile,
+                        top: options.padding.top * layout_units,
+                        bottom: options.padding.bottom * layout_units,
+                        left: options.padding.left * layout_units,
+                        right: options.padding.right * layout_units,
                     };
                     let tile_reach = reach.map(|(first, last)| (first * to_tile, last * to_tile));
                     collision_circles(
@@ -444,7 +466,7 @@ impl ViewSymbols {
                                     // `tileToViewport`: out of tile units and then shrunk by the
                                     // camera, which is the only place the perspective belongs.
                                     entry.circle.radius =
-                                        entry.circle.radius / to_tile * label.perspective;
+                                        entry.circle.radius / layout_units * label.perspective;
                                     entry
                                 })
                                 .collect(),
