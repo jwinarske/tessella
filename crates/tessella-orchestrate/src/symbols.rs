@@ -137,6 +137,14 @@ pub struct FrameOptions {
     /// *one* around an icon. Sharing one value crowds icons or spaces them, depending which way
     /// it is shared.
     pub icon_padding: Padding,
+    /// Takes a sprite's own size to the screen pixels its icon competes in: `icon-size`.
+    ///
+    /// The icon's half of [`Self::font_scale`], and mbgl keeps the pair the same way --
+    /// `textBoxScale = tilePixelRatio * fontScale` beside `iconBoxScale = tilePixelRatio *
+    /// layoutIconSize`. A shaped icon's extent is the picture's own size, so without this a
+    /// marker drawn at a quarter size still reserves the whole picture: sixteen times the area
+    /// it covers, against every label on the screen.
+    pub icon_scale: f32,
     /// Tile units per screen pixel for the bucket being offered, at perspective ratio one.
     ///
     /// `pixels_to_tile_units` for the tile's zoom against the view's. The collision run is walked
@@ -201,6 +209,8 @@ impl Default for FrameOptions {
             // `icon-padding`'s spec default, which this read as one. Every other default here is
             // the spec's and this one was not.
             icon_padding: Padding::uniform(2.0),
+            // `icon-size`'s spec default, which is a multiplier and not a size.
+            icon_scale: 1.0,
             tile_units_per_pixel: 0.0,
             layout_tile_units_per_pixel: 0.0,
         }
@@ -522,7 +532,9 @@ impl ViewSymbols {
                             right,
                         },
                         project(laid.anchor),
-                        label.perspective,
+                        // The icon's own box scale, not the text's: the extent is the sprite's
+                        // pixels and `icon-size` is what takes them to the drawn ones.
+                        options.icon_scale * label.perspective,
                         icon_padding,
                         // After `icon-text-fit` the extent is the shield's *content* area and
                         // the picture reaches further out; collision reserves the picture.

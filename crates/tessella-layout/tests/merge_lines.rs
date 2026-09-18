@@ -52,6 +52,7 @@ fn layout(features: &[(&str, &[(i32, i32)])]) -> SymbolLayout {
         pending,
         symbol: SymbolOptions::default(),
         // Merging is about geometry; the size these labels draw at never enters it.
+        icon_scale: 1.0,
         sort_by_key: false,
         text_size: SizeBinding::Constant(16.0),
         icon_size: SizeBinding::Constant(1.0),

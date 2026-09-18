@@ -916,3 +916,105 @@ fn a_line_labels_run_is_laid_out_at_the_tiles_scale() {
     );
     assert_ne!(first_free(0.0), at_layout, "laid out at the view's scale");
 }
+
+/// An icon reserves the room it draws in, which `icon-size` decides.
+///
+/// A shaped icon's extent is the sprite's own pixels; `icon-size` is the multiplier between those
+/// and the pixels on the screen. Built without it, a marker drawn at a quarter size still blocks
+/// sixteen times the area it covers -- which is how one added icon cleared six graticule labels
+/// off the demotiles world map while covering none of them.
+mod icon_box_scale {
+    use super::{lay_out, to_screen};
+
+    use tessella_layout::symbol_bucket::{IconLabel, IconOptions, build_icons};
+    use tessella_orchestrate::symbols::{FrameLabel, FrameOptions, ViewSymbols};
+    use tessella_place::feature::Padding;
+
+    /// One 64-pixel sprite, padded the way the packer pads.
+    fn sprites() -> tessella_glyph::sprite::Positions {
+        [(
+            "marker".to_string(),
+            tessella_glyph::sprite::IconPosition {
+                padded_rect: tessella_glyph::atlas::Rect {
+                    x: 1,
+                    y: 1,
+                    width: 66,
+                    height: 66,
+                },
+                pixel_ratio: 1.0,
+                sdf: false,
+                content: None,
+                text_fit_width: None,
+                text_fit_height: None,
+            },
+        )]
+        .into_iter()
+        .collect()
+    }
+
+    /// Which of two markers fifty screen pixels apart are drawn, at `icon_scale`.
+    ///
+    /// Neither symbol has a label, so the icons' own boxes are the whole of the decision. The
+    /// sprite is sixty-four pixels across, so at full size the second marker is well inside the
+    /// first's box and at a quarter size it is well outside it.
+    fn drawn_at(icon_scale: f32) -> Vec<bool> {
+        // `to_screen` is a sixteenth, so eight hundred tile units is fifty pixels.
+        let anchors = [(1000.0f32, 1000.0f32), (1800.0, 1000.0)];
+        let (_, text) = lay_out(&[("", anchors[0]), ("", anchors[1])]);
+        let icons: Vec<IconLabel> = anchors
+            .into_iter()
+            .map(|anchor| IconLabel {
+                pending: 0,
+                image: "marker".to_string(),
+                anchor,
+                options: IconOptions::default(),
+                text: None,
+            })
+            .collect();
+        let (_, laid_icons) = build_icons(&icons, &sprites());
+
+        let labels: Vec<FrameLabel> = text
+            .into_iter()
+            .zip(laid_icons)
+            .enumerate()
+            .map(|(index, (label, icon))| FrameLabel {
+                #[allow(clippy::cast_possible_truncation)]
+                cross_tile_id: index as u32 + 1,
+                icon: Some(icon),
+                ..label
+            })
+            .collect();
+
+        let mut view = ViewSymbols::new();
+        let result = view.frame(
+            &labels,
+            to_screen,
+            &FrameOptions {
+                icon_scale,
+                icon_padding: Padding::uniform(1.0),
+                ..FrameOptions::default()
+            },
+        );
+        result.placed.iter().map(|symbol| symbol.icon).collect()
+    }
+
+    /// The control: at their own size the two sprites overlap, so the second is dropped.
+    #[test]
+    fn a_full_size_icon_blocks_the_marker_beside_it() {
+        assert_eq!(
+            drawn_at(1.0),
+            vec![true, false],
+            "two overlapping sprites both drew, so the comparison below says nothing"
+        );
+    }
+
+    /// And a quarter of that size does not, because it does not reach.
+    #[test]
+    fn a_quarter_size_icon_reserves_a_quarter_of_the_room() {
+        assert_eq!(
+            drawn_at(0.25),
+            vec![true, true],
+            "a marker sixteen pixels across blocked one fifty pixels away"
+        );
+    }
+}

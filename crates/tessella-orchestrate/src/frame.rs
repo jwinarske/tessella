@@ -2598,6 +2598,9 @@ fn place_symbols(
             rules,
             padding,
             icon_padding,
+            // The layer's `icon-size`, which an icon's box is built at for the same reason a
+            // label's is built at its `text-size`.
+            icon_scale: layout.icon_scale,
             // The collision run is walked in tile units and projected after, so it needs the
             // tile's own scale. mbgl's `pixelsToTileUnits`, and the same value
             // `write_line_positions` already takes.

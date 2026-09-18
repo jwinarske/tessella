@@ -802,6 +802,19 @@ pub struct SymbolLayout {
     pub pending: Vec<Pending>,
     /// How the text is set.
     pub symbol: SymbolOptions,
+    /// `icon-size` for the layer: the multiplier between a sprite's own pixels and the pixels it
+    /// draws at.
+    ///
+    /// mbgl's `layoutIconSize`, which it carries into `CollisionFeature` as
+    /// `iconBoxScale = tilePixelRatio * layoutIconSize`. A shaped icon's extent is the picture's
+    /// own size, so a box built from it without this reserves the sprite at its full size however
+    /// small the layer draws it -- and an `icon-size` of a quarter then blocks sixteen times the
+    /// area it covers.
+    ///
+    /// The layer's value, like [`Self::symbol`]'s sizes: mbgl evaluates both per feature, and a
+    /// data-driven `icon-size` is read here as the layer's. Each label's own is on its
+    /// [`Pending::icon_options`].
+    pub icon_scale: f32,
     /// How `text-size` reaches the shader: as a uniform, or out of the vertex.
     ///
     /// Held on the layout rather than on each label because the *classification* is the layer's
@@ -890,6 +903,8 @@ impl SymbolLayout {
             icons_need_linear,
             variable_anchors: variable_anchors(layer, zoom),
             symbol,
+            // The same read `icon_options` makes for a feature, with the layer in place of one.
+            icon_scale: number("icon-size").unwrap_or(1.0),
             text_size,
             icon_size,
             sort_by_key,
