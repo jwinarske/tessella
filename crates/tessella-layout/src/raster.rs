@@ -43,6 +43,14 @@ pub struct RasterBucket {
     pub vertices: Vec<RasterVertex>,
     /// Six indices per quad.
     pub indices: Vec<u16>,
+    /// The grid, in cells a side, when this is one quad covering the whole tile.
+    ///
+    /// Which is when its bytes are the same for every tile that draws one: the positions are the
+    /// tile's own coordinates and the texture coordinates are the same grid over the same square,
+    /// so nothing in them says which tile. What differs travels in the uniforms. `None` for a
+    /// quad cut to a mask, which is the tile's own shape -- which sub-tiles an ancestor still has
+    /// to cover -- and two tiles rarely agree about that.
+    pub grid: Option<u32>,
 }
 
 impl RasterBucket {
@@ -159,6 +167,9 @@ impl RasterBucket {
     pub fn whole_tile() -> Self {
         let mut bucket = Self::default();
         bucket.add_quad(0, 0, 0);
+        // The same grid `masked_on` records for the whole-tile mask, which builds this bucket by
+        // the other path: the two are byte-identical and have to stay so.
+        bucket.grid = Some(1);
         bucket
     }
 
@@ -194,6 +205,9 @@ impl RasterBucket {
         for entry in mask {
             bucket.add_quad_on(entry.z, entry.x, entry.y, cells);
         }
+        // Recorded rather than deduced later: only here is it known that the quads came from a
+        // mask rather than from `add_quad_on` calls a caller made itself.
+        bucket.grid = tessella_tile::mask::is_whole_tile(mask).then_some(cells.max(1));
         bucket
     }
 }

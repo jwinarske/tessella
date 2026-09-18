@@ -220,6 +220,37 @@ pub struct SlabArena {
     /// whether *anyone* holds the slab, not how much of it is still wanted, and the second is
     /// what decides whether re-emitting the survivors is worth the upload.
     live: BTreeMap<u32, usize>,
+    /// Bytes that are the same for every drawable that names them, by [`SharedGeometry`].
+    ///
+    /// A terrain's ground is one mesh however many tiles are drawn on it, and a raster quad at a
+    /// given grid is one quad: what differs per tile is the matrix and the sampling pair, and
+    /// those travel in the uniforms. Allocated once and named by every drawable that wants them,
+    /// which is what keeps the region's occupancy independent of the cover — a pitched z14
+    /// terrain view held 11.5 MiB of identical ground mesh, one copy per tile, and ran the
+    /// region out.
+    ///
+    /// Held by the arena as well as by its users, so it outlives the drawables of any one frame
+    /// and is never swept while the cache still names it.
+    shared: BTreeMap<SharedGeometry, SlabRef>,
+}
+
+/// Geometry that is the same bytes wherever it is drawn, and so is allocated once.
+///
+/// The key rather than the bytes: an arena cannot tell two identical buffers apart, and hashing
+/// them to find out would cost more than the copy it saves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum SharedGeometry {
+    /// The terrain mesh's vertices, at `tessella_layout::terrain::MESH_SIZE`.
+    TerrainMeshVertices,
+    /// And its indices, which include the skirt's.
+    TerrainMeshIndices,
+    /// A whole-tile raster quad's vertices, gridded this many cells a side.
+    ///
+    /// Only a whole tile. A quad cut to a mask is the tile's own shape -- which sub-tiles an
+    /// ancestor still has to cover -- and two tiles rarely agree about that.
+    QuadVertices(u32),
+    /// And its indices.
+    QuadIndices(u32),
 }
 
 /// Bytes the region's header and table occupy before the first slab.
@@ -601,6 +632,12 @@ impl SlabArena {
         if !mark.open {
             self.open = None;
         }
+        // Shared bytes the failed frame allocated went with the slots above, so the cache must
+        // let go of them: kept, they would name a slab that no longer exists and every later
+        // frame would draw from it.
+        self.shared.retain(|_, reference| {
+            matches!(self.slots.get(reference.slab as usize), Some(Some(_)))
+        });
         // And the region's own cursor, so the next attempt writes over the bytes the failed one
         // wrote rather than past them. The entries naming them went with their slots above.
         if let Backing::Region { cursor, full, .. } = &mut self.backing {
@@ -644,6 +681,45 @@ impl SlabArena {
     #[must_use]
     pub fn slab(&self, id: u32) -> Option<&Arc<Slab>> {
         self.slots.get(id as usize)?.as_ref()
+    }
+
+    /// Bytes every drawable of a kind shares, allocated on the first ask and named ever after.
+    ///
+    /// In a slab of their own, which is what keeps them out of the way: a slab holding one
+    /// frame's tiles empties as those tiles leave, and a shared buffer in it would keep it alive
+    /// for ever. Sealed either side for the same reason.
+    ///
+    /// Retained once for the cache itself, so a frame that draws no terrain does not sweep the
+    /// mesh the next one wants. That is a bounded hold: one mesh and a quad per grid, and the
+    /// grids are powers of two up to the mesh's own.
+    pub fn shared(
+        &mut self,
+        key: SharedGeometry,
+        len: usize,
+        write: impl FnOnce(&mut [u8]),
+    ) -> SlabRef {
+        // The length as well as the key: a key stands for bytes of a particular shape, and one
+        // that ever asked for another shape would otherwise be handed the first shape's bytes --
+        // geometry drawn from the wrong buffer, with nothing to say so. Allocated unshared
+        // instead, which is correct if wasteful, and cannot happen while the grids are what they
+        // are.
+        if let Some(reference) = self.shared.get(&key).copied() {
+            if reference.length as usize == len {
+                return reference;
+            }
+            return self.alloc_with(len, write);
+        }
+        self.seal();
+        let reference = self.alloc_with(len, write);
+        self.seal();
+        // Nothing is shared until it is allocated, and an allocation that did not fit is not
+        // worth remembering: the region reports itself full and the frame fails, and the retry
+        // asks again.
+        if reference.length as usize == len {
+            self.retain(reference);
+            self.shared.insert(key, reference);
+        }
+        reference
     }
 
     /// Marks a reference's bytes as still wanted.
@@ -1957,16 +2033,36 @@ pub fn encode_terrain(
     mesh: &tessella_layout::terrain::TerrainMesh,
     elevation: TextureId,
 ) -> Encoded {
-    let mut bytes = Vec::with_capacity(mesh.vertices.len() * TERRAIN_STRIDE as usize);
-    for vertex in &mesh.vertices {
-        for value in vertex {
-            bytes.extend_from_slice(&value.to_le_bytes());
-        }
-        // The fourth short, which nothing reads. See `TERRAIN_STRIDE`.
-        bytes.extend_from_slice(&0i16.to_le_bytes());
-    }
-    let vertices = arena.alloc(&bytes);
-    let indexes = alloc_u16(arena, &mesh.indices);
+    // The same bytes for every tile of every terrain: the mesh is a tile's own coordinates and
+    // nothing about which tile, so it is allocated once and named by all of them. One copy per
+    // tile was 11.5 MiB of a pitched z14 view, which is most of what ran the region out.
+    let vertices = arena.shared(
+        SharedGeometry::TerrainMeshVertices,
+        mesh.vertices.len() * TERRAIN_STRIDE as usize,
+        |out| {
+            for (bytes, vertex) in out
+                .as_chunks_mut::<{ TERRAIN_STRIDE as usize }>()
+                .0
+                .iter_mut()
+                .zip(&mesh.vertices)
+            {
+                for (pair, value) in bytes.as_chunks_mut::<2>().0.iter_mut().zip(vertex) {
+                    *pair = value.to_le_bytes();
+                }
+                // The fourth short, which nothing reads. See `TERRAIN_STRIDE`.
+                bytes[6..8].copy_from_slice(&0i16.to_le_bytes());
+            }
+        },
+    );
+    let indexes = arena.shared(
+        SharedGeometry::TerrainMeshIndices,
+        mesh.indices.len() * 2,
+        |out| {
+            for (bytes, value) in out.as_chunks_mut::<2>().0.iter_mut().zip(&mesh.indices) {
+                *bytes = value.to_le_bytes();
+            }
+        },
+    );
 
     // Two attributes over one buffer rather than one of three components. Filament draws nothing
     // at all from a `Short3` position -- 72 renderables, 72 primitives, zero fragments, with the
@@ -2861,10 +2957,7 @@ pub fn encode_raster(
     image: TextureId,
     elevation: Option<TextureId>,
 ) -> Encoded {
-    let vertex_bytes = as_raster_bytes(&bucket.vertices);
-
-    let interleaved = arena.alloc(&vertex_bytes);
-    let indexes = alloc_u16(arena, &bucket.indices);
+    let (interleaved, indexes) = alloc_raster(arena, bucket);
 
     let descriptors = alloc::vec![
         AttributeDesc {
@@ -2967,10 +3060,7 @@ pub fn encode_hillshade(
     image: TextureId,
     elevation: Option<TextureId>,
 ) -> Encoded {
-    let vertex_bytes = as_raster_bytes(&bucket.vertices);
-
-    let interleaved = arena.alloc(&vertex_bytes);
-    let indexes = alloc_u16(arena, &bucket.indices);
+    let (interleaved, indexes) = alloc_raster(arena, bucket);
 
     let descriptors = alloc::vec![
         AttributeDesc {
@@ -3068,10 +3158,7 @@ pub fn encode_color_relief(
     color_stops: TextureId,
     ground: Option<TextureId>,
 ) -> Encoded {
-    let vertex_bytes = as_raster_bytes(&bucket.vertices);
-
-    let interleaved = arena.alloc(&vertex_bytes);
-    let indexes = alloc_u16(arena, &bucket.indices);
+    let (interleaved, indexes) = alloc_raster(arena, bucket);
 
     let descriptors = alloc::vec![
         AttributeDesc {
@@ -3334,6 +3421,48 @@ fn as_symbol_bytes(values: &[SymbolVertex]) -> Vec<u8> {
 /// bytes an `i16` pair would produce for any value a tile holds. It is spelled as the type the
 /// bucket stores rather than converted, so a value that ever did exceed `i16::MAX` would be
 /// wrong here in an obvious way instead of silently negative.
+/// A raster quad's bytes, shared between tiles where the quad is the same for all of them.
+///
+/// Which is a whole-tile quad: its positions are the tile's own coordinates and its texture
+/// coordinates the same grid over the same square, so nothing in the bytes says which tile. A
+/// cover of a hundred tiles held a hundred copies of one 330 KB quad per raster family, which on
+/// a raised terrain is most of the region.
+fn alloc_raster(arena: &mut SlabArena, bucket: &RasterBucket) -> (SlabRef, SlabRef) {
+    let Some(cells) = bucket.grid else {
+        let bytes = as_raster_bytes(&bucket.vertices);
+        return (arena.alloc(&bytes), alloc_u16(arena, &bucket.indices));
+    };
+    let vertices = arena.shared(
+        SharedGeometry::QuadVertices(cells),
+        bucket.vertices.len() * RASTER_STRIDE as usize,
+        |out| {
+            for (bytes, vertex) in out
+                .as_chunks_mut::<{ RASTER_STRIDE as usize }>()
+                .0
+                .iter_mut()
+                .zip(&bucket.vertices)
+            {
+                // The position is signed and the texture coordinate is not, so the two halves
+                // are written apart rather than through one iterator.
+                bytes[0..2].copy_from_slice(&vertex.position[0].to_le_bytes());
+                bytes[2..4].copy_from_slice(&vertex.position[1].to_le_bytes());
+                bytes[4..6].copy_from_slice(&vertex.texture[0].to_le_bytes());
+                bytes[6..8].copy_from_slice(&vertex.texture[1].to_le_bytes());
+            }
+        },
+    );
+    let indexes = arena.shared(
+        SharedGeometry::QuadIndices(cells),
+        bucket.indices.len() * 2,
+        |out| {
+            for (bytes, value) in out.as_chunks_mut::<2>().0.iter_mut().zip(&bucket.indices) {
+                *bytes = value.to_le_bytes();
+            }
+        },
+    );
+    (vertices, indexes)
+}
+
 fn as_raster_bytes(values: &[RasterVertex]) -> Vec<u8> {
     let mut out = Vec::with_capacity(values.len() * RASTER_STRIDE as usize);
     for vertex in values {
