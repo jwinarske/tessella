@@ -3386,6 +3386,8 @@ fn encode_parts(
                 &vertex_layout,
                 bucket.binder.data(),
                 key,
+                // The ground the circle stands on, where one is under it.
+                raised.then_some(textures.terrain),
             ))
         }
         Content::Heatmap(heatmap) => {
