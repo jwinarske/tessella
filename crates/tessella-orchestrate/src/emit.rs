@@ -2757,6 +2757,7 @@ pub fn encode_symbol(
     sprites: Option<TextureId>,
     filter: TextureFilter,
     paint: &SymbolPaint<'_>,
+    elevation: Option<TextureId>,
 ) -> Encoded {
     encode_symbol_indices(
         arena,
@@ -2769,6 +2770,7 @@ pub fn encode_symbol(
         sprites,
         filter,
         paint,
+        elevation,
     )
 }
 
@@ -2797,6 +2799,7 @@ pub fn encode_symbol_indices(
     sprites: Option<TextureId>,
     filter: TextureFilter,
     paint: &SymbolPaint<'_>,
+    elevation: Option<TextureId>,
 ) -> Encoded {
     let vertex_bytes = as_symbol_bytes(&buffers.vertices);
 
@@ -2915,7 +2918,22 @@ pub fn encode_symbol_indices(
         None if is_sdf => (BuiltIn::SymbolSDFShader, alloc::vec![atlas]),
         None => (BuiltIn::SymbolIconShader, alloc::vec![atlas]),
     };
-    let texture_refs = push_span(&mut payload, &texture_refs(shader, &textures, filter));
+    // The atlas this half samples, and the ground under the label where a terrain raises it.
+    // The elevation's slot is named directly rather than read out of `texture_refs`, whose table
+    // is mbgl's -- and mbgl, having no terrain, has no row for it. Without this the consumer's
+    // raised path has no sampler to bind, and Filament draws nothing at all rather than drawing
+    // the label flat: every label in the frame vanished, which is how this was found.
+    let texture_refs = push_span(&mut payload, &{
+        let mut refs = texture_refs(shader, &textures, filter);
+        if let Some(elevation) = elevation {
+            refs.push(TextureRef {
+                texture: elevation,
+                slot: TERRAIN_ELEVATION_SLOT,
+                filter: TextureFilter::Linear as u32,
+            });
+        }
+        refs
+    });
 
     #[allow(clippy::cast_possible_truncation)]
     let record = GeometryAdd {

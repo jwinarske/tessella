@@ -103,6 +103,7 @@ fn labeled(text: &str) -> (SlabArena, emit::Encoded, usize) {
         None,
         tessella_capture_abi::envelope::TextureFilter::Linear,
         &no_paint(),
+        None,
     );
     arena.seal();
     (arena, encoded, glyphs)
@@ -152,6 +153,7 @@ fn a_non_sdf_symbol_names_the_icon_shader() {
         None,
         tessella_capture_abi::envelope::TextureFilter::Linear,
         &no_paint(),
+        None,
     );
     assert_eq!(
         encoded.record.builtin_shader,
@@ -303,6 +305,7 @@ fn an_empty_layer_encodes_to_nothing() {
         None,
         tessella_capture_abi::envelope::TextureFilter::Linear,
         &no_paint(),
+        None,
     );
     assert_eq!(encoded.record.vertex_count, 0);
     assert_eq!(encoded.segments()[0].vertex_length, 0);

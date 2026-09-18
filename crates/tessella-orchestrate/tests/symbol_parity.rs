@@ -725,6 +725,7 @@ mod through_the_builder {
                 None,
                 tessella_capture_abi::envelope::TextureFilter::Linear,
                 &crate::no_paint(),
+                None,
             );
 
             let mut attributes: Vec<(u32, u32, u32, u32)> = encoded
@@ -819,6 +820,7 @@ fn an_encoded_symbol_binds_its_atlas_at_the_oracle_s_slot() {
             None,
             tessella_capture_abi::envelope::TextureFilter::Linear,
             &crate::no_paint(),
+            None,
         );
         assert_eq!(encoded.record.texture_refs.count, 1, "sdf={is_sdf}");
 

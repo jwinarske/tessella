@@ -3506,6 +3506,8 @@ fn encode_parts(
                         bytes: &paint.text,
                         layout: &text_layout,
                     },
+                    // The ground the label stands on, where one is under it.
+                    raised.then_some(textures.terrain),
                 ));
             }
             let atlas = layout
@@ -3558,6 +3560,8 @@ fn encode_parts(
                             bytes: &paint.icons,
                             layout: &icon_layout,
                         },
+                        // As the text half: the ground the icon stands on.
+                        raised.then_some(textures.terrain),
                     ));
                     return Some(parts);
                 }
