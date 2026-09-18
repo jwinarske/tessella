@@ -1,0 +1,30 @@
+{
+ "example": "add-a-new-layer-below-labels",
+ "base": "https://tiles.openfreemap.org/styles/bright",
+ "sources": {
+  "urban-areas": {
+   "type": "geojson",
+   "data": "https://d2ad6b4ur7yvpq.cloudfront.net/naturalearth-3.3.0/ne_50m_urban_areas.geojson"
+  }
+ },
+ "layers": [
+  {
+   "id": "urban-areas-fill",
+   "before": "road_oneway",
+   "type": "fill",
+   "source": "urban-areas",
+   "layout": {},
+   "paint": {
+    "fill-color": "#f08",
+    "fill-opacity": 0.4
+   }
+  }
+ ],
+ "cameras": [
+  {
+   "lat": 35.137451890638886,
+   "lon": -88.13734351262877,
+   "zoom": 4
+  }
+ ]
+}
