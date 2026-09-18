@@ -55,11 +55,11 @@ The sweep's numbers as of 2026-09-16, which is the gate:
     terrain_families_p  z16 p0     0
     terrain_families_p  z16 p60    2
     terrain_families_p  z9  p0    30 of 2160000
-    terrain_cover_p     z14 p0   holes 154 of 786432
-    terrain_cover_p     z14 p30  holes 294
-    terrain_cover_p     z14 p45  holes 782
-    terrain_cover_p     z14 p60  holes 1033
-    terrain_cover_p     z16 p45  holes 1173
+    terrain_cover_p     z14 p0   holes 0 of 786432
+    terrain_cover_p     z14 p30  holes 0
+    terrain_cover_p     z14 p45  holes 0
+    terrain_cover_p     z14 p60  holes 0
+    terrain_cover_p     z16 p45  holes 28
 
 `holes` is the other measure, for the one scene nothing can be compared against: pixels of a color
 the scene uses for nothing but its background. See `terrain_cover_p` below.
@@ -175,11 +175,11 @@ the scene uses for nothing but its background. See `terrain_cover_p` below.
   Five cameras, because two are not enough: `p0` and `p45` are the kindest in the space and held
   while everything around them was failing.
 
-      terrain_cover_p  z14 p0     154 of 786432  (0.020%)
-      terrain_cover_p  z14 p30    294            (0.037%)
-      terrain_cover_p  z14 p45    782            (0.099%)
-      terrain_cover_p  z14 p60   1033            (0.131%)
-      terrain_cover_p  z16 p45   1173            (0.149%)
+      terrain_cover_p  z14 p0       0 of 786432  (0.000%)
+      terrain_cover_p  z14 p30      0            (0.000%)
+      terrain_cover_p  z14 p45      0            (0.000%)
+      terrain_cover_p  z14 p60      0            (0.000%)
+      terrain_cover_p  z16 p45     28            (0.004%)
 
   They read 62, 34140, 622, 180367 and 618072 before the camera took the ground's height into
   account, and z17 was a frame of pure background at any pitch. What that was:
@@ -215,9 +215,22 @@ the scene uses for nothing but its background. See `terrain_cover_p` below.
   draws them visits its own cover; refining only what is drawn changes nothing, because the tiles
   were never asked for. Each was measured alone first and read as a dead end.
 
-  What is left is the same in every row: a raised raster has no skirt where the ground has one.
-  Drawn alone at `z14 p60` the ground covers the whole frame, 785403 of it without its skirt; the
-  relief covers 781405. The gap is the skirt, and it is what the remaining holes are.
+  The last of it was the skirt. The ground's mesh hangs one from every tile edge, because two
+  tiles agree on a shared edge's world position and reach it through different matrices, so the
+  two land a fraction of a pixel apart and the boundary pixels are claimed by neither. A picture
+  drawn *on* that ground is its own surface with its own edges and cracks in the same places, and
+  what shows through is the ground, which takes the background's color.
+
+  So a raised raster hangs a curtain too, and so does the clip mask -- a mask cut to the surface
+  clips the very skirt it admits, which is why the first attempt changed nothing at all. The
+  curtain is not the ground's: that one is a fifth of a tile and is invisible only because the
+  ground is the backmost thing there is, and the same length on a picture is a wall across the
+  view. It is four pixels, in meters, at the frame's own camera -- wider than any crack and too
+  narrow to see.
+
+  Not on ground that is not raised. At an exaggeration of zero the tiles are coplanar and there is
+  no crack; a curtain there is a line drawn rather than a seam filled, and the oracle says so --
+  `terrain_flat_p` went from 0 to 547 before it was gated on displacement.
 
 - `puck_p` — a location indicator over Berlin: an accuracy circle, a bearing, and the perspective
   compensation that decides how the puck leans when the camera pitches. **This one does not pass

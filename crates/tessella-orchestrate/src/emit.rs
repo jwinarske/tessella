@@ -64,8 +64,11 @@ const POSITION_STRIDE: u32 = 4;
 /// A symbol's interleaved layout vertex: three attributes of four shorts.
 const SYMBOL_STRIDE: u32 = 24;
 
-/// A raster vertex: a tile position and a texture position, two shorts each.
-const RASTER_STRIDE: u32 = 8;
+/// A raster vertex: a tile position, a texture position, and the skirt flag beside them.
+///
+/// Twelve rather than ten so the stride stays a multiple of four, which is what a driver wants of
+/// an attribute offset. The last two bytes are padding nothing reads.
+const RASTER_STRIDE: u32 = 12;
 
 /// A location indicator's vertex: two floats.
 ///
@@ -2982,6 +2985,19 @@ pub fn encode_raster(
             declared_data_type: AttributeDataType::Short2 as u8,
             _pad: [0; 2],
         },
+        // The skirt flag. Zero on every vertex of a bucket that has no curtain, which is every
+        // flat one, and the specialization the consumer compiles then reads a constant.
+        AttributeDesc {
+            attr_id: 2,
+            binding: 2,
+            source: interleaved,
+            offset: 8,
+            vertex_offset: 0,
+            stride: RASTER_STRIDE,
+            data_type: AttributeDataType::Short2 as u8,
+            declared_data_type: AttributeDataType::Short2 as u8,
+            _pad: [0; 2],
+        },
     ];
 
     let mut payload = Vec::new();
@@ -3085,6 +3101,19 @@ pub fn encode_hillshade(
             declared_data_type: AttributeDataType::Short2 as u8,
             _pad: [0; 2],
         },
+        // The skirt flag. Zero on every vertex of a bucket that has no curtain, which is every
+        // flat one, and the specialization the consumer compiles then reads a constant.
+        AttributeDesc {
+            attr_id: 2,
+            binding: 2,
+            source: interleaved,
+            offset: 8,
+            vertex_offset: 0,
+            stride: RASTER_STRIDE,
+            data_type: AttributeDataType::Short2 as u8,
+            declared_data_type: AttributeDataType::Short2 as u8,
+            _pad: [0; 2],
+        },
     ];
 
     let mut payload = Vec::new();
@@ -3177,6 +3206,19 @@ pub fn encode_color_relief(
             binding: 1,
             source: interleaved,
             offset: 4,
+            vertex_offset: 0,
+            stride: RASTER_STRIDE,
+            data_type: AttributeDataType::Short2 as u8,
+            declared_data_type: AttributeDataType::Short2 as u8,
+            _pad: [0; 2],
+        },
+        // The skirt flag. Zero on every vertex of a bucket that has no curtain, which is every
+        // flat one, and the specialization the consumer compiles then reads a constant.
+        AttributeDesc {
+            attr_id: 2,
+            binding: 2,
+            source: interleaved,
+            offset: 8,
             vertex_offset: 0,
             stride: RASTER_STRIDE,
             data_type: AttributeDataType::Short2 as u8,
@@ -3448,6 +3490,11 @@ fn alloc_raster(arena: &mut SlabArena, bucket: &RasterBucket) -> (SlabRef, SlabR
                 bytes[2..4].copy_from_slice(&vertex.position[1].to_le_bytes());
                 bytes[4..6].copy_from_slice(&vertex.texture[0].to_le_bytes());
                 bytes[6..8].copy_from_slice(&vertex.texture[1].to_le_bytes());
+                // The skirt flag, and two bytes of padding after it. Declared `Short2` like the
+                // pair above it, because Filament draws nothing from a single short -- the same
+                // reason `encode_terrain` puts the ground's flag beside its position.
+                bytes[8..10].copy_from_slice(&vertex.skirt.to_le_bytes());
+                bytes[10..12].copy_from_slice(&0u16.to_le_bytes());
             }
         },
     );

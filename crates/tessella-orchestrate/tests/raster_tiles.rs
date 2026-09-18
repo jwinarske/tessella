@@ -354,11 +354,12 @@ fn the_encoded_raster_binds_its_picture_to_both_samplers() {
     );
 }
 
-/// Both vertex attributes read the one interleaved buffer, four bytes apart.
+/// All three vertex attributes read the one interleaved buffer, four bytes apart.
 ///
 /// Position and texture coordinate travel together — mbgl declares them as one vertex — so a
 /// descriptor pointing the second at its own slab would be describing a layout the bytes do not
-/// have, and the consumer believes descriptors.
+/// have, and the consumer believes descriptors. The skirt flag is the third, beside them for the
+/// same reason and because Filament draws nothing from a single short.
 #[test]
 fn the_raster_attributes_share_one_interleaved_buffer() {
     use tessella_capture_abi::AttributeDataType;
@@ -375,12 +376,14 @@ fn the_raster_attributes_share_one_interleaved_buffer() {
     );
 
     let attributes = encoded.attributes();
-    assert_eq!(attributes.len(), 2);
+    assert_eq!(attributes.len(), 3);
     assert_eq!(attributes[0].source, attributes[1].source, "two slabs");
+    assert_eq!(attributes[0].source, attributes[2].source, "two slabs");
     assert_eq!(attributes[0].offset, 0);
     assert_eq!(attributes[1].offset, 4);
+    assert_eq!(attributes[2].offset, 8);
     for attribute in &attributes {
-        assert_eq!(attribute.stride, 8);
+        assert_eq!(attribute.stride, 12);
         assert_eq!(attribute.data_type, AttributeDataType::Short2 as u8);
         assert_eq!(
             attribute.declared_data_type,
