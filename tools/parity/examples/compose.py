@@ -16,6 +16,11 @@ Fixture fields:
             for the "insert beneath the first label" idiom several examples use
   cameras   [{lat, lon, zoom, pitch, bearing}], each a settled frame to compare
   size      [width, height]; 1024x768 when absent, the sweep's street-zoom size
+  script    what the example does after its style loads, as render-test operations --
+            `["setData", id, <document>]` and the four camera properties. Written beside the
+            style as `<out>.script.json`, and handed to both renderers: `--script` to the
+            oracle, `TSF_SCRIPT` to the probe. Both read that one file, because a harness that
+            lowered it into two would be free to lower it differently for each.
 
 Prints one line per camera: `lat lon zoom width height pitch bearing`, parity.sh's arguments.
 Every absolute URL, in the base and in what the fixture adds, is routed through the proxy.
@@ -83,6 +88,17 @@ def main() -> None:
 
     with open(sys.argv[2], "w") as out:
         json.dump(style, out, indent=1)
+
+    # Beside the style, and only when the fixture has one: `examples.sh` hands over whichever
+    # file is there, so an example that mutates nothing runs exactly as it did before.
+    script_path = sys.argv[2] + ".script.json"
+    if fixture.get("script"):
+        script = json.loads(rewrite(json.dumps(fixture["script"]).encode()))
+        with open(script_path, "w") as out:
+            json.dump(script, out, indent=1)
+    elif os.path.exists(script_path):
+        # A fixture that had a script and lost one must not keep replaying the old one.
+        os.remove(script_path)
 
     width, height = fixture.get("size", [1024, 768])
     for camera in fixture["cameras"]:

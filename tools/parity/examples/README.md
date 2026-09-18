@@ -18,10 +18,26 @@ conformance suite. The ones whose content is a style plus a camera are asked her
 - `cameras` — settled frames to compare. An example that animates is asked at the ends of its
   animation, because `mbgl-render` draws a still picture.
 - `size` — `[width, height]`, 1024x768 when absent.
+- `script` — what the example does *after* its style has loaded, which no stylesheet can say: a
+  source handed new data, or the camera moved. Written in the render tests' own vocabulary, an
+  array with the operation's name first, because `render-test/parser.cpp` already names these
+  calls and a second spelling of them would be a second thing to keep right:
+
+      "script": [["setData", "point", {"type": "Point", "coordinates": [0, 20]}],
+                 ["setCenter", [-74.0, 40.7]], ["setZoom", 15.5],
+                 ["setBearing", -17.6], ["setPitch", 45]]
+
+  `compose.py` writes it beside the style and both renderers read *that one file* -- `--script`
+  to the oracle, `TSF_SCRIPT` to the probe. One file rather than one each, because two renderers
+  handed different instructions is the one failure a gross number cannot show.
+
+  An example that animates is asked at the ends of its animation, and a script is how the far end
+  is reached: `animate-a-point` moves its point a quarter turn around its circle.
 
 Adding on load and writing the same sources and layers into the document are the same style by the
 time a frame is drawn, which is what lets these run without any call the header does not have.
-Examples that mutate the style after load wait for those calls, and for the oracle to replay them.
+Examples that mutate the style after load need `script` and the calls behind it: `setData` is
+there, and the rest of the render tests' vocabulary is not yet.
 
 ## The snapshot
 

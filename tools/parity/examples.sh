@@ -66,6 +66,13 @@ for slug in "$@"; do
     status=1
     continue
   fi
+  # What the example does once its style has loaded, where it does anything: `compose.py` writes
+  # it beside the style, and both renderers read that same file.
+  if [ -f "$style.script.json" ]; then
+    export PARITY_SCRIPT="$style.script.json"
+  else
+    unset PARITY_SCRIPT
+  fi
   while read -r lat lon zoom width height pitch bearing; do
     bash "$PARITY_DIR/parity.sh" "$style" "$lat" "$lon" "$zoom" "$width" "$height" "$pitch" \
       "$bearing" || status=1
