@@ -1031,6 +1031,7 @@ fn the_alignments_decide_the_drawables_matrices() {
         // so the view was pitched half a degree and turned three quarters of one.
         bearing: 45.0,
         pitch: 30.0,
+        ground_below: 0.0,
     };
 
     let entry = |alignments, placement| {
@@ -1117,6 +1118,7 @@ fn the_gamma_scale_corrects_only_a_flat_label() {
         bearing: 0.0,
         // Degrees. `FRAC_PI_6` here was half a degree, not thirty.
         pitch: 30.0,
+        ground_below: 0.0,
     };
 
     assert_eq!(symbol_gamma_scale(&view, Alignment::Viewport), 1.0);
@@ -1360,6 +1362,7 @@ fn the_gamma_scale_reads_pitch_as_degrees() {
         height: 359.0,
         bearing: 0.0,
         pitch: 15.0,
+        ground_below: 0.0,
     };
 
     let scale = symbol_gamma_scale(&view, Alignment::Map);

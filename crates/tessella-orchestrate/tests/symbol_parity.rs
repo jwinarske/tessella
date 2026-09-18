@@ -998,6 +998,7 @@ mod painter_order {
             height: 768.0,
             bearing: 0.0,
             pitch: 0.0,
+            ground_below: 0.0,
         }
     }
 
@@ -1296,6 +1297,7 @@ mod symbol_drawable_ubo {
             height: 768.0,
             bearing: 0.0,
             pitch: 0.0,
+            ground_below: 0.0,
         }
     }
 

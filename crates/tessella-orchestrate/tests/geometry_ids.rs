@@ -44,6 +44,7 @@ fn emit_at(longitude: f64) -> (Vec<u64>, Vec<String>) {
         height: 512.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     });
     let tiles = cover::cover(&view).expect("covers");
     let decoded = Tile::decode(REAL_TILE).expect("decodes");
@@ -158,6 +159,7 @@ fn nothing_is_released_because_nothing_is_retained() {
         height: 512.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     });
     let tiles = cover::cover(&view).expect("covers");
     let decoded = Tile::decode(REAL_TILE).expect("decodes");
@@ -233,6 +235,7 @@ fn a_wrapped_tile_is_not_its_own_copy() {
         height: 512.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     });
     let tiles = cover::cover(&view).expect("covers");
     let wrapped = tiles.iter().filter(|tile| tile.wrap != 0).count();

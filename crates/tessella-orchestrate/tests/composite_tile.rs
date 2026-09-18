@@ -313,6 +313,7 @@ fn the_fill_drawable_buffer_matches_the_oracle_at_a_fractional_zoom() {
         height: 768.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     });
 
     // `(layer, slot) -> sorted 16-byte blocks`, as the probe canonicalizes them.

@@ -178,6 +178,7 @@ fn the_horizon_cuts_only_the_lowest_zooms() {
             height: 700.0,
             bearing: 0.0,
             pitch: 0.0,
+            ground_below: 0.0,
         };
         let view = camera::settled(&view);
         let tiles = cover::cover_with(&view, WorldCopies::One).expect("covers");
@@ -220,6 +221,7 @@ fn horizon_counts() {
             height: 700.0,
             bearing: 0.0,
             pitch: 0.0,
+            ground_below: 0.0,
         });
         let tiles = cover::cover_with(&view, WorldCopies::One).expect("covers");
         let behind = tiles
@@ -370,6 +372,7 @@ fn globe_view(longitude: f64, latitude: f64, zoom: f64) -> tessella_tile::cover:
         height: 700.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     }
 }
 
@@ -526,6 +529,7 @@ fn a_degenerate_viewport_still_gives_a_matrix() {
             height: h,
             bearing: 0.0,
             pitch: 0.0,
+            ground_below: 0.0,
         };
         let m = globe::clip_matrix(&view);
         assert!(
@@ -627,6 +631,7 @@ fn the_point_under_the_camera_bends_to_the_middle_of_the_screen() {
             height: 700.0,
             bearing: 0.0,
             pitch: 0.0,
+            ground_below: 0.0,
         };
         let z = 4u8;
         let across = f64::from(1u32 << z);
@@ -655,6 +660,7 @@ fn the_bend_keeps_north_up() {
         height: 700.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     };
     let z = 4u8;
     let across = f64::from(1u32 << z);
@@ -698,6 +704,7 @@ fn the_bend_and_the_horizon_agree_about_the_far_side() {
         height: 700.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     };
     let distance = globe::camera_distance(view.zoom, view.latitude, view.height);
     // The antipode of the camera: normalized Mercator x of 0.0 is longitude -180.
@@ -769,6 +776,7 @@ fn a_globe_and_a_plane_draw_one_zoom_at_one_scale() {
                 height: 768.0,
                 bearing: 0.0,
                 pitch: 0.0,
+                ground_below: 0.0,
             };
             let settled = camera::settled(&view);
             let clip = globe::clip_matrix(&settled);
@@ -814,6 +822,7 @@ fn the_anchored_bend_reproduces_the_exact_one() {
             height,
             bearing: 0.0,
             pitch: 0.0,
+            ground_below: 0.0,
         });
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let z = zoom.floor() as u8;
@@ -869,6 +878,7 @@ fn the_anchor_is_the_middle_of_its_tile() {
         height: 768.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     });
     let (z, x, y) = (12_u8, 655_u32, 1582_u32);
     let bend = globe::anchored_bend(&view, z, x, y, 0);
@@ -962,6 +972,7 @@ mod pitched_globe {
                     height: 768.0,
                     bearing,
                     pitch,
+                    ground_below: 0.0,
                 };
                 for (dlon, dlat) in offsets {
                     let plane = on_plane(&view, longitude + dlon, latitude + dlat)
@@ -1006,6 +1017,7 @@ mod pitched_globe {
                         height: 700.0,
                         bearing,
                         pitch,
+                        ground_below: 0.0,
                     };
                     let point = globe::sphere_point(view.longitude, view.latitude);
                     let clip = globe::project_point(&globe::clip_matrix(&view), point)
@@ -1044,6 +1056,7 @@ mod pitched_globe {
                 height: 700.0,
                 bearing: 0.0,
                 pitch: 0.0,
+                ground_below: 0.0,
             };
             // The old composition: one pull-back from the sphere's center, no rotations between.
             let distance = globe::camera_distance(view.zoom, view.latitude, view.height);

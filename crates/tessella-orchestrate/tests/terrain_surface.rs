@@ -138,6 +138,7 @@ fn the_surface_follows_the_style() {
         height: 768.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     };
     let with_terrain = r##"{"version":8,
       "sources":{"dem":{"type":"raster-dem","url":"http://x/d.json"}},

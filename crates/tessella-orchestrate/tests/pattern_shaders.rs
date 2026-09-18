@@ -49,6 +49,7 @@ fn emit_with(sprites: Option<&Patterns<'_>>) -> (BTreeMap<i32, usize>, u32) {
         height: 512.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     });
     let tiles = cover::cover(&view).expect("covers");
     let decoded = Tile::decode(REAL_TILE).expect("decodes");
@@ -217,6 +218,7 @@ fn the_atlas_is_uploaded_and_the_placements_are_written() {
         height: 512.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     });
     let tiles = cover::cover(&view).expect("covers");
     let decoded = Tile::decode(REAL_TILE).expect("decodes");
@@ -373,6 +375,7 @@ fn an_extrusion_pattern_binds_its_own_shader() {
         height: 512.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     });
     let tiles = cover::cover(&view).expect("covers");
     let decoded = Tile::decode(REAL_TILE).expect("decodes");

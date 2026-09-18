@@ -33,6 +33,7 @@ fn view(zoom: f64, latitude: f64, pitch: f64, height: f64) -> ViewTransform {
         height,
         bearing: 0.0,
         pitch,
+        ground_below: 0.0,
     }
 }
 

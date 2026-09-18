@@ -184,6 +184,12 @@ pub struct TerrainContent {
     /// thousands of triangles, and a z14 cover of that took the renderer from settling in 224
     /// ticks to 1,200 and stopped it settling to the same picture twice.
     pub cells: u32,
+    /// The lowest and highest ground in this tile, in meters, before exaggeration.
+    ///
+    /// What the camera's far plane is set from -- see `ViewTransform::ground_below`. Measured
+    /// here, once, because the tile is where the bytes are: a frame that asked the DEM each tick
+    /// would read every texel of every tile for a number that cannot change once it has arrived.
+    pub elevation: [f32; 2],
 }
 
 /// The quad a hillshade's slope field is drawn on, and the field.
@@ -1661,6 +1667,35 @@ fn terrain_cells(dem: &tessella_source::dem::Dem, tile: TileId, exaggeration: f6
     tessella_source::terrain::Relief::new(dem, base).cells_within(relief)
 }
 
+/// The lowest and highest ground a DEM tile holds, in meters.
+///
+/// Every texel, including the border: the border is real ground that this tile's edge vertices and
+/// its neighbors' both read, so a range over the interior alone would be short exactly where two
+/// tiles meet.
+///
+/// `[0.0, 0.0]` for a DEM with no readable texel, which is the plane -- a tile that cannot say how
+/// high its ground is must not move the far plane on a guess.
+fn terrain_elevation(dem: &tessella_source::dem::Dem) -> [f32; 2] {
+    let dim = dem.dim();
+    #[allow(clippy::cast_possible_wrap)]
+    let last = dim as i32;
+    let mut low = f32::INFINITY;
+    let mut high = f32::NEG_INFINITY;
+    for y in -1..=last {
+        for x in -1..=last {
+            if let Some(meters) = dem.elevation_exact(x, y) {
+                low = low.min(meters);
+                high = high.max(meters);
+            }
+        }
+    }
+    if low.is_finite() && high.is_finite() {
+        [low, high]
+    } else {
+        [0.0, 0.0]
+    }
+}
+
 /// Builds the ground's bucket from a decoded DEM.
 ///
 /// [`build_dem_tile_on`]'s other sibling, and not its arm for the same reason: a style may want a
@@ -1701,6 +1736,7 @@ pub fn build_terrain_tile_on(
                 dem: alloc::sync::Arc::clone(dem),
                 exaggeration: terrain.exaggeration() as f32,
                 cells: terrain_cells(dem, tile, terrain.exaggeration()),
+                elevation: terrain_elevation(dem),
                 // The tile's own zoom, not the cover's: a skirt hides the seam between this tile
                 // and its neighbors, and how wide that seam can be is a property of the level.
                 skirt: tessella_layout::terrain::skirt_length(f64::from(tile.z)) as f32,

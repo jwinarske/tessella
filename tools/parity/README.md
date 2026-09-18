@@ -55,8 +55,11 @@ The sweep's numbers as of 2026-09-16, which is the gate:
     terrain_families_p  z16 p0     0
     terrain_families_p  z16 p60    2
     terrain_families_p  z9  p0    30 of 2160000
-    terrain_cover_p     z14 p0   holes 62 of 786432
-    terrain_cover_p     z14 p45  holes 622
+    terrain_cover_p     z14 p0   holes 154 of 786432
+    terrain_cover_p     z14 p30  holes 294
+    terrain_cover_p     z14 p45  holes 782
+    terrain_cover_p     z14 p60  holes 5027
+    terrain_cover_p     z16 p45  holes 1173
 
 `holes` is the other measure, for the one scene nothing can be compared against: pixels of a color
 the scene uses for nothing but its background. See `terrain_cover_p` below.
@@ -169,40 +172,39 @@ the scene uses for nothing but its background. See `terrain_cover_p` below.
   background's color, and every magenta pixel is somewhere the ground shows through the layers on
   it. `coverage.sh` counts them.
 
-  **This one does not pass.** Five cameras, and only two of them are hairlines:
+  Five cameras, because two are not enough: `p0` and `p45` are the kindest in the space and held
+  while everything around them was failing.
 
-      terrain_cover_p  z14 p0       62 of 786432  (0.008%)
-      terrain_cover_p  z14 p30   34140            (4.341%)
-      terrain_cover_p  z14 p45      622           (0.079%)
-      terrain_cover_p  z14 p60  180367           (22.935%)
-      terrain_cover_p  z16 p45  618072           (78.592%)
+      terrain_cover_p  z14 p0     154 of 786432  (0.020%)
+      terrain_cover_p  z14 p30    294            (0.037%)
+      terrain_cover_p  z14 p45    782            (0.099%)
+      terrain_cover_p  z14 p60   5027            (0.639%)
+      terrain_cover_p  z16 p45   1173            (0.149%)
 
-  The gate held `p0` and `p45` alone for a while, which are the two kindest cameras in the space;
-  everything between and past them is far worse, and at z17 the frame is 100% background. The rows
-  are here so that cannot happen again.
+  They read 62, 34140, 622, 180367 and 618072 before the camera took the ground's height into
+  account, and z17 was a frame of pure background at any pitch. What that was:
 
-  What is known, all of it measured:
+  The camera sat a fixed distance above the *plane* -- `camera_to_center_distance`, a property of
+  the viewport -- while a height in meters reaches the screen multiplied by pixels-per-meter,
+  which doubles with every zoom level. So the ground climbed towards a camera that did not climb
+  with it, and far enough in it arrived: at this build's 1152-pixel camera, 400 meters of ground
+  exaggerated by 1.5 stands 826 pixels up at z16 and 1651 at z17. Past that the camera is
+  underground and the frame is whatever the background is. The prediction and the measurement
+  agree: at z16 p0 the scene holds at exaggeration 1.5 and 2.0, reads **zero** holes at 2.5 --
+  the ground magnified until it covered everything -- and is 100% background at 3.0.
 
-  - It is displacement, not coverage arithmetic. At exaggeration 0 there are **no** holes at all;
-    at 0.1 there are 80; at 1.5, 618072. Nothing else about the scene changes.
-  - The ground and the layers standing on it agree exactly. Drawn alone at z16, the ground's
-    surface covers 168383 pixels and the color relief 168360 — the same surface. The raise blocks
-    match too: identical sampling scale, offsets, exaggeration and matrix for all three layers.
-  - The ground's *skirt* is what disguises it. With the skirt at zero the ground covers 168383
-    pixels; with it, 748675. The curtain is ~670 pixels tall at z16 and paints the background
-    color, so a frame with tiles missing looks exactly like a frame with tiles present and bare.
-    That is also why the hole count does not move when the skirt length does: magenta comes from
-    the curtain or from the background behind it, and the measure cannot tell them apart.
-  - It is not the flat cover, though `cover_on` does test a tile as a plate at height zero. Giving
-    the frustum walk the ground's true vertical range — ±5.7 tile units at z17 — selects the same
-    34 tiles. A box extended in z does not cross the side planes that bound the walk in x and y.
-  - It is not overzoom. With the source's `maxzoom` raised so no tile is overzoomed, z16 still
-    leaves 618462.
-  - It is not a different-zoom seam. At z15 the cover is uniformly z15 and the hairlines remain.
+  The fix is GL JS's `Transform.elevation`: the camera's height is measured from the ground under
+  the center rather than from sea level. It is applied as a shift in the raise block, which every
+  raised family and the clip mask read, so it costs one subtraction and no camera plumbing.
 
-  The open lead is a ratio: four tiles that should blanket the frame paint 21% of it, and 21% is
-  about a quarter — the signature of geometry drawn at half its linear scale. `map.rs` warns about
-  exactly that shape of mistake where a coarser tile stands in for a finer coordinate.
+  That exposed a second one. The far plane reached `distance * 1.01`, barely past the center, so
+  once the center's ground sat on the plane everything below it was clipped -- 116770 pixels of
+  no geometry at all, in bands following the contours. `ViewTransform::ground_below` carries the
+  relief the far plane has to reach.
+
+  What is left, in order of size: at the steepest pitches a strip along the bottom edge, where
+  the cover is computed against the plane and stops short of the ground nearest the camera; and
+  the seam hairlines, which are the whole of `p0` and most of `p45`.
 
 - `puck_p` — a location indicator over Berlin: an accuracy circle, a bearing, and the perspective
   compensation that decides how the puck leans when the camera pitches. **This one does not pass

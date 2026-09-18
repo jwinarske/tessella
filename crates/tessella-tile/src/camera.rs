@@ -523,7 +523,14 @@ fn proj_matrix_with(view: &ViewTransform, near_z: f64) -> Result<Mat4, CameraErr
     // A one-percent margin, so a fragment at exactly the far distance does not fail the depth
     // test. With no pitch `tan_multiple` is zero and this is the center distance, which is what
     // the unrotated path computed before pitch existed.
-    let far_z = furthest * 1.01;
+    //
+    // Then whatever the ground reaches below the plane, which is nothing without a terrain and so
+    // leaves every flat camera exactly where it was. With one, the plane is no longer the bottom
+    // of the scene: ground below it sits further from the camera than the center does, and past
+    // this plane it is clipped rather than drawn -- at pitch 0 the margin is about eleven pixels,
+    // so a terrain of any relief loses the whole of its lower half in bands that follow its own
+    // contours. See `ViewTransform::ground_below`.
+    let far_z = furthest * 1.01 + view.ground_below * pixels_per_meter(view);
 
     // The f32 field of view, which is what `getFieldOfView()` returns.
     #[allow(clippy::cast_possible_truncation)]
@@ -1083,6 +1090,7 @@ mod tests {
             height: 768.0,
             bearing: -17.6,
             pitch: 45.0,
+            ground_below: 0.0,
         };
         assert_eq!(super::camera_to_center_distance(view.height), 1152.0);
         let near = super::near_clipped_proj_matrix(&view).expect("a matrix");
@@ -1138,6 +1146,7 @@ mod tests {
             height: 768.0,
             bearing: 0.0,
             pitch: 0.0,
+            ground_below: 0.0,
         }
     }
 

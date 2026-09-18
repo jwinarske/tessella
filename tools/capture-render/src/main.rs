@@ -174,6 +174,7 @@ fn parse_args() -> Result<Args, String> {
             height,
             bearing,
             pitch,
+            ground_below: 0.0,
         }),
     })
 }
