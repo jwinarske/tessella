@@ -21,6 +21,9 @@ Fixture fields:
             style as `<out>.script.json`, and handed to both renderers: `--script` to the
             oracle, `TSF_SCRIPT` to the probe. Both read that one file, because a harness that
             lowered it into two would be free to lower it differently for each.
+            A `setData` may name a URL instead of a document; it is read here, through the
+            proxy, into the document it names -- which is what lets an example whose document is
+            fetched and large be a fixture at all.
 
 Prints one line per camera: `lat lon zoom width height pitch bearing`, parity.sh's arguments.
 Every absolute URL, in the base and in what the fixture adds, is routed through the proxy.
@@ -37,6 +40,32 @@ from proxy import rewrite  # noqa: E402
 
 def proxied(url: str) -> str:
     return rewrite(url.encode()).decode()
+
+
+def resolved(script: list, example: str) -> list:
+    """`setData` by URL, read once here into the document it names.
+
+    Both renderers are handed one file, so whatever a `setData` names has to be in it. A URL
+    could be left for each to fetch -- the oracle does that with `GeoJSONSource::setURL` -- but
+    the probe has no file source of its own, and giving it one would mean two fetches of one
+    document, each free to get something else. Reading it here keeps the fixture declarative: it
+    names the document the example fetches, and the snapshot holds the bytes.
+    """
+    out = []
+    for operation in script:
+        if len(operation) == 3 and operation[0] == "setData" and isinstance(operation[2], str):
+            # Through the proxy, as everything else is: a record run stores it and a replay
+            # serves it, so the document is the one the example was recorded against.
+            url = proxied(operation[2])
+            if not url.startswith("http://127.0.0.1:"):
+                sys.exit(f"{example}: setData {operation[2]!r} is not an http or https URL")
+            # The URL was just checked to be the loopback proxy, so no other scheme reaches here.
+            with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310
+                document = json.loads(response.read())
+            out.append([operation[0], operation[1], document])
+            continue
+        out.append(operation)
+    return out
 
 
 def insert_index(layers: list, before: str | None, example: str) -> int:
@@ -93,7 +122,7 @@ def main() -> None:
     # file is there, so an example that mutates nothing runs exactly as it did before.
     script_path = sys.argv[2] + ".script.json"
     if fixture.get("script"):
-        script = json.loads(rewrite(json.dumps(fixture["script"]).encode()))
+        script = resolved(json.loads(rewrite(json.dumps(fixture["script"]).encode())), example)
         with open(script_path, "w") as out:
             json.dump(script, out, indent=1)
     elif os.path.exists(script_path):
