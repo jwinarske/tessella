@@ -771,12 +771,13 @@ pub fn build_tile_on_with_patterns(
                                                     piece.seg_end / length,
                                                 )
                                             });
-                                            bucket.add_geometry(
+                                            bucket.add_geometry_on(
                                                 &ring,
                                                 &LineOptions {
                                                     clip_distances,
                                                     ..options
                                                 },
+                                                fill_step,
                                             );
                                         }
                                         continue;
@@ -785,7 +786,11 @@ pub fn build_tile_on_with_patterns(
                                     // own caps, not a continuation: a line that leaves the buffered
                                     // box and comes back must not be joined across the gap.
                                     for piece in clip_line_to_box(&projected, lo, hi) {
-                                        bucket.add_geometry(&to_tile_ring(&piece), &options);
+                                        bucket.add_geometry_on(
+                                            &to_tile_ring(&piece),
+                                            &options,
+                                            fill_step,
+                                        );
                                     }
                                 }
                             }
@@ -806,7 +811,11 @@ pub fn build_tile_on_with_patterns(
                                             ring.iter().map(project).collect();
                                         let clipped = clip_ring_to_box(&projected, lo, hi);
                                         if !clipped.is_empty() {
-                                            bucket.add_geometry(&to_tile_ring(&clipped), &options);
+                                            bucket.add_geometry_on(
+                                                &to_tile_ring(&clipped),
+                                                &options,
+                                                fill_step,
+                                            );
                                         }
                                     }
                                 }
@@ -2090,7 +2099,7 @@ pub fn build_mvt_tile_on_with_patterns(
                                 .iter()
                                 .map(|point| [point[0] as i16, point[1] as i16])
                                 .collect();
-                            bucket.add_geometry(&part, &options);
+                            bucket.add_geometry_on(&part, &options, fill_step);
                         }
                         binder
                             .push(bucket.vertices.len(), &paint, &feature)

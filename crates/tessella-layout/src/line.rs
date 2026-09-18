@@ -466,6 +466,34 @@ impl LineBucket {
     /// 54k vertices spread over thousands of features, and the largest single feature is three
     /// orders of magnitude below the limit.
     pub fn add_geometry(&mut self, coordinates: &[Position], options: &LineOptions) {
+        self.add_geometry_on(coordinates, options, 0);
+    }
+
+    /// As [`Self::add_geometry`], splitting the polyline against a `step`-unit grid first.
+    ///
+    /// `step` of zero is the flat path byte for byte, which is every caller that is not on a
+    /// terrain. [`crate::subdivide::step_for_surface`] is what a caller derives it from, and it
+    /// is the same step a fill's rings are cut on -- a road and the park it runs along have to
+    /// bend over the same ground, and two different cuts are two different curves.
+    ///
+    /// # Why a line needs cutting at all
+    ///
+    /// A point family only has to raise its anchor. A line is a polyline, and a segment that
+    /// spans a hill is a straight chord through it: the ends sit on the ground and everything
+    /// between them is under it. Extra vertices along the segment are what let the shader's
+    /// per-vertex read follow the surface, and they cost nothing where the ground is flat --
+    /// `crossings` finds none, and the polyline comes out as it went in.
+    ///
+    /// The extrusion is unaffected: a vertex inserted along a segment is collinear with its
+    /// neighbors, so the normals the join arithmetic derives are the ones it derived before.
+    pub fn add_geometry_on(&mut self, coordinates: &[Position], options: &LineOptions, step: i32) {
+        let cut;
+        let coordinates = if step > 0 {
+            cut = crate::subdivide::subdivide_ring(coordinates, step);
+            &cut[..]
+        } else {
+            coordinates
+        };
         let mut len = coordinates.len();
         while len >= 2 && coordinates[len - 1] == coordinates[len - 2] {
             len -= 1;

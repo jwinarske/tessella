@@ -1757,6 +1757,12 @@ pub struct LineDraw<'a> {
     pub gradient_ramp: Option<TextureId>,
     /// Per-vertex pattern rectangles, when the pattern is data-driven.
     pub pattern_vertices: Option<&'a PatternVertices>,
+    /// The ground this line runs over, where a terrain raises it.
+    ///
+    /// Named directly rather than read out of `texture_refs`, whose table is mbgl's -- and mbgl,
+    /// having no terrain, has no row for it. Without it the consumer's raised path has no sampler
+    /// to bind, and Filament draws nothing rather than drawing the line flat.
+    pub elevation: Option<TextureId>,
 }
 
 /// Encodes a line layer's geometry.
@@ -1785,6 +1791,7 @@ pub fn encode_line(
         dash_atlas,
         gradient_ramp,
         pattern_vertices,
+        elevation,
     } = draw;
     let vertices = alloc_line_vertices(arena, &bucket.vertices);
     let indexes = alloc_u16(arena, &bucket.indices);
@@ -1808,21 +1815,29 @@ pub fn encode_line(
             ],
         );
     }
-    geometry_add(
+    let shader = match (dash_atlas, pattern_atlas, gradient_ramp) {
+        (Some(_), _, _) => BuiltIn::LineSDFShader,
+        (None, Some(_), _) => BuiltIn::LinePatternShader,
+        (None, None, Some(_)) => BuiltIn::LineGradientShader,
+        (None, None, None) => BuiltIn::LineShader,
+    };
+    let bound: Vec<TextureId> = dash_atlas
+        .or(pattern_atlas)
+        .or(gradient_ramp)
+        .into_iter()
+        .collect();
+    geometry_add_textured(
         geometry,
         permutation_key,
         indexes,
         bucket.vertices.len(),
         &descriptors,
+        &[],
         &bucket.segments,
-        match (dash_atlas, pattern_atlas, gradient_ramp) {
-            (Some(_), _, _) => BuiltIn::LineSDFShader,
-            (None, Some(_), _) => BuiltIn::LinePatternShader,
-            (None, None, Some(_)) => BuiltIn::LineGradientShader,
-            (None, None, None) => BuiltIn::LineShader,
-        },
-        dash_atlas.or(pattern_atlas).or(gradient_ramp),
+        shader,
+        &bound,
         TextureFilter::Linear,
+        elevation,
     )
 }
 

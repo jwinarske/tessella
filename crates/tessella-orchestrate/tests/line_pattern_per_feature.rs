@@ -195,6 +195,7 @@ fn the_streams_land_where_the_oracle_puts_them() {
             dash_atlas: None,
             gradient_ramp: None,
             pattern_vertices: Some(&bucket.pattern_vertices),
+            elevation: None,
         },
     );
 
@@ -248,6 +249,7 @@ fn an_unresolved_pattern_binds_nothing() {
             dash_atlas: None,
             gradient_ramp: None,
             pattern_vertices: None,
+            elevation: None,
         },
     );
     assert!(
