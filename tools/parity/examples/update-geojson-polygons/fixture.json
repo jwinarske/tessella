@@ -1,0 +1,554 @@
+{
+ "example": "update-geojson-polygons",
+ "note": "The example moves five rectangles with `updateData({update: ...})`, a diff. The pinned oracle has no diff API -- its GeoJSONSource takes a whole document, `setGeoJSON` or `setURL` -- so the fixture states the document the diff produces and hands it over with setData. What is compared is the frame either way. Its rectangles are Math.random() all the way down, so these are chosen: five to start, and where the animation has carried them, two of them recoloured.",
+ "base": "https://demotiles.maplibre.org/style.json",
+ "sources": {
+  "rectangles": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "id": 0,
+      "properties": {
+       "color": "#008888"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -71.0,
+          45.9
+         ],
+         [
+          -69.8,
+          45.9
+         ],
+         [
+          -69.8,
+          46.7
+         ],
+         [
+          -71.0,
+          46.7
+         ],
+         [
+          -71.0,
+          45.9
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "0_label",
+      "properties": {
+       "label": "Zoom: 5"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -70.4,
+        46.3
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": 1,
+      "properties": {
+       "color": "#008888"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -67.076151,
+          43.368176
+         ],
+         [
+          -66.333349,
+          43.876354
+         ],
+         [
+          -67.123849,
+          45.031824
+         ],
+         [
+          -67.866651,
+          44.523646
+         ],
+         [
+          -67.076151,
+          43.368176
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "1_label",
+      "properties": {
+       "label": "Zoom: 5"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -67.1,
+        44.2
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": 2,
+      "properties": {
+       "color": "#008888"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -65.292157,
+          46.092263
+         ],
+         [
+          -64.74862,
+          47.490322
+         ],
+         [
+          -65.307843,
+          47.707737
+         ],
+         [
+          -65.85138,
+          46.309678
+         ],
+         [
+          -65.292157,
+          46.092263
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "2_label",
+      "properties": {
+       "label": "Zoom: 5"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -65.3,
+        46.9
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": 3,
+      "properties": {
+       "color": "#008888"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -69.170407,
+          43.769154
+         ],
+         [
+          -69.686583,
+          44.241979
+         ],
+         [
+          -70.429593,
+          43.430846
+         ],
+         [
+          -69.913417,
+          42.958021
+         ],
+         [
+          -69.170407,
+          43.769154
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "3_label",
+      "properties": {
+       "label": "Zoom: 5"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -69.8,
+        43.6
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": 4,
+      "properties": {
+       "color": "#008888"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -65.679642,
+          45.978777
+         ],
+         [
+          -66.678777,
+          46.020358
+         ],
+         [
+          -66.720358,
+          45.021223
+         ],
+         [
+          -65.721223,
+          44.979642
+         ],
+         [
+          -65.679642,
+          45.978777
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "4_label",
+      "properties": {
+       "label": "Zoom: 5"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -66.2,
+        45.5
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "rectangles",
+   "type": "fill",
+   "source": "rectangles",
+   "paint": {
+    "fill-color": [
+     "get",
+     "color"
+    ],
+    "fill-opacity": 0.8
+   },
+   "filter": [
+    "==",
+    "$type",
+    "Polygon"
+   ]
+  },
+  {
+   "id": "rectangles-label",
+   "type": "symbol",
+   "source": "rectangles",
+   "layout": {
+    "text-field": [
+     "get",
+     "label"
+    ],
+    "text-size": 14,
+    "text-allow-overlap": true,
+    "text-ignore-placement": true
+   },
+   "paint": {
+    "text-color": "#ffffff"
+   },
+   "filter": [
+    "==",
+    "$type",
+    "Point"
+   ]
+  }
+ ],
+ "cameras": [
+  {
+   "lat": 45.137451890638886,
+   "lon": -68.13734351262877,
+   "zoom": 5
+  }
+ ],
+ "script": [
+  [
+   "setData",
+   "rectangles",
+   {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "id": 0,
+      "properties": {
+       "color": "#008888"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -69.259635,
+          44.88136
+         ],
+         [
+          -68.513703,
+          45.821352
+         ],
+         [
+          -69.140365,
+          46.31864
+         ],
+         [
+          -69.886297,
+          45.378648
+         ],
+         [
+          -69.259635,
+          44.88136
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "0_label",
+      "properties": {
+       "label": "5.0"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -69.2,
+        45.6
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": 1,
+      "properties": {
+       "color": "#b3005e"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -65.733585,
+          44.601611
+         ],
+         [
+          -65.669922,
+          45.499357
+         ],
+         [
+          -67.066415,
+          45.598389
+         ],
+         [
+          -67.130078,
+          44.700643
+         ],
+         [
+          -65.733585,
+          44.601611
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "1_label",
+      "properties": {
+       "label": "5.0"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -66.4,
+        45.1
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": 2,
+      "properties": {
+       "color": "#008888"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -63.462403,
+          45.604047
+         ],
+         [
+          -64.219672,
+          46.898861
+         ],
+         [
+          -64.737597,
+          46.595953
+         ],
+         [
+          -63.980328,
+          45.301139
+         ],
+         [
+          -63.462403,
+          45.604047
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "2_label",
+      "properties": {
+       "label": "5.0"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -64.1,
+        46.1
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": 3,
+      "properties": {
+       "color": "#3f7f1f"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -68.641142,
+          44.998325
+         ],
+         [
+          -69.332378,
+          44.887903
+         ],
+         [
+          -69.158858,
+          43.801675
+         ],
+         [
+          -68.467622,
+          43.912097
+         ],
+         [
+          -68.641142,
+          44.998325
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "3_label",
+      "properties": {
+       "label": "5.0"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -68.9,
+        44.4
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": 4,
+      "properties": {
+       "color": "#008888"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -65.451579,
+          45.505223
+         ],
+         [
+          -66.105223,
+          44.748421
+         ],
+         [
+          -65.348421,
+          44.094777
+         ],
+         [
+          -64.694777,
+          44.851579
+         ],
+         [
+          -65.451579,
+          45.505223
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "id": "4_label",
+      "properties": {
+       "label": "5.0"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -65.4,
+        44.8
+       ]
+      }
+     }
+    ]
+   }
+  ]
+ ]
+}
