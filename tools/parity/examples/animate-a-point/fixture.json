@@ -1,0 +1,21 @@
+{
+ "example": "animate-a-point",
+ "base": "https://demotiles.maplibre.org/style.json",
+ "sources": {
+  "point": {"type": "geojson", "data": {"type": "Point", "coordinates": [20, 0]}}
+ },
+ "layers": [
+  {
+   "id": "point",
+   "source": "point",
+   "type": "circle",
+   "paint": {"circle-radius": 10, "circle-color": "#007cbf"}
+  }
+ ],
+ "cameras": [
+  {"lat": 0, "lon": 0, "zoom": 2}
+ ],
+ "script": [
+  ["setData", "point", {"type": "Point", "coordinates": [0, 20]}]
+ ]
+}

@@ -57,9 +57,22 @@ if [ -f "$PARITY_DIR/scenes/$scene.geojson" ]; then
   [ -f "$PARITY_DIR/scenes/marker.png" ] && annot+=(--annotation-image "default_marker=$PARITY_DIR/scenes/marker.png")
 fi
 
+# What a consumer does after the style loads, which no stylesheet can say: `setData` on a source,
+# or a camera property. `PARITY_SCRIPT` names one file and both renderers read it -- `--script`
+# here, `TSF_SCRIPT` below -- because two renderers handed different instructions is the one
+# failure a gross number cannot show.
+script=()
+if [ -n "${PARITY_SCRIPT:-}" ]; then
+  [ -f "$PARITY_SCRIPT" ] || {
+    echo "no script at $PARITY_SCRIPT" >&2
+    exit 1
+  }
+  script+=(--script "$PARITY_SCRIPT")
+fi
+
 "$MBGL_RENDER" --style "$style" --output "$PARITY_WORK/o_$tag.png" \
   --lat "$lat" --lon "$lon" --zoom "$z" --width "$W" --height "$H" \
-  --pitch "$pitch" --bearing "$bearing" "${annot[@]}" >/dev/null 2>&1 ||
+  --pitch "$pitch" --bearing "$bearing" "${annot[@]}" "${script[@]}" >/dev/null 2>&1 ||
   {
     echo "ORACLE FAILED $tag" >&2
     exit 1
@@ -80,6 +93,13 @@ fi
 
 # TSF_NO_FADES: a fade is time-dependent and the two renderers are not started at the same
 # instant, so comparing mid-fade measures the clock rather than the geometry.
+# Set rather than passed empty: an empty variable is still a variable, and the probe would read it
+# as a path it cannot open.
+if [ -n "${PARITY_SCRIPT:-}" ]; then
+  export TSF_SCRIPT="$PARITY_SCRIPT"
+else
+  unset TSF_SCRIPT
+fi
 out=$(TSF_NO_FADES=1 "$PARITY_WORK/render_probe" "$style" "$PARITY_WORK/mat" \
   "$PARITY_WORK/t_$tag.ppm" "$lat" "$lon" "$z" "$W" "$H" "$pitch" "$bearing" 2>&1)
 # Every package the probe found loaded, and there was at least one. Not a count: a directory with no
