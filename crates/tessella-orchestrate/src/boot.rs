@@ -650,6 +650,7 @@ fn build_for(
                 alloc::sync::Arc::new(image),
                 &[tessella_tile::mask::WHOLE_TILE],
                 cells,
+                false,
             )
             .map_err(|error| BootError::Build {
                 url: url.clone(),
@@ -694,6 +695,11 @@ fn build_for(
             // builders run over the same decode, and a style with only one of them pays for only
             // that one.
             let dem = alloc::sync::Arc::new(dem);
+            // Whether this DEM is the one the ground is raised from, which is what decides
+            // whether its pictures are painted on that ground and so want its curtain. The same
+            // test `plan` makes, asked here because a job carries the tile and not the style's
+            // answer about it.
+            let raised = style.terrain_dem().map(|(id, _)| id) == Some(job.source.as_str());
             let mut buckets = Vec::new();
             if reads.image {
                 buckets.extend(
@@ -704,6 +710,7 @@ fn build_for(
                         job.tile,
                         &[tessella_tile::mask::WHOLE_TILE],
                         cells,
+                        raised,
                     )
                     .map_err(|error| BootError::Build {
                         url: url.clone(),
@@ -731,6 +738,7 @@ fn build_for(
                         &dem,
                         &[tessella_tile::mask::WHOLE_TILE],
                         cells,
+                        raised,
                     )
                     .map_err(|error| BootError::Build {
                         url: url.clone(),

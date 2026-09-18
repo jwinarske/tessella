@@ -41,10 +41,9 @@
 # 0 / 190 and 0 / 0 for the hillshade and relief; 0 / 28 / 0 for the flat terrain; 4 / 16 / 0 / 2
 # / 30 for the families on a flat terrain, the same as without one.
 #
-# Then the raised cover: holes of 154, 294, 782, 1033 and 1173. These were 62, 34140, 622, 180367
-# and 618072 before the camera took the ground's height into account, and the fourth was 5027
-# before a DEM's picture was covered on the ground's own footprint -- see the README. What is left
-# is the seam hairlines, and the skirt a raised raster does not have where the ground does.
+# Then the raised cover: 0, 0, 0, 0 and 28 holes. These were 62, 34140, 622, 180367 and 618072
+# when the row was first written -- see the README for the three things that were wrong and the
+# order they came out in.
 set -euo pipefail
 P="$(dirname "${BASH_SOURCE[0]}")"
 source "$P/env.sh"

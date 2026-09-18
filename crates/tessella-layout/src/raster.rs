@@ -34,6 +34,8 @@ pub struct RasterVertex {
     pub position: [i16; 2],
     /// Position in the image, in the same units.
     pub texture: [u16; 2],
+    /// One for a skirt vertex, zero for the surface. See [`RasterBucket::add_skirt`].
+    pub skirt: u16,
 }
 
 /// One raster layer's geometry for one tile.
@@ -143,6 +145,7 @@ impl RasterBucket {
                 self.vertices.push(RasterVertex {
                     position: [x, y],
                     texture: [x as u16, y as u16],
+                    skirt: 0,
                 });
             }
         }
@@ -171,6 +174,64 @@ impl RasterBucket {
         // the other path: the two are byte-identical and have to stay so.
         bucket.grid = Some(1);
         bucket
+    }
+
+    /// Hangs a curtain from the grid's outer edge, as the terrain mesh has one.
+    ///
+    /// # Why a picture on the ground needs one
+    ///
+    /// Two tiles meet at a shared edge whose world position they agree on exactly and whose
+    /// vertices they reach through different matrices, so the two land a fraction of a pixel
+    /// apart and the boundary pixels are claimed by neither. On the ground that is a crack
+    /// through the planet and [`crate::terrain::mesh`] hangs a skirt to hide it. A raster drawn
+    /// *on* that ground is its own surface with its own edges and cracks in exactly the same
+    /// places -- and what shows through is the ground, which takes the background's color, so it
+    /// reads as bare ground rather than as a seam.
+    ///
+    /// The curtain takes the surface vertex's own position and texture coordinate and is flagged;
+    /// the shader drops a flagged vertex by the same skirt length the ground uses. So it paints
+    /// the edge of the picture downwards, which is hidden behind the neighboring tile wherever
+    /// that tile covers and fills the crack wherever it does not.
+    ///
+    /// Four strips rather than a ring, one per edge, which duplicates each corner twice and is
+    /// the same picture for two vertices nobody sees.
+    ///
+    /// # Panics
+    ///
+    /// When the grid is smaller than `cells` a side, which a caller that did not build it here
+    /// could do and none does.
+    pub fn add_skirt(&mut self, cells: u32) {
+        let cells = cells.max(1) as usize;
+        let side = cells + 1;
+        assert!(
+            self.vertices.len() >= side * side,
+            "a skirt needs the grid it hangs from"
+        );
+        #[allow(clippy::cast_possible_truncation)]
+        let at = |row: usize, column: usize| (row * side + column) as u16;
+        let edges = [
+            (0..=cells).map(|c| at(0, c)).collect::<Vec<u16>>(),
+            (0..=cells).map(|r| at(r, cells)).collect::<Vec<u16>>(),
+            (0..=cells).map(|c| at(cells, c)).collect::<Vec<u16>>(),
+            (0..=cells).map(|r| at(r, 0)).collect::<Vec<u16>>(),
+        ];
+        for edge in edges {
+            #[allow(clippy::cast_possible_truncation)]
+            let start = self.vertices.len() as u16;
+            for &index in &edge {
+                let surface = self.vertices[index as usize];
+                self.vertices.push(RasterVertex {
+                    skirt: 1,
+                    ..surface
+                });
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            for step in 0..edge.len() - 1 {
+                let (a, b) = (edge[step], edge[step + 1]);
+                let (c, d) = (start + step as u16, start + step as u16 + 1);
+                self.indices.extend_from_slice(&[a, b, d, a, d, c]);
+            }
+        }
     }
 
     /// The bucket for a tile's clip mask.

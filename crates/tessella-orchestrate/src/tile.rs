@@ -1523,7 +1523,7 @@ pub fn build_raster_tile(
     image: alloc::sync::Arc<tessella_source::image::Image>,
     mask: &[tessella_tile::mask::MaskEntry],
 ) -> Result<Vec<LayerBucket>, TileError> {
-    build_raster_tile_on(style, source, image, mask, 1)
+    build_raster_tile_on(style, source, image, mask, 1, false)
 }
 
 /// As [`build_raster_tile`], with each mask entry gridded `cells` a side.
@@ -1540,6 +1540,7 @@ pub fn build_raster_tile_on(
     image: alloc::sync::Arc<tessella_source::image::Image>,
     mask: &[tessella_tile::mask::MaskEntry],
     cells: u32,
+    skirt: bool,
 ) -> Result<Vec<LayerBucket>, TileError> {
     let mut buckets = Vec::new();
 
@@ -1558,7 +1559,7 @@ pub fn build_raster_tile_on(
             layer_index,
             layer_id: layer.id.clone(),
             content: Content::Raster(RasterContent {
-                bucket: RasterBucket::masked_on(mask, cells),
+                bucket: skirted(mask, cells, skirt),
                 image: alloc::sync::Arc::clone(&image),
             }),
             paint,
@@ -1596,6 +1597,7 @@ pub fn build_dem_tile_on(
     tile: TileId,
     mask: &[tessella_tile::mask::MaskEntry],
     cells: u32,
+    skirt: bool,
 ) -> Result<Vec<LayerBucket>, TileError> {
     let mut buckets = Vec::new();
     let wants = style
@@ -1626,7 +1628,7 @@ pub fn build_dem_tile_on(
             layer_index,
             layer_id: layer.id.clone(),
             content: Content::Hillshade(HillshadeContent {
-                bucket: RasterBucket::masked_on(mask, cells),
+                bucket: skirted(mask, cells, skirt),
                 prepared: alloc::sync::Arc::clone(&prepared),
                 lat_range,
             }),
@@ -1665,6 +1667,23 @@ fn terrain_cells(dem: &tessella_source::dem::Dem, tile: TileId, exaggeration: f6
     #[allow(clippy::cast_possible_truncation)]
     let relief = relief as f32;
     tessella_source::terrain::Relief::new(dem, base).cells_within(relief)
+}
+
+/// A raster bucket for `mask`, with the ground's curtain on it where one is wanted.
+///
+/// Only a whole-tile grid takes one. A masked quad is the part of a tile no better tile covers,
+/// so its outer edge is mostly *inside* the tile and a curtain there would hang in the middle of
+/// the ground rather than at a seam.
+fn skirted(
+    mask: &[tessella_tile::mask::MaskEntry],
+    cells: u32,
+    skirt: bool,
+) -> tessella_layout::raster::RasterBucket {
+    let mut bucket = RasterBucket::masked_on(mask, cells);
+    if skirt && bucket.grid.is_some() && cells > 1 {
+        bucket.add_skirt(cells);
+    }
+    bucket
 }
 
 /// The lowest and highest ground a DEM tile holds, in meters.
@@ -1765,6 +1784,7 @@ pub fn build_relief_tile_on(
     dem: &alloc::sync::Arc<tessella_source::dem::Dem>,
     mask: &[tessella_tile::mask::MaskEntry],
     cells: u32,
+    skirt: bool,
 ) -> Result<Vec<LayerBucket>, TileError> {
     let mut buckets = Vec::new();
 
@@ -1783,7 +1803,7 @@ pub fn build_relief_tile_on(
             layer_index,
             layer_id: layer.id.clone(),
             content: Content::ColorRelief(ColorReliefContent {
-                bucket: RasterBucket::masked_on(mask, cells),
+                bucket: skirted(mask, cells, skirt),
                 dem: alloc::sync::Arc::clone(dem),
             }),
             paint,

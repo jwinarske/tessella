@@ -5239,6 +5239,17 @@ fn terrain_blocks(
     // Once for the layer, not once per drawable: the camera has one center and every tile of the
     // frame is placed against the same one. A per-tile answer would tilt the world.
     let center = center_elevation(frame.view, &grounds);
+    // Four pixels in meters, at this camera. Per frame rather than per tile: it is a property of
+    // how far the camera is from the ground, which is the same for every tile of the frame.
+    #[allow(clippy::cast_possible_truncation)]
+    let seam_at_camera = {
+        let per_meter = tessella_tile::camera::pixels_per_meter(frame.view);
+        if per_meter > 0.0 {
+            (4.0 / per_meter) as f32
+        } else {
+            0.0
+        }
+    };
     bindings
         .iter()
         .map(|binding| {
@@ -5295,10 +5306,32 @@ fn terrain_blocks(
                 unpack: content.dem.encoding().unpack(),
                 color,
                 params: [scale, offset_x, offset_y, content.exaggeration],
-                // The skirt, then the ground under the camera's center -- see `center_elevation`.
-                // Every raised family subtracts the second before the exaggeration multiplies, so
-                // the surface under the center is the plane and the camera stands above it.
-                skirt: [content.skirt, center, 0.0, 0.0],
+                // The skirt, the ground under the camera's center -- see `center_elevation` --
+                // and the seam.
+                //
+                // The seam is the ground's skirt for a surface that is not the ground. A layer
+                // painted *on* the ground cracks at a tile edge for the reason the ground does,
+                // and hangs a curtain for the same reason, but it cannot hang the ground's: that
+                // one is a fifth of a tile and is invisible only because the ground is the
+                // backmost thing there is. The same curtain on a picture is a wall across the
+                // view. What a picture has to cover is a crack a fraction of a pixel wide, so
+                // this is two pixels of it, in meters, which is a curtain nothing can see and
+                // every seam is narrower than.
+                // Nothing to hide on ground that is not raised. A terrain drawn at an
+                // exaggeration of zero is the flat map, its tiles are coplanar, and a curtain
+                // there hangs below a surface with no crack in it -- which is not a seam filled
+                // but a line drawn. The oracle says so: `terrain_flat_p` is held against the same
+                // style without a terrain, and an unconditional curtain moved it from 0 to 547.
+                skirt: [
+                    content.skirt,
+                    center,
+                    if content.exaggeration > 0.0 {
+                        seam_at_camera
+                    } else {
+                        0.0
+                    },
+                    0.0,
+                ],
             }
         })
         .collect()
