@@ -1,0 +1,94 @@
+{
+ "example": "visualize-population-density",
+ "base": "https://tiles.openfreemap.org/styles/bright",
+ "sources": {
+  "rwanda-provinces": {
+   "type": "geojson",
+   "data": "https://maplibre.org/maplibre-gl-js/docs/assets/rwanda-provinces.geojson"
+  }
+ },
+ "layers": [
+  {
+   "id": "rwanda-provinces",
+   "type": "fill",
+   "source": "rwanda-provinces",
+   "layout": {},
+   "paint": {
+    "fill-color": [
+     "let",
+     "density",
+     [
+      "/",
+      [
+       "get",
+       "population"
+      ],
+      [
+       "get",
+       "sq-km"
+      ]
+     ],
+     [
+      "interpolate",
+      [
+       "linear"
+      ],
+      [
+       "zoom"
+      ],
+      8,
+      [
+       "interpolate",
+       [
+        "linear"
+       ],
+       [
+        "var",
+        "density"
+       ],
+       274,
+       [
+        "to-color",
+        "#edf8e9"
+       ],
+       1551,
+       [
+        "to-color",
+        "#006d2c"
+       ]
+      ],
+      10,
+      [
+       "interpolate",
+       [
+        "linear"
+       ],
+       [
+        "var",
+        "density"
+       ],
+       274,
+       [
+        "to-color",
+        "#eff3ff"
+       ],
+       1551,
+       [
+        "to-color",
+        "#08519c"
+       ]
+      ]
+     ]
+    ],
+    "fill-opacity": 0.7
+   }
+  }
+ ],
+ "cameras": [
+  {
+   "lat": -1.9596,
+   "lon": 30.0222,
+   "zoom": 7
+  }
+ ]
+}
