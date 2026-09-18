@@ -35,8 +35,13 @@
 #
 # The numbers to hold, as of 2026-09-16: 4 / 16 / 0 / 2 / 30, then 3 / 2, then 0 / 0 / 0; then
 # 0 / 190 and 0 / 0 for the hillshade and relief; 0 / 28 / 0 for the flat terrain; 4 / 16 / 0 / 2
-# / 30 for the families on a flat terrain, the same as without one; and holes of 0.008% and
-# 0.079% for the raised cover, which are hairlines at tile seams.
+# / 30 for the families on a flat terrain, the same as without one.
+#
+# Then the raised cover, which is the one row here that gates a known defect rather than a
+# standard met: holes of 62, 34140, 622, 180367 and 618072. Only the first and third are
+# hairlines. The rest is ground the frame shows and no tile covers, and it is recorded so it
+# cannot grow and cannot quietly come back once it is fixed -- see the README for what is known
+# about it.
 set -euo pipefail
 P="$(dirname "${BASH_SOURCE[0]}")"
 source "$P/env.sh"
@@ -77,6 +82,9 @@ for args in "14 1024 768 0" "14 1024 768 60" "16 1024 768 0" "16 1024 768 60"; d
   bash "$P/parity.sh" terrain_families_p 52.52 13.405 $args
 done
 bash "$P/parity.sh" terrain_families_p 52.52 13.405 9 2400 900 0
-for pitch in 0 45; do
-  bash "$P/coverage.sh" terrain_cover_p 52.52 13.405 14 1024 768 "$pitch" ff00ff
+# Five cameras, not two. The first two were the gate for a while and they are the two kindest in
+# the whole space: every other pitch and every zoom past the DEM's own is far worse, and holding
+# only these two said the ground was covered when most of it was not. See the README.
+for args in "14 0" "14 30" "14 45" "14 60" "16 45"; do
+  bash "$P/coverage.sh" terrain_cover_p 52.52 13.405 "${args% *}" 1024 768 "${args#* }" ff00ff
 done
