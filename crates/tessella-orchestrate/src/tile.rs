@@ -214,6 +214,15 @@ pub struct RasterContent {
 /// One layer's contribution to one tile.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LayerBucket {
+    /// Which revision of its source's data it was built from.
+    ///
+    /// Zero for everything a style resolved and nothing has replaced, and for the buckets a
+    /// frame synthesizes for itself. The frame carries it into the content stamp a retained
+    /// drawable is compared by: a source handed new data rebuilds a tile under the same key, at
+    /// the same size, over the same ground -- a point that moved is the same count of the same
+    /// vertices somewhere else -- so without it the rebuilt tile is never announced and the map
+    /// goes on drawing what it had. See `TileKey::data_rev`, which this is a copy of.
+    pub data_rev: u64,
     /// Position in the style document, which is painter order.
     pub layer_index: usize,
     /// Layer id.
@@ -933,6 +942,7 @@ pub fn build_tile_on_with_patterns(
         };
 
         buckets.push(LayerBucket {
+            data_rev: 0,
             layer_index,
             layer_id: layer.id.clone(),
             content,
@@ -1149,6 +1159,7 @@ pub fn build_sourceless(style: &Style, tile: TileId) -> Result<Vec<LayerBucket>,
             _ => continue,
         };
         buckets.push(LayerBucket {
+            data_rev: 0,
             layer_index,
             layer_id: layer.id.clone(),
             content,
@@ -1209,6 +1220,7 @@ pub fn build_location_indicators(
         }
         let binder = PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint, view.zoom);
         buckets.push(LayerBucket {
+            data_rev: 0,
             layer_index,
             layer_id: layer.id.clone(),
             content: Content::LocationIndicator(bucket),
@@ -1536,6 +1548,7 @@ pub fn build_raster_tile_on(
         })?;
 
         buckets.push(LayerBucket {
+            data_rev: 0,
             layer_index,
             layer_id: layer.id.clone(),
             content: Content::Raster(RasterContent {
@@ -1603,6 +1616,7 @@ pub fn build_dem_tile_on(
         })?;
 
         buckets.push(LayerBucket {
+            data_rev: 0,
             layer_index,
             layer_id: layer.id.clone(),
             content: Content::Hillshade(HillshadeContent {
@@ -1680,6 +1694,7 @@ pub fn build_terrain_tile_on(
         })?;
         #[allow(clippy::cast_possible_truncation)]
         buckets.push(LayerBucket {
+            data_rev: 0,
             layer_index,
             layer_id: layer.id.clone(),
             content: Content::Terrain(TerrainContent {
@@ -1728,6 +1743,7 @@ pub fn build_relief_tile_on(
         })?;
 
         buckets.push(LayerBucket {
+            data_rev: 0,
             layer_index,
             layer_id: layer.id.clone(),
             content: Content::ColorRelief(ColorReliefContent {
@@ -2192,6 +2208,7 @@ pub fn build_mvt_tile_on_with_patterns(
         };
 
         buckets.push(LayerBucket {
+            data_rev: 0,
             layer_index,
             layer_id: layer.id.clone(),
             content,

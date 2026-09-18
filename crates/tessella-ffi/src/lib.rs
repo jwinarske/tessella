@@ -68,6 +68,19 @@ pub enum Status {
     /// what the caller passed, and the caller is the only one that can fix it. The document is not
     /// a GeoJSON feature collection, or the image is not a picture this build decodes.
     BadAnnotations = 9,
+    /// The style has no GeoJSON source by that name.
+    ///
+    /// Distinct from [`Self::Failed`] for [`Self::NotHosted`]'s reason: the caller named a source
+    /// the style does not have, or one that is not GeoJSON, and the caller is the only one that
+    /// can fix it.
+    NoSuchSource = 10,
+    /// A GeoJSON document could not be read.
+    BadGeojson = 11,
+    /// The style has not resolved yet, so the map has no sources to name.
+    ///
+    /// Not a failure: a map only just created has not read its style. Poll `tessella_status` and
+    /// hand the data over once it reports ready.
+    NotResolved = 12,
 }
 
 extern crate alloc;
@@ -848,6 +861,69 @@ pub unsafe extern "C" fn tessella_set_annotations(
         // annotation bucket correctly and draws none of them.
         state.map.set_annotations(&state.annotations);
         Status::Ok
+    })
+}
+
+/// Replaces a GeoJSON source's data.
+///
+/// The style's own `data` is what the map draws until this is called, and this document
+/// afterwards. The source's *options* stay the style's -- clustering, its radius and its maximum
+/// zoom -- because they describe the source rather than the data. That is mbgl's
+/// `GeoJSONSource::setGeoJSONData`, and GL JS's `map.getSource(id).setData(...)`.
+///
+/// Every tile of that source is built again for the next frame, and no tile of any other source
+/// is, so replacing one layer's points does not rebuild the basemap under them. What is already
+/// drawn stays until the new tiles land, which is what keeps an animation from blinking.
+///
+/// Unlike [`tessella_set_annotations`] this may be called whenever the style has resolved, which
+/// is what makes it useful: it is how a point moves along a route and how live data arrives.
+/// Before then there is no source list to name and the call reports [`Status::NotResolved`].
+///
+/// The document is read, and a clustered source's index rebuilt, on the calling thread, because
+/// both are functions of the data and a tile cut from a half-built index would be wrong rather
+/// than late. The cost follows the document's size, so a caller replacing a large document every
+/// frame pays for it every frame.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed; `source` must be
+/// non-null and valid for reads of `source_len` bytes, and `geojson` non-null and valid for reads
+/// of `geojson_len` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_set_geojson_data(
+    map: MapHandle,
+    source: *const u8,
+    source_len: usize,
+    geojson: *const u8,
+    geojson_len: usize,
+) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_mut() }) else {
+            return Status::NoSuchMap;
+        };
+        if source.is_null() || geojson.is_null() {
+            return Status::NullArgument;
+        }
+        let (Some(name), Some(text)) = (unsafe { borrowed(source, source_len) }, unsafe {
+            borrowed(geojson, geojson_len)
+        }) else {
+            return Status::NotUtf8;
+        };
+        let Ok(document) = serde_json::from_str::<tessella_style::Value>(&text) else {
+            return Status::BadGeojson;
+        };
+        match state.source.set_geojson_data(&name, &document) {
+            Ok(()) => {
+                // The source's generation moved, which the tick reads -- but a tick that finds no
+                // new tile yet would still call the frame idle, and the replacement has to reach
+                // the map even on the frame before its tiles land.
+                state.map.mark_dirty();
+                Status::Ok
+            }
+            Err(tessella_orchestrate::source::SetDataError::NotResolved) => Status::NotResolved,
+            Err(tessella_orchestrate::source::SetDataError::NoSuchSource) => Status::NoSuchSource,
+            Err(tessella_orchestrate::source::SetDataError::BadDocument(_)) => Status::BadGeojson,
+        }
     })
 }
 

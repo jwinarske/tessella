@@ -69,6 +69,13 @@ struct Build {
     seq: u64,
     /// What it was split for, which `Tiles::stale` compares with what the map now draws on.
     surface: Surface,
+    /// Which revision of its source's data it was cut from, which `Tiles::stale` compares with
+    /// the revision that source now stands at.
+    ///
+    /// A replaced source's tiles are still *there* -- they are what the map draws until the
+    /// replacement lands -- so nothing else would make the map ask for them again: the cover is
+    /// satisfied by the very tiles the replacement is meant to supersede.
+    data_rev: u64,
     buckets: Arc<Vec<LayerBucket>>,
 }
 
@@ -247,6 +254,32 @@ struct Inner {
     resolving: Option<Resolving>,
 }
 
+/// Why a source's data could not be replaced.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SetDataError {
+    /// The style has not resolved, so there is no source to name yet.
+    ///
+    /// Not a failure to retry blindly: resolution is what reads the style's own sources, and a
+    /// caller with data to hand over has a map it has not finished starting. `tessella_status`
+    /// reports when it is ready.
+    #[error("the style has not resolved yet")]
+    NotResolved,
+    /// The style has no GeoJSON source by that name.
+    #[error("no GeoJSON source by that name")]
+    NoSuchSource,
+    /// The document is not GeoJSON this reads.
+    #[error("the document is not GeoJSON: {0}")]
+    BadDocument(String),
+}
+
+/// One source's data, as a caller replaced it.
+struct Replaced {
+    /// What the document read to, clustered where the source asked for clustering.
+    data: boot::SourceData,
+    /// Which revision of this source's data this is. Part of every tile key cut from it.
+    rev: u64,
+}
+
 /// A style part-way through resolving.
 struct Resolving {
     /// What the document said, and what it needs fetched.
@@ -325,6 +358,19 @@ pub struct TileSource<D> {
     /// `None` until a caller adds something, which is the case every style that does not use
     /// annotations stays in -- and it costs that style nothing, because a `None` plans no job.
     annotations: RwLock<Option<Arc<tessella_source::annotation::Annotations>>>,
+    /// GeoJSON data a caller has replaced since the style resolved, by source id.
+    ///
+    /// Read on every dispatch and written only when a caller hands over new data, which is what
+    /// the `RwLock` is for -- a frame planning its cover must not queue behind anything.
+    ///
+    /// Each entry carries the revision its data stands at. That number reaches the tile key, so
+    /// the source's tiles are planned afresh and every *other* source's survive: replacing one
+    /// layer's points at animation rates must not rebuild the basemap under them. It also keeps
+    /// two maps sharing one cache apart -- the FFI keys that cache by style text, so without the
+    /// revision a map that replaced its data and a map that did not would read each other's tiles.
+    replaced: RwLock<BTreeMap<String, Replaced>>,
+    /// Numbers the replacements, so each one is a revision nothing else has used.
+    data_revs: AtomicU64,
     /// Bumped whenever something lands.
     ///
     /// A map draws when its damage gate says something changed, and a tile arriving on a worker
@@ -427,6 +473,8 @@ impl<D: TileTransport + 'static> TileSource<D> {
             }),
             landed: RwLock::new(Landed::default()),
             annotations: RwLock::new(None),
+            replaced: RwLock::new(BTreeMap::new()),
+            data_revs: AtomicU64::new(0),
             glyphs: Mutex::new(Glyphs::default()),
             generation: AtomicU64::new(0),
             dispatched: AtomicU64::new(0),
@@ -586,6 +634,51 @@ impl<D: TileTransport + 'static> TileSource<D> {
             .annotations
             .write()
             .unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(annotations));
+    }
+
+    /// Replaces a GeoJSON source's data.
+    ///
+    /// mbgl's `GeoJSONSource::setGeoJSONData`, and the same shape: the source's *options* are the
+    /// style's and are kept -- clustering, its radius and its maximum zoom -- while the document
+    /// is the caller's and is replaced whole. The index a clustered source is cut from is rebuilt
+    /// here, on the calling thread, because it is a function of the data and the options and a
+    /// tile cut from a half-built one would be wrong rather than merely late.
+    ///
+    /// Every tile of this source is planned again on the next frame, and no tile of any other
+    /// source is: the revision this bumps is the source's own and it is part of the tile key.
+    /// Tiles built from the old data stay drawn until the new ones land, which is what mbgl does
+    /// and what keeps a map from blinking at every replacement.
+    ///
+    /// # Errors
+    ///
+    /// [`SetDataError::NotResolved`] before the style has resolved -- there is no source list to
+    /// name yet, and the data the style came with has not been read. [`SetDataError::NoSuchSource`]
+    /// when the style has no GeoJSON source by that name, and [`SetDataError::BadDocument`] when
+    /// the document is not GeoJSON this reads.
+    pub fn set_geojson_data(
+        &self,
+        name: &str,
+        document: &tessella_style::Value,
+    ) -> Result<(), SetDataError> {
+        let sources = {
+            let inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
+            inner.sources.clone().ok_or(SetDataError::NotResolved)?
+        };
+        let Some(tessella_style::Source::Geojson(source)) = sources.style.source(name) else {
+            return Err(SetDataError::NoSuchSource);
+        };
+        let data = boot::read_geojson_data(source, document).map_err(SetDataError::BadDocument)?;
+        // Taken before the write so two callers cannot be handed one number, and so the revision
+        // a tile is keyed by is the one the data it was cut from carries.
+        let rev = self.data_revs.fetch_add(1, Ordering::AcqRel) + 1;
+        self.replaced
+            .write()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(String::from(name), Replaced { data, rev });
+        // The camera has not moved and nothing has landed, so without this the damage gate would
+        // call the next frame idle and the new data would sit here, read and never drawn.
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        Ok(())
     }
 
     /// The transport this source fetches through.
@@ -1009,11 +1102,51 @@ impl<D: TileTransport + 'static> TileSource<D> {
             .map(|(name, _, _)| name.as_str())
             .filter(|name| sources.style.shades(name))
             .collect();
+        // What a caller has replaced, folded over what the style resolved. A source appears in
+        // exactly one of the two lists -- clustering is the style's choice, not the data's -- so a
+        // replacement takes its place in whichever list the style put it in. Built per dispatch
+        // rather than held: it is a handful of `Arc` clones, and holding it would mean keeping it
+        // in step with a lock a frame must not wait on.
+        let (documents, clustered, data_revs) = {
+            let replaced = self.replaced.read().unwrap_or_else(PoisonError::into_inner);
+            if replaced.is_empty() {
+                (None, None, BTreeMap::new())
+            } else {
+                let mut revs = BTreeMap::new();
+                for (name, entry) in replaced.iter() {
+                    revs.insert(name.clone(), entry.rev);
+                }
+                let documents = sources
+                    .documents
+                    .iter()
+                    .map(|(name, features)| match replaced.get(name) {
+                        Some(Replaced {
+                            data: boot::SourceData::Document(new),
+                            ..
+                        }) => (name.clone(), Arc::clone(new)),
+                        _ => (name.clone(), Arc::clone(features)),
+                    })
+                    .collect::<Vec<_>>();
+                let clustered = sources
+                    .clustered
+                    .iter()
+                    .map(|(name, index)| match replaced.get(name) {
+                        Some(Replaced {
+                            data: boot::SourceData::Clustered(new),
+                            ..
+                        }) => (name.clone(), Arc::clone(new)),
+                        _ => (name.clone(), Arc::clone(index)),
+                    })
+                    .collect::<Vec<_>>();
+                (Some(documents), Some(clustered), revs)
+            }
+        };
         let Ok(jobs) = boot::plan(
             &boot::Resolution {
                 sets: &sources.sets,
-                documents: &sources.documents,
-                clustered: &sources.clustered,
+                documents: documents.as_deref().unwrap_or(&sources.documents),
+                clustered: clustered.as_deref().unwrap_or(&sources.clustered),
+                data_revs: &data_revs,
                 annotations: sources.annotations.as_ref(),
                 terrain: sources.style.terrain_dem().map(|(id, _)| id),
                 shaded: &shaded,
@@ -1216,6 +1349,7 @@ impl<D: TileTransport + 'static> TileSource<D> {
             Build {
                 seq,
                 surface: job.key.surface,
+                data_rev: job.key.data_rev,
                 buckets,
             },
         );
@@ -1368,9 +1502,17 @@ impl<D: TileTransport + 'static> Tiles for Arc<TileSource<D>> {
                 None => return false,
             }
         };
-        held.by_source
-            .get(&data)
-            .is_some_and(|builds| builds.values().any(|build| build.surface != surface))
+        let replaced = self.replaced.read().unwrap_or_else(PoisonError::into_inner);
+        held.by_source.get(&data).is_some_and(|builds| {
+            builds.iter().any(|(name, build)| {
+                // Either half of the key that can change under a tile already built: the surface
+                // the map now draws on, and the revision its source's data now stands at.
+                build.surface != surface
+                    || replaced
+                        .get(name)
+                        .is_some_and(|entry| entry.rev != build.data_rev)
+            })
+        })
     }
 
     fn sourceless(&self, tile: TileId) -> Option<Arc<Vec<LayerBucket>>> {

@@ -562,6 +562,23 @@ fn decode_and_build(
     fetched: Option<&Response>,
     probe: &BuildProbe<'_>,
 ) -> Result<Vec<LayerBucket>, BootError> {
+    let mut built = build_for(job, style, fetched, probe)?;
+    // Which data these were cut from, stamped here rather than inside each builder: it is a
+    // property of the job rather than of the geometry, and one place to set it is one place for
+    // it to be right. The frame reads it as part of a retained drawable's content stamp.
+    for bucket in &mut built {
+        bucket.data_rev = job.key.data_rev;
+    }
+    Ok(built)
+}
+
+/// The decode and the build themselves, by what the job is.
+fn build_for(
+    job: &Job,
+    style: &Style,
+    fetched: Option<&Response>,
+    probe: &BuildProbe<'_>,
+) -> Result<Vec<LayerBucket>, BootError> {
     /// The response a job with a URL must have been given.
     fn body<'a>(job: &Job, fetched: Option<&'a Response>) -> Result<&'a Response, BootError> {
         fetched.ok_or_else(|| BootError::Fetch {
@@ -865,6 +882,12 @@ pub(crate) struct Resolution<'a> {
     /// finer than the surface one, so four tiles for every ground tile, fetched and decoded to
     /// build buckets no layer would have asked for.
     pub(crate) shaded: &'a [&'a str],
+    /// Which revision of each source's data these documents are, where a caller has replaced one.
+    ///
+    /// Absent is zero, which is what every source the style resolved and nothing has replaced
+    /// stands at. It reaches the tile key, so a replacement invalidates that source's tiles and
+    /// only that source's -- see `TileKey::data_rev`.
+    pub(crate) data_revs: &'a alloc::collections::BTreeMap<String, u64>,
 }
 
 pub(crate) fn plan(
@@ -881,7 +904,9 @@ pub(crate) fn plan(
         annotations,
         terrain,
         shaded,
+        data_revs,
     } = resolution;
+    let data_rev = |name: &String| data_revs.get(name).copied().unwrap_or(0);
     let mut raster_covers: alloc::collections::BTreeMap<u8, Vec<cover::TileCoord>> =
         alloc::collections::BTreeMap::new();
     let want = |zooms: &mut alloc::collections::BTreeMap<u8, Vec<cover::TileCoord>>, z: u8| {
@@ -1001,6 +1026,7 @@ pub(crate) fn plan(
                 cover: id,
                 source: name.clone(),
                 key: tessella_tile::store::TileKey::new(name.as_str(), id.z, id.x, id.y, style_rev)
+                    .of_data(data_rev(name))
                     .on(surface),
                 tile: id,
                 work: Work::Geojson {
@@ -1022,6 +1048,7 @@ pub(crate) fn plan(
                 cover: id,
                 source: name.clone(),
                 key: tessella_tile::store::TileKey::new(name.as_str(), id.z, id.x, id.y, style_rev)
+                    .of_data(data_rev(name))
                     .on(surface),
                 tile: id,
                 work: Work::Geojson {
@@ -1402,17 +1429,48 @@ fn dem_encoding(style: &Style, source: &str) -> tessella_source::dem::Encoding {
         .unwrap_or_default()
 }
 
+/// What a GeoJSON document resolved to, for a caller outside this module.
+///
+/// The two shapes a GeoJSON source's data takes, without the tiled cases a replacement cannot
+/// produce: handing a source new data cannot turn it into a raster.
+#[derive(Debug, Clone)]
+pub enum SourceData {
+    /// Features, cut per tile.
+    Document(alloc::sync::Arc<Vec<GeoJsonFeature>>),
+    /// The cluster index a source that asked for clustering is cut from.
+    Clustered(alloc::sync::Arc<tessella_source::cluster::Clustered>),
+}
+
+/// Reads a GeoJSON document into features, clustering it if the source asked.
+///
+/// The read a replacement does, which is the read resolution does: a source's options decide
+/// whether its data is indexed, and they belong to the source rather than to the document, so
+/// data handed over later is clustered exactly as the data the style came with was.
+///
+/// # Errors
+///
+/// The reader's message when the document is not GeoJSON this reads.
+pub fn read_geojson_data(
+    source: &tessella_style::GeojsonSource,
+    document: &tessella_style::Value,
+) -> Result<SourceData, String> {
+    let features = tessella_source::geojson::read(document).map_err(|error| error.to_string())?;
+    Ok(match clustering_for(source) {
+        Some(options) => SourceData::Clustered(alloc::sync::Arc::new(
+            tessella_source::cluster::Clustered::new(features, options),
+        )),
+        None => SourceData::Document(alloc::sync::Arc::new(features)),
+    })
+}
+
 /// Reads a GeoJSON document into features, clustering it if the source asked.
 fn read_geojson(
     source: &tessella_style::GeojsonSource,
     document: &tessella_style::Value,
 ) -> Result<Resolved, String> {
-    let features = tessella_source::geojson::read(document).map_err(|error| error.to_string())?;
-    Ok(match clustering_for(source) {
-        Some(options) => Resolved::Clustered(alloc::sync::Arc::new(
-            tessella_source::cluster::Clustered::new(features, options),
-        )),
-        None => Resolved::Document(alloc::sync::Arc::new(features)),
+    Ok(match read_geojson_data(source, document)? {
+        SourceData::Clustered(index) => Resolved::Clustered(index),
+        SourceData::Document(features) => Resolved::Document(features),
     })
 }
 
@@ -1669,6 +1727,8 @@ pub fn cold_start<S: FileSource + 'static>(config: &ColdStart<'_, S>) -> Result<
             annotations: None,
             terrain: style.terrain_dem().map(|(id, _)| id),
             shaded: &shaded,
+            // A cold start is the data the style came with, by definition.
+            data_revs: &alloc::collections::BTreeMap::new(),
         },
         view,
         &cover,
@@ -1932,6 +1992,7 @@ mod annotation_plan_tests {
                 annotations: None,
                 terrain: None,
                 shaded: &[],
+                data_revs: &alloc::collections::BTreeMap::new(),
             },
             &view(),
             &cover_at(14),
@@ -1953,6 +2014,7 @@ mod annotation_plan_tests {
                 annotations: Some(&store),
                 terrain: None,
                 shaded: &[],
+                data_revs: &alloc::collections::BTreeMap::new(),
             },
             &view(),
             &cover_at(14),
@@ -1989,6 +2051,7 @@ mod annotation_plan_tests {
                 annotations: Some(&store),
                 terrain: None,
                 shaded: &[],
+                data_revs: &alloc::collections::BTreeMap::new(),
             },
             &view(),
             &cover,

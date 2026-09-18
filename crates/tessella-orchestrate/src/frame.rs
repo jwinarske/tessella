@@ -1226,7 +1226,21 @@ fn emit_group(
                         i32::try_from(bucket.layer_index).is_ok_and(|at| at == binding.layer_index)
                     })
                     .map_or(0, |bucket| bucket.content.split_size());
-                let stamp = [ground_stamp, size];
+                // And which revision of its source's data it was built from. A tile rebuilt
+                // under the same key -- a source handed new data -- is the same key, the same
+                // ground and the same size, because a point that moved is the same count of the
+                // same vertices somewhere else. This is the term that tells the two apart.
+                //
+                // Read off the bucket rather than from the tile's list, because the list is not
+                // always the store's: a frame synthesizes some of its own, freshly allocated
+                // every time, and their identity would report a change on every frame.
+                let data_rev = tile_buckets
+                    .iter()
+                    .find(|bucket| {
+                        i32::try_from(bucket.layer_index).is_ok_and(|at| at == binding.layer_index)
+                    })
+                    .map_or(0, |bucket| bucket.data_rev);
+                let stamp = [ground_stamp, size, data_rev];
                 if registry.is_new(&key) || registry.content_changed(&key, stamp) {
                     fresh.insert(key);
                 }
@@ -1356,7 +1370,7 @@ fn emit_group(
                 }
                 // A heatmap's second pass is a viewport quad on no tile, so there is no ground
                 // under it and nothing frame-dependent for a stamp to carry.
-                let id = registry.id_for(key, [0, 0]);
+                let id = registry.id_for(key, [0, 0, 0]);
                 keyed.insert(id.0, key);
                 id
             }
