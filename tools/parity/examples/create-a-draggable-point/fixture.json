@@ -1,0 +1,65 @@
+{
+ "example": "create-a-draggable-point",
+ "base": "https://demotiles.maplibre.org/style.json",
+ "sources": {
+  "point": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        0,
+        0
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "point",
+   "type": "circle",
+   "source": "point",
+   "paint": {
+    "circle-radius": 10,
+    "circle-color": "#3887be"
+   }
+  }
+ ],
+ "cameras": [
+  {
+   "lat": 0,
+   "lon": 0,
+   "zoom": 2
+  }
+ ],
+ "script": [
+  [
+   "setData",
+   "point",
+   {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        25,
+        15
+       ]
+      }
+     }
+    ]
+   }
+  ]
+ ]
+}
