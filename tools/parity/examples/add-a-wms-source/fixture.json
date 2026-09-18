@@ -1,0 +1,25 @@
+{
+ "example": "add-a-wms-source",
+ "note": "A raster source whose tile URL is a WMS request, so the template carries {bbox-epsg-3857} rather than {z}/{x}/{y}. Both renderers substitute it themselves -- mbgl in `Resource::tileURL`, tessella in `url::tile_bbox` -- so a difference in how the box is written is a different request, which the snapshot shows as a miss rather than as pixels.",
+ "base": null,
+ "sources": {
+  "wms-test-source": {
+   "type": "raster",
+   "tiles": [
+    "https://ows.terrestris.de/osm/service?service=WMS&request=GetMap&version=1.1.1&layers=TOPO-WMS%2COSM-Overlay-WMS&styles=&format=image%2Fpng&transparent=true&info_format=text%2Fhtml&tiled=false&srs=EPSG:3857&bbox={bbox-epsg-3857}&width=256&height=256"
+   ],
+   "tileSize": 256
+  }
+ },
+ "layers": [
+  {
+   "id": "wms-test-layer",
+   "type": "raster",
+   "source": "wms-test-source",
+   "paint": {}
+  }
+ ],
+ "cameras": [
+  {"lat": 40.6892, "lon": -74.5447, "zoom": 8}
+ ]
+}
