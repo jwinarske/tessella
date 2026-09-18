@@ -311,3 +311,104 @@ fn an_icon_only_symbol_contributes_no_font_stack() {
         "and contributes no stack, so the bucket names the atlas its text is in"
     );
 }
+
+/// `text-variable-anchor-offset`: the anchors a layer offers, each with its own offset.
+///
+/// The newer property is one flat list alternating an anchor and its `[x, y]` offset in ems, and
+/// where a style writes it, it replaces `text-variable-anchor`, `text-radial-offset` and
+/// `text-offset` -- mbgl reads those only when this one is undefined or empty. tessella did not
+/// read it at all, so a layer writing it offered no variable anchors and every label sat where
+/// its plain `text-anchor` put it. That is variable-label-placement-with-offset, all of it.
+mod variable_anchor_offset {
+    use tessella_glyph::shaping::{Anchor, anchor_offset};
+    use tessella_layout::symbol_layout::SymbolLayout;
+    use tessella_style::Layer;
+
+    fn layout_of(layout: &str) -> SymbolLayout {
+        let layer: Layer = serde_json::from_str(&format!(
+            r#"{{"id": "places", "type": "symbol", "source": "s", "layout": {layout}}}"#
+        ))
+        .expect("a layer");
+        SymbolLayout::new(&layer, 11.0, 1.0)
+    }
+
+    /// Each pair becomes one candidate position, in the order the style wrote them.
+    #[test]
+    fn each_pair_is_one_anchor_with_its_own_offset() {
+        let layout = layout_of(
+            r#"{"text-field": "x", "text-font": ["Noto Sans Regular"],
+                "text-variable-anchor-offset": ["top", [0, 1], "bottom", [0, -2],
+                                                "left", [1, 0], "right", [-2, 0]]}"#,
+        );
+        let anchors = &layout.variable_anchors;
+        assert_eq!(anchors.len(), 4, "four pairs, four positions");
+        assert_eq!(
+            anchors.iter().map(|entry| entry.anchor).collect::<Vec<_>>(),
+            [Anchor::Top, Anchor::Bottom, Anchor::Left, Anchor::Right]
+        );
+        assert_eq!(
+            anchors[0].offset,
+            Some(anchor_offset(Anchor::Top, [0.0, 1.0]))
+        );
+        assert_eq!(
+            anchors[3].offset,
+            Some(anchor_offset(Anchor::Right, [-2.0, 0.0]))
+        );
+        assert_eq!(
+            anchors[0].alignment,
+            Anchor::Top.alignment(),
+            "and the alignment is still the anchor's"
+        );
+    }
+
+    /// It replaces the older properties rather than adding to them.
+    #[test]
+    fn it_wins_over_the_older_pair() {
+        let layout = layout_of(
+            r#"{"text-field": "x", "text-font": ["Noto Sans Regular"],
+                "text-variable-anchor": ["left", "right"],
+                "text-radial-offset": 3,
+                "text-variable-anchor-offset": ["top", [0, 1]]}"#,
+        );
+        assert_eq!(
+            layout.variable_anchors.len(),
+            1,
+            "the paired property alone"
+        );
+        assert_eq!(layout.variable_anchors[0].anchor, Anchor::Top);
+        assert_eq!(
+            layout.symbol.variable_offset,
+            [0.0, 0.0],
+            "and the layer-wide radial offset is not pointed at it as well"
+        );
+    }
+
+    /// Without it, a layer's anchors carry no offset of their own and the layer's is pointed by
+    /// the anchor, which is what `text-variable-anchor` has always done.
+    #[test]
+    fn the_older_pair_still_offers_anchors_with_no_offset() {
+        let layout = layout_of(
+            r#"{"text-field": "x", "text-font": ["Noto Sans Regular"],
+                "text-variable-anchor": ["left", "right"], "text-radial-offset": 3}"#,
+        );
+        assert_eq!(layout.variable_anchors.len(), 2);
+        assert!(
+            layout
+                .variable_anchors
+                .iter()
+                .all(|entry| entry.offset.is_none())
+        );
+        assert_ne!(layout.symbol.variable_offset, [0.0, 0.0]);
+    }
+
+    /// An anchor with no offset after it is dropped rather than paired with nothing.
+    #[test]
+    fn an_odd_tail_is_dropped() {
+        let layout = layout_of(
+            r#"{"text-field": "x", "text-font": ["Noto Sans Regular"],
+                "text-variable-anchor-offset": ["top", [0, 1], "bottom"]}"#,
+        );
+        assert_eq!(layout.variable_anchors.len(), 1);
+        assert_eq!(layout.variable_anchors[0].anchor, Anchor::Top);
+    }
+}

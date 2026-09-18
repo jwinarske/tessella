@@ -383,6 +383,10 @@ impl Anchor {
     }
 }
 
+/// mbgl's `baselineOffset`: how far a vertically anchored label moves so the text rather than its
+/// em box clears the point. Not derived from anything; mbgl calls it the baseline shift.
+const BASELINE_OFFSET: f32 = 7.0;
+
 /// Where a label sits when its anchor is one of a variable list, in shaping units.
 ///
 /// mbgl's `evaluateRadialOffset`. A style writing `text-variable-anchor` gives a *distance* rather
@@ -402,9 +406,6 @@ impl Anchor {
 /// be pushed backwards gets the anchor it asked for and no offset.
 #[must_use]
 pub fn radial_offset(anchor: Anchor, offset: f32) -> [f32; 2] {
-    /// mbgl's `baselineOffset`, in the same units as the advances.
-    const BASELINE_OFFSET: f32 = 7.0;
-
     let offset = offset.max(0.0);
     // Solve `r² + r² = offset²` for the diagonal anchors.
     let leg = offset / core::f32::consts::SQRT_2;
@@ -440,9 +441,6 @@ pub fn variable_offset(anchor: Anchor, offset: [f32; 2], is_radial: bool) -> [f3
     if is_radial {
         return radial_offset(anchor, offset[0]);
     }
-    /// mbgl's `baselineOffset`, as in [`radial_offset`].
-    const BASELINE_OFFSET: f32 = 7.0;
-
     let (x, y) = (offset[0].abs(), offset[1].abs());
     let down = match anchor {
         Anchor::TopRight | Anchor::TopLeft | Anchor::Top => y - BASELINE_OFFSET,
@@ -455,6 +453,29 @@ pub fn variable_offset(anchor: Anchor, offset: [f32; 2], is_radial: bool) -> [f3
         Anchor::Center | Anchor::Top | Anchor::Bottom => 0.0,
     };
     [across, down]
+}
+
+/// Where a label sits at one anchor of `text-variable-anchor-offset`, in shaping units.
+///
+/// mbgl's `SymbolLayout::getTextVariableAnchorOffset`. The newer property pairs each anchor with
+/// its own offset, so unlike [`variable_offset`] there is nothing for the anchor to point: the
+/// vector is taken as the style wrote it, ems into shaping units, and only the baseline shift is
+/// the anchor's -- up for a label above its point, down for one below, and nothing either side.
+///
+/// A negative component is kept, which is the difference from the older pair: `["top", [0, -1]]`
+/// asks for a label above the point *and* an offset upwards, and the spec lets it have both.
+#[must_use]
+pub fn anchor_offset(anchor: Anchor, offset: [f32; 2]) -> [f32; 2] {
+    let (x, y) = (
+        offset[0] * crate::text::ONE_EM,
+        offset[1] * crate::text::ONE_EM,
+    );
+    let down = match anchor {
+        Anchor::TopRight | Anchor::TopLeft | Anchor::Top => y - BASELINE_OFFSET,
+        Anchor::BottomRight | Anchor::BottomLeft | Anchor::Bottom => y + BASELINE_OFFSET,
+        Anchor::Center | Anchor::Left | Anchor::Right => y,
+    };
+    [x, down]
 }
 
 /// How lines are aligned against each other.

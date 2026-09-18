@@ -523,3 +523,72 @@ mod variable_offset {
         ));
     }
 }
+
+/// `text-variable-anchor-offset` pairs each anchor with its own offset, which is taken as written.
+mod anchor_offset {
+    use tessella_glyph::shaping::{Anchor, anchor_offset, variable_offset};
+    use tessella_glyph::text::ONE_EM;
+
+    /// mbgl's `baselineOffset`.
+    const BASELINE: f32 = 7.0;
+
+    fn near(a: [f32; 2], b: [f32; 2]) -> bool {
+        (a[0] - b[0]).abs() < 1e-4 && (a[1] - b[1]).abs() < 1e-4
+    }
+
+    /// Ems into shaping units, and the baseline shift is the only thing the anchor adds: up for a
+    /// label above its point, down for one below, nothing either side.
+    #[test]
+    fn the_anchor_adds_only_the_baseline_shift() {
+        assert!(near(
+            anchor_offset(Anchor::Top, [0.0, 1.0]),
+            [0.0, ONE_EM - BASELINE]
+        ));
+        assert!(near(
+            anchor_offset(Anchor::Bottom, [0.0, -2.0]),
+            [0.0, -2.0 * ONE_EM + BASELINE]
+        ));
+        assert!(near(anchor_offset(Anchor::Left, [1.0, 0.0]), [ONE_EM, 0.0]));
+        assert!(near(
+            anchor_offset(Anchor::Right, [-2.0, 0.0]),
+            [-2.0 * ONE_EM, 0.0]
+        ));
+        assert!(near(
+            anchor_offset(Anchor::TopLeft, [1.0, 1.0]),
+            [ONE_EM, ONE_EM - BASELINE]
+        ));
+        assert!(near(
+            anchor_offset(Anchor::BottomRight, [1.0, 1.0]),
+            [ONE_EM, ONE_EM + BASELINE]
+        ));
+    }
+
+    /// A center anchor takes the offset whole, where the older pair discards it.
+    #[test]
+    fn the_center_takes_its_offset() {
+        assert!(near(
+            anchor_offset(Anchor::Center, [1.0, 2.0]),
+            [ONE_EM, 2.0 * ONE_EM]
+        ));
+        assert!(near(
+            variable_offset(Anchor::Center, [ONE_EM, 0.0], false),
+            [0.0, 0.0]
+        ));
+    }
+
+    /// The sign is the style's, not the anchor's. `text-offset` lets the anchor choose the
+    /// direction -- `[-1, 0]` on a `left` anchor still puts the label to the right -- and this
+    /// property does not: an offset written backwards moves the label backwards.
+    #[test]
+    fn a_negative_offset_is_not_reflected() {
+        assert!(near(
+            anchor_offset(Anchor::Left, [-1.0, 0.0]),
+            [-ONE_EM, 0.0]
+        ));
+        assert_eq!(
+            variable_offset(Anchor::Left, [-ONE_EM, 0.0], false),
+            variable_offset(Anchor::Left, [ONE_EM, 0.0], false),
+            "the older pair takes the magnitude"
+        );
+    }
+}

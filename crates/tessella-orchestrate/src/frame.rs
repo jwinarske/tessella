@@ -4473,14 +4473,18 @@ fn write_layer_state(
             let alignments = Alignments::of(layer, zoom, placement, "text");
             // Whether this layer's labels are positioned by the frame rather than by the shader.
             // See the `plane` fork in `SymbolDrawableEntry::for_tile`.
-            let variable_anchors = !layer
-                .layout
-                .get("text-variable-anchor")
-                .is_none_or(|value| {
-                    value
-                        .as_literal()
-                        .and_then(tessella_style::Value::as_array)
-                        .is_none()
+            // Either property: `text-variable-anchor-offset` names its own anchors and is
+            // placed the same way, so a layer writing it is positioned by the frame too. Read
+            // through the shader instead, its labels drew at their plain anchors.
+            let variable_anchors = ["text-variable-anchor", "text-variable-anchor-offset"]
+                .iter()
+                .any(|key| {
+                    layer.layout.get(*key).is_some_and(|value| {
+                        value
+                            .as_literal()
+                            .and_then(tessella_style::Value::as_array)
+                            .is_some()
+                    })
                 });
 
             // The highest sub-layer this layer's bindings carry, taken before `bindings` is
