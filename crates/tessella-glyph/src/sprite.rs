@@ -493,7 +493,7 @@ pub fn decode_sheet(body: &[u8]) -> Result<Sheet, SheetError> {
 ///
 /// [`Fonts`]: crate::fonts::Fonts
 #[cfg(feature = "image")]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Sprites {
     base: String,
     pixel_ratio: f64,
@@ -757,7 +757,7 @@ pub enum LoadError {
 /// padding between them. A sheet has no padding — icons in it are usually flush — so drawing
 /// straight from it makes every icon quad's one-pixel border sample its neighbor.
 #[cfg(feature = "image")]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IconAtlas {
     pack: crate::atlas::ShelfPack,
     pixels: Vec<u8>,

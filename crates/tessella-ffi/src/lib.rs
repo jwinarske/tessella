@@ -81,6 +81,11 @@ pub enum Status {
     /// Not a failure: a map only just created has not read its style. Poll `tessella_status` and
     /// hand the data over once it reports ready.
     NotResolved = 12,
+    /// An image could not be read, or its pixel ratio was not positive.
+    ///
+    /// Distinct from [`Self::BadAnnotations`], which says the same of an *annotation's* image: the
+    /// two calls take different things and a caller fixing one is not looking at the other.
+    BadImage = 13,
 }
 
 extern crate alloc;
@@ -317,6 +322,37 @@ pub struct MapState {
     /// it would re-upload a texture that has not changed and defeat the damage gate that makes a
     /// settled map free.
     sprites_set: bool,
+    /// The sheet the map is drawing from, once there is one.
+    ///
+    /// The style's, plus whatever `tessella_add_image` has added. Held here rather than in the
+    /// source because nothing else reads it: a symbol's icon is laid out per frame against the
+    /// atlas the map holds -- `lay_out_icons` in the frame, not in the tile -- so an image added
+    /// now needs no tile rebuilt, only the atlas handed over again.
+    #[cfg(feature = "image")]
+    sheet: Option<tessella_glyph::sprite::Sprites>,
+}
+
+/// Hands the map the sheet this state is holding.
+///
+/// Once when the style's own arrives, and again whenever a caller adds an image: `set_sprites`
+/// copies the atlas, invalidates the layouts -- an icon laid out before its image arrived has no
+/// rectangle -- and marks the map dirty, which is exactly what a new image needs and exactly what
+/// repeating it for an unchanged sheet would waste.
+#[cfg(feature = "image")]
+fn hand_over_sheet(state: &mut MapState) {
+    let Some(sheet) = state.sheet.as_ref() else {
+        return;
+    };
+    let (width, height) = sheet.atlas().size();
+    state.map.set_sprites(SpriteAtlas {
+        texture: SPRITE_TEXTURE,
+        size: [
+            u16::try_from(width).unwrap_or(u16::MAX),
+            u16::try_from(height).unwrap_or(u16::MAX),
+        ],
+        positions: sheet.positions().clone(),
+        pixels: sheet.atlas().pixels().to_vec(),
+    });
 }
 
 /// Runs `body`, turning a panic into a status.
@@ -544,6 +580,8 @@ unsafe fn create(
             generation: 0,
             annotations: tessella_source::annotation::Annotations::new(),
             sprites_set: false,
+            #[cfg(feature = "image")]
+            sheet: None,
         });
         unsafe { *out = Box::into_raw(state) };
         Status::Ok
@@ -928,6 +966,91 @@ pub unsafe extern "C" fn tessella_set_geojson_data(
     })
 }
 
+/// Adds an image the style's `icon-image` and `*-pattern` can name.
+///
+/// GL JS's `map.addImage(id, image)` and mbgl's `Style::addImage`. The image joins the style's
+/// own sheet: it is packed into the same atlas, under a name any layer can ask for, and a style
+/// with no `sprite` at all can still have images this way.
+///
+/// `image` is an encoded picture -- PNG, JPEG, or WebP where that decoder is built in -- rather
+/// than raw pixels, because every caller with an icon has a file and none of them has a
+/// premultiplied RGBA buffer. `sdf` says the picture is a signed distance field, which is what
+/// lets `icon-color` recolour it.
+///
+/// Distinct from [`tessella_add_annotation_image`], which adds an image an *annotation* names.
+/// Annotations are not style layers and their images are their own; this one is the style's.
+///
+/// May be called at any time. An icon is laid out against the sheet per frame rather than built
+/// into a tile, so an image that arrives late costs a relayout of the symbols that wanted it and
+/// no tile is rebuilt. Replacing a name repacks the atlas, which is mbgl's behaviour too.
+///
+/// Before the style's own sheet has arrived there is nothing to add to, and the call reports
+/// [`Status::NotResolved`] -- `tessella_status` says when a map is ready.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed; `id` must be
+/// non-null and valid for reads of `id_len` bytes, and `image` non-null and valid for reads of
+/// `image_len` bytes.
+#[cfg(feature = "image")]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_add_image(
+    map: MapHandle,
+    id: *const u8,
+    id_len: usize,
+    image: *const u8,
+    image_len: usize,
+    pixel_ratio: f64,
+    sdf: bool,
+) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_mut() }) else {
+            return Status::NoSuchMap;
+        };
+        if id.is_null() || image.is_null() {
+            return Status::NullArgument;
+        }
+        let Some(id) = (unsafe { borrowed(id, id_len) }) else {
+            return Status::NotUtf8;
+        };
+        if !(pixel_ratio.is_finite() && pixel_ratio > 0.0) {
+            return Status::BadImage;
+        }
+        // SAFETY: the caller guarantees `image_len` readable bytes at a non-null `image`.
+        let bytes = unsafe { core::slice::from_raw_parts(image, image_len) };
+        let Ok(decoded) = tessella_source::image::decode(bytes) else {
+            return Status::BadImage;
+        };
+        // The sheet the map is drawing from. The first tick after resolution takes the style's
+        // own; before that there is none to add to, and adding to one the tick is about to
+        // replace would lose the image. A style that names no sprite never gets one that way,
+        // which is where the empty sheet below comes from -- mbgl's `addImage` works on such a
+        // style too, and so must this.
+        if state.sheet.is_none() {
+            let Some(sources) = state.source.sources() else {
+                return Status::NotResolved;
+            };
+            if let Some((sheet, _)) = sources.sprite_outcome.as_ref() {
+                state.sheet = Some(sheet.clone());
+            } else {
+                state.sheet = Some(tessella_glyph::sprite::Sprites::new(String::new(), 1.0));
+            }
+            // Taken here rather than by the tick, which would otherwise replace the sheet this
+            // image is about to be added to.
+            state.sprites_set = true;
+        }
+        let Some(sheet) = state.sheet.as_mut() else {
+            return Status::NotResolved;
+        };
+        sheet.insert_image(id, &decoded, pixel_ratio, sdf);
+        // The atlas changed, so the map needs it again: `set_sprites` re-uploads the texture,
+        // invalidates the layouts -- an icon laid out while its image was missing has no
+        // rectangle -- and marks the map dirty.
+        hand_over_sheet(state);
+        Status::Ok
+    })
+}
+
 /// Adds an image a symbol annotation's `icon` can name.
 ///
 /// `image` is an encoded picture -- PNG, JPEG, or WebP where that decoder is built in -- rather
@@ -1040,16 +1163,10 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
             && let Some(sources) = state.source.sources()
             && let Some((sheet, _)) = sources.sprite_outcome.as_ref()
         {
-            let (width, height) = sheet.atlas().size();
-            state.map.set_sprites(SpriteAtlas {
-                texture: SPRITE_TEXTURE,
-                size: [
-                    u16::try_from(width).unwrap_or(u16::MAX),
-                    u16::try_from(height).unwrap_or(u16::MAX),
-                ],
-                positions: sheet.positions().clone(),
-                pixels: sheet.atlas().pixels().to_vec(),
-            });
+            // Taken rather than borrowed: from here the map's sheet is this one, and a caller
+            // adding an image adds to it.
+            state.sheet = Some(sheet.clone());
+            hand_over_sheet(state);
             state.sprites_set = true;
         }
 
