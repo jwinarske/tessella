@@ -384,6 +384,9 @@ fn justify_of(
 /// label in [`text_options`] and only the directions are here -- each one a unit-distance offset
 /// the caller scales.
 fn variable_anchors(layer: &Layer, zoom: f64) -> Vec<VariableAnchor> {
+    if let Some(paired) = anchor_offsets(layer, zoom, None) {
+        return paired;
+    }
     let Some(value) = layout_value(layer, "text-variable-anchor", zoom, None) else {
         return Vec::new();
     };
@@ -396,9 +399,47 @@ fn variable_anchors(layer: &Layer, zoom: f64) -> Vec<VariableAnchor> {
             VariableAnchor {
                 alignment: anchor.alignment(),
                 anchor,
+                offset: None,
             }
         })
         .collect()
+}
+
+/// The positions `text-variable-anchor-offset` offers, each with its own offset.
+///
+/// The property is one flat list alternating an anchor and its `[x, y]` offset in ems, and where
+/// a style writes it, it replaces `text-variable-anchor`, `text-radial-offset` and `text-offset`
+/// together -- mbgl reads the other three only when this one is undefined or empty.
+///
+/// `None` where the style does not write it, or writes something that is not that list; an odd
+/// tail is dropped rather than paired with nothing.
+fn anchor_offsets(
+    layer: &Layer,
+    zoom: f64,
+    feature: Option<&dyn Feature>,
+) -> Option<Vec<VariableAnchor>> {
+    let value = layout_value(layer, "text-variable-anchor-offset", zoom, feature)?;
+    let list = value.as_array()?;
+    let anchors: Vec<VariableAnchor> = list
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .filter_map(|pair| {
+            let anchor = anchor_of(Some(&pair[0]));
+            let offset = pair[1].as_array()?;
+            #[allow(clippy::cast_possible_truncation)]
+            let at = |index: usize| offset.get(index)?.as_number().map(|value| value as f32);
+            Some(VariableAnchor {
+                alignment: anchor.alignment(),
+                anchor,
+                offset: Some(tessella_glyph::shaping::anchor_offset(
+                    anchor,
+                    [at(0)?, at(1)?],
+                )),
+            })
+        })
+        .collect();
+    (!anchors.is_empty()).then_some(anchors)
 }
 
 /// The first anchor `text-variable-anchor` offers, for the justification `auto` asks it for.
@@ -407,6 +448,9 @@ fn first_variable_anchor(
     zoom: f64,
     feature: Option<&dyn Feature>,
 ) -> Option<tessella_glyph::shaping::Anchor> {
+    if let Some(paired) = anchor_offsets(layer, zoom, feature) {
+        return paired.first().map(|entry| entry.anchor);
+    }
     let anchors = layout_value(layer, "text-variable-anchor", zoom, feature)?;
     Some(anchor_of(Some(anchors.as_array()?.first()?)))
 }
@@ -473,7 +517,11 @@ fn text_options(
         // radial one, and a layer writing only `text-offset` takes that. Reading the radial alone
         // left the second case with no offset at all, so its labels sat on their own points --
         // which against the oracle is four percent of a POI layer.
-        variable_offset: if variable.is_none() {
+        variable_offset: if variable.is_none()
+            || layer.layout.contains_key("text-variable-anchor-offset")
+        {
+            // The paired property carries an offset per anchor, so there is no layer-wide one to
+            // point: `VariableAnchor::offset` is where it lives, and this stays out of the way.
             [0.0, 0.0]
         } else if layer.layout.contains_key("text-radial-offset") {
             [number("text-radial-offset").unwrap_or(0.0) * ONE_EM, 0.0]
@@ -704,6 +752,13 @@ pub struct VariableAnchor {
     pub alignment: (f32, f32),
     /// The anchor itself, for `shaping::variable_offset` to point the label with.
     pub anchor: tessella_glyph::shaping::Anchor,
+    /// This anchor's own offset, in shaping units, where `text-variable-anchor-offset` gave it
+    /// one.
+    ///
+    /// `None` is the older pair of properties, where the offset is the layer's and the anchor
+    /// points it -- see `shaping::variable_offset`. The newer property pairs an offset with each
+    /// anchor, so it is neither the layer's nor pointed, and it replaces both.
+    pub offset: Option<[f32; 2]>,
 }
 
 /// A symbol layer's contribution to one tile, before glyphs.

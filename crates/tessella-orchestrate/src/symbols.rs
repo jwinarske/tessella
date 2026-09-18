@@ -393,11 +393,15 @@ impl ViewSymbols {
                         .variable
                         .iter()
                         .map(|entry| {
-                            let pointed = tessella_glyph::shaping::variable_offset(
-                                entry.anchor,
-                                label.variable_offset,
-                                label.variable_radial,
-                            );
+                            // Its own offset where `text-variable-anchor-offset` gave it one,
+                            // and the layer's, pointed by the anchor, where the older pair did.
+                            let pointed = entry.offset.unwrap_or_else(|| {
+                                tessella_glyph::shaping::variable_offset(
+                                    entry.anchor,
+                                    label.variable_offset,
+                                    label.variable_radial,
+                                )
+                            });
                             (
                                 -(entry.alignment.0 - 0.5) * width + pointed[0] * scale,
                                 -(entry.alignment.1 - 0.5) * height + pointed[1] * scale,
