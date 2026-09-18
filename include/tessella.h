@@ -93,7 +93,11 @@ typedef enum tessella_result {
     /* The style has not resolved yet, so the map has no sources to name. Not a failure: a map
      * only just created has not read its style. Poll tessella_status and hand the data over once
      * it reports TESSELLA_READY. */
-    TESSELLA_NOT_RESOLVED = 12
+    TESSELLA_NOT_RESOLVED = 12,
+    /* An image could not be read, or its pixel ratio was not positive. Distinct from
+     * TESSELLA_BAD_ANNOTATIONS, which says the same of an annotation's image: the two calls take
+     * different things and a caller fixing one is not looking at the other. */
+    TESSELLA_BAD_IMAGE = 13
 } tessella_result;
 
 /* How far along a map's sources are.
@@ -409,6 +413,31 @@ tessella_result tessella_set_annotations(tessella_map* map, const uint8_t* geojs
 tessella_result tessella_set_geojson_data(tessella_map* map, const uint8_t* source,
                                           size_t source_len, const uint8_t* geojson,
                                           size_t geojson_len);
+
+/* Adds an image the style's "icon-image" and "*-pattern" can name.
+ *
+ * GL JS's `map.addImage(id, image)`. The image joins the style's own sheet: it is packed into the
+ * same atlas, under a name any layer can ask for, and a style with no "sprite" at all can still
+ * have images this way.
+ *
+ * `image` is an encoded picture -- PNG, JPEG, or WebP where that decoder is built in -- rather
+ * than raw pixels, because every caller with an icon has a file and none has a premultiplied RGBA
+ * buffer. `sdf` says the picture is a signed distance field, which is what lets "icon-color"
+ * recolour it.
+ *
+ * Distinct from tessella_add_annotation_image, which adds an image an *annotation* names.
+ * Annotations are not style layers and their images are their own; this one is the style's.
+ *
+ * May be called at any time. An icon is laid out against the sheet per frame rather than built
+ * into a tile, so an image that arrives late costs a relayout of the symbols that wanted it and
+ * no tile is rebuilt. Replacing a name repacks the atlas.
+ *
+ * TESSELLA_NOT_RESOLVED before the style's own sheet has arrived -- there is nothing to add to
+ * yet, and tessella_status says when a map is ready. TESSELLA_BAD_IMAGE if the picture does not
+ * decode or the pixel ratio is not positive. */
+tessella_result tessella_add_image(tessella_map* map, const uint8_t* id, size_t id_len,
+                                   const uint8_t* image, size_t image_len, double pixel_ratio,
+                                   bool sdf);
 
 /* Adds an image a symbol annotation's "icon" can name.
  *

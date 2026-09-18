@@ -64,7 +64,7 @@ struct Shelf {
 /// at double the dimensions, until the whole set fits. So 512 is where it starts, not where it
 /// stays, and [`ShelfPack::grow`] is how this reaches the same sizes without discarding the
 /// rectangles already handed out.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ShelfPack {
     width: u32,
     height: u32,
