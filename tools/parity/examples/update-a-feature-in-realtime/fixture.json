@@ -1,0 +1,22 @@
+{
+ "example": "update-a-feature-in-realtime",
+ "note": "The example fetches the hike, draws its first coordinate, and appends the rest a frame at a time. A line of one coordinate draws nothing and mbgl refuses it -- 'a line string must have two or more coordinate points' -- so the fixture starts from an empty collection, which is what that frame looks like, and the script names the document the example fetched. The camera is where the example jumps once it has it: the hike's first coordinate, zoom 14, pitch 30.",
+ "base": "https://tiles.openfreemap.org/styles/bright",
+ "sources": {
+  "trace": {"type": "geojson", "data": {"type": "FeatureCollection", "features": []}}
+ },
+ "layers": [
+  {
+   "id": "trace",
+   "type": "line",
+   "source": "trace",
+   "paint": {"line-color": "yellow", "line-opacity": 0.75, "line-width": 5}
+  }
+ ],
+ "cameras": [
+  {"lat": 45.632433, "lon": -122.019807, "zoom": 14, "pitch": 30}
+ ],
+ "script": [
+  ["setData", "trace", "https://maplibre.org/maplibre-gl-js/docs/assets/hike.geojson"]
+ ]
+}

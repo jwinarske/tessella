@@ -34,6 +34,11 @@ conformance suite. The ones whose content is a style plus a camera are asked her
   An example that animates is asked at the ends of its animation, and a script is how the far end
   is reached: `animate-a-point` moves its point a quarter turn around its circle.
 
+  A `setData` may name a URL rather than a document, and `compose.py` reads it -- through the
+  proxy, so a record run stores it and a replay serves it -- into the document it names. That is
+  what lets an example whose document is fetched and large be a fixture at all:
+  `update-a-feature-in-realtime` names a 462 KB hike the repository does not carry.
+
 Adding on load and writing the same sources and layers into the document are the same style by the
 time a frame is drawn, which is what lets these run without any call the header does not have.
 Examples that mutate the style after load need `script` and the calls behind it: `setData` is
