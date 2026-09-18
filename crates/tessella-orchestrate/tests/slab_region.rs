@@ -620,3 +620,63 @@ mod in_region {
         );
     }
 }
+
+/// Bytes that are the same wherever they are drawn are allocated once and named by everyone.
+///
+/// A terrain's ground is one mesh however many tiles stand on it, and a whole-tile raster quad is
+/// one quad. Copied per tile, a pitched z14 terrain view held 11.5 MiB of identical mesh and
+/// 46 MiB of identical quad, and the region ran out: the frame that would have added the labels
+/// never fit, so the map drew without them.
+#[test]
+fn shared_geometry_is_allocated_once() {
+    use tessella_orchestrate::SharedGeometry;
+
+    let mut arena = SlabArena::new();
+    let first = arena.shared(SharedGeometry::TerrainMeshVertices, 64, |out| out.fill(7));
+    let again = arena.shared(SharedGeometry::TerrainMeshVertices, 64, |out| out.fill(9));
+    assert_eq!(first, again, "the second ask names the first's bytes");
+    arena.seal();
+    assert_eq!(
+        arena.resolve(first).map(<[u8]>::to_vec),
+        Some(alloc_vec(64, 7)),
+        "and they are the bytes the first ask wrote"
+    );
+
+    // A different grid is different bytes, so it is a different key and a different allocation.
+    let quad = arena.shared(SharedGeometry::QuadVertices(4), 32, |out| out.fill(1));
+    assert_ne!(quad.slab, first.slab);
+    assert_ne!(
+        arena.shared(SharedGeometry::QuadVertices(8), 32, |out| out.fill(2)),
+        quad
+    );
+}
+
+/// What a failed frame allocated is not remembered, because its slab is gone.
+///
+/// `rewind` drops the slots the frame invented. A cache that kept naming them would hand every
+/// later frame a reference into a slab that no longer exists.
+#[test]
+fn a_rolled_back_frame_shares_nothing() {
+    use tessella_orchestrate::SharedGeometry;
+
+    let mut arena = SlabArena::new();
+    let mark = arena.mark();
+    let lost = arena.shared(SharedGeometry::TerrainMeshIndices, 16, |out| out.fill(3));
+    arena.rewind(mark);
+    assert!(
+        arena.slab(lost.slab).is_none(),
+        "the slab went with the frame"
+    );
+
+    let fresh = arena.shared(SharedGeometry::TerrainMeshIndices, 16, |out| out.fill(4));
+    arena.seal();
+    assert_eq!(
+        arena.resolve(fresh).map(<[u8]>::to_vec),
+        Some(alloc_vec(16, 4)),
+        "and the next frame allocates its own"
+    );
+}
+
+fn alloc_vec(len: usize, value: u8) -> Vec<u8> {
+    vec![value; len]
+}
