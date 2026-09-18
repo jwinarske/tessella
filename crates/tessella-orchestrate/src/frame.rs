@@ -3374,6 +3374,8 @@ fn encode_parts(
                     // draws as a plain line, and rectangles for a pattern nothing will bind are
                     // bytes on the wire that no shader reads.
                     pattern_vertices: atlas.and(Some(&bucket.pattern_vertices)),
+                    // The ground the line runs over, where one is under it.
+                    elevation: raised.then_some(textures.terrain),
                 },
             ))
         }

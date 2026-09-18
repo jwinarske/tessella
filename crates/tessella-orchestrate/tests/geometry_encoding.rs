@@ -60,6 +60,7 @@ fn encode(kind: &str, extra: &str, family: &[BuiltIn], shader: BuiltIn) -> Encod
                 dash_atlas: None,
                 gradient_ramp: None,
                 pattern_vertices: None,
+                elevation: None,
             },
         ),
         Content::Circle(b) => encode_circle(
