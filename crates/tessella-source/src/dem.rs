@@ -498,6 +498,70 @@ mod tests {
         assert_eq!(dem.elevation(8, -1), dem.elevation(7, 0));
     }
 
+    /// A tile continuing `x0` pixels along one linear ramp, so two of them abut seamlessly.
+    ///
+    /// Linear in x and flat in y, which makes the true slope the same at every pixel -- so a
+    /// prepared edge that disagrees with the middle disagrees with the ground, not with a
+    /// neighboring value that happens to differ.
+    fn ramp_from(dim: u32, x0: u32) -> crate::image::Image {
+        let mut pixels = Vec::with_capacity((dim * dim * 4) as usize);
+        for _ in 0..dim {
+            for x in 0..dim {
+                let meters = f64::from(x0 + x) * 100.0;
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let units = ((meters + 10000.0) / 0.1).round() as u32;
+                pixels.extend_from_slice(&[
+                    u8::try_from(units >> 16).unwrap_or(255),
+                    u8::try_from((units >> 8) & 0xFF).unwrap_or(255),
+                    u8::try_from(units & 0xFF).unwrap_or(255),
+                    255,
+                ]);
+            }
+        }
+        crate::image::Image {
+            width: dim,
+            height: dim,
+            pixels,
+        }
+    }
+
+    /// A hillshade's slope at a tile's edge is the neighbor's business, and without it the shade
+    /// is wrong in a line one pixel wide along every tile boundary.
+    ///
+    /// This is what a seam in a hillshade *is*. `Dem::new` fills the border by repeating the
+    /// tile's own edge, which is a placeholder that lets a tile draw before its neighbors exist:
+    /// read as a slope it says the ground goes flat exactly at the boundary. On gentle ground
+    /// nobody sees it -- two neighbors of the parity DEM disagree at a shared edge by three
+    /// centimeters -- and on real terrain it draws as a bright line along every tile edge.
+    ///
+    /// Both tiles here are cut from *one* linear ramp, so the true slope is the same everywhere
+    /// and the middle of the tile is the answer the edge should give.
+    #[test]
+    fn a_hillshade_edge_needs_its_neighbor_to_be_right() {
+        const DIM: u32 = 16;
+        let east = Dem::new(&ramp_from(DIM, DIM), Encoding::Mapbox).expect("a square tile");
+        let mut dem = Dem::new(&ramp_from(DIM, 0), Encoding::Mapbox).expect("a square tile");
+
+        let at = |image: &crate::image::Image, x: u32, y: u32| {
+            let index = ((y * image.width + x) * 4) as usize;
+            [image.pixels[index], image.pixels[index + 1]]
+        };
+
+        let middle = at(&dem.prepare(14), DIM / 2, DIM / 2);
+        let before = at(&dem.prepare(14), DIM - 1, DIM / 2);
+        assert_ne!(
+            before, middle,
+            "the last column already agreed with the middle, so this proves nothing"
+        );
+
+        dem.backfill_border(&east, 1, 0);
+        let after = at(&dem.prepare(14), DIM - 1, DIM / 2);
+        assert_eq!(
+            after, middle,
+            "with the neighbor's column the edge reads the slope the ramp actually has"
+        );
+    }
+
     /// The second fill: a neighbor to the east replaces the right column with its own first.
     #[test]
     fn a_side_neighbor_replaces_one_column() {
