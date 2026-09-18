@@ -2382,6 +2382,7 @@ pub fn encode_circle(
     layout: &VertexLayout,
     attributes: &[u8],
     permutation_key: u64,
+    elevation: Option<TextureId>,
 ) -> Encoded {
     let vertices = alloc_i16x2(arena, &bucket.vertices);
     let indexes = alloc_u16(arena, &bucket.indices);
@@ -2389,16 +2390,21 @@ pub fn encode_circle(
 
     let fixed = [(POSITION_ATTRIBUTE, 0, 0, AttributeDataType::Short2)];
     let descriptors = descriptors(&fixed, vertices, POSITION_STRIDE, layout, interleaved);
-    geometry_add(
+    // Textured only for the ground it stands on: a circle samples no atlas, and without the
+    // elevation the consumer's raised path has no sampler to bind -- which draws nothing at all
+    // rather than drawing the circle flat. See the symbol encoders for the same trap.
+    geometry_add_textured(
         geometry,
         permutation_key,
         indexes,
         bucket.vertices.len(),
         &descriptors,
+        &[],
         &bucket.segments,
         BuiltIn::CircleShader,
-        None,
+        &[],
         TextureFilter::Linear,
+        elevation,
     )
 }
 
