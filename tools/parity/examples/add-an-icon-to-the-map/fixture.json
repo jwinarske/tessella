@@ -1,0 +1,30 @@
+{
+ "example": "add-an-icon-to-the-map",
+ "note": "The example fetches a picture, adds it under a name its symbol layer asks for, and draws one point with it. The fixture names the same picture; compose.py fetches it to a file beside the style, because bytes cannot live in a script, and both renderers read that file.",
+ "base": "https://demotiles.maplibre.org/style.json",
+ "sources": {
+  "point": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [0, 0]}}
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "points",
+   "type": "symbol",
+   "source": "point",
+   "layout": {"icon-image": "cat", "icon-size": 0.25}
+  }
+ ],
+ "cameras": [
+  {"lat": 0, "lon": 0, "zoom": 1}
+ ],
+ "script": [
+  ["addImage", "cat", "https://upload.wikimedia.org/wikipedia/commons/7/7c/201408_cat.png"]
+ ]
+}
