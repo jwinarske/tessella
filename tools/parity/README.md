@@ -167,7 +167,42 @@ the scene uses for nothing but its background. See `terrain_cover_p` below.
 - `terrain_cover_p` — `terrain_p` raised by 1.5 over a magenta background. There is nothing to
   compare a raised terrain against, so what is held is that it is covered: the ground takes the
   background's color, and every magenta pixel is somewhere the ground shows through the layers on
-  it. `coverage.sh` counts them. What remains are hairlines at some tile seams.
+  it. `coverage.sh` counts them.
+
+  **This one does not pass.** Five cameras, and only two of them are hairlines:
+
+      terrain_cover_p  z14 p0       62 of 786432  (0.008%)
+      terrain_cover_p  z14 p30   34140            (4.341%)
+      terrain_cover_p  z14 p45      622           (0.079%)
+      terrain_cover_p  z14 p60  180367           (22.935%)
+      terrain_cover_p  z16 p45  618072           (78.592%)
+
+  The gate held `p0` and `p45` alone for a while, which are the two kindest cameras in the space;
+  everything between and past them is far worse, and at z17 the frame is 100% background. The rows
+  are here so that cannot happen again.
+
+  What is known, all of it measured:
+
+  - It is displacement, not coverage arithmetic. At exaggeration 0 there are **no** holes at all;
+    at 0.1 there are 80; at 1.5, 618072. Nothing else about the scene changes.
+  - The ground and the layers standing on it agree exactly. Drawn alone at z16, the ground's
+    surface covers 168383 pixels and the color relief 168360 — the same surface. The raise blocks
+    match too: identical sampling scale, offsets, exaggeration and matrix for all three layers.
+  - The ground's *skirt* is what disguises it. With the skirt at zero the ground covers 168383
+    pixels; with it, 748675. The curtain is ~670 pixels tall at z16 and paints the background
+    color, so a frame with tiles missing looks exactly like a frame with tiles present and bare.
+    That is also why the hole count does not move when the skirt length does: magenta comes from
+    the curtain or from the background behind it, and the measure cannot tell them apart.
+  - It is not the flat cover, though `cover_on` does test a tile as a plate at height zero. Giving
+    the frustum walk the ground's true vertical range — ±5.7 tile units at z17 — selects the same
+    34 tiles. A box extended in z does not cross the side planes that bound the walk in x and y.
+  - It is not overzoom. With the source's `maxzoom` raised so no tile is overzoomed, z16 still
+    leaves 618462.
+  - It is not a different-zoom seam. At z15 the cover is uniformly z15 and the hairlines remain.
+
+  The open lead is a ratio: four tiles that should blanket the frame paint 21% of it, and 21% is
+  about a quarter — the signature of geometry drawn at half its linear scale. `map.rs` warns about
+  exactly that shape of mistake where a coarser tile stands in for a finer coordinate.
 
 - `puck_p` — a location indicator over Berlin: an accuracy circle, a bearing, and the perspective
   compensation that decides how the puck leans when the camera pitches. **This one does not pass
