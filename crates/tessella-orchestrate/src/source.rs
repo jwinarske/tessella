@@ -1492,6 +1492,18 @@ impl<D: TileTransport + 'static> Tiles for Arc<TileSource<D>> {
             .max()
     }
 
+    fn terrain_elevation(&self) -> Option<[f32; 2]> {
+        let held = self.landed.read().unwrap_or_else(PoisonError::into_inner);
+        held.by_tile
+            .values()
+            .flat_map(|buckets| buckets.iter())
+            .filter_map(|bucket| match &bucket.content {
+                crate::tile::Content::Terrain(ground) => Some(ground.elevation),
+                _ => None,
+            })
+            .reduce(|a, b| [a[0].min(b[0]), a[1].max(b[1])])
+    }
+
     fn stale(&self, tile: TileId, surface: Surface) -> bool {
         let held = self.landed.read().unwrap_or_else(PoisonError::into_inner);
         let data = if held.by_tile.contains_key(&tile) {

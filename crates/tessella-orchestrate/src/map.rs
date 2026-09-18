@@ -146,6 +146,18 @@ pub trait Tiles {
         None
     }
 
+    /// The relief of the ground in hand, in meters, before exaggeration: lowest and highest.
+    ///
+    /// The camera's far plane is set from it -- see `ViewTransform::ground_below`. Store-wide
+    /// rather than per camera, because the far plane is one number for the frame and the widest
+    /// answer is the safe one: too far costs a little depth resolution, too short is a hole.
+    ///
+    /// `None` while no ground has landed, which leaves the flat far plane -- the same answer this
+    /// build had before, and self-correcting once a DEM arrives.
+    fn terrain_elevation(&self) -> Option<[f32; 2]> {
+        None
+    }
+
     /// Whether what is held for `tile` was built for a different surface than `surface`.
     ///
     /// A surface is part of a tile's key, so a refined terrain grid makes every tile in hand the
@@ -650,6 +662,17 @@ impl Map {
         if let Some(cells) = tiles.terrain_cells() {
             self.terrain_cells = cells;
         }
+        // And how deep the ground goes, which the far plane has to reach. Read beside the grid
+        // and for the same reason: both are properties of the ground in hand, and the matrices
+        // below are the first thing to ask.
+        //
+        // The whole relief rather than the depth under this center: the shift that puts the
+        // center's ground on the plane is the shader's -- see `terrain_height.glsl` -- and the
+        // deepest it can push anything below that plane is the relief itself.
+        self.view.ground_below = match (tiles.terrain_elevation(), self.style.terrain.as_ref()) {
+            (Some([low, high]), Some(terrain)) => f64::from(high - low) * terrain.exaggeration(),
+            _ => 0.0,
+        };
         let key = crate::frame::camera_key_of(&self.view);
         let work = self.damage.begin_frame(self.view_id, key);
         if work.is_idle() {

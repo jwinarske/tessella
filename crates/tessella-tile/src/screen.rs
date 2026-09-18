@@ -172,6 +172,7 @@ mod tests {
             height: 768.0,
             bearing,
             pitch,
+            ground_below: 0.0,
         }
     }
 

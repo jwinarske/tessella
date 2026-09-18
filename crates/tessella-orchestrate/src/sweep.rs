@@ -62,6 +62,7 @@ pub fn four_views() -> [ViewTransform; 4] {
         height: 768.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     };
     // Roughly a third of a z13 tile apart, so neighbors overlap at high zoom and the whole
     // group collapses into shared tiles as the sweep descends.

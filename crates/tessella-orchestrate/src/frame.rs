@@ -516,6 +516,66 @@ fn terrain_covering<'a>(
 /// A tile's coordinate extent, as the terrain's sampling pair takes it.
 const EXTENT_UNITS: u16 = 8192;
 
+/// The ground's height under the camera's center, in meters, before exaggeration.
+///
+/// # Why the camera needs one
+///
+/// The camera sits a fixed distance above the *plane* -- `camera_to_center_distance`, which is a
+/// property of the viewport and not of the ground -- while a height in meters reaches the screen
+/// multiplied by pixels-per-meter, which doubles with every zoom level. So the ground climbs
+/// towards a camera that does not climb with it, and far enough in it arrives: at this build's
+/// 1152-pixel camera, 400 meters of ground exaggerated by 1.5 stands 826 pixels up at z16 and
+/// 1651 at z17. Past that the camera is underground and the frame is whatever the background is.
+///
+/// mbgl has no terrain and so has no answer to transcribe. GL JS's is `Transform.elevation`: the
+/// camera's height is measured from the ground under the center rather than from sea level, which
+/// is what lets a map zoom into a mountain at all.
+///
+/// # Why it is subtracted here rather than added to the camera
+///
+/// The two are the same transform -- lowering the world by the center's height and raising the
+/// camera by it differ by nothing a projection can see -- and this side of it is reachable. A
+/// camera altitude is a term on `ViewTransform`, which 187 call sites construct by literal; the
+/// ground under the center is a number the frame already has the tiles to read.
+///
+/// It also leaves the cover honest rather than making it worse: the plane the cover tests against
+/// is now the ground under the center, which is the surface the camera is actually looking at.
+///
+/// Zero when no ground covers the center, which is a map whose DEM has not landed. That is the
+/// flat camera, and it is what this build had before.
+fn center_elevation(
+    view: &ViewTransform,
+    grounds: &[(TileId, &crate::tile::TerrainContent)],
+) -> f32 {
+    for (tile, content) in grounds {
+        let units = tessella_tile::projection::tile_units(view.longitude, view.latitude, tile.z);
+        let (fx, fy) = (units[0], units[1]);
+        if fx < 0.0 || fy < 0.0 {
+            continue;
+        }
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let (cx, cy) = (fx.floor() as u32, fy.floor() as u32);
+        if cx != tile.x || cy != tile.y {
+            continue;
+        }
+        // The DEM under this tile is the tile's own, so the cover is the whole of it.
+        let Some(cover) = tessella_source::terrain::DemCover::new(tile.z, tile.x, tile.y, tile.z)
+        else {
+            continue;
+        };
+        let sampler = tessella_source::terrain::DemSampler::new(&content.dem, cover);
+        #[allow(clippy::cast_possible_truncation)]
+        let x = (fx.fract() * f64::from(EXTENT_UNITS)) as f32;
+        #[allow(clippy::cast_possible_truncation)]
+        let y = (fy.fract() * f64::from(EXTENT_UNITS)) as f32;
+        let [px, py] = sampler.pixel(x, y, i32::from(EXTENT_UNITS));
+        if let Some(meters) = content.dem.sample_bilinear(px, py) {
+            return meters;
+        }
+    }
+    0.0
+}
+
 /// The first texture id a terrain tile's elevation takes.
 ///
 /// Its own space beside the color relief's, not shared with it. The two are the same bytes -- both
@@ -5176,6 +5236,9 @@ fn terrain_blocks(
                 })
         })
         .collect();
+    // Once for the layer, not once per drawable: the camera has one center and every tile of the
+    // frame is placed against the same one. A per-tile answer would tilt the world.
+    let center = center_elevation(frame.view, &grounds);
     bindings
         .iter()
         .map(|binding| {
@@ -5232,7 +5295,10 @@ fn terrain_blocks(
                 unpack: content.dem.encoding().unpack(),
                 color,
                 params: [scale, offset_x, offset_y, content.exaggeration],
-                skirt: [content.skirt, 0.0, 0.0, 0.0],
+                // The skirt, then the ground under the camera's center -- see `center_elevation`.
+                // Every raised family subtracts the second before the exaggeration multiplies, so
+                // the surface under the center is the plane and the camera stands above it.
+                skirt: [content.skirt, center, 0.0, 0.0],
             }
         })
         .collect()

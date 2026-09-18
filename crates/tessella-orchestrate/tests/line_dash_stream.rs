@@ -54,6 +54,7 @@ fn emit() -> Sent {
         height: 512.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     });
     let tiles = cover::cover(&view).expect("covers");
     let decoded = Tile::decode(REAL_TILE).expect("the fixture decodes");
@@ -147,6 +148,7 @@ fn the_atlas_goes_up_before_anything_names_it() {
         height: 512.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     });
     let tiles = cover::cover(&view).expect("covers");
     let decoded = Tile::decode(REAL_TILE).expect("the fixture decodes");

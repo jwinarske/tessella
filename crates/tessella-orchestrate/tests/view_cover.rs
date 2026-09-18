@@ -21,6 +21,7 @@ fn at(zoom: f64, longitude: f64, latitude: f64) -> ViewTransform {
         height: 768.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     }
 }
 

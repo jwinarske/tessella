@@ -93,6 +93,7 @@ fn frame_stream() -> (BTreeMap<u64, Binding>, Vec<OrderEntry>) {
         height: 768.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     });
     let tiles = cover::cover(&view).expect("covers");
     assert!(tiles.len() > 1, "the cover has to have tiles to batch");

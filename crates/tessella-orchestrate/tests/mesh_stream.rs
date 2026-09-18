@@ -250,6 +250,7 @@ fn a_mesh_uses_the_same_matrix_as_every_other_drawable() {
         height: 768.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     });
 
     let entry = DrawableEntry::for_tile(&view, ProjectionMode::Mercator, 14, 8189, 5447, 0, 3, 1)

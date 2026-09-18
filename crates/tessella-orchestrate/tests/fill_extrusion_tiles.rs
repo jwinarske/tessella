@@ -337,6 +337,7 @@ fn the_drawable_block_is_an_extrusions_own() {
         height: 768.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     });
     let entry = ExtrusionDrawableEntry::for_tile(
         &view,

@@ -190,6 +190,7 @@ mod through_a_frame {
             height: 512.0,
             bearing: 0.0,
             pitch: 45.0,
+            ground_below: 0.0,
         });
         let tiles = cover::cover(&view).expect("covers");
         let decoded = Tile::decode(REAL_TILE).expect("the fixture decodes");

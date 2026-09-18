@@ -35,6 +35,7 @@ fn view(pitch: f64) -> ViewTransform {
         height: 1080.0,
         bearing: 0.0,
         pitch,
+        ground_below: 0.0,
     })
 }
 

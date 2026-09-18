@@ -17,6 +17,7 @@ fn the_cover_contains_the_tile_the_center_falls_in() {
         height: 700.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     };
 
     // Straight from the Mercator definition rather than from anything under test.

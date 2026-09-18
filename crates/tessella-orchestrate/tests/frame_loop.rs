@@ -66,6 +66,7 @@ fn view(zoom: f64) -> ViewTransform {
         height: 768.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     })
 }
 
@@ -339,6 +340,7 @@ fn labels_draw_only_once_the_glyphs_are_handed_over() {
         height: 768.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     });
 
     let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];

@@ -44,6 +44,7 @@ fn probe() -> ViewTransform {
         height: 768.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     })
 }
 

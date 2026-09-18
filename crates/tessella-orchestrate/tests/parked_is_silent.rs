@@ -266,6 +266,7 @@ fn a_cover_is_constant_within_an_integer_level() {
             height: 768.0,
             bearing: 0.0,
             pitch: 0.0,
+            ground_below: 0.0,
         };
         let mut out: Vec<_> = tessella_tile::cover::cover(&view)
             .expect("covers")
@@ -316,6 +317,7 @@ fn a_pure_pan_costs_one_camera_block_a_frame() {
         height: 768.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     };
 
     // A pan small enough to stay inside one integer level's cover: the tiles do not change, so

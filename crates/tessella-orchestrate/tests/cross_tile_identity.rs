@@ -93,6 +93,7 @@ fn scene(ids: &[TileId]) -> Scene {
         height: 512.0,
         bearing: 0.0,
         pitch: 0.0,
+        ground_below: 0.0,
     });
     let decoded = Tile::decode(BERLIN).expect("the fixture decodes");
 

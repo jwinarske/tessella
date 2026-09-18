@@ -496,6 +496,7 @@ unsafe fn create(
             height: f64::from(config.height),
             bearing: 0.0,
             pitch: 0.0,
+            ground_below: 0.0,
         }));
 
         // Eight-aligned by construction, which `ring::init` requires, and sized to a power of

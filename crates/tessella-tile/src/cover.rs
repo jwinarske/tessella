@@ -80,6 +80,23 @@ pub struct ViewTransform {
     pub bearing: f64,
     /// Pitch in degrees from straight down.
     pub pitch: f64,
+    /// How far the ground reaches below the plane the camera is referenced to, in meters, with
+    /// the style's exaggeration already applied. Zero for a map with no terrain, which is every
+    /// camera this build had before terrain existed.
+    ///
+    /// # What it is for
+    ///
+    /// The far plane. Without a terrain the ground *is* the plane, so `proj_matrix` reaches a
+    /// little past the center distance and that is the whole of the depth range there is. A
+    /// terrain puts ground below that plane, and ground past the far plane is clipped away --
+    /// not shaded wrongly, not depth-fought, simply absent, in bands that follow the contours of
+    /// the height field. At this build's camera a pitch-0 view clips anything more than about
+    /// eleven pixels below the plane.
+    ///
+    /// Conservative by construction: this is the whole relief in hand rather than the depth under
+    /// this particular center, so it is never short and is at most the height of the terrain too
+    /// far. Too far costs a little depth-buffer resolution; too short is a hole.
+    pub ground_below: f64,
 }
 
 impl ViewTransform {
@@ -794,6 +811,7 @@ mod tests {
             height: 768.0,
             bearing: 0.0,
             pitch: 0.0,
+            ground_below: 0.0,
         }
     }
 
@@ -957,6 +975,7 @@ mod tests {
             height: 512.0,
             bearing: 0.0,
             pitch: 0.0,
+            ground_below: 0.0,
         };
         let tiles = cover(&view).expect("covers");
         assert!(
@@ -1234,6 +1253,7 @@ impl ZoomLatch {
                 height: 1.0,
                 bearing: 0.0,
                 pitch: 0.0,
+                ground_below: 0.0,
             }
             .tile_zoom(),
             margin: margin.max(0.0),
@@ -1256,6 +1276,7 @@ impl ZoomLatch {
             height: 1.0,
             bearing: 0.0,
             pitch: 0.0,
+            ground_below: 0.0,
         }
         .tile_zoom();
 
