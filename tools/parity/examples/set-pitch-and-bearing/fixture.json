@@ -1,0 +1,15 @@
+{
+ "example": "set-pitch-and-bearing",
+ "base": "https://demotiles.maplibre.org/style.json",
+ "sources": {},
+ "layers": [],
+ "cameras": [
+  {
+   "lat": 45.53483,
+   "lon": -73.5804,
+   "zoom": 4,
+   "pitch": 60,
+   "bearing": -60
+  }
+ ]
+}
