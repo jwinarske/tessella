@@ -58,7 +58,7 @@ The sweep's numbers as of 2026-09-16, which is the gate:
     terrain_cover_p     z14 p0   holes 154 of 786432
     terrain_cover_p     z14 p30  holes 294
     terrain_cover_p     z14 p45  holes 782
-    terrain_cover_p     z14 p60  holes 5027
+    terrain_cover_p     z14 p60  holes 1033
     terrain_cover_p     z16 p45  holes 1173
 
 `holes` is the other measure, for the one scene nothing can be compared against: pixels of a color
@@ -178,7 +178,7 @@ the scene uses for nothing but its background. See `terrain_cover_p` below.
       terrain_cover_p  z14 p0     154 of 786432  (0.020%)
       terrain_cover_p  z14 p30    294            (0.037%)
       terrain_cover_p  z14 p45    782            (0.099%)
-      terrain_cover_p  z14 p60   5027            (0.639%)
+      terrain_cover_p  z14 p60   1033            (0.131%)
       terrain_cover_p  z16 p45   1173            (0.149%)
 
   They read 62, 34140, 622, 180367 and 618072 before the camera took the ground's height into
@@ -202,9 +202,22 @@ the scene uses for nothing but its background. See `terrain_cover_p` below.
   no geometry at all, in bands following the contours. `ViewTransform::ground_below` carries the
   relief the far plane has to reach.
 
-  What is left, in order of size: at the steepest pitches a strip along the bottom edge, where
-  the cover is computed against the plane and stops short of the ground nearest the camera; and
-  the seam hairlines, which are the whole of `p0` and most of `p45`.
+  `p60` was 5027 after that, and the rest of it was the picture's own cover. A DEM read as a
+  picture is covered one zoom deeper than the ground -- the 256-pixel rule, so its texels land on
+  screen pixels one to one -- and a cover computed at that deeper zoom fits the frustum more
+  tightly than the ground's. Along the near edge of a pitched view it stopped short: ground drawn
+  with no picture on it, which reads as a band of bare ground. The picture's cover is the ground's
+  own refined now, which keeps the finer resolution and paints exactly the ground that exists. It
+  costs tiles, because a coarse cover over-covers and refining multiplies that: 104 raster tiles
+  where there were 72 at `z14 p60`, and 24 where there were 20 at `p0`.
+
+  Both halves were needed. Refining only what is fetched changes nothing, because the walk that
+  draws them visits its own cover; refining only what is drawn changes nothing, because the tiles
+  were never asked for. Each was measured alone first and read as a dead end.
+
+  What is left is the same in every row: a raised raster has no skirt where the ground has one.
+  Drawn alone at `z14 p60` the ground covers the whole frame, 785403 of it without its skirt; the
+  relief covers 781405. The gap is the skirt, and it is what the remaining holes are.
 
 - `puck_p` — a location indicator over Berlin: an accuracy circle, a bearing, and the perspective
   compensation that decides how the puck leans when the camera pitches. **This one does not pass

@@ -921,7 +921,36 @@ pub(crate) fn plan(
             // Only where a layer draws a picture of it. A DEM nothing shades is read as a
             // surface alone, and the surface's cover is the frame's own.
             SourceKind::RasterDem { .. } if shaded.contains(&name.as_str()) => {
-                want(&mut raster_covers, covering_zoom(*kind, view.zoom))?;
+                let image = covering_zoom(*kind, view.zoom);
+                let surface_at = surface_zoom(view.zoom);
+                // A DEM the ground is raised from paints the ground, so its picture has to exist
+                // wherever that ground does. A cover computed at the picture's own deeper zoom
+                // fits the frustum more tightly than the ground's, and along the near edge of a
+                // pitched view it stops short: the ground is drawn and has no picture on it, which
+                // reads as a band of bare ground. So the picture's cover is the ground's own,
+                // refined -- the same footprint at the finer level, which keeps the resolution the
+                // 256-pixel rule asks for and covers exactly what is there.
+                if terrain == Some(name.as_str()) && image > surface_at {
+                    want(&mut raster_covers, surface_at)?;
+                    let dz = image - surface_at;
+                    let step = 1u32 << dz;
+                    let refined = raster_covers[&surface_at]
+                        .iter()
+                        .flat_map(|tile| {
+                            (0..step).flat_map(move |dy| {
+                                (0..step).map(move |dx| cover::TileCoord {
+                                    z: image,
+                                    x: (tile.x << dz) + dx,
+                                    y: (tile.y << dz) + dy,
+                                    wrap: tile.wrap,
+                                })
+                            })
+                        })
+                        .collect();
+                    raster_covers.insert(image, refined);
+                } else {
+                    want(&mut raster_covers, image)?;
+                }
             }
             SourceKind::RasterDem { .. } | SourceKind::Vector => {}
         }
