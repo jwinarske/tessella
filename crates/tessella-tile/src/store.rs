@@ -67,6 +67,15 @@ pub struct TileKey {
     pub overscaled_z: u8,
     /// Style revision the entry was built against.
     pub style_rev: u64,
+    /// Which revision of its *source's data* the entry was built from.
+    ///
+    /// Zero for everything a style resolved once and nothing has replaced since, which is every
+    /// tiled source and every GeoJSON source until a caller hands it new data. A replacement
+    /// bumps this for that source alone, so its tiles are new entries and every other source's
+    /// survive -- which is what `tessella_set_geojson_data` needs to be affordable at animation
+    /// rates. The style revision cannot serve: it is the whole style's, and bumping it to change
+    /// one source's data would rebuild every tile of every other source with it.
+    pub data_rev: u64,
     /// The surface the entry's buckets were split for.
     ///
     /// Part of the key for the reason `overscaled_z` is: a bucket is shareable only between views
@@ -130,6 +139,7 @@ impl TileKey {
             y,
             overscaled_z: z,
             style_rev,
+            data_rev: 0,
             surface: Surface::Plane,
         }
     }
@@ -142,6 +152,17 @@ impl TileKey {
     #[must_use]
     pub fn on(mut self, surface: Surface) -> Self {
         self.surface = surface;
+        self
+    }
+
+    /// The same key for a revision of its source's data.
+    ///
+    /// A builder for the same reason [`Self::on`] is one: nothing replaces a source's data in
+    /// most maps, and a positional argument on both constructors would be a zero every call site
+    /// carries to say "the data the style came with".
+    #[must_use]
+    pub fn of_data(mut self, data_rev: u64) -> Self {
+        self.data_rev = data_rev;
         self
     }
 
@@ -170,6 +191,7 @@ impl TileKey {
             y,
             overscaled_z,
             style_rev,
+            data_rev: 0,
             surface: Surface::Plane,
         }
     }
@@ -184,6 +206,9 @@ impl std::fmt::Display for TileKey {
         )?;
         if self.overscaled_z != self.z {
             write!(f, "@{}", self.overscaled_z)?;
+        }
+        if self.data_rev != 0 {
+            write!(f, "+{}", self.data_rev)?;
         }
         Ok(())
     }

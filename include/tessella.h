@@ -83,7 +83,17 @@ typedef enum tessella_result {
      * TESSELLA_NOT_HOSTED's reason: it is a fixable mistake in what the caller passed, and the
      * caller is the only one that can fix it. The document is not a GeoJSON feature collection,
      * or the image is not a picture this build decodes. */
-    TESSELLA_BAD_ANNOTATIONS = 9
+    TESSELLA_BAD_ANNOTATIONS = 9,
+    /* The style has no GeoJSON source by that name, or the source it names is not GeoJSON.
+     * Distinct from TESSELLA_FAILED for TESSELLA_NOT_HOSTED's reason: the caller is the only one
+     * that can fix it. */
+    TESSELLA_NO_SUCH_SOURCE = 10,
+    /* A GeoJSON document could not be read. */
+    TESSELLA_BAD_GEOJSON = 11,
+    /* The style has not resolved yet, so the map has no sources to name. Not a failure: a map
+     * only just created has not read its style. Poll tessella_status and hand the data over once
+     * it reports TESSELLA_READY. */
+    TESSELLA_NOT_RESOLVED = 12
 } tessella_result;
 
 /* How far along a map's sources are.
@@ -374,6 +384,31 @@ tessella_result tessella_set_projection(tessella_map* map, tessella_projection p
  * TESSELLA_BAD_ANNOTATIONS if the document is not a feature collection this reads. */
 tessella_result tessella_set_annotations(tessella_map* map, const uint8_t* geojson,
                                          size_t geojson_len);
+
+/* Replaces a GeoJSON source's data.
+ *
+ * The style's own "data" is what the map draws until this is called, and this document
+ * afterwards. The source's *options* stay the style's -- clustering, its radius and its maximum
+ * zoom -- because they describe the source rather than the data.
+ *
+ * Every tile of that source is built again for the next frame, and no tile of any other source
+ * is, so replacing one layer's points does not rebuild the basemap under them. What is already
+ * drawn stays until the new tiles land, which is what keeps an animation from blinking.
+ *
+ * Unlike tessella_set_annotations this may be called whenever the style has resolved, which is
+ * what makes it useful: it is how a point moves along a route and how live data arrives. Before
+ * then there is no source list to name and the call reports TESSELLA_NOT_RESOLVED.
+ *
+ * The document is read, and a clustered source's index rebuilt, on the calling thread, because
+ * both are functions of the data and a tile cut from a half-built index would be wrong rather
+ * than late. The cost follows the document's size, so a caller replacing a large document every
+ * frame pays for it every frame.
+ *
+ * TESSELLA_NO_SUCH_SOURCE if the style has no GeoJSON source by that name, TESSELLA_BAD_GEOJSON
+ * if the document is not GeoJSON this reads. */
+tessella_result tessella_set_geojson_data(tessella_map* map, const uint8_t* source,
+                                          size_t source_len, const uint8_t* geojson,
+                                          size_t geojson_len);
 
 /* Adds an image a symbol annotation's "icon" can name.
  *

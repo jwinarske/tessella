@@ -55,14 +55,10 @@ fn scene(longitude: f64) -> Scene {
         pitch: 0.0,
     });
     let tiles = cover::cover(&view).expect("covers");
-    let decoded = Tile::decode(REAL_TILE).expect("decodes");
     let mut buckets = Vec::new();
     for tile in &tiles {
         let id = TileId::new(tile.z, tile.x, tile.y);
-        let mut built = build_mvt_tile(&style, "s", id, &decoded).expect("builds");
-        built.extend(build_sourceless(&style, id).expect("background"));
-        built.sort_by_key(|bucket| bucket.layer_index);
-        buckets.push((id, Arc::new(built)));
+        buckets.push((id, held(&style, id)));
     }
     Scene {
         style,
@@ -70,6 +66,31 @@ fn scene(longitude: f64) -> Scene {
         tiles,
         buckets,
     }
+}
+
+/// One tile's buckets, built once and handed out by the same `Arc` after that.
+///
+/// A store, which is what the map draws from: `TileSource` keeps a tile's buckets until something
+/// rebuilds them, so two frames over one tile read one allocation. Building a fresh `Arc` per
+/// scene instead modelled a source that rebuilds every tile every frame -- and the registry now
+/// reads the build's identity as part of its content stamp, because a source handed new data
+/// rebuilds a tile under the same key at the same size, which nothing else distinguishes.
+fn held(style: &Style, id: TileId) -> Arc<Vec<LayerBucket>> {
+    use std::cell::RefCell;
+    use std::collections::BTreeMap;
+    thread_local! {
+        static STORE: RefCell<BTreeMap<TileId, Arc<Vec<LayerBucket>>>> =
+            const { RefCell::new(BTreeMap::new()) };
+    }
+    STORE.with(|store| {
+        Arc::clone(store.borrow_mut().entry(id).or_insert_with(|| {
+            let decoded = Tile::decode(REAL_TILE).expect("decodes");
+            let mut built = build_mvt_tile(style, "s", id, &decoded).expect("builds");
+            built.extend(build_sourceless(style, id).expect("background"));
+            built.sort_by_key(|bucket| bucket.layer_index);
+            Arc::new(built)
+        }))
+    })
 }
 
 /// Emits one frame into a fresh ring, returning what it wrote and the record counts.

@@ -33,10 +33,11 @@ use alloc::vec::Vec;
 
 use tessella_capture_abi::envelope::{GeometryId, SlabRef, TileId, ViewId};
 
-/// What a retained drawable's content was built from, beyond its key: the ground it stands on
-/// and the size of its build. Two numbers rather than one mixed from them, so no pair of
-/// different builds can compare equal. See [`GeometryRegistry::content_changed`].
-pub type ContentStamp = [u64; 2];
+/// What a retained drawable's content was built from, beyond its key: the ground it stands on,
+/// the size of its build, and which build it is. Separate numbers rather than one mixed from
+/// them, so no pair of different builds can compare equal. See
+/// [`GeometryRegistry::content_changed`].
+pub type ContentStamp = [u64; 3];
 
 /// What names one drawable across frames.
 ///
@@ -248,10 +249,12 @@ impl GeometryRegistry {
     /// asked together and a new drawable is announced for being new.
     ///
     /// A stamp is whatever the caller decides identifies a drawable's content -- today the
-    /// covering ground's texture id and the vertex count of its build. It exists because a
-    /// retained drawable is never re-encoded, which holds only while everything its encode reads
-    /// is unchanged; a layer the terrain raises names another source's elevation, arriving on its
-    /// own schedule, and a refined grid rebuilds a tile under the same key.
+    /// covering ground's texture id, the vertex count of its build, and the identity of the
+    /// build itself. It exists because a retained drawable is never re-encoded, which holds only
+    /// while everything its encode reads is unchanged; a layer the terrain raises names another
+    /// source's elevation, arriving on its own schedule, a refined grid rebuilds a tile under the
+    /// same key, and a source handed new data rebuilds one under the same key and at the same
+    /// size -- a point that moved is the same count of the same vertices somewhere else.
     #[must_use]
     pub fn content_changed(&self, key: &DrawableKey, stamp: ContentStamp) -> bool {
         self.live.get(key).is_some_and(|entry| entry.stamp != stamp)
