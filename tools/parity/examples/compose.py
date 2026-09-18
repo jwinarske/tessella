@@ -23,7 +23,8 @@ Fixture fields:
             lowered it into two would be free to lower it differently for each.
             A `setData` may name a URL instead of a document; it is read here, through the
             proxy, into the document it names -- which is what lets an example whose document is
-            fetched and large be a fixture at all.
+            fetched and large be a fixture at all. An `addImage` names a URL too, and its picture
+            is fetched to a file beside the style, because bytes cannot live in the script.
 
 Prints one line per camera: `lat lon zoom width height pitch bearing`, parity.sh's arguments.
 Every absolute URL, in the base and in what the fixture adds, is routed through the proxy.
@@ -53,6 +54,21 @@ def resolved(script: list, example: str) -> list:
     """
     out = []
     for operation in script:
+        if len(operation) >= 3 and operation[0] == "addImage" and isinstance(operation[2], str):
+            # A picture is bytes and cannot live in the script, so it is fetched to a file beside
+            # the style and the operation names that. Both renderers then read one file, which is
+            # the rule the rest of the script follows.
+            url = proxied(operation[2])
+            if not url.startswith("http://127.0.0.1:"):
+                sys.exit(f"{example}: addImage {operation[2]!r} is not an http or https URL")
+            # The URL was just checked to be the loopback proxy, so no other scheme reaches here.
+            with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310
+                picture = response.read()
+            path = f"{sys.argv[2]}.{operation[1]}.image"
+            with open(path, "wb") as image:
+                image.write(picture)
+            out.append([operation[0], operation[1], path, *operation[3:]])
+            continue
         if len(operation) == 3 and operation[0] == "setData" and isinstance(operation[2], str):
             # Through the proxy, as everything else is: a record run stores it and a replay
             # serves it, so the document is the one the example was recorded against.
