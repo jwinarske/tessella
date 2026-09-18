@@ -33,17 +33,18 @@
 # Those need `scenes/dem.py`. Started here when nothing is listening on its port, and stopped by
 # the process this started -- never by name, because another run on the machine may be using one.
 #
-# `hill_p` at z11 is not stable: three runs of one binary gave 190, 141 and 190. The number below
-# is the one it settles on most often, and a run that reads 141 is that scene rather than a change.
+# Two scenes are not stable run to run. `hill_p` at z11 gave 190, 141 and 190 from one binary, and
+# `terrain_flat_p` at z14 p60 has read 26, 27 and 28. The numbers below are the ones they settle on
+# most often, and a run that reads one of the others is that scene rather than a change.
 #
 # The numbers to hold, as of 2026-09-18: 4 / 16 / 0 / 2 / 30, then 3 / 2, then 0 / 0 / 0; then
 # 0 / 190 and 0 / 0 for the hillshade and relief; 0 / 28 / 0 for the flat terrain; 4 / 16 / 0 / 2
 # / 30 for the families on a flat terrain, the same as without one.
 #
-# Then the raised cover: holes of 154, 294, 782, 5027 and 1173. These were 62, 34140, 622, 180367
-# and 618072 before the camera took the ground's height into account -- see the README. What is
-# left is the seam hairlines and, at the steepest pitches, a strip along the bottom edge where the
-# cover stops short of the ground nearest the camera.
+# Then the raised cover: holes of 154, 294, 782, 1033 and 1173. These were 62, 34140, 622, 180367
+# and 618072 before the camera took the ground's height into account, and the fourth was 5027
+# before a DEM's picture was covered on the ground's own footprint -- see the README. What is left
+# is the seam hairlines, and the skirt a raised raster does not have where the ground does.
 set -euo pipefail
 P="$(dirname "${BASH_SOURCE[0]}")"
 source "$P/env.sh"

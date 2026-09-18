@@ -825,10 +825,38 @@ impl Map {
         // `served` carries over, so a tile already drawn by the walk above is not drawn twice; a
         // second draw is the same geometry under the same matrix, blended again.
         for z in tiles.extra_zooms(&self.view) {
-            let Ok(extra) =
-                tessella_tile::cover::cover_on(&self.view, z, self.copies, self.surface())
-            else {
-                continue;
+            // Refined from what the frame is drawing rather than recomputed at this zoom. A cover
+            // computed at a deeper zoom fits the frustum more tightly than the frame's own, so a
+            // picture painted on the ground stopped short of it along the near edge of a pitched
+            // view -- ground drawn with nothing on it, which reads as a band of bare ground. The
+            // planner fetches this same refinement, and the two have to agree or the tiles are
+            // fetched and never looked up.
+            let refined: Vec<tessella_tile::cover::TileCoord> = self
+                .drawn
+                .iter()
+                .filter(|tile| tile.z <= z)
+                .flat_map(|tile| {
+                    let dz = z - tile.z;
+                    let step = 1u32 << dz;
+                    (0..step).flat_map(move |dy| {
+                        (0..step).map(move |dx| tessella_tile::cover::TileCoord {
+                            z,
+                            x: (tile.x << dz) + dx,
+                            y: (tile.y << dz) + dy,
+                            wrap: tile.wrap,
+                        })
+                    })
+                })
+                .collect();
+            let extra = if refined.is_empty() {
+                let Ok(computed) =
+                    tessella_tile::cover::cover_on(&self.view, z, self.copies, self.surface())
+                else {
+                    continue;
+                };
+                computed
+            } else {
+                refined
             };
             for entry in &extra {
                 let cover = TileId::new(entry.z, entry.x, entry.y);
