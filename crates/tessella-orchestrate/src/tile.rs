@@ -206,6 +206,14 @@ pub struct HillshadeContent {
     /// The tile's latitude range, north then south, which the shader needs to undo Mercator's
     /// stretch before it reads the slope as a real one.
     pub lat_range: [f32; 2],
+    /// The elevation the field was prepared from.
+    ///
+    /// Kept so the field can be prepared *again*. A tile's border is filled twice -- once by
+    /// repeating its own edge, and again from the neighbors as they arrive -- and the second fill
+    /// changes the slope along every edge it touches. Without the elevation here a hillshade over
+    /// a source nothing else reads has nothing to re-derive from, and the seam its first fill left
+    /// is permanent.
+    pub dem: alloc::sync::Arc<tessella_source::dem::Dem>,
 }
 
 /// The quad a raster tile's picture is drawn on, and the picture.
@@ -1602,7 +1610,7 @@ pub fn build_raster_tile_on(
 pub fn build_dem_tile_on(
     style: &Style,
     source: &str,
-    dem: &tessella_source::dem::Dem,
+    dem: &alloc::sync::Arc<tessella_source::dem::Dem>,
     tile: TileId,
     mask: &[tessella_tile::mask::MaskEntry],
     cells: u32,
@@ -1640,6 +1648,7 @@ pub fn build_dem_tile_on(
                 bucket: skirted(mask, cells, skirt),
                 prepared: alloc::sync::Arc::clone(&prepared),
                 lat_range,
+                dem: alloc::sync::Arc::clone(dem),
             }),
             paint,
             // A hillshade's paint has no feature to vary over, for a raster layer's reason.

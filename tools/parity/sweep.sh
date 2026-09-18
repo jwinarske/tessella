@@ -33,17 +33,20 @@
 # Those need `scenes/dem.py`. Started here when nothing is listening on its port, and stopped by
 # the process this started -- never by name, because another run on the machine may be using one.
 #
-# Two scenes are not stable run to run. `hill_p` at z11 gave 190, 141 and 190 from one binary, and
-# `terrain_flat_p` at z14 p60 has read 26, 27 and 28. The numbers below are the ones they settle on
-# most often, and a run that reads one of the others is that scene rather than a change.
+# Two scenes are not stable run to run. `terrain_flat_p` at z14 p60 has read 26 through 29.
+# `hill_p` at z11 read 190, 141 and 190 before the DEM border backfill and reads 0 to 14 after it:
+# 0 every time the scene is run alone, and up to 14 inside a full sweep, where the reconciliation
+# can land after the frame the probe settled on. The numbers below are the ones they settle on
+# most often, and a run that reads another is that scene rather than a change.
 #
 # The numbers to hold, as of 2026-09-18: 4 / 16 / 0 / 2 / 30, then 3 / 2, then 0 / 0 / 0; then
-# 0 / 190 and 0 / 0 for the hillshade and relief; 0 / 28 / 0 for the flat terrain; 4 / 16 / 0 / 2
+# 0 / 0 and 0 / 0 for the hillshade and relief; 0 / 28 / 0 for the flat terrain; 4 / 16 / 0 / 2
 # / 30 for the families on a flat terrain, the same as without one.
 #
-# Then the raised cover: 0, 0, 0, 0 and 28 holes. These were 62, 34140, 622, 180367 and 618072
-# when the row was first written -- see the README for the three things that were wrong and the
-# order they came out in.
+# Then the raised cover: no holes at any of the five cameras. These were 62, 34140, 622, 180367
+# and 618072 when the row was first written -- see the README for the three things that were wrong
+# and the order they came out in. The last of them, 28 holes at z16 p45, closed with the border
+# backfill: neighboring tiles whose edges disagreed by a border pixel did not meet.
 set -euo pipefail
 P="$(dirname "${BASH_SOURCE[0]}")"
 source "$P/env.sh"
