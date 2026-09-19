@@ -1,0 +1,171 @@
+{
+ "example": "filter-symbols-by-toggling-a-list",
+ "note": "The page puts seven places on the map, one symbol layer per icon kind, each filtered to its own kind so a checkbox can hide it by name. The fixture draws them all, which is the page's own starting state. It writes `icon-allow-overlap` where the page writes `icon-overlap`: the pinned oracle predates the newer spelling and refuses the whole layer for it, drawing no icon at all, so a fixture using it would compare a map with markers against a map without.",
+ "base": "https://tiles.openfreemap.org/styles/bright",
+ "sources": {
+  "places": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {
+       "icon": "theatre"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.038659,
+        38.931567
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "icon": "theatre"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.003168,
+        38.894651
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "icon": "bar"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.090372,
+        38.881189
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "icon": "bicycle"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.052477,
+        38.943951
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "icon": "music"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.031706,
+        38.914581
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "icon": "music"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.020945,
+        38.878241
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "icon": "music"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.007481,
+        38.876516
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "poi-bar",
+   "type": "symbol",
+   "source": "places",
+   "layout": {
+    "icon-image": "bar_11",
+    "icon-allow-overlap": true
+   },
+   "filter": [
+    "==",
+    "icon",
+    "bar"
+   ]
+  },
+  {
+   "id": "poi-bicycle",
+   "type": "symbol",
+   "source": "places",
+   "layout": {
+    "icon-image": "bicycle_11",
+    "icon-allow-overlap": true
+   },
+   "filter": [
+    "==",
+    "icon",
+    "bicycle"
+   ]
+  },
+  {
+   "id": "poi-music",
+   "type": "symbol",
+   "source": "places",
+   "layout": {
+    "icon-image": "music_11",
+    "icon-allow-overlap": true
+   },
+   "filter": [
+    "==",
+    "icon",
+    "music"
+   ]
+  },
+  {
+   "id": "poi-theatre",
+   "type": "symbol",
+   "source": "places",
+   "layout": {
+    "icon-image": "theatre_11",
+    "icon-allow-overlap": true
+   },
+   "filter": [
+    "==",
+    "icon",
+    "theatre"
+   ]
+  }
+ ],
+ "cameras": [
+  {
+   "lat": 38.907,
+   "lon": -77.04,
+   "zoom": 11.15
+  }
+ ]
+}

@@ -1,0 +1,23 @@
+{
+ "example": "filter-within-a-layer",
+ "note": "The page adds a circle layer over a year of earthquakes and narrows it from a form, `setFilter('earthquakes', ['all', ['>', 'mag', 5]])` and the like -- the shape its own comments give. A filter has no history, so the fixture writes one in and draws the frame that form draws. The magnitude bound is the example's own example.",
+ "base": "https://demotiles.maplibre.org/style.json",
+ "sources": {
+  "earthquakes": {
+   "type": "geojson",
+   "data": "https://maplibre.org/maplibre-gl-js/docs/assets/earthquakes.geojson"
+  }
+ },
+ "layers": [
+  {
+   "id": "earthquakes",
+   "type": "circle",
+   "source": "earthquakes",
+   "filter": ["all", [">", "mag", 5.0]],
+   "paint": {"circle-color": "#ff0000"}
+  }
+ ],
+ "cameras": [
+  {"lat": 32, "lon": -117, "zoom": 0}
+ ]
+}

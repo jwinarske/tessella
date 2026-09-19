@@ -1,0 +1,13 @@
+{
+ "example": "change-a-maps-language",
+ "note": "The page's buttons call setLayoutProperty on the three country-label layers to read `name:<language>` instead of the style's own text-field. The fixture picks one language -- German, the second button -- and writes the same value into the same three layers, which is the frame that button draws.",
+ "base": "https://tiles.openfreemap.org/styles/bright",
+ "layers": [
+  {"id": "label_country_1", "layout": {"text-field": ["get", "name:de"]}},
+  {"id": "label_country_2", "layout": {"text-field": ["get", "name:de"]}},
+  {"id": "label_country_3", "layout": {"text-field": ["get", "name:de"]}}
+ ],
+ "cameras": [
+  {"lat": 48, "lon": 16.05, "zoom": 2.9}
+ ]
+}
