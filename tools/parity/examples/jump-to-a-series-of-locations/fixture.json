@@ -1,0 +1,13 @@
+{
+ "example": "jump-to-a-series-of-locations",
+ "note": "The page jumps between six Thai cities two seconds apart, and a jump has no state left behind it: what the map shows at each stop is the map at that camera. So the fixture is the six stops as six cameras, which is what the multi-camera form is for and what no other fixture uses it for at this scale. No layer of its own, no script -- the bright base at zoom 9 over six places, and the value is the six places: Bangkok, Chiang Mai, Chiang Rai, Nong Khai, Hat Yai and Pattaya are 139 resources of coastline, river delta, border and dense city that nothing else in the suite reaches. They read 61, 74, 47, 67, 73 and 67, and that they differ is itself the check that six cameras drew six places.",
+ "base": "https://tiles.openfreemap.org/styles/bright",
+ "cameras": [
+  {"lat": 13.745, "lon": 100.507, "zoom": 9},
+  {"lat": 18.793, "lon": 98.993, "zoom": 9},
+  {"lat": 19.924, "lon": 99.838, "zoom": 9},
+  {"lat": 17.408, "lon": 102.812, "zoom": 9},
+  {"lat": 7.001, "lon": 100.458, "zoom": 9},
+  {"lat": 12.935, "lon": 100.905, "zoom": 9}
+ ]
+}
