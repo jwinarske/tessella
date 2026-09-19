@@ -1,0 +1,247 @@
+{
+ "example": "filter-symbols-by-text-input",
+ "note": "The page labels each place with its kind and hides a layer whose name does not match what is typed. The fixture types nothing, which is the page's own starting state, and draws all four. It writes `icon-allow-overlap` where the page writes `icon-overlap`: the pinned oracle predates the newer spelling and refuses the layer for it. The labels are what this one is for -- uppercased, letter-spaced, offset below the icon and set in a halo -- where its sibling filter-symbols-by-toggling-a-list draws the icons alone.",
+ "base": "https://tiles.openfreemap.org/styles/bright",
+ "sources": {
+  "places": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {
+       "icon": "theatre"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.038659,
+        38.931567
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "icon": "theatre"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.003168,
+        38.894651
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "icon": "bar"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.090372,
+        38.881189
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "icon": "bicycle"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.052477,
+        38.943951
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "icon": "music"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.031706,
+        38.914581
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "icon": "music"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.020945,
+        38.878241
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "icon": "music"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.007481,
+        38.876516
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "poi-bar",
+   "type": "symbol",
+   "source": "places",
+   "layout": {
+    "icon-image": "bar_11",
+    "icon-allow-overlap": true,
+    "text-field": "bar",
+    "text-font": [
+     "Noto Sans Regular"
+    ],
+    "text-size": 11,
+    "text-transform": "uppercase",
+    "text-letter-spacing": 0.05,
+    "text-offset": [
+     0,
+     1.5
+    ]
+   },
+   "paint": {
+    "text-color": "#202",
+    "text-halo-color": "#fff",
+    "text-halo-width": 2
+   },
+   "filter": [
+    "==",
+    [
+     "get",
+     "icon"
+    ],
+    "bar"
+   ]
+  },
+  {
+   "id": "poi-bicycle",
+   "type": "symbol",
+   "source": "places",
+   "layout": {
+    "icon-image": "bicycle_11",
+    "icon-allow-overlap": true,
+    "text-field": "bicycle",
+    "text-font": [
+     "Noto Sans Regular"
+    ],
+    "text-size": 11,
+    "text-transform": "uppercase",
+    "text-letter-spacing": 0.05,
+    "text-offset": [
+     0,
+     1.5
+    ]
+   },
+   "paint": {
+    "text-color": "#202",
+    "text-halo-color": "#fff",
+    "text-halo-width": 2
+   },
+   "filter": [
+    "==",
+    [
+     "get",
+     "icon"
+    ],
+    "bicycle"
+   ]
+  },
+  {
+   "id": "poi-music",
+   "type": "symbol",
+   "source": "places",
+   "layout": {
+    "icon-image": "music_11",
+    "icon-allow-overlap": true,
+    "text-field": "music",
+    "text-font": [
+     "Noto Sans Regular"
+    ],
+    "text-size": 11,
+    "text-transform": "uppercase",
+    "text-letter-spacing": 0.05,
+    "text-offset": [
+     0,
+     1.5
+    ]
+   },
+   "paint": {
+    "text-color": "#202",
+    "text-halo-color": "#fff",
+    "text-halo-width": 2
+   },
+   "filter": [
+    "==",
+    [
+     "get",
+     "icon"
+    ],
+    "music"
+   ]
+  },
+  {
+   "id": "poi-theatre",
+   "type": "symbol",
+   "source": "places",
+   "layout": {
+    "icon-image": "theatre_11",
+    "icon-allow-overlap": true,
+    "text-field": "theatre",
+    "text-font": [
+     "Noto Sans Regular"
+    ],
+    "text-size": 11,
+    "text-transform": "uppercase",
+    "text-letter-spacing": 0.05,
+    "text-offset": [
+     0,
+     1.5
+    ]
+   },
+   "paint": {
+    "text-color": "#202",
+    "text-halo-color": "#fff",
+    "text-halo-width": 2
+   },
+   "filter": [
+    "==",
+    [
+     "get",
+     "icon"
+    ],
+    "theatre"
+   ]
+  }
+ ],
+ "cameras": [
+  {
+   "lat": 38.907,
+   "lon": -77.04,
+   "zoom": 11.15
+  }
+ ]
+}
