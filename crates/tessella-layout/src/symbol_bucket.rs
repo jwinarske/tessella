@@ -580,7 +580,18 @@ fn chars_of<G: tessella_glyph::Glyphs + ?Sized>(
             out.push(built.at_scale(section.scale));
         }
     }
-    out
+    // The contextual forms, measured by the glyphs they will be drawn from.
+    //
+    // Shaping runs this again and finds nothing left to do -- joining a letter twice gives the
+    // same letter -- but it runs there without the stack in hand, so a form changed there keeps
+    // the advance of the letter it replaced. Done here the new advance comes from the new
+    // glyph, which is what decides where a line breaks.
+    tessella_glyph::shaping::apply_arabic_measured(&out, |codepoint| {
+        glyphs
+            .metrics(codepoint)
+            .map(|(metrics, drawable)| (metrics.advance, drawable))
+    })
+    .into_owned()
 }
 
 /// Lays out a layer's labels into one tile's buffers.
