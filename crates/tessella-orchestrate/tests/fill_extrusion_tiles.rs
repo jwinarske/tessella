@@ -212,13 +212,62 @@ fn a_boolean_paint_property_defaults_to_one_not_zero() {
 
     let style = style_with("");
     let paint = resolve_paint(style.layer("buildings").expect("the layer")).expect("resolves");
-    let packed = fill_extrusion_props_from_paint(&paint, 15.0, &Light::default());
+    let packed = fill_extrusion_props_from_paint(&paint, 15.0, &Light::default(), 0.0);
 
     // The third word of the fourth vec4: height, light_intensity, vertical_gradient, opacity.
     let gradient = f32::from_le_bytes(packed[56..60].try_into().expect("four bytes"));
     assert_eq!(
         gradient, 1.0,
         "the gradient defaults to on, and zero is the value that disables it"
+    );
+}
+
+/// A viewport-anchored light turns with the camera, and the map-anchored one does not.
+///
+/// This is `FillExtrusionBucket::lightPosition`, and its absence is what
+/// `animate-map-camera-around-a-point` found: the fixture reads 25 pixels at bearing 0 and
+/// 25269 at bearing 90, because every wall of Chicago was shaded as though the map had not
+/// turned. Bearing 0 is the identity, which is why nothing earlier caught it.
+///
+/// The default anchor is the viewport, so the default light is the one that has to turn.
+#[test]
+fn a_viewport_anchored_light_turns_with_the_bearing() {
+    use tessella_style::light::{Anchor, Light};
+    use tessella_style::property::resolve_paint;
+
+    let style = style_with("");
+    let paint = resolve_paint(style.layer("buildings").expect("the layer")).expect("resolves");
+    let position = |light: &Light, bearing: f64| {
+        let packed = fill_extrusion_props_from_paint(&paint, 15.0, light, bearing);
+        let at = |offset: usize| {
+            f32::from_le_bytes(packed[offset..offset + 4].try_into().expect("four bytes"))
+        };
+        [at(32), at(36), at(40)]
+    };
+
+    let viewport = Light::default();
+    assert_eq!(viewport.anchor, Anchor::Viewport, "the spec's own default");
+    let north = position(&viewport, 0.0);
+    assert_eq!(north, viewport.cartesian(), "bearing 0 is the identity");
+
+    // A quarter turn takes (x, y) to (-y, x), and leaves the vertical component alone.
+    let quarter = position(&viewport, 90.0);
+    assert!(
+        (quarter[0] - -north[1]).abs() < 1e-6
+            && (quarter[1] - north[0]).abs() < 1e-6
+            && quarter[2] == north[2],
+        "a quarter turn should give {:?}, got {quarter:?}",
+        [-north[1], north[0], north[2]]
+    );
+
+    let anchored = Light {
+        anchor: Anchor::Map,
+        ..Light::default()
+    };
+    assert_eq!(
+        position(&anchored, 90.0),
+        anchored.cartesian(),
+        "a map-anchored light stays where north is"
     );
 }
 

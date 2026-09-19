@@ -1503,24 +1503,61 @@ pub fn extrusion_interpolations(
     ]
 }
 
+/// The direction a fill-extrusion's walls are lit from, in the space their normals are in.
+///
+/// mbgl's `FillExtrusionBucket::lightPosition`. The style gives a direction relative to *north*;
+/// a viewport-anchored light is one that stays where the screen is while the map turns beneath
+/// it, so the direction is turned by the camera's bearing before the shader dots it with a
+/// normal. Anchored to the map it does not turn, which is what makes a city look lit rather than
+/// painted.
+///
+/// The arithmetic is mbgl's rather than the algebra's, for the reason
+/// [`tessella_style::light`] gives for the cartesian form: `sin` and `cos` are taken in `f64`,
+/// then every matrix element is narrowed to `f32` *before* it multiplies anything and the
+/// products are accumulated in `f32`. `mat3::rotate` of the identity leaves
+/// `[c, s, 0, -s, c, 0, 0, 0, 1]` and `transformMat3f` reads it by column, which is the pair of
+/// signs below.
+///
+/// mbgl turns by `-state.getBearing()`, and its state bearing is `deg2rad(-degrees)`, so the
+/// angle wanted here is the bearing itself — degrees clockwise from north, as `ViewTransform`
+/// carries it.
+#[allow(clippy::cast_possible_truncation)]
+fn extrusion_light_position(light: &tessella_style::light::Light, bearing: f64) -> [f32; 3] {
+    let cartesian = light.cartesian();
+    if light.anchor == tessella_style::light::Anchor::Map {
+        return cartesian;
+    }
+    let (sin, cos) = bearing.to_radians().sin_cos();
+    let (sin, cos) = (sin as f32, cos as f32);
+    [
+        cos * cartesian[0] - sin * cartesian[1],
+        sin * cartesian[0] + cos * cartesian[1],
+        cartesian[2],
+    ]
+}
+
 /// A fill-extrusion layer's evaluated properties, from its paint and the style light.
 ///
 /// Three of the five blocks are the light, which is why it is a parameter rather than something
 /// read from the paint: an extrusion is the first thing here whose color depends on more than
 /// its own layer, and a build that packed the paint and left the light at zero draws every
 /// building flat black.
+///
+/// `bearing` is here for the same reason it is on [`hillshade_props_from_paint`]: the default
+/// light anchor is the viewport, so the block has to be rewritten whenever the camera turns.
 #[must_use]
 pub fn fill_extrusion_props_from_paint(
     paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
     zoom: f64,
     light: &tessella_style::light::Light,
+    bearing: f64,
 ) -> Vec<u8> {
     let color = light.color;
     let fill = uniform_color(paint, "fill-extrusion-color", zoom);
     pack_fill_extrusion_props(
         [fill.r, fill.g, fill.b, fill.a],
         [color.r, color.g, color.b],
-        light.cartesian(),
+        extrusion_light_position(light, bearing),
         uniform_number(paint, "fill-extrusion-base", zoom),
         uniform_number(paint, "fill-extrusion-height", zoom),
         light.intensity,

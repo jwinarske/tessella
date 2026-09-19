@@ -4518,7 +4518,8 @@ fn write_layer_state(
                 )?;
             }
 
-            let props = ubo::fill_extrusion_props_from_paint(&paint, view.zoom, frame.light);
+            let props =
+                ubo::fill_extrusion_props_from_paint(&paint, view.zoom, frame.light, view.bearing);
             ubo::write(
                 producer,
                 view_id,
