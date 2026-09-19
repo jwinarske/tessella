@@ -236,8 +236,62 @@ fn list<T>(
         .collect()
 }
 
+/// One polygon's rings, wound the way a vector tile winds them.
+///
+/// # Why the direction is not free
+///
+/// A ring's *order* is geometry to an extrusion in a way it never is to a fill. The wall builder
+/// walks the outline and takes each edge's perpendicular as that wall's outward facing, and the
+/// quad it winds from the edge is what back-face culling reads. Reverse the ring and both
+/// invert: the walls are lit from behind, and culling takes one triangle of every quad, which
+/// draws a building as a band across its top with a diagonal sliver down each side.
+///
+/// Vector tiles carry one winding and so never showed this. A GeoJSON polygon is written by
+/// hand, and RFC 7946 §3.1.6 asks for the *opposite* one -- exterior rings counter-clockwise --
+/// so the spec-conformant way to write a building was the way that drew it broken. One white
+/// cube read 19742 gross pixels against the oracle, and 0 with its ring reversed.
+///
+/// mbgl normalizes in the same place, before any bucket sees the ring: traced through
+/// `FillExtrusionBucket::addFeature`, it reports the same shoelace, `+17784648`, for a polygon
+/// written either way. Doing it here rather than in the extrusion builder is what keeps a vector
+/// tile's rings untouched -- and with them the edge distances a `fill-extrusion-pattern` wraps
+/// against, which reversing a ring would re-phase.
+///
+/// Every ring turns together, so a hole stays a hole: `classify_rings` tells an interior ring
+/// from an exterior one by the sign it does *not* share, and flipping only the exterior would
+/// leave the two indistinguishable.
 fn rings(type_name: &str, value: &Value) -> Result<PolygonRings, GeoJsonError> {
-    list(type_name, value, |ring| positions(type_name, ring))
+    let mut rings: PolygonRings = list(type_name, value, |ring| positions(type_name, ring))?;
+    // Positive is counter-clockwise in longitude and latitude, which is RFC 7946's exterior and
+    // the one to turn. Web Mercator flips the vertical axis, so it is the ring that reads
+    // *clockwise* on a map that arrives wound the way a tile is.
+    if rings
+        .first()
+        .is_some_and(|exterior| shoelace(exterior) > 0.0)
+    {
+        for ring in &mut rings {
+            ring.reverse();
+        }
+    }
+    Ok(rings)
+}
+
+/// Twice a ring's signed area, in longitude and latitude.
+///
+/// Only the sign is read, so the factor of two and the units are beside the point. A ring of
+/// fewer than three positions encloses nothing and gets zero, which leaves it alone.
+fn shoelace(ring: &[Position]) -> f64 {
+    let len = ring.len();
+    if len < 3 {
+        return 0.0;
+    }
+    let mut sum = 0.0;
+    for index in 0..len {
+        let here = ring[index];
+        let next = ring[(index + 1) % len];
+        sum += here[0] * next[1] - next[0] * here[1];
+    }
+    sum
 }
 
 fn positions(type_name: &str, value: &Value) -> Result<Vec<Position>, GeoJsonError> {
