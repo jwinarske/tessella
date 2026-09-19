@@ -47,7 +47,7 @@ use crate::binder::{
 use crate::camera::CameraBlock;
 use crate::emit::SlabArena;
 use crate::order::{self, DrawOrder};
-use crate::registry::{DrawableKey, Session};
+use crate::registry::{DrawableKey, Session, TextureContent, Textures};
 use crate::tile::{Content, LayerBucket, TileId};
 use crate::ubo::{self, DrawableEntry};
 use crate::view::{GeometryBinding, ViewSession};
@@ -824,6 +824,10 @@ fn emit_into(
                 arena.sweep();
                 session.record_camera(frame.view_id, key);
                 session.record_declared(frame.view_id);
+                // And what the consumer now holds. Written here for the reason the camera is:
+                // a texture staged by an attempt that then failed never reached the consumer,
+                // and remembering it would leave that tile drawing whatever was at the slot.
+                session.textures().record();
             }
             crate::watch::frame_end(emitted.geometries, emitted.removed, emitted.uses, true);
             producer.commit();
@@ -840,9 +844,34 @@ fn emit_into(
             // the consumer never saw.
             if let Some(session) = session {
                 session.registry().rollback();
+                session.textures().discard();
             }
             Err(error)
         }
+    }
+}
+
+/// Whether the consumer already holds this texture at this payload.
+///
+/// A free function so the two halves read the same at every call site, and so a frame emitted
+/// without a session -- `emit`, and every test that calls it -- sends everything, which is what
+/// "the consumer has nothing" means.
+fn holds(
+    textures: Option<&Textures>,
+    texture: tessella_capture_abi::envelope::TextureId,
+    content: &TextureContent,
+) -> bool {
+    textures.is_some_and(|textures| textures.current(texture, content))
+}
+
+/// Notes a texture this frame has written, to be remembered if the frame commits.
+fn stage(
+    textures: Option<&mut Textures>,
+    texture: tessella_capture_abi::envelope::TextureId,
+    content: TextureContent,
+) {
+    if let Some(textures) = textures {
+        textures.stage(texture, content);
     }
 }
 
@@ -1071,14 +1100,18 @@ fn emit_group(
     let mut owned_order;
     // Both at once: a frame needs the registry and the order for its whole length, and they are
     // different fields of the same stream.
-    let (mut registry, draw_order): (Option<&mut _>, &mut DrawOrder) = match stream {
+    let (mut registry, draw_order, mut textures): (
+        Option<&mut _>,
+        &mut DrawOrder,
+        Option<&mut Textures>,
+    ) = match stream {
         Some(stream) => {
-            let (registry, order) = stream.split(view_id, layer_count);
-            (Some(registry), order)
+            let (registry, order, textures) = stream.split(view_id, layer_count);
+            (Some(registry), order, Some(textures))
         }
         None => {
             owned_order = DrawOrder::new(layer_count);
-            (None, &mut owned_order)
+            (None, &mut owned_order, None)
         }
     };
     let mut next_id = 0;
@@ -1139,10 +1172,14 @@ fn emit_group(
         // last at that slot.
         let raster_texture = raster_texture_id(tile.z, tile.x, tile.y, wrap);
         for bucket in tile_buckets.iter() {
-            if let Content::Raster(raster) = &bucket.content
-                && let Some(upload) = texture::raster_tile(raster_texture, &raster.image)
-            {
-                texture::write(producer, &upload)?;
+            if let Content::Raster(raster) = &bucket.content {
+                let content = TextureContent::Picture(alloc::sync::Arc::clone(&raster.image));
+                if let Some(upload) = texture::raster_tile(raster_texture, &raster.image)
+                    && !holds(textures.as_deref(), raster_texture, &content)
+                {
+                    texture::write(producer, &upload)?;
+                    stage(textures.as_deref_mut(), raster_texture, content);
+                }
                 break;
             }
         }
@@ -1152,10 +1189,14 @@ fn emit_group(
         // pictures are not the same picture.
         let hillshade_texture = hillshade_texture_id(tile.z, tile.x, tile.y, wrap);
         for bucket in tile_buckets.iter() {
-            if let Content::Hillshade(hillshade) = &bucket.content
-                && let Some(upload) = texture::raster_tile(hillshade_texture, &hillshade.prepared)
-            {
-                texture::write(producer, &upload)?;
+            if let Content::Hillshade(hillshade) = &bucket.content {
+                let content = TextureContent::Picture(alloc::sync::Arc::clone(&hillshade.prepared));
+                if let Some(upload) = texture::raster_tile(hillshade_texture, &hillshade.prepared)
+                    && !holds(textures.as_deref(), hillshade_texture, &content)
+                {
+                    texture::write(producer, &upload)?;
+                    stage(textures.as_deref_mut(), hillshade_texture, content);
+                }
                 break;
             }
         }
@@ -1166,17 +1207,21 @@ fn emit_group(
         let relief_texture = relief_texture_id(tile.z, tile.x, tile.y, wrap);
         for bucket in tile_buckets.iter() {
             if let Content::ColorRelief(relief) = &bucket.content {
-                let size = tessella_capture_abi::envelope::Extent {
-                    width: relief.dem.stride(),
-                    height: relief.dem.stride(),
-                };
-                let upload = texture::whole(
-                    relief_texture,
-                    size,
-                    tessella_capture_abi::TexturePixelType::RGBA,
-                    relief.dem.pixels(),
-                );
-                texture::write(producer, &upload)?;
+                let content = TextureContent::Elevation(alloc::sync::Arc::clone(&relief.dem));
+                if !holds(textures.as_deref(), relief_texture, &content) {
+                    let size = tessella_capture_abi::envelope::Extent {
+                        width: relief.dem.stride(),
+                        height: relief.dem.stride(),
+                    };
+                    let upload = texture::whole(
+                        relief_texture,
+                        size,
+                        tessella_capture_abi::TexturePixelType::RGBA,
+                        relief.dem.pixels(),
+                    );
+                    texture::write(producer, &upload)?;
+                    stage(textures.as_deref_mut(), relief_texture, content);
+                }
                 break;
             }
         }
@@ -1193,17 +1238,21 @@ fn emit_group(
         );
         for bucket in tile_buckets.iter() {
             if let Content::Terrain(terrain) = &bucket.content {
-                let size = tessella_capture_abi::envelope::Extent {
-                    width: terrain.dem.stride(),
-                    height: terrain.dem.stride(),
-                };
-                let upload = texture::whole(
-                    terrain_texture,
-                    size,
-                    tessella_capture_abi::TexturePixelType::RGBA,
-                    terrain.dem.pixels(),
-                );
-                texture::write(producer, &upload)?;
+                let content = TextureContent::Elevation(alloc::sync::Arc::clone(&terrain.dem));
+                if !holds(textures.as_deref(), terrain_texture, &content) {
+                    let size = tessella_capture_abi::envelope::Extent {
+                        width: terrain.dem.stride(),
+                        height: terrain.dem.stride(),
+                    };
+                    let upload = texture::whole(
+                        terrain_texture,
+                        size,
+                        tessella_capture_abi::TexturePixelType::RGBA,
+                        terrain.dem.pixels(),
+                    );
+                    texture::write(producer, &upload)?;
+                    stage(textures.as_deref_mut(), terrain_texture, content);
+                }
                 break;
             }
         }
@@ -1941,6 +1990,7 @@ pub fn teardown_view(
         Err(error) => {
             producer.abort();
             session.registry().rollback();
+            session.textures().discard();
             Err(error)
         }
     }
