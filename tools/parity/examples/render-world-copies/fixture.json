@@ -1,0 +1,8 @@
+{
+ "example": "render-world-copies",
+ "note": "The antimeridian at zoom 0.01, where the world is drawn more than once across the frame. The page offers a radio between copies on and off; on is its starting state and what this draws, because `setRenderWorldCopies` is not in the render tests' operation vocabulary and inventing one for it would give the two renderers different instructions. Three resources and pixel for pixel, which is worth having because no other fixture puts the seam in the middle of the frame. That the copies are really there rather than one world on a wide canvas is measured: in eighths of the frame, the non-background pixels repeat with a period of six eighths -- 36588 in the first band and 36588 in the seventh, 52050 in the second and 52049 in the eighth.",
+ "base": "https://demotiles.maplibre.org/style.json",
+ "cameras": [
+  {"lat": 0, "lon": 179, "zoom": 0.01}
+ ]
+}
