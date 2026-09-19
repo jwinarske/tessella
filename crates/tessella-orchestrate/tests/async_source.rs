@@ -540,17 +540,17 @@ fn tiles_arrive_over_a_transport_that_is_not_the_pool() {
 
     // The test decides when the bytes exist. No timing, no network, no sleep.
     manual.answer(FIXTURE);
-    source.drain();
 
-    let deadline = Instant::now() + Duration::from_secs(20);
-    while source.buckets(tile).is_none() && Instant::now() < deadline {
-        std::thread::yield_now();
-    }
+    // Both halves under the same wait, which is the whole of the fix here. The bucket becomes
+    // visible when the worker publishes it and the request leaves `inflight` a moment later, so
+    // reading the count the instant the bucket appears is a race -- one this lost on a loaded
+    // CI runner and won everywhere else, which is the worst way for a test to be wrong.
     assert!(
-        source.buckets(tile).is_some(),
+        settle(&source, || {
+            source.buckets(tile).is_some() && source.outstanding() == 0
+        }),
         "the tile never landed from bytes the transport supplied"
     );
-    assert_eq!(source.outstanding(), 0);
 }
 
 /// The browser's arrangement, driven by a test: no threads, and a host that does the fetching.
