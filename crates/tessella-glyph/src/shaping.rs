@@ -717,15 +717,35 @@ fn justify_line(glyphs: &mut [PositionedGlyph], last_advance: f32, justify: f32,
     }
 }
 
-/// Rewrites a label's Arabic letters into their contextual forms.
-///
-/// [`crate::arabic::shape`] over the whole label, carrying the advances. A lam-alef ligature
-/// replaces two letters with one, so the result can be shorter than the input — the advance kept
-/// is the *lam's*, since the ligature is drawn where the lam was and the alef is folded into it.
+/// Rewrites a label's Arabic letters into their contextual forms, keeping the advances it has.
 ///
 /// Borrowed when the label has no Arabic in it, which is most of them.
+///
+/// The advances are the *unshaped* letters', which is only right when the caller has no way to
+/// look the new ones up. A caller holding the glyphs should use [`apply_arabic_measured`]: a
+/// joined letter is narrower than the isolated one it came from, so a label measured by the
+/// forms it was stored as is wider than the one it sets — wide enough to break a line the
+/// oracle keeps whole.
 #[must_use]
 pub fn apply_arabic(text: &[Char]) -> std::borrow::Cow<'_, [Char]> {
+    apply_arabic_measured(text, |_| None)
+}
+
+/// The same, measuring each new form with `metrics_of`.
+///
+/// `metrics_of` answers a codepoint with its glyph's own advance and whether there is a glyph to
+/// draw, both as the stack holds them — unscaled, since a character carries its section's scale
+/// and applies it here. `None` keeps what the letter already had, which is what a caller with no
+/// glyphs in hand can offer.
+///
+/// A lam-alef ligature replaces two letters with one, so the result can be shorter than the
+/// input, and the character it is built from is the *lam*: the ligature is drawn where the lam
+/// was and the alef is folded into it.
+#[must_use]
+pub fn apply_arabic_measured<'a>(
+    text: &'a [Char],
+    metrics_of: impl Fn(u32) -> Option<(u32, bool)>,
+) -> std::borrow::Cow<'a, [Char]> {
     use std::borrow::Cow;
 
     let codepoints: Vec<u32> = text.iter().map(|character| character.codepoint).collect();
@@ -746,10 +766,20 @@ pub fn apply_arabic(text: &[Char]) -> std::borrow::Cow<'_, [Char]> {
                 && codepoint != text[input].codepoint
                 && crate::arabic::is_lam_alef(codepoint),
         );
-        out.push(Char {
+        let mut character = Char {
             codepoint,
             ..text[input]
-        });
+        };
+        if codepoint != text[input].codepoint
+            && let Some((advance, drawable)) = metrics_of(codepoint)
+        {
+            #[allow(clippy::cast_precision_loss)]
+            {
+                character.advance = advance as f32 * character.scale;
+            }
+            character.drawable = drawable;
+        }
+        out.push(character);
         input += 1 + consumed;
     }
 

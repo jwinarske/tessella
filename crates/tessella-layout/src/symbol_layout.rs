@@ -1043,6 +1043,19 @@ impl SymbolLayout {
     ///
     /// What the manager fetches. A stack the layer names but that resolves to nothing is left
     /// out, because an entry under an empty key builds a URL of `//0-255.pbf`.
+    ///
+    /// # The letters asked for are the ones that will be drawn
+    ///
+    /// Arabic is written joined, and shaping rewrites each letter into the contextual form it
+    /// takes between its neighbors -- from the block at U+0600 into the presentation forms at
+    /// U+FE70. Those are different codepoints in different ranges, so a label asked for by the
+    /// letters it is *stored* as is fetched in glyphs it will never use, and every Arabic label
+    /// on the map draws blank: the text reaches layout, the range arrives, and the shaped
+    /// codepoints are not in it.
+    ///
+    /// So the same rewrite runs here, over the same function shaping uses. Both sets go in --
+    /// the shaped and the stored -- because a run that shaping leaves alone is asked for as
+    /// itself, and mbgl fetches both ranges for the same reason.
     #[must_use]
     pub fn dependencies(&self) -> GlyphDependencies {
         let mut out = GlyphDependencies::new();
@@ -1050,9 +1063,14 @@ impl SymbolLayout {
             if pending.fonts.is_empty() || pending.text.is_empty() {
                 continue;
             }
-            out.entry(pending.fonts.clone())
-                .or_default()
-                .extend(pending.text.chars().map(|character| character as u32));
+            let stored: Vec<u32> = pending
+                .text
+                .chars()
+                .map(|character| character as u32)
+                .collect();
+            let wanted = out.entry(pending.fonts.clone()).or_default();
+            wanted.extend(tessella_glyph::arabic::shape(&stored));
+            wanted.extend(stored);
         }
         out
     }
