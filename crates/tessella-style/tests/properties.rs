@@ -539,3 +539,65 @@ fn an_unset_color_property_is_not_coerced() {
         Value::Null
     );
 }
+
+/// A hillshade lit by more than one light.
+///
+/// The spec's `numberArray` and `colorArray`: `hillshade-illumination-direction` and its three
+/// companions are each a number or color *or a list of them*, and `hillshade-method` chooses
+/// which algorithm reads them. Typed as scalars, a style writing the list form had its whole
+/// layer refused -- `hillshade-highlight-color` expects a color, got array -- and the map drew
+/// no relief at all.
+mod hillshade_lights {
+    use super::{layer_with, resolve_paint};
+
+    /// The example's own paint: four lights, written as four lists.
+    const FOUR: &str = r##""hillshade-method": "multidirectional",
+        "hillshade-highlight-color": ["#FF4000", "#FFFF00", "#40ff00", "#00FF80"],
+        "hillshade-shadow-color": ["#00bfff", "#0000ff", "#bf00ff", "#FF0080"],
+        "hillshade-illumination-direction": [270, 315, 0, 45],
+        "hillshade-illumination-altitude": [30, 30, 30, 30]"##;
+
+    /// It resolves at all, which is the whole of the fault.
+    #[test]
+    fn a_layer_may_light_itself_four_ways() {
+        let layer = layer_with("hillshade", FOUR);
+        let resolved = resolve_paint(&layer).expect("the layer resolves");
+        assert!(resolved.contains_key("hillshade-method"));
+        assert!(resolved.contains_key("hillshade-highlight-color"));
+    }
+
+    /// And so does the single-value form every style written before the list existed uses.
+    #[test]
+    fn one_light_is_still_a_light() {
+        let layer = layer_with(
+            "hillshade",
+            r##""hillshade-highlight-color": "#ffffff",
+               "hillshade-shadow-color": "#000000",
+               "hillshade-illumination-direction": 335,
+               "hillshade-illumination-altitude": 45"##,
+        );
+        resolve_paint(&layer).expect("the layer resolves");
+    }
+
+    /// A list of the wrong thing is still refused: the kind admits two shapes, not any shape.
+    #[test]
+    fn a_list_of_non_colors_is_refused() {
+        let layer = layer_with("hillshade", r##""hillshade-shadow-color": [1, 2, 3]"##);
+        resolve_paint(&layer).expect_err("numbers are not colors");
+    }
+
+    /// An expression still produces one light, and is still type-checked as a color.
+    ///
+    /// The list form is a literal -- there is nothing to interpolate between two *sets* of
+    /// lights -- so the expression's own type stays the element's, which is what every style
+    /// that varies a hillshade color by zoom writes.
+    #[test]
+    fn an_expression_produces_one_light() {
+        let layer = layer_with(
+            "hillshade",
+            r##""hillshade-shadow-color":
+               ["interpolate", ["linear"], ["zoom"], 0, "red", 10, "blue"]"##,
+        );
+        resolve_paint(&layer).expect("a zoom curve over one color");
+    }
+}

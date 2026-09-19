@@ -1207,6 +1207,22 @@ impl Expression {
         Self::parse_rooted(value, spec, true)
     }
 
+    /// A value that is data rather than a call: the expression that returns it, unexamined.
+    ///
+    /// For the spec's `numberArray` and `colorArray` properties, where a literal list is the
+    /// ordinary spelling — `["#FF4000", "#FFFF00"]` is four colors, not a call to an operator
+    /// named `#FF4000`. The parser cannot tell the two apart from the value alone, and the
+    /// property's declared type cannot say so either, because these properties accept a bare
+    /// scalar as readily as a list. The caller that has already checked the literal against the
+    /// spec knows, so it says so here.
+    #[must_use]
+    pub fn of_literal(value: Value) -> Self {
+        Self {
+            root: Expr::Literal(value),
+            dependency: Dependency::NONE,
+        }
+    }
+
     /// Parses a filter, where a zoom curve may appear anywhere.
     ///
     /// # The rule is a property rule, not an expression rule

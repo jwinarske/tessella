@@ -130,6 +130,17 @@ pub enum PropertyKind {
     /// many alternating on/off runs the author wrote; mbgl carries it as a `std::vector<float>`
     /// for the same reason. Every other array property in the spec does give a length.
     NumberArray(Option<usize>),
+    /// The spec's `numberArray`: a number, *or* a list of them.
+    ///
+    /// Not [`Self::NumberArray`], which demands an array. These properties are written both
+    /// ways and the spec says so itself: `hillshade-illumination-direction` is declared
+    /// `"type": "numberArray"` with a default of `335`, a bare number. mbgl's converter takes
+    /// either and wraps a lone value in a one-element vector, which is what makes every style
+    /// written before the light became a list keep working.
+    NumberList,
+    /// The spec's `colorArray`: a color, or a list of them. [`Self::NumberList`]'s counterpart,
+    /// for `hillshade-highlight-color` and `hillshade-shadow-color`.
+    ColorList,
 }
 
 /// A property's default, in a form that can live in a static table.
@@ -855,7 +866,7 @@ const HILLSHADE_PAINT: &[PropertySpec] = &[
     },
     PropertySpec {
         name: "hillshade-highlight-color",
-        kind: PropertyKind::Color,
+        kind: PropertyKind::ColorList,
         default: DefaultValue::Color(Color {
             r: 1.0,
             g: 1.0,
@@ -866,7 +877,7 @@ const HILLSHADE_PAINT: &[PropertySpec] = &[
     },
     PropertySpec {
         name: "hillshade-illumination-altitude",
-        kind: PropertyKind::Number,
+        kind: PropertyKind::NumberList,
         default: DefaultValue::Number(45.0),
         data_driven: false,
     },
@@ -878,13 +889,22 @@ const HILLSHADE_PAINT: &[PropertySpec] = &[
     },
     PropertySpec {
         name: "hillshade-illumination-direction",
-        kind: PropertyKind::Number,
+        kind: PropertyKind::NumberList,
         default: DefaultValue::Number(335.0),
         data_driven: false,
     },
     PropertySpec {
+        // How the slopes are lit, and how many lights the other four properties may carry.
+        // `standard` reads one light and is what a style saying nothing asks for;
+        // `multidirectional` is the one that reads all of them.
+        name: "hillshade-method",
+        kind: PropertyKind::Enum,
+        default: DefaultValue::Enum("standard"),
+        data_driven: false,
+    },
+    PropertySpec {
         name: "hillshade-shadow-color",
-        kind: PropertyKind::Color,
+        kind: PropertyKind::ColorList,
         default: DefaultValue::Color(Color::black()),
         data_driven: false,
     },
@@ -1179,7 +1199,20 @@ fn resolve(
             Some(PropertyValue::Expression(expression)) => parse(expression.value())?,
             Some(PropertyValue::Literal(value)) => {
                 check_literal(spec, value)?;
-                parse(value)?
+                // A checked list is data. `["#FF4000", "#FFFF00"]` on a `colorArray` property
+                // is two colors, and handing it to the parser would report a call to an
+                // operator named `#FF4000` -- the same trap `line-dasharray` is spared by its
+                // array type, which these properties cannot have because a bare scalar is
+                // equally legal for them.
+                if matches!(
+                    spec.kind,
+                    PropertyKind::NumberList | PropertyKind::ColorList
+                ) && value.as_array().is_some()
+                {
+                    Expression::of_literal(value.clone())
+                } else {
+                    parse(value)?
+                }
             }
             None => parse(&default_value(spec))?,
         };
@@ -1231,6 +1264,22 @@ fn check_literal(spec: &PropertySpec, value: &Value) -> Result<(), PropertyError
             len.is_none_or(|len| items.len() == len)
                 && items.iter().all(|i| i.as_number().is_some())
         }),
+        // One or many, and a list of one is not special: mbgl converts a lone value into a
+        // one-element vector rather than treating the two shapes as different properties.
+        PropertyKind::NumberList => match value.as_array() {
+            Some(items) => items.iter().all(|item| item.as_number().is_some()),
+            None => value.as_number().is_some(),
+        },
+        PropertyKind::ColorList => match value.as_array() {
+            Some(items) => items
+                .iter()
+                .all(|item| item.as_str().is_some_and(|text| Color::parse(text).is_ok())),
+            // The single-color path is the plain one's, parse and all.
+            None => match value.as_str() {
+                Some(text) => return Color::parse(text).map(|_| ()),
+                None => false,
+            },
+        },
     };
 
     if ok {
@@ -1245,6 +1294,8 @@ fn check_literal(spec: &PropertySpec, value: &Value) -> Result<(), PropertyError
                 PropertyKind::Enum => "a name",
                 PropertyKind::Image => "an image name",
                 PropertyKind::NumberArray(_) => "an array of numbers",
+                PropertyKind::NumberList => "a number, or an array of them",
+                PropertyKind::ColorList => "a color, or an array of them",
             },
             got: value.type_name(),
         })
@@ -1287,6 +1338,13 @@ pub fn expression_spec(spec: &PropertySpec) -> expression::PropertySpec {
                 #[allow(clippy::cast_possible_truncation)]
                 length: length.map(|n| n as u32),
             }),
+            // The element's type, not the list's. A list of lights is written as a literal --
+            // there is nothing to interpolate between two *sets* of them -- while an expression
+            // on one of these properties produces a single light, which is what every style
+            // that writes one produces and what this has always coerced. mbgl accepts both
+            // shapes from an expression too, by wrapping a lone value.
+            PropertyKind::NumberList => expression::Type::Number,
+            PropertyKind::ColorList => expression::Type::Color,
         }),
     }
 }

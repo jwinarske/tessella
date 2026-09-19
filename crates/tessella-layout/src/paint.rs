@@ -119,10 +119,14 @@ fn slot_width(kind: PropertyKind, interpolated: bool) -> Option<usize> {
     let unit = match kind {
         PropertyKind::Color => 8,
         PropertyKind::Number => 4,
+        // A list of lights is a uniform like the arrays are: the spec declares neither of the
+        // list kinds data-driven, so neither reaches a vertex.
         PropertyKind::Boolean
         | PropertyKind::Enum
         | PropertyKind::Image
-        | PropertyKind::NumberArray(_) => return None,
+        | PropertyKind::NumberArray(_)
+        | PropertyKind::NumberList
+        | PropertyKind::ColorList => return None,
     };
     Some(if interpolated { unit * 2 } else { unit })
 }

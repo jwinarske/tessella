@@ -1091,6 +1091,79 @@ pub(crate) fn uniform_color(
         .unwrap_or(default)
 }
 
+/// A list-valued color property's uniform value: every color it resolves to, in order.
+///
+/// The spec's `colorArray`, which is one color or a list of them -- so a style that writes a
+/// single color and one that writes a list of one are the same thing here, as they are in mbgl.
+/// Empty only when the layer does not set the property and has no default to fall back on; the
+/// caller pads.
+pub(crate) fn uniform_colors(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    name: &str,
+    zoom: f64,
+) -> Vec<Color> {
+    let Some(property) = paint.get(name) else {
+        return Vec::new();
+    };
+    let default = match property.spec.default {
+        DefaultValue::Color(color) => alloc::vec![color],
+        _ => Vec::new(),
+    };
+    let Some(value) = uniform_value(property, zoom) else {
+        return default;
+    };
+    // A list, or the one value a list of one would hold.
+    if let Some(items) = value.as_array()
+        && !matches!(value, tessella_style::value::Value::Color(_))
+    {
+        let colors: Vec<Color> = items
+            .iter()
+            .filter_map(|item| tessella_style::property::as_color(item).ok())
+            .collect();
+        if colors.len() == items.len() {
+            return colors;
+        }
+    }
+    tessella_style::property::as_color(&value)
+        .map(|color| alloc::vec![color])
+        .unwrap_or(default)
+}
+
+/// A list-valued number property's uniform value: every number it resolves to, in order.
+///
+/// [`uniform_colors`]'s counterpart, for the spec's `numberArray`.
+pub(crate) fn uniform_numbers(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    name: &str,
+    zoom: f64,
+) -> Vec<f32> {
+    let Some(property) = paint.get(name) else {
+        return Vec::new();
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    let default = match property.spec.default {
+        DefaultValue::Number(number) => alloc::vec![number as f32],
+        _ => Vec::new(),
+    };
+    let Some(value) = uniform_value(property, zoom) else {
+        return default;
+    };
+    #[allow(clippy::cast_possible_truncation)]
+    if let Some(items) = value.as_array() {
+        let numbers: Vec<f32> = items
+            .iter()
+            .filter_map(|item| item.as_number().map(|number| number as f32))
+            .collect();
+        if numbers.len() == items.len() {
+            return numbers;
+        }
+    }
+    #[allow(clippy::cast_possible_truncation)]
+    value
+        .as_number()
+        .map_or(default, |number| alloc::vec![number as f32])
+}
+
 /// A number-typed property's uniform value, falling back to its spec default.
 /// A uniform property's value at zoom zero, for a decision that is not per frame.
 ///
@@ -2936,8 +3009,25 @@ pub fn hillshade_props_from_paint(
     bearing: f64,
 ) -> Vec<u8> {
     let accent = uniform_color(paint, "hillshade-accent-color", zoom);
-    let shadow = uniform_color(paint, "hillshade-shadow-color", zoom);
-    let highlight = uniform_color(paint, "hillshade-highlight-color", zoom);
+    let mut shadows = uniform_colors(paint, "hillshade-shadow-color", zoom);
+    let mut highlights = uniform_colors(paint, "hillshade-highlight-color", zoom);
+    let mut azimuths = uniform_numbers(paint, "hillshade-illumination-direction", zoom);
+    let mut altitudes = uniform_numbers(paint, "hillshade-illumination-altitude", zoom);
+
+    // As many lights as the longest of the four lists, capped at the four the block holds, and
+    // the shorter lists padded by repeating their own last entry -- mbgl's `getIlluminationProperties`
+    // exactly. Repeating rather than defaulting is what makes a style that writes four
+    // directions and one color light all four in that one color.
+    let lights = hillshade_lights(&[
+        shadows.len(),
+        highlights.len(),
+        azimuths.len(),
+        altitudes.len(),
+    ]);
+    pad_to(&mut shadows, lights, Color::transparent());
+    pad_to(&mut highlights, lights, Color::transparent());
+    pad_to(&mut azimuths, lights, 0.0);
+    pad_to(&mut altitudes, lights, 0.0);
 
     #[allow(clippy::cast_possible_truncation)]
     let anchored_bearing = if hillshade_anchor_is_viewport(paint) {
@@ -2945,29 +3035,115 @@ pub fn hillshade_props_from_paint(
     } else {
         0.0
     };
-    let azimuth = uniform_number(paint, "hillshade-illumination-direction", zoom).to_radians()
-        - anchored_bearing.to_radians();
-    let altitude = uniform_number(paint, "hillshade-illumination-altitude", zoom).to_radians();
 
     let mut out = Vec::with_capacity(ubo_layouts::HILLSHADE_EVALUATED_PROPS_UBO.size as usize);
     push_color(&mut out, accent);
-    push_f32s(&mut out, &[altitude, 0.0, 0.0, 0.0]);
-    push_f32s(&mut out, &[azimuth, 0.0, 0.0, 0.0]);
-    // Four slots each, because the block is `vec4[4]`. One light fills the first and leaves the
-    // rest transparent, which is what a shader reading past `num_lights` would find.
-    push_color(&mut out, shadow);
-    for _ in 0..3 {
-        push_color(&mut out, Color::transparent());
+    for slot in 0..MAX_HILLSHADE_LIGHTS {
+        let altitude = altitudes.get(slot).copied().unwrap_or(0.0);
+        push_f32s(&mut out, &[altitude.to_radians()]);
     }
-    push_color(&mut out, highlight);
-    for _ in 0..3 {
-        push_color(&mut out, Color::transparent());
+    for slot in 0..MAX_HILLSHADE_LIGHTS {
+        let azimuth = azimuths.get(slot).copied().unwrap_or(0.0);
+        push_f32s(
+            &mut out,
+            &[azimuth.to_radians() - anchored_bearing.to_radians()],
+        );
+    }
+    // Four slots each, because the block is `vec4[4]`. A light the style did not write leaves
+    // its slot transparent, which is what a shader reading past `num_lights` would find.
+    for slot in 0..MAX_HILLSHADE_LIGHTS {
+        push_color(
+            &mut out,
+            shadows
+                .get(slot)
+                .copied()
+                .unwrap_or_else(Color::transparent),
+        );
+    }
+    for slot in 0..MAX_HILLSHADE_LIGHTS {
+        push_color(
+            &mut out,
+            highlights
+                .get(slot)
+                .copied()
+                .unwrap_or_else(Color::transparent),
+        );
     }
     debug_assert_eq!(
         out.len(),
         ubo_layouts::HILLSHADE_EVALUATED_PROPS_UBO.size as usize
     );
     out
+}
+
+/// How many lights the block carries, from the four lists' lengths.
+///
+/// mbgl's rule: the longest of them, never more than the block holds, and never fewer than one
+/// -- `padArray` pushes a default into an empty list before it pads, so a layer that writes none
+/// of the four still lights once.
+#[must_use]
+pub fn hillshade_lights(lengths: &[usize]) -> usize {
+    lengths
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(0)
+        .clamp(1, MAX_HILLSHADE_LIGHTS)
+}
+
+/// How many lights a hillshade layer may carry, which is what the block has room for.
+pub const MAX_HILLSHADE_LIGHTS: usize = 4;
+
+/// Grows `values` to `len` by repeating its last entry, or by `empty` when it has none.
+fn pad_to<T: Copy>(values: &mut Vec<T>, len: usize, empty: T) {
+    if values.is_empty() {
+        values.push(empty);
+    }
+    while values.len() < len {
+        let last = values[values.len() - 1];
+        values.push(last);
+    }
+}
+
+/// Which lighting method the layer asks for, as the shader's own numbering.
+///
+/// mbgl's `HillshadeMethodType`, and the order is *its* order rather than the spec's listing:
+/// `standard, combined, igor, multidirectional, basic`, cast straight to an int and read by the
+/// shader's `switch`. A name the enum does not have reads as the spec's default, which is what
+/// an unset property gives too.
+#[must_use]
+pub fn hillshade_method(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    zoom: f64,
+) -> i32 {
+    match uniform_enum(paint, "hillshade-method", zoom).as_str() {
+        "combined" => 1,
+        "igor" => 2,
+        "multidirectional" => 3,
+        "basic" => 4,
+        _ => 0,
+    }
+}
+
+/// How many lights this layer's paint asks for, which is what the shader iterates over.
+///
+/// The same rule [`hillshade_props_from_paint`] pads to, asked separately because the count
+/// travels in the *tile* block and the lights themselves travel in the evaluated one.
+#[must_use]
+pub fn hillshade_light_count(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    zoom: f64,
+) -> i32 {
+    let lights = hillshade_lights(&[
+        uniform_colors(paint, "hillshade-shadow-color", zoom).len(),
+        uniform_colors(paint, "hillshade-highlight-color", zoom).len(),
+        uniform_numbers(paint, "hillshade-illumination-direction", zoom).len(),
+        uniform_numbers(paint, "hillshade-illumination-altitude", zoom).len(),
+    ]);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+    {
+        lights as i32
+    }
 }
 
 /// Whether the light is anchored to the viewport rather than to north.

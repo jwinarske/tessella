@@ -5028,16 +5028,17 @@ fn write_layer_state(
             // interpolates across it to undo Mercator's stretch, and one range for the layer
             // would make every tile read the slope of whichever tile wrote it.
             let exaggeration = ubo::uniform_number(&paint, "hillshade-exaggeration", view.zoom);
+            // Per layer, not per tile: how the slopes are lit and how many lights do it are
+            // the layer's, and every tile of it is shaded the same way.
+            let method = ubo::hillshade_method(&paint, view.zoom);
+            let lights = ubo::hillshade_light_count(&paint, view.zoom);
             let tile_props: Vec<Vec<u8>> = bindings
                 .iter()
                 .filter(|binding| binding.sub_layer_index == 0)
                 .filter_map(|binding| binding.tile)
                 .map(|tile| {
                     let lat_range = crate::tile::lat_range_of(tile.z, tile.x, tile.y);
-                    // Method zero and one light: the standard algorithm is the spec's default
-                    // and the only one built. The other four are in mbgl's shader and the
-                    // fields travel for them, so adding one is a material and not a format.
-                    ubo::pack_hillshade_tile_props(lat_range, exaggeration, 0, 1)
+                    ubo::pack_hillshade_tile_props(lat_range, exaggeration, method, lights)
                 })
                 .collect();
             ubo::write(
