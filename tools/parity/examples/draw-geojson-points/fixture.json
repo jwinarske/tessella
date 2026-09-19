@@ -1,0 +1,50 @@
+{
+ "example": "draw-geojson-points",
+ "note": "Fifteen conference cities, each drawn with a fetched marker and labeled with its year. It is the first fixture where one symbol layer carries both an icon from an added image and text from a feature property, so it is `tessella_add_image` reaching layout alongside glyphs rather than on its own, and the labels sit below the icon on a `text-offset` with `text-anchor` at top, which nothing else in the suite sets. It reads 1474, under the 1480 that `display-a-map` reads on this same base and camera, so the layer costs nothing. Checked rather than assumed, since a fixture at the base's own number could as easily mean neither renderer drew the layer: measured against that frame, the markers and labels come to 6094 pixels on this side and 6095 on the oracle's.",
+ "base": "https://demotiles.maplibre.org/style.json",
+ "sources": {
+  "conferences": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {"type": "Feature", "geometry": {"type": "Point", "coordinates": [100.4933, 13.7551]}, "properties": {"year": "2004"}},
+     {"type": "Feature", "geometry": {"type": "Point", "coordinates": [6.6523, 46.5535]}, "properties": {"year": "2006"}},
+     {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-123.3596, 48.4268]}, "properties": {"year": "2007"}},
+     {"type": "Feature", "geometry": {"type": "Point", "coordinates": [18.4264, -33.9224]}, "properties": {"year": "2008"}},
+     {"type": "Feature", "geometry": {"type": "Point", "coordinates": [151.195, -33.8552]}, "properties": {"year": "2009"}},
+     {"type": "Feature", "geometry": {"type": "Point", "coordinates": [2.1404, 41.3925]}, "properties": {"year": "2010"}},
+     {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-104.8548, 39.7644]}, "properties": {"year": "2011"}},
+     {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-1.1665, 52.9539]}, "properties": {"year": "2013"}},
+     {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-122.6544, 45.5428]}, "properties": {"year": "2014"}},
+     {"type": "Feature", "geometry": {"type": "Point", "coordinates": [126.974, 37.5651]}, "properties": {"year": "2015"}},
+     {"type": "Feature", "geometry": {"type": "Point", "coordinates": [7.1112, 50.7255]}, "properties": {"year": "2016"}},
+     {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-71.0314, 42.3539]}, "properties": {"year": "2017"}},
+     {"type": "Feature", "geometry": {"type": "Point", "coordinates": [39.2794, -6.8173]}, "properties": {"year": "2018"}},
+     {"type": "Feature", "geometry": {"type": "Point", "coordinates": [26.0961, 44.4379]}, "properties": {"year": "2019"}},
+     {"type": "Feature", "geometry": {"type": "Point", "coordinates": [-114.0879, 51.0279]}, "properties": {"year": "2020"}}
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "conferences",
+   "type": "symbol",
+   "source": "conferences",
+   "layout": {
+    "icon-image": "custom-marker",
+    "text-field": ["get", "year"],
+    "text-font": ["Noto Sans Regular"],
+    "text-offset": [0, 1.25],
+    "text-anchor": "top"
+   }
+  }
+ ],
+ "cameras": [
+  {"lat": 0, "lon": 0, "zoom": 1}
+ ],
+ "script": [
+  ["addImage", "custom-marker", "https://maplibre.org/maplibre-gl-js/docs/assets/osgeo-logo.png"]
+ ]
+}
