@@ -76,7 +76,7 @@ struct Entry {
     users: BTreeSet<u32>,
     /// Ring position just past the `GeometryAdd` that announced it.
     ///
-    /// §13.2's acknowledgement, made answerable. The consumer publishes how far it has uploaded
+    /// §13.2's acknowledgment, made answerable. The consumer publishes how far it has uploaded
     /// through [`ReverseChannel::acked_geometry`](tessella_capture_abi::reverse::ReverseChannel::acked_geometry),
     /// and a drawable whose announcement sits at or before that has bytes on the GPU rather than
     /// merely bytes on the wire.
@@ -209,7 +209,7 @@ impl GeometryRegistry {
     ///
     /// Because it wrote the records and knows where each one landed. The consumer publishes one
     /// number — how far it has uploaded through — and the comparison is the whole of §13.2's
-    /// acknowledgement. mbgl has no equivalent: it retains an ancestor until its descendants are
+    /// acknowledgment. mbgl has no equivalent: it retains an ancestor until its descendants are
     /// *built*, and the gap between built and uploaded is exactly where its single-frame holes
     /// come from.
     #[must_use]

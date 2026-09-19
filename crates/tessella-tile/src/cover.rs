@@ -1218,7 +1218,7 @@ mod tests {
 ///
 /// # Why a jump still snaps
 ///
-/// The band is checked against the level currently held, not against the distance travelled, so
+/// The band is checked against the level currently held, not against the distance traveled, so
 /// a fly-to from zoom 5 to zoom 14 passes the threshold on its first frame and lands on 14
 /// directly. Hysteresis is for the boundary a camera is sitting on, not a tax on going anywhere.
 #[derive(Debug, Clone, Copy, PartialEq)]

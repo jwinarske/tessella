@@ -327,14 +327,14 @@ pub fn get_center_anchor(
     let angle_window = angle_window_size(text_left, text_right, glyph_size, box_scale);
     let label_length = (text_right - text_left).max(icon_right - icon_left) * box_scale;
     let center = line_length(line) / 2.0;
-    let mut travelled = 0.0f32;
+    let mut traveled = 0.0f32;
 
     for (segment, pair) in line.windows(2).enumerate() {
         let (a, b) = (pair[0], pair[1]);
         let segment_distance = distance(a, b);
 
-        if travelled + segment_distance > center {
-            let t = (center - travelled) / segment_distance;
+        if traveled + segment_distance > center {
+            let t = (center - traveled) / segment_distance;
             let anchor = Anchor {
                 point: (
                     (a.0 + (b.0 - a.0) * t).round(),
@@ -353,7 +353,7 @@ pub fn get_center_anchor(
             .then_some(anchor);
         }
 
-        travelled += segment_distance;
+        traveled += segment_distance;
     }
 
     None

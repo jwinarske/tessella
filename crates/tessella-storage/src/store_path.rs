@@ -87,7 +87,7 @@ pub enum StorePathError {
 /// In order: `TESSELLA_STORE_DIR`, then `$XDG_DATA_HOME/tessella`, then `$HOME/.local/share/tessella`.
 ///
 /// **This reads the environment.** Call it only from an application that knows its own
-/// environment is trustworthy — see the module documentation for why that judgement cannot be
+/// environment is trustworthy — see the module documentation for why that judgment cannot be
 /// made here. It performs no filesystem work; pass the result to [`prepare`].
 ///
 /// # Errors
@@ -183,7 +183,7 @@ fn is_exposed(path: &Path) -> Result<bool, StorePathError> {
 
 #[cfg(not(unix))]
 fn is_exposed(_path: &Path) -> Result<bool, StorePathError> {
-    // The permission model is different enough that a mode check would be theatre. The path is
+    // The permission model is different enough that a mode check would be theater. The path is
     // still refused if it is relative or a symlink.
     Ok(false)
 }

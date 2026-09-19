@@ -284,7 +284,7 @@ impl Map {
     ///
     /// The point of it is [`SlabArena::in_region`]: an arena over a mapping writes the bytes
     /// where the consumer already reads them, so there is no pack step and no copy. With an
-    /// owned arena every frame has to serialise the whole arena again, which is the whole of
+    /// owned arena every frame has to serialize the whole arena again, which is the whole of
     /// [`SlabArena::pack`] and, on a moving map, most of the frame.
     #[must_use]
     pub fn with_arena(
@@ -619,7 +619,7 @@ impl Map {
         &self.style
     }
 
-    /// The arena holding retained geometry. A consumer's acknowledgement is checked against it.
+    /// The arena holding retained geometry. A consumer's acknowledgment is checked against it.
     #[must_use]
     pub const fn arena(&self) -> &SlabArena {
         &self.arena

@@ -57,7 +57,7 @@ fn falling_back_holds_the_level_it_reached() {
 
 /// A long jump lands where it was aimed rather than stepping.
 ///
-/// The band is checked against the level held, not against distance travelled, so a fly-to is
+/// The band is checked against the level held, not against distance traveled, so a fly-to is
 /// not taxed for passing through levels it never rendered.
 #[test]
 fn a_jump_snaps_to_its_destination() {

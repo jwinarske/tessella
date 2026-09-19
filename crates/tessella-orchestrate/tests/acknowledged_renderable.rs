@@ -18,7 +18,7 @@
 //! Because it wrote the records and knows where each one landed, and the consumer publishes one
 //! number: how far it has uploaded through. `announced_through` is the furthest position a
 //! tile's drawables were announced at, and the comparison against
-//! `ReverseChannel::acked_geometry` is the whole of the acknowledgement. No new field, on either
+//! `ReverseChannel::acked_geometry` is the whole of the acknowledgment. No new field, on either
 //! side — the reverse channel has carried the acked position since DR-10.
 
 use std::collections::BTreeMap;
@@ -122,7 +122,7 @@ fn emit(scene: &Scene) -> (Session, u64) {
 
 /// Nothing is acknowledged until the consumer says so, and then it is.
 #[test]
-fn acknowledgement_follows_the_consumer_not_the_build() {
+fn acknowledgment_follows_the_consumer_not_the_build() {
     let scene = scene();
     let (session, head) = emit(&scene);
     let wire: Vec<WireTileId> = scene

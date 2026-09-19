@@ -15,7 +15,7 @@ any of them and it returns nothing. What identifies a customer lives in the *req
 is why extracted glyphs are kept outside this repository and tiles need not be. Redistribution is
 a licensing question, and it is answered upstream or not at all.
 
-Data that is not Mapbox's answers to its own licence instead: `protomaps-berlin-14-8802-5373.mvt`
+Data that is not Mapbox's answers to its own license instead: `protomaps-berlin-14-8802-5373.mvt`
 and everything in `../live-fixtures/` are OpenStreetMap under ODbL, cut from a Protomaps planet
 extract, and are ours to ship on those terms.
 
@@ -93,7 +93,7 @@ It exists because the benchmark had been measuring `real-world-0-0-0.mvt`, and t
 zoom-0 view of the whole world: 17 202 features, of which 17 153 are one `admin` layer. A real
 tile at a zoom anyone looks at has 934 to 3 160 features spread over seven layers, and two to
 three properties each rather than three on a single dense layer. Both are valid tiles; only one
-is shaped like the thing being optimised.
+is shaped like the thing being optimized.
 
 Measured against it, decode is about 0.21 us per feature plus 0.016 us per point — so on a tile
 of dense polygons the geometry is roughly sixty per cent of the work and on a tile of scattered

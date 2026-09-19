@@ -15,7 +15,7 @@
 # # Why it is one global function
 #
 # Sampled per tile out of a function of world position, not generated per tile. A hillshade's
-# prepare pass backfills each tile's border from its neighbours, so a field with a seam at a tile
+# prepare pass backfills each tile's border from its neighbors, so a field with a seam at a tile
 # edge would make a correct backfill look broken and a broken one look fine. This has no seams:
 # neighboring tiles agree exactly along their shared edge because they are sampling the same
 # function at the same point.

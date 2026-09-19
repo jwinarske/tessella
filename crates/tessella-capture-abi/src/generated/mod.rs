@@ -214,7 +214,7 @@ mod tests {
     ///
     /// mbgl writes two of its `AttributeInfo`s with a *fourth* field — the instance-rate id the
     /// static and instanced shaders share — and the generator required exactly three, so those
-    /// two were dropped. The table then described a shader that bound its data-driven colour and
+    /// two were dropped. The table then described a shader that bound its data-driven color and
     /// height and had nowhere to put its vertices: a producer reading it would have emitted a
     /// drawable with no geometry binding at all, which draws nothing and reports nothing.
     ///
@@ -251,7 +251,7 @@ mod tests {
     /// and DR-16 settled this build on Vulkan — so the id after `decimals` is
     /// `idFillExtrusionOutlinePos` and the data-driven three start at 3, not the
     /// `Normal2D` numbering the other branch would give. Getting the branch wrong shifts every
-    /// data-driven id by one, which binds height where colour belongs.
+    /// data-driven id by one, which binds height where color belongs.
     #[test]
     fn the_fill_extrusion_ids_are_the_instanced_branchs() {
         let table = attributes(BuiltIn::FillExtrusionShader);
