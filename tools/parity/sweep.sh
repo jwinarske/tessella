@@ -36,7 +36,8 @@
 # Two scenes are not stable run to run. `terrain_flat_p` at z14 p60 has read 26 through 29.
 # `hill_p` at z11 read 190, 141 and 190 before the DEM border backfill and reads 0 to 14 after it:
 # 0 every time the scene is run alone, and up to 14 inside a full sweep, where the reconciliation
-# can land after the frame the probe settled on. The numbers below are the ones they settle on
+# can land after the frame the probe settled on. The same timing shows at z14 as an occasional 1,
+# which settles back to 0 when the scene is re-run. The numbers below are the ones they settle on
 # most often, and a run that reads another is that scene rather than a change.
 #
 # The numbers to hold, as of 2026-09-18: 4 / 16 / 0 / 2 / 30, then 3 / 2, then 0 / 0 / 0; then
