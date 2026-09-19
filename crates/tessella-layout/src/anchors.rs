@@ -42,8 +42,25 @@ pub struct Anchor {
 }
 
 /// The angle between two points, as mbgl measures it.
-fn angle_to(a: (f32, f32), b: (f32, f32)) -> f32 {
-    (a.1 - b.1).atan2(a.0 - b.0)
+///
+/// # In double, and not for tidiness
+///
+/// `util::angle_to` is `std::atan2` over a `GeometryCoordinate`'s `int16_t` fields, so mbgl's
+/// angle is a `double` and stays one until something asks for less. Computed in `f32` instead,
+/// each angle is rounded before it is used, and [`check_max_angle`] sums a windowful of them
+/// against `text-max-angle` -- so the rounding lands on the sum, and the sum is compared with a
+/// fixed threshold.
+///
+/// That is not a theoretical loss. Bunker Road in the `add-a-geojson-line` example hairpins back
+/// on itself, and the turn a label would cover there comes to 0.785398245 radians against a
+/// `text-max-angle` of 0.785398185 -- over the limit by sixty billionths. In `f32` the same sum
+/// is 0.785398126, under it, so this wrote a name across the hairpin where mbgl refuses one.
+/// The extra label then crowded out the transit stop beside the road.
+///
+/// The anchor's own `angle` is still stored as an `f32`, which is what mbgl stores: it casts the
+/// double down at exactly that point.
+fn angle_to(a: (f32, f32), b: (f32, f32)) -> f64 {
+    (f64::from(a.1) - f64::from(b.1)).atan2(f64::from(a.0) - f64::from(b.0))
 }
 
 /// How far apart two points are, computed the way mbgl computes it.
@@ -139,7 +156,7 @@ pub fn check_max_angle(
         }
         let (previous, current, next) = (line[index - 1], line[index], line[index + 1]);
 
-        let delta = f64::from(angle_to(previous, current)) - f64::from(angle_to(current, next));
+        let delta = angle_to(previous, current) - angle_to(current, next);
         // Wrapped into -pi..pi before taking the magnitude: a turn of 359 degrees is a turn of
         // one, and summing the unwrapped value would fail a line that barely bends.
         let pi = core::f64::consts::PI;
@@ -192,7 +209,9 @@ fn resample(
     for (segment, pair) in line.windows(2).enumerate() {
         let (a, b) = (pair[0], pair[1]);
         let segment_distance = distance(a, b);
-        let angle = angle_to(b, a);
+        // Down to `f32` here and nowhere earlier, which is where mbgl casts it.
+        #[allow(clippy::cast_possible_truncation)]
+        let angle = angle_to(b, a) as f32;
 
         while marked + spacing < distance_so_far + segment_distance {
             marked += spacing;
@@ -340,7 +359,8 @@ pub fn get_center_anchor(
                     (a.0 + (b.0 - a.0) * t).round(),
                     (a.1 + (b.1 - a.1) * t).round(),
                 ),
-                angle: angle_to(b, a),
+                #[allow(clippy::cast_possible_truncation)]
+                angle: angle_to(b, a) as f32,
                 segment,
             };
 
