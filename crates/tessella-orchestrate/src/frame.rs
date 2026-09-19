@@ -5247,6 +5247,50 @@ fn terrain_blocks(
                 })
         })
         .collect();
+    // Which tiles have nothing beside them, because that is where a curtain earns its keep.
+    //
+    // A curtain is a wall hanging below a quad's edge, and at pitch it occludes a band of the
+    // ground behind it. Between two tiles that are both drawn there is nothing to occlude *for*:
+    // they agree on the height along their shared edge, since a DEM's border is filled from its
+    // neighbors, so the crack the curtain was hung to fill is not there. At the edge of the cover
+    // there is no neighbor, the ground's own skirt runs on past the layers standing on it, and
+    // without a curtain the layer stops short of the ground it is painted on.
+    //
+    // Measured on Swiss terrain at z12 p65, a color relief drew 76 dark bands at tile edges with
+    // the curtain unconditional, 28 with it held to the cover's edge, and 4 with it gone. The 24
+    // between the last two are the cover's own boundary tiles, which keep a curtain on all four
+    // edges because the block carries one length and not one per edge. `terrain_cover_p` holds at
+    // no holes for all five of its cameras either way; unconditional is what it cost.
+    //
+    // Against this layer's own tiles, which is the grid the curtain hangs on: the quad is cut to
+    // the drawable's tile, not to the coarser ground tile it stands on.
+    let drawn: alloc::collections::BTreeSet<(u8, u32, u32)> = bindings
+        .iter()
+        .filter_map(|binding| binding.tile)
+        .map(|tile| (tile.z, tile.x, tile.y))
+        .collect();
+    let edge_of_cover = |z: u8, x: u32, y: u32| {
+        let span = 1i64 << z;
+        [(-1i64, 0i64), (1, 0), (0, -1), (0, 1)]
+            .into_iter()
+            .any(|(dx, dy)| {
+                let row = i64::from(y) + dy;
+                if !(0..span).contains(&row) {
+                    return true;
+                }
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                let column = (i64::from(x) + dx).rem_euclid(span) as u32;
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                let row = row as u32;
+                // At its own zoom or at any coarser one. A pitched cover is several levels deep
+                // and a tile's neighbor often stands in one level up -- tested at one zoom only,
+                // every tile beside a coarser one reads as an edge and keeps its curtain.
+                !(0..=z).rev().any(|at| {
+                    let down = z - at;
+                    drawn.contains(&(at, column >> down, row >> down))
+                })
+            })
+    };
     // Once for the layer, not once per drawable: the camera has one center and every tile of the
     // frame is placed against the same one. A per-tile answer would tilt the world.
     let center = center_elevation(frame.view, &grounds);
@@ -5333,10 +5377,12 @@ fn terrain_blocks(
                 // there hangs below a surface with no crack in it -- which is not a seam filled
                 // but a line drawn. The oracle says so: `terrain_flat_p` is held against the same
                 // style without a terrain, and an unconditional curtain moved it from 0 to 547.
+                //
+                // And nothing to hide between two tiles that are both drawn: see `edge_of_cover`.
                 skirt: [
                     content.skirt,
                     center,
-                    if content.exaggeration > 0.0 {
+                    if content.exaggeration > 0.0 && edge_of_cover(tile.z, tile.x, tile.y) {
                         seam_at_camera
                     } else {
                         0.0
