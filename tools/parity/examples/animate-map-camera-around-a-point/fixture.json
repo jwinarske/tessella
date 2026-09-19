@@ -1,0 +1,11 @@
+{
+ "example": "animate-map-camera-around-a-point",
+ "note": "Chicago at zoom 15.5 and pitch 45 on the liberty base, which nothing else in the suite uses, turned to each of the four cardinal bearings. The page rotates the camera every frame, and a rotation has no state behind it, so the four bearings are four cameras. **It finds a fault.** Bearing 0 reads 25; bearing 90, 180 and 270 read 25269, 16460 and 22070, and the difference is the walls of liberty's `building-3d` fill-extrusion, which this side shades as though the map had not turned. mbgl rotates the light by the negated bearing when the light's anchor is `viewport`, which is the spec's default (`FillExtrusionBucket::lightPosition`); `fill_extrusion_props_from_paint` passes `light.cartesian()` unrotated and is never handed a bearing at all. At bearing 0 the rotation is the identity, which is why every earlier fixture missed it. The page also removes the label layers, which needs a `remove_layer` the header does not have; the labels stay, and both renderers draw the same ones.",
+ "base": "https://tiles.openfreemap.org/styles/liberty",
+ "cameras": [
+  {"lat": 41.89033, "lon": -87.62712, "zoom": 15.5, "pitch": 45, "bearing": 0},
+  {"lat": 41.89033, "lon": -87.62712, "zoom": 15.5, "pitch": 45, "bearing": 90},
+  {"lat": 41.89033, "lon": -87.62712, "zoom": 15.5, "pitch": 45, "bearing": 180},
+  {"lat": 41.89033, "lon": -87.62712, "zoom": 15.5, "pitch": 45, "bearing": 270}
+ ]
+}
