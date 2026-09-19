@@ -98,7 +98,7 @@ jobs:
       #
       # What does assert it is building the crates that claim `no_std` without `std` at all. The
       # list comes from the marker itself rather than a copy, so a new crate is covered the day it
-      # declares one, and there are no exceptions: a crate that carries the marker honours it.
+      # declares one, and there are no exceptions: a crate that carries the marker honors it.
       # The module itself, because nothing else describes it. `cargo check` for this target is a
       # weaker gate than it looks -- it passed while the module carried 1,380
       # `__wbindgen_describe_*` exports, which §19.2 rules out, and a megabyte of `ureq` behind an

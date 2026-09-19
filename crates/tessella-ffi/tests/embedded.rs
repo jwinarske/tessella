@@ -115,7 +115,7 @@ fn the_regions_a_consumer_reads_are_whole() {
         );
         // At most, not equal: the range handed over is the whole region the arena was built on,
         // and `total_len` is how far the bump cursor has reached inside it. They were equal when
-        // the producer serialised a fresh buffer each frame; it writes in place now, so the
+        // the producer serialized a fresh buffer each frame; it writes in place now, so the
         // header is what bounds a consumer's reads and the capacity is what bounds the header.
         assert!(
             total as usize <= regions.slabs_len,

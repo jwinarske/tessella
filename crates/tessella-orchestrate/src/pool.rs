@@ -17,7 +17,7 @@
 //!
 //! Strict priority starves the bottom class under sustained load, and that is the intent rather
 //! than a defect to be softened. Prefetch is a speculative cover along the camera's velocity:
-//! work that exists to be thrown away when something real arrives. Ageing it up would mean a
+//! work that exists to be thrown away when something real arrives. Aging it up would mean a
 //! guess the user may never look at competing with the tile under their finger. What must not
 //! starve is foreground, and nothing outranks it.
 //!

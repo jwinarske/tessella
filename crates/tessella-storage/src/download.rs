@@ -338,7 +338,7 @@ impl Download<'_> {
     /// and there stays exactly one place that decides what a 404 means.
     ///
     /// Safe to call from several threads against one region. The fetch happens outside the
-    /// store's lock, so what serialises is the write and not the network — which is the whole
+    /// store's lock, so what serializes is the write and not the network — which is the whole
     /// reason fanning it out is worth doing.
     ///
     /// # Errors

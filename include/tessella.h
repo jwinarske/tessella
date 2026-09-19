@@ -251,7 +251,7 @@ tessella_result tessella_take_request(tessella_map* map,
  * of a source's coverage, which the map draws around, and reporting it as a broken fetch would
  * make a hole look like a fault. tessella_fail_request is for a fetch that did not happen at all.
  *
- * A ticket that was cancelled, already answered, or never issued is ignored and answers
+ * A ticket that was canceled, already answered, or never issued is ignored and answers
  * TESSELLA_OK: a caller that has lost track of its own bookkeeping has wasted a fetch, which is
  * not something the map can fix by refusing. An empty body is legitimate -- a tile with no
  * features is a valid, empty tile -- so a null pointer with a zero length is a real answer. */
@@ -287,7 +287,7 @@ tessella_result tessella_set_camera(tessella_map* map,
  * one in static map mode -- and it is what every parity capture on both sides compares, so it stays
  * the default.
  *
- * It is the wrong behaviour for a map somebody is looking at. A label that stops being placed at one
+ * It is the wrong behavior for a map somebody is looking at. A label that stops being placed at one
  * anchor and starts at another along the same road, with nothing fading between the two, is read as
  * the text having moved. Call this once a frame with the milliseconds since the last one and the
  * fades run at mbgl's rate of 300 ms.
@@ -423,7 +423,7 @@ tessella_result tessella_set_geojson_data(tessella_map* map, const uint8_t* sour
  * `image` is an encoded picture -- PNG, JPEG, or WebP where that decoder is built in -- rather
  * than raw pixels, because every caller with an icon has a file and none has a premultiplied RGBA
  * buffer. `sdf` says the picture is a signed distance field, which is what lets "icon-color"
- * recolour it.
+ * recolor it.
  *
  * Distinct from tessella_add_annotation_image, which adds an image an *annotation* names.
  * Annotations are not style layers and their images are their own; this one is the style's.

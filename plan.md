@@ -396,10 +396,10 @@ The number is the kernel's own: `cpu_capacity`, out of 1024, derived on arm64 fr
 tree's `capacity-dmips-mhz` and present exactly where capacity-aware scheduling is. Asking the
 same source the scheduler asks is the difference between a policy that agrees with it and one
 that fights it. Where it is absent — x86, hybrid parts included — `cpufreq/cpuinfo_max_freq`
-stands in, normalised so the largest core is 1024; a worse measure, since frequency is not
+stands in, normalized so the largest core is 1024; a worse measure, since frequency is not
 throughput across microarchitectures, but it separates the tiers it has to. The two are never
 mixed: a part answering one for some cores and the other for the rest would put them on
-incomparable scales and the tiers would be an artefact of which file existed.
+incomparable scales and the tiers would be an artifact of which file existed.
 
 `Affinity` is then a preference with two answers, defaulting to leaving the scheduler alone —
 which is what a capacity-aware scheduler deserves, and pinning against one is how a decode
@@ -584,7 +584,7 @@ historic note).
   stops being visible. The frame-wide block is checked against a scaled inset as well as a
   reshaped one: 320x240 beside 1024x768 is the same 4:3, so a block distinguished by aspect
   ratio alone would size an inset's geometry to the display. Stencil matrices are covered
-  separately, because they are deliberately not the drawable's — a mask left on a neighbour's
+  separately, because they are deliberately not the drawable's — a mask left on a neighbor's
   camera subtracts geometry rather than misplacing it. Each of the three paths was checked by
   pinning it to one canonical camera and confirming that its own test, and only its own, fails.
 
@@ -773,7 +773,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   road that has been removed; and a completed refresh releases claims the plan no longer names —
   a style that lost a layer, a source that lowered its maximum zoom, an area redrawn smaller —
   which would otherwise stay pinned for the life of the region, outside the ambient bound and
-  never used. A cancelled refresh releases nothing: it has not visited every URL, so what looks
+  never used. A canceled refresh releases nothing: it has not visited every URL, so what looks
   orphaned may simply not have been reached.
   Telling a call from a literal array is a registry lookup, not a shape test — the spec spells
   it `expression[0] in expressions` — and that registry is now generated from mbgl's two
@@ -835,7 +835,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   draining once per frame, and 239 envelopes in the busiest frame — that is the high-water mark
   §4 wants a ring sized against, for this style; a style with more layers scales it, but the
   order of magnitude is settled. Exit: zero symbol pops — **met**, once R2 had symbols that could
-  pop. The sweep runs again with a symbol layer over a grid of labelled points: build each cover
+  pop. The sweep runs again with a symbol layer over a grid of labeled points: build each cover
   tile, take identities from the process-scoped cross-tile index, place per view, step the fades,
   and record what every label drew at on every frame of every view.
   Stating it took two goes, and the first was wrong in a way worth keeping. A pop is a label that
@@ -860,7 +860,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   buffers, byte for byte. R1.5's remaining criterion — zero symbol pops — closed with it.
   **The qualification** is the seven elided lines: mbgl packs the glyph atlas in the order glyphs
   arrive and that order is not deterministic, so the symbol vertex hashes and the atlas texture
-  hash cannot be compared. Making them comparable is a change to mbgl's atlas behaviour rather
+  hash cannot be compared. Making them comparable is a change to mbgl's atlas behavior rather
   than to the probe's dump code, and an oracle representing a *modified* mbgl is worth less than
   one with seven elided lines. Investigated and declined, not deferred.
   **Not in this phase**: icons and sprites. R2 is spelled "symbols" and means glyphs. R3's line
@@ -987,7 +987,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   `unaccent` because it has no level control. And `resolved-locale` must answer the empty string
   rather than the locale asked for: `accent-equals-de` branches on that answer, comparing `ü`
   with `ue` where a German tailoring exists and checking the input directly where none does, so
-  an implementation that overstates what it resolved takes a branch it cannot honour.
+  an implementation that overstates what it resolved takes a branch it cannot honor.
   Han is the other half of being right rather than plausible. The ideographs are not in
   `allkeys.txt` at all — they are given an order by construction, UTS #10 §10.1.3 — so without
   the implicit-weight formula every Chinese label would compare equal to every other. Not built:
@@ -1013,7 +1013,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   256 codepoints a file, metrics and a distance field with the ecosystem's three-pixel border.
   Almost all of it is rejection, and that is the part that matters — proto2 makes every field
   optional on the wire, so a glyph missing `advance` parses perfectly and then lays out on top
-  of its neighbour. A declared width and height that disagree with the bitmap's length is the
+  of its neighbor. A declared width and height that disagree with the bitmap's length is the
   one that would be a read past the end, so the glyph is dropped rather than the bitmap
   clamped. Zero-area glyphs are kept: a space has an advance and nothing to draw, and a range
   that dropped its spaces would set the words run together.
@@ -1071,7 +1071,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   want is one rectangle; a freed slot keeps its size rather than merging back into its shelf,
   which is what lets the next glyph of that size land exactly where the old one was. Padding is
   two pixels and one of them comes back inside the reported rectangle: the outer one stops
-  linear filtering pulling in a neighbour, the inner one gives the shader real distance field to
+  linear filtering pulling in a neighbor, the inner one gives the shader real distance field to
   read at the glyph's own edge.
   Quads follow, which is where a shaped label becomes geometry: four corners per glyph in
   label-local pixels plus the atlas rectangle to sample. The quad is deliberately larger than
@@ -1146,7 +1146,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   The decision loop closes the per-view half. Candidates are offered in the style's order — by
   `symbol-sort-key`, then feature order — and what fits is placed and inserted so it blocks
   whatever comes after. There is no global optimisation, deliberately: a cartographer decides
-  what matters rather than an algorithm, and a set that re-optimised as the camera moved would be
+  what matters rather than an algorithm, and a set that re-optimized as the camera moved would be
   a map where labels swap places while you watch. `allow-overlap` and `ignore-placement` are
   different permissions — one skips the test, the other skips the insert — and a label with both
   is drawn always and blocks nothing, which is how a style pins one that must never move. The
@@ -1158,7 +1158,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   `"{name}"` template. A frontend reading only expressions would render half the basemaps on the
   internet with no labels, so both are read — and tokens are resolved *after* an expression
   evaluates too, which is what styles written against the old syntax and later wrapped in a
-  `concat` rely on. An unrecognised token survives verbatim, braces and all, the same rule the
+  `concat` rely on. An unrecognized token survives verbatim, braces and all, the same rule the
   tile URL templates follow: a label reading `{nmae}` is a typo somebody can see and fix, and a
   label silently reduced to nothing is not. A feature with no name — which is most of them —
   produces no label rather than an empty one, since an empty label still has an anchor, a
@@ -1166,7 +1166,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   nothing.
   A token in `text-field` is a `get`, not a substitution: mbgl converts `"{name}"` at parse time
   into `toString(get("name"))`, so a feature without the property yields an *empty* label and
-  therefore no symbol. This is deliberately not the tile URL rule, where an unrecognised token
+  therefore no symbol. This is deliberately not the tile URL rule, where an unrecognized token
   survives verbatim so a 404 says why — a label cannot do that, and leaving the token writes a
   literal `{name}` across the map on every unnamed feature. Which is what it did until an
   end-to-end test asked a water layer for its glyph dependencies and got seventy-five labels
@@ -1193,7 +1193,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   zoom crossing.
   `line-center` comes with it: one anchor at the line's midpoint, for a river or a boundary whose
   name should appear once rather than march along the feature. It deliberately has *no*
-  tile-bounds test, unlike the repeating case — a centred label belongs to its feature rather
+  tile-bounds test, unlike the repeating case — a centered label belongs to its feature rather
   than to a position, so a line whose middle falls outside this tile still gets its name, which
   mbgl's own expectation of an anchor at (-3, -3) pins. And a bend at the center refuses the
   label outright rather than sliding it along: the caller asked for the center, and answering
@@ -1214,7 +1214,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   writing down: **placement happens in screen space**. Anchors arrive in tile coordinates,
   0..8192 across, and a shaped label measures in screen pixels and is tens across; mixed, every
   label is a speck on a vast plane, nothing ever collides, and all seventy-five place. Labels
-  compete for screen and not for ground — two towns a kilometre apart collide at z5 and not at
+  compete for screen and not for ground — two towns a kilometer apart collide at z5 and not at
   z14, and the same two collide on a phone and not on a wall display — so the anchor is projected
   before a box is built. The cross-tile index stays in tile coordinates, and that is right for
   the opposite reason: identity is about where a label is on the ground, and the ground does not
@@ -1246,7 +1246,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   which is a change to the probe rather than to this. Investigated and declined: the iteration
   itself is deterministic — `std::map` by fontstack then glyph id — and what varies is *which*
   glyphs have arrived when the first upload runs, since glyph loading is async. Making that
-  deterministic means changing mbgl's atlas behaviour rather than the probe's dump code, and an
+  deterministic means changing mbgl's atlas behavior rather than the probe's dump code, and an
   oracle that represents a modified mbgl is worth less than one with seven elided lines.
   The two per-frame buffers *are* comparable, which was nearly written off. They were assumed to
   hold post-placement state that only a matching frame loop could reproduce; solving for their
@@ -1279,10 +1279,10 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   buffers. Layout runs once per tile and is shared (§5.1); this is the per-view cost center §5.2
   names. The projection is the caller's, because placement happens in screen space and the
   camera is per view: the same two labels collide at z5 and not at z14, and on a phone and not
-  on a wall display, which is asserted as behaviour rather than described. A label's per-frame
+  on a wall display, which is asserted as behavior rather than described. A label's per-frame
   state is written into the slice of the shared buffer that layout recorded for it, since a
   layer's labels share one buffer and a range that is off writes one label's opacity over its
-  neighbour's — which draws as a label that will not fade, and errors nowhere. Fades stay keyed
+  neighbor's — which draws as a label that will not fade, and errors nowhere. Fades stay keyed
   by cross-tile id rather than by buffer position, so a tile rebuilt at a crossing does not
   re-fade the labels that never moved.
   A picture then gets drawn, because every other test here checks a number and a map is a thing
@@ -1339,7 +1339,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   long segment is then treated as sitting at the near end of it, which puts the whole run at the
   start of the line — found by a right-angled road whose label came out on the wrong arm. The run
   extends past the label, because a pitched camera draws a distant label *larger* than the box it
-  was laid out for and a label that has outgrown its collision shape overlaps its neighbour with
+  was laid out for and a label that has outgrown its collision shape overlaps its neighbor with
   nothing detecting it; the padding grows with overscaling but only slowly, since an overscaled
   tile places labels closer together and each extra circle costs a query. And the padding
   *before* the label survives only when the line's vertices are coarse enough that the walk
@@ -1424,7 +1424,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   It found the gap immediately, which is what an end-to-end comparison is for. A point label was
   not clipped to its tile — the builder is handed the whole GeoJSON source rather than one tile's
   share, the way the fill and line arms are, and each of those clips for itself. So every tile of
-  the cover drew every label: right on the tile that owns it, wrong on its neighbours, and
+  the cover drew every label: right on the tile that owns it, wrong on its neighbors, and
   invisible to any test that assembled its own tile assignment. The test is bounded half-open so
   a point on a boundary lands in exactly one tile. A *line* label is deliberately not clipped —
   `get_anchors` tests each candidate against the tile, so a road crossing a seam gets anchors on
@@ -1496,7 +1496,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   feature and wrong for the rest. It now binds them, and where they go came from the oracle
   rather than from reading the binder classes: ids nine and ten at bindings *seven and eight*,
   where a fill puts the same two streams at ids four and five, bindings one and two — the line
-  shader has already spent its low bindings on colour, blur, opacity, gapwidth, offset and
+  shader has already spent its low bindings on color, blur, opacity, gapwidth, offset and
   width. That needed a new capture, so `pattern_style.json` gained a data-driven line layer and
   a second line feature beside it, one line being unable to tell a per-vertex stream from a
   uniform that happened to be right.
@@ -1514,14 +1514,14 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   rather than an error. `doDepthPass = (!opaque || hasPattern)` was quoted in two comments and
   implemented as `!opaque`, so an opaque patterned extrusion got one pass where the capture has
   two. And `colorBuilder->setEnableStencil(doDepthPass)` was implemented as no stencil at all,
-  under a comment whose reasoning was sound and whose fact was wrong — the colour pass tests the
+  under a comment whose reasoning was sound and whose fact was wrong — the color pass tests the
   stencil the prepass wrote, and without a prepass there is nothing to test, which is how both
   halves of that comment can be true at once.
   The drawable dispatch changed with it. It cached one record per bucket and copied it for the
   second pass, which is right for a bucket whose drawables differ only in render state and
   silently wrong for one with two *geometries*; it caches the bucket's records as a list now and
   picks by sub-layer. An extrusion is four drawables — roof and walls, in the depth pass and
-  again in the colour pass — where the fill it was modelled on is two.
+  again in the color pass — where the fill it was modeled on is two.
   The sprite index lands first, as `tessella-glyph/sprite`: mbgl's `SpriteParser`. A style names
   one sprite *base* and the origin serves two resources for it, the suffix going before the
   extension rather than after the URL — `sprite@2x.json`, not `sprite.json@2x` — and a query
@@ -1529,7 +1529,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   Almost all of it is refusal, and that is the part worth having. The index is hand-written or
   tool-generated JSON with no schema behind it, so every field can be wrong in a way that is not
   a parse error: a negative width wraps when it reaches an unsigned rectangle, a zero pixel ratio
-  divides by zero, a rectangle running off the sheet samples whatever the neighbouring icon left
+  divides by zero, a rectangle running off the sheet samples whatever the neighboring icon left
   there and looks like the wrong icon rather than like an error. mbgl's bounds are transcribed
   rather than chosen — a dimension over 1024, a ratio outside `0 < r <= 10` — and a bad entry is
   dropped while the sheet is kept, because a style with one broken icon still has three hundred
@@ -1565,7 +1565,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   aligned to the pixel grid covers eleven actual pixels, so a quad sized to the icon clips a
   sliver off one edge. The pad is on the *quad* and not on the texture rectangle, since the extra
   pixel samples the atlas padding the atlas already reserves; padding the rectangle instead would
-  sample the neighbouring icon.
+  sample the neighboring icon.
   `shape_icon` takes *logical* pixels, which is the unit the pixel ratio exists to produce.
   Handing it the sheet size draws every `@2x` icon at twice its size, and that reads as a broken
   sprite sheet rather than as a unit mix-up — so the conversion is asserted where the two meet.
@@ -1588,7 +1588,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   like a broken sprite sheet rather than a units mistake, so the two are read by separate
   functions and the defaults are asserted against each other.
   Whether an icon is a distance field is the *sprite's* property and not the layer's. A shield
-  drawn as a field is recolourable by `icon-color`; a photographic icon is not, and putting a
+  drawn as a field is recolorable by `icon-color`; a photographic icon is not, and putting a
   plain image through the SDF shader draws its alpha as a coverage ramp. The flag rides in the
   low bit of the packed size, where the text path already put it.
   **Line-placed icons draw where they accompany a label.** They repeat along a line the way a
@@ -1618,12 +1618,12 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   binary size (DR-12), not for the toolchain. `zune-png` rather than the whole `zune-image` that
   §8 named: a sprite sheet and a raster tile are PNG, and the family's other decoders are bytes
   §12.4 would carry for nothing.
-  Everything is widened to RGBA whatever the file's colour type. The rectangles the index hands
+  Everything is widened to RGBA whatever the file's color type. The rectangles the index hands
   out are in *pixels*, so a decoder returning the source's own channel count would make every
-  offset downstream depend on how the sheet happened to be encoded — a greyscale sheet and an
-  RGBA one with identical rectangles would sample different things. Greyscale broadcasts across
-  the colour channels rather than staying in red, which is the failure that decodes to the right
-  place at the right size and draws the wrong colour; RGB gains an *opaque* alpha rather than a
+  offset downstream depend on how the sheet happened to be encoded — a grayscale sheet and an
+  RGBA one with identical rectangles would sample different things. Grayscale broadcasts across
+  the color channels rather than staying in red, which is the failure that decodes to the right
+  place at the right size and draws the wrong color; RGB gains an *opaque* alpha rather than a
   transparent one, which is the failure that draws nothing at all.
   Not premultiplied. mbgl premultiplies on upload and the capture's texture hash is over the
   decoded image, so doing it here would put different bytes on the wire than the oracle has.
@@ -1650,7 +1650,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   its interface — the same reason the evaluated props carry an icon half for a layer with no
   icons. The symbol capture's style has no sprite, so its zero is a value the oracle carries
   rather than a placeholder, which is why it is passed rather than defaulted.
-  Placement then takes both halves. `place` has modelled `text-optional` and `icon-optional`
+  Placement then takes both halves. `place` has modeled `text-optional` and `icon-optional`
   since R2 and nothing exercised them, because until now `Candidate::icon` was always `None` —
   which is the kind of gap where every rule agrees with every other for the wrong reason, so the
   first assertion is that the icon half is offered at all. The four combinations are four
@@ -1682,7 +1682,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   mbgl's own error message for a zero ratio quotes `@0x` rather than `@1x`. Two readers, not one,
   and a fractional ratio survives where a fractional width does not.
   `textFitWidth` and `textFitHeight` were not read at all. An unrecognized value is *absent*
-  rather than defaulted, because the three behaviours resize a shield differently and guessing
+  rather than defaulted, because the three behaviors resize a shield differently and guessing
   between them is worse than not stretching.
   `emerald.json` is now vendored beside the glyph fixtures: a two-hundred-by-two-hundred-ninety-
   nine sheet with seventy-three icons, among them the
@@ -1697,7 +1697,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   `getIconQuads.normal` is the arithmetic that proves it — a 15x11 *padded* rect displays at 13x9
   and quads to a 15x11 box. This build had drawn straight from the sheet on the reasoning that a
   sheet is already laid out, which is true and beside the point: a sheet has no padding between
-  icons, so the border sampled the neighbouring picture and every marker on the map carried a
+  icons, so the border sampled the neighboring picture and every marker on the map carried a
   hairline of the wrong icon. Icons are cut and repacked now, into an RGBA atlas using the same
   `ShelfPack` and the same two-reserved-one-reported padding the glyph atlas already used — which
   the same pass confirmed was right, since our reported rectangle for a 24-pixel glyph is 32 and
@@ -1718,7 +1718,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   joins features that share an endpoint *and* say the same thing. A road is rarely one feature —
   a tile cuts it at its edges and a source cuts it wherever an attribute changes, a speed limit
   or a surface or a bridge — so "Main Street" arrives as a dozen stubs laid end to end. Without
-  the join each stub is labelled separately, and most are *dropped*: a stub shorter than its own
+  the join each stub is labeled separately, and most are *dropped*: a stub shorter than its own
   label cannot hold one. That is why the street fixture produced so many fewer labels than it has
   roads, a number that had been read as the fixture being short of long roads.
   Ported with mbgl's own `MergeLines.*` expectations, coordinate for coordinate, because the
@@ -1732,8 +1732,8 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   running it twice joins more. The index holds one entry per text and endpoint, so where two
   roads of the same name start at the same place only one is reachable — the street fixture has
   fifty such junctions. mbgl's index is an `unordered_map` assigned into and overwrites the same
-  way, so one greedy pass is the oracle's behaviour. Running to a fixed point would be a
-  divergence, and a *silent* one, since the extra joins look like better labelling rather than
+  way, so one greedy pass is the oracle's behavior. Running to a fixed point would be a
+  divergence, and a *silent* one, since the extra joins look like better labeling rather than
   like a difference.
   The sweep then reached the rest of R0–R2, and most of it came back clean. Expressions were
   already checked against the 350-case spec suite rather than against mbgl, which is a stronger
@@ -1765,8 +1765,8 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   the *sprite* says `textFitWidth` and `textFitHeight`, how far that stretch may distort it. mbgl
   keeps them in two functions and so does this.
   Fitting deliberately ignores the icon's anchor, which mbgl says outright: `icon-text-fit` is a
-  statement about where the icon sits relative to the *text*, and honouring the anchor as well
-  would move it off the label it is drawn around. An axis that is not fitted is *centred* rather
+  statement about where the icon sits relative to the *text*, and honoring the anchor as well
+  would move it off the label it is drawn around. An axis that is not fitted is *centered* rather
   than left alone, which is the branch it is easy to read as a no-op — without it a width-fitted
   shield stretches across its label while sitting above it.
   `applyTextFit` corrects the aspect afterwards, and only a `proportional` axis does anything:
@@ -1800,7 +1800,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   Nothing about the icon *pixel* path had been seen — the audit found its one bug by reading
   mbgl, and a packer that shears a row, drops a channel or mislays the padding produces
   arithmetic that checks out and a picture that does not. mbgl's own `emerald` sheet packs to
-  seventy-three icons: shields, pins and roundels, colours intact and unsheared. It is drawn over
+  seventy-three icons: shields, pins and roundels, colors intact and unsheared. It is drawn over
   a chequerboard rather than a ground, so the transparent padding reads as padding — a solid
   ground would make a dropped alpha channel look correct, which is the failure most worth seeing.
   A security pass over the untrusted decoders then puts a stated ceiling on every one of them.
@@ -1981,13 +1981,13 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   breaking is decided on the logical order. And it carries each character's *advance* with it —
   the trap in reordering a shaped line rather than a string, since a reorder that moved codepoints
   and left the widths behind would set every right-to-left label with its letters spaced by their
-  neighbours' widths.
+  neighbors' widths.
   A line the algorithm leaves alone is borrowed rather than rebuilt. Most labels on most maps are
   left-to-right and shaping runs per label per tile, so that is the difference between the pass
   being free for them and costing an allocation each.
   Arabic *shaping* — the contextual letter forms, mbgl's `applyArabicShaping` over ICU's
   `u_shapeArabic` — was the remaining half, and lands here. Reordering alone left each letter in
-  its isolated form rather than joined to its neighbours; mbgl's `BiDi.ArabicShaping`, `Tashkeel`
+  its isolated form rather than joined to its neighbors; mbgl's `BiDi.ArabicShaping`, `Tashkeel`
   and `MixedShaping` state the exact strings, and they pass.
   Arabic is written joined: which of a letter's four shapes is drawn depends on whether the
   letters either side join to it, so the same letter is four different pictures and text is
@@ -2011,7 +2011,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   comes apart while unvoweled text stays perfect, which is most of a Qur'anic inscription and none
   of a road sign.
   Shaping runs before breaking and breaking before reordering, which is mbgl's order and each step
-  depends on the one before: the forms come from *logical* neighbours, so reordering first joins
+  depends on the one before: the forms come from *logical* neighbors, so reordering first joins
   every letter to whatever ended up beside it on screen. A lam-alef consumes two characters for
   one, so the rewrite walks input and output in step rather than matching codepoints — a
   presentation form does not equal the base it came from.
@@ -2032,14 +2032,14 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   here. Fills, lines and symbols all build from a tile's features and produce nothing when there
   are none — a rule that, applied to a raster tile, draws no imagery ever, since a raster tile
   carries no features to build from. The layer arm is in both tile builders for that reason.
-  The colour adjustments are the part worth transcribing rather than deriving. Each is a *factor*
+  The color adjustments are the part worth transcribing rather than deriving. Each is a *factor*
   and not the property, and two of the three are asymmetric: reducing saturation or contrast is
   linear while raising either is a reciprocal that runs away as it approaches its limit. Read as
   symmetric — one multiply either way — the picture is nearly right at small values and visibly
   wrong at large ones, which is a defect nobody reports until a style leans on it. The `1.001` in
   the saturation branch is a bound in the arithmetic rather than in the property, and it is what
-  keeps the property's own maximum finite. Hue rotation is a rotation about the grey axis of the
-  colour cube, so its weights sum to one at every angle: a version that normalised wrongly
+  keeps the property's own maximum finite. Hue rotation is a rotation about the gray axis of the
+  color cube, so its weights sum to one at every angle: a version that normalized wrongly
   brightens or darkens as the hue turns, which reads as a broken image rather than a broken
   rotation, and is asserted as the sum rather than as three numbers.
   `RasterEvaluatedPropsUBO` is transcribed offset by offset against the header's own comments,
@@ -2074,9 +2074,9 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   against the header, the widening to RGBA and the sniff are the same questions for a sheet and
   for a tile, and answering them twice is how two answers drift apart.
   **The decode premultiplies, and it did not before.** mbgl's `decodeImage` returns a
-  `PremultipliedImage`; this build's style colours are stored premultiplied and its shaders are
+  `PremultipliedImage`; this build's style colors are stored premultiplied and its shaders are
   mbgl's, so an image that is not premultiplied was the odd one out in a pipeline that assumed
-  otherwise. Left straight, an icon's anti-aliased edge blends its own colour at full strength
+  otherwise. Left straight, an icon's anti-aliased edge blends its own color at full strength
   against the background and draws a bright fringe around every marker that fades out — invisible
   on the opaque sprites that are most of a sheet, and wrong everywhere else. mbgl's rounding is
   transcribed with it: `(c * a + 127) / 255` is a round-to-nearest where `c * a / 255` truncates,
@@ -2084,8 +2084,8 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   pixel of a sheet compared byte for byte.
   The oracle's own `test/fixtures/image` is vendored and its `image.test.cpp` numbers
   transcribed. The profile/no-profile pair is the assertion worth having: mbgl expects the *same*
-  pixel from both, so a decoder honouring an ICC profile would colour-manage one tile of a
-  basemap and not its neighbours, and the seam between them reads as a bug in the tile server.
+  pixel from both, so a decoder honoring an ICC profile would color-manage one tile of a
+  basemap and not its neighbors, and the seam between them reads as a bug in the tile server.
   **A raster source is covered at its own zoom, not the map's.** mbgl computes `tileCover` per
   source with that source's `coveringZoomLevel`, which shifts by `log2(512 / tileSize)` and
   *rounds* where a vector source floors. A 256-pixel source — which is what most imagery services
@@ -2161,7 +2161,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   make it. A fill shader genuinely samples nothing — mbgl writes `std::array<TextureInfo, 0>` —
   while a shader missing from the generated match would also answer with an empty slice and mean
   that generation had missed it. `texture_count` returns `Option` for that reason, and the
-  parser recognises the one-line empty form as a table rather than skipping it.
+  parser recognizes the one-line empty form as a table rather than skipping it.
   Supplying too few textures is refused rather than truncated. A shader's samplers are all of
   them or none: what a shader reads from an unbound sampler is the backend's business rather
   than a defined black, so a drawable missing one cannot draw and a prefix is not a lesser
@@ -2202,19 +2202,19 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   eight. `RIFF` alone is a container tag shared with WAV, AVI and a dozen other formats, so
   matching on it would hand a sound file to the image decoder and report a decode failure where
   "not an image" is the truthful answer.
-  Two behaviours are chosen rather than inherited. An *animated* WebP decodes to its first frame
+  Two behaviors are chosen rather than inherited. An *animated* WebP decodes to its first frame
   rather than being refused: a raster tile is a picture of the ground, the texture behind it
   holds one image, and there is no frame clock in this pipeline to advance a second one with —
   so refusing would drop a tile whose first frame is perfectly usable. And chroma is upsampled
   bilinearly, which is `image-webp`'s default and libwebp's, and therefore what mbgl gets; the
-  alternative is faster and leaves jagged edges along every colour boundary.
+  alternative is faster and leaves jagged edges along every color boundary.
   The fixture turned out to be a better oracle than its own test claims. mbgl's `image.test.cpp`
   asserts the size of `tile.webp` and nothing more, but the file is a *lossy* `VP8 ` frame inside
   an extended `VP8X` container with an EXIF chunk beside it — the harder of the two container
   paths — and it still agrees with `tile.png` to within a tenth of a level on every channel mean.
   That is an assertion the size check cannot make: a decoder that swapped the chroma planes,
   upsampled them wrongly, or read the container's dimensions instead of the frame's produces
-  something of exactly the right size and visibly the wrong colour.
+  something of exactly the right size and visibly the wrong color.
   Reading the fixtures as one picture in three encodings would have been wrong, though, and the
   tests say so out loud. `tile.jpeg` is a *different photograph* — its red channel means 117.6
   against the other two's 63.9 — so it is excluded from that comparison with the numbers written
@@ -2323,16 +2323,16 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   Importing an offline pack downloaded by another client is out of this tree, in a separate
   crate that is not part of this repository.
   Placing a model tile then needed one fact settled from the data rather than assumed, and it is
-  the fact everything else follows from: **a buildings mesh is tile units in x and y and metres in
+  the fact everything else follows from: **a buildings mesh is tile units in x and y and meters in
   z**. Measured across 972 nodes of a real store — node translations span 60 to 8189, which is the
   tile extent, while node z-scale is exactly 1.0 and heights run to 330 with a 95th percentile of
-  136. Those are buildings in metres, not a normalised range. Half the nodes are flat, because a
+  136. Those are buildings in meters, not a normalized range. Half the nodes are flat, because a
   buildings tile carries a footprint mesh beside each extruded one.
   That is the same mixed convention `fill-extrusion` uses, which is why mbgl's own `heightFactor`
   — `-numTiles / tileSize_D / 8.0` — is the conversion rather than something derived here. It
   carries no latitude term and that is not an omission: heights are drawn in Mercator-scaled units
   so a building keeps its proportion against the locally-scaled ground, and putting latitude in
-  would make one at sixty degrees correct against the metre and wrong against its own street.
+  would make one at sixty degrees correct against the meter and wrong against its own street.
   The matrix is the *drawable* matrix, not a second one computed beside it. A model tile sits in
   the same tile space as every other layer and takes the same layer and sublayer depth bias, so a
   parallel implementation would leave two copies of mbgl's bias arithmetic to keep in step — and
@@ -2624,9 +2624,9 @@ minimum is the estimator of the floor; alternating the two things being compared
 the *ratio* trustworthy while neither absolute is.
 It counts allocations as well as timing:
 a build with data-driven paint does 99 231 of them and one with constant paint 75 045, so the
-data-driven surcharge was about 24 000 — roughly one per feature, half of it colours. A colour
+data-driven surcharge was about 24 000 — roughly one per feature, half of it colors. A color
 had no runtime type: `Type::Color` existed statically, but the value was a `Value::Array` of
-four numbers, so every evaluation allocated a `Vec` for sixteen bytes of channel and a colour
+four numbers, so every evaluation allocated a `Vec` for sixteen bytes of channel and a color
 was indistinguishable from a plain array of the same numbers. Giving it a variant removed 12 116
 of those allocations, took `["rgb", …]` from 38 ns to 27, and left the golden dumps byte for
 byte identical. The 75 042 underneath are tessellation and bucket building, four and a half per
@@ -2675,7 +2675,7 @@ rate against. Revisit when symbols land and filters are in play.
   46 ns against the walk's 9, `match` 60 against 20, the build 7.9 ms against 5.6.
 
   The cost was the operand frame. `Value` is 32 bytes and has a destructor, so a fixed frame is
-  initialised and dropped on every evaluation: `get` measured 46, 22, 17 and 14 ns for frames of
+  initialized and dropped on every evaluation: `get` measured 46, 22, 17 and 14 ns for frames of
   32, 8, 4 and 2 slots — about 1.3 ns a slot — which puts a *free* frame at roughly 10 ns,
   still no better than the walk. The walk is not slow because it recurses; it is slow because of
   what it moves, and a VM moves the same things through a stack instead of through returns.
@@ -3148,7 +3148,7 @@ is the realistic worst case, not a contrived one).
   0.1 by default. Separate from `ViewTransform::tile_zoom` on purpose: that is a pure function of
   a camera and the cover, the oracle parity and the tile keys all depend on it staying one, while
   hysteresis needs memory of the level currently held. The band is measured against that held
-  level rather than against distance travelled, so a fly-to across nine levels still lands where
+  level rather than against distance traveled, so a fly-to across nine levels still lands where
   it was aimed. Both it and the never-blank substitution are now held by
   `orchestrate::viewcover::ViewCover`, which is the answer to where per-view cover state lives
   (§5.2): one object per view, walked by §5.4's single pass. It answers §12.7 differently than
@@ -3176,7 +3176,7 @@ is the realistic worst case, not a contrived one).
   passes an oracle diff and fails this: across a crossing in both directions, under every arrival
   order a coprime stride reaches, no ideal tile is left with a hole. Coverage is decided on the
   quadtree rather than by sampling, since a hairline of background between two tiles is exactly
-  the artefact at issue and a sampling test passes for a hole thinner than its spacing. And it
+  the artifact at issue and a sampling test passes for a hole thinner than its spacing. And it
   counts only tiles that *have data*, which mutation testing forced: dropping the renderable
   check on a substitution left every coverage assertion passing, because filling a hole with an
   empty tile covers it as far as tile ids are concerned. That in turn needed a pyramid that
@@ -3371,7 +3371,7 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
   perfect and frees promptly, and is the simplest thing a consumer can be asked — "replace this
   buffer". It re-uploads the layer's entire cover to change one tile: measured, 20.8 MB to
   replace roughly half a megabyte, and cover changes are constant under nav. *Per-tile slabs*
-  honour §5.3 exactly and free promptly, and cost the batching win — a draw would have to bind
+  honor §5.3 exactly and free promptly, and cost the batching win — a draw would have to bind
   several vertex buffers, which Vulkan permits and Unity's `BatchRendererGroup` and UE5's
   `FPrimitiveSceneProxy` do not express. It is also the most buffer churn of the three, which
   §11.5 already names as one of the four seam costs. *Generational slabs* is the third and is
@@ -3446,7 +3446,7 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
   `Pool::drain(budget)` in priority order. **Why not a trait:** an executor trait puts a virtual
   call on the job path for every target so that one target can be different, and the job path is
   §12's hot one. `Batch::wait` already runs its own jobs inline when the pool is full, so the
-  single-thread case is a narrowing of behaviour that exists rather than a new one.
+  single-thread case is a narrowing of behavior that exists rather than a new one.
   `Workers::serial` (`boot.rs:281`) supplies the count. Clock: `web_time::Instant` replaces
   `std::time::Instant` at `source.rs:28` and `boot.rs:53`, and is a re-export of `std` off wasm.
   **What native gains from it:** `drain(budget)` plus `serial` plus the DR-23 blanket impl is the
@@ -3562,7 +3562,7 @@ one world copy**, which is a per-view parameter beside its cover and its camera 
 change to how covering works. That is `cover::WorldCopies`, a parameter of the *request* — the
 surface the tiles are drawn on is not something the camera knows. It folds the cover onto the
 near copy rather than filtering to it, which is the difference between the policy working and
-leaving a hole: a view centred on the antimeridian sees patches whose only entry has a non-zero
+leaving a hole: a view centered on the antimeridian sees patches whose only entry has a non-zero
 wrap, and filtering would drop exactly those. The horizon is the consumer's to skip, one dot product per tile
 before it subdivides, which removes the draw as well.
 
@@ -3608,7 +3608,7 @@ eighty removed requests are about 42 ms of producer work over the sweep, each of
 a subdivision and a draw the consumer no longer makes.
 - **R-9 DR-23 drifts into "async everywhere".** The pressure is real: once a deferred path
   exists, making the blocking one call it looks like simplification. Mitigation: `FileSource::fetch`
-  keeps its signature, and a change to it is the review's tripwire rather than a judgement call.
+  keeps its signature, and a change to it is the review's tripwire rather than a judgment call.
 - **R-10 `Pool` grows a trait.** Same shape as R-9 and the same answer: DR-24 says concrete, `cfg`
   inside. A `dyn Executor` is one virtual call on §12's hot path to serve one target.
 - **R-11 A single-threaded wasm producer stalls the page on a large cover.** `drain(budget)` bounds
@@ -3755,7 +3755,7 @@ a subdivision and a draw the consumer no longer makes.
   so a family appearing or disappearing is not a quiet change. What the count does not settle is how
   many *materials* that is, because a family is not a material — see the next entry.
 - **Materials vary with the style, and are fixed the moment it parses.** Measured, against a
-  fluorite built from `origin/main` (`ec0a56bd`) rather than a stale artefact. Shader identity
+  fluorite built from `origin/main` (`ec0a56bd`) rather than a stale artifact. Shader identity
   on the wire is the pair (family, permutation). The family is static: it follows the layer type
   and the ABI freezes thirty-five of them. The permutation is not — it is a bitmask over the
   family's attribute ids saying which paint properties reach the shader as *uniforms* rather
@@ -3846,7 +3846,7 @@ a subdivision and a draw the consumer no longer makes.
   arithmetic, not a result: it is known when the job is *planned*, and recording it there is what
   fills the cover. Both halves are regression-tested in `source.rs`.
 - **The camera diverged from mbgl above z13.** *Fixed -- three separate faults, found by
-  comparing landmarks against `mbgl-render` rather than aggregate colour counts.*
+  comparing landmarks against `mbgl-render` rather than aggregate color counts.*
 
   **The frame was drawn upside down.** Flipping our z14 render collapsed the water centroid's
   vertical error from +270 px to -10 px, which said mirrored rather than translated. An
@@ -3872,7 +3872,7 @@ a subdivision and a draw the consumer no longer makes.
   (-16, -10), z15 0.99 at (+7, -19). z16 is the same ground at the same scale, confirmed by
   matching it against the center quarter of both z14 renders.
 
-  The lesson is in how long it hid. Green, water and grey pixel counts were matching mbgl to a few
+  The lesson is in how long it hid. Green, water and gray pixel counts were matching mbgl to a few
   percent and that was read as the frame being right; a histogram cannot see a translation, still
   less a reflection, because a mirrored view of the same city has nearly the same one. Landmark
   position is the test that separates them, and it is what the mbgl comparison should assert on.
@@ -3889,7 +3889,7 @@ a subdivision and a draw the consumer no longer makes.
 
   The second was the lighting itself, invented rather than ported. mbgl's directional term
   *brightens* a lit surface: at full incidence it is `max(1 - luminance + intensity, 1)`, never
-  below one, and only a surface facing away is scaled, by `1 - intensity`. Multiplying the colour
+  below one, and only a surface facing away is scaled, by `1 - intensity`. Multiplying the color
   by the intensity is what made every building near-black. The term is mbgl's now, including the
   light position, which was not being passed at all.
 
@@ -3901,17 +3901,17 @@ a subdivision and a draw the consumer no longer makes.
 
   The chain is sound at every step, each verified against a real z14 Berlin tile rather than
   reasoned about: the MVT decoder reads `render_height` on all 236 building features with a
-  believable spread, 0 to 103 metres; `resolve_paint` binds it as an `Attribute` carrying
+  believable spread, 0 to 103 meters; `resolve_paint` binds it as an `Attribute` carrying
   `Get { key: "render_height" }`; the expression evaluates against a real feature; `PaintBinder`
   writes 21,051 nonzero entries out of 21,112; and the wire carries them, base and height
-  interleaved at one 8-byte stride. Forcing a 500-metre height moves 160,440 pixels, so altitude
+  interleaved at one 8-byte stride. Forcing a 500-meter height moves 160,440 pixels, so altitude
   reaches clip space as well.
 
   What went wrong was the sampling. The first roof drawable a frame uploads is the *prefetched
   z13 ancestor*, and openmaptiles carries no `render_height` at z13 -- the layer's own minzoom is
   13 but the field arrives at 14. Its 14,613 vertices are genuinely all zero. I dumped that one
   drawable, saw zeros, and wrote up a producer bug that did not exist. Printing the tile id beside
-  the values showed z14/8800/5373 with 21,051 nonzero and a 103-metre maximum, sitting right
+  the values showed z14/8800/5373 with 21,051 nonzero and a 103-meter maximum, sitting right
   underneath.
 
   This is the same error as the four before it, and the pattern is now specific enough to name:
@@ -3924,19 +3924,19 @@ a subdivision and a draw the consumer no longer makes.
   a rendering fault either, and neither was the z13 ancestor suspected of it: the frame draws
   `zoom_14 124` and nothing else, so the ancestor is uploaded and correctly not drawn.
 
-  The measurement was wrong. It compared the count of *our* most common colour against the count
-  of *mbgl's*, which are two different colours. Classifying pixels instead, at z16 against the
-  oracle: the frame differs by +16,178 grey and -13,953 dark, and the dark is mbgl's text. Labels
-  sit on top of buildings, so where the oracle has type we have the grey underneath. Excluding the
-  pixels mbgl draws a label on drops the grey excess to +3,237.
+  The measurement was wrong. It compared the count of *our* most common color against the count
+  of *mbgl's*, which are two different colors. Classifying pixels instead, at z16 against the
+  oracle: the frame differs by +16,178 gray and -13,953 dark, and the dark is mbgl's text. Labels
+  sit on top of buildings, so where the oracle has type we have the gray underneath. Excluding the
+  pixels mbgl draws a label on drops the gray excess to +3,237.
 
-  What is left after that: green -6,759, road-yellow +2,910, grey +3,237, water -3,019. The water
+  What is left after that: green -6,759, road-yellow +2,910, gray +3,237, water -3,019. The water
   is the same cause once more -- most of the oracle's blue at this zoom is transit badges and POI
   markers, not water, and the genuine ponds appear in both. So the visible gap from the oracle at
   z16 is dominated by the symbol family, and the fill and line families are close.
 
   Twice in one investigation the metric, not the renderer, was what was broken. Both times the fix
-  was to classify rather than to count one colour, and to exclude what the oracle draws and we do
+  was to classify rather than to count one color, and to exclude what the oracle draws and we do
   not before comparing what remains.
 - **`c_surface` can fail when two `cargo test` runs overlap.** It builds the staticlib itself and
   links a C binary against it, so two workspace runs started back to back race over the same
@@ -3965,7 +3965,7 @@ a subdivision and a draw the consumer no longer makes.
 
   Four times in this hunt I measured the wrong population and drew a conclusion from it: a
   histogram truncated to its lowest buckets, twice; a diagnostic that painted the whole screen
-  opaquely, whose colour buckets were then mostly map and not glyph; and a probe that multiplied
+  opaquely, whose color buckets were then mostly map and not glyph; and a probe that multiplied
   the value it was reporting by the coverage, so it reported `fade x alpha` as `fade`. Each looked
   like a finding. The habit that catches all four is the same: say what population is being
   measured, and check the count against what it should be before reading the values.
@@ -4182,7 +4182,7 @@ a subdivision and a draw the consumer no longer makes.
   too many.
 
   Two test fixtures were recalibrated rather than relaxed: they had been written against the old
-  behaviour, and at the corrected spacing their roads are no longer long enough to repeat a label
+  behavior, and at the corrected spacing their roads are no longer long enough to repeat a label
   at all, which is the premise both tests rest on. They now state small pixel spacings and say
   why.
 
@@ -4275,7 +4275,7 @@ a subdivision and a draw the consumer no longer makes.
   mbgl builds the same padded run and then does not test it. `placeLineFeature` skips every circle
   outside the placed first and last glyph, which at pitch zero is the label's own extent. We
   tested the whole run, so a label 114 pixels wide reserved 272, and two of them 250 pixels apart
-  -- which is exactly what `symbol-spacing` asks for -- collided with a neighbour they never
+  -- which is exactly what `symbol-spacing` asks for -- collided with a neighbor they never
   touched.
 
   Measured on one straight road with one name, both renderers: mbgl draws four labels 250 pixels
@@ -4299,7 +4299,7 @@ a subdivision and a draw the consumer no longer makes.
   it each of them labels itself. We had no such filter.
 
   Berlin goes 3,041 to 2,958 against the oracle's 3,005, and Washington 2,353 to 2,309 against
-  1,931. Kept because it is mbgl's behaviour and was missing, not because of the numbers: it moved
+  1,931. Kept because it is mbgl's behavior and was missing, not because of the numbers: it moved
   Berlin from one per cent over to two under, which is noise at this distance.
 
 - **All five remaining shader families reach the screen now.** Every parity number before this
@@ -4349,20 +4349,20 @@ a subdivision and a draw the consumer no longer makes.
   drawable layout for the whole of it. The layer now draws at 92.9% of pixels exact against the
   oracle with no gross pixels.
 
-- **An extrusion drew its depth pass and threw its colour pass away.** *Fixed, both halves.* The
+- **An extrusion drew its depth pass and threw its color pass away.** *Fixed, both halves.* The
   producer packs one drawable-UBO entry per drawable, and `ubo_index` is numbered per *layer*
   across every sub-layer the layer emits. An extrusion emits four when it needs a depth pass -- 0
-  and 1 draw depth, 2 and 3 draw colour -- and the packing covered only the first two. The colour
+  and 1 draw depth, 2 and 3 draw color -- and the packing covered only the first two. The color
   pass therefore indexed past the end of its own buffer, where the consumer counts it `unplaced`
   and skips it: eighteen drawables of thirty-six on a twelve-tile frame.
 
-  What was on screen was the *depth* pass, drawn with colour because the consumer did not honour
+  What was on screen was the *depth* pass, drawn with color because the consumer did not honor
   `ENABLE_COLOR` either. That is why a building was a flat footprint in the roof's shade: it was
   geometry that exists to fill a depth buffer, painted as though it were the building.
 
   Both halves needed fixing together. The producer now packs all four sub-layers -- `matrices`
   yields nothing for one with no bindings, so it is right for an opaque extrusion too, which emits
-  2 and 3 alone. The consumer honours `ENABLE_COLOR`, and gives the extrusion families the depth
+  2 and 3 alone. The consumer honors `ENABLE_COLOR`, and gives the extrusion families the depth
   buffer they need.
 
   Depth is scoped to those families rather than read from `ENABLE_DEPTH`, which a background
@@ -4386,11 +4386,11 @@ a subdivision and a draw the consumer no longer makes.
 
   Two bugs, and neither was visible while the other stood.
 
-  **The consumer drew the colour pass before the depth pass.** `endFrame` reverses the frame's
+  **The consumer drew the color pass before the depth pass.** `endFrame` reverses the frame's
   batches, because the producer sends front-to-back and a translucent pass with no depth buffer has
   to blend bottom-up. That reversal also turned an extrusion inside out: the producer emits the
-  depth-only pass at sub-layers 0 and 1 and the colour pass at 2 and 3, and reversed, the colour
-  pass ran first against a cleared buffer. The measurement that proves it: a read-only colour pass
+  depth-only pass at sub-layers 0 and 1 and the color pass at 2 and 3, and reversed, the color
+  pass ran first against a cleared buffer. The measurement that proves it: a read-only color pass
   *with* the prepass and one with **no depth buffer at all** lost the same 6,857 wall pixels, which
   can only hold if nothing ever read what the prepass wrote. It is also why the prepass looked
   redundant -- dropping it rendered pixel-identically. Fixed by reversing at layer granularity and
@@ -4408,23 +4408,23 @@ a subdivision and a draw the consumer no longer makes.
   `depthModeForSublayer`, which divides a flat layer's depth range so a fill's outline does not
   z-fight the fill it outlines. mbgl draws a fill-extrusion under `depthModeFor3D` instead -- the
   whole range, no sublayer term. One step of `DEPTH_EPSILON` is 9.3e-7 of clip depth after the
-  divide, against the 2e-4 a 150-metre building spans in total, and `depth_probe`'s third phase puts
-  the tolerance below that: at 1e-6 apart the colour pass is rejected outright. Fixed with
+  divide, against the 2e-4 a 150-meter building spans in total, and `depth_probe`'s third phase puts
+  the tolerance below that: at 1e-6 apart the color pass is rejected outright. Fixed with
   `DrawableEntry::for_tile_3d`, and pinned by a test, which nothing did before.
 
   Removing the nudge alone had been tried and reverted as useless -- correctly, on the evidence
-  available then. With the order still inverted the colour pass was never tested against anything,
+  available then. With the order still inverted the color pass was never tested against anything,
   so no depth change could show. Each fix needs the other to mean anything.
 
-  **mbgl's read-only colour pass is not reproducible here, and does not need to be.** It exists so
+  **mbgl's read-only color pass is not reproducible here, and does not need to be.** It exists so
   each pixel blends exactly once, and it works there because both passes draw the same drawables
   through the same shaders, making the depths bit-identical. Ours are not: the roof and the walls
   are separate drawables on separate shaders, the walls expanded from outlines and reconstructing
-  position from instance attributes. Swept over every comparison function, a read-only colour pass
+  position from instance attributes. Swept over every comparison function, a read-only color pass
   scores MAE 5.46 against the oracle where a writing one scores 2.05, and the disagreement shows as
   whole triangles of building where neither surface won.
 
-  So the prepass is skipped at the consumer and the single colour pass writes depth. It resolves
+  So the prepass is skipped at the consumer and the single color pass writes depth. It resolves
   roof against wall and building against building, which is what the prepass was for. Against the
   oracle: **MAE 2.05 and 164 gross pixels, from 2.08 and 342**, with 36 renderables instead of 54.
   Skipped at the consumer rather than dropped from the stream -- the producer's order is measured
@@ -4447,15 +4447,15 @@ a subdivision and a draw the consumer no longer makes.
   It hid behind a coincidence: at an opacity of one, not blending *is* the right answer, so the
   layer matched the oracle exactly and every measurement taken on an opaque style said the pipeline
   was correct. What it cost was 3 of 255 on a roof and 14 on a wall -- the roof came out at the lit
-  colour instead of nine parts lit to one part what was behind it -- across more than a third of
+  color instead of nine parts lit to one part what was behind it -- across more than a third of
   the frame.
 
   Berlin at `fill-extrusion-opacity: 0.9`: **63.1% of pixels exact and MAE 2.44 before, 91.8% and
   MAE 0.45 after.** Opaque styles stay at 100.0% and MAE 0.00.
 
   The same nesting cost every other family too. The opacity read sat *inside* the branch that sets
-  a shared colour, which excludes raster, the symbols and the two pattern variants by design --
-  opacity is not a property of having a shared colour. Lifted out, and line, circle and the pattern
+  a shared color, which excludes raster, the symbols and the two pattern variants by design --
+  opacity is not a property of having a shared color. Lifted out, and line, circle and the pattern
   fills are covered by name.
 
   This is also why the earlier depth work read the way it did. Every prepass and read-only
@@ -4485,7 +4485,7 @@ a subdivision and a draw the consumer no longer makes.
 
   **And the depth prepass is drawn again.** Depth alone cannot prevent a double blend -- the test
   rejects a farther fragment that arrives second, but nothing stops it arriving first -- so the
-  buffer has to be filled before any colour is blended, which is what mbgl's prepass is for. It was
+  buffer has to be filled before any color is blended, which is what mbgl's prepass is for. It was
   being skipped on the strength of measurements taken while opacity was stuck at one, where the
   question does not arise.
 
@@ -4494,32 +4494,32 @@ a subdivision and a draw the consumer no longer makes.
   MAE 0.00.
 
   **And an extrusion is not clipped to its tile, in either pass.** This was the anomaly, and it
-  took three tries to read correctly. The producer marks the colour pass `ENABLE_STENCIL` and the
-  depth pass not, which is what mbgl does -- `setEnableStencil(doDepthPass)` on the colour builder,
+  took three tries to read correctly. The producer marks the color pass `ENABLE_STENCIL` and the
+  depth pass not, which is what mbgl does -- `setEnableStencil(doDepthPass)` on the color builder,
   the depth builder left at the default of false. There the asymmetry is harmless, because mbgl's
   stencil is what makes exactly one tile paint each pixel and between them the tiles cover
   everything.
 
   Here a building's geometry runs past its tile's edge by design and nothing paints what the clip
-  cuts: the neighbouring tile does not carry its own copy to paint it with. So the clip removes
+  cuts: the neighboring tile does not carry its own copy to paint it with. So the clip removes
   wall faces and leaves the background in their place.
 
   The measurement that settles it is the gross count, not the exact count. Rendering *only* the
-  depth drawables, which carry no stencil, gives 8 gross pixels against the colour drawables' 163 --
+  depth drawables, which carry no stencil, gives 8 gross pixels against the color drawables' 163 --
   identical geometry through an identical shader, differing in one flag.
 
   Berlin at 0.9, against `mbgl-render`:
 
   | arrangement | exact | MAE | gross px | worst region |
   |---|---|---|---|---|
-  | colour pass only, clipped | 92.0% | 0.41 | 163 | 66 |
-  | prepass unclipped, colour clipped | 94.9% | 0.66 | 2,694 | 1,351 |
+  | color pass only, clipped | 92.0% | 0.41 | 163 | 66 |
+  | prepass unclipped, color clipped | 94.9% | 0.66 | 2,694 | 1,351 |
   | both clipped | 97.8% | 0.13 | 161 | 64 |
   | **neither clipped** | 95.7% | 0.20 | **8** | **1** |
 
   Clipping only one pass is worse than either extreme: the depth pass writes for the whole building
-  and the clipped colour pass cannot paint the part outside the tile, which leaves depth with no
-  colour -- a hole rather than a slice. Clipping both trades the holes back for slices and scores
+  and the clipped color pass cannot paint the part outside the tile, which leaves depth with no
+  color -- a hole rather than a slice. Clipping both trades the holes back for slices and scores
   best on exact and MAE while keeping every visible defect, which is what makes those two numbers
   the wrong ones to steer by here.
 
@@ -4530,8 +4530,8 @@ a subdivision and a draw the consumer no longer makes.
   Opaque styles stay at 100.0% and MAE 0.00. The all-families scene improved with it, from 8.4% of
   pixels exact and MAE 31.84 to 16.6% and 20.13.
 
-  One thing deliberately not taken: mbgl leaves its colour pass read-only, and measured here that
-  is worse, so the colour pass writes depth too.
+  One thing deliberately not taken: mbgl leaves its color pass read-only, and measured here that
+  is worse, so the color pass writes depth too.
 
 - **A background layer needed a vector tile to exist.** *Fixed.* The background was taken off
   whatever tiles a source happened to serve. mbgl does not do that and says so in as many words --
@@ -4540,7 +4540,7 @@ a subdivision and a draw the consumer no longer makes.
 
   Taking it from served tiles was wrong twice. A style with no vector source has nothing
   renderable, so substitution records no coordinates and no background was drawn at all: the frame
-  came out the clear colour, which is black. A raster-only basemap is exactly that style. And where
+  came out the clear color, which is black. A raster-only basemap is exactly that style. And where
   a source *was* present but an ancestor stood in for a missing tile, the background went onto the
   ancestor's coordinate and covered four or sixteen times the ground it should -- which the comment
   beside it already said was wrong ("a background belongs to the coordinate on screen rather than
@@ -4610,24 +4610,24 @@ a subdivision and a draw the consumer no longer makes.
 
   It is a double blend, and the arithmetic says so exactly: a roof blended once against the
   background gives 211, twice gives 209, and our frame carries both -- 211 as its most common roof
-  colour and 209 across 24,840 pixels, with about 900 wall pixels the same way at a delta of 13.
+  color and 209 across 24,840 pixels, with about 900 wall pixels the same way at a delta of 13.
   The blend itself is right: at opacity 1.0, 0.9 and 0.5 our roof reads 208, 211 and 221, matching
   the oracle at each.
 
   The doubled pixels are spread over 829 of 900 columns rather than banded at tile edges, and no
-  drawable is issued twice -- the final frame has nine roof and nine wall drawables, one colour
+  drawable is issued twice -- the final frame has nine roof and nine wall drawables, one color
   pass each. So the two copies are two *tiles* carrying the same building, which our extrusion no
   longer clips apart.
 
-  **mbgl's read-only colour pass now measures identically** -- 95.7%, MAE 0.20, 8 gross, the same
+  **mbgl's read-only color pass now measures identically** -- 95.7%, MAE 0.20, 8 gross, the same
   to the decimal as writing depth -- where it once scored MAE 6.51. That was the ordering and
   culling bugs, not the technique, and it is worth knowing it is no longer a cost. It is also not a
   cure: two tiles' copies of one building sit at the *same* depth, so no depth test separates them.
   Only a per-tile clip can, which is what mbgl uses and what cuts our walls, because the
-  neighbouring tile does not carry the geometry to paint what the clip removes.
+  neighboring tile does not carry the geometry to paint what the clip removes.
 
   So the remaining work is in what the tiles carry, not in how they are drawn: if a tile's
-  extrusion geometry included its neighbours' overhang the way MVT's buffer intends, the clip
+  extrusion geometry included its neighbors' overhang the way MVT's buffer intends, the clip
   would be lossless and the double blend would go with it.
 
 - **A line label's anchors were walked along the unclipped line.** *Fixed.* mbgl runs
@@ -4686,7 +4686,7 @@ a subdivision and a draw the consumer no longer makes.
 
   Nor is it the merge, or the order symbols are offered in. Both have been read against mbgl's:
 
-  - `merge_lines` mirrors `mergeLines` case for case -- both neighbours, left only, right only --
+  - `merge_lines` mirrors `mergeLines` case for case -- both neighbors, left only, right only --
     and picks the same survivor each time, the earlier feature when merging rightwards and the
     later when merging leftwards. mbgl leaves a merged-away feature in place with empty geometry
     where this compacts it away; the relative order of the survivors is the same either way.
@@ -4710,7 +4710,7 @@ a subdivision and a draw the consumer no longer makes.
           continue;
       }
 
-  Two behaviours in there, and **one of them is already implemented** -- an earlier reading of this
+  Two behaviors in there, and **one of them is already implemented** -- an earlier reading of this
   same guard put it in. `LineCircle::covered_by_label` is `distance_from_anchor.abs() <=
   label_length / 2`, which is `[-firstTileDistance, lastTileDistance]` at pitch zero, and
   `placement.rs` filters the chain by it before testing. A first pass through this entry said "we
@@ -4822,9 +4822,9 @@ a subdivision and a draw the consumer no longer makes.
   after**. The all-families scene went from 47.2% and MAE 7.39 to **86.4% and 1.45**.
 
   How it was found, in the order that mattered: the layer had *zero* gross pixels, so the aggregate
-  numbers were the only signal it was wrong at all. Forcing the material to a solid colour showed
+  numbers were the only signal it was wrong at all. Forcing the material to a solid color showed
   the geometry, coverage and blending were all correct, which left the sample. Having the shader
-  output its own sampled alpha gave 36/255 -- the exact factor the colours were short by -- and
+  output its own sampled alpha gave 36/255 -- the exact factor the colors were short by -- and
   having it output the tiling coordinate gave `(0, 0)`, which is only possible if `tile_ratio` is
   zero.
 
@@ -5088,7 +5088,7 @@ a subdivision and a draw the consumer no longer makes.
 - **Placement order already matches mbgl, in both axes.** *No change; recorded so it is not
   "fixed" again.* Washington's largest remaining differences are whole line labels: at x 354-364
   we print "14th Street Northwest" where the oracle prints "13th Street Northwest" at x 463-473,
-  over an identical y span and identical road geometry. Both streets are labelled in both frames;
+  over an identical y span and identical road geometry. Both streets are labeled in both frames;
   the two renderers just give the second label to different streets. That is placement order, so
   it was worth checking properly, and it was wrong twice on the way:
 
@@ -5178,10 +5178,10 @@ a subdivision and a draw the consumer no longer makes.
   where mbgl splits -- 390 runs against 348 lines -- and the run an anchor was found on is no
   longer the same array as the feature's line.
 
-  One test moved with this. `a_roads_segments_are_joined_before_it_is_labelled` read the street
+  One test moved with this. `a_roads_segments_are_joined_before_it_is_labeled` read the street
   fixture as 1,773 road features; it is 28 features carrying 1,699 line strings, one of them a
   single feature with 562 parts, and the 1,773 was a count of rings. Its second-pass assertion --
-  that running `merge_lines` again joins more -- was an artefact of the same misreading: 1,699
+  that running `merge_lines` again joins more -- was an artifact of the same misreading: 1,699
   ring-pendings contended for one index slot per (text, endpoint), and 28 features do not. The
   assertion is gone and the reasoning is recorded in its place.
 
@@ -5307,7 +5307,7 @@ a subdivision and a draw the consumer no longer makes.
 
 - **An unscaled icon was sampled with interpolation, and mbgl samples it nearest.** *Fixed, and it
   closes the two Berlin symbol scenes.* The poi-labels difference was 47 small clusters, the
-  largest an 18x18 box around a sprite. Cropped, the sprite is there in both and the same colour,
+  largest an 18x18 box around a sprite. Cropped, the sprite is there in both and the same color,
   but ours has soft edges where the oracle's are crisp: mbgl drew a 17x16 block with 268 of its
   272 pixels at full strength, and this drew 18x17 with about 66 partial pixels round the border.
 
@@ -5327,7 +5327,7 @@ a subdivision and a draw the consumer no longer makes.
   The sampler is a property of the *use* rather than of the texture -- the same sprite sheet is
   sampled linearly by a pattern -- so it travels with the binding. `TextureRef` had a `_pad` word
   documented as "must be zero"; it now carries a `TextureFilter`, and zero is `Linear`, so a
-  producer that never sets it and a consumer that never reads it both keep the behaviour they had.
+  producer that never sets it and a consumer that never reads it both keep the behavior they had.
   `SymbolLayout::icons_need_linear` answers the three conditions that live in the style, reading a
   literal as constant and an expression as not -- which is mbgl's `constantOr` and
   `isDataDriven() || !isZoomConstant()` split. The fourth needs the sheet, so the emit site
@@ -5346,7 +5346,7 @@ a subdivision and a draw the consumer no longer makes.
   because the consumer had failed to compile and the probe ran a stale binary -- the build script
   is `set -e` and the failure was hidden behind a `tail -1`. Check that a build succeeded before
   believing a measurement that says nothing happened. And the consumer's `Mesh` is built with
-  positional initialisers, so a field inserted between `texture` and `texture1` silently took the
+  positional initializers, so a field inserted between `texture` and `texture1` silently took the
   next one's value; the new field goes after both, and says so.
 
 - **flutter_gpu on Flutter web.** Unverified, and the Dart consumer's shape depends on it: if it is
@@ -5411,7 +5411,7 @@ against; none is scheduled.
   are packed at runtime by a shelf allocator and uploaded as dirty sub-rects, and a
   block-compressed format cannot take a sub-rect at an arbitrary offset because its blocks are
   4x4. Even if it could, neither should be lossy: an SDF atlas is a smooth distance field and
-  block artefacts in it read as text with wobbling edges, and an icon is now sampled *nearest*
+  block artifacts in it read as text with wobbling edges, and an icon is now sampled *nearest*
   precisely so its texels land one to a pixel.
 
   That leaves raster tiles, where it is a real if modest win. Today the source serves PNG, JPEG or
@@ -5875,7 +5875,7 @@ against; none is scheduled.
 
   **Where.** `Substitution::get` answers `renderable: true` for any tile whose buckets are built,
   and `onion` prefetches ancestors two levels up so their buckets *are* built -- coarsest first, so
-  the map becomes legible early, which is the right strategy for fetching and not a licence to keep
+  the map becomes legible early, which is the right strategy for fetching and not a license to keep
   drawing them. `updateRenderables` should use an ancestor only where the ideal tile is not
   renderable; that all thirteen ideal tiles are built by quiescence and ancestors are still drawn
   says the substitution is not collapsing when its children arrive.
@@ -6014,10 +6014,10 @@ against; none is scheduled.
   8 ViewRelease, 8 GeometryRemove, 7 TextureUpdate, 4 OrderUpdate, 4 CameraUpdate, 1 ViewDeclare).
   Two runs even produced identical stream lengths and different images.
 
-  **Uninitialised tail padding on the wire.** The first differing record is a `ViewUse`, and the
+  **Uninitialized tail padding on the wire.** The first differing record is a `ViewUse`, and the
   bytes that differ are at record offset 52-55 -- `fe7f0000` against `ff7f0000` -- past
   `_pad` at 35. `ViewUse`'s fields end at 36 and `size_of::<ViewUse>()` is 40, so four bytes of
-  compiler tail padding are copied to the ring uninitialised. All 47 records carry it. That is
+  compiler tail padding are copied to the ring uninitialized. All 47 records carry it. That is
   process memory published to a consumer, and it makes the stream differ run to run whatever else
   is happening. Worth fixing on its own account; `#[repr(C)]` structs written as bytes should be
   zeroed or built field by field.
@@ -6032,7 +6032,7 @@ against; none is scheduled.
 
 - **ViewUse tail padding zeroed.** `_pad` was one byte where the record needed five: fields ended at
   35, `size_of::<ViewUse>()` is 40, and `as_bytes` copied four bytes of compiler padding to the
-  ring uninitialised. All 47 records carried it and it differed run to run. Now `[u8; 5]`, so every
+  ring uninitialized. All 47 records carried it and it differed run to run. Now `[u8; 5]`, so every
   byte of the record is a field, which is what the `WireRecord` contract already asked for. Header
   regenerated. Flat parity unchanged.
 
@@ -6185,7 +6185,7 @@ against; none is scheduled.
   `buildSymbol`.
 
 - **Found it: the per-frame symbol buffer differs per tile, and the earlier "identical" was a
-  positional artefact.** Hashing what the consumer hands Filament, keyed by the tile id the record
+  positional artifact.** Hashing what the consumer hands Filament, keyed by the tile id the record
   carries rather than by position:
 
       MESH t=14/8801/5373 sh=32 n=536 pos=8a62.. dat=8a62.. px=8a62.. placed=279dbe4fcd65ec85 idx=c4ee..
@@ -6331,8 +6331,8 @@ Two causes, one asset and one real:
   same server.
 
 - **The atlas dropped what would not fit.** `ATLAS_SIZE = 512` was read off an observation --
-  `symbol_style.dump` lists a `512x512` texture -- and generalised into a fixed page, with a comment
-  reasoning that growing would invalidate rectangles already handed out. mbgl's actual behaviour is
+  `symbol_style.dump` lists a `512x512` texture -- and generalized into a fixed page, with a comment
+  reasoning that growing would invalidate rectangles already handed out. mbgl's actual behavior is
   in `DynamicTextureAtlas::uploadGlyphs`: `startSize` is 512, and when a glyph of the set will not
   pack it releases what it packed, discards the texture and retries at double, until the whole set
   fits. 512 holds a few hundred glyphs; a CJK frame has thousands.
@@ -6357,7 +6357,7 @@ The quad was ticking at 202 ms a frame while panning. Four defects, found by pro
 than by reading, and each one a thing being redone every frame that only ever changes when
 something else does.
 
-**The arena was serialised every frame.** `SlabArena::pack` was 83% of the producer's samples,
+**The arena was serialized every frame.** `SlabArena::pack` was 83% of the producer's samples,
 copying every slab into a fresh `Vec` so a consumer could read it. `SlabArena::in_region` exists
 so that is not needed and nothing used it; the FFI now allocates a slab region beside the ring
 and the arena writes into it. `Config` gains `slab_capacity`, zero taking 64 MiB.
@@ -6396,7 +6396,7 @@ Four maps, 640x480 panes, release, ticked serially on one thread:
 | peak rss         | 5473 MiB | 1155 MiB |
 
 With the frame at 1.07 ms p50 and 1.80 p99: **4.5 ms at p50, 7.9 at p99, 9.6 at the worst frame
-of 660** -- every percentile inside 16.7 ms, with the four ticks serialised, which is the
+of 660** -- every percentile inside 16.7 ms, with the four ticks serialized, which is the
 pessimistic arrangement. Fluorite runs every view's Filament work on one strand, so serial is what
 it will see; per pane the worst is 1.16 ms.
 
@@ -6446,8 +6446,8 @@ found by looking at what came up:
 
 - *Post-processing off.* A map is display-referred sRGB, like the UI over it. Filament's pipeline
   treats what a shader wrote as scene-referred light and tone-maps it: roads at a couple of
-  percent contrast against their background, water grey. Reproduced headlessly with
-  `TSF_POSTPROCESS`, which `render_probe` honours.
+  percent contrast against their background, water gray. Reproduced headlessly with
+  `TSF_POSTPROCESS`, which `render_probe` honors.
 - *Stencil on.* Tessella clips tiles with a stencil pass, and Filament panics rather than
   degrades when a view asks for a stencil the swapchain does not carry -- so the swapchain gains
   the flag as well.
@@ -6562,7 +6562,7 @@ atlas rather than adding to the old, so it has to ask for everything asked for s
 ### Text made of fragments
 
 The CJK panes drew their labels as fragments -- each glyph a magnified corner of itself with its
-neighbours' corners around it. That is what a shader does when it divides atlas coordinates by the
+neighbors' corners around it. That is what a shader does when it divides atlas coordinates by the
 wrong number.
 
 It took a while to find because it is invisible everywhere it was looked for. Flat is clean.
@@ -6737,7 +6737,7 @@ than a value being miscomputed -- and the fades are what exist to cover that.
 
 `fade::increment` was already written, and already unused, in the same way the cross-tile index
 was. `tessella_advance` is the missing input: the elapsed milliseconds a fade is a fraction of.
-A map that is never told keeps the still-picture behaviour, so every capture and every probe is
+A map that is never told keeps the still-picture behavior, so every capture and every probe is
 untouched.
 
 ### The center gives way, not the zoom
@@ -6836,7 +6836,7 @@ Checked at every zoom from 11 to 16 against `mbgl-render`, settled, pitched: 0.8
 2.75%, 2.02%, 0.90% gross. The middle of that range is the settled probe stopping while fades are
 still part way, not misplacement -- the same camera measured 1.16% before the fades ran at all.
 
-### The text was half the colour it should be, and the fades are parked
+### The text was half the color it should be, and the fades are parked
 
 Caught by eye, from the parity captures: our glyphs topped out around (137,133,123) where the
 style asks for `#333333` and mbgl reaches (16,15,14). The tint is the giveaway -- ours is *warm*,
@@ -6865,7 +6865,7 @@ and 0.90% to 0.56%.
 
 The lesson for the parity metric: a 2.75% gross reading was recorded as "the settled probe stopping
 while fades are part way", which was true and was treated as benign. It was a regression in the
-text's colour, visible at a glance, and nobody looked because the number was small.
+text's color, visible at a glance, and nobody looked because the number was small.
 
 ### A frame that writes anything must send a camera
 
@@ -6889,7 +6889,7 @@ view writes nothing and stays silent, so §10's exit criterion is untouched.
 ### The fades: three attempts, three regressions, and what is actually known
 
 Enabling them has now been tried three times and made the picture worse every time: black frames,
-then text at half the colour the style asks for, then 26% gross at z14 with the text still wrong.
+then text at half the color the style asks for, then 26% gross at z14 with the text still wrong.
 The camera-commit bug above was one real cause underneath it and fixing that did not make the
 feature work.
 
@@ -7151,7 +7151,7 @@ names on their streets, Broadway on First Hill.
 
 `TSF_NO_FADES` turns them off, which is what a capture wants: `mbgl-render` runs in static map mode
 where `symbolFadeChange` returns one, so instant fades are what a parity comparison is against, and
-a settled probe that stops mid-fade reads a label at part of its colour. That is the whole of the
+a settled probe that stops mid-fade reads a label at part of its color. That is the whole of the
 1.668% against 1.456% difference between the two modes.
 
 Both defects found here -- the camera and the uniforms -- are the same mistake made twice: a gate
@@ -7802,7 +7802,7 @@ whose real quality was 236, 92 and 132. The count is what discriminated.
 ### The icon scene reaches zero, on a sampler
 
 Its placements had agreed exactly since the padding fix, and the 919 pixels left at Seattle z15
-pitch 45 were all of one kind: ours at either the icon's flat colour or the background's, mbgl's a
+pitch 45 were all of one kind: ours at either the icon's flat color or the background's, mbgl's a
 blend of the two. Hard edges against antialiased ones.
 
 mbgl picks an icon's filter with `sdfIcons || isChanging || iconScaled || iconTransformed`, and
@@ -7831,7 +7831,7 @@ pixels form **170 runs, of which 143 are a single pixel and none is longer than 
 specks along the coastline, not a region. `one_buildings` is 41 runs with a maximum of four,
 `families` 70 runs with a maximum of four. All three are edges.
 
-Nor is it antialiasing. Where the two differ, this side is the fill's flat colour and mbgl's is the
+Nor is it antialiasing. Where the two differ, this side is the fill's flat color and mbgl's is the
 background's -- both pure, neither blended -- so the polygon edge simply lands on the other side of
 a pixel center. One pixel of coverage, on boundaries thousands of pixels long.
 
@@ -7890,7 +7890,7 @@ not inside the walk, and it asks mbgl's question in mbgl's space.
 
 The road-label layer alone at z14 pitch 45 goes 4,084 gross to **13**. Every remaining number on
 this page is now edge noise of the kind measured two entries ago: single pixels along a boundary,
-pure colour against pure colour.
+pure color against pure color.
 
 Worth noting what the sequence looked like from inside, because it did not look like progress at
 the time. Placement was made exact -- 388 anchors, 167 against 167, zero disagreements -- and the
@@ -8564,7 +8564,7 @@ is remembered.
 
 Item 3 turned the stencil off under a globe and wrote down what that gave up. It gave up more than
 it said: with neither the mask nor the bounding-box scissor -- meaningless on a curved patch -- MVT
-geometry ran past its tile edge into the buffer that hides seams and painted across its neighbours,
+geometry ran past its tile edge into the buffer that hides seams and painted across its neighbors,
 as wedges of water lying over the map.
 
 Those wedges cost most of a day to identify because they look like a bend artifact and are not. What
@@ -8707,7 +8707,7 @@ already the release profile, which is the wasm size profile with nothing to add 
 HTTP `Range:` is a second impl rather than a redesign. And `topology` takes its sysfs reads as a
 closure with no libc, so it degrades to "no policy" for free.
 
-`tessella-ffi` already builds `staticlib`, `cdylib` and `rlib`, so the artefact half of the export
+`tessella-ffi` already builds `staticlib`, `cdylib` and `rlib`, so the artifact half of the export
 work is done; what is left is the strings.
 
 ### 19.2 What blocks it
@@ -8856,7 +8856,7 @@ The lane is still worth having -- it is the same one `aarch64` and `riscv64gc` u
 a dependency that has no wasm32 build at all. What actually asserts the discipline is a second step
 beside it: `cargo check -p <crate> --no-default-features` over the crates that carry the `no_std`
 marker, with the list read out of the markers rather than copied. That fails the moment one of them
-grows a `std::` path, which is the property the paragraph above wanted. Runtime behaviour needs a
+grows a `std::` path, which is the property the paragraph above wanted. Runtime behavior needs a
 runtime; it belongs to WS-3's consumer, not to a check lane.
 
 Building the gate turned up one thing worth recording. `tessella-orchestrate` carried
@@ -8991,7 +8991,7 @@ is §19.3's caution about `cargo check` one level further down.
 in as many words, so WS-0's clock was the wrong answer and this is the correction. Nothing replaces
 it on wasm. The only clock that changes what is drawn is the fade clock, and the ABI already has
 the host supply that through `tessella_advance` -- a producer reading its own would disagree with
-the compositor driving it. What is left is the cold-start trace, a diagnostic no behaviour reads,
+the compositor driving it. What is left is the cold-start trace, a diagnostic no behavior reads,
 which reports zero there; a browser wanting those numbers has `performance.now` and a tick to
 record it around, which measures what the consumer waited for rather than what the producer thinks
 it spent.
@@ -9274,7 +9274,7 @@ dominate.
 Nothing, by construction. Native keeps the blocking trait and only meets the blanket impl through
 `drain`, which it does not call outside the deterministic mode. `Pool` stays concrete, so the wasm
 internals compile out and no virtual call appears on the job path. `web-time` is `std` off wasm, `fs`
-is on by default, and `cdylib` is a second artefact from object code that already exists.
+is on by default, and `cdylib` is a second artifact from object code that already exists.
 
 What native gains is in DR-24: a one-thread, one-call-site-per-tick execution of the whole producer,
 which is a reproducible trace baseline that falls out of this work rather than being built for its

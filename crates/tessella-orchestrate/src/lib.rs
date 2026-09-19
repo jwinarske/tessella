@@ -23,7 +23,7 @@
 //! on the hermetic one. The process-scoped worker pool of §5.4 exists with its three priority
 //! classes, and the cold start runs on it. Not implemented: symbols and their placement (R2),
 //! patterns and raster (R3), and the predictive pre-warm and acknowledged never-blank of §13.2,
-//! which need the reverse channel to carry zoom velocity and consumer acknowledgement.
+//! which need the reverse channel to carry zoom velocity and consumer acknowledgment.
 
 // Not `forbid`: `emit` reinterprets `#[repr(C)]` envelope records as bytes to put them on the
 // ring, which is the one thing this crate does that cannot be expressed safely. Everything

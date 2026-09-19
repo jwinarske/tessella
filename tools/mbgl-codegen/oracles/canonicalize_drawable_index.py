@@ -67,7 +67,7 @@ def canonicalize(path: str) -> int:
 
     # The blocks move as well as their labels: mbgl lists drawables in the order it visited
     # them, so the same set comes out in a different sequence. Sorting them by identity is the
-    # same judgement as renumbering — the list is a set of drawables, and painter order is the
+    # same judgment as renumbering — the list is a set of drawables, and painter order is the
     # `draw` lines, which are compared exactly and left alone.
     out: list[str] = []
     block: list[str] | None = None

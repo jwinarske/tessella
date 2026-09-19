@@ -16,7 +16,7 @@
 //! seventy tiles fetched in seventy calls across four views, which is §9.3 flatness stated over
 //! the shared pyramid rather than over a cover count.
 //!
-//! # Necessity is modelled, because it is load-bearing
+//! # Necessity is modeled, because it is load-bearing
 //!
 //! Only a `Required` retain starts a fetch here. An `Optional` one is a cache lookup and starts
 //! nothing, which is what the distinction means. That is not decoration: if optional retains
@@ -39,7 +39,7 @@ const LATENCY: u64 = 6;
 /// How many frames pass between a tile's buckets being built and the consumer having uploaded
 /// them.
 ///
-/// §13.2's acknowledgement, modelled. mbgl retains an ancestor until its descendants are
+/// §13.2's acknowledgment, modeled. mbgl retains an ancestor until its descendants are
 /// *built*, and the gap between built and uploaded is where its single-frame holes come from —
 /// a gap this harness did not have, so it could not have caught one. Two frames rather than one
 /// because a consumer that misses a vsync is the ordinary case, not the pathological one.

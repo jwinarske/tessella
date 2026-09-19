@@ -2002,7 +2002,7 @@ fn parse_ubo_body(body: &str) -> Result<(Vec<UboField>, u32), String> {
         };
         let (kind_text, field_name) = declaration.split_at(split);
         let kind = ubo_field_kind(kind_text.trim())
-            .ok_or_else(|| format!("unmodelled type `{}`", kind_text.trim()))?;
+            .ok_or_else(|| format!("unmodeled type `{}`", kind_text.trim()))?;
 
         if offset != running {
             return Err(format!(
@@ -2051,10 +2051,10 @@ fn ubo_field_kind(text: &str) -> Option<(&'static str, u32)> {
         "float" => Some(("F32", 4)),
         "int32_t" | "int" => Some(("I32", 4)),
         "uint32_t" => Some(("U32", 4)),
-        // A `uint32_t`-backed scoped enum used as a bitmask. Modelled as the integer it is:
+        // A `uint32_t`-backed scoped enum used as a bitmask. Modeled as the integer it is:
         // a consumer reading it wants the bits, and the names are mbgl's own business.
         //
-        // Named rather than matched by shape because the alternative is guessing: an unmodelled
+        // Named rather than matched by shape because the alternative is guessing: an unmodeled
         // type is refused, and refusing `LineEvaluatedPropsUBO` for one 4-byte field left the
         // line layer's color, width and opacity undescribable — which the Fluorite mirror hit
         // as soon as it tried to read them.

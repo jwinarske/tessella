@@ -472,7 +472,7 @@ fn a_line_label_reserves_its_road_and_not_its_box() {
 
 /// A symbol's two halves are placed together, and the optionality rules decide how.
 ///
-/// `place` has modelled these since R2 and nothing exercised them with a real icon, because
+/// `place` has modeled these since R2 and nothing exercised them with a real icon, because
 /// until R3 there were none. The four combinations are genuinely four different maps: a shield
 /// that vanishes with its label, a label that vanishes with its shield, either alone, or both
 /// or nothing.

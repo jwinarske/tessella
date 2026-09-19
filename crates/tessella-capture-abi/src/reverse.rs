@@ -221,7 +221,7 @@ impl ReverseChannel {
     /// Reports that geometry up to `position` is on the GPU.
     ///
     /// `position` is a ring head value. Monotonic: this takes the maximum rather than the
-    /// argument, so an out-of-order or stale acknowledgement cannot walk the value backwards
+    /// argument, so an out-of-order or stale acknowledgment cannot walk the value backwards
     /// and hand the producer permission to release a tile whose replacement is not up yet.
     pub fn ack_geometry(&self, position: u64) {
         self.acked_geometry.fetch_max(position, Ordering::Release);
@@ -388,11 +388,11 @@ mod tests {
         );
     }
 
-    /// The acknowledgement must never walk backwards. §13.2 releases an ancestor tile on the
-    /// strength of this value, so a stale acknowledgement lowering it would hand the producer
+    /// The acknowledgment must never walk backwards. §13.2 releases an ancestor tile on the
+    /// strength of this value, so a stale acknowledgment lowering it would hand the producer
     /// permission to drop a tile whose replacement is not on the GPU yet — a hole in the map.
     #[test]
-    fn geometry_acknowledgement_only_advances() {
+    fn geometry_acknowledgment_only_advances() {
         let channel = ReverseChannel::new();
         assert_eq!(channel.acked_geometry(), 0);
 

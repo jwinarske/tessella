@@ -7,7 +7,7 @@ rather than against its own.
 
 - `no_profile.png`, `profile.png` — one pixel, opaque half-red. The pair exists because one
   carries an ICC profile and the other does not, and mbgl expects the *same* pixel from both: a
-  decoder honouring the profile would colour-manage the tile and disagree with every other tile
+  decoder honoring the profile would color-manage the tile and disagree with every other tile
   on the map.
 - `no_profile_alpha.png`, `profile_alpha.png` — the same pixel at half alpha, and what says
   the decode premultiplies: the file holds `128, 0, 0` at alpha `128` and mbgl expects

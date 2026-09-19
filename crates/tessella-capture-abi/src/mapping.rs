@@ -35,7 +35,7 @@ impl Mapping {
     ///
     /// `base` must point at `len` bytes that stay mapped and writable for as long as this value
     /// lives, and nothing else may write them. Reads by another process are expected — that is
-    /// the point — and are what the caller synchronises through the ring's `head`: a store that
+    /// the point — and are what the caller synchronizes through the ring's `head`: a store that
     /// publishes a record happens after the writes here, so a consumer that acquires `head`
     /// sees the bytes of every record it can see.
     #[must_use]

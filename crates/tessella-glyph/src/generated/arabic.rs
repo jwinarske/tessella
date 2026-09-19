@@ -7,7 +7,7 @@
 //! every right-joining one — repeats its isolated and final, which is what keeps the
 //! lookup a plain index rather than a branch.
 
-/// How a character joins to its neighbours.
+/// How a character joins to its neighbors.
 ///
 /// Unicode's joining types. `Transparent` is the one that carries the algorithm: a
 /// diacritic sits *between* two letters without breaking their join, so the context a
@@ -20,7 +20,7 @@ pub enum Joining {
     Right,
     /// Joins only to the letter after it.
     Left,
-    /// Joins nothing itself but lets its neighbours join through it.
+    /// Joins nothing itself but lets its neighbors join through it.
     Causing,
     /// Invisible to joining: a diacritic.
     Transparent,

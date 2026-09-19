@@ -546,7 +546,7 @@ unsafe fn create(
             unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), capacity) };
 
         // The slab region. The arena writes the frame's geometry straight into it and the
-        // consumer reads it there, so there is no serialise step: an owned arena has to rebuild
+        // consumer reads it there, so there is no serialize step: an owned arena has to rebuild
         // the whole region every frame, which on a moving map is most of the frame.
         let slab_capacity = if config.slab_capacity == 0 {
             DEFAULT_SLAB_CAPACITY
@@ -975,14 +975,14 @@ pub unsafe extern "C" fn tessella_set_geojson_data(
 /// `image` is an encoded picture -- PNG, JPEG, or WebP where that decoder is built in -- rather
 /// than raw pixels, because every caller with an icon has a file and none of them has a
 /// premultiplied RGBA buffer. `sdf` says the picture is a signed distance field, which is what
-/// lets `icon-color` recolour it.
+/// lets `icon-color` recolor it.
 ///
 /// Distinct from [`tessella_add_annotation_image`], which adds an image an *annotation* names.
 /// Annotations are not style layers and their images are their own; this one is the style's.
 ///
 /// May be called at any time. An icon is laid out against the sheet per frame rather than built
 /// into a tile, so an image that arrives late costs a relayout of the symbols that wanted it and
-/// no tile is rebuilt. Replacing a name repacks the atlas, which is mbgl's behaviour too.
+/// no tile is rebuilt. Replacing a name repacks the atlas, which is mbgl's behavior too.
 ///
 /// Before the style's own sheet has arrived there is nothing to add to, and the call reports
 /// [`Status::NotResolved`] -- `tessella_status` says when a map is ready.

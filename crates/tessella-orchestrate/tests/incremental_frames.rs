@@ -73,7 +73,7 @@ fn scene(longitude: f64) -> Scene {
 ///
 /// A store, which is what the map draws from: `TileSource` keeps a tile's buckets until something
 /// rebuilds them, so two frames over one tile read one allocation. Building a fresh `Arc` per
-/// scene instead modelled a source that rebuilds every tile every frame -- and the registry now
+/// scene instead modeled a source that rebuilds every tile every frame -- and the registry now
 /// reads the build's identity as part of its content stamp, because a source handed new data
 /// rebuilds a tile under the same key at the same size, which nothing else distinguishes.
 fn held(style: &Style, id: TileId) -> Arc<Vec<LayerBucket>> {
@@ -696,7 +696,7 @@ fn a_parked_view_writes_no_bytes_at_all() {
 /// A slab holds a layer's tiles, so a pan releases some of them and the slab stays for the rest.
 /// Without compaction a camera that keeps moving leaves a trail of slabs each holding one or two
 /// live geometries, and none of them can be swept because none is empty. The bytes held grow
-/// with distance travelled.
+/// with distance traveled.
 ///
 /// Compaction is the answer DR-21 chose: a slab far enough below its live fraction has its
 /// survivors re-announced into the current slab, and the old one sweeps. This walks a camera far
@@ -722,7 +722,7 @@ fn a_long_pan_does_not_accumulate_dead_slabs() {
     let peak = slab_counts.iter().copied().max().unwrap_or(0);
     let last = slab_counts.last().copied().unwrap_or(0);
 
-    // The steady state is bounded, not growing with the distance travelled. The bound is loose
+    // The steady state is bounded, not growing with the distance traveled. The bound is loose
     // on purpose: what is asserted is that it stops growing, not what it settles at.
     assert!(
         last <= peak,
