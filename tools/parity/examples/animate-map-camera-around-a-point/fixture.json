@@ -1,0 +1,35 @@
+{
+ "example": "animate-map-camera-around-a-point",
+ "note": "Chicago at zoom 15.5 and pitch 45 on the liberty base, which nothing else in the suite uses, turned to each of the four cardinal bearings. The page rotates the camera every frame, and a rotation has no state behind it, so the four bearings are four cameras. It found two faults. The first: a viewport-anchored light was never turned by the camera, so every wall was shaded as though the map had not rotated -- bearing 0 read 25 and 90, 180 and 270 read 25269, 16460 and 22070. Fixed in #212, after which they read 25, 50, 5 and 7822. The second is what is left at 225 and 270, where a sweep of eight bearings reads 25, 50, 50, 9, 5, 83079, 7822 and 95: every differing pixel is a building wall, none differs by more than 96, and the ratio to the oracle's shade is a constant 0.734 with a standard deviation of 0.024 at 225. A rotation error would vary with a wall's orientation and this does not, so it is one wall family taking a different directional term. Recorded here, fixed in its own commit. The page also removes the label layers, which needs a `remove_layer` the header does not have; the labels stay, and both renderers draw the same ones -- over the buildings rather than masked by them, which is what the oracle does too (at bearing 180 the two frames agree to 5 pixels of 786432 while both draw street names across the tower faces).",
+ "base": "https://tiles.openfreemap.org/styles/liberty",
+ "cameras": [
+  {
+   "lat": 41.89033,
+   "lon": -87.62712,
+   "zoom": 15.5,
+   "pitch": 45,
+   "bearing": 0
+  },
+  {
+   "lat": 41.89033,
+   "lon": -87.62712,
+   "zoom": 15.5,
+   "pitch": 45,
+   "bearing": 90
+  },
+  {
+   "lat": 41.89033,
+   "lon": -87.62712,
+   "zoom": 15.5,
+   "pitch": 45,
+   "bearing": 180
+  },
+  {
+   "lat": 41.89033,
+   "lon": -87.62712,
+   "zoom": 15.5,
+   "pitch": 45,
+   "bearing": 270
+  }
+ ]
+}
