@@ -304,12 +304,24 @@ impl Map {
         // Unlike an annotation, a terrain is in the style document, so it is synthesized here
         // rather than by a setter.
         style.synthesize_terrain();
+        // Read before the struct literal, because `style` moves into it.
+        //
+        // The style's own light, not the default one. A style that declares `light` was having it
+        // read into the document and then dropped, so every scene was lit by mbgl's defaults --
+        // `[1.15, 210, 30]`, half intensity, viewport-anchored -- however the style asked to be
+        // lit. Nothing in the suite caught it because no fixture's base style declares a light,
+        // and the two renderers then agree by both taking the default.
+        //
+        // A malformed light falls back to the default rather than failing the map, which is how
+        // mbgl treats it: the light is optional, every member of it is optional, and a style is
+        // not worth refusing over one.
+        let light = Light::resolve(style.light.as_ref()).unwrap_or_default();
         Self {
             terrain_cells: 1,
             style,
             view,
             view_id,
-            light: Light::default(),
+            light,
             session: Session::new(),
             arena,
             layouts: frame::SymbolCache::default(),
@@ -329,6 +341,17 @@ impl Map {
             sprites: None,
             zoom: ZoomHistory::new(),
         }
+    }
+
+    /// The light this scene is lit by, resolved from the style.
+    ///
+    /// Exposed because the fault it was written for was a value that existed and could not be
+    /// seen: the style's `light` reached the document and never reached the frame, and nothing
+    /// short of a rendered pixel could tell. The camera block carries this to the consumer every
+    /// frame (§2.2).
+    #[must_use]
+    pub fn light(&self) -> &Light {
+        &self.light
     }
 
     /// Hands the map the glyphs its symbol layers need.

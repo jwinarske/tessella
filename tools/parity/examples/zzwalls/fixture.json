@@ -1,0 +1,18 @@
+{
+ "example": "zzwalls",
+ "note": "throwaway",
+ "base": null,
+ "sources": {
+  "b": {"type": "geojson", "data": {"type": "Feature",
+   "properties": {"h": 400.0, "b": 0.0},
+   "geometry": {"type": "Polygon", "coordinates": [[[-0.002, 0.002], [0.002, 0.002], [0.002, -0.002], [-0.002, -0.002], [-0.002, 0.002]]]}}}
+ },
+ "layers": [
+  {"id": "bg", "type": "background", "paint": {"background-color": "#000000"}},
+  {"id": "walls", "type": "fill-extrusion", "source": "b",
+   "paint": {"fill-extrusion-color": "#ffffff", "fill-extrusion-height": ["get", "h"],
+             "fill-extrusion-base": ["get", "b"], "fill-extrusion-opacity": 1,
+             "fill-extrusion-vertical-gradient": false}}
+ ],
+ "cameras": [{"lat": 0, "lon": 0, "zoom": 15, "pitch": 60, "bearing": 0}]
+}

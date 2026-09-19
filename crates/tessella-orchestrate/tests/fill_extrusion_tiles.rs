@@ -271,6 +271,48 @@ fn a_viewport_anchored_light_turns_with_the_bearing() {
     );
 }
 
+/// A style that declares a light is lit by it, not by the default.
+///
+/// The document carried `light` and the map dropped it on the floor, so every scene was lit by
+/// mbgl's defaults however the style asked. No fixture caught it because no base style in the
+/// suite declares a light, and the two renderers then agree by both taking the default.
+///
+/// Asserted through the props block rather than the field, because the block is what the shader
+/// reads and the whole fault was a value that existed and never got there.
+#[test]
+fn a_style_that_declares_a_light_is_lit_by_it() {
+    use tessella_orchestrate::map::Map;
+    use tessella_tile::cover::ViewTransform;
+
+    let with_light: Style = serde_json::from_str(
+        r#"{"version": 8, "light": {"anchor": "map", "intensity": 0.9,
+             "position": [1.5, 90.0, 80.0]},
+            "sources": {}, "layers": []}"#,
+    )
+    .expect("a style");
+    assert!(with_light.light.is_some(), "the document holds it");
+
+    let view = ViewTransform {
+        longitude: 0.0,
+        latitude: 0.0,
+        zoom: 15.0,
+        width: 256.0,
+        height: 256.0,
+        bearing: 0.0,
+        pitch: 0.0,
+        ground_below: 0.0,
+    };
+    let map = Map::new(with_light, view, tessella_capture_abi::envelope::ViewId(0));
+    let light = map.light();
+    assert_eq!(light.anchor, tessella_style::light::Anchor::Map, "anchor");
+    assert!(
+        (light.intensity - 0.9).abs() < 1e-6,
+        "intensity {}",
+        light.intensity
+    );
+    assert_eq!(light.position, [1.5, 90.0, 80.0], "position");
+}
+
 /// The three data-driven properties are the three an extrusion is.
 ///
 /// Color, height and base vary per feature — a building layer varies all three, which is the
