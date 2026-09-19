@@ -1,6 +1,6 @@
 {
  "example": "change-a-layers-color-with-buttons",
- "note": "The page offers two layers and ten swatches, and a click calls setPaintProperty(layer, 'fill-color', colour). The fixture takes the first of each -- water, and the first swatch -- and writes that colour in, which is the frame that click draws.",
+ "note": "The page offers two layers and ten swatches, and a click calls setPaintProperty(layer, 'fill-color', color). The fixture takes the first of each -- water, and the first swatch -- and writes that color in, which is the frame that click draws.",
  "base": "https://tiles.openfreemap.org/styles/bright",
  "layers": [
   {"id": "water", "paint": {"fill-color": "#ffffcc"}}
