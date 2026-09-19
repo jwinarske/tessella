@@ -1,0 +1,9 @@
+200 071614ea24aa05df4304f00815979251fb9d70b2beaf4bfb1923374c4a652bcb https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/Cat_silhouette.svg/60px-Cat_silhouette.svg.png
+200 293f4af715854c93410ec6f77c899490135f034195181c925b9ed61ad676555c https://demotiles.maplibre.org/tiles/1/1/1.pbf
+200 2f3391f513a816d54d33416a28fc691de62f89377de5e0c51ca32aebf5d7ee5b https://demotiles.maplibre.org/tiles/1/0/0.pbf
+200 64da7011e07531351a249a3d26aad76e2f22e4e321e50833f742697b453e8365 https://demotiles.maplibre.org/font/Open%20Sans%20Semibold/0-255.pbf
+200 a0db7e774a2ff0cd7313860e32a35b0f57a9aaafadb0d2ae94e8788dea7342c1 https://demotiles.maplibre.org/tiles/tiles.json
+200 c149422787969410cb13ab35380d2ff13a6f3748ca974c9918f494b8fd276573 https://demotiles.maplibre.org/tiles/1/1/0.pbf
+200 c8dfea55da2b4bb06878a35895b14fe00ed0bd383874a7a535205e167578842f https://demotiles.maplibre.org/tiles/1/0/1.pbf
+200 dd86fd257f9895da23b7da5dac62829a0b25ab458f71b06a3e06857b076caf06 https://demotiles.maplibre.org/style.json
+200 ea66b3cbc159e31458c2ef1d7def233b5d6368bb13d1c4ffa26d3fc7e36aefc1 https://demotiles.maplibre.org/tiles/0/0/0.pbf
