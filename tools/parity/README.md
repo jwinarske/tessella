@@ -45,7 +45,7 @@ The sweep's numbers as of 2026-09-16, which is the gate:
     puck_p              z14 p60    0
     hill_p              z14 p0     0 of 786432
     relief_p            z14 p0     0
-    hill_p              z11 p0   190
+    hill_p              z11 p0     0
     relief_p            z11 p0     0
     terrain_flat_p      z14 p0     0 of 786432
     terrain_flat_p      z14 p60   28
@@ -59,7 +59,7 @@ The sweep's numbers as of 2026-09-16, which is the gate:
     terrain_cover_p     z14 p30  holes 0
     terrain_cover_p     z14 p45  holes 0
     terrain_cover_p     z14 p60  holes 0
-    terrain_cover_p     z16 p45  holes 28
+    terrain_cover_p     z16 p45  holes 0
 
 `holes` is the other measure, for the one scene nothing can be compared against: pixels of a color
 the scene uses for nothing but its background. See `terrain_cover_p` below.
@@ -124,11 +124,15 @@ the scene uses for nothing but its background. See `terrain_cover_p` below.
 - `hill_p` — a hillshade over generated terrain. It stood at `gross 174053 (22.132%)` at z14 and
   `379466 (48.252%)` at z11 the day it was written, when nothing drew a hillshade, and now reads
 
-      hill_p  z14 p0     0 of 786432
-      hill_p  z11 p0   190
+      hill_p  z14 p0   0 of 786432
+      hill_p  z11 p0   0
 
-  z11 read 151 when it was written and 190 by 2026-09-16, with nothing on the terrain branch able
-  to reach it -- the scene has no terrain. The drift is recorded rather than explained.
+  z11 read 151 when it was written and 190 by 2026-09-16, and drifted between 190 and 141 from one
+  binary. That was the seam: each tile's border was a repeat of its own edge until its neighbors
+  arrived, nothing replaced it, and which tile arrived first decided how the edge shaded. Since the
+  store backfills borders on arrival it reads 0 every time the scene is run alone, and 0 to 14
+  inside a full sweep -- the reconciliation lands a tick or two behind the tile, and on a busy
+  machine the probe can settle on the frame before it.
 
   The terrain is generated rather than fetched, by `scenes/dem.py`, for three reasons in the order
   they decided it. No archive here carries a DEM and every public one carries a license, so a
@@ -179,7 +183,11 @@ the scene uses for nothing but its background. See `terrain_cover_p` below.
       terrain_cover_p  z14 p30      0            (0.000%)
       terrain_cover_p  z14 p45      0            (0.000%)
       terrain_cover_p  z14 p60      0            (0.000%)
-      terrain_cover_p  z16 p45     28            (0.004%)
+      terrain_cover_p  z16 p45      0            (0.000%)
+
+  z16 p45 held 28 holes longer than the rest, and they were the border again: two neighboring
+  tiles whose shared edge disagreed by a border pixel raise their edge vertices to different
+  heights, and the ground tears along the seam. Backfilling the border closed them.
 
   They read 62, 34140, 622, 180367 and 618072 before the camera took the ground's height into
   account, and z17 was a frame of pure background at any pitch. What that was:

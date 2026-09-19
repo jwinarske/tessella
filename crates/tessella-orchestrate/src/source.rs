@@ -304,6 +304,56 @@ impl<D: TileTransport + 'static> Drop for Clearing<D> {
     }
 }
 
+/// Where a DEM tile is on the globe: zoom, column and row, with the column wrapped.
+///
+/// Not a [`TileId`], because that is an *address* and several of them can name one tile: a world
+/// copy carries an unwrapped column, and a tile standing in above its source's maxzoom carries
+/// the zoom it is used at as well as its own. Bordering is geometry, so it is keyed by the
+/// geometry and the addresses are looked up from it.
+type Neighborhood = (u8, u32, u32);
+
+/// The tile an address names, with its column wrapped into the world.
+fn neighborhood(tile: TileId) -> Neighborhood {
+    let span = 1i64 << tile.z;
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let x = i64::from(tile.x).rem_euclid(span) as u32;
+    (tile.z, x, tile.y)
+}
+
+/// The eight tiles that share an edge or a corner, each with the offset `backfill_border` wants.
+///
+/// The column wraps and the row does not: the world is a cylinder, so the tile at the east edge
+/// borders the one at the west, and the tile at the top of the map borders nothing above it.
+fn adjacent(key: Neighborhood) -> impl Iterator<Item = (Option<Neighborhood>, i8, i8)> {
+    let (z, x, y) = key;
+    let span = 1i64 << z;
+    [-1i8, 0, 1].into_iter().flat_map(move |dy| {
+        [-1i8, 0, 1].into_iter().filter_map(move |dx| {
+            if dx == 0 && dy == 0 {
+                return None;
+            }
+            let row = i64::from(y) + i64::from(dy);
+            let found = (0..span).contains(&row).then(|| {
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                let column = (i64::from(x) + i64::from(dx)).rem_euclid(span) as u32;
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                (z, column, row as u32)
+            });
+            Some((found, dx, dy))
+        })
+    })
+}
+
+/// The elevation a tile's buckets were built from, if any of them was.
+fn dem_of(buckets: &[LayerBucket]) -> Option<&Arc<tessella_source::dem::Dem>> {
+    buckets.iter().find_map(|bucket| match &bucket.content {
+        crate::tile::Content::Terrain(terrain) => Some(&terrain.dem),
+        crate::tile::Content::ColorRelief(relief) => Some(&relief.dem),
+        crate::tile::Content::Hillshade(hillshade) => Some(&hillshade.dem),
+        _ => None,
+    })
+}
+
 /// A tile whose bytes were asked for and have not landed.
 ///
 /// The job outlives the request because the request only produces bytes: what to do with them --
@@ -380,6 +430,16 @@ pub struct TileSource<D> {
     generation: AtomicU64,
     /// Numbers each dispatch, for `Landed::by_source`.
     dispatched: AtomicU64,
+    /// DEM tiles that have landed since the last tick reconciled borders, by source.
+    ///
+    /// A DEM tile is stored one pixel wider on every side, and until its neighbors exist that
+    /// border is a guess: `Dem::new` repeats the tile's own edge. The guess is wrong by exactly
+    /// the amount the ground changes across the seam, and a hillshade reads the border -- so
+    /// every tile edge draws a line of slope nothing on the ground has. Collected here rather
+    /// than fixed in `land`, because a tick usually lands several tiles and each one is a
+    /// neighbor of the next: reconciling once with all of them in hand clones and re-prepares
+    /// each tile once instead of once per arriving neighbor.
+    seams: Mutex<BTreeMap<String, BTreeSet<TileId>>>,
 }
 
 /// A [`FileSource`] over the coalescing store.
@@ -479,6 +539,7 @@ impl<D: TileTransport + 'static> TileSource<D> {
             generation: AtomicU64::new(0),
             dispatched: AtomicU64::new(0),
             failures: Mutex::new((0, None)),
+            seams: Mutex::new(BTreeMap::new()),
         })
     }
 
@@ -1338,6 +1399,7 @@ impl<D: TileTransport + 'static> TileSource<D> {
 
     /// Files a tile's buckets under the tile that was built, and says the frame is worth redrawing.
     fn land(&self, job: &boot::Job, seq: u64, buckets: Arc<Vec<LayerBucket>>) {
+        let elevation = dem_of(&buckets).is_some();
         let mut held = self.landed.write().unwrap_or_else(PoisonError::into_inner);
         let builds = held.by_source.entry(job.tile).or_default();
         if builds.get(&job.source).is_some_and(|held| held.seq > seq) {
@@ -1366,7 +1428,179 @@ impl<D: TileTransport + 'static> TileSource<D> {
             .or_default()
             .insert(job.key.clone());
         drop(held);
+        if elevation {
+            // After the lock: the next tick reads this, and a worker must not hold the store's
+            // write lock while it takes a second one.
+            self.seams
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .entry(job.source.clone())
+                .or_default()
+                .insert(job.tile);
+        }
         self.generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// Replaces the repeated borders of the DEM tiles that have landed, and of their neighbors.
+    ///
+    /// Both directions, because a border is a property of a *pair*: the tile that arrived has
+    /// eight neighbors whose real pixels it has never seen, and each of those neighbors has an
+    /// edge facing it that it filled by repeating its own. Fixing one direction leaves the other
+    /// half of every seam.
+    ///
+    /// The work is a clone, up to eight edge copies and a prepare pass per tile, so it runs on
+    /// the pool: the tick thread collects what is needed under a read lock and takes the write
+    /// lock again only to swap the results in. Holding the write lock across the prepare would
+    /// stall every view's cover lookup behind a megabyte of arithmetic per landed tile.
+    fn reseam(self: &Arc<Self>) {
+        let dirty =
+            core::mem::take(&mut *self.seams.lock().unwrap_or_else(PoisonError::into_inner));
+        for (source, tiles) in dirty {
+            self.reseam_source(source, &tiles);
+        }
+    }
+
+    /// One source's share of [`Self::reseam`].
+    fn reseam_source(self: &Arc<Self>, source: String, dirty: &BTreeSet<TileId>) {
+        let mut dems: BTreeMap<Neighborhood, Arc<tessella_source::dem::Dem>> = BTreeMap::new();
+        let mut prepares: BTreeSet<Neighborhood> = BTreeSet::new();
+        // Which addresses hold each of those, with the dispatch that put it there: one DEM tile
+        // can sit at several addresses -- a world copy either side of the antimeridian, the same
+        // data overscaled to two zooms -- and every one of them carries the seam.
+        let mut holders: BTreeMap<Neighborhood, Vec<(TileId, u64)>> = BTreeMap::new();
+        // Only the zooms something landed at. A tile borders nothing at another level -- a cover
+        // spanning two of them, which is every cover mid-zoom, would otherwise have each one's
+        // arrivals walk the other's tiles for neighbors that cannot exist.
+        let zooms: BTreeSet<u8> = dirty.iter().map(|tile| tile.z).collect();
+        {
+            let held = self.landed.read().unwrap_or_else(PoisonError::into_inner);
+            for (tile, builds) in &held.by_source {
+                if !zooms.contains(&tile.z) {
+                    continue;
+                }
+                let Some(build) = builds.get(&source) else {
+                    continue;
+                };
+                let Some(dem) = dem_of(&build.buckets) else {
+                    continue;
+                };
+                let key = neighborhood(*tile);
+                dems.entry(key).or_insert_with(|| Arc::clone(dem));
+                if build
+                    .buckets
+                    .iter()
+                    .any(|bucket| matches!(bucket.content, crate::tile::Content::Hillshade(_)))
+                {
+                    prepares.insert(key);
+                }
+                holders.entry(key).or_default().push((*tile, build.seq));
+            }
+        }
+
+        // What arrived, and everything it borders.
+        let mut work: BTreeSet<Neighborhood> = BTreeSet::new();
+        for tile in dirty {
+            let key = neighborhood(*tile);
+            if !dems.contains_key(&key) {
+                continue;
+            }
+            work.insert(key);
+            work.extend(
+                adjacent(key).filter_map(|(next, ..)| next.filter(|n| dems.contains_key(n))),
+            );
+        }
+        if work.is_empty() {
+            return;
+        }
+
+        let this = Arc::clone(self);
+        // Background: a seam is wrong pixels where a missing tile is no pixels at all, and this
+        // must never outrank a tile a view is still waiting to draw.
+        self.pool.submit(Priority::Background, move || {
+            let mut reseamed = Vec::with_capacity(work.len());
+            for key in work {
+                let Some(base) = dems.get(&key) else { continue };
+                // From the tile as stored rather than from the last reconciliation, so a border
+                // is never carried over from a neighbor that has since been dropped.
+                let mut next = (**base).clone();
+                for (neighbor, dx, dy) in adjacent(key) {
+                    let Some(neighbor) = neighbor.and_then(|n| dems.get(&n)) else {
+                        continue;
+                    };
+                    next.backfill_border(neighbor, dx, dy);
+                }
+                // Only where something reads a slope. A terrain-only style samples the elevation
+                // itself and pays for no prepare pass at all.
+                let prepared = prepares
+                    .contains(&key)
+                    .then(|| Arc::new(next.prepare(key.0)));
+                reseamed.push((key, Arc::new(next), prepared));
+            }
+            this.swap_in(&source, &holders, reseamed);
+        });
+    }
+
+    /// Puts reconciled elevation back under every address that holds it.
+    fn swap_in(
+        &self,
+        source: &str,
+        holders: &BTreeMap<Neighborhood, Vec<(TileId, u64)>>,
+        reseamed: Vec<(
+            Neighborhood,
+            Arc<tessella_source::dem::Dem>,
+            Option<Arc<tessella_source::image::Image>>,
+        )>,
+    ) {
+        let mut changed = false;
+        let mut held = self.landed.write().unwrap_or_else(PoisonError::into_inner);
+        for (key, dem, prepared) in reseamed {
+            for (tile, seq) in holders.get(&key).into_iter().flatten() {
+                let Some(builds) = held.by_source.get_mut(tile) else {
+                    continue;
+                };
+                let Some(build) = builds.get_mut(source) else {
+                    continue;
+                };
+                // A newer build landed while this was being prepared, from bytes this never
+                // saw. It wins, and its own arrival has already asked for another pass.
+                if build.seq != *seq {
+                    continue;
+                }
+                let mut buckets = (*build.buckets).clone();
+                for bucket in &mut buckets {
+                    // The elevation only: a tile's mesh grid and its measured height range are
+                    // properties of the ground inside the tile, which a border does not touch.
+                    match &mut bucket.content {
+                        crate::tile::Content::Terrain(terrain) => {
+                            terrain.dem = Arc::clone(&dem);
+                        }
+                        crate::tile::Content::ColorRelief(relief) => {
+                            relief.dem = Arc::clone(&dem);
+                        }
+                        crate::tile::Content::Hillshade(hillshade) => {
+                            hillshade.dem = Arc::clone(&dem);
+                            if let Some(prepared) = &prepared {
+                                hillshade.prepared = Arc::clone(prepared);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                build.buckets = Arc::new(buckets);
+                let merged: Vec<LayerBucket> = builds
+                    .values()
+                    .flat_map(|build| build.buckets.iter().cloned())
+                    .collect();
+                held.by_tile.insert(*tile, Arc::new(merged));
+                changed = true;
+            }
+        }
+        drop(held);
+        if changed {
+            // The camera has not moved and no tile has arrived, so nothing else would tell a
+            // view that what it has drawn is now wrong.
+            self.generation.fetch_add(1, Ordering::AcqRel);
+        }
     }
 
     /// Counts a tile that did not build, and keeps the first reason one did not.
@@ -1402,6 +1636,7 @@ impl<D: TileTransport + 'static> TileSource<D> {
     pub fn drain(self: &Arc<Self>) {
         self.drain_resolution();
         self.drain_glyphs();
+        self.reseam();
 
         // Snapshotted rather than walked under the lock, because polling takes the ticket
         // table's lock and holding `pending` across that is the nesting `dispatch` is careful
