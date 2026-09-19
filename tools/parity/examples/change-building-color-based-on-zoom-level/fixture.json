@@ -1,0 +1,18 @@
+{
+ "example": "change-building-color-based-on-zoom-level",
+ "note": "The page gives `building-top` a colour and an opacity that both follow the zoom on an exponential-0.5 curve, then flies to zoom 19 so the buildings fade up. Two cameras, because one frame cannot show a curve: the page's own starting zoom, where the opacity curve is still clamped to nothing, and the zoom its button flies to.",
+ "base": "https://tiles.openfreemap.org/styles/bright",
+ "layers": [
+  {
+   "id": "building-top",
+   "paint": {
+    "fill-color": ["interpolate", ["exponential", 0.5], ["zoom"], 15, "#e2714b", 22, "#eee695"],
+    "fill-opacity": ["interpolate", ["exponential", 0.5], ["zoom"], 15, 0, 22, 1]
+   }
+  }
+ ],
+ "cameras": [
+  {"lat": 14.55524, "lon": -90.73414, "zoom": 13},
+  {"lat": 14.55524, "lon": -90.73414, "zoom": 19}
+ ]
+}
