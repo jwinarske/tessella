@@ -25,4 +25,5 @@
 200 ddce73e051bd2e32b1441e15a8184909e6f7279d5b5e3ca29e9501f9d6e9d90d https://tiles.openfreemap.org/fonts/Noto%20Sans%20Bold/1536-1791.pbf
 200 ef1f38a3f1978591e846e9eaddf8a54f7047f546fc6aaed7872cc53151a5de78 https://tiles.openfreemap.org/fonts/Noto%20Sans%20Regular/0-255.pbf
 200 f60ce4cb899455c2203bd8293b550394ade53ffce8032bf9cc7f59255e49259c https://tiles.openfreemap.org/fonts/Noto%20Sans%20Bold/0-255.pbf
+200 f85c0c4160e8766ad18ec6712aab38b7e30c11a6f63734b656e3c7cc0e4407f0 https://tiles.openfreemap.org/fonts/Noto%20Sans%20Bold/65024-65279.pbf
 200 fe3b711e5255dadb72052f792ccc650321780da4450e484962985a0c47ae148d https://tiles.openfreemap.org/planet/20260906_080001_pt/4/4/6.pbf
