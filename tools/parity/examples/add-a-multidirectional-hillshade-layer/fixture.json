@@ -1,0 +1,29 @@
+{
+ "example": "add-a-multidirectional-hillshade-layer",
+ "note": "Four lights on one hillshade: `hillshade-method` picks how the slopes are lit, and the highlight color, shadow color, illumination direction and altitude become arrays with one entry per light. The pinned oracle carries all of it -- HillshadeMethodType, and std::vector for each of the four paint properties.",
+ "base": null,
+ "sources": {
+  "hillshadeSource": {
+   "type": "raster-dem",
+   "url": "https://demotiles.maplibre.org/terrain-tiles/tiles.json",
+   "tileSize": 256
+  }
+ },
+ "layers": [
+  {
+   "id": "hillshade",
+   "type": "hillshade",
+   "source": "hillshadeSource",
+   "paint": {
+    "hillshade-method": "multidirectional",
+    "hillshade-highlight-color": ["#FF4000", "#FFFF00", "#40ff00", "#00FF80"],
+    "hillshade-shadow-color": ["#00bfff", "#0000ff", "#bf00ff", "#FF0080"],
+    "hillshade-illumination-direction": [270, 315, 0, 45],
+    "hillshade-illumination-altitude": [30, 30, 30, 30]
+   }
+  }
+ ],
+ "cameras": [
+  {"lat": 47.274, "lon": 11.491, "zoom": 10}
+ ]
+}
