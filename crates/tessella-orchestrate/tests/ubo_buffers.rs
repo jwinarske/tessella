@@ -553,3 +553,106 @@ fn the_line_ratio_is_the_label_planes_reciprocal() {
         );
     }
 }
+
+/// A hillshade's lights, as the evaluated-props block carries them.
+///
+/// The block has always had room for four -- `vec4` altitudes and azimuths, `vec4[4]` shadows
+/// and highlights -- and only ever carried one, because the paint was read one value at a time.
+mod hillshade_lights {
+    use tessella_orchestrate::ubo;
+    use tessella_style::Layer;
+    use tessella_style::property::resolve_paint;
+
+    fn paint_of(paint: &str) -> Paint {
+        let layer: Layer = serde_json::from_str(&format!(
+            r##"{{"id": "h", "type": "hillshade", "source": "s", "paint": {{{paint}}}}}"##
+        ))
+        .expect("a layer");
+        resolve_paint(&layer).expect("the paint resolves")
+    }
+
+    /// A layer's resolved paint, which is what the packers read.
+    type Paint =
+        std::collections::BTreeMap<&'static str, tessella_style::property::ResolvedProperty>;
+
+    /// The floats of the block, which is what the shader reads.
+    fn floats(paint: &Paint) -> Vec<f32> {
+        let bytes = ubo::hillshade_props_from_paint(paint, 10.0, 0.0);
+        bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|four| f32::from_le_bytes(*four))
+            .collect()
+    }
+
+    /// Four directions reach four slots, in the order the style wrote them.
+    #[test]
+    fn four_directions_reach_four_slots() {
+        let paint = paint_of(
+            r##""hillshade-illumination-direction": [270, 315, 0, 45],
+                "hillshade-illumination-altitude": [30, 30, 30, 30]"##,
+        );
+        let values = floats(&paint);
+        // Accent is the first four; altitudes the next four; azimuths the four after that.
+        let azimuths = &values[8..12];
+        for (slot, degrees) in [270.0f32, 315.0, 0.0, 45.0].into_iter().enumerate() {
+            assert!(
+                (azimuths[slot] - degrees.to_radians()).abs() < 1e-6,
+                "light {slot} points at {} rather than {degrees}",
+                azimuths[slot].to_degrees()
+            );
+        }
+        assert_eq!(ubo::hillshade_light_count(&paint, 10.0), 4);
+    }
+
+    /// A list shorter than the longest repeats its own last entry, which is mbgl's `padArray`.
+    ///
+    /// Not a default: a style that writes four directions and one color means that one color
+    /// for all four lights, and zeroing the other three would light three of them into nothing.
+    #[test]
+    fn a_short_list_repeats_its_last_entry() {
+        let paint = paint_of(
+            r##""hillshade-illumination-direction": [0, 90, 180, 270],
+                "hillshade-shadow-color": "#ff0000""##,
+        );
+        let values = floats(&paint);
+        // Accent, then four altitudes, then four azimuths, then the four shadow colors.
+        let shadows = &values[12..28];
+        let first: Vec<f32> = shadows[0..4].to_vec();
+        assert!(first[0] > 0.9, "the written color is the first light's");
+        for slot in 1..4 {
+            assert_eq!(
+                &shadows[slot * 4..slot * 4 + 4],
+                first.as_slice(),
+                "light {slot} was not padded from the one before it"
+            );
+        }
+        assert_eq!(ubo::hillshade_light_count(&paint, 10.0), 4);
+    }
+
+    /// A layer that writes nothing still lights once, as mbgl's empty-list push does.
+    #[test]
+    fn a_layer_that_says_nothing_lights_once() {
+        let paint = paint_of(r##""hillshade-exaggeration": 0.5"##);
+        assert_eq!(ubo::hillshade_light_count(&paint, 10.0), 1);
+    }
+
+    /// The method's numbering is mbgl's enum order, which is not the spec's listing order.
+    #[test]
+    fn the_method_is_mbgls_numbering() {
+        for (name, number) in [
+            ("standard", 0),
+            ("combined", 1),
+            ("igor", 2),
+            ("multidirectional", 3),
+            ("basic", 4),
+        ] {
+            let paint = paint_of(&format!(r##""hillshade-method": "{name}""##));
+            assert_eq!(ubo::hillshade_method(&paint, 10.0), number, "{name}");
+        }
+        // And the default, which is what a style saying nothing asks for.
+        let paint = paint_of(r##""hillshade-exaggeration": 0.5"##);
+        assert_eq!(ubo::hillshade_method(&paint, 10.0), 0);
+    }
+}
