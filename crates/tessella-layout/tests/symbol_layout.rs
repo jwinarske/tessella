@@ -412,3 +412,49 @@ mod variable_anchor_offset {
         assert_eq!(layout.variable_anchors[0].anchor, Anchor::Top);
     }
 }
+
+/// `icon-size` reaches the layout, which is where an icon's collision box is scaled from.
+///
+/// The value was parsed per feature and read by nothing: every icon competed for the room its
+/// sprite occupies rather than the room it draws in.
+mod icon_scale {
+    use tessella_layout::symbol_layout::SymbolLayout;
+    use tessella_style::Layer;
+
+    fn layout_of(layout: &str) -> SymbolLayout {
+        let layer: Layer = serde_json::from_str(&format!(
+            r#"{{"id": "points", "type": "symbol", "source": "s", "layout": {layout}}}"#
+        ))
+        .expect("a layer");
+        SymbolLayout::new(&layer, 11.0, 1.0)
+    }
+
+    /// What the style wrote.
+    #[test]
+    fn the_layer_s_icon_size_is_the_factor() {
+        let layout = layout_of(r#"{"icon-image": "cat", "icon-size": 0.25}"#);
+        assert!((layout.icon_scale - 0.25).abs() < f32::EPSILON);
+    }
+
+    /// And a multiplier of one where it wrote nothing -- `icon-size`'s own default, not
+    /// `text-size`'s sixteen.
+    #[test]
+    fn an_unstated_icon_size_is_one() {
+        let layout = layout_of(r#"{"icon-image": "cat"}"#);
+        assert!((layout.icon_scale - 1.0).abs() < f32::EPSILON);
+    }
+
+    /// A zoom curve is read at the tile's zoom, as every other layout property is.
+    #[test]
+    fn a_zoom_curve_is_read_at_the_tiles_zoom() {
+        let layout = layout_of(
+            r#"{"icon-image": "cat",
+                "icon-size": {"stops": [[10, 1], [12, 3]]}}"#,
+        );
+        assert!(
+            (layout.icon_scale - 2.0).abs() < 1e-5,
+            "halfway between the stops at zoom 11, got {}",
+            layout.icon_scale
+        );
+    }
+}
