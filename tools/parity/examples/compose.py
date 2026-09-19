@@ -13,7 +13,10 @@ Fixture fields:
   base      the style URL the example constructs its map with, or null for none
   sources   sources added on load, by id
   layers    layers added on load, in call order; `before` is a layer id, or `first-text-symbol`
-            for the "insert beneath the first label" idiom several examples use
+            for the "insert beneath the first label" idiom several examples use. A layer whose
+            id the base style already has is merged into that layer instead -- `layout`, `paint`
+            and `filter` key by key -- which is how an example that calls `setLayoutProperty`,
+            `setPaintProperty` or `setFilter` on the style's own layer is written.
   cameras   [{lat, lon, zoom, pitch, bearing}], each a settled frame to compare
   size      [width, height]; 1024x768 when absent, the sweep's street-zoom size
   script    what the example does after its style loads, as render-test operations --
@@ -129,6 +132,29 @@ def main() -> None:
     layers = style.setdefault("layers", [])
     for layer in added["layers"]:
         before = layer.pop("before", None)
+        # A layer the base already has is *changed*, not added again.
+        #
+        # Several examples reach for one property of a layer the style brought -- a country
+        # label's `text-field`, a building's color, a filter on a POI layer -- through
+        # `setLayoutProperty` and its two siblings. None of those has a history: the frame after
+        # the call is the frame a style carrying that value would have drawn. So the fixture
+        # names the layer and the properties the page sets, and they are merged in here.
+        #
+        # Merged rather than substituted, so a fixture says what the *call* says. A layer of
+        # bright's is forty lines, and a fixture repeating all of them to change one would go
+        # stale the day the style changes any of the others.
+        held = next((entry for entry in layers if entry.get("id") == layer["id"]), None)
+        if held is not None:
+            if before is not None:
+                sys.exit(f"{example}: layer {layer['id']!r} is the base's, so `before` says nothing")
+            for key, value in layer.items():
+                if key == "id":
+                    continue
+                if isinstance(value, dict) and isinstance(held.get(key), dict):
+                    held[key].update(value)
+                else:
+                    held[key] = value
+            continue
         layers.insert(insert_index(layers, before, example), layer)
 
     with open(sys.argv[2], "w") as out:

@@ -1,0 +1,43 @@
+{
+ "example": "display-and-style-rich-text-labels",
+ "note": "The page calls setLayoutProperty on load to give country labels a two-line `format` text-field: the English name at 1.2 scale, a newline, and the local name at 0.8 in a different font. A layout property has no history, so the fixture writes the same value into the same layer and draws the same frame. It names `label_country_1` rather than the page's `label_country`, because bright splits its country labels by rank and has no layer of that name -- run as written against today's bright, the page's own call would find nothing.",
+ "base": "https://tiles.openfreemap.org/styles/bright",
+ "layers": [
+  {
+   "id": "label_country_1",
+   "layout": {
+    "text-field": [
+     "format",
+     ["get", "name_en"], {"font-scale": 1.2},
+     "\n", {},
+     ["get", "name"], {"font-scale": 0.8, "text-font": ["literal", ["Noto Sans Regular"]]}
+    ]
+   }
+  },
+  {
+   "id": "label_country_2",
+   "layout": {
+    "text-field": [
+     "format",
+     ["get", "name_en"], {"font-scale": 1.2},
+     "\n", {},
+     ["get", "name"], {"font-scale": 0.8, "text-font": ["literal", ["Noto Sans Regular"]]}
+    ]
+   }
+  },
+  {
+   "id": "label_country_3",
+   "layout": {
+    "text-field": [
+     "format",
+     ["get", "name_en"], {"font-scale": 1.2},
+     "\n", {},
+     ["get", "name"], {"font-scale": 0.8, "text-font": ["literal", ["Noto Sans Regular"]]}
+    ]
+   }
+  }
+ ],
+ "cameras": [
+  {"lat": 40.01, "lon": 17.49, "zoom": 4}
+ ]
+}
