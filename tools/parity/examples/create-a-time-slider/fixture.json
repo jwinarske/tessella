@@ -1,0 +1,39 @@
+{
+ "example": "create-a-time-slider",
+ "note": "A year of significant earthquakes, narrowed to one month by a slider. The page computes a `month` property in JavaScript from each feature's `time` and filters on that; the fixture asks the same question of `time` itself -- January 2015, the slider's first stop -- so the data can be the document the page fetches rather than a copy with a property added to it. The frame is the same frame.",
+ "base": "https://demotiles.maplibre.org/style.json",
+ "sources": {
+  "earthquakes": {
+   "type": "geojson",
+   "data": "https://maplibre.org/maplibre-gl-js/docs/assets/significant-earthquakes-2015.geojson"
+  }
+ },
+ "layers": [
+  {
+   "id": "earthquake-circles",
+   "type": "circle",
+   "source": "earthquakes",
+   "filter": ["all", [">=", ["get", "time"], 1420070400000], ["<", ["get", "time"], 1422748800000]],
+   "paint": {
+    "circle-color": ["interpolate", ["linear"], ["get", "mag"], 6, "#FCA107", 8, "#7F3121"],
+    "circle-opacity": 0.75,
+    "circle-radius": ["interpolate", ["linear"], ["get", "mag"], 6, 20, 8, 40]
+   }
+  },
+  {
+   "id": "earthquake-labels",
+   "type": "symbol",
+   "source": "earthquakes",
+   "filter": ["all", [">=", ["get", "time"], 1420070400000], ["<", ["get", "time"], 1422748800000]],
+   "layout": {
+    "text-field": ["concat", ["to-string", ["get", "mag"]], "m"],
+    "text-font": ["Noto Sans Regular"],
+    "text-size": 12
+   },
+   "paint": {"text-color": "rgba(0,0,0,0.5)"}
+  }
+ ],
+ "cameras": [
+  {"lat": 20.7927, "lon": 31.4606, "zoom": 0.5}
+ ]
+}
