@@ -1,6 +1,6 @@
 {
  "example": "update-geojson-polygons",
- "note": "The example moves five rectangles with `updateData({update: ...})`, a diff. The pinned oracle has no diff API -- its GeoJSONSource takes a whole document, `setGeoJSON` or `setURL` -- so the fixture states the document the diff produces and hands it over with setData. What is compared is the frame either way. Its rectangles are Math.random() all the way down, so these are chosen: five to start, and where the animation has carried them, two of them recoloured.",
+ "note": "The example moves five rectangles with `updateData({update: ...})`, a diff. The pinned oracle has no diff API -- its GeoJSONSource takes a whole document, `setGeoJSON` or `setURL` -- so the fixture states the document the diff produces and hands it over with setData. What is compared is the frame either way. Its rectangles are Math.random() all the way down, so these are chosen: five to start, and where the animation has carried them, two of them recolored.",
  "base": "https://demotiles.maplibre.org/style.json",
  "sources": {
   "rectangles": {

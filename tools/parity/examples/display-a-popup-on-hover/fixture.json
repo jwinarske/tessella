@@ -1,0 +1,139 @@
+{
+ "example": "display-a-popup-on-hover",
+ "note": "Nine places across Washington with a marker each, and a popup the page builds in the DOM rather than in the map, so what a fixture can compare is the markers. They are what this one is for: nine copies of an added image over a dense basemap at zoom 11.15, two of them close enough to overlap, drawn with `icon-allow-overlap` so neither is dropped. It reads 13. Checked rather than assumed, since a fixture near the base's own number could as easily mean neither renderer drew the layer: against a base-only frame the markers come to 8769 pixels, the same 8769 on both sides. It writes `icon-allow-overlap` where the page writes `icon-overlap`, which the pinned oracle predates and refuses the layer for.",
+ "base": "https://tiles.openfreemap.org/styles/bright",
+ "sources": {
+  "places": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.038659,
+        38.931567
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.003168,
+        38.894651
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.090372,
+        38.881189
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.111561,
+        38.882342
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.052477,
+        38.943951
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.043444,
+        38.909664
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.031706,
+        38.914581
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.020945,
+        38.878241
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -77.007481,
+        38.876516
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "places",
+   "type": "symbol",
+   "source": "places",
+   "layout": {
+    "icon-image": "custom-marker",
+    "icon-allow-overlap": true
+   }
+  }
+ ],
+ "cameras": [
+  {
+   "lat": 38.907,
+   "lon": -77.04,
+   "zoom": 11.15
+  }
+ ],
+ "script": [
+  [
+   "addImage",
+   "custom-marker",
+   "https://maplibre.org/maplibre-gl-js/docs/assets/custom_marker.png"
+  ]
+ ]
+}

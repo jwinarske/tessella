@@ -1,0 +1,27 @@
+{
+ "example": "center-the-map-on-a-clicked-symbol",
+ "note": "Three markers over the Galapagos on the demotiles base. The page flies to whichever one is clicked, which a fixture cannot do -- `flyTo` is driven from `queryRenderedFeatures` -- so this draws the state the page starts in, and what is left to measure is a 32x40 marker from an added image placed three times at zoom 7.5, where the base draws almost nothing behind it. It reads 2, the base's own number at this camera. Checked rather than assumed: against a base-only frame the markers come to 627 pixels, the same 627 on both sides.",
+ "base": "https://demotiles.maplibre.org/style.json",
+ "sources": {
+  "points": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [-91.395263671875, -0.9145729757782163]}},
+     {"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [-90.32958984375, -0.6344474832838974]}},
+     {"type": "Feature", "properties": {}, "geometry": {"type": "Point", "coordinates": [-91.34033203125, 0.01647949196029245]}}
+    ]
+   }
+  }
+ },
+ "layers": [
+  {"id": "symbols", "type": "symbol", "source": "points", "layout": {"icon-image": "custom-marker"}}
+ ],
+ "cameras": [
+  {"lat": -0.47, "lon": -90.96, "zoom": 7.5}
+ ],
+ "script": [
+  ["addImage", "custom-marker", "https://maplibre.org/maplibre-gl-js/docs/assets/custom_marker.png"]
+ ]
+}

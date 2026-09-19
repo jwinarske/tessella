@@ -1,0 +1,22 @@
+{
+ "example": "select-features-with-boxzoomend-callback",
+ "note": "Drawing a box over the map selects the earthquakes inside it and redraws them larger and orange, through setFilter on a second layer over the same source. The fixture draws the page's own starting state, where nothing is selected yet -- the ids come from queryRenderedFeatures, which a fixture cannot ask. The selection itself has no oracle either: the page reaches its ids through `promoteId` and `['id']`, and with the pinned oracle that pair selects nothing, in both renderers alike. Written out as `['get', 'id']` instead, a chosen selection draws the same 1199 pixels on both sides -- so it is the promoted id that neither has, not the filter. What this fixture measures is the base layer: six thousand circles over a world view.",
+ "base": "https://demotiles.maplibre.org/style.json",
+ "sources": {
+  "earthquakes": {
+   "type": "geojson",
+   "data": "https://maplibre.org/maplibre-gl-js/docs/assets/earthquakes.geojson",
+   "promoteId": "id"
+  }
+ },
+ "layers": [
+  {"id": "earthquakes-base", "type": "circle", "source": "earthquakes",
+   "paint": {"circle-radius": 4, "circle-color": "#1f78b4", "circle-opacity": 0.65}},
+  {"id": "earthquakes-selected", "type": "circle", "source": "earthquakes",
+   "paint": {"circle-radius": 6, "circle-color": "#ff6b00", "circle-opacity": 0.95},
+   "filter": ["in", ["id"], ["literal", []]]}
+ ],
+ "cameras": [
+  {"lat": 40, "lon": -100, "zoom": 2.8}
+ ]
+}
