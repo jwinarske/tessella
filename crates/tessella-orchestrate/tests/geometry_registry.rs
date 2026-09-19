@@ -258,3 +258,95 @@ mod views {
         assert_eq!(registry.len(), 4, "both covers are live");
     }
 }
+
+/// A texture is sent once and then only when its payload changes.
+///
+/// The three states that matter: never sent, sent and unchanged, sent and replaced. The payload
+/// is compared by allocation rather than by content, so a second `Arc` over identical pixels is
+/// a *different* payload and is sent again -- which is correct and is what the producer
+/// actually does, since it replaces the whole allocation when a tile's content changes.
+#[test]
+fn a_texture_is_sent_once_and_again_when_its_payload_changes() {
+    use std::sync::Arc;
+    use tessella_capture_abi::envelope::TextureId;
+    use tessella_orchestrate::registry::{TextureContent, Textures};
+
+    let image = Arc::new(tessella_source::image::Image {
+        width: 2,
+        height: 2,
+        pixels: vec![0u8; 16],
+    });
+    let first = TextureContent::Picture(Arc::clone(&image));
+    let id = TextureId(7);
+
+    let mut textures = Textures::default();
+    assert!(!textures.current(id, &first), "nothing has been sent yet");
+
+    // Staged but not committed: a frame that failed must not leave the consumer credited.
+    textures.stage(id, first.clone());
+    assert!(!textures.current(id, &first), "staging is not sending");
+    textures.discard();
+    assert!(
+        !textures.current(id, &first),
+        "a discarded frame sent nothing"
+    );
+
+    textures.stage(id, first.clone());
+    textures.record();
+    assert!(textures.current(id, &first), "the consumer holds it now");
+
+    // The same pixels in a new allocation is what a rebuilt tile looks like, and it is sent.
+    let again = TextureContent::Picture(Arc::new(tessella_source::image::Image {
+        width: 2,
+        height: 2,
+        pixels: vec![0u8; 16],
+    }));
+    assert!(
+        !textures.current(id, &again),
+        "a new payload is not the held one"
+    );
+
+    // And an elevation never matches a picture, whatever the addresses happen to be.
+    let dem = TextureContent::Elevation(Arc::new(
+        tessella_source::dem::Dem::new(
+            &tessella_source::image::Image {
+                width: 2,
+                height: 2,
+                pixels: vec![0u8; 16],
+            },
+            tessella_source::dem::Encoding::Mapbox,
+        )
+        .expect("a square image is a DEM"),
+    ));
+    assert!(!textures.current(id, &dem), "a DEM is not a picture");
+}
+
+/// A texture the cover has dropped stops being held, so its payload can go.
+#[test]
+fn a_texture_is_forgotten_once_no_frame_names_it() {
+    use std::sync::Arc;
+    use tessella_capture_abi::envelope::TextureId;
+    use tessella_orchestrate::registry::{TextureContent, Textures};
+
+    let content = TextureContent::Picture(Arc::new(tessella_source::image::Image {
+        width: 1,
+        height: 1,
+        pixels: vec![0u8; 4],
+    }));
+    let id = TextureId(3);
+
+    let mut textures = Textures::default();
+    textures.stage(id, content.clone());
+    textures.record();
+    assert!(textures.current(id, &content));
+
+    // Frames that name nothing. The grace is there so a view's turn in a quad does not evict
+    // what the other three are still drawing, so it takes more than one.
+    for _ in 0..16 {
+        textures.record();
+    }
+    assert!(
+        !textures.current(id, &content),
+        "a texture no frame names is still being held"
+    );
+}

@@ -31,7 +31,7 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
-use tessella_capture_abi::envelope::{GeometryId, SlabRef, TileId, ViewId};
+use tessella_capture_abi::envelope::{GeometryId, SlabRef, TextureId, TileId, ViewId};
 
 /// What a retained drawable's content was built from, beyond its key: the ground it stands on,
 /// the size of its build, and which build it is. Separate numbers rather than one mixed from
@@ -479,6 +479,119 @@ pub struct Session {
     /// Font stacks in the order their atlases were first published, which is the order their
     /// texture ids are assigned in. See [`Self::atlas_stacks`].
     stacks: Vec<Vec<alloc::string::String>>,
+    /// Which tile textures the consumer holds.
+    ///
+    /// Shared across views rather than per view, because a texture id is a function of the tile
+    /// and nothing else: two views over one tile name the same texture, and the consumer keeps
+    /// one of it. Per view, the quad would send every tile four times.
+    textures: Textures,
+}
+
+/// Which tile textures the consumer holds, and the payload each was sent from.
+#[derive(Debug, Default)]
+pub struct Textures {
+    sent: BTreeMap<TextureId, SentTexture>,
+    /// Written by this frame and not yet committed.
+    staged: Vec<(TextureId, TextureContent)>,
+    /// How many emissions have been committed, which ages `sent`.
+    emissions: u64,
+}
+
+/// The payload a tile texture was last sent from.
+///
+/// Held rather than hashed. A tile texture is a quarter of a megabyte and comparing one would
+/// mean reading all of it every frame, on the thread that has to finish before the frame does --
+/// which on a device with one memory bus is the cost this exists to avoid. An `Arc` is its own
+/// identity instead: nothing here mutates a decoded payload in place, so a tile whose content
+/// changed carries a *different* allocation, and two clones of one `Arc` are the same pixels by
+/// construction. The comparison is a pointer.
+///
+/// Holding the `Arc` rather than the bare address is what makes that sound. An address alone
+/// compares equal to a different payload that landed where a freed one had been, and tile
+/// textures are all the same size, so the allocator handing back the same block is ordinary
+/// rather than remote. The strong reference keeps the allocation from being reissued while a
+/// comparison still names it.
+#[derive(Clone, Debug)]
+pub enum TextureContent {
+    /// A picture: a raster tile's imagery, or a hillshade's slope field.
+    Picture(alloc::sync::Arc<tessella_source::image::Image>),
+    /// A DEM, which a color relief samples for height and the ground for its surface.
+    Elevation(alloc::sync::Arc<tessella_source::dem::Dem>),
+}
+
+impl TextureContent {
+    /// Whether these name the same payload.
+    #[must_use]
+    pub fn same_as(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Picture(ours), Self::Picture(theirs)) => alloc::sync::Arc::ptr_eq(ours, theirs),
+            (Self::Elevation(ours), Self::Elevation(theirs)) => {
+                alloc::sync::Arc::ptr_eq(ours, theirs)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// How many emissions a texture is remembered for after the last frame that named it.
+///
+/// The map pins its payloads, so this is what bounds it. Long enough that a tile the cover keeps
+/// across a few views' turns is not forgotten and re-sent -- the quad draws four views before
+/// coming back to the first -- and short enough that what falls out of the cover stops being
+/// held. Anything still on screen is named every emission and never ages.
+const TEXTURE_GRACE: u64 = 8;
+
+/// A texture the consumer holds, and when it was last named.
+#[derive(Clone, Debug)]
+struct SentTexture {
+    content: TextureContent,
+    seen: u64,
+}
+
+impl Textures {
+    /// Whether the consumer already holds `texture` at this payload.
+    ///
+    /// The whole of what makes a settled map quiet. Every tile texture used to be written every
+    /// frame -- a raster tile's picture, a hillshade's slope field, a DEM for the relief and
+    /// another for the ground -- so a cover of 254 tiles put about 64 MiB on the wire per frame
+    /// and peaked the capture ring at 63.76 of its 64. Nothing in that had changed since the
+    /// frame before it.
+    ///
+    /// A query, with [`Self::stage`] and [`Self::record`] separate, for the
+    /// reason the camera and the declaration are split that way: a frame is emitted whole or not
+    /// at all, so a texture written into an attempt that then failed never reached the consumer
+    /// and must not be remembered as sent.
+    #[must_use]
+    pub fn current(&self, texture: TextureId, content: &TextureContent) -> bool {
+        self.sent
+            .get(&texture)
+            .is_some_and(|held| held.content.same_as(content))
+    }
+
+    /// Notes a texture this frame has written, to be remembered if the frame commits.
+    pub fn stage(&mut self, texture: TextureId, content: TextureContent) {
+        self.staged.push((texture, content));
+    }
+
+    /// Forgets what an attempt staged, because it is not being sent.
+    pub fn discard(&mut self) {
+        self.staged.clear();
+    }
+
+    /// Records the textures a frame has just sent, and ages out what it did not name.
+    pub fn record(&mut self) {
+        self.emissions += 1;
+        let now = self.emissions;
+        for (texture, content) in self.staged.drain(..) {
+            self.sent
+                .insert(texture, SentTexture { content, seen: now });
+        }
+        // Everything still drawn was named by this frame or one of the last few, so this drops
+        // only what has left the cover -- and with it the payload the entry was pinning.
+        if let Some(oldest) = now.checked_sub(TEXTURE_GRACE) {
+            self.sent.retain(|_, held| held.seen > oldest);
+        }
+    }
 }
 
 /// What one view remembers.
@@ -535,22 +648,31 @@ impl Session {
         &mut self.registry
     }
 
-    /// The registry and this view's draw order at once.
+    /// The registry, this view's draw order, and the textures the consumer holds, at once.
     ///
-    /// One call because a frame needs both for its whole length and they are different fields:
-    /// handing them out separately means two overlapping borrows of the session, which the
+    /// One call because a frame needs all three for its whole length and they are different
+    /// fields: handing them out separately means overlapping borrows of the session, which the
     /// caller can only resolve by cloning something it should not.
     pub fn split(
         &mut self,
         view: ViewId,
         layer_count: u32,
-    ) -> (&mut GeometryRegistry, &mut crate::order::DrawOrder) {
+    ) -> (
+        &mut GeometryRegistry,
+        &mut crate::order::DrawOrder,
+        &mut Textures,
+    ) {
         let memory = self.views.entry(view.0).or_default();
         if memory.order.layer_count() != layer_count {
             memory.order = crate::order::DrawOrder::new(layer_count);
         }
         memory.order.clear();
-        (&mut self.registry, &mut memory.order)
+        (&mut self.registry, &mut memory.order, &mut self.textures)
+    }
+
+    /// The textures the consumer holds, to commit or discard once the frame is decided.
+    pub fn textures(&mut self) -> &mut Textures {
+        &mut self.textures
     }
 
     /// The draw order this view last sent, ready to be rebuilt against.
