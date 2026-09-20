@@ -246,6 +246,26 @@ impl SymbolBuffers {
         base
     }
 
+    /// Closes a run of indices, recording which stack they were packed against.
+    ///
+    /// `first` is where the run started. An empty run records nothing, and a run adjacent to one
+    /// of the same stack extends it -- which is the ordinary case, since a label is usually one
+    /// face and the labels beside it usually the same.
+    pub fn close_run(&mut self, first: usize, fonts: &[alloc::string::String]) {
+        if self.indices.len() == first {
+            return;
+        }
+        match self.runs.last_mut() {
+            Some(run) if run.fonts == fonts && run.indices.end == first => {
+                run.indices.end = self.indices.len();
+            }
+            _ => self.runs.push(Run {
+                fonts: fonts.to_vec(),
+                indices: first..self.indices.len(),
+            }),
+        }
+    }
+
     /// As [`Self::append`], recording which stack the appended indices belong to.
     ///
     /// Runs of the same stack are merged when they are adjacent, which is the ordinary case: the
@@ -256,12 +276,25 @@ impl SymbolBuffers {
         if self.indices.len() == first {
             return base;
         }
-        match self.runs.last_mut() {
-            Some(run) if run.fonts == fonts => run.indices.end = self.indices.len(),
-            _ => self.runs.push(Run {
-                fonts: fonts.to_vec(),
-                indices: first..self.indices.len(),
-            }),
+        // The appended buffer's own runs, where it has them: a label whose sections are set in
+        // different faces is already split, and flattening it back under one stack would draw
+        // half of it from the wrong sheet. Shifted by where it landed. A buffer with no runs of
+        // its own -- the line path, and icons -- is the whole stretch under `fonts`.
+        if other.runs.is_empty() {
+            self.close_run(first, fonts);
+            return base;
+        }
+        for run in &other.runs {
+            let shifted = (run.indices.start + first)..(run.indices.end + first);
+            match self.runs.last_mut() {
+                Some(held) if held.fonts == run.fonts && held.indices.end == shifted.start => {
+                    held.indices.end = shifted.end;
+                }
+                _ => self.runs.push(Run {
+                    fonts: run.fonts.clone(),
+                    indices: shifted,
+                }),
+            }
         }
         base
     }
@@ -530,6 +563,61 @@ fn letter_spacing(chars: &[tessella_glyph::shaping::Char], spacing: f32) -> f32 
     }
 }
 
+/// The face each section of a label is drawn from.
+///
+/// One entry per section, in the label's own order, so a glyph indexes it by the section it
+/// carries. A section that names no `text-font` takes the label's, and so does one whose stack
+/// has nothing packed -- the same two fallbacks its *measurement* takes, and they have to agree:
+/// a glyph measured against one face and drawn from another lands its rectangle on the wrong
+/// sheet.
+fn faces_of<'a, G: tessella_glyph::Glyphs + ?Sized>(
+    sections: &[crate::symbol::Section],
+    glyphs: &'a G,
+    faces: Option<&'a tessella_glyph::fonts::Fonts>,
+) -> Vec<Face<'a, G>> {
+    sections
+        .iter()
+        .map(|section| {
+            section
+                .fonts
+                .as_deref()
+                .zip(faces)
+                .filter(|(fonts, faces)| faces.atlas(fonts).is_some())
+                .map_or(Face::Label(glyphs), |(fonts, faces)| {
+                    Face::Section(faces.stack(fonts))
+                })
+        })
+        .collect()
+}
+
+/// A label's face, or one section's own.
+///
+/// An enum implementing [`tessella_glyph::Glyphs`] rather than a `&dyn` of either, because the
+/// label's is already unsized and cannot be coerced into a second trait object to choose
+/// between.
+enum Face<'a, G: ?Sized> {
+    /// The label's, which answers for every section that names none.
+    Label(&'a G),
+    /// The stack a section named, packed.
+    Section(tessella_glyph::fonts::StackGlyphs<'a>),
+}
+
+impl<G: tessella_glyph::Glyphs + ?Sized> tessella_glyph::Glyphs for Face<'_, G> {
+    fn metrics(&self, codepoint: u32) -> Option<(tessella_glyph::pbf::Metrics, bool)> {
+        match self {
+            Self::Label(glyphs) => glyphs.metrics(codepoint),
+            Self::Section(stack) => stack.metrics(codepoint),
+        }
+    }
+
+    fn rect(&self, codepoint: u32) -> Option<tessella_glyph::atlas::Rect> {
+        match self {
+            Self::Label(glyphs) => glyphs.rect(codepoint),
+            Self::Section(stack) => stack.rect(codepoint),
+        }
+    }
+}
+
 fn chars_of<G: tessella_glyph::Glyphs + ?Sized>(
     sections: &[crate::symbol::Section],
     glyphs: &G,
@@ -632,14 +720,15 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
     sprites: Option<&tessella_glyph::sprite::Positions>,
     options: &SymbolOptions,
 ) -> (SymbolBuffers, Vec<LaidOut>) {
-    build_symbols_with(labels, glyphs, None, sprites, options)
+    build_symbols_with(labels, glyphs, &[], None, sprites, options)
 }
 
 /// As [`build_symbols`], measuring a section that names its own `text-font` in that face.
 pub fn build_symbols_with<G: Glyphs + ?Sized>(
     labels: &[Label],
     glyphs: &G,
-    faces: Option<&tessella_glyph::fonts::Fonts>,
+    label_fonts: &[alloc::string::String],
+    faces_held: Option<&tessella_glyph::fonts::Fonts>,
     sprites: Option<&tessella_glyph::sprite::Positions>,
     options: &SymbolOptions,
 ) -> (SymbolBuffers, Vec<LaidOut>) {
@@ -651,7 +740,7 @@ pub fn build_symbols_with<G: Glyphs + ?Sized>(
     let mut out = Vec::with_capacity(labels.len());
 
     for label in labels {
-        let chars = chars_of(&label.sections, glyphs, faces, sprites);
+        let chars = chars_of(&label.sections, glyphs, faces_held, sprites);
         let spacing = letter_spacing(&chars, options.letter_spacing);
 
         let shape = |mode, justify, chars: &[shaping::Char]| {
@@ -670,10 +759,15 @@ pub fn build_symbols_with<G: Glyphs + ?Sized>(
                 },
             )
         };
-        let placed = |codepoint| {
-            let (metrics, _) = glyphs.metrics(codepoint)?;
+        // A glyph's rectangle belongs to the atlas of the face its *section* is set in, which
+        // may not be the label's -- see `faces_of`. Resolving it from the label's would put one
+        // face's coordinates against another's sheet, which draws letters from the wrong script.
+        let faces = faces_of(&label.sections, glyphs, faces_held);
+        let placed = |glyph: &shaping::PositionedGlyph| {
+            let face = faces.get(glyph.section as usize)?;
+            let (metrics, _) = face.metrics(glyph.codepoint)?;
             Some(Placed {
-                rect: glyphs.rect(codepoint)?,
+                rect: face.rect(glyph.codepoint)?,
                 metrics,
             })
         };
@@ -698,25 +792,73 @@ pub fn build_symbols_with<G: Glyphs + ?Sized>(
             anchor: (f32, f32),
             quads: &[quads::Quad],
             size: SizeRange,
+            stacks: &[Vec<alloc::string::String>],
         ) {
+            // Grouped by the face each section is set in, and a run closed per group: a
+            // drawable binds one texture, and a glyph's rectangle is only meaningful against
+            // the atlas it was packed into. Ordinary labels are one group and one run, which is
+            // what this recorded before sections could differ.
+            let mut order: Vec<&Vec<alloc::string::String>> = Vec::new();
             for quad in quads {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                buffers.add_quad(
-                    anchor,
-                    [quad.tl, quad.tr, quad.bl, quad.br],
-                    quad.glyph_offset,
-                    (
-                        quad.tex.x as u16,
-                        quad.tex.y as u16,
-                        quad.tex.width as u16,
-                        quad.tex.height as u16,
-                    ),
-                    size,
-                    quad.sdf,
-                    1.0,
-                );
+                let stack = stacks
+                    .get(quad.section as usize)
+                    .unwrap_or_else(|| &stacks[0]);
+                if !order.contains(&stack) {
+                    order.push(stack);
+                }
+            }
+            for stack in order {
+                let first = buffers.indices.len();
+                for quad in quads
+                    .iter()
+                    .filter(|quad| stacks.get(quad.section as usize).unwrap_or(&stacks[0]) == stack)
+                {
+                    add(buffers, anchor, quad, size);
+                }
+                buffers.close_run(first, stack);
             }
         }
+
+        /// One quad into the buffers.
+        fn add(
+            buffers: &mut SymbolBuffers,
+            anchor: (f32, f32),
+            quad: &quads::Quad,
+            size: SizeRange,
+        ) {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            buffers.add_quad(
+                anchor,
+                [quad.tl, quad.tr, quad.bl, quad.br],
+                quad.glyph_offset,
+                (
+                    quad.tex.x as u16,
+                    quad.tex.y as u16,
+                    quad.tex.width as u16,
+                    quad.tex.height as u16,
+                ),
+                size,
+                quad.sdf,
+                1.0,
+            );
+        }
+
+        // The stack each of this label's sections is set in, indexed the way a glyph carries it.
+        let stacks: Vec<Vec<alloc::string::String>> = label
+            .sections
+            .iter()
+            .map(|section| {
+                section
+                    .fonts
+                    .clone()
+                    .unwrap_or_else(|| label_fonts.to_vec())
+            })
+            .collect();
+        let stacks = if stacks.is_empty() {
+            alloc::vec![label_fonts.to_vec()]
+        } else {
+            stacks
+        };
 
         buffers.icons_in_text |= shaping.icons_in_text;
         emit(
@@ -724,6 +866,7 @@ pub fn build_symbols_with<G: Glyphs + ?Sized>(
             label.anchor,
             &quads::glyph_quads(&shaping, placed, &horizontal),
             options.vertex_size,
+            &stacks,
         );
         let vertices = buffers.vertices.len();
 
@@ -745,6 +888,7 @@ pub fn build_symbols_with<G: Glyphs + ?Sized>(
                 label.anchor,
                 &quads::glyph_quads(&shaped, placed, &horizontal),
                 options.vertex_size,
+                &stacks,
             );
             Some(Vertical {
                 at: vertices,
@@ -987,10 +1131,14 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
             })
             .collect()
         };
-        let placed = |codepoint| {
-            let (metrics, _) = glyphs.metrics(codepoint)?;
+        // The same resolution the point path makes, so a section is drawn from the face it was
+        // measured in whichever way the label is placed.
+        let faces = faces_of(&label.sections, glyphs, None);
+        let placed = |glyph: &shaping::PositionedGlyph| {
+            let face = faces.get(glyph.section as usize)?;
+            let (metrics, _) = face.metrics(glyph.codepoint)?;
             Some(Placed {
-                rect: glyphs.rect(codepoint)?,
+                rect: face.rect(glyph.codepoint)?,
                 metrics,
             })
         };

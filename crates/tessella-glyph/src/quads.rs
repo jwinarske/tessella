@@ -56,6 +56,12 @@ pub struct Quad {
     /// because a label with an image in it draws both from one buffer, and the shader has to
     /// recolor one and not the other.
     pub sdf: bool,
+    /// Which section of the label the glyph came from.
+    ///
+    /// Carried so the caller can group a label's quads by the face each section is set in: a
+    /// rectangle is only meaningful against the atlas it was packed into, and a drawable binds
+    /// one texture.
+    pub section: u16,
 }
 
 /// What a label's quads are built against.
@@ -102,7 +108,7 @@ fn rotate(point: (f32, f32), sin: f32, cos: f32) -> (f32, f32) {
 /// font, and its rectangle is in the icon atlas.
 pub fn glyph_quads<F>(shaping: &Shaping, mut placed: F, options: &Options) -> Vec<Quad>
 where
-    F: FnMut(u32) -> Option<Placed>,
+    F: FnMut(&crate::shaping::PositionedGlyph) -> Option<Placed>,
 {
     let mut quads = Vec::new();
     let (sin, cos) = if options.text_rotate == 0.0 {
@@ -146,7 +152,7 @@ where
                     image.sdf,
                 ),
                 None => {
-                    let Some(Placed { rect, metrics }) = placed(glyph.codepoint) else {
+                    let Some(Placed { rect, metrics }) = placed(glyph) else {
                         continue;
                     };
                     (rect, metrics, RECT_BUFFER, 1.0, true)
@@ -235,6 +241,7 @@ where
                 tex: rect,
                 glyph_offset,
                 sdf,
+                section: glyph.section,
             };
 
             if rotate_vertical {
@@ -500,6 +507,8 @@ pub fn icon_quad(icon: PositionedIcon, tex: Rect, radians: f32) -> Quad {
         // flag, so its quads do not each need to carry one. The field is here because the type
         // is shared with a label's, where a quad *is* what decides.
         sdf: false,
+        // An icon is not a text section, and the label's own face answers for it.
+        section: 0,
     };
 
     if radians != 0.0 {

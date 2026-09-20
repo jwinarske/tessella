@@ -48,7 +48,7 @@ fn one_glyph(x: f32, y: f32) -> Shaping {
     }
 }
 
-fn placed(_: u32) -> Option<Placed> {
+fn placed(_: &tessella_glyph::shaping::PositionedGlyph) -> Option<Placed> {
     Some(Placed {
         rect: rect_32(),
         metrics: metrics_24(),
@@ -158,7 +158,7 @@ fn an_unplaced_glyph_is_skipped() {
     let quads = glyph_quads(
         &shaping,
         |codepoint| {
-            if codepoint == u32::from(b'A') {
+            if codepoint.codepoint == u32::from(b'A') {
                 placed(codepoint)
             } else {
                 None

@@ -1408,6 +1408,18 @@ impl SymbolLayout {
             if !out.contains(&pending.fonts) {
                 out.push(pending.fonts.clone());
             }
+            // And every face a section names, for the reason `dependencies` collects them: a
+            // section's glyphs are packed into *that* stack's atlas, and a stack nobody
+            // advertises is a stack the frame never uploads -- so the run that names it draws
+            // from whatever was last in the slot.
+            for section in &pending.sections {
+                let Some(fonts) = section.fonts.as_ref() else {
+                    continue;
+                };
+                if !fonts.is_empty() && !out.contains(fonts) {
+                    out.push(fonts.clone());
+                }
+            }
         }
         out
     }
@@ -1537,7 +1549,14 @@ impl SymbolLayout {
                         Anchoring::Line(_) => None,
                     })
                     .collect();
-                build_symbols_with(&labels, &glyphs, Some(fonts), icons, &head.symbol)
+                build_symbols_with(
+                    &labels,
+                    &glyphs,
+                    &head.fonts,
+                    Some(fonts),
+                    icons,
+                    &head.symbol,
+                )
             };
 
             // Each run's ranges address its own buffer, so they shift by what was already here.
