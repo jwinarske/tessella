@@ -283,6 +283,9 @@ impl Workers {
     /// The default worker count. See the type's note for why it is a constant.
     pub const DEFAULT: usize = 4;
 
+    /// The default number of threads waiting on the network. See [`Self::io_from_env`].
+    pub const DEFAULT_IO: usize = 16;
+
     /// A pool of `count` workers, with a floor of one.
     ///
     /// Zero is treated as one rather than refused: a caller asking for no workers wants the
@@ -332,6 +335,39 @@ impl Workers {
                 Ok(0) => Self::none(),
                 Ok(count) => Self::new(count),
                 Err(_) => Self::default(),
+            },
+        }
+    }
+
+    /// How many threads wait on the network, or the default.
+    ///
+    /// `TESSELLA_IO_WORKERS` names it. Zero is [`Self::none`], and so is a build pool of none:
+    /// the deterministic mode is one thread running every job it queued, and a fetch that ran on
+    /// a thread of its own would put the transport back outside the trace.
+    ///
+    /// # Why this is not the build count
+    ///
+    /// A fetch holds its thread for a round trip and spends no CPU doing it, so the number that
+    /// matters is latency times the throughput wanted, not the core count. Sharing the build
+    /// pool made every fetch cost a build slot: over the Alps at 1800x900 and pitch 68 all four
+    /// workers sat in `recv` while 458 decodes queued behind them, and 462 of 568 tiles never
+    /// arrived -- a frame with sixty drawables where it wanted three hundred.
+    ///
+    /// Sixteen covers a 50 ms origin at three hundred tiles a second, which is past what a cover
+    /// asks for in a frame, and sixteen blocked threads cost a stack each and no CPU. It is a
+    /// bound on outstanding requests as much as a thread count: an origin is a shared resource
+    /// and a cover of five hundred tiles should not open five hundred sockets.
+    #[must_use]
+    pub fn io_from_env() -> Self {
+        if Self::from_env() == Self::none() {
+            return Self::none();
+        }
+        match std::env::var("TESSELLA_IO_WORKERS").ok().as_deref() {
+            None => Self::new(Self::DEFAULT_IO),
+            Some(text) => match text.trim().parse::<usize>() {
+                Ok(0) => Self::none(),
+                Ok(count) => Self::new(count),
+                Err(_) => Self::new(Self::DEFAULT_IO),
             },
         }
     }

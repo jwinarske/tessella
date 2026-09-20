@@ -422,9 +422,11 @@ pub unsafe extern "C" fn tessella_create(
     // SAFETY: the caller's contract, unchanged, and passed straight through.
     unsafe {
         create(config, latitude, longitude, zoom, out, || {
+            // The I/O pool: a fetch blocks on a socket and the build it produces is CPU work,
+            // and one pool for both lets the fetches hold every slot the builds need.
             Transport::Pooled(PoolBacked::new(
                 Arc::new(Coalesced(Arc::new(Coalescing::new(origins())))),
-                Pool::shared(),
+                Pool::shared_io(),
                 Priority::Background,
             ))
         })
@@ -1129,8 +1131,13 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
         //
         // Unbounded on purpose. This is the deterministic mode, and a trace only reproduces if a
         // tick means "everything that was ready", not "as much as fitted".
+        // Both pools, because the transport has one of its own now: the fetches are queued on
+        // that one and the builds they produce on this one, so draining only this one leaves
+        // every tile unfetched and the deterministic mode drawing nothing.
         let serial = tessella_orchestrate::pool::Pool::shared();
+        let serial_io = tessella_orchestrate::pool::Pool::shared_io();
         if serial.workers() == 0 {
+            serial_io.drain(usize::MAX);
             serial.drain(usize::MAX);
         }
 
@@ -1140,6 +1147,7 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
         state.source.drain();
 
         if serial.workers() == 0 {
+            serial_io.drain(usize::MAX);
             serial.drain(usize::MAX);
         }
 
