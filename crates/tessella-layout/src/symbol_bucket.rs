@@ -533,6 +533,7 @@ fn letter_spacing(chars: &[tessella_glyph::shaping::Char], spacing: f32) -> f32 
 fn chars_of<G: tessella_glyph::Glyphs + ?Sized>(
     sections: &[crate::symbol::Section],
     glyphs: &G,
+    faces: Option<&tessella_glyph::fonts::Fonts>,
     sprites: Option<&tessella_glyph::sprite::Positions>,
 ) -> Vec<tessella_glyph::shaping::Char> {
     use tessella_glyph::shaping::{Char, Image};
@@ -566,11 +567,28 @@ fn chars_of<G: tessella_glyph::Glyphs + ?Sized>(
             });
             continue;
         }
+        // The face this run is set in. A section that names none is the label's, which is what
+        // `glyphs` already answers for.
+        // The face this run is set in. A section that names none takes the label's, which is
+        // what `glyphs` already answers for; so does one whose stack has nothing packed yet,
+        // which is the picture this drew before sections had faces at all.
+        let measured = section
+            .fonts
+            .as_deref()
+            .zip(faces)
+            .filter(|(fonts, faces)| faces.atlas(fonts).is_some())
+            .map(|(fonts, faces)| faces.stack(fonts));
+        // Branching rather than coercing: `glyphs` is already unsized, so it cannot become a
+        // second trait object to pick between.
+        let metrics_of = |codepoint: u32| match &measured {
+            Some(face) => face.metrics(codepoint),
+            None => glyphs.metrics(codepoint),
+        };
         for character in section.text.chars() {
             let codepoint = character as u32;
             #[allow(clippy::cast_precision_loss)]
             let scaled = |advance: u32| advance as f32 * section.scale;
-            let built = match glyphs.metrics(codepoint) {
+            let built = match metrics_of(codepoint) {
                 Some((metrics, true)) => Char::new(codepoint, scaled(metrics.advance)),
                 Some((metrics, false)) => Char::blank(codepoint, scaled(metrics.advance)),
                 // A codepoint the stack does not carry: no advance and nothing to draw, so the
@@ -609,6 +627,17 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
     sprites: Option<&tessella_glyph::sprite::Positions>,
     options: &SymbolOptions,
 ) -> (SymbolBuffers, Vec<LaidOut>) {
+    build_symbols_with(labels, glyphs, None, sprites, options)
+}
+
+/// As [`build_symbols`], measuring a section that names its own `text-font` in that face.
+pub fn build_symbols_with<G: Glyphs + ?Sized>(
+    labels: &[Label],
+    glyphs: &G,
+    faces: Option<&tessella_glyph::fonts::Fonts>,
+    sprites: Option<&tessella_glyph::sprite::Positions>,
+    options: &SymbolOptions,
+) -> (SymbolBuffers, Vec<LaidOut>) {
     use tessella_glyph::quads::{self, Placed};
     use tessella_glyph::shaping::{self, Options as ShapeOptions};
     use tessella_glyph::text::ONE_EM;
@@ -617,7 +646,7 @@ pub fn build_symbols<G: Glyphs + ?Sized>(
     let mut out = Vec::with_capacity(labels.len());
 
     for label in labels {
-        let chars = chars_of(&label.sections, glyphs, sprites);
+        let chars = chars_of(&label.sections, glyphs, faces, sprites);
         let spacing = letter_spacing(&chars, options.letter_spacing);
 
         let shape = |mode, justify, chars: &[shaping::Char]| {
@@ -866,7 +895,7 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
     for label in labels {
         // The same sections a point label gets. A line-placed label is set the same way; what
         // differs is where it is put, not how it is shaped.
-        let chars = chars_of(&label.sections, glyphs, sprites);
+        let chars = chars_of(&label.sections, glyphs, None, sprites);
         let spacing = letter_spacing(&chars, options.symbol.letter_spacing);
 
         let shaping = shaping::shape(
