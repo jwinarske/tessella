@@ -867,23 +867,21 @@ impl Map {
             // view -- ground drawn with nothing on it, which reads as a band of bare ground. The
             // planner fetches this same refinement, and the two have to agree or the tiles are
             // fetched and never looked up.
-            let refined: Vec<tessella_tile::cover::TileCoord> = self
-                .drawn
-                .iter()
-                .filter(|tile| tile.z <= z)
-                .flat_map(|tile| {
-                    let dz = z - tile.z;
-                    let step = 1u32 << dz;
-                    (0..step).flat_map(move |dy| {
-                        (0..step).map(move |dx| tessella_tile::cover::TileCoord {
-                            z,
-                            x: (tile.x << dz) + dx,
-                            y: (tile.y << dz) + dy,
-                            wrap: tile.wrap,
-                        })
-                    })
-                })
-                .collect();
+            //
+            // `boot::refined_cover` is that refinement, called rather than repeated: it steps each
+            // ground tile by a fixed `dz` from *its own* level, and this walk used to step every
+            // tile to the fixed level `z` instead. The two agree only while the cover is one
+            // level. Above sixty degrees of pitch it mixes levels, and then stepping to `z` names
+            // tiles the planner never fetched -- at 1800x900 and pitch 68 that was 1940 of 1944
+            // coordinates looked up and missing, while the pictures that *had* been fetched, at
+            // the levels their own ground sits at, were never asked for.
+            let surface_at = crate::boot::surface_zoom(self.view.zoom);
+            let refined: Vec<tessella_tile::cover::TileCoord> =
+                if self.style.terrain_dem().is_some() && z > surface_at {
+                    crate::boot::refined_cover(&self.drawn, z - surface_at)
+                } else {
+                    Vec::new()
+                };
             let extra = if refined.is_empty() {
                 let Ok(computed) =
                     tessella_tile::cover::cover_on(&self.view, z, self.copies, self.surface())

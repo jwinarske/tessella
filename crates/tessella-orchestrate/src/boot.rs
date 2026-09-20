@@ -916,7 +916,7 @@ pub(crate) struct Resolution<'a> {
 /// for sixteen pictures -- the resolution the level-of-detail pass had just decided that patch
 /// does not need -- and over the Alps at 1200x800 that filled the capture ring, 63.75 MiB of 64,
 /// and the frame came out empty.
-fn refined_cover(ground: &[cover::TileCoord], dz: u8) -> Vec<cover::TileCoord> {
+pub(crate) fn refined_cover(ground: &[cover::TileCoord], dz: u8) -> Vec<cover::TileCoord> {
     let step = 1u32 << dz;
     ground
         .iter()
