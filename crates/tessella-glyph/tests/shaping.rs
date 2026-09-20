@@ -592,3 +592,50 @@ mod anchor_offset {
         );
     }
 }
+
+/// A glyph remembers which section it came from.
+///
+/// A `["format", …]` section may name its own `text-font`, and a glyph's rectangle belongs to
+/// that face's atlas rather than the label's. The shaper cannot use the face -- it is handed
+/// advances, not fonts -- so it has to hand the section on, the way it hands on `font-scale`.
+/// Reordering and line breaking must not lose it: the whole point is that the quad builder can
+/// still tell which face a glyph was set in after the shaper has moved it.
+#[test]
+fn a_glyph_carries_the_section_it_came_from() {
+    let mut chars: Vec<Char> = latin("ab", ONE_EM / 2.0)
+        .into_iter()
+        .map(|character| character.in_section(0))
+        .collect();
+    chars.extend(
+        latin("cd", ONE_EM / 2.0)
+            .into_iter()
+            .map(|character| character.in_section(1)),
+    );
+
+    let shaping = shape(&chars, &centered(40.0));
+    let placed: Vec<(u32, u16)> = shaping
+        .lines
+        .iter()
+        .flat_map(|line| line.glyphs.iter())
+        .map(|glyph| (glyph.codepoint, glyph.section))
+        .collect();
+
+    assert_eq!(
+        placed.len(),
+        4,
+        "every character should be placed: {placed:?}"
+    );
+    for (codepoint, section) in &placed {
+        let expected = if *codepoint == u32::from('a') || *codepoint == u32::from('b') {
+            0
+        } else {
+            1
+        };
+        assert_eq!(
+            *section,
+            expected,
+            "{:?} came out of section {section}",
+            char::from_u32(*codepoint)
+        );
+    }
+}
