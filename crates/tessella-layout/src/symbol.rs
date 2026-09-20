@@ -85,6 +85,13 @@ pub struct Section {
     /// from the sprite, drawn from the icon atlas, and sized in pixels where a glyph is sized in
     /// ems.
     pub image: Option<String>,
+    /// The stack this section is set in, where it names one of its own.
+    ///
+    /// `None` is the ordinary case and means the layer's, which [`Label::fonts`] carries. A
+    /// `["format", …]` section may override `text-font`, and then the section is set in a
+    /// different face from the rest of the label -- the regular weight of a name under the bold
+    /// of the line above it, which is what the spec's own example does.
+    pub fonts: Option<Vec<String>>,
 }
 
 /// Resolves `{token}` against the feature's properties.
@@ -269,6 +276,7 @@ pub fn label(layer: &Layer, zoom: f64, feature: &dyn Feature) -> Option<Label> {
             text: text.clone(),
             scale: 1.0,
             image: None,
+            fonts: None,
         });
     }
 
@@ -380,7 +388,26 @@ fn read_sections(sections: Option<&Value>, feature: &dyn Feature) -> Vec<Section
                 },
                 _ => None,
             };
-            Some(Section { text, scale, image })
+            // The evaluator joins a stack into the comma-separated string the glyph side keys
+            // its caches by -- `["a", "b"]` is `a,b` -- so it is split back into the list every
+            // reader here wants. Absent means the section named none and the layer's answers.
+            let fonts = match members.get("fontStack") {
+                Some(Value::String(stack)) => {
+                    let names: Vec<String> = stack
+                        .split(',')
+                        .map(|name| name.trim().to_string())
+                        .filter(|name| !name.is_empty())
+                        .collect();
+                    (!names.is_empty()).then_some(names)
+                }
+                _ => None,
+            };
+            Some(Section {
+                text,
+                scale,
+                image,
+                fonts,
+            })
         })
         .collect()
 }
@@ -432,9 +459,18 @@ where
             if label.fonts.is_empty() {
                 continue;
             }
-            out.entry(label.fonts)
-                .or_default()
-                .extend(label.text.chars().map(|character| character as u32));
+            // Per section, not per label: a section that names its own stack needs *its*
+            // glyphs from *that* stack, and asking for them under the label's fetches a range
+            // the section will never draw from while leaving the one it will unfetched.
+            for section in &label.sections {
+                let stack = section.fonts.as_ref().unwrap_or(&label.fonts);
+                if stack.is_empty() {
+                    continue;
+                }
+                out.entry(stack.clone())
+                    .or_default()
+                    .extend(section.text.chars().map(|character| character as u32));
+            }
         }
     }
     out

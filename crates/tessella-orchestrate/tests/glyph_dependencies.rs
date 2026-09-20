@@ -176,3 +176,52 @@ fn the_manager_takes_what_was_collected() {
         );
     }
 }
+
+/// A `format` section that names its own stack asks for its glyphs under that stack.
+///
+/// The spec's own rich-text example is a two-line label: the English name in the layer's face,
+/// then the local name in another. A section's `text-font` overrides the layer's for that run
+/// alone, so the glyphs it draws are in a different atlas -- and asking for them under the
+/// layer's stack fetches a range the section will never draw from while leaving the one it will
+/// unfetched.
+#[test]
+fn a_section_asks_under_the_font_it_names() {
+    let tile = Tile::decode(TILE).expect("the fixture decodes");
+    let features = place_features(&tile);
+    let layer: Layer = serde_json::from_str(
+        r#"{"id": "labels", "type": "symbol", "source": "v", "source-layer": "places",
+            "layout": {"text-font": ["Layer Face"], "text-field":
+              ["format",
+                ["get", "name"], {"font-scale": 1.2},
+                "\n", {},
+                ["get", "name"], {"font-scale": 0.8,
+                                  "text-font": ["literal", ["Section Face"]]}]}}"#,
+    )
+    .expect("a symbol layer");
+
+    let deps = glyph_dependencies([&layer], 5.0, &features, |_| true);
+
+    let stacks: Vec<&Vec<String>> = deps.keys().collect();
+    assert!(
+        stacks
+            .iter()
+            .any(|stack| stack.as_slice() == ["Section Face".to_string()]),
+        "the section's own stack was never asked for: {stacks:?}"
+    );
+    assert!(
+        stacks
+            .iter()
+            .any(|stack| stack.as_slice() == ["Layer Face".to_string()]),
+        "the layer's stack still answers for the sections that name none: {stacks:?}"
+    );
+
+    // And each carries the codepoints of its own run rather than the whole label's, which is
+    // the same set here because both sections draw the same property.
+    let section = deps
+        .get(&vec!["Section Face".to_string()])
+        .expect("the section's stack");
+    assert!(
+        !section.is_empty(),
+        "the section's stack asked for no glyphs"
+    );
+}
