@@ -1063,14 +1063,22 @@ impl SymbolLayout {
             if pending.fonts.is_empty() || pending.text.is_empty() {
                 continue;
             }
-            let stored: Vec<u32> = pending
-                .text
-                .chars()
-                .map(|character| character as u32)
-                .collect();
-            let wanted = out.entry(pending.fonts.clone()).or_default();
-            wanted.extend(tessella_glyph::arabic::shape(&stored));
-            wanted.extend(stored);
+            // Per section, for the reason `symbol::glyph_dependencies` gives: a section that
+            // names its own stack draws from that one, and the label's answers for the rest.
+            for section in &pending.sections {
+                let stack = section.fonts.as_ref().unwrap_or(&pending.fonts);
+                if stack.is_empty() || section.text.is_empty() {
+                    continue;
+                }
+                let stored: Vec<u32> = section
+                    .text
+                    .chars()
+                    .map(|character| character as u32)
+                    .collect();
+                let wanted = out.entry(stack.clone()).or_default();
+                wanted.extend(tessella_glyph::arabic::shape(&stored));
+                wanted.extend(stored);
+            }
         }
         out
     }

@@ -26,6 +26,7 @@ fn layout(features: &[(&str, &[(i32, i32)])]) -> SymbolLayout {
                 text: (*text).to_string(),
                 scale: 1.0,
                 image: None,
+                fonts: None,
             }],
             icon: None,
             fonts: vec!["TestFont".to_string()],

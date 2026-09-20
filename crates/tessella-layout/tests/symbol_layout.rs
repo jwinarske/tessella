@@ -54,6 +54,7 @@ fn label(text: &str, anchor: (f32, f32)) -> Label {
             text: text.to_string(),
             scale: 1.0,
             image: None,
+            fonts: None,
         }],
         text: text.to_string(),
         anchor,

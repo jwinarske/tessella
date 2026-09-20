@@ -67,6 +67,7 @@ fn label(text: &str, line: Vec<(f32, f32)>) -> LineLabel {
             text: text.to_string(),
             scale: 1.0,
             image: None,
+            fonts: None,
         }],
         icon: (0.0, 0.0),
         text: text.to_string(),
