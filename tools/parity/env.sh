@@ -8,6 +8,14 @@
 #
 #   MBGL_RENDER        the oracle. maplibre-native's own renderer, built with `-DMLN_WITH_...`;
 #                      the comparison is meaningless without it and the scripts refuse to run.
+#                      It has to carry maplibre/maplibre-native#4662 -- `transformMat3f` wrote
+#                      its output over its input, and the viewport-anchored light is turned
+#                      through it, so without the fix every bearing whose sine is not zero lights
+#                      an extrusion from somewhere else. Merged upstream; the capture branch is
+#                      behind and does not merge forward cleanly, since upstream is moving
+#                      `mbgl/` to `mln/` and the capture backend does not follow, so the one
+#                      commit is cherry-picked onto it instead. Only
+#                      `animate-map-camera-around-a-point` moves: 7822 to 66 at bearing 270.
 #   TESSELLA_FLUORITE  the Filament consumer, which holds render_probe and the materials.
 #   FILAMENT_STAGING   the Filament build the consumer links and whose matc compiles materials.
 #   PARITY_WORK        scratch for probes, materials and rendered frames. Not in the tree: these
