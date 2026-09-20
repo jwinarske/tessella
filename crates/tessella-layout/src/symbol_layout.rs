@@ -41,7 +41,7 @@ use crate::size::SizeBinding;
 use crate::symbol::{self, GlyphDependencies};
 use crate::symbol_bucket::{
     IconLabel, IconOptions, Label, LaidOut, LineLabel, LineOptions, SizeRange, SymbolBuffers,
-    SymbolOptions, build_icons, build_line_symbols, build_symbols,
+    SymbolOptions, build_icons, build_line_symbols, build_symbols_with,
 };
 
 /// One layout property, evaluated at a zoom with no feature.
@@ -1537,7 +1537,7 @@ impl SymbolLayout {
                         Anchoring::Line(_) => None,
                     })
                     .collect();
-                build_symbols(&labels, &glyphs, icons, &head.symbol)
+                build_symbols_with(&labels, &glyphs, Some(fonts), icons, &head.symbol)
             };
 
             // Each run's ranges address its own buffer, so they shift by what was already here.
