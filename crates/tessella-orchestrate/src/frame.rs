@@ -209,6 +209,12 @@ impl crate::tile::PatternLookup for Patterns<'_> {
 /// names it, with only the position map per tile. An atlas per tile would put the same fifty by
 /// fifty pixels in the stream once per tile of the cover.
 pub struct Patterns<'a> {
+    /// Which sheet this is, counted by the map.
+    ///
+    /// Carried so a bucket that resolved a pattern against an older sheet -- or against none --
+    /// can be told apart from one that resolved against this. It reaches the content stamp of
+    /// the buckets that carry a pattern and of no others.
+    pub revision: u64,
     /// The texture the atlas was uploaded as.
     pub texture: tessella_capture_abi::envelope::TextureId,
     /// Its dimensions, which the shader needs to turn a rectangle into texture coordinates.
@@ -1349,7 +1355,27 @@ fn emit_group(
                         i32::try_from(bucket.layer_index).is_ok_and(|at| at == binding.layer_index)
                     })
                     .map_or(0, |bucket| bucket.data_rev);
-                let stamp = [ground_stamp, size, data_rev];
+                // And which sheet a pattern was resolved against, for the buckets that carry
+                // one. A fill's encoding depends on the atlas -- which shader, whether a texture
+                // is bound at all -- and the sheet arrives on its own schedule, exactly as the
+                // ground above does. Zero for everything else, so a sheet handed over late
+                // re-announces the patterned buckets and leaves the rest of the cover alone.
+                let patterned = tile_buckets
+                    .iter()
+                    .find(|bucket| {
+                        i32::try_from(bucket.layer_index).is_ok_and(|at| at == binding.layer_index)
+                    })
+                    .is_some_and(|bucket| {
+                        tessella_style::crossfade::PATTERN_PROPERTIES
+                            .iter()
+                            .any(|property| bucket.paint.contains_key(property))
+                    });
+                let pattern_rev = if patterned {
+                    patterns.map_or(0, |patterns| patterns.revision)
+                } else {
+                    0
+                };
+                let stamp = [ground_stamp, size, data_rev, pattern_rev];
                 if registry.is_new(&key) || registry.content_changed(&key, stamp) {
                     fresh.insert(key);
                 }
@@ -1479,7 +1505,7 @@ fn emit_group(
                 }
                 // A heatmap's second pass is a viewport quad on no tile, so there is no ground
                 // under it and nothing frame-dependent for a stamp to carry.
-                let id = registry.id_for(key, [0, 0, 0]);
+                let id = registry.id_for(key, [0, 0, 0, 0]);
                 keyed.insert(id.0, key);
                 id
             }
