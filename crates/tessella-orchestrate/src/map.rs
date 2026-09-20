@@ -191,6 +191,11 @@ pub struct Map {
     terrain_cells: u32,
     view: ViewTransform,
     view_id: ViewId,
+    /// Which sheet the map is drawing from, counted rather than compared.
+    ///
+    /// A patterned bucket's content stamp carries it, so a sheet handed over after that bucket
+    /// was encoded re-announces it. See [`Self::set_sprites`].
+    sprites_rev: u64,
     light: Light,
     /// Survives every tick, which is what makes an id belong to a drawable rather than to a
     /// frame.
@@ -321,6 +326,7 @@ impl Map {
             style,
             view,
             view_id,
+            sprites_rev: 0,
             light,
             session: Session::new(),
             arena,
@@ -415,6 +421,13 @@ impl Map {
         self.sprites = Some(sprites);
         // An icon laid out before the sheet arrived has no rectangle to sample.
         self.layouts.invalidate();
+        // And a *fill* encoded before it has no atlas bound and no pattern shader, which no
+        // layout invalidation reaches: a bucket is re-encoded only when its drawable is fresh,
+        // so without this the fill keeps the plain encoding for the life of the drawable and
+        // draws its `fill-color` -- black, by default -- where the pattern belongs. The
+        // revision travels in the content stamp of the buckets that carry a pattern, and only
+        // those, so adding an image re-announces them and nothing else.
+        self.sprites_rev += 1;
         self.mark_dirty();
     }
 
@@ -1064,6 +1077,7 @@ impl Map {
         // field: building it here is what keeps the atlas owned by the map and the frame's view
         // of it borrowed.
         let patterns = self.sprites.as_ref().map(|sprites| Patterns {
+            revision: self.sprites_rev,
             texture: sprites.texture,
             size: sprites.size,
             positions: &sprites.positions,

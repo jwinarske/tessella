@@ -114,6 +114,7 @@ fn build() -> Vec<tessella_orchestrate::tile::LayerBucket> {
     let positions = atlas();
     let pixels = vec![0u8; 4];
     let patterns = Patterns {
+        revision: 0,
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,

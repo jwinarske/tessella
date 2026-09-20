@@ -127,6 +127,7 @@ fn a_resolved_pattern_binds_the_pattern_shaders() {
     let positions = atlas();
     let pixels = vec![0u8; 512 * 512 * 4];
     let patterns = Patterns {
+        revision: 0,
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
@@ -176,6 +177,7 @@ fn a_missing_sprite_draws_as_a_fill() {
     positions.insert("something_else".to_owned(), atlas()["sand_noise"]);
     let pixels = vec![0u8; 512 * 512 * 4];
     let patterns = Patterns {
+        revision: 0,
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
@@ -202,6 +204,7 @@ fn the_atlas_is_uploaded_and_the_placements_are_written() {
     let positions = atlas();
     let pixels = vec![0u8; 512 * 512 * 4];
     let patterns = Patterns {
+        revision: 0,
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
@@ -320,6 +323,7 @@ fn an_unseeded_history_does_not_look_like_zooming_in() {
     let positions = atlas();
     let pixels = vec![0u8; 4];
     let patterns = Patterns {
+        revision: 0,
         texture: TextureId(20),
         size: [1, 1],
         positions: &positions,
@@ -351,6 +355,7 @@ fn an_extrusion_pattern_binds_its_own_shader() {
     let positions = atlas();
     let pixels = vec![0u8; 512 * 512 * 4];
     let patterns = Patterns {
+        revision: 0,
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,

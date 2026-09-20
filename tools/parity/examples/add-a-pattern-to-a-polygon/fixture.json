@@ -1,6 +1,6 @@
 {
  "example": "add-a-pattern-to-a-polygon",
- "note": "A polygon filled with a picture the style never carried: the page fetches one, adds it under a name, and asks `fill-pattern` for it. Nothing else in the suite paints a fill from an added image. The two renderers reach the picture at different moments and that is the point -- the oracle has it before its first frame, this side is handed it after the tiles are built, which is when the page hands it over too. It reads 24403: the oracle tiles the silhouette through the polygon and this draws a solid black rectangle, because a pattern a tile could not resolve is written into that tile's vertices as the zero rectangle and stays there.",
+ "note": "A polygon filled with a picture the style never carried: the page fetches one, adds it under a name, and asks `fill-pattern` for it. Nothing else in the suite paints a fill from an added image. The two renderers reach the picture at different moments and that is the point -- the oracle has it before its first frame, this side is handed it after the tiles are built, which is when the page hands it over too. It read 24403 -- the oracle tiled the silhouette through the polygon and this drew a solid black rectangle -- and reads 1477 now, which is the noise every z1 example in the suite carries: `display-a-map` reads 1480 over the same basemap. The cause was not the tile. A pattern is resolved per frame against the sheet the map holds, not baked into a bucket, and a bucket is re-encoded only when its drawable is fresh. The fill was encoded in the frames before the sheet arrived, so it carried no atlas and no pattern shader and drew its `fill-color`, whose default is black; nothing re-encoded it afterwards. `set_sprites` counts a revision now, and a bucket carrying a pattern takes that revision in its content stamp, so handing over a sheet re-announces those buckets and no others.",
  "base": "https://demotiles.maplibre.org/style.json",
  "sources": {
   "source": {
@@ -10,18 +10,56 @@
     "properties": {},
     "geometry": {
      "type": "Polygon",
-     "coordinates": [[[-30, -25], [-30, 35], [30, 35], [30, -25], [-30, -25]]]
+     "coordinates": [
+      [
+       [
+        -30,
+        -25
+       ],
+       [
+        -30,
+        35
+       ],
+       [
+        30,
+        35
+       ],
+       [
+        30,
+        -25
+       ],
+       [
+        -30,
+        -25
+       ]
+      ]
+     ]
     }
    }
   }
  },
  "layers": [
-  {"id": "pattern-layer", "type": "fill", "source": "source", "paint": {"fill-pattern": "pattern"}}
+  {
+   "id": "pattern-layer",
+   "type": "fill",
+   "source": "source",
+   "paint": {
+    "fill-pattern": "pattern"
+   }
+  }
  ],
  "cameras": [
-  {"lat": 0, "lon": 0, "zoom": 1}
+  {
+   "lat": 0,
+   "lon": 0,
+   "zoom": 1
+  }
  ],
  "script": [
-  ["addImage", "pattern", "https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/Cat_silhouette.svg/60px-Cat_silhouette.svg.png"]
+  [
+   "addImage",
+   "pattern",
+   "https://upload.wikimedia.org/wikipedia/commons/thumb/6/60/Cat_silhouette.svg/60px-Cat_silhouette.svg.png"
+  ]
  ]
 }

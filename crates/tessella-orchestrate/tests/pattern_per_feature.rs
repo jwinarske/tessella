@@ -92,6 +92,7 @@ fn each_feature_gets_the_sprite_its_expression_names() {
     let positions = atlas();
     let pixels = vec![0u8; 4];
     let patterns = Patterns {
+        revision: 0,
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
@@ -169,6 +170,7 @@ fn an_atlas_without_the_sprites_resolves_to_nothing() {
     let positions = BTreeMap::new();
     let pixels = vec![0u8; 4];
     let patterns = Patterns {
+        revision: 0,
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
