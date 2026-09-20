@@ -85,7 +85,8 @@ fn run(text: &str, glyphs: &[Glyph], atlas: &mut Atlas) -> Ran {
     }
     let built = quads::glyph_quads(
         &shaping,
-        |codepoint| {
+        |placed| {
+            let codepoint = placed.codepoint;
             let glyph = glyphs.iter().find(|glyph| glyph.id == codepoint)?;
             Some(QuadGlyph {
                 rect: atlas.get(codepoint)?,
