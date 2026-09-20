@@ -798,6 +798,119 @@ fn rotated_corners(half_width: f64, half_height: f64, bearing: f64) -> [[f64; 2]
     corners.map(|[x, y]| [x * cos - y * sin, x * sin + y * cos])
 }
 
+/// The picture cover for a ground cover, `dz` levels finer.
+///
+/// Each tile against *its own* level, which is the whole of it. A cover is usually one level and
+/// then the distinction does not arise; above sixty degrees of pitch `pitched_cover` stops the
+/// descent short far from the center, so the set mixes levels and the level it is filed under is
+/// the finest in it rather than the level every tile is at.
+///
+/// Refined against that filed level instead, a coarser tile's column and row are shifted by less
+/// than its own depth: a z11 tile under a z12 cover moved by one level rather than two, which
+/// names a tile at half the longitude. The ground at that patch then asks for a picture of
+/// somewhere else entirely, and the tiles it asks for exist, so they are fetched and decoded.
+///
+/// One level finer than the tile rather than at a fixed level, for the reason the picture is a
+/// level finer at all: it is the 256-pixel rule, which is a statement about the picture's
+/// resolution *relative to* the ground it paints. Held to a fixed level a z11 ground tile asks
+/// for sixteen pictures -- the resolution the level-of-detail pass had just decided that patch
+/// does not need -- and over the Alps at 1200x800 that filled the capture ring, 63.75 MiB of 64,
+/// and the frame came out empty.
+#[must_use]
+pub fn refined_cover(ground: &[TileCoord], dz: u8) -> Vec<TileCoord> {
+    let step = 1u32 << dz;
+    ground
+        .iter()
+        .flat_map(|tile| {
+            (0..step).flat_map(move |dy| {
+                (0..step).map(move |dx| TileCoord {
+                    z: tile.z + dz,
+                    x: (tile.x << dz) + dx,
+                    y: (tile.y << dz) + dy,
+                    wrap: tile.wrap,
+                })
+            })
+        })
+        .collect()
+}
+
+/// The picture cover a pitched ground asks for.
+#[cfg(test)]
+mod refined_cover_tests {
+    use super::*;
+
+    /// A refined picture tile lies inside the ground tile it was cut from.
+    ///
+    /// The property the arithmetic exists for, asserted against a cover that mixes levels the
+    /// way a pitched one does. Before this, a coarser tile was shifted by the set's nominal depth
+    /// rather than its own, and landed outside its parent -- at half the longitude, on a tile
+    /// that exists and so is fetched, decoded and drawn somewhere else.
+    #[test]
+    fn a_refined_picture_tile_lies_inside_its_ground_tile() {
+        // What `pitched_cover` returns above sixty degrees: the level it is filed under, and
+        // coarser tiles further from the center.
+        let ground = [
+            TileCoord {
+                z: 12,
+                x: 2136,
+                y: 1456,
+                wrap: 0,
+            },
+            TileCoord {
+                z: 11,
+                x: 1065,
+                y: 725,
+                wrap: 0,
+            },
+            TileCoord {
+                z: 11,
+                x: 1066,
+                y: 725,
+                wrap: -1,
+            },
+        ];
+        let refined = refined_cover(&ground, 1);
+
+        // Four per tile, each a level finer than the tile it came from, each inside it, and the
+        // world copy carried through.
+        assert_eq!(refined.len(), ground.len() * 4);
+        for tile in &ground {
+            let children: Vec<&TileCoord> = refined
+                .iter()
+                .filter(|child| child.z == tile.z + 1 && child.wrap == tile.wrap)
+                .filter(|child| child.x >> 1 == tile.x && child.y >> 1 == tile.y)
+                .collect();
+            assert_eq!(
+                children.len(),
+                4,
+                "{tile:?} did not get its four, got {refined:?}"
+            );
+        }
+    }
+
+    /// Two levels of refinement, which a 512-pixel ground under a 128-pixel picture would ask for.
+    #[test]
+    fn refining_by_two_levels_keeps_the_footprint() {
+        let ground = [TileCoord {
+            z: 11,
+            x: 1065,
+            y: 725,
+            wrap: 0,
+        }];
+        let refined = refined_cover(&ground, 2);
+
+        assert_eq!(refined.len(), 16);
+        for child in &refined {
+            assert_eq!(child.z, 13);
+            assert_eq!(
+                (child.x >> 2, child.y >> 2),
+                (1065, 725),
+                "{child:?} left its parent"
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
