@@ -538,7 +538,7 @@ fn chars_of<G: tessella_glyph::Glyphs + ?Sized>(
 ) -> Vec<tessella_glyph::shaping::Char> {
     use tessella_glyph::shaping::{Char, Image};
     let mut out = Vec::new();
-    for section in sections {
+    for (index, section) in sections.iter().enumerate() {
         // An image section is one character standing for a whole sprite. mbgl uses the object
         // replacement character for it, and the choice matters twice over: the shaper needs
         // *something* to advance past, and the codepoint must be one no font is asked for, or a
@@ -551,8 +551,11 @@ fn chars_of<G: tessella_glyph::Glyphs + ?Sized>(
             };
             #[allow(clippy::cast_possible_truncation)]
             let size = position.display_size();
+            #[allow(clippy::cast_possible_truncation)]
+            let at = index as u16;
             out.push(Char {
                 codepoint: OBJECT_REPLACEMENT,
+                section: at,
                 // The shaper computes an image's advance itself: it depends on the writing mode,
                 // which is not known here.
                 advance: 0.0,
@@ -595,7 +598,9 @@ fn chars_of<G: tessella_glyph::Glyphs + ?Sized>(
                 // rest of the label still sets correctly around the gap.
                 None => Char::blank(codepoint, 0.0),
             };
-            out.push(built.at_scale(section.scale));
+            #[allow(clippy::cast_possible_truncation)]
+            let at = index as u16;
+            out.push(built.at_scale(section.scale).in_section(at));
         }
     }
     // The contextual forms, measured by the glyphs they will be drawn from.

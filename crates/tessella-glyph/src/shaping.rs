@@ -66,6 +66,14 @@ pub struct Char {
     /// metrics this type does not carry. This is kept beside it for the two things the caller
     /// cannot do: the line's height, which depends on its neighbors, and the quad's size.
     pub scale: f32,
+    /// Which section of the label it came from.
+    ///
+    /// Zero for an ordinary label, which is one section. A `["format", …]` numbers them in the
+    /// order they were written, and the number survives shaping because the quad builder needs
+    /// it and the shaper cannot use it: a section may name its own `text-font`, and a glyph's
+    /// rectangle belongs to *that* face's atlas rather than the label's. Carried for the reason
+    /// [`Self::scale`] is -- what the shaper cannot apply, it hands on.
+    pub section: u16,
     /// The sprite this character is, if it is an `["image", …]` section rather than text.
     ///
     /// Everything an image section needs travels with it, because nothing downstream can look a
@@ -108,6 +116,7 @@ impl Char {
             advance,
             drawable: true,
             scale: 1.0,
+            section: 0,
             image: None,
         }
     }
@@ -121,6 +130,7 @@ impl Char {
             advance,
             drawable: false,
             scale: 1.0,
+            section: 0,
             image: None,
         }
     }
@@ -134,6 +144,12 @@ impl Char {
     #[must_use]
     pub const fn at_scale(self, scale: f32) -> Self {
         Self { scale, ..self }
+    }
+
+    /// The same character, marked as belonging to the section at `section`.
+    #[must_use]
+    pub const fn in_section(self, section: u16) -> Self {
+        Self { section, ..self }
     }
 }
 
@@ -521,6 +537,8 @@ pub struct PositionedGlyph {
     /// Shaping places a glyph; the quad is where its size is decided, and a scaled glyph is
     /// larger as well as further along. Carrying it here is how the two stay one decision.
     pub scale: f32,
+    /// Which section of the label it came from, as [`Char::section`] carries it.
+    pub section: u16,
     /// Whether this glyph keeps its upright orientation on a vertical line.
     ///
     /// Only ever true in a vertical shaping, and not for every glyph in one: a CJK ideograph
@@ -994,6 +1012,7 @@ pub fn shape(text: &[Char], options: &Options) -> Shaping {
                     x,
                     y: y + baseline_offset,
                     scale,
+                    section: character.section,
                     vertical,
                     image: character.image,
                 });
