@@ -867,23 +867,25 @@ impl Map {
             // view -- ground drawn with nothing on it, which reads as a band of bare ground. The
             // planner fetches this same refinement, and the two have to agree or the tiles are
             // fetched and never looked up.
-            let refined: Vec<tessella_tile::cover::TileCoord> = self
-                .drawn
-                .iter()
-                .filter(|tile| tile.z <= z)
-                .flat_map(|tile| {
-                    let dz = z - tile.z;
-                    let step = 1u32 << dz;
-                    (0..step).flat_map(move |dy| {
-                        (0..step).map(move |dx| tessella_tile::cover::TileCoord {
-                            z,
-                            x: (tile.x << dz) + dx,
-                            y: (tile.y << dz) + dy,
-                            wrap: tile.wrap,
-                        })
-                    })
-                })
-                .collect();
+            //
+            // `cover::refined_cover` is that refinement, called rather than repeated: it steps
+            // each ground tile by a fixed `dz` from *its own* level, and this walk used to step
+            // every tile to the fixed level `z` instead. The two agree only while the cover is
+            // one level. Above sixty degrees of pitch it mixes levels, and then stepping to `z`
+            // names tiles the planner never fetched -- at 1800x900 and pitch 68 that was 1940 of
+            // 1944 coordinates looked up and missing, while the pictures that *had* been fetched,
+            // at the levels their own ground sits at, were never asked for.
+            //
+            // `tile_zoom` is `boot::surface_zoom`: a DEM read as a surface covers at the view's
+            // own zoom, the way a vector source does, and both floor it under the same clamp.
+            // Spelled here rather than called because `boot` is gated on `std` and this is not.
+            let surface_at = self.view.tile_zoom();
+            let refined: Vec<tessella_tile::cover::TileCoord> =
+                if self.style.terrain_dem().is_some() && z > surface_at {
+                    tessella_tile::cover::refined_cover(&self.drawn, z - surface_at)
+                } else {
+                    Vec::new()
+                };
             let extra = if refined.is_empty() {
                 let Ok(computed) =
                     tessella_tile::cover::cover_on(&self.view, z, self.copies, self.surface())

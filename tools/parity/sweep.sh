@@ -94,3 +94,8 @@ bash "$P/parity.sh" terrain_families_p 52.52 13.405 9 2400 900 0
 for args in "14 0" "14 30" "14 45" "14 60" "16 45"; do
   bash "$P/coverage.sh" terrain_cover_p 52.52 13.405 "${args% *}" 1024 768 "${args#* }" ff00ff
 done
+# Wide and past sixty, which is where the cover starts mixing levels and the picture walk has to
+# refine each ground tile from its own level rather than to a fixed one. Every camera above is
+# 1024x768 and at most sixty degrees, so none of them reaches that: this one held 184,028 holes
+# of 1,620,000 while they all read zero.
+bash "$P/coverage.sh" terrain_cover_p 52.52 13.405 14 1800 900 67 ff00ff
