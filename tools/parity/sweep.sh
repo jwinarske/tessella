@@ -99,3 +99,7 @@ done
 # 1024x768 and at most sixty degrees, so none of them reaches that: this one held 184,028 holes
 # of 1,620,000 while they all read zero.
 bash "$P/coverage.sh" terrain_cover_p 52.52 13.405 14 1800 900 67 ff00ff
+# And one past where the cover reaches below z12, which is what the fetches have to keep up with:
+# sharing one pool with the builds, this held 1,566,116 holes of 1,620,000 -- every worker in
+# `recv` while the decodes queued behind them.
+bash "$P/coverage.sh" terrain_cover_p 52.52 13.405 14 1800 900 68 ff00ff

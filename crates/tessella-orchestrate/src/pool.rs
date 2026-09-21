@@ -293,6 +293,18 @@ impl Pool {
         SHARED.get_or_init(|| Self::new(Workers::from_env()))
     }
 
+    /// The one pool for this process that waits on the network (§5.5).
+    ///
+    /// Separate from [`Self::shared`] because the two block on different things. A build is CPU
+    /// work and wants about as many threads as there are cores; a fetch is a round trip and wants
+    /// as many as there are requests in flight. Run on one pool the fetches win -- they are
+    /// queued first, one per tile -- and the builds they produce wait behind every remaining
+    /// fetch. See [`Workers::io_from_env`] for the measurement.
+    pub fn shared_io() -> &'static Self {
+        static SHARED_IO: std::sync::OnceLock<Pool> = std::sync::OnceLock::new();
+        SHARED_IO.get_or_init(|| Self::new(Workers::io_from_env()))
+    }
+
     /// How many threads are running.
     #[must_use]
     pub fn workers(&self) -> usize {
