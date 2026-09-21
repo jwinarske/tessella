@@ -1072,6 +1072,19 @@ fn emit_group(
         Some(session) => session.atlas_stacks(&symbol_stacks(buckets)).to_vec(),
         None => symbol_stacks(buckets),
     };
+    // The ground's mesh, taken here for the reason `stacks` is: the borrow has to end before the
+    // registry is split out of the same session below. It is the same 17,415 vertices for every
+    // terrain tile of every view, so a session builds it once and hands back an `Arc` -- see
+    // `Session::terrain_mesh`. Only where something in the frame is terrain, so a style without
+    // one pays a scan of the buckets and nothing else.
+    let terrain_mesh = buckets
+        .iter()
+        .flat_map(|(_, tile_buckets)| tile_buckets.iter())
+        .any(|bucket| matches!(bucket.content, Content::Terrain(_)))
+        .then(|| match stream.as_deref_mut() {
+            Some(session) => session.terrain_mesh(),
+            None => alloc::sync::Arc::new(tessella_layout::terrain::mesh()),
+        });
     if let Some(fonts) = fonts {
         for (index, stack) in stacks.iter().enumerate().take(GLYPH_ATLAS_CAP) {
             if let Some(atlas) = fonts.atlas(stack) {
@@ -1725,15 +1738,6 @@ fn emit_group(
 
     let mut packed: BTreeSet<u64> = BTreeSet::new();
     let mut open: Option<u32> = None;
-    // The ground's mesh, once for this emission. It is the same 17,415 vertices for every
-    // terrain tile of every view, so building it inside the loop below would rebuild a fixed
-    // 101,376-index array per drawable. Built only when something in the frame is terrain, so a
-    // style without one pays a scan of the buckets and nothing else.
-    let terrain_mesh = buckets
-        .iter()
-        .flat_map(|(_, tile_buckets)| tile_buckets.iter())
-        .any(|bucket| matches!(bucket.content, Content::Terrain(_)))
-        .then(tessella_layout::terrain::mesh);
 
     for entry in order.iter().copied() {
         // A drawable whose pass is a mask appears once per pass; its geometry is packed once.
@@ -1844,7 +1848,7 @@ fn emit_group(
                         stacks: &stacks,
                         prepared: &prepared,
                         key: (tile_index, bucket_index),
-                        terrain: terrain_mesh.as_ref(),
+                        terrain: terrain_mesh.as_deref(),
                         raised: buckets
                             .get(tile_index)
                             .is_some_and(|(id, _)| terrain_covering(&grounds, *id).is_some()),
