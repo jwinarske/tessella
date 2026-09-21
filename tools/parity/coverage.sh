@@ -29,6 +29,23 @@ grep -qE "^materials_loaded [1-9][0-9]* rejected 0$" <<<"$out" || {
   echo "MATERIALS NOT LOADED $tag" >&2
   exit 1
 }
+# A hole is the background's color, and black is not that color -- so a frame the renderer never
+# lit at all has no holes in it and scores a clean zero. That is not a hypothetical: a change that
+# blanked every viewport past about a megapixel passed this gate at five cameras, because the
+# count it reports only ever looked for magenta.
+#
+# `lit_pixels` is the probe's own count of what the renderer put down. Every camera here is ground
+# to the horizon and lights the whole frame, so anything short of all of them is the measure
+# reporting on an image that was never drawn. A camera that means to show sky would need to say so.
+lit=$(sed -nE 's/^lit_pixels ([0-9]+) of ([0-9]+)$/\1 \2/p' <<<"$out")
+[ -n "$lit" ] || {
+  echo "NO lit_pixels REPORTED $tag" >&2
+  exit 1
+}
+[ "${lit% *}" = "${lit#* }" ] || {
+  echo "FRAME NOT DRAWN $tag: lit_pixels $lit" >&2
+  exit 1
+}
 
 printf "%-20s z%-4s p%-3s " "$scene" "$z" "$pitch"
 python3 - "$PARITY_WORK/t_$tag.ppm" "$hex" <<'PY'
