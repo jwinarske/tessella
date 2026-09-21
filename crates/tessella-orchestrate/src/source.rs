@@ -491,12 +491,9 @@ impl<S: FileSource + 'static> Pooled<S> {
         // Background rather than foreground by default: `dispatch` names a class per request,
         // and the one it never names is this. A request that reached here without a class would
         // be a tile nobody said was urgent, so it should not outrank one that is.
-        // The I/O pool, not `pool`: a fetch blocks on a socket for a round trip and the build it
-        // produces is CPU work, so sharing one pool lets the fetches -- one per tile, queued
-        // first -- hold every slot the builds need. See `Pool::shared_io`.
         let deferred = Arc::new(PoolBacked::new(
             Arc::new(Coalesced(Arc::clone(&files))),
-            Pool::shared_io(),
+            pool,
             Priority::Background,
         ));
         TileSource::with_transport(style_text, deferred, cache, pool, style_rev)
