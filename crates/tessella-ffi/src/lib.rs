@@ -1220,6 +1220,9 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
             // the projection now -- a terrain is the plane with the ground raised -- and two
             // places deciding what a tile is keyed by is one of them free to disagree.
             state.map.surface(),
+            // And whether that surface's grid is settled, which decides if speculation is worth
+            // fetching yet -- see `Map::terrain_grid_settled`.
+            state.map.terrain_grid_settled(),
         );
         outcome
     })

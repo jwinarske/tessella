@@ -129,7 +129,7 @@ fn draw_until<D: TileTransport + 'static>(
     }];
     assert!(
         settle(source, || {
-            source.want(&view(), &cover, &[], Surface::Plane);
+            source.want(&view(), &cover, &[], Surface::Plane, true);
             source.readiness() == Readiness::Ready
                 && source
                     .buckets(TileId::new(0, 0, 0))
@@ -356,7 +356,7 @@ mod clustered {
         }];
         let landed = |wanted: usize| {
             settle(&source, || {
-                source.want(&view(), &cover, &[], Surface::Plane);
+                source.want(&view(), &cover, &[], Surface::Plane, true);
                 source.readiness() == Readiness::Ready
                     && source
                         .buckets(TileId::new(0, 0, 0))
