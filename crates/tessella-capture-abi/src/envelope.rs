@@ -822,14 +822,32 @@ pub struct TextureUpdate {
     /// consumer that has never read it keeps working: zero is `UnsignedByte`, every producer
     /// before this one zeroed the padding, and every texture before the relief's stops is one.
     pub channel_type: u8,
+    /// Whether [`Self::pixels`] holds only the dirty regions, packed.
+    ///
+    /// Zero -- every producer before this one -- means the payload is the whole texture and a
+    /// rect names which part of it moved. That is what the rects were written for, and it is why
+    /// a partial update still costs a whole texture on the wire: a DEM's border is four strips of
+    /// 4 KiB carried inside 266 KiB, and a settled view over the Alps pushed 214.8 MiB through the
+    /// ring to deliver a fraction of it.
+    ///
+    /// One means the payload is the rects' own pixels, each region packed tight at its own width
+    /// and laid down in the order [`Self::rects`] names them. Meaningless with a `rect_count` of
+    /// zero, which is a whole texture either way.
+    ///
+    /// Taken from the padding rather than added to the record, the way [`Self::channel_type`] was
+    /// and for the same reason: the size does not move and a consumer that has never read it
+    /// keeps working. A producer must not set it against a consumer that does not read it -- the
+    /// rects would land at the right addresses holding the wrong pixels, which is a map that
+    /// draws rather than one that fails.
+    pub packed: u8,
     /// Padding. Must be zero.
     ///
-    /// Five bytes, and six before the channel type took one. Not two, for the reason
-    /// [`ViewUse::_pad`] is five: the fields before it end at 58 and the record is 64, so two
-    /// left four of compiler tail padding that `as_bytes` copied to the ring uninitialized. Two
-    /// runs of the same producer then disagreed about the first frame, by the bytes of its stack
-    /// that went out with it.
-    pub _pad: [u8; 5],
+    /// Four bytes, five before this field took one and six before the channel type did. Not two,
+    /// for the reason [`ViewUse::_pad`] is five: the fields before it end at 59 and the record is
+    /// 64, so two left four of compiler tail padding that `as_bytes` copied to the ring
+    /// uninitialized. Two runs of the same producer then disagreed about the first frame, by the
+    /// bytes of its stack that went out with it.
+    pub _pad: [u8; 4],
 }
 
 /// One tile of a clip set: which tile, and the matrix that places its mask quad.

@@ -853,7 +853,15 @@ fn structs() -> Vec<Struct> {
                     "tsl_texture_channel_data_type. Not implied by the layout: a color relief's \
                      elevation stops are RGBA and Float together."
                 ),
-                (_pad, "uint8_t _pad[5]", "Must be zero."),
+                (
+                    packed,
+                    "uint8_t packed",
+                    "Whether pixels holds only the dirty regions, packed. Zero is the whole \
+                     texture with rects naming what moved, which is what every producer before \
+                     this field sent. One is each rect's own pixels, tight at its own width, in \
+                     the order rects names them. Meaningless when rect_count is zero."
+                ),
+                (_pad, "uint8_t _pad[4]", "Must be zero."),
             ]
         ),
         c_struct!(
