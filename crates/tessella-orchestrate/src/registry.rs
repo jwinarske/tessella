@@ -492,7 +492,7 @@ pub struct Session {
 pub struct Textures {
     sent: BTreeMap<TextureId, SentTexture>,
     /// Written by this frame and not yet committed.
-    staged: Vec<(TextureId, TextureContent)>,
+    staged: alloc::collections::BTreeMap<TextureId, TextureContent>,
     /// How many emissions have been committed, which ages `sent`.
     emissions: u64,
 }
@@ -568,9 +568,66 @@ impl Textures {
             .is_some_and(|held| held.content.same_as(content))
     }
 
+    /// Whether *this* frame has already written this payload to `texture`.
+    ///
+    /// Not [`Self::current`], and deliberately a second question. `current` answers what the
+    /// consumer holds, and a frame that fails must not leave it credited with what it never
+    /// received -- which is why staging is not sending. But one texture serves every tile
+    /// standing on it: a ground DEM covers the sixteen tiles above it and each of them asks in
+    /// turn, so without this the same payload goes out once per tile in a single frame.
+    ///
+    /// Safe where `current` would not be, because [`Self::discard`] drops the staged set with the
+    /// attempt: a frame that fails re-writes everything it had written, rather than skipping what
+    /// an earlier attempt only got as far as staging.
+    #[must_use]
+    pub fn writing(&self, texture: TextureId, content: &TextureContent) -> bool {
+        self.staged
+            .get(&texture)
+            .is_some_and(|staged| staged.same_as(content))
+    }
+
+    /// Whether what the consumer holds at `texture` is already a DEM of this stride.
+    ///
+    /// Which is what says a re-send writes the border and nothing else. A DEM is decoded once and
+    /// thereafter only ever border-filled -- [`Dem::backfill_border`] writes a row, a column or a
+    /// corner of the one-texel ring and never reaches the interior -- so a second send of the same
+    /// size to the same id is a seam being filled in, not a different tile. A different size is a
+    /// different build and has to go whole.
+    ///
+    /// [`Dem::backfill_border`]: tessella_source::dem::Dem::backfill_border
+    #[must_use]
+    pub fn holds_elevation_sized(&self, texture: TextureId, stride: u32) -> bool {
+        self.sent
+            .get(&texture)
+            .is_some_and(|held| match &held.content {
+                TextureContent::Elevation(dem) => dem.stride() == stride,
+                TextureContent::Picture(_) => false,
+            })
+    }
+
+    /// Notes that a frame still draws from `texture`, so it does not age out.
+    ///
+    /// The grace exists to drop what has left the cover, and its own note says anything still on
+    /// screen is named every emission and never ages. That only held for a texture the frame
+    /// *sent*: an unchanged one is skipped, so it was never restaged, aged out after
+    /// the grace's emissions and came back as a whole-texture upload. On the Alps at
+    /// 1024x768 that was 26 ground DEMs sent 402 times, 266 KiB apiece.
+    ///
+    /// Dated to the emission this frame will become, which is what [`Self::record`] gives the
+    /// textures it stages -- so a kept texture and a sent one age together.
+    ///
+    /// Silent for an id nothing holds. A frame names a texture per slot whether or not the tile
+    /// has one, and a tile with no raster names a raster id that was never sent.
+    pub fn keep(&mut self, texture: TextureId) {
+        let next = self.emissions.saturating_add(1);
+        if let Some(held) = self.sent.get_mut(&texture) {
+            held.seen = next;
+        }
+    }
+
     /// Notes a texture this frame has written, to be remembered if the frame commits.
     pub fn stage(&mut self, texture: TextureId, content: TextureContent) {
-        self.staged.push((texture, content));
+        self.staged.insert(texture, content);
     }
 
     /// Forgets what an attempt staged, because it is not being sent.
@@ -582,7 +639,7 @@ impl Textures {
     pub fn record(&mut self) {
         self.emissions += 1;
         let now = self.emissions;
-        for (texture, content) in self.staged.drain(..) {
+        for (texture, content) in core::mem::take(&mut self.staged) {
             self.sent
                 .insert(texture, SentTexture { content, seen: now });
         }
