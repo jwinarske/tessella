@@ -100,6 +100,43 @@ pub fn regions(
     }; TEXTURE_RECT_CAP];
     rects[..dirty.len()].copy_from_slice(dirty);
 
+    // The regions alone, tight at their own widths and in the order the rects name them. A rect
+    // list used to cost a whole texture on the wire whatever it named -- a DEM's border is four
+    // strips of 4 KiB carried inside 266 KiB, and a settled view over the Alps pushed 214.8 MiB
+    // through the ring to deliver a fraction of it. See `TextureUpdate::packed`.
+    //
+    // Whole where the rects and the pixels do not agree: a rect reaching past the image, or a
+    // buffer shorter than the size claims, is a caller describing one texture and handing over
+    // another. Packing that reads the wrong rows and uploads them to the right addresses, which
+    // draws. Sending it whole is what this always did, and the consumer's own bounds check is
+    // the second half of the same guard.
+    let stride = size.width as usize * format.channels() as usize;
+    let fits = pixels.len() >= stride * size.height as usize
+        && dirty.iter().all(|rect| {
+            u32::from(rect.x) + u32::from(rect.w) <= size.width
+                && u32::from(rect.y) + u32::from(rect.h) <= size.height
+        });
+    let payload = if fits {
+        let mut out = Vec::with_capacity(
+            dirty
+                .iter()
+                .map(|rect| rect.w as usize * rect.h as usize * format.channels() as usize)
+                .sum(),
+        );
+        for rect in dirty {
+            for row in 0..usize::from(rect.h) {
+                let at = (usize::from(rect.y) + row) * stride
+                    + usize::from(rect.x) * format.channels() as usize;
+                out.extend_from_slice(
+                    &pixels[at..at + usize::from(rect.w) * format.channels() as usize],
+                );
+            }
+        }
+        out
+    } else {
+        pixels.to_vec()
+    };
+
     #[allow(clippy::cast_possible_truncation)]
     let record = TextureUpdate {
         texture,
@@ -107,19 +144,18 @@ pub fn regions(
         rects,
         pixels: Span {
             offset: 0,
-            count: pixels.len() as u32,
+            count: payload.len() as u32,
         },
         format: format as u8,
         rect_count: dirty.len() as u8,
         // Bytes, which every texture but a color relief's elevation stops is.
         channel_type: tessella_capture_abi::TextureChannelDataType::UnsignedByte as u8,
-        // Whole-texture pixels, which is what every rect list on this wire has always carried.
-        packed: 0,
+        packed: u8::from(fits),
         _pad: [0; 4],
     };
     Ok(Upload {
         record,
-        pixels: pixels.to_vec(),
+        pixels: payload,
     })
 }
 
