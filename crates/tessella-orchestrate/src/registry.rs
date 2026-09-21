@@ -605,6 +605,24 @@ impl Textures {
             })
     }
 
+    /// Whether what the consumer holds at `texture` is already a picture of this size.
+    ///
+    /// The picture half of [`Self::holds_elevation_sized`], and only sound where the id says what
+    /// the picture is *of*. A hillshade has an id space of its own, and its slope field is
+    /// derived from a DEM that is only ever border-filled after it is decoded -- so a re-send at
+    /// the same size is a seam being filled, and `prepare` reaches the border only from the first
+    /// and last row and column. `dem::tests::backfilling_a_border_changes_only_the_slope_fields_outer_ring`
+    /// holds that. A raster tile's imagery would not qualify and does not ask.
+    #[must_use]
+    pub fn holds_picture_sized(&self, texture: TextureId, width: u32, height: u32) -> bool {
+        self.sent
+            .get(&texture)
+            .is_some_and(|held| match &held.content {
+                TextureContent::Picture(image) => image.width == width && image.height == height,
+                TextureContent::Elevation(_) => false,
+            })
+    }
+
     /// Notes that a frame still draws from `texture`, so it does not age out.
     ///
     /// The grace exists to drop what has left the cover, and its own note says anything still on

@@ -463,6 +463,52 @@ mod tests {
         Dem::new(&ramp(dim), Encoding::Mapbox).expect("a square tile")
     }
 
+    /// Filling a seam changes the slope field's outer ring and nothing else.
+    ///
+    /// What lets a producer send that ring alone rather than the whole field: `prepare` is a
+    /// three-by-three walk, so an output texel reaches the border only from the first and last
+    /// row and column. Asserted rather than reasoned about, because it is the whole safety of
+    /// sending a partial texture -- an interior that did move would be left stale on the GPU
+    /// with nothing to say so.
+    #[test]
+    fn backfilling_a_border_changes_only_the_slope_fields_outer_ring() {
+        let dim = 16;
+        let before = dem(dim);
+        let field_before = before.prepare(14);
+
+        // A neighbor with different ground, so the border it contributes is nothing like the
+        // edge-repeat guess it replaces.
+        let mut after = dem(dim);
+        let mut other = ramp(dim);
+        for byte in &mut other.pixels {
+            *byte = byte.wrapping_add(37);
+        }
+        let neighbor = Dem::new(&other, Encoding::Mapbox).expect("a square tile");
+        for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1)] {
+            after.backfill_border(&neighbor, dx, dy);
+        }
+        let field_after = after.prepare(14);
+
+        assert_eq!(field_before.pixels.len(), field_after.pixels.len());
+        let mut moved_inside = 0;
+        let mut moved_on_ring = 0;
+        for y in 0..dim {
+            for x in 0..dim {
+                let at = ((y * dim + x) * 4) as usize;
+                if field_before.pixels[at..at + 4] == field_after.pixels[at..at + 4] {
+                    continue;
+                }
+                if x == 0 || y == 0 || x == dim - 1 || y == dim - 1 {
+                    moved_on_ring += 1;
+                } else {
+                    moved_inside += 1;
+                }
+            }
+        }
+        assert_eq!(moved_inside, 0, "the interior of the slope field moved");
+        assert!(moved_on_ring > 0, "the border was filled and nothing moved");
+    }
+
     #[test]
     fn the_stored_image_is_two_wider_than_the_tile() {
         let dem = dem(8);

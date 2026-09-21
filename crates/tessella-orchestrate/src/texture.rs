@@ -303,6 +303,29 @@ pub fn raster_tile(texture: TextureId, image: &tessella_source::image::Image) ->
     Some(whole(texture, size, RASTER_TILE_FORMAT, &image.pixels))
 }
 
+/// A raster tile whose changed part is only the rectangles named.
+///
+/// The pixels are still the whole image -- a rect says which part of it moved, not where a packed
+/// run belongs -- so this differs from [`raster_tile`] in what the consumer uploads and not in
+/// what it is given.
+///
+/// `None` for an image with no area, as [`raster_tile`], and for a rect list this cannot carry.
+#[must_use]
+pub fn raster_tile_regions(
+    texture: TextureId,
+    image: &tessella_source::image::Image,
+    dirty: &[Rect16],
+) -> Option<Upload> {
+    if image.width == 0 || image.height == 0 || image.pixels.is_empty() {
+        return None;
+    }
+    let size = Extent {
+        width: image.width,
+        height: image.height,
+    };
+    regions(texture, size, RASTER_TILE_FORMAT, dirty, &image.pixels).ok()
+}
+
 /// The smallest rectangle containing all of these.
 fn union_of(rects: &[Rect16]) -> Rect16 {
     let min_x = rects.iter().map(|rect| rect.x).min().unwrap_or(0);

@@ -872,6 +872,17 @@ fn holds(
     })
 }
 
+/// Whether a re-send of `texture` only has to carry a picture's outer ring. See
+/// [`Textures::holds_picture_sized`].
+fn holds_picture_sized(
+    textures: Option<&Textures>,
+    texture: tessella_capture_abi::envelope::TextureId,
+    width: u32,
+    height: u32,
+) -> bool {
+    textures.is_some_and(|textures| textures.holds_picture_sized(texture, width, height))
+}
+
 /// Whether a re-send of `texture` only has to carry the DEM's border. See
 /// [`Textures::holds_elevation_sized`].
 fn holds_elevation_sized(
@@ -1251,11 +1262,37 @@ fn emit_group(
         for bucket in tile_buckets.iter() {
             if let Content::Hillshade(hillshade) = &bucket.content {
                 let content = TextureContent::Picture(alloc::sync::Arc::clone(&hillshade.prepared));
-                if let Some(upload) = texture::raster_tile(hillshade_texture, &hillshade.prepared)
-                    && !holds(textures.as_deref(), hillshade_texture, &content)
-                {
-                    texture::write(producer, &upload)?;
-                    stage(textures.as_deref_mut(), hillshade_texture, content);
+                if !holds(textures.as_deref(), hillshade_texture, &content) {
+                    // The outer ring alone where the consumer already holds this field at this
+                    // size. A slope field is prepared from a DEM, and a DEM is only ever
+                    // border-filled once decoded -- `prepare` is a three-by-three walk, so only
+                    // its first and last row and column can have moved. The interior would be
+                    // re-uploaded to no effect: 465 fields of 256 square in a settled frame,
+                    // 256 KiB each to move 4 KiB of edge.
+                    let field = &hillshade.prepared;
+                    let rects = (field.width == field.height)
+                        .then(|| {
+                            holds_picture_sized(
+                                textures.as_deref(),
+                                hillshade_texture,
+                                field.width,
+                                field.height,
+                            )
+                            .then(|| border_rects(field.width))
+                            .flatten()
+                        })
+                        .flatten();
+                    let upload = match rects {
+                        Some(rects) => {
+                            texture::raster_tile_regions(hillshade_texture, field, &rects)
+                                .or_else(|| texture::raster_tile(hillshade_texture, field))
+                        }
+                        None => texture::raster_tile(hillshade_texture, field),
+                    };
+                    if let Some(upload) = upload {
+                        texture::write(producer, &upload)?;
+                        stage(textures.as_deref_mut(), hillshade_texture, content);
+                    }
                 }
                 break;
             }
