@@ -374,6 +374,77 @@ impl Dem {
     #[must_use]
     pub fn prepare(&self, zoom: u8) -> crate::image::Image {
         let dim = self.dim;
+        let scale = self.slope_scale(zoom);
+        let mut pixels = Vec::with_capacity((dim as usize) * (dim as usize) * 4);
+        for y in 0..dim {
+            for x in 0..dim {
+                #[allow(clippy::cast_possible_wrap)]
+                pixels.extend_from_slice(&self.slope_at(x as i32, y as i32, scale));
+            }
+        }
+        crate::image::Image {
+            width: dim,
+            height: dim,
+            pixels,
+        }
+    }
+
+    /// [`Self::prepare`] over the outer ring alone, on a field whose interior already holds.
+    ///
+    /// A DEM is decoded once and thereafter only ever border-filled, and [`Self::prepare`] is a
+    /// three-by-three walk -- so a filled seam reaches the first and last row and column of the
+    /// field and nothing else. Reconciling a border therefore has to redo four strips rather than
+    /// the sixty-five thousand texels between them, which is the same work the *upload* was cut
+    /// to. See `tests::backfilling_a_border_changes_only_the_slope_fields_outer_ring`.
+    ///
+    /// `None` when `previous` is not this DEM's field, which is a caller pairing two tiles.
+    #[must_use]
+    pub fn prepare_ring(
+        &self,
+        zoom: u8,
+        previous: &crate::image::Image,
+    ) -> Option<crate::image::Image> {
+        let dim = self.dim;
+        if previous.width != dim
+            || previous.height != dim
+            || previous.pixels.len() != (dim as usize) * (dim as usize) * 4
+        {
+            return None;
+        }
+        let scale = self.slope_scale(zoom);
+        let mut field = previous.clone();
+        let mut write = |x: u32, y: u32| {
+            let at = ((y as usize) * (dim as usize) + (x as usize)) * 4;
+            #[allow(clippy::cast_possible_wrap)]
+            let texel = self.slope_at(x as i32, y as i32, scale);
+            field.pixels[at..at + 4].copy_from_slice(&texel);
+        };
+        for x in 0..dim {
+            write(x, 0);
+            write(x, dim - 1);
+        }
+        for y in 1..dim.saturating_sub(1) {
+            write(0, y);
+            write(dim - 1, y);
+        }
+        Some(field)
+    }
+
+    /// One texel of the slope field, as [`Self::prepare`] writes it.
+    fn slope_at(&self, x: i32, y: i32, scale: f32) -> [u8; 4] {
+        let at = |dx: i32, dy: i32| self.elevation_exact(x + dx, y + dy).unwrap_or(0.0);
+        let (a, b, c) = (at(-1, -1), at(0, -1), at(1, -1));
+        let (d, f) = (at(-1, 0), at(1, 0));
+        let (g, h, i) = (at(-1, 1), at(0, 1), at(1, 1));
+
+        let dx = ((c + f + f + i) - (a + d + d + g)) * scale;
+        let dy = ((g + h + h + i) - (a + b + b + c)) * scale;
+        [quantize(dx / 8.0 + 0.5), quantize(dy / 8.0 + 0.5), 255, 255]
+    }
+
+    /// What the slope is multiplied by at this zoom.
+    fn slope_scale(&self, zoom: u8) -> f32 {
+        let dim = self.dim;
         let zoom = f32::from(zoom);
 
         // mapbox-gl-js#5286: the effect is softened at low zoom, where a pixel covers enough
@@ -391,33 +462,8 @@ impl Dem {
             0.0
         };
         #[allow(clippy::cast_precision_loss)]
-        let scale = dim as f32 / libm::powf(2.0, exaggeration + (28.2562 - zoom));
-
-        let mut pixels = Vec::with_capacity((dim as usize) * (dim as usize) * 4);
-        for y in 0..dim {
-            for x in 0..dim {
-                #[allow(clippy::cast_possible_wrap)]
-                let (x, y) = (x as i32, y as i32);
-                let at = |dx: i32, dy: i32| self.elevation_exact(x + dx, y + dy).unwrap_or(0.0);
-                let (a, b, c) = (at(-1, -1), at(0, -1), at(1, -1));
-                let (d, f) = (at(-1, 0), at(1, 0));
-                let (g, h, i) = (at(-1, 1), at(0, 1), at(1, 1));
-
-                let dx = ((c + f + f + i) - (a + d + d + g)) * scale;
-                let dy = ((g + h + h + i) - (a + b + b + c)) * scale;
-                pixels.extend_from_slice(&[
-                    quantize(dx / 8.0 + 0.5),
-                    quantize(dy / 8.0 + 0.5),
-                    255,
-                    255,
-                ]);
-            }
-        }
-
-        crate::image::Image {
-            width: dim,
-            height: dim,
-            pixels,
+        {
+            dim as f32 / libm::powf(2.0, exaggeration + (28.2562 - zoom))
         }
     }
 }
@@ -507,6 +553,36 @@ mod tests {
         }
         assert_eq!(moved_inside, 0, "the interior of the slope field moved");
         assert!(moved_on_ring > 0, "the border was filled and nothing moved");
+    }
+
+    /// Recomputing the ring gives the field a full pass would have.
+    ///
+    /// The shortcut and the thing it stands on, asserted together: if these ever differ, the
+    /// shortcut is writing a field nobody would have computed.
+    #[test]
+    fn preparing_the_ring_matches_preparing_the_whole_field() {
+        let dim = 16;
+        let base = dem(dim);
+        let from_base = base.prepare(14);
+
+        let mut after = dem(dim);
+        let mut other = ramp(dim);
+        for byte in &mut other.pixels {
+            *byte = byte.wrapping_add(37);
+        }
+        let neighbor = Dem::new(&other, Encoding::Mapbox).expect("a square tile");
+        for (dx, dy) in [(-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1)] {
+            after.backfill_border(&neighbor, dx, dy);
+        }
+
+        let whole = after.prepare(14);
+        let ring = after
+            .prepare_ring(14, &from_base)
+            .expect("the same tile's field");
+        assert_eq!(
+            ring.pixels, whole.pixels,
+            "the ring pass left a different field"
+        );
     }
 
     #[test]

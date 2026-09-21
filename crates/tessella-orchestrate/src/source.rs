@@ -345,6 +345,18 @@ fn adjacent(key: Neighborhood) -> impl Iterator<Item = (Option<Neighborhood>, i8
 }
 
 /// The elevation a tile's buckets were built from, if any of them was.
+/// The slope field a tile already holds, if it holds one.
+///
+/// Its interior is the answer for every border this tile will ever have: a DEM is decoded once
+/// and thereafter only ever border-filled, so reconciling a seam moves the field's outer ring
+/// and nothing else -- see `Dem::prepare_ring`.
+fn field_of(buckets: &[LayerBucket]) -> Option<&Arc<tessella_source::image::Image>> {
+    buckets.iter().find_map(|bucket| match &bucket.content {
+        crate::tile::Content::Hillshade(hillshade) => Some(&hillshade.prepared),
+        _ => None,
+    })
+}
+
 fn dem_of(buckets: &[LayerBucket]) -> Option<&Arc<tessella_source::dem::Dem>> {
     buckets.iter().find_map(|bucket| match &bucket.content {
         crate::tile::Content::Terrain(terrain) => Some(&terrain.dem),
@@ -1488,6 +1500,9 @@ impl<D: TileTransport + 'static> TileSource<D> {
     fn reseam_source(self: &Arc<Self>, source: String, dirty: &BTreeSet<TileId>) {
         let mut dems: BTreeMap<Neighborhood, Arc<tessella_source::dem::Dem>> = BTreeMap::new();
         let mut prepares: BTreeSet<Neighborhood> = BTreeSet::new();
+        // The field each of those already has, whose interior a reconciliation cannot move.
+        let mut fields: BTreeMap<Neighborhood, Arc<tessella_source::image::Image>> =
+            BTreeMap::new();
         // Which addresses hold each of those, with the dispatch that put it there: one DEM tile
         // can sit at several addresses -- a world copy either side of the antimeridian, the same
         // data overscaled to two zooms -- and every one of them carries the seam.
@@ -1516,6 +1531,9 @@ impl<D: TileTransport + 'static> TileSource<D> {
                     .any(|bucket| matches!(bucket.content, crate::tile::Content::Hillshade(_)))
                 {
                     prepares.insert(key);
+                    if let Some(field) = field_of(&build.buckets) {
+                        fields.entry(key).or_insert_with(|| Arc::clone(field));
+                    }
                 }
                 holders.entry(key).or_default().push((*tile, build.seq));
             }
@@ -1555,9 +1573,17 @@ impl<D: TileTransport + 'static> TileSource<D> {
                 }
                 // Only where something reads a slope. A terrain-only style samples the elevation
                 // itself and pays for no prepare pass at all.
-                let prepared = prepares
-                    .contains(&key)
-                    .then(|| Arc::new(next.prepare(key.0)));
+                // The ring alone where the tile already has a field. Its interior is the same
+                // answer whatever the border becomes, so a full pass would spend sixty-five
+                // thousand texels' worth of Sobel to change four strips. Over the Alps at
+                // 1024x768 a settled frame ran 104 of these for the tiles themselves and 418
+                // more for their seams.
+                let prepared = prepares.contains(&key).then(|| {
+                    fields
+                        .get(&key)
+                        .and_then(|previous| next.prepare_ring(key.0, previous))
+                        .map_or_else(|| Arc::new(next.prepare(key.0)), Arc::new)
+                });
                 reseamed.push((key, Arc::new(next), prepared));
             }
             this.swap_in(&source, &holders, reseamed);
