@@ -64,7 +64,9 @@ pub fn whole(texture: TextureId, size: Extent, format: TexturePixelType, pixels:
         rect_count: 0,
         // Bytes, which every texture but a color relief's elevation stops is.
         channel_type: tessella_capture_abi::TextureChannelDataType::UnsignedByte as u8,
-        _pad: [0; 5],
+        // Whole-texture pixels, which is what every rect list on this wire has always carried.
+        packed: 0,
+        _pad: [0; 4],
     };
     Upload {
         record,
@@ -111,7 +113,9 @@ pub fn regions(
         rect_count: dirty.len() as u8,
         // Bytes, which every texture but a color relief's elevation stops is.
         channel_type: tessella_capture_abi::TextureChannelDataType::UnsignedByte as u8,
-        _pad: [0; 5],
+        // Whole-texture pixels, which is what every rect list on this wire has always carried.
+        packed: 0,
+        _pad: [0; 4],
     };
     Ok(Upload {
         record,
