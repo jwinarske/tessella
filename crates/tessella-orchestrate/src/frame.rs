@@ -867,7 +867,61 @@ fn holds(
     texture: tessella_capture_abi::envelope::TextureId,
     content: &TextureContent,
 ) -> bool {
-    textures.is_some_and(|textures| textures.current(texture, content))
+    textures.is_some_and(|textures| {
+        textures.current(texture, content) || textures.writing(texture, content)
+    })
+}
+
+/// Whether a re-send of `texture` only has to carry the DEM's border. See
+/// [`Textures::holds_elevation_sized`].
+fn holds_elevation_sized(
+    textures: Option<&Textures>,
+    texture: tessella_capture_abi::envelope::TextureId,
+    stride: u32,
+) -> bool {
+    textures.is_some_and(|textures| textures.holds_elevation_sized(texture, stride))
+}
+
+/// The four strips of a DEM's one-texel border, which is all a reseam writes.
+///
+/// Two full rows and the two columns between them: the corners land in the rows, so no strip
+/// overlaps another and the whole ring is covered. Four is `TEXTURE_RECT_CAP` exactly.
+///
+/// `None` for a DEM too small to have an interior, or one wider than a `u16` -- neither is a
+/// thing a tile source produces, and both fall back to sending the texture whole.
+fn border_rects(stride: u32) -> Option<[tessella_capture_abi::envelope::Rect16; 4]> {
+    use tessella_capture_abi::envelope::Rect16;
+    let side = u16::try_from(stride).ok()?;
+    let inner = side.checked_sub(2)?;
+    if inner == 0 {
+        return None;
+    }
+    Some([
+        Rect16 {
+            x: 0,
+            y: 0,
+            w: side,
+            h: 1,
+        },
+        Rect16 {
+            x: 0,
+            y: side - 1,
+            w: side,
+            h: 1,
+        },
+        Rect16 {
+            x: 0,
+            y: 1,
+            w: 1,
+            h: inner,
+        },
+        Rect16 {
+            x: side - 1,
+            y: 1,
+            w: 1,
+            h: inner,
+        },
+    ])
 }
 
 /// Notes a texture this frame has written, to be remembered if the frame commits.
@@ -1219,12 +1273,42 @@ fn emit_group(
                         width: relief.dem.stride(),
                         height: relief.dem.stride(),
                     };
-                    let upload = texture::whole(
+                    // The border alone where the consumer already holds this DEM at this
+                    // size: everything that can have changed since is the ring, so the rest of
+                    // the payload would be re-uploaded to no effect. Over the Alps at 1024x768
+                    // a settled frame uploaded 588 MiB of textures, 2,575 of them whole, and
+                    // 1,817 of those were seams being filled -- 266 KiB each to move 4 KiB of
+                    // edge.
+                    let rects = holds_elevation_sized(
+                        textures.as_deref(),
                         relief_texture,
-                        size,
-                        tessella_capture_abi::TexturePixelType::RGBA,
-                        relief.dem.pixels(),
-                    );
+                        relief.dem.stride(),
+                    )
+                    .then(|| border_rects(relief.dem.stride()))
+                    .flatten();
+                    let upload = match rects {
+                        Some(rects) => texture::regions(
+                            relief_texture,
+                            size,
+                            tessella_capture_abi::TexturePixelType::RGBA,
+                            &rects,
+                            relief.dem.pixels(),
+                        )
+                        .unwrap_or_else(|_| {
+                            texture::whole(
+                                relief_texture,
+                                size,
+                                tessella_capture_abi::TexturePixelType::RGBA,
+                                relief.dem.pixels(),
+                            )
+                        }),
+                        None => texture::whole(
+                            relief_texture,
+                            size,
+                            tessella_capture_abi::TexturePixelType::RGBA,
+                            relief.dem.pixels(),
+                        ),
+                    };
                     texture::write(producer, &upload)?;
                     stage(textures.as_deref_mut(), relief_texture, content);
                 }
@@ -1250,17 +1334,57 @@ fn emit_group(
                         width: terrain.dem.stride(),
                         height: terrain.dem.stride(),
                     };
-                    let upload = texture::whole(
+                    // The border alone where the consumer already holds this DEM at this
+                    // size: everything that can have changed since is the ring, so the rest of
+                    // the payload would be re-uploaded to no effect. Over the Alps at 1024x768
+                    // a settled frame uploaded 588 MiB of textures, 2,575 of them whole, and
+                    // 1,817 of those were seams being filled -- 266 KiB each to move 4 KiB of
+                    // edge.
+                    let rects = holds_elevation_sized(
+                        textures.as_deref(),
                         terrain_texture,
-                        size,
-                        tessella_capture_abi::TexturePixelType::RGBA,
-                        terrain.dem.pixels(),
-                    );
+                        terrain.dem.stride(),
+                    )
+                    .then(|| border_rects(terrain.dem.stride()))
+                    .flatten();
+                    let upload = match rects {
+                        Some(rects) => texture::regions(
+                            terrain_texture,
+                            size,
+                            tessella_capture_abi::TexturePixelType::RGBA,
+                            &rects,
+                            terrain.dem.pixels(),
+                        )
+                        .unwrap_or_else(|_| {
+                            texture::whole(
+                                terrain_texture,
+                                size,
+                                tessella_capture_abi::TexturePixelType::RGBA,
+                                terrain.dem.pixels(),
+                            )
+                        }),
+                        None => texture::whole(
+                            terrain_texture,
+                            size,
+                            tessella_capture_abi::TexturePixelType::RGBA,
+                            terrain.dem.pixels(),
+                        ),
+                    };
                     texture::write(producer, &upload)?;
                     stage(textures.as_deref_mut(), terrain_texture, content);
                 }
                 break;
             }
+        }
+
+        // Named, so the grace does not age out what this frame is still drawing from. A texture
+        // that has not changed is not re-sent, and without this that is indistinguishable from
+        // one that left the cover -- see `Textures::keep`.
+        if let Some(held) = textures.as_deref_mut() {
+            held.keep(raster_texture);
+            held.keep(hillshade_texture);
+            held.keep(relief_texture);
+            held.keep(terrain_texture);
         }
 
         let textures = TileTextures {
