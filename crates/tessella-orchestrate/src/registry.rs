@@ -485,6 +485,14 @@ pub struct Session {
     /// and nothing else: two views over one tile name the same texture, and the consumer keeps
     /// one of it. Per view, the quad would send every tile four times.
     textures: Textures,
+    /// The ground's mesh, built on the first terrain frame and kept.
+    ///
+    /// `tessella_layout::terrain::mesh` takes no arguments -- it is the same 17,415 vertices and
+    /// 101,376 indices for every tile, zoom and view there will ever be -- so rebuilding it is a
+    /// fixed 300 KiB of allocation and fill for an answer that cannot have changed. Once an
+    /// emission was cheap enough not to notice while a map sat still; a map being panned emits
+    /// every frame, and then it is that much per frame for as long as the pan lasts.
+    terrain_mesh: Option<alloc::sync::Arc<tessella_layout::terrain::TerrainMesh>>,
 }
 
 /// Which tile textures the consumer holds, and the payload each was sent from.
@@ -683,6 +691,20 @@ impl Session {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The ground's mesh, built once and kept for the life of the session.
+    ///
+    /// Handed back behind an [`Arc`](alloc::sync::Arc) rather than borrowed, because the caller
+    /// goes on to split the registry out of this same session and a borrow held across that is
+    /// two borrows of one object.
+    ///
+    /// Built on demand: a style with no terrain never asks, and never pays.
+    pub fn terrain_mesh(&mut self) -> alloc::sync::Arc<tessella_layout::terrain::TerrainMesh> {
+        alloc::sync::Arc::clone(
+            self.terrain_mesh
+                .get_or_insert_with(|| alloc::sync::Arc::new(tessella_layout::terrain::mesh())),
+        )
     }
 
     /// This frame's font stacks merged into the session's, in publication order.
