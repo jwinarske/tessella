@@ -607,6 +607,7 @@ impl<D: TileTransport + 'static> TileSource<D> {
         coords: &[TileCoord],
         speculative: &[TileCoord],
         surface: Surface,
+        grid_settled: bool,
     ) {
         let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
         match inner.readiness {
@@ -625,7 +626,7 @@ impl<D: TileTransport + 'static> TileSource<D> {
                     return;
                 };
                 drop(inner);
-                self.dispatch(&sources, view, coords, speculative, surface);
+                self.dispatch(&sources, view, coords, speculative, surface, grid_settled);
                 self.want_glyphs(&sources);
             }
         }
@@ -1156,6 +1157,7 @@ impl<D: TileTransport + 'static> TileSource<D> {
         coords: &[TileCoord],
         speculative: &[TileCoord],
         surface: Surface,
+        grid_settled: bool,
     ) {
         let shaded: Vec<&str> = sources
             .sets
@@ -1273,6 +1275,38 @@ impl<D: TileTransport + 'static> TileSource<D> {
             }
         }
 
+        // What the frame is drawing outranks what it might draw. A cover coordinate is urgent
+        // even when a speculative copy of the same tile is also wanted -- two world copies share
+        // a `TileId` and only one of them may be on screen -- so this is built from the tiles
+        // that are *not* speculation rather than from the ones that are.
+        let urgent: BTreeSet<TileId> = coords
+            .iter()
+            .filter(|tile| !speculative.contains(tile))
+            .map(|tile| TileId::new(tile.z, tile.x, tile.y))
+            .collect();
+
+        // Nothing but the frame's own tiles while the terrain grid is still the one-cell guess.
+        //
+        // A terrain style keys every tile on the grid its ground asks for, and that count is not
+        // known until a DEM tile has landed -- so a tile fetched and built before then is keyed
+        // on a guess and re-keyed the moment the real count arrives. The cover's own tiles earn
+        // that: they are what the first frame draws, coarsely, rather than a hole. Nothing else
+        // does. Over the Alps at 1800x900 the frame planned 221 jobs against the guess and 182
+        // of them were never drawn at either grid -- built, thrown away, and asked for again.
+        // On a four-core board that is the whole budget.
+        //
+        // Dropped here rather than at the loop below, because the filter that follows is what
+        // puts a key in `inflight`, and a key that goes in without a job to take it out again
+        // stays there: the coordinate is then filtered out of every later tick as already asked
+        // for, and never arrives.
+        let jobs: Vec<boot::Job> = if grid_settled || !matches!(surface, Surface::Terrain { .. }) {
+            jobs
+        } else {
+            jobs.into_iter()
+                .filter(|job| urgent.contains(&job.cover))
+                .collect()
+        };
+
         let ready: Vec<boot::Job> = {
             let landed = self.landed.read().unwrap_or_else(PoisonError::into_inner);
             let mut inner = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1292,16 +1326,6 @@ impl<D: TileTransport + 'static> TileSource<D> {
                 })
                 .collect()
         };
-
-        // What the frame is drawing outranks what it might draw. A cover coordinate is urgent
-        // even when a speculative copy of the same tile is also wanted -- two world copies share
-        // a `TileId` and only one of them may be on screen -- so this is built from the tiles
-        // that are *not* speculation rather than from the ones that are.
-        let urgent: BTreeSet<TileId> = coords
-            .iter()
-            .filter(|tile| !speculative.contains(tile))
-            .map(|tile| TileId::new(tile.z, tile.x, tile.y))
-            .collect();
 
         for job in ready {
             // `Prefetch` is documented as correct to starve, which is exactly the rank a level

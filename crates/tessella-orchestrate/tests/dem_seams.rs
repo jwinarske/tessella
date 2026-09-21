@@ -128,12 +128,12 @@ fn a_dem_tile_takes_its_border_from_the_tile_next_to_it() {
     let source = TileSource::new(STYLE.to_string(), files, cache, Pool::shared(), 1);
 
     let cover = cover();
-    source.want(&view(), &cover, &[], Surface::Plane);
+    source.want(&view(), &cover, &[], Surface::Plane, true);
     assert!(
         settle(&source, || source.readiness() == Readiness::Ready),
         "never resolved"
     );
-    source.want(&view(), &cover, &[], Surface::Plane);
+    source.want(&view(), &cover, &[], Surface::Plane, true);
 
     let (west, east) = (TileId::new(1, 0, 0), TileId::new(1, 1, 0));
     assert!(
@@ -196,12 +196,12 @@ fn a_dem_tile_takes_its_border_from_the_tile_below_it() {
     let source = TileSource::new(STYLE.to_string(), files, cache, Pool::shared(), 1);
 
     let cover = cover();
-    source.want(&view(), &cover, &[], Surface::Plane);
+    source.want(&view(), &cover, &[], Surface::Plane, true);
     assert!(
         settle(&source, || source.readiness() == Readiness::Ready),
         "never resolved"
     );
-    source.want(&view(), &cover, &[], Surface::Plane);
+    source.want(&view(), &cover, &[], Surface::Plane, true);
 
     let (north, south) = (TileId::new(1, 0, 0), TileId::new(1, 0, 1));
     assert!(
@@ -248,12 +248,12 @@ fn the_slope_field_is_prepared_again_from_the_reconciled_elevation() {
     let cache: Arc<TileCache<BootError>> = Arc::new(TileCache::new(64));
     let source = TileSource::new(STYLE.to_string(), files, cache, Pool::shared(), 1);
     let cover = cover();
-    source.want(&view(), &cover, &[], Surface::Plane);
+    source.want(&view(), &cover, &[], Surface::Plane, true);
     assert!(
         settle(&source, || source.readiness() == Readiness::Ready),
         "never resolved"
     );
-    source.want(&view(), &cover, &[], Surface::Plane);
+    source.want(&view(), &cover, &[], Surface::Plane, true);
     let west = TileId::new(1, 0, 0);
     assert!(
         settle(&source, || dem(&source, west).is_some()),

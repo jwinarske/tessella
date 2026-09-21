@@ -189,6 +189,9 @@ pub struct Map {
     /// and nothing to split for. It steps up when the first ground lands and its relief asks for
     /// more, which is one rebuild wave and bounded by the mesh's own grid.
     terrain_cells: u32,
+    /// Whether [`Tiles::terrain_cells`] has ever answered, so the grid is the ground's own
+    /// rather than the one-cell guess a terrain style starts at.
+    terrain_grid_settled: bool,
     view: ViewTransform,
     view_id: ViewId,
     /// Which sheet the map is drawing from, counted rather than compared.
@@ -323,6 +326,7 @@ impl Map {
         let light = Light::resolve(style.light.as_ref()).unwrap_or_default();
         Self {
             terrain_cells: 1,
+            terrain_grid_settled: false,
             style,
             view,
             view_id,
@@ -573,6 +577,16 @@ impl Map {
         }
     }
 
+    /// Whether the terrain grid is the ground's own rather than the guess a style starts at.
+    ///
+    /// A tile keyed on the guess is re-keyed the moment a DEM lands, so what is fetched before
+    /// then is work done twice. The frame's own tiles are worth that and speculation is not --
+    /// see the filter in `TileSource::dispatch`.
+    #[must_use]
+    pub fn terrain_grid_settled(&self) -> bool {
+        self.terrain_grid_settled
+    }
+
     /// Reports that a source has new tiles, so the next tick emits.
     ///
     /// Called by whatever owns the fetching. The map does not poll: a tick that asked every
@@ -697,6 +711,7 @@ impl Map {
         // and a store with no ground yet leaves it where it is.
         if let Some(cells) = tiles.terrain_cells() {
             self.terrain_cells = cells;
+            self.terrain_grid_settled = true;
         }
         // And how deep the ground goes, which the far plane has to reach. Read beside the grid
         // and for the same reason: both are properties of the ground in hand, and the matrices
@@ -768,7 +783,21 @@ impl Map {
             // levels it is already drawing from.
             let ideal: alloc::collections::BTreeSet<TileCoord> =
                 pass.wanted.iter().copied().collect();
-            self.wanted = onion(&pass.wanted, self.prefetch_levels())
+            // No speculation while the grid is still the one-cell guess. A terrain style keys
+            // every tile on the grid its ground asks for, and that count is not known until a
+            // DEM tile has landed -- so everything fetched and built before then is keyed on a
+            // guess and re-keyed the moment the real count arrives. The cover's own tiles are
+            // worth that: they are what the first frame draws, coarsely, instead of a hole.
+            // Speculation is not. It is not drawn at either grid, and it is the larger half --
+            // over the Alps at 1800x900 the frame planned 221 jobs on the guess, 182 of them
+            // prefetch, every one of which was built and thrown away before anything asked for
+            // it. On a four-core board that is the budget.
+            let levels = if self.style.terrain_dem().is_some() && !self.terrain_grid_settled {
+                0
+            } else {
+                self.prefetch_levels()
+            };
+            self.wanted = onion(&pass.wanted, levels)
                 .into_iter()
                 .filter(|tile| {
                     let id = TileId::new(tile.z, tile.x, tile.y);
