@@ -1014,6 +1014,18 @@ const SYMBOL_PAINT: &[PropertySpec] = &[
         data_driven: true,
     },
     PropertySpec {
+        name: "icon-translate",
+        kind: PropertyKind::NumberArray(Some(2)),
+        default: DefaultValue::NumberPair(0.0, 0.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "icon-translate-anchor",
+        kind: PropertyKind::Enum,
+        default: DefaultValue::Enum("map"),
+        data_driven: false,
+    },
+    PropertySpec {
         name: "text-color",
         kind: PropertyKind::Color,
         default: DefaultValue::Color(Color::black()),
@@ -1042,6 +1054,18 @@ const SYMBOL_PAINT: &[PropertySpec] = &[
         kind: PropertyKind::Number,
         default: DefaultValue::Number(1.0),
         data_driven: true,
+    },
+    PropertySpec {
+        name: "text-translate",
+        kind: PropertyKind::NumberArray(Some(2)),
+        default: DefaultValue::NumberPair(0.0, 0.0),
+        data_driven: false,
+    },
+    PropertySpec {
+        name: "text-translate-anchor",
+        kind: PropertyKind::Enum,
+        default: DefaultValue::Enum("map"),
+        data_driven: false,
     },
 ];
 

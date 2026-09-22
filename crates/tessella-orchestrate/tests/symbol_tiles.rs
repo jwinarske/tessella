@@ -1051,6 +1051,7 @@ fn the_alignments_decide_the_drawables_matrices() {
             placement,
             ProjectionMode::Mercator,
             false,
+            [0.0, 0.0],
         )
         .expect("a viewport")
     };

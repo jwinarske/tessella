@@ -2114,6 +2114,7 @@ impl SymbolDrawableEntry {
         placement: Placement,
         surface: ProjectionMode,
         variable: bool,
+        translate: [f64; 2],
     ) -> Result<Self, camera::CameraError> {
         // The matrices here are the plane's under either projection, and a globe uses only some
         // of them: the consumer bends the anchor itself from `globe_ubo`, so `matrix` and the
@@ -2121,10 +2122,18 @@ impl SymbolDrawableEntry {
         // it is the one that has to be right.
         let mut projection = camera::proj_matrix(view)?;
         projection[14] -= f64::from(depth_offset(layer_index, sub_layer_index));
-        let tile = camera::multiply(
+        let mut tile = camera::multiply(
             &projection,
             &camera::matrix_for_tile(z, x, y, wrap, view.zoom),
         );
+        // The layer's own offset, before anything is derived from this matrix. mbgl translates
+        // the tile matrix and builds the label-plane matrices from the result, so a translated
+        // label moves with its anchor rather than sliding against it -- see `paint_translate`,
+        // and `is_text` above for which of the two property pairs applies.
+        if translate != [0.0, 0.0] {
+            camera::translate_in_place(&mut tile, translate[0], translate[1], 0.0);
+        }
+        let tile = tile;
 
         // A label pitched with the map lies flat on the ground, and its `coord_matrix` is built
         // from the tile's own *plane* matrix to get it back to clip. On a sphere the ground is not

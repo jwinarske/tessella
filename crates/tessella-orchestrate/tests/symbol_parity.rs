@@ -1343,6 +1343,7 @@ mod symbol_drawable_ubo {
                     Placement::Point,
                     ProjectionMode::Mercator,
                     false,
+                    [0.0, 0.0],
                 )
                 .expect("the probe has a viewport")
             })
@@ -1390,6 +1391,7 @@ mod symbol_drawable_ubo {
                 Placement::Line,
                 surface,
                 false,
+                [0.0, 0.0],
             )
             .expect("a viewport");
             let effective = ubo::effective_pitch(MAP.pitch, surface);
@@ -1445,6 +1447,7 @@ mod symbol_drawable_ubo {
             Placement::Point,
             ProjectionMode::Mercator,
             false,
+            [0.0, 0.0],
         )
         .expect("a viewport");
         let second = SymbolDrawableEntry::for_tile(
@@ -1463,6 +1466,7 @@ mod symbol_drawable_ubo {
             Placement::Point,
             ProjectionMode::Mercator,
             false,
+            [0.0, 0.0],
         )
         .expect("a viewport");
 
