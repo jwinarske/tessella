@@ -438,6 +438,7 @@ fn the_drawable_block_is_an_extrusions_own() {
         5373,
         0,
         [0.0, 0.0, 0.0],
+        [0.0, 0.0],
     )
     .expect("an entry");
 

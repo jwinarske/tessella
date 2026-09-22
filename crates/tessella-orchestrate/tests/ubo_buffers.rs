@@ -310,6 +310,7 @@ fn the_line_drawable_buffer_matches_the_oracle() {
                 0,
                 // Nothing in the hermetic style's line paint varies with zoom.
                 [0.0; 6],
+                [0.0, 0.0],
             )
             .expect("an unrotated camera")
         })
@@ -450,6 +451,7 @@ fn the_circle_drawable_buffer_matches_the_oracle() {
         // The style leaves `circle-pitch-alignment` at its viewport default.
         ubo::circle_extrude_scale(false, 13, &view),
         [0.0; 7],
+        [0.0, 0.0],
     )
     .expect("an unrotated camera");
 
