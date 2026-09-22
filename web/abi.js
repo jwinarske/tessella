@@ -1220,7 +1220,7 @@ export const LAYOUT = Object.freeze({
     },
   },
   tsl_view_slot: {
-    size: 56, align: 8,
+    size: 184, align: 8,
     at: {
       seq: 0,
       flags: 4,
@@ -1231,10 +1231,11 @@ export const LAYOUT = Object.freeze({
       pitch: 40,
       viewport_width: 48,
       viewport_height: 52,
+      view_projection: 56,
     },
   },
   tsl_reverse_channel: {
-    size: 456, align: 8,
+    size: 1480, align: 8,
     at: {
       acked_geometry: 0,
       views: 8,

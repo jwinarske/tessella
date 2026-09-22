@@ -1155,6 +1155,15 @@ fn structs() -> Vec<Struct> {
                     "uint32_t viewport_height",
                     "Viewport height in pixels."
                 ),
+                (
+                    view_projection,
+                    "uint64_t view_projection[16]",
+                    "The consumer's view-projection, column-major, each element as the bits of \
+                     a double. It says where things land on screen -- the cover's frustum, \
+                     label placement, screen-space sizes -- where the scalars above say which \
+                     data at what scale. Both are written in one seqlock generation, so a \
+                     reader that takes them together cannot mix frames."
+                ),
             ]
         ),
         c_struct!(
