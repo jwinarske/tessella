@@ -364,6 +364,20 @@ impl Map {
         &self.light
     }
 
+    /// The viewport this map draws into, in pixels.
+    ///
+    /// The consumer set it with `resize`, and a camera published for a consumer-camera view
+    /// carries it back: the producer needs it for the cover and for screen-space sizes, and
+    /// taking it from here rather than from the publisher is what stops the two disagreeing.
+    #[must_use]
+    pub fn viewport(&self) -> tessella_capture_abi::envelope::Extent {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        tessella_capture_abi::envelope::Extent {
+            width: self.view.width as u32,
+            height: self.view.height as u32,
+        }
+    }
+
     /// Hands the map the glyphs its symbol layers need.
     ///
     /// Set rather than fetched here, for the reason `Frame::fonts` gives: which glyphs a style

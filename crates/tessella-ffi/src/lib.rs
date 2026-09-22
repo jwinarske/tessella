@@ -98,6 +98,7 @@ use std::sync::{Mutex, PoisonError};
 
 use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::ViewId;
+use tessella_capture_abi::reverse::{ConsumerCamera, ReverseChannel};
 use tessella_capture_abi::ring::{self, Producer, region_size};
 use tessella_orchestrate::boot::BootError;
 use tessella_orchestrate::cache::TileCache;
@@ -300,6 +301,13 @@ pub struct MapState {
     /// `tessella_regions`. Allocated once and never resized, so the `Mapping` the arena holds
     /// stays valid for as long as this state does.
     slabs: Vec<u64>,
+    /// The consumer-to-producer strip (DR-10).
+    ///
+    /// Owned here rather than handed out through `tessella_map_regions`, which stays the four
+    /// words it has always been. That serves an in-process consumer, which is every consumer
+    /// today; one in another process would map this as a third region, and nothing above it
+    /// would change.
+    reverse: ReverseChannel,
     producer: Producer,
     /// Where tiles come from. Shared between views by construction, so a tile two maps want is
     /// fetched once and built once.
@@ -575,6 +583,7 @@ unsafe fn create(
             map: Map::with_arena(style, view, ViewId(0), arena),
             region,
             slabs,
+            reverse: ReverseChannel::new(),
             producer,
             source,
             generation: 0,
@@ -831,6 +840,78 @@ pub unsafe extern "C" fn tessella_set_projection(map: MapHandle, projection: Pro
         });
         Status::Ok
     })
+}
+
+/// Publishes the camera of a view running in consumer-camera mode (DR-9).
+///
+/// The consumer owns the camera under that mode and the producer reads it back here, one frame
+/// stale, for the things it cannot do without one: the cover, label placement, and the
+/// screen-space uniforms. §11.1 accepts that staleness and the cover's padding absorbs it.
+///
+/// Two cameras go in together because they answer different questions. `view_projection` -- sixteen
+/// doubles, column-major -- says where things land on screen, and is the consumer's own, so a scene
+/// camera that is not a map camera is expressible rather than approximated. The scalars after it say
+/// which data at what scale: the fetch and paint zooms, pixels-per-meter, the zoom history. Neither
+/// derives the other. They are written in one seqlock generation, so a producer reading them gets
+/// both halves of one frame or retries.
+///
+/// Publishing is not the same as being in the mode: a view whose mode is producer-camera ignores
+/// what is published here, which is what lets a consumer publish before it switches.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed, and
+/// `view_projection` must point at sixteen
+/// readable doubles.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_publish_camera(
+    map: MapHandle,
+    view_projection: *const f64,
+    longitude: f64,
+    latitude: f64,
+    zoom: f64,
+    bearing: f64,
+    pitch: f64,
+) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_mut() }) else {
+            return Status::NoSuchMap;
+        };
+        if view_projection.is_null() {
+            return Status::NullArgument;
+        }
+        // SAFETY: the caller guarantees sixteen readable doubles.
+        let matrix = unsafe { core::slice::from_raw_parts(view_projection, 16) };
+        let viewport = state.map.viewport();
+        state.reverse.publish_camera(
+            ViewId(0),
+            &ConsumerCamera {
+                view_projection: core::array::from_fn(|i| matrix[i]),
+                center_zoom0: tessella_tile::projection::center_zoom0(longitude, latitude),
+                zoom,
+                bearing,
+                pitch,
+                viewport,
+            },
+        );
+        Status::Ok
+    })
+}
+
+/// The camera last published for this map's view, for tests.
+///
+/// Not part of the C surface. Nothing outside needs to read the strip back -- the producer reads
+/// it from the inside -- and an entry point that existed only to be asserted on would be a
+/// promise to keep working forever for the sake of one test.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed.
+#[doc(hidden)]
+#[must_use]
+pub unsafe fn published_camera_for_test(map: MapHandle) -> Option<ConsumerCamera> {
+    let state = unsafe { map.as_ref() }?;
+    state.reverse.camera(ViewId(0))
 }
 
 /// Emits a frame, if anything changed.
