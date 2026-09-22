@@ -378,7 +378,43 @@ impl DrawableEntry {
         sub_layer_index: i32,
         interpolations: [f32; 2],
     ) -> Result<Self, camera::CameraError> {
-        let matrix = tile_matrix(
+        Self::for_tile_translated(
+            view,
+            projection,
+            z,
+            x,
+            y,
+            wrap,
+            layer_index,
+            sub_layer_index,
+            interpolations,
+            [0.0, 0.0],
+        )
+    }
+
+    /// As [`Self::for_tile_with`], offset by the layer's paint translate.
+    ///
+    /// `translate` is in tile units; [`paint_translate`] is what turns the property's screen
+    /// pixels into them. Applied to the tile's matrix rather than folded into the geometry,
+    /// which is what lets one set of vertices serve a layer that moves with the zoom.
+    ///
+    /// # Errors
+    ///
+    /// [`camera::CameraError`] when the view has no area.
+    #[allow(clippy::too_many_arguments)]
+    pub fn for_tile_translated(
+        view: &ViewTransform,
+        projection: ProjectionMode,
+        z: u8,
+        x: u32,
+        y: u32,
+        wrap: i32,
+        layer_index: i32,
+        sub_layer_index: i32,
+        interpolations: [f32; 2],
+        translate: [f64; 2],
+    ) -> Result<Self, camera::CameraError> {
+        let mut matrix = tile_matrix(
             view,
             projection,
             z,
@@ -387,6 +423,9 @@ impl DrawableEntry {
             wrap,
             depth_offset(layer_index, sub_layer_index),
         )?;
+        if translate != [0.0, 0.0] {
+            camera::translate_in_place(&mut matrix, translate[0], translate[1], 0.0);
+        }
 
         #[allow(clippy::cast_possible_truncation)]
         Ok(Self {
@@ -465,6 +504,65 @@ impl DrawableEntry {
             interpolations: [0.0, 0.0],
         })
     }
+}
+
+/// A layer's paint translate, in the tile units a drawable's matrix takes.
+///
+/// mbgl's `translatedMatrix`. The property is a pair of screen pixels and the matrix takes tile
+/// units, so the conversion is mbgl's `pixelsToTileUnits`: the tile's own extent over the pixels
+/// it covers at this zoom. A tile further from the view's zoom covers fewer pixels, so the same
+/// offset is more of its units.
+///
+/// A `viewport` anchor turns with the camera, because the offset is a direction on the screen; a
+/// `map` anchor does not, because it is a direction on the ground. `map` is the default and is
+/// what a style asking for a fake third dimension uses -- a building top offset up and left of
+/// its footprint has to stay there when the map turns.
+///
+/// Zero for a layer that does not name one, which is nearly all of them, and zero for a pair this
+/// cannot read as two numbers.
+#[must_use]
+pub fn paint_translate(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    translate: &str,
+    anchor: &str,
+    view: &ViewTransform,
+    tile_z: u8,
+) -> [f64; 2] {
+    let pair = paint
+        .get(translate)
+        .and_then(|property| property.expression.evaluate(Some(view.zoom), None).ok());
+    let Some(tessella_style::Value::Array(pair)) = pair else {
+        return [0.0, 0.0];
+    };
+    let [Some(x), Some(y)] = [0, 1].map(|index| match pair.get(index) {
+        Some(tessella_style::Value::Number(value)) => Some(*value),
+        _ => None,
+    }) else {
+        return [0.0, 0.0];
+    };
+    if x == 0.0 && y == 0.0 {
+        return [0.0, 0.0];
+    }
+
+    let viewport = matches!(
+        paint
+            .get(anchor)
+            .and_then(|property| property.expression.evaluate(Some(view.zoom), None).ok()),
+        Some(tessella_style::Value::String(ref name)) if name == "viewport"
+    );
+    let (x, y) = if viewport {
+        // The screen direction taken back to the ground, which is the camera's rotation undone.
+        let angle = -camera::bearing_radians(view);
+        (
+            x * angle.cos() - y * angle.sin(),
+            x * angle.sin() + y * angle.cos(),
+        )
+    } else {
+        (x, y)
+    };
+
+    let units = camera::EXTENT / (512.0 * 2f64.powf(view.zoom - f64::from(tile_z)));
+    [x * units, y * units]
 }
 
 /// The two zoom-mix factors a fill drawable's UBO carries.
@@ -3267,4 +3365,121 @@ pub fn pack_relief_color_stops(ramp: &tessella_style::ramp::ReliefRamp) -> Vec<u
         ]);
     }
     out
+}
+
+#[cfg(test)]
+mod translate_tests {
+    use super::{ViewTransform, paint_translate};
+
+    fn paint(
+        json: &str,
+    ) -> alloc::collections::BTreeMap<&'static str, tessella_style::property::ResolvedProperty>
+    {
+        let style = tessella_style::Style::parse(json).expect("style parses");
+        tessella_style::property::resolve_paint(style.layer("l").expect("the layer"))
+            .expect("the paint resolves")
+    }
+
+    fn view_at(zoom: f64, bearing: f64) -> ViewTransform {
+        ViewTransform {
+            longitude: 0.0,
+            latitude: 0.0,
+            zoom,
+            width: 1024.0,
+            height: 768.0,
+            bearing,
+            pitch: 0.0,
+            ground_below: 0.0,
+        }
+    }
+
+    /// The property is screen pixels and the matrix takes tile units.
+    ///
+    /// A z14 tile drawn at zoom 19 is stretched over thirty-two times its own width, so one of
+    /// its units is half a pixel and a two-pixel offset is one unit. Getting this backwards moves
+    /// a building top by a tile rather than by a hair.
+    #[test]
+    fn a_translate_is_the_screen_pixels_in_the_tiles_own_units() {
+        let paint = paint(
+            r#"{"version": 8, "sources": {}, "layers": [
+                 {"id": "l", "type": "fill", "source": "s",
+                  "paint": {"fill-translate": [-2, -2]}}]}"#,
+        );
+        let at = paint_translate(
+            &paint,
+            "fill-translate",
+            "fill-translate-anchor",
+            &view_at(19.0, 0.0),
+            14,
+        );
+        assert_eq!(at, [-1.0, -1.0]);
+
+        // And at the tile's own zoom, where a unit is an eight-thousandth of the tile.
+        let at = paint_translate(
+            &paint,
+            "fill-translate",
+            "fill-translate-anchor",
+            &view_at(14.0, 0.0),
+            14,
+        );
+        assert_eq!(at, [-32.0, -32.0]);
+    }
+
+    /// A `map` anchor is a direction on the ground and does not turn; `viewport` is a direction
+    /// on the screen and does.
+    #[test]
+    fn only_a_viewport_translate_turns_with_the_camera() {
+        let ground = paint(
+            r#"{"version": 8, "sources": {}, "layers": [
+                 {"id": "l", "type": "fill", "source": "s",
+                  "paint": {"fill-translate": [8, 0]}}]}"#,
+        );
+        let screen = paint(
+            r#"{"version": 8, "sources": {}, "layers": [
+                 {"id": "l", "type": "fill", "source": "s",
+                  "paint": {"fill-translate": [8, 0],
+                            "fill-translate-anchor": "viewport"}}]}"#,
+        );
+        let turned = view_at(14.0, 90.0);
+        let of = |paint: &_| {
+            paint_translate(
+                paint,
+                "fill-translate",
+                "fill-translate-anchor",
+                &turned,
+                14,
+            )
+        };
+
+        let [x, y] = of(&ground);
+        assert!((x - 128.0).abs() < 1e-9 && y.abs() < 1e-9, "{x} {y}");
+
+        // A quarter turn puts the screen's x on the ground's y. Which sign is the camera's
+        // convention and is the half worth asserting.
+        let [x, y] = of(&screen);
+        assert!(x.abs() < 1e-9, "{x} should be off the ground's x axis");
+        assert!(
+            (y.abs() - 128.0).abs() < 1e-9,
+            "{y} should carry the whole offset"
+        );
+    }
+
+    /// Nearly every layer names none, and the matrix must not move for them.
+    #[test]
+    fn a_layer_with_no_translate_moves_nothing() {
+        let paint = paint(
+            r#"{"version": 8, "sources": {}, "layers": [
+                 {"id": "l", "type": "fill", "source": "s", "paint": {}}]}"#,
+        );
+        assert_eq!(
+            paint_translate(
+                &paint,
+                "fill-translate",
+                "fill-translate-anchor",
+                &view_at(19.0, 0.0),
+                14
+            ),
+            [0.0, 0.0]
+        );
+    }
 }
