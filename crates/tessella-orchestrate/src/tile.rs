@@ -2341,7 +2341,8 @@ fn line_options(layer: &tessella_style::Layer) -> LineOptions {
         begin_cap: cap,
         end_cap: cap,
         miter_limit: number("line-miter-limit", 2.0),
-        round_limit: number("line-round-limit", 1.05),
+        // One, where the style spec says 1.05 -- mbgl's default. See `LineOptions::round_limit`.
+        round_limit: number("line-round-limit", 1.0),
         overscaling: 1,
         closed: false,
         clip_distances: None,
