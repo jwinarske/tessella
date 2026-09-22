@@ -168,3 +168,71 @@ fn the_boundary_refuses_what_it_cannot_use() {
         unsafe { tessella_ffi::tessella_create(&config, 0.0, 0.0, 1.0, core::ptr::null_mut()) };
     assert_eq!(status, Status::NullArgument);
 }
+
+/// A published camera reaches the strip whole, matrix and map camera together.
+///
+/// The two halves answer different questions and are written in one seqlock generation, so this
+/// asserts both came back rather than just the scalars: sixteen doubles is most of the payload,
+/// and a read that returned the map camera alone would look like a pass.
+#[test]
+fn a_published_camera_reaches_the_strip() {
+    let map = create();
+    let matrix: [f64; 16] = core::array::from_fn(|i| i as f64 + 0.5);
+
+    // SAFETY: `map` is live, and `matrix` is sixteen readable doubles.
+    unsafe {
+        assert_eq!(
+            tessella_ffi::tessella_publish_camera(
+                map,
+                matrix.as_ptr(),
+                -0.11,
+                51.505,
+                4.0,
+                30.0,
+                45.0,
+            ),
+            Status::Ok
+        );
+
+        let camera = tessella_ffi::published_camera_for_test(map).expect("nothing was published");
+        assert_eq!(camera.view_projection, matrix, "the matrix did not survive");
+        assert_eq!(camera.zoom, 4.0);
+        assert_eq!(camera.bearing, 30.0);
+        assert_eq!(camera.pitch, 45.0);
+        assert_eq!(
+            camera.center_zoom0,
+            tessella_tile::projection::center_zoom0(-0.11, 51.505),
+            "the center is the scale-free one the strip is defined in"
+        );
+
+        tessella_ffi::tessella_destroy(map);
+    }
+}
+
+/// Publishing through a null handle is refused rather than crashing, and a null matrix with it.
+#[test]
+fn publishing_without_a_map_or_a_matrix_is_refused() {
+    let matrix = [0.0f64; 16];
+    let map = create();
+
+    // SAFETY: the first call is the null-handle path; the second has a live map.
+    unsafe {
+        assert_eq!(
+            tessella_ffi::tessella_publish_camera(
+                core::ptr::null_mut(),
+                matrix.as_ptr(),
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+            ),
+            Status::NoSuchMap
+        );
+        assert_eq!(
+            tessella_ffi::tessella_publish_camera(map, core::ptr::null(), 0.0, 0.0, 1.0, 0.0, 0.0),
+            Status::NullArgument
+        );
+        tessella_ffi::tessella_destroy(map);
+    }
+}
