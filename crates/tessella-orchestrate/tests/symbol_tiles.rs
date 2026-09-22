@@ -1606,3 +1606,59 @@ fn an_icon_only_symbol_is_not_thinned_by_a_neighboring_road() {
         "four parallel icon-only roads placed {four} anchors where one road places {one}"
     );
 }
+
+/// A line-placed label is walked at the *camera's* size, not the size it was laid out at.
+///
+/// mbgl opens `reprojectLineLabels` with
+///
+/// ```text
+/// const ZoomEvaluatedSize partiallyEvaluatedSize = sizeBinder.evaluateForZoom(state.getZoom());
+/// ...
+/// const float fontSize = evaluateSizeForFeature(partiallyEvaluatedSize, placedSymbol);
+/// ```
+///
+/// and steps the walk by what that answers. The two numbers are different whenever the camera is
+/// not at the tile's own zoom, which is most frames: the bucket is shaped once at its own level
+/// and the camera moves continuously between levels.
+///
+/// # What this was
+///
+/// The frame stepped by `SymbolOptions::size` -- the layout's. Under it a label's glyphs bunched
+/// toward its middle while its anchor stayed put, so the label was the right size in the right
+/// place with the wrong spacing. On demotiles' "Tropic of Cancer" at z2.8 over a z2 tile the
+/// first word sat 1.58 px right of the oracle's and the last 1.17 px left, with the label's own
+/// center within a tenth of a pixel -- which is why it read as antialiasing for as long as it
+/// did.
+#[test]
+fn the_walk_takes_the_cameras_size_not_the_layouts() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "roads", "type": "symbol", "source": "v",
+                        "source-layer": "road",
+                        "layout": {"text-field": "{type}", "text-font": ["TestFont"],
+                                   "symbol-placement": "line",
+                                   "text-size": {"stops": [[10, 12], [14, 16]]}}}]}"#,
+    )
+    .expect("a style");
+
+    // `ID` is a z10 tile, so the bucket is laid out for zoom 10 and the curve there reads 12.
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+    assert!(
+        (layout.symbol.size - 12.0).abs() < 1e-5,
+        "the layout size is the curve at the tile's own zoom: {}",
+        layout.symbol.size
+    );
+
+    // The camera a fifth of the way into the tile's interval. The covering stops are 10 and 14,
+    // so the factor is 0.2 and the size 12.8 -- which is what the walk has to step by.
+    let walked = layout.text_size.at_zoom(10.8).size;
+    assert!(
+        (walked - 12.8).abs() < 1e-5,
+        "the walked size is the binder's at the camera's zoom: {walked}"
+    );
+    assert!(
+        (walked - layout.symbol.size).abs() > 0.5,
+        "the two must not be the same number, or this test proves nothing"
+    );
+}
