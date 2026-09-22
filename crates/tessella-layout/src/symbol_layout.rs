@@ -1338,6 +1338,10 @@ impl SymbolLayout {
                     // no glyphs is a placeholder for an icon-only symbol, and `icon-text-fit`
                     // has nothing to fit to.
                     text: (laid.glyphs > 0).then_some(laid.extent),
+                    // The run the instance was anchored on. A line-placed icon is reprojected
+                    // along it every frame, as its label is.
+                    line: alloc::sync::Arc::clone(&laid.line),
+                    segment: laid.segment,
                 })
             })
             .collect();

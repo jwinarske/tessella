@@ -1278,6 +1278,14 @@ pub struct IconLabel {
     /// nothing without it: an icon told to stretch to a label that is not there has no size to
     /// stretch to, so it keeps its own.
     pub text: Option<(f32, f32, f32, f32)>,
+    /// The run this icon's anchor was found on, and where along it the anchor sits.
+    ///
+    /// Carried for the same reason a label carries them: a line-placed symbol is reprojected per
+    /// frame, and the walk steps along *this* run from `segment`. Empty and zero for a
+    /// point-placed icon, which is never walked.
+    pub line: alloc::sync::Arc<Vec<(f32, f32)>>,
+    /// Where along [`Self::line`] the anchor sits.
+    pub segment: usize,
 }
 
 /// How a symbol layer draws its icons.
@@ -1430,8 +1438,10 @@ pub fn build_icons(
             extent: (placed.top, placed.bottom, placed.left, placed.right),
             glyphs: buffers.glyphs() - before,
             content_margins: margins,
-            segment: 0,
-            line: alloc::sync::Arc::default(),
+            // Its instance's own run and segment, so the frame can walk it along the line the
+            // way it walks a label. Empty for a point-placed icon, which is not walked.
+            segment: label.segment,
+            line: alloc::sync::Arc::clone(&label.line),
             vertices: before * 4..buffers.vertices.len(),
         });
     }

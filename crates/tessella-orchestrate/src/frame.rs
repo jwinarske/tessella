@@ -2735,7 +2735,7 @@ fn place_symbols(
         if buffers.vertices.is_empty() && !layout.has_icons() {
             continue;
         }
-        let icons = bucket_laid.icons.clone();
+        let mut icons = bucket_laid.icons.clone();
 
         let plane = tessella_tile::camera::label_plane_matrix(&to_clip, view.width, view.height);
         let mut held = placement.borrow_mut();
@@ -2878,6 +2878,9 @@ fn place_symbols(
         // question mbgl asks inside `placeLineFeature` -- was tried and is indistinguishable here:
         // when the whole walk fails, an outermost glyph is what failed.
         let mut without_room: Vec<u32> = Vec::new();
+        // The same, for the icon half: an icon whose road ran out is hidden where it stands
+        // rather than drawn at a position the walk never reached.
+        let mut icon_without_room: Vec<u32> = Vec::new();
         let units = tessella_tile::camera::pixels_to_tile_units(tile.z, view.zoom);
         if units.abs() > f64::EPSILON {
             #[allow(clippy::cast_possible_truncation)]
@@ -2917,11 +2920,71 @@ fn place_symbols(
                 held.symbols.write_line_positions(
                     &labels,
                     |point| (point.0 * scale, point.1 * scale),
-                    to_screen,
+                    &to_screen,
                     layout.symbol.size,
                     &mut buffers,
                 )
             };
+
+            // And the icon half, which is walked along the same roads and for the same reason.
+            //
+            // mbgl reprojects both buffers: `RenderSymbolLayer` decides `alongLine` separately
+            // for each half, from that half's own rotation alignment, and calls
+            // `reprojectLineLabels` on whichever of them it holds for.
+            //
+            // Missing, a line-placed icon drew nowhere. `SymbolDrawableEntry` gives an
+            // along-line drawable the *identity* label plane, on the grounds that the frame has
+            // already projected its positions -- true of the text, which is walked here, and
+            // false of the icon, whose dynamic buffer still held the anchor in tile units. Read
+            // as label-plane pixels those are some thousands off screen, so every oneway arrow
+            // and every line-placed shield was absent with nothing in any counter to say so.
+            if layout.icon_alignments.along_line(layout.placement)
+                && let Some((shaped, placed)) = icons.as_mut()
+            {
+                let walked: Vec<crate::symbols::FrameLabel<'_>> = placed
+                    .iter()
+                    .filter_map(|icon| {
+                        let label = labels
+                            .iter()
+                            .find(|label| crate::symbols::same_instance(&label.laid_out, icon))?;
+                        Some(crate::symbols::FrameLabel {
+                            cross_tile_id: label.cross_tile_id,
+                            laid_out: icon.clone(),
+                            // The walk reads the run, the segment, the vertex range and the
+                            // perspective, and nothing else. See `write_line_positions`.
+                            variable: &[],
+                            variable_offset: [0.0, 0.0],
+                            variable_radial: false,
+                            icon: None,
+                            perspective: label.perspective,
+                            line: icon.line.as_slice(),
+                            glyph_reach: None,
+                        })
+                    })
+                    .collect();
+                // The icon's own size, where the text half passes `text-size`. An icon's offset
+                // along its line is zero -- `icon_quad` writes no glyph offset, as mbgl's
+                // `PlacedSymbol` for an icon carries one of zero -- so this scales nothing here
+                // and is passed in the units the walk expects rather than left at the text's.
+                let icon_size = layout.icon_scale * tessella_glyph::text::ONE_EM;
+                icon_without_room = if bent {
+                    held.symbols.write_line_positions(
+                        &walked,
+                        &to_plane_screen,
+                        |point| point,
+                        icon_size,
+                        shaped,
+                    )
+                } else {
+                    held.symbols.write_line_positions(
+                        &walked,
+                        |point| (point.0 * scale, point.1 * scale),
+                        &to_screen,
+                        icon_size,
+                        shaped,
+                    )
+                };
+            }
         }
         let offered: Vec<crate::symbols::FrameLabel<'_>> = labels.to_vec();
         held.symbols.frame_in(
@@ -2955,6 +3018,7 @@ fn place_symbols(
                 icons,
                 ids,
                 without_room,
+                icon_without_room,
             },
         );
     }
@@ -2985,6 +3049,7 @@ fn place_symbols(
             icons,
             ids,
             without_room,
+            icon_without_room,
         } = entry;
         let laid = &shaped.laid;
         let Some((tile, bucket)) = buckets
@@ -3097,7 +3162,9 @@ fn place_symbols(
             // number; without the number it is an empty box, and strung along a road at every
             // anchor it is worse than nothing there.
             for icon in &paired {
-                if !without_room.contains(&icon.cross_tile_id) {
+                if !without_room.contains(&icon.cross_tile_id)
+                    && !icon_without_room.contains(&icon.cross_tile_id)
+                {
                     continue;
                 }
                 let range = icon.laid_out.vertices.clone();
@@ -3133,6 +3200,9 @@ struct Shaped {
     ids: Vec<u32>,
     /// The labels whose road ran out before their name did, decided before placement.
     without_room: Vec<u32>,
+    /// The same for the icon half, whose walk is its own: an icon sits at one point on the road
+    /// and a label spans it, so the two halves run out of room at different anchors.
+    icon_without_room: Vec<u32>,
 }
 
 /// What `SymbolLayout::lay_out` produced for one bucket.
@@ -4835,6 +4905,12 @@ fn write_layer_state(
             let zoom = view.zoom;
             let placement = Placement::of(layer, zoom);
             let alignments = Alignments::of(layer, zoom, placement, "text");
+            // The icon's own pair. mbgl reads `icon-rotation-alignment` and
+            // `icon-pitch-alignment` for the icon drawable and the `text-` pair for the text
+            // one, and the two need not agree: a style may lay its shields on the map and stand
+            // their numbers up, and reading the text's for both gives one half the other's
+            // label plane.
+            let icon_alignments = Alignments::of(layer, zoom, placement, "icon");
             // Whether this layer's labels are positioned by the frame rather than by the shader.
             // See the `plane` fork in `SymbolDrawableEntry::for_tile`.
             // Either property: `text-variable-anchor-offset` names its own anchors and is
@@ -4867,14 +4943,22 @@ fn write_layer_state(
             // style's expression, which is not a thing to do once a tile per frame. A cover is
             // one zoom in the ordinary case and two while a level loads.
             //
+            // The zoom is the *overscaled* one, which is what the bucket was laid out at:
+            // `SymbolLayout::new` is handed `TileId::bucket_zoom`, and mbgl builds its two
+            // `SymbolSizeBinder`s from `tileID.overscaledZ` for the same reason. Keyed on the
+            // canonical zoom instead, a tile standing in above its source's maxzoom sampled the
+            // curve at the wrong interval: above a maxzoom of 14 at z19, `["interpolate",
+            // ["linear"], ["zoom"], 15, 0.5, 19, 1]` answered 0.5 for every icon in the frame,
+            // and every oneway arrow drew at half the size mbgl draws it.
+            //
             // `icon-size` is a multiplier and defaults to one, where `text-size` names a size in
             // pixels. The shader divides by `ONE_EM` for text and does not for an icon, so the
             // two halves need their own binder as well as their own flag.
             let mut bindings: BTreeMap<u8, [tessella_layout::size::SizeBinding; 2]> =
                 BTreeMap::new();
             for tile in matrices(0).chain(matrices(1)) {
-                bindings.entry(tile.z).or_insert_with(|| {
-                    let z = f64::from(tile.z);
+                bindings.entry(tile.overscaled_z).or_insert_with(|| {
+                    let z = f64::from(tile.overscaled_z);
                     [
                         tessella_layout::size::SizeBinding::of(layer, "text-size", z, 16.0),
                         tessella_layout::size::SizeBinding::of(layer, "icon-size", z, 1.0),
@@ -4985,7 +5069,7 @@ fn write_layer_state(
                         // icon drew as a flat black square rather than as its sprite.
                         sheet_size,
                         // Sub-layer 1 is the sprite half -- see `bindings_for`.
-                        bindings.get(&tile.z).map_or_else(
+                        bindings.get(&tile.overscaled_z).map_or_else(
                             || tessella_layout::size::EvaluatedSize {
                                 zoom_constant: true,
                                 feature_constant: true,
@@ -4995,7 +5079,7 @@ fn write_layer_state(
                             |pair| pair[usize::from(is_icon)].at_zoom(zoom),
                         ),
                         !is_icon,
-                        alignments,
+                        if is_icon { icon_alignments } else { alignments },
                         placement,
                         projection,
                         // The text half only. A variable anchor moves the *label* beside its
