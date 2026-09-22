@@ -520,6 +520,18 @@ impl DrawableEntry {
 ///
 /// Zero for a layer that does not name one, which is nearly all of them, and zero for a pair this
 /// cannot read as two numbers.
+///
+/// # A line's x offset is not exact yet
+///
+/// `symbol_translate_p` and the circle and fill-extrusion halves of `paint_translate_p` hold at
+/// zero against the oracle. A *line* does not: an offset along x leaves about 130 pixels in a
+/// band at one tile edge, where the oracle draws road and this draws the ground under it.
+///
+/// What is known: the arithmetic is not the suspect. `line-translate: [0, 14]` is exactly zero,
+/// and rendering the failing camera with either `TSF_NO_STENCIL` or `TSF_NO_SCISSOR` is also
+/// exactly zero -- so this over-clips geometry the offset moved, rather than moving it wrongly.
+/// It is not a seam gap either: two pixels of offset leave 67 differing pixels where fourteen
+/// leave 98, which does not scale the way a gap would.
 #[must_use]
 pub fn paint_translate(
     paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
@@ -849,8 +861,9 @@ impl LineDrawableEntry {
         layer_index: i32,
         sub_layer_index: i32,
         interpolations: [f32; 6],
+        translate: [f64; 2],
     ) -> Result<Self, camera::CameraError> {
-        let matrix = tile_matrix(
+        let mut matrix = tile_matrix(
             view,
             projection,
             z,
@@ -859,6 +872,13 @@ impl LineDrawableEntry {
             wrap,
             depth_offset(layer_index, sub_layer_index),
         )?;
+        // The layer's own offset -- see `paint_translate`. Applied to the tile's matrix rather
+        // than to its geometry, so one set of vertices still serves every zoom the layer is
+        // drawn at.
+        if translate != [0.0, 0.0] {
+            camera::translate_in_place(&mut matrix, translate[0], translate[1], 0.0);
+        }
+        let matrix = matrix;
 
         #[allow(clippy::cast_possible_truncation)]
         Ok(Self {
@@ -1412,11 +1432,23 @@ impl ExtrusionDrawableEntry {
         y: u32,
         wrap: i32,
         interpolations: [f32; 3],
+        translate: [f64; 2],
     ) -> Result<Self, camera::CameraError> {
         // `for_tile_3d`, not `for_tile_with`: mbgl's `depthModeFor3D` has no sublayer term, and
         // applying the flat-layer one here separates this drawable's depth from the depth pass
         // that precedes it by more than the comparison tolerates.
-        let matrix = DrawableEntry::for_tile_3d(view, projection, z, x, y, wrap)?.matrix;
+        // The near-clipped matrix taken in doubles rather than through `for_tile_3d`, which
+        // hands back the `f32` the UBO carries: the offset below is in tile units and applying
+        // it after the narrowing would round it away on a tile whose units are small.
+        let mut matrix = near_clipped_tile_matrix(view, projection, z, x, y, wrap)?;
+        // The layer's own offset -- see `paint_translate`. Applied to the tile's matrix rather
+        // than to its geometry, so one set of vertices still serves every zoom the layer is
+        // drawn at.
+        if translate != [0.0, 0.0] {
+            camera::translate_in_place(&mut matrix, translate[0], translate[1], 0.0);
+        }
+        #[allow(clippy::cast_possible_truncation)]
+        let matrix: [f32; 16] = core::array::from_fn(|index| matrix[index] as f32);
 
         let origin = PixelOrigin::of(view, z, x, y, wrap);
 
@@ -1698,8 +1730,9 @@ impl CircleDrawableEntry {
         sub_layer_index: i32,
         extrude_scale: [f32; 2],
         interpolations: [f32; 7],
+        translate: [f64; 2],
     ) -> Result<Self, camera::CameraError> {
-        let matrix = tile_matrix(
+        let mut matrix = tile_matrix(
             view,
             projection,
             z,
@@ -1708,6 +1741,13 @@ impl CircleDrawableEntry {
             wrap,
             depth_offset(layer_index, sub_layer_index),
         )?;
+        // The layer's own offset -- see `paint_translate`. Applied to the tile's matrix rather
+        // than to its geometry, so one set of vertices still serves every zoom the layer is
+        // drawn at.
+        if translate != [0.0, 0.0] {
+            camera::translate_in_place(&mut matrix, translate[0], translate[1], 0.0);
+        }
+        let matrix = matrix;
 
         #[allow(clippy::cast_possible_truncation)]
         Ok(Self {

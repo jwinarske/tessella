@@ -243,6 +243,7 @@ fn emit_frame() -> Vec<EnvelopeKind> {
                             *layer_index,
                             0,
                             ubo::line_interpolations(&paint, f64::from(tile.z), view.zoom),
+                            [0.0, 0.0],
                         )
                         .expect("an unrotated camera")
                     })
@@ -298,6 +299,7 @@ fn emit_frame() -> Vec<EnvelopeKind> {
                             0,
                             ubo::circle_extrude_scale(pitch_with_map, tile.z, &view),
                             ubo::circle_interpolations(&paint, f64::from(tile.z), view.zoom),
+                            [0.0, 0.0],
                         )
                         .expect("an unrotated camera")
                     })

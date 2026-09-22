@@ -93,6 +93,13 @@ done
 # both draws the labels on top of the icons the offset exists to separate them from. Asymmetric
 # on purpose -- a swapped axis or a flipped sign shows, where [4, 4] would not.
 bash "$P/parity.sh" symbol_translate_p 52.52 13.405 16 1024 768 0 0
+
+# And the other three families' offsets, which no example style writes either. Not zero: the line
+# half leaves about 130 pixels along one tile edge, and the note in `paint_translate` says what is
+# known about that. Circle and fill-extrusion are exact, and the number is here so a change in it
+# is visible rather than absorbed.
+bash "$P/parity.sh" paint_translate_p 52.52 13.405 16 1024 768 0 0
+bash "$P/parity.sh" paint_translate_p 52.52 13.405 16 1024 768 60 0
 bash "$P/parity.sh" terrain_families_p 52.52 13.405 9 2400 900 0
 # Five cameras, not two. The first two were the gate for a while and they are the two kindest in
 # the whole space: every other pitch and every zoom past the DEM's own is far worse, and holding

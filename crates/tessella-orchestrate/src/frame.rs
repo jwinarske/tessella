@@ -4352,6 +4352,14 @@ fn write_layer_state(
                         layer_index,
                         0,
                         ubo::line_interpolations(&paint, f64::from(tile.overscaled_z), view.zoom),
+                        // The layer's own offset -- see `paint_translate`.
+                        ubo::paint_translate(
+                            &paint,
+                            "line-translate",
+                            "line-translate-anchor",
+                            view,
+                            tile.z,
+                        ),
                     )
                     .ok()?;
                     Some((tile.z, tile.overscaled_z, entry))
@@ -4591,6 +4599,14 @@ fn write_layer_state(
                         0,
                         ubo::circle_extrude_scale(pitch_with_map, tile.z, view),
                         ubo::circle_interpolations(&paint, f64::from(tile.overscaled_z), view.zoom),
+                        // The layer's own offset -- see `paint_translate`.
+                        ubo::paint_translate(
+                            &paint,
+                            "circle-translate",
+                            "circle-translate-anchor",
+                            view,
+                            tile.z,
+                        ),
                     )
                     .ok()
                 })
@@ -4676,6 +4692,14 @@ fn write_layer_state(
                                 &paint,
                                 f64::from(tile.overscaled_z),
                                 view.zoom,
+                            ),
+                            // The layer's own offset -- see `paint_translate`.
+                            ubo::paint_translate(
+                                &paint,
+                                "fill-extrusion-translate",
+                                "fill-extrusion-translate-anchor",
+                                view,
+                                tile.z,
                             ),
                         )
                         .ok()

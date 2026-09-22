@@ -691,6 +691,7 @@ fn the_live_line_drawable_buffer_matches_the_oracle() {
                 3,
                 sub,
                 [0.0; 6],
+                [0.0, 0.0],
             )
             .expect("an unrotated camera")
         })

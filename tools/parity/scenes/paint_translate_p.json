@@ -1,0 +1,188 @@
+{
+ "version": 8,
+ "name": "paint-translate",
+ "glyphs": "http://127.0.0.1:8081/glyphs/{fontstack}/{range}.pbf",
+ "sprite": "http://127.0.0.1:8081/sprites/emerald",
+ "sources": {
+  "berlin": {
+   "type": "vector",
+   "url": "http://127.0.0.1:8080/berlin_z15.json"
+  },
+  "img": {
+   "type": "raster",
+   "tiles": [
+    "http://127.0.0.1:8081/raster/{z}/{x}/{y}.png"
+   ],
+   "tileSize": 256,
+   "minzoom": 0,
+   "maxzoom": 16
+  }
+ },
+ "layers": [
+  {
+   "id": "bg",
+   "type": "background",
+   "paint": {
+    "background-color": "#eae6dd"
+   }
+  },
+  {
+   "id": "imagery",
+   "type": "raster",
+   "source": "img",
+   "paint": {
+    "raster-opacity": 0.55
+   }
+  },
+  {
+   "id": "water",
+   "type": "fill",
+   "source": "berlin",
+   "source-layer": "water",
+   "paint": {
+    "fill-color": "#9ec6dd"
+   }
+  },
+  {
+   "id": "parks",
+   "type": "fill",
+   "source": "berlin",
+   "source-layer": "landuse",
+   "paint": {
+    "fill-pattern": "grass_pattern",
+    "fill-opacity": 0.9
+   }
+  },
+  {
+   "id": "roads",
+   "type": "line",
+   "source": "berlin",
+   "source-layer": "roads",
+   "paint": {
+    "line-color": "#cfc7b6",
+    "line-width": 2.5,
+    "line-translate": [
+     14,
+     -7
+    ]
+   }
+  },
+  {
+   "id": "buildings",
+   "type": "fill-extrusion",
+   "source": "berlin",
+   "source-layer": "buildings",
+   "paint": {
+    "fill-extrusion-color": "#c9b9a8",
+    "fill-extrusion-height": [
+     "get",
+     "height"
+    ],
+    "fill-extrusion-base": [
+     "get",
+     "min_height"
+    ],
+    "fill-extrusion-opacity": 0.9,
+    "fill-extrusion-translate": [
+     16,
+     8
+    ]
+   }
+  },
+  {
+   "id": "poi-dots",
+   "type": "circle",
+   "source": "berlin",
+   "source-layer": "pois",
+   "paint": {
+    "circle-radius": 4,
+    "circle-color": "#b2453c",
+    "circle-stroke-width": 1,
+    "circle-stroke-color": "#ffffff",
+    "circle-translate": [
+     -9,
+     11
+    ]
+   },
+   "filter": [
+    "all",
+    [
+     "has",
+     "name"
+    ],
+    [
+     "<=",
+     [
+      "get",
+      "min_zoom"
+     ],
+     15
+    ]
+   ]
+  },
+  {
+   "id": "poi-labels",
+   "type": "symbol",
+   "source": "berlin",
+   "source-layer": "pois",
+   "filter": [
+    "all",
+    [
+     "has",
+     "name"
+    ],
+    [
+     "<=",
+     [
+      "get",
+      "min_zoom"
+     ],
+     15
+    ]
+   ],
+   "layout": {
+    "icon-image": "default_1",
+    "icon-size": 1,
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 11,
+    "text-offset": [
+     0,
+     1.2
+    ],
+    "text-anchor": "top"
+   },
+   "paint": {
+    "text-color": "#3b342c"
+   }
+  },
+  {
+   "id": "place-labels",
+   "type": "symbol",
+   "source": "berlin",
+   "source-layer": "places",
+   "filter": [
+    "has",
+    "name"
+   ],
+   "layout": {
+    "text-field": [
+     "get",
+     "name"
+    ],
+    "text-font": [
+     "Open Sans Regular,Arial Unicode MS Regular"
+    ],
+    "text-size": 14
+   },
+   "paint": {
+    "text-color": "#221e19"
+   }
+  }
+ ]
+}
