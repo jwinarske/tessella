@@ -191,7 +191,14 @@ pub struct LineOptions {
     pub end_cap: LineCap,
     /// `line-miter-limit`.
     pub miter_limit: f32,
-    /// `line-round-limit`.
+    /// `line-round-limit`: below this miter length a round join is drawn as a miter instead.
+    ///
+    /// **One, where the style spec says 1.05.** mbgl's `LineRoundLimit::defaultValue()` returns
+    /// `1`, and the oracle is what parity is measured against. The difference is not small: a
+    /// miter length is `1 / cos(half the turn)`, so it is never below one and a threshold of one
+    /// converts almost nothing, where 1.05 converts every join turning less than about 36
+    /// degrees. On one demotiles coastline ring of 3,147 points that was 2,011 joins made miters
+    /// here against 83 in mbgl, and the arcs mbgl drew instead are what the parity gap was.
     pub round_limit: f32,
     /// Tile overscale factor.
     pub overscaling: u32,
@@ -208,7 +215,8 @@ impl Default for LineOptions {
             begin_cap: LineCap::Butt,
             end_cap: LineCap::Butt,
             miter_limit: 2.0,
-            round_limit: 1.05,
+            // mbgl's default, not the spec's. See the field.
+            round_limit: 1.0,
             overscaling: 1,
             closed: false,
             clip_distances: None,
