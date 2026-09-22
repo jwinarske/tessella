@@ -9,11 +9,18 @@ whether or not it meant to.
     tools/parity/build.sh        # both probes and the materials, from the current trees
     tools/parity/sweep.sh        # the five cameras, against the oracle
 
-    cd "$PARITY_WORK" && ./quad_probe "$PARITY_DIR/scenes/quad_remote.json" mat quad.ppm
+    tools/parity/quad.sh         # the four-pane quad, replayed from its snapshot
 
 The quad is the other half of the gate and is not part of the sweep: four views on one engine,
 which is what catches a regression in layer masking or in the shared scene that a single-view
 render cannot. It holds at `22 / 22 / 22 / 32` primitives with `image_stable 1`.
+
+It reads its planet archive through the examples' record-and-replay proxy rather than from the
+origin. A dated protomaps build is kept for about a week, and pointed straight at one this test
+rots on a timer: the archive 404s, every pane draws two primitives, and it reads as a regression
+in whatever was being changed. `PARITY_RECORD=1 tools/parity/quad.sh` records what it lacks;
+`quad-manifest.txt` is the URL, byte range and content hash of each, which is what makes the
+snapshot checkable. Running `quad_probe` directly still works and still reaches the network.
 
 Needs three things the tree does not carry: maplibre-native's `mbgl-render` as the oracle, a
 Filament build, and the tile and asset servers the scenes name (`serve.sh` on 8080 and
@@ -67,8 +74,9 @@ the scene uses for nothing but its background. See `terrain_cover_p` below.
 ## The scenes
 
 - `families_p` — one layer of every family this build draws, over Berlin. The sweep's scene.
-- `quad_remote` — the four-pane quad's style, read over https with nothing on disk. Used by the
-  consumer's own `quad_probe` rather than by `sweep.sh`.
+- `quad_remote` — the four-pane quad's style, read by range out of a planet archive with nothing
+  on disk. Used by `quad.sh` rather than by `sweep.sh`, and through the proxy: the URL in it names
+  the proxy, which holds the archive's ranges in the snapshot.
 - `heat_p` — a heatmap over Berlin's POIs. Captured before any heatmap code existed, so the
   design behind it had a referee rather than an argument; it stood at `gross 271571 (34.532%)`
   then and is at **0** now. Not in the sweep because the sweep is the five-camera gate.

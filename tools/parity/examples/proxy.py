@@ -86,15 +86,23 @@ class Snapshot:
     def __init__(self, root: str, log: str, recording: bool) -> None:
         self.root, self.log, self.recording = root, log, recording
 
-    def paths(self, url: str) -> tuple[str, str]:
-        key = hashlib.sha256(url.encode()).hexdigest()
+    def paths(self, url: str, span: str = "") -> tuple[str, str]:
+        # The span is part of the key, not of the URL. One archive answers as many bodies as it is
+        # asked ranges of, and a snapshot keyed on the URL alone would hold whichever came first
+        # and hand it back for every other -- a pmtiles reader would take a directory for a tile.
+        #
+        # A request with no span keys exactly as it did before spans existed -- the URL and
+        # nothing appended. Every resource already in a snapshot stays findable; hashing
+        # `url + "\n"` for those would have invalidated the lot and sent the suite back to the
+        # origins to re-record.
+        key = hashlib.sha256((url if not span else f"{url}\n{span}").encode()).hexdigest()
         return (
             os.path.join(self.root, key[:2], key + ".body"),
             os.path.join(self.root, key[:2], key + ".json"),
         )
 
-    def load(self, url: str) -> tuple[dict, bytes] | None:
-        body_path, meta_path = self.paths(url)
+    def load(self, url: str, span: str = "") -> tuple[dict, bytes] | None:
+        body_path, meta_path = self.paths(url, span)
         try:
             with open(meta_path) as meta_file:
                 meta = json.load(meta_file)
@@ -107,14 +115,26 @@ class Snapshot:
             return None
         return meta, body
 
-    def store(self, url: str, status: int, content_type: str, body: bytes) -> dict:
-        body_path, meta_path = self.paths(url)
+    def store(
+        self,
+        url: str,
+        status: int,
+        content_type: str,
+        body: bytes,
+        span: str = "",
+        content_range: str = "",
+    ) -> dict:
+        body_path, meta_path = self.paths(url, span)
         meta = {
             "url": url,
             "status": status,
             "content_type": content_type,
             "sha256": hashlib.sha256(body).hexdigest(),
         }
+        # Only where there was one, so an unranged record reads exactly as it did before this.
+        if span:
+            meta["range"] = span
+            meta["content_range"] = content_range
         # Body before metadata, each by rename: a record interrupted part way leaves either nothing
         # or a body with no metadata, and both read as not recorded.
         write_atomically(body_path, body)
@@ -146,11 +166,14 @@ def read_bounded(stream) -> bytes:
     return body
 
 
-def fetch(url: str) -> tuple[int, str, bytes]:
+def fetch(url: str, span: str = "") -> tuple[int, str, bytes, str]:
     # origin_of admits only http and https; checked again here because this is where it matters.
     if urllib.parse.urlsplit(url).scheme not in ("http", "https"):
         raise ValueError(f"refusing to fetch {url!r}")
-    request = urllib.request.Request(url, headers={"User-Agent": "tessella-parity/0.1"})  # noqa: S310
+    headers = {"User-Agent": "tessella-parity/0.1"}
+    if span:
+        headers["Range"] = span
+    request = urllib.request.Request(url, headers=headers)  # noqa: S310
     try:
         response = urllib.request.urlopen(request, timeout=60)  # noqa: S310
     except urllib.error.HTTPError as error:
@@ -166,7 +189,12 @@ def fetch(url: str) -> tuple[int, str, bytes]:
         body = inflater.decompress(body, MAX_BODY + 1)
         if len(body) > MAX_BODY or inflater.unconsumed_tail:
             raise TooLarge(f"inflates past {MAX_BODY} bytes")
-    return status, headers.get("Content-Type") or "application/octet-stream", body
+    return (
+        status,
+        headers.get("Content-Type") or "application/octet-stream",
+        body,
+        headers.get("Content-Range") or "",
+    )
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -175,10 +203,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     snapshot: Snapshot
 
-    def answer(self, status: int, content_type: str, body: bytes) -> None:
+    def answer(
+        self, status: int, content_type: str, body: bytes, content_range: str = ""
+    ) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        # A ranged answer has to say which bytes these are: a reader that asked for a range and got
+        # a 206 without it cannot place them, and one that got a 200 would take the range for the
+        # whole archive.
+        if content_range:
+            self.send_header("Content-Range", content_range)
+            self.send_header("Accept-Ranges", "bytes")
         self.end_headers()
         self.wfile.write(body)
 
@@ -188,27 +224,31 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if url is None:
             self.answer(400, "text/plain", b"not a proxied url\n")
             return
+        # A pmtiles archive is read by range and is far too large to hold whole, so a span is part
+        # of what is asked for and part of what is kept. Absent for every other resource, which
+        # records and replays exactly as it did before.
+        span = self.headers.get("Range") or ""
         kind = "HIT"
-        loaded = snapshot.load(url)
+        loaded = snapshot.load(url, span)
         if loaded is not None:
             meta, body = loaded
         elif snapshot.recording:
             try:
-                status, content_type, body = fetch(url)
+                status, content_type, body, content_range = fetch(url, span)
             except Exception as error:  # a transport failure is not a snapshot
                 snapshot.note(f"FAIL - - {url} {error}")
                 self.answer(502, "text/plain", f"{error}\n".encode())
                 return
-            meta = snapshot.store(url, status, content_type, body)
+            meta = snapshot.store(url, status, content_type, body, span, content_range)
             kind = "REC"
         else:
-            snapshot.note(f"MISS - - {url}")
+            snapshot.note(f"MISS - - {url}{f' {span}' if span else ''}")
             self.answer(502, "text/plain", b"not in snapshot\n")
             return
-        snapshot.note(f"{kind} {meta['status']} {meta['sha256']} {url}")
+        snapshot.note(f"{kind} {meta['status']} {meta['sha256']} {url}{f' {span}' if span else ''}")
         if is_json(meta["content_type"], url):
             body = rewrite(body)
-        self.answer(meta["status"], meta["content_type"], body)
+        self.answer(meta["status"], meta["content_type"], body, meta.get("content_range", ""))
 
     def log_message(self, *args) -> None:
         pass
