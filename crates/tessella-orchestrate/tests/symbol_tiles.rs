@@ -13,6 +13,7 @@ use tessella_glyph::fonts::Fonts;
 use tessella_layout::symbol_layout::{Anchoring, Placement};
 use tessella_orchestrate::tile::{TileId, build_mvt_tile};
 use tessella_source::mvt::Tile;
+use tessella_source::tiling::TilingOptions;
 use tessella_storage::source::{FetchError, FileSource, Response};
 use tessella_style::Style;
 
@@ -1499,13 +1500,26 @@ fn a_line_placed_icon_carries_the_run_it_was_anchored_on() {
         "a line-placed icon must carry the run its anchor was found on"
     );
 
-    // And it is the instance's own run and segment, not some other anchor's. Paired the way the
-    // frame pairs them, which is on the pending symbol and the anchor together.
-    for icon in &laid {
-        let instance = instances
-            .iter()
-            .find(|instance| instance.pending == icon.pending && instance.anchor == icon.anchor)
-            .expect("every icon is some instance's other half");
+    // And it is the instance's own run and segment, not some other anchor's.
+    //
+    // Paired in order rather than by anchor. `lay_out_icons` walks the instances and keeps the
+    // ones whose symbol named a sprite, so the two lists run together -- and an anchor is not a
+    // key: a road clipped into two runs that meet, or two features sharing an endpoint, put two
+    // instances on the same point, and only their runs tell them apart. That is exactly what the
+    // repeat-distance guard used to hide, and mbgl keeps both.
+    let with_icons: Vec<_> = instances
+        .iter()
+        .filter(|instance| {
+            layout
+                .pending
+                .get(instance.pending)
+                .is_some_and(|pending| pending.icon.is_some())
+        })
+        .collect();
+    assert_eq!(laid.len(), with_icons.len(), "one icon per instance");
+    for (icon, instance) in laid.iter().zip(with_icons) {
+        assert_eq!(icon.pending, instance.pending, "the instance's own symbol");
+        assert_eq!(icon.anchor, instance.anchor, "the instance's own anchor");
         assert_eq!(icon.segment, instance.segment, "the instance's own segment");
         assert_eq!(
             icon.line.as_slice(),
@@ -1513,4 +1527,82 @@ fn a_line_placed_icon_carries_the_run_it_was_anchored_on() {
             "the instance's own run"
         );
     }
+}
+
+/// The repeat-distance guard is about a *name*, so a symbol with no name is not subject to it.
+///
+/// mbgl gates the whole test on there being text at all:
+///
+/// ```text
+/// if (!feature.formattedText ||
+///     !anchorIsTooClose(feature.formattedText->rawText(), textRepeatDistance, anchor))
+/// ```
+///
+/// # What this was
+///
+/// Run unconditionally, every icon-only symbol in a layer keys on the same empty string. The test
+/// then stops asking "is this name already here" and starts asking "is *any* icon already here",
+/// across the whole layer rather than one road -- so a oneway arrow suppressed every other arrow
+/// within half the symbol spacing, including the ones on the next street over.
+///
+/// Two parallel roads a hair apart is the smallest case that shows it: each carries its own
+/// anchors, and every anchor on the second is within half the spacing of one on the first.
+///
+/// Held against `mbgl-render` on the bright style at z15.5, the unconditional guard dropped 158
+/// of 331 oneway arrows, and none of the twenty-three symbol layers that carry text.
+#[test]
+fn an_icon_only_symbol_is_not_thinned_by_a_neighboring_road() {
+    let roads = |count: usize| -> Style {
+        let lines: Vec<String> = (0..count)
+            .map(|n| {
+                #[allow(clippy::cast_precision_loss)]
+                let lat = n as f64;
+                format!(
+                    r#"{{"type":"Feature","properties":{{}},"geometry":{{"type":"LineString",
+                        "coordinates":[[-160.0,{lat}],[160.0,{lat}]]}}}}"#
+                )
+            })
+            .collect();
+        Style::parse(&format!(
+            r#"{{"version":8,
+                "sources":{{"s":{{"type":"geojson","data":{{
+                  "type":"FeatureCollection","features":[{}]}}}}}},
+                "layers":[{{"id":"oneway","type":"symbol","source":"s",
+                  "layout":{{"symbol-placement":"line","symbol-spacing":40,
+                             "icon-image":"primary"}}}}]}}"#,
+            lines.join(",")
+        ))
+        .expect("the style parses")
+    };
+
+    let placed = |style: &Style| -> usize {
+        let tessella_style::Source::Geojson(source) = style.source("s").expect("a source") else {
+            panic!("the fixture has one geojson source")
+        };
+        let features = tessella_source::geojson::read(&source.data).expect("features read");
+        let built = tessella_orchestrate::tile::build_tile(
+            style,
+            "s",
+            TileId::new(0, 0, 0),
+            &features,
+            TilingOptions::default(),
+        )
+        .expect("the tile builds");
+        let layout = built[0].content.as_symbol().expect("a symbol layout");
+        let (fonts, _) = fonts_for(layout);
+        let sprites = positions(&[("primary", false)]);
+        layout.lay_out(&fonts, Some(&sprites)).1.len()
+    };
+
+    let one = placed(&roads(1));
+    assert!(one > 1, "the fixture road carries several anchors: {one}");
+
+    // Four roads, each the same length: four times the anchors. Under the old guard the second,
+    // third and fourth were suppressed by the first, since all four share the empty name.
+    let four = placed(&roads(4));
+    assert_eq!(
+        four,
+        one * 4,
+        "four parallel icon-only roads placed {four} anchors where one road places {one}"
+    );
 }
