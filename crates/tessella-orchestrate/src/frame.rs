@@ -4065,7 +4065,19 @@ fn write_layer_state(
     let entries = |sub_layer_index: i32| -> Vec<DrawableEntry> {
         matrices(sub_layer_index)
             .filter_map(|tile| {
-                DrawableEntry::for_tile_with(
+                // The layer's own offset, which a style asking for a fake third dimension uses:
+                // a building top drawn up and left of its footprint, so the footprint shows on
+                // the other two sides. Without it the top sits exactly on the footprint and the
+                // only thing between them is the outline -- one pixel where the oracle has
+                // three, over every building in the frame.
+                let translate = ubo::paint_translate(
+                    &paint,
+                    "fill-translate",
+                    "fill-translate-anchor",
+                    view,
+                    tile.z,
+                );
+                DrawableEntry::for_tile_translated(
                     view,
                     projection,
                     tile.z,
@@ -4080,6 +4092,7 @@ fn write_layer_state(
                         view.zoom,
                         sub_layer_index,
                     ),
+                    translate,
                 )
                 .ok()
             })
