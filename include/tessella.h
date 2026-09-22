@@ -280,6 +280,48 @@ tessella_result tessella_set_camera(tessella_map* map,
                                     double bearing,
                                     double pitch);
 
+/* Which side owns a map's camera (DR-9). */
+typedef enum tessella_camera_owner {
+    /* The producer's own, moved with tessella_set_camera. The default. */
+    TESSELLA_CAMERA_OWNER_PRODUCER = 0,
+    /* The consumer's, published with tessella_publish_camera and read back each tick. */
+    TESSELLA_CAMERA_OWNER_CONSUMER = 1,
+} tessella_camera_owner;
+
+/* Says which side owns this map's camera.
+ *
+ * Under TESSELLA_CAMERA_OWNER_CONSUMER the map takes its camera from what was last published, at
+ * the start of each tick, and tessella_set_camera stops being the thing that moves it -- a
+ * consumer that keeps calling both is telling the map two different things and the published one
+ * wins.
+ *
+ * Switching before anything is published leaves the camera where it was: a mode is not a camera,
+ * and a map that blanked itself on the switch would flash. */
+tessella_result tessella_set_camera_owner(tessella_map* map, tessella_camera_owner owner);
+
+/* Publishes the camera of a map whose owner is the consumer (DR-9).
+ *
+ * Two cameras go in together because they answer different questions. view_projection -- sixteen
+ * doubles, column-major -- says where things land on screen, and is the consumer's own, so a
+ * scene camera that is not a map camera is expressible rather than approximated. The scalars say
+ * which data at what scale: the fetch and paint zooms, pixels-per-meter, the zoom history.
+ * Neither derives the other. They are stored in one seqlock generation, so the producer reads
+ * both halves of one frame or retries.
+ *
+ * The viewport is not an argument: the map already knows what it draws into, set with
+ * tessella_set_viewport, and taking it from there is what stops the published camera and the
+ * cover disagreeing about the size of the screen.
+ *
+ * Publishing is not the same as being in the mode. A map still owned by the producer ignores what
+ * is published here, which is what lets a consumer publish before it switches. */
+tessella_result tessella_publish_camera(tessella_map* map,
+                                        const double* view_projection,
+                                        double longitude,
+                                        double latitude,
+                                        double zoom,
+                                        double bearing,
+                                        double pitch);
+
 /* Tells a map how much time has passed, so its labels can fade.
  *
  * A map that is never told this behaves as a still picture: a fade completes in one step and a

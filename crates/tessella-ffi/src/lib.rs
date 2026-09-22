@@ -96,6 +96,7 @@ use alloc::sync::{Arc, Weak};
 use std::ffi::c_char;
 use std::sync::{Mutex, PoisonError};
 
+use tessella_capture_abi::CameraMode;
 use tessella_capture_abi::ProjectionMode;
 use tessella_capture_abi::envelope::ViewId;
 use tessella_capture_abi::reverse::{ConsumerCamera, ReverseChannel};
@@ -120,6 +121,7 @@ use tessella_storage::source::{Coalescing, RangeFetch, Router};
 use tessella_style::Style;
 use tessella_tile::camera;
 use tessella_tile::cover::{self, ViewTransform};
+use tessella_tile::projection::TILE_SIZE;
 
 /// The texture the sprite atlas is uploaded as.
 ///
@@ -301,6 +303,11 @@ pub struct MapState {
     /// `tessella_regions`. Allocated once and never resized, so the `Mapping` the arena holds
     /// stays valid for as long as this state does.
     slabs: Vec<u64>,
+    /// Which side owns this map's camera (DR-9).
+    ///
+    /// Producer by default, which is every map that has not asked otherwise, and is what keeps
+    /// every existing consumer and every parity number untouched by construction.
+    camera_mode: CameraMode,
     /// The consumer-to-producer strip (DR-10).
     ///
     /// Owned here rather than handed out through `tessella_map_regions`, which stays the four
@@ -583,6 +590,7 @@ unsafe fn create(
             map: Map::with_arena(style, view, ViewId(0), arena),
             region,
             slabs,
+            camera_mode: CameraMode::Producer,
             reverse: ReverseChannel::new(),
             producer,
             source,
@@ -842,6 +850,43 @@ pub unsafe extern "C" fn tessella_set_projection(map: MapHandle, projection: Pro
     })
 }
 
+/// Which side owns a map's camera (DR-9).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u32)]
+pub enum CameraOwner {
+    /// The producer's own camera, moved with [`tessella_set_camera`]. The default, and what every
+    /// map that has not asked otherwise is.
+    Producer = 0,
+    /// The consumer's, published with [`tessella_publish_camera`] and read back each tick.
+    Consumer = 1,
+}
+
+/// Says which side owns this map's camera (DR-9).
+///
+/// Under [`CameraOwner::Consumer`] the map takes its camera from the strip at the start of each
+/// tick, and [`tessella_set_camera`] stops being the thing that moves it -- a consumer that keeps
+/// calling both is telling the map two different things and the published one wins.
+///
+/// Switching to consumer before anything is published leaves the camera where it was: a mode is
+/// not a camera, and a map that blanked itself on the switch would flash.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_set_camera_owner(map: MapHandle, owner: CameraOwner) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_mut() }) else {
+            return Status::NoSuchMap;
+        };
+        state.camera_mode = match owner {
+            CameraOwner::Producer => CameraMode::Producer,
+            CameraOwner::Consumer => CameraMode::Consumer,
+        };
+        Status::Ok
+    })
+}
+
 /// Publishes the camera of a view running in consumer-camera mode (DR-9).
 ///
 /// The consumer owns the camera under that mode and the producer reads it back here, one frame
@@ -912,6 +957,23 @@ pub unsafe extern "C" fn tessella_publish_camera(
 pub unsafe fn published_camera_for_test(map: MapHandle) -> Option<ConsumerCamera> {
     let state = unsafe { map.as_ref() }?;
     state.reverse.camera(ViewId(0))
+}
+
+/// The tiles this map's cover wants, for tests.
+///
+/// Not part of the C surface, for the reason [`published_camera_for_test`] is not: it exists so a
+/// test can see that a camera moved the map rather than only that a call returned.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed.
+#[doc(hidden)]
+#[must_use]
+pub unsafe fn wanted_tiles_for_test(map: MapHandle) -> alloc::vec::Vec<tessella_tile::TileCoord> {
+    let Some(state) = (unsafe { map.as_ref() }) else {
+        return alloc::vec::Vec::new();
+    };
+    state.map.wanted().to_vec()
 }
 
 /// Emits a frame, if anything changed.
@@ -1199,6 +1261,32 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
         let Some(state) = (unsafe { map.as_mut() }) else {
             return Status::NoSuchMap;
         };
+
+        // A consumer-camera map takes its camera from the strip before anything else looks at it,
+        // so the cover, the placement and the screen-space uniforms this tick are all answering
+        // the same camera. Read once here rather than wherever each of them needs it: the strip
+        // is written by another thread, and three reads could straddle three frames.
+        //
+        // Nothing published yet leaves the camera where it is. A mode is not a camera, and a map
+        // that blanked itself on the switch would flash.
+        if state.camera_mode == CameraMode::Consumer
+            && let Some(camera) = state.reverse.camera(ViewId(0))
+        {
+            let (longitude, latitude) =
+                tessella_tile::projection::unproject(camera.center_zoom0, TILE_SIZE);
+            // Constrained and settled the way `tessella_set_camera` does it: a camera the
+            // consumer published is still a camera this map has to be able to draw.
+            state
+                .map
+                .look_at(camera::settled(&camera::constrained(&ViewTransform {
+                    longitude,
+                    latitude,
+                    zoom: camera.zoom,
+                    bearing: camera.bearing,
+                    pitch: camera.pitch,
+                    ..*state.map.view()
+                })));
+        }
 
         // Anything landed since the last frame makes this one worth drawing.
         // A pool with no workers has nobody to run its jobs but this thread. Twice, around the
