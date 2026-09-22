@@ -276,6 +276,77 @@ mod tests {
         style.layer("l").expect("l").clone()
     }
 
+    /// A legacy `{"stops": …}` size is a zoom curve, and is sampled like one.
+    ///
+    /// # What this was
+    ///
+    /// The binder found the curve -- `Dependency` knew it varied with zoom, so this was
+    /// `SizeBinding::Zoom` -- and then every reader of the curve *itself* came up empty, because
+    /// `zoom_curve` only knew `interpolate` and `step`. `covering_stops` fell back to
+    /// `[tile_zoom, tile_zoom + 1]` and `interpolation_factor` returned zero, so the size stuck
+    /// at the low end of its covering interval for the whole of that zoom.
+    ///
+    /// mbgl never has to ask twice: `style/conversion/function.cpp` rewrites an exponential
+    /// function as `["interpolate", ["exponential", base], ["zoom"], …]` before anything reads
+    /// it. This side keeps the legacy node, so the readers have to know both spellings.
+    ///
+    /// The style that shows it is demotiles' own `countries-label`, whose `text-size` runs
+    /// `[[2, 10], [4, 12], [6, 16]]`. Over a z2 tile at camera zoom 2.8 mbgl draws 10.8 and this
+    /// drew 10 -- every label 8% small in both axes, and 13% lighter for it.
+    #[test]
+    fn a_legacy_stops_size_is_sampled_across_its_covering_stops() {
+        let binding = SizeBinding::of(
+            &layer(r#"{"stops": [[2, 10], [4, 12], [6, 16]]}"#),
+            "text-size",
+            2.0,
+            16.0,
+        );
+        let SizeBinding::Zoom {
+            covering, sizes, ..
+        } = &binding
+        else {
+            panic!("a stops function varies with zoom: {binding:?}");
+        };
+        // The stops enclosing [2, 3], which is 2 and 4 -- not the interval's own ends.
+        assert_eq!(*covering, (2.0, 4.0));
+        assert_eq!(*sizes, (10.0, 12.0));
+
+        // And between them by the camera's own zoom: 10 + 0.4 * 2.
+        let evaluated = binding.at_zoom(2.8);
+        assert!(!evaluated.zoom_constant && evaluated.feature_constant);
+        assert!(
+            (evaluated.size - 10.8).abs() < 1e-5,
+            "size was {}",
+            evaluated.size
+        );
+
+        // The ends are the stops themselves, which is what makes the curve continuous across a
+        // tile boundary rather than jumping when the cover changes level.
+        assert!((binding.at_zoom(2.0).size - 10.0).abs() < 1e-5);
+        assert!((binding.at_zoom(4.0).size - 12.0).abs() < 1e-5);
+    }
+
+    /// An `interval` function selects rather than blends, so its factor is zero.
+    ///
+    /// mbgl converts that kind to `step`, and a step curve's mix factor is zero -- the same
+    /// answer this gave every legacy function before it could read one.
+    #[test]
+    fn a_legacy_interval_size_does_not_blend() {
+        let binding = SizeBinding::of(
+            &layer(r#"{"type": "interval", "stops": [[2, 10], [4, 12]]}"#),
+            "text-size",
+            2.0,
+            16.0,
+        );
+        let SizeBinding::Zoom { .. } = &binding else {
+            panic!("still a zoom curve: {binding:?}");
+        };
+        assert!(
+            (binding.at_zoom(2.8).size - 10.0).abs() < 1e-5,
+            "an interval holds its stop until the next one"
+        );
+    }
+
     /// A literal size is constant in both senses, and the shader reads the uniform.
     #[test]
     fn a_literal_is_a_uniform() {

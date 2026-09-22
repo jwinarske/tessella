@@ -1722,24 +1722,36 @@ impl Expression {
     /// `None` when nothing varies with zoom, and for a curve with no stops.
     #[must_use]
     pub fn covering_stops(&self, lower: f64, upper: f64) -> Option<(f64, f64)> {
-        let stops = match zoom_curve(&self.root)? {
-            Expr::Interpolate { stops, .. } | Expr::Step { stops, .. } => stops,
-            _ => return None,
+        // Either spelling of the same curve. A legacy function's stop inputs are `Value`s
+        // rather than positions, so they are read as numbers; one that is not a number is not a
+        // zoom stop, and a curve with none of them has nothing to cover with.
+        let stops: alloc::vec::Vec<f64> = match zoom_curve(&self.root) {
+            Some(Expr::Interpolate { stops, .. } | Expr::Step { stops, .. }) => {
+                stops.iter().map(|(at, _)| *at).collect()
+            }
+            Some(_) => return None,
+            None => legacy_zoom_curve(&self.root)?
+                .stops
+                .iter()
+                .filter_map(|(at, _)| at.as_number())
+                .collect(),
         };
-        let first = stops.first()?.0;
-        let last = stops.last()?.0;
+        let first = *stops.first()?;
+        let last = *stops.last()?;
         // `lower_bound`, then backed up one where it overshot -- mbgl's own comment, and the
         // reason the two ends are not symmetric: the low end wants the last stop *at or below*
         // and the high end the first stop *at or above*.
         let min = stops
             .iter()
             .rev()
-            .find(|(at, _)| *at <= lower)
-            .map_or(first, |(at, _)| *at);
+            .find(|at| **at <= lower)
+            .copied()
+            .unwrap_or(first);
         let max = stops
             .iter()
-            .find(|(at, _)| *at >= upper)
-            .map_or(last, |(at, _)| *at);
+            .find(|at| **at >= upper)
+            .copied()
+            .unwrap_or(last);
         Some((min, max))
     }
 
@@ -1750,13 +1762,24 @@ impl Expression {
     /// range of no width.
     #[must_use]
     pub fn interpolation_factor(&self, range: (f64, f64), view_zoom: f64) -> f32 {
-        let Some(curve) = zoom_curve(&self.root) else {
+        let Some(interpolation) = self.zoom_interpolation() else {
             return 0.0;
         };
-        let Expr::Interpolate { interpolation, .. } = curve else {
-            return 0.0;
-        };
-        factor_between(interpolation, range, view_zoom)
+        factor_between(&interpolation, range, view_zoom)
+    }
+
+    /// How this expression's zoom curve blends, in whichever spelling it is written.
+    ///
+    /// `None` when there is no zoom curve at all and when the curve selects rather than blends:
+    /// a `step`, or the legacy `interval`, `categorical` and `identity` kinds mbgl converts into
+    /// one. Both answer a mix factor of zero, and for the same reason.
+    fn zoom_interpolation(&self) -> Option<Interpolation> {
+        match zoom_curve(&self.root) {
+            Some(Expr::Interpolate { interpolation, .. }) => return Some(*interpolation),
+            Some(_) => return None,
+            None => {}
+        }
+        legacy_interpolation(legacy_zoom_curve(&self.root)?)
     }
 
     /// The shader's mix factor between this property's two zoom endpoints.
@@ -1777,15 +1800,11 @@ impl Expression {
     /// the endpoints mix.
     #[must_use]
     pub fn zoom_mix_factor(&self, bucket_zoom: f64, view_zoom: f64) -> f32 {
-        let Some(curve) = zoom_curve(&self.root) else {
+        // A step curve answers zero, and so does no curve at all. See above.
+        let Some(interpolation) = self.zoom_interpolation() else {
             return 0.0;
         };
-        let Expr::Interpolate { interpolation, .. } = curve else {
-            // A step curve. See above.
-            return 0.0;
-        };
-
-        factor_between(interpolation, (bucket_zoom, bucket_zoom + 1.0), view_zoom)
+        factor_between(&interpolation, (bucket_zoom, bucket_zoom + 1.0), view_zoom)
     }
 }
 
@@ -1840,6 +1859,38 @@ fn zoom_curve(expr: &Expr) -> Option<&Expr> {
         Expr::Coalesce(args) => args.iter().find_map(zoom_curve),
         Expr::Let { body, .. } => zoom_curve(body),
         _ => None,
+    }
+}
+
+/// The legacy `{"stops": …}` function at the root, where it is one over zoom.
+///
+/// The same wrappers [`zoom_curve`] sees through, and the same question asked of the other
+/// spelling. mbgl never has to ask twice because it converts before anything reads the curve --
+/// `style/conversion/function.cpp` turns an exponential function into `["interpolate",
+/// ["exponential", base], ["zoom"], …]` and an interval one into `["step", ["zoom"], …]`. This
+/// side keeps the legacy node, so every reader of a zoom curve has to know both spellings.
+///
+/// `property` decides it: a function reading a feature property is a *source* function whose
+/// stops are that property's values, and its zoom curve is not this one.
+fn legacy_zoom_curve(expr: &Expr) -> Option<&LegacyFunction> {
+    match expr {
+        Expr::LegacyFunction(function) if function.property.is_none() => Some(function),
+        Expr::Coalesce(args) => args.iter().find_map(legacy_zoom_curve),
+        Expr::Let { body, .. } => legacy_zoom_curve(body),
+        _ => None,
+    }
+}
+
+/// How a legacy zoom function blends between its stops, or `None` where it selects.
+///
+/// `interval`, `categorical` and `identity` all select rather than blend, which is what mbgl's
+/// conversion to `step` says about them, and a `step` curve's mix factor is zero.
+const fn legacy_interpolation(function: &LegacyFunction) -> Option<Interpolation> {
+    match function.kind {
+        LegacyKind::Exponential => Some(Interpolation::Exponential {
+            base: function.base,
+        }),
+        LegacyKind::Identity | LegacyKind::Categorical | LegacyKind::Interval => None,
     }
 }
 
