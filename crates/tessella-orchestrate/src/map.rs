@@ -193,6 +193,12 @@ pub struct Map {
     /// rather than the one-cell guess a terrain style starts at.
     terrain_grid_settled: bool,
     view: ViewTransform,
+    /// The consumer's own view-projection, for a view whose camera it owns (DR-9).
+    ///
+    /// Beside the camera rather than inside it, for the reason `projection` is: a matrix is not
+    /// something a map camera knows, and the two answer different questions. `None` is a
+    /// producer-camera map, which is every map that has not been handed over.
+    published_projection: Option<[f64; 16]>,
     view_id: ViewId,
     /// Which sheet the map is drawing from, counted rather than compared.
     ///
@@ -329,6 +335,7 @@ impl Map {
             terrain_grid_settled: false,
             style,
             view,
+            published_projection: None,
             view_id,
             sprites_rev: 0,
             light,
@@ -455,6 +462,15 @@ impl Map {
     /// here would mean answering it again when a tile lands in the same frame.
     pub fn look_at(&mut self, view: ViewTransform) {
         self.view = view;
+    }
+
+    /// Hands this map the projection its consumer is drawing with, or takes it back.
+    ///
+    /// The cover is computed through it while it is set: the frustum is what says which tiles are
+    /// on screen, and one derived from the map camera would answer for a camera the consumer does
+    /// not have. What the map camera still answers is which data at what scale.
+    pub fn see_through(&mut self, projection: Option<[f64; 16]>) {
+        self.published_projection = projection;
     }
 
     /// The camera as it stands.
@@ -930,9 +946,13 @@ impl Map {
                     Vec::new()
                 };
             let extra = if refined.is_empty() {
-                let Ok(computed) =
-                    tessella_tile::cover::cover_on(&self.view, z, self.copies, self.surface())
-                else {
+                let Ok(computed) = tessella_tile::cover::cover_on_through(
+                    &self.view,
+                    z,
+                    self.copies,
+                    self.surface(),
+                    self.published_projection.as_ref(),
+                ) else {
                     continue;
                 };
                 computed
@@ -1040,9 +1060,13 @@ impl Map {
                     wrap: 0,
                 });
             }
-        } else if let Ok(background) =
-            tessella_tile::cover::cover_on(&self.view, integer_zoom, self.copies, self.surface())
-        {
+        } else if let Ok(background) = tessella_tile::cover::cover_on_through(
+            &self.view,
+            integer_zoom,
+            self.copies,
+            self.surface(),
+            self.published_projection.as_ref(),
+        ) {
             for entry in &background {
                 let cover = TileId::new(entry.z, entry.x, entry.y);
                 // Built here when the store has not got to it, because a background is a
