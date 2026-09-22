@@ -526,6 +526,9 @@ mod two_halves {
                 anchor,
                 options: IconOptions::default(),
                 text: None,
+                // Point-placed, so there is no run to walk and nothing reprojects it.
+                line: std::sync::Arc::default(),
+                segment: 0,
             })
             .collect();
         let (_, laid_icons) = build_icons(&icons, &sprites());
@@ -974,6 +977,9 @@ mod icon_box_scale {
                 anchor,
                 options: IconOptions::default(),
                 text: None,
+                // Point-placed, so there is no run to walk and nothing reprojects it.
+                line: std::sync::Arc::default(),
+                segment: 0,
             })
             .collect();
         let (_, laid_icons) = build_icons(&icons, &sprites());

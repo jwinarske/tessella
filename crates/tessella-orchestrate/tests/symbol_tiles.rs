@@ -1457,3 +1457,60 @@ fn a_halo_is_a_second_drawable_under_the_letters() {
         "the halo takes zero when there are no letters to sit under"
     );
 }
+
+/// A line-placed icon carries the run its anchor was found on, so the frame can walk it.
+///
+/// # What this was
+///
+/// `build_icons` wrote `line: Arc::default()` and `segment: 0` into every icon it laid out, on
+/// the grounds that an icon is a point. It is, but a line-placed one is a point *on a road*, and
+/// the frame reprojects it along that road every frame exactly as it reprojects the label —
+/// mbgl calls `reprojectLineLabels` for the icon buffer and the text buffer alike, each from its
+/// own rotation alignment.
+///
+/// Without the run there was nothing to walk, so nothing wrote label-plane coordinates into the
+/// icon's dynamic buffer. `SymbolDrawableEntry` gives an along-line drawable the *identity*
+/// label plane — correct for the text, which is walked — so the icon's vertices were read as
+/// label-plane pixels while still holding the anchor in tile units, which is some thousands of
+/// pixels off screen. Every oneway arrow and every line-placed shield drew nowhere, and no
+/// counter said so.
+#[test]
+fn a_line_placed_icon_carries_the_run_it_was_anchored_on() {
+    let style: Style = serde_json::from_str(
+        r#"{"version": 8, "sources": {"v": {"type": "vector", "tiles": []}},
+            "layers": [{"id": "oneway", "type": "symbol", "source": "v",
+                        "source-layer": "road",
+                        "layout": {"symbol-placement": "line", "symbol-spacing": 8,
+                                   "icon-rotation-alignment": "map",
+                                   "icon-image": "primary"}}]}"#,
+    )
+    .expect("a style");
+
+    let buckets = build_mvt_tile(&style, "v", ID, &tile()).expect("the tile builds");
+    let layout = buckets[0].content.as_symbol().expect("a symbol layout");
+    let (fonts, _) = fonts_for(layout);
+    let sprites = positions(&[("primary", false)]);
+    let (_, instances) = layout.lay_out(&fonts, Some(&sprites));
+    let (_, laid) = layout.lay_out_icons(&sprites, &instances);
+
+    assert!(!laid.is_empty(), "an icon-only line layer laid out nothing");
+    assert!(
+        laid.iter().all(|icon| icon.line.len() > 1),
+        "a line-placed icon must carry the run its anchor was found on"
+    );
+
+    // And it is the instance's own run and segment, not some other anchor's. Paired the way the
+    // frame pairs them, which is on the pending symbol and the anchor together.
+    for icon in &laid {
+        let instance = instances
+            .iter()
+            .find(|instance| instance.pending == icon.pending && instance.anchor == icon.anchor)
+            .expect("every icon is some instance's other half");
+        assert_eq!(icon.segment, instance.segment, "the instance's own segment");
+        assert_eq!(
+            icon.line.as_slice(),
+            instance.line.as_slice(),
+            "the instance's own run"
+        );
+    }
+}
