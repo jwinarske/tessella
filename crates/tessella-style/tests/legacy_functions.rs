@@ -117,3 +117,66 @@ fn an_object_without_stops_stays_a_literal() {
         PropertyValue::Literal(_)
     ));
 }
+
+/// A legacy zoom function answers the *curve* questions too, not only evaluation.
+///
+/// # What this was
+///
+/// `covering_stops`, `interpolation_factor` and `zoom_mix_factor` all reach the curve through one
+/// helper, and that helper knew `interpolate` and `step` and nothing else. A legacy function
+/// evaluated correctly at any zoom and reported no curve at all, so the first returned `None`,
+/// the other two returned zero, and anything sampling a property across a zoom interval read the
+/// low end of it for the whole interval.
+///
+/// mbgl is never asked twice: `style/conversion/function.cpp` rewrites an exponential function as
+/// `["interpolate", ["exponential", base], ["zoom"], …]` and an interval one as
+/// `["step", ["zoom"], …]` before any of this is read. This side keeps the legacy node, so every
+/// reader has to know both spellings.
+#[test]
+fn a_legacy_zoom_function_answers_the_curve_questions() {
+    let expression = tessella_style::Expression::parse(
+        &serde_json::from_str::<Value>(r#"{"stops": [[2, 10], [4, 12], [6, 16]]}"#)
+            .expect("valid json"),
+    )
+    .expect("a legacy function parses");
+
+    // The stops enclosing [2, 3] are 2 and 4 -- the last at or below, then the first at or above.
+    assert_eq!(expression.covering_stops(2.0, 3.0), Some((2.0, 4.0)));
+    // And past the ends it clamps to the curve's own first and last.
+    assert_eq!(expression.covering_stops(-1.0, 99.0), Some((2.0, 6.0)));
+
+    // Base one is linear, so 2.8 sits four tenths of the way from 2 to 4.
+    let factor = expression.interpolation_factor((2.0, 4.0), 2.8);
+    assert!((factor - 0.4).abs() < 1e-5, "factor was {factor}");
+}
+
+/// An `interval` function selects rather than blends, and mbgl's `step` says so.
+#[test]
+fn a_legacy_interval_function_does_not_blend() {
+    let expression = tessella_style::Expression::parse(
+        &serde_json::from_str::<Value>(r#"{"type": "interval", "stops": [[2, 10], [4, 12]]}"#)
+            .expect("valid json"),
+    )
+    .expect("a legacy function parses");
+
+    // It still has stops to cover with -- what it does not have is a blend between them.
+    assert_eq!(expression.covering_stops(2.0, 3.0), Some((2.0, 4.0)));
+    assert!(expression.interpolation_factor((2.0, 4.0), 2.8).abs() < 1e-6);
+    assert!(expression.zoom_mix_factor(2.0, 2.8).abs() < 1e-6);
+}
+
+/// A legacy *source* function is not a zoom curve, whatever its stops look like.
+///
+/// Its stops are the feature property's values, so reading them as zoom levels would answer a
+/// covering interval in the wrong units entirely.
+#[test]
+fn a_legacy_source_function_is_not_a_zoom_curve() {
+    let expression = tessella_style::Expression::parse(
+        &serde_json::from_str::<Value>(r#"{"property": "mag", "stops": [[2, 10], [4, 12]]}"#)
+            .expect("valid json"),
+    )
+    .expect("a legacy function parses");
+
+    assert_eq!(expression.covering_stops(2.0, 3.0), None);
+    assert!(expression.interpolation_factor((2.0, 4.0), 2.8).abs() < 1e-6);
+}
