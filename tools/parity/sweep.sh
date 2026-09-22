@@ -87,6 +87,12 @@ for args in "14 1024 768 0" "14 1024 768 60" "16 1024 768 0" "16 1024 768 60"; d
   # shellcheck disable=SC2086 # four words by construction: zoom, width, height, pitch
   bash "$P/parity.sh" terrain_families_p 52.52 13.405 $args
 done
+
+# A symbol layer's own offset, which no example style writes and so nothing else here covers.
+# `icon-translate` and `text-translate` are a pair and the halves move apart: reading one for
+# both draws the labels on top of the icons the offset exists to separate them from. Asymmetric
+# on purpose -- a swapped axis or a flipped sign shows, where [4, 4] would not.
+bash "$P/parity.sh" symbol_translate_p 52.52 13.405 16 1024 768 0 0
 bash "$P/parity.sh" terrain_families_p 52.52 13.405 9 2400 900 0
 # Five cameras, not two. The first two were the gate for a while and they are the two kindest in
 # the whole space: every other pitch and every zoom past the DEM's own is far worse, and holding

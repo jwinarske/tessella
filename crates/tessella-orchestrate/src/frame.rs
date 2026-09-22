@@ -4936,6 +4936,9 @@ fn write_layer_state(
                     None => atlas_size,
                 }
             };
+            // Borrowed once for the closures below, which are `move`: see the same shape at the
+            // fill layer's `entries`.
+            let paint_ref = &paint;
             let entry = |sub_layer_index: i32| {
                 let sub = sub_layer_index;
                 matrices(sub).filter_map(move |tile| {
@@ -4983,6 +4986,26 @@ fn write_layer_state(
                         // gross-pixel count barely moves, because what is missing is a handful of
                         // sprites against a screen of labels.
                         variable_anchors && !is_icon,
+                        // The layer's own offset, from whichever of the two property pairs this
+                        // half is. A style that nudges its labels off their icons writes
+                        // `text-translate` and leaves the icon where it is, so reading one pair
+                        // for both halves would move the thing the offset exists to move away
+                        // from.
+                        ubo::paint_translate(
+                            paint_ref,
+                            if is_icon {
+                                "icon-translate"
+                            } else {
+                                "text-translate"
+                            },
+                            if is_icon {
+                                "icon-translate-anchor"
+                            } else {
+                                "text-translate-anchor"
+                            },
+                            view,
+                            tile.z,
+                        ),
                     )
                     .ok()
                 })
