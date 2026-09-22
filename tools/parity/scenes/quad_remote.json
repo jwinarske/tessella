@@ -3,7 +3,7 @@
  "name": "planet",
  "glyphs": "http://127.0.0.1:8081/glyphs/{fontstack}/{range}.pbf",
  "sources": {
-  "planet": { "type": "vector", "url": "pmtiles://https://build.protomaps.com/20260915.pmtiles" }
+  "planet": { "type": "vector", "url": "pmtiles://https://build.protomaps.com/20260916.pmtiles" }
  },
  "layers": [
   { "id": "bg", "type": "background", "paint": { "background-color": "#f4f1ea" } },
