@@ -23,7 +23,8 @@
 //!
 //! # Why a seqlock
 //!
-//! A camera is five doubles and a viewport, which no single atomic covers. A reader that
+//! A camera is five doubles, a viewport and a sixteen-double matrix, which no single atomic
+//! covers. A reader that
 //! copied the fields one at a time while the consumer wrote them would get a camera that never
 //! existed — half of one frame's and half of the next's. At high zoom that is the §6.3
 //! flicker bug wearing a different hat.
@@ -57,6 +58,19 @@ pub const MAX_VIEWS: usize = 8;
 /// whole frames come back empty while zooming.
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct ConsumerCamera {
+    /// Where things land on screen: the consumer's own view-projection, column-major.
+    ///
+    /// This and the map camera below answer different questions, and a view running in
+    /// consumer-camera mode needs both. The matrix says *where on screen* -- the cover's frustum,
+    /// label placement and collision, screen-space sizes -- and is the consumer's to shape, so a
+    /// scene camera that is not a map camera is expressible rather than approximated. The fields
+    /// after it say *which data, at what scale*: the fetch and paint zooms, pixels-per-meter, the
+    /// zoom history. A producer deriving the second from the first would have to guess at a
+    /// convention the consumer never stated.
+    ///
+    /// Both travel in one seqlock generation and are read in one read, so they cannot disagree
+    /// about a frame.
+    pub view_projection: [f64; 16],
     /// Map center at zoom zero. Scale-free.
     pub center_zoom0: [f64; 2],
     /// Fractional zoom.
@@ -121,6 +135,12 @@ pub struct ViewSlot {
     pub viewport_width: AtomicU32,
     /// Viewport height in pixels.
     pub viewport_height: AtomicU32,
+    /// The view-projection, column-major, as `f64` bits.
+    ///
+    /// Sixteen doubles is most of this slot, and most of what a torn read would tear. It rides
+    /// the same seqlock as the scalars above for that reason: a matrix from one frame beside a
+    /// zoom from the next is a picture that never existed.
+    pub view_projection: [AtomicU64; 16],
 }
 
 /// The consumer-to-producer strip.
@@ -144,8 +164,10 @@ pub struct ReverseChannel {
 const _: () = {
     assert!(align_of::<ReverseChannel>() == 8);
     // Slots are read by the producer while the consumer writes them, so their layout is
-    // protocol; a size change means the two sides disagree about where slot N starts.
-    assert!(size_of::<ViewSlot>() == 56);
+    // protocol; a size change means the two sides disagree about where slot N starts. Fifty-six
+    // of these bytes are the map camera and its viewport; the other hundred and twenty-eight are
+    // the view-projection.
+    assert!(size_of::<ViewSlot>() == 184);
 };
 
 impl ReverseChannel {
@@ -195,6 +217,13 @@ impl ReverseChannel {
             .store(camera.viewport.width, Ordering::Relaxed);
         slot.viewport_height
             .store(camera.viewport.height, Ordering::Relaxed);
+        for (cell, value) in slot
+            .view_projection
+            .iter()
+            .zip(camera.view_projection.iter())
+        {
+            cell.store(value.to_bits(), Ordering::Relaxed);
+        }
         slot.flags.fetch_or(FLAG_PUBLISHED, Ordering::Relaxed);
 
         // Even again, and release so a reader that sees this count also sees the payload.
@@ -254,6 +283,9 @@ impl ReverseChannel {
             }
 
             let camera = ConsumerCamera {
+                view_projection: core::array::from_fn(|i| {
+                    f64::from_bits(slot.view_projection[i].load(Ordering::Relaxed))
+                }),
                 center_zoom0: [
                     f64::from_bits(slot.center_x.load(Ordering::Relaxed)),
                     f64::from_bits(slot.center_y.load(Ordering::Relaxed)),
@@ -300,6 +332,7 @@ mod tests {
     fn generation(n: u64) -> ConsumerCamera {
         let n = n as f64;
         ConsumerCamera {
+            view_projection: core::array::from_fn(|i| n + 5.0 + i as f64),
             center_zoom0: [n, n + 1.0],
             zoom: n + 2.0,
             bearing: n + 3.0,
@@ -320,6 +353,11 @@ mod tests {
             && camera.pitch == n + 4.0
             && f64::from(camera.viewport.width) == n
             && f64::from(camera.viewport.height) == n + 1.0
+            && camera
+                .view_projection
+                .iter()
+                .enumerate()
+                .all(|(i, value)| *value == n + 5.0 + i as f64)
     }
 
     #[test]

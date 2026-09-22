@@ -2401,9 +2401,14 @@ typedef struct tsl_view_slot {
     uint32_t viewport_width;
     /* Viewport height in pixels. */
     uint32_t viewport_height;
+    /* The consumer's view-projection, column-major, each element as the bits of a double. It */
+    /* says where things land on screen -- the cover's frustum, label placement, screen-space */
+    /* sizes -- where the scalars above say which data at what scale. Both are written in one */
+    /* seqlock generation, so a reader that takes them together cannot mix frames. */
+    uint64_t view_projection[16];
 } tsl_view_slot;
 
-TSL_ASSERT(sizeof(tsl_view_slot) == 56, "tsl_view_slot size differs from the Rust definition");
+TSL_ASSERT(sizeof(tsl_view_slot) == 184, "tsl_view_slot size differs from the Rust definition");
 TSL_ASSERT(TSL_ALIGNOF(tsl_view_slot) == 8, "tsl_view_slot alignment differs from the Rust definition");
 TSL_ASSERT(offsetof(tsl_view_slot, seq) == 0, "tsl_view_slot.seq moved");
 TSL_ASSERT(offsetof(tsl_view_slot, flags) == 4, "tsl_view_slot.flags moved");
@@ -2414,6 +2419,7 @@ TSL_ASSERT(offsetof(tsl_view_slot, bearing) == 32, "tsl_view_slot.bearing moved"
 TSL_ASSERT(offsetof(tsl_view_slot, pitch) == 40, "tsl_view_slot.pitch moved");
 TSL_ASSERT(offsetof(tsl_view_slot, viewport_width) == 48, "tsl_view_slot.viewport_width moved");
 TSL_ASSERT(offsetof(tsl_view_slot, viewport_height) == 52, "tsl_view_slot.viewport_height moved");
+TSL_ASSERT(offsetof(tsl_view_slot, view_projection) == 56, "tsl_view_slot.view_projection moved");
 
 /*
  * The consumer-to-producer strip (DR-10), living in the shared region beside the ring.
@@ -2434,7 +2440,7 @@ typedef struct tsl_reverse_channel {
     tsl_view_slot views[TSL_MAX_VIEWS];
 } tsl_reverse_channel;
 
-TSL_ASSERT(sizeof(tsl_reverse_channel) == 456, "tsl_reverse_channel size differs from the Rust definition");
+TSL_ASSERT(sizeof(tsl_reverse_channel) == 1480, "tsl_reverse_channel size differs from the Rust definition");
 TSL_ASSERT(TSL_ALIGNOF(tsl_reverse_channel) == 8, "tsl_reverse_channel alignment differs from the Rust definition");
 TSL_ASSERT(offsetof(tsl_reverse_channel, acked_geometry) == 0, "tsl_reverse_channel.acked_geometry moved");
 TSL_ASSERT(offsetof(tsl_reverse_channel, views) == 8, "tsl_reverse_channel.views moved");
