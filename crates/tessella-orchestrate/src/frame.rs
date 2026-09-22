@@ -4314,6 +4314,13 @@ fn write_layer_state(
                             i32::from(tile.wrap),
                             layer_index,
                             outline_sub,
+                            ubo::paint_translate(
+                                &paint,
+                                "fill-translate",
+                                "fill-translate-anchor",
+                                view,
+                                tile.z,
+                            ),
                         )
                         .ok()
                     })

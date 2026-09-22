@@ -768,8 +768,9 @@ impl FillOutlineTriangulatedEntry {
         wrap: i32,
         layer_index: i32,
         sub_layer_index: i32,
+        translate: [f64; 2],
     ) -> Result<Self, camera::CameraError> {
-        let matrix = tile_matrix(
+        let mut matrix = tile_matrix(
             view,
             projection,
             z,
@@ -778,6 +779,15 @@ impl FillOutlineTriangulatedEntry {
             wrap,
             depth_offset(layer_index, sub_layer_index),
         )?;
+        // The layer's `fill-translate`, which the outline takes as much as the interior does:
+        // mbgl builds one `translatedMatrix` in `FillLayerTweaker::execute` and hands it to
+        // every drawable the layer has. Left off here, the outline stayed on the footprint
+        // while the fill moved off it, so a building top's outline sat two pixels down and
+        // right of its own edge -- drawn under the fill, half of it was then covered and the
+        // other half ran along the wrong side.
+        if translate != [0.0, 0.0] {
+            camera::translate_in_place(&mut matrix, translate[0], translate[1], 0.0);
+        }
         #[allow(clippy::cast_possible_truncation)]
         Ok(Self {
             matrix: core::array::from_fn(|index| matrix[index] as f32),
