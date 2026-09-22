@@ -2908,12 +2908,23 @@ fn place_symbols(
             // the shader offsets in.
             let bent = frame_projection == ProjectionMode::Globe;
             let to_plane_screen = project_with(&plane, 0.0);
+            // The size the *frame* evaluates, not the one the bucket was laid out at.
+            //
+            // mbgl opens `reprojectLineLabels` with
+            // `sizeBinder.evaluateForZoom(state.getZoom())` and steps the walk by what that
+            // answers. The layout size is a different number whenever the camera is not at the
+            // tile's own zoom -- a `text-size` curve over a z2 tile read at 2.8 lays out at 12
+            // and draws at 12.8 -- and stepping by the smaller one bunches a label's glyphs
+            // toward its middle while its anchor stays put. Measured on demotiles' "Tropic of
+            // Cancer" at z2.8: the first word sat 1.58 px right of the oracle's and the last
+            // 1.17 px left, with the label's own center within a tenth of a pixel.
+            let walked_text_size = layout.text_size.at_zoom(view.zoom).size;
             without_room = if bent {
                 held.symbols.write_line_positions(
                     &labels,
                     &to_plane_screen,
                     |point| point,
-                    layout.symbol.size,
+                    walked_text_size,
                     &mut buffers,
                 )
             } else {
@@ -2921,7 +2932,7 @@ fn place_symbols(
                     &labels,
                     |point| (point.0 * scale, point.1 * scale),
                     &to_screen,
-                    layout.symbol.size,
+                    walked_text_size,
                     &mut buffers,
                 )
             };
@@ -2962,11 +2973,12 @@ fn place_symbols(
                         })
                     })
                     .collect();
-                // The icon's own size, where the text half passes `text-size`. An icon's offset
-                // along its line is zero -- `icon_quad` writes no glyph offset, as mbgl's
-                // `PlacedSymbol` for an icon carries one of zero -- so this scales nothing here
-                // and is passed in the units the walk expects rather than left at the text's.
-                let icon_size = layout.icon_scale * tessella_glyph::text::ONE_EM;
+                // The icon's own binder, evaluated for this frame as the text's is. mbgl hands
+                // `reprojectLineLabels` whichever binder the half belongs to and reads it at the
+                // camera's zoom. An icon's offset along its line is zero -- `icon_quad` writes
+                // none, as mbgl's `PlacedSymbol` for an icon carries one of zero -- so this
+                // scales nothing today; it is the size the walk would need the moment one did.
+                let icon_size = layout.icon_size.at_zoom(view.zoom).size;
                 icon_without_room = if bent {
                     held.symbols.write_line_positions(
                         &walked,
