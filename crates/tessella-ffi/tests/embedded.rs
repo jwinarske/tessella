@@ -236,3 +236,55 @@ fn publishing_without_a_map_or_a_matrix_is_refused() {
         tessella_ffi::tessella_destroy(map);
     }
 }
+
+/// A consumer-camera map takes its camera from the strip, and a producer-camera one ignores it.
+///
+/// The assertion is that the map *moved*, not that the call returned Ok: publishing into a strip
+/// nothing reads returns Ok all day. The cover is what moves, so the tiles the map wants are the
+/// evidence -- London and Berlin do not want the same ones.
+#[test]
+fn a_consumer_camera_map_follows_what_was_published() {
+    let map = create();
+    let matrix = [0.0f64; 16];
+
+    // SAFETY: `map` is live for all of these, and `matrix` is sixteen readable doubles.
+    unsafe {
+        // Created over London, and still there after a tick.
+        assert_eq!(tessella_ffi::tessella_tick(map), Status::Ok);
+        let london = tessella_ffi::wanted_tiles_for_test(map);
+
+        // Berlin, published but not yet asked for: a producer-camera map reads nothing.
+        assert_eq!(
+            tessella_ffi::tessella_publish_camera(
+                map,
+                matrix.as_ptr(),
+                13.405,
+                52.52,
+                4.0,
+                0.0,
+                0.0
+            ),
+            Status::Ok
+        );
+        assert_eq!(tessella_ffi::tessella_tick(map), Status::Ok);
+        assert_eq!(
+            tessella_ffi::wanted_tiles_for_test(map),
+            london,
+            "a producer-camera map moved for a camera it does not own"
+        );
+
+        // Asked for, and now it follows.
+        assert_eq!(
+            tessella_ffi::tessella_set_camera_owner(map, tessella_ffi::CameraOwner::Consumer),
+            Status::Ok
+        );
+        assert_eq!(tessella_ffi::tessella_tick(map), Status::Ok);
+        assert_ne!(
+            tessella_ffi::wanted_tiles_for_test(map),
+            london,
+            "a consumer-camera map stayed where the producer left it"
+        );
+
+        tessella_ffi::tessella_destroy(map);
+    }
+}
