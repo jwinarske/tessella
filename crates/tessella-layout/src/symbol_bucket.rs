@@ -1192,15 +1192,33 @@ pub fn build_line_symbols<G: Glyphs + ?Sized>(
         };
 
         for (run, anchor) in anchors {
-            // Not next to another copy of the same name. Kept per name rather than per feature,
-            // which is the point: two halves of one street are two features and one name.
-            let seen = placed_text.entry(label.text.as_str()).or_default();
-            if seen.iter().any(|point| {
-                (point.0 - anchor.point.0).hypot(point.1 - anchor.point.1) < repeat_distance
-            }) {
-                continue;
+            // Not next to another copy of the same *name*, and only for a symbol that has one.
+            //
+            // mbgl gates the whole test on there being text at all:
+            //
+            // ```text
+            // if (!feature.formattedText ||
+            //     !anchorIsTooClose(feature.formattedText->rawText(), textRepeatDistance, anchor))
+            // ```
+            //
+            // Run unconditionally, every icon-only symbol in the layer keys on the same empty
+            // string, so the test stops asking "is this name already here" and starts asking "is
+            // any icon already here" -- across the whole layer, not one road. A oneway arrow then
+            // suppresses every other arrow within half the symbol spacing, including the ones on
+            // the next street over. Held against mbgl on the bright style at z15.5 that dropped
+            // 158 of 331 arrows, and none of the twenty-three symbol layers that carry text.
+            //
+            // Kept per name rather than per feature, which is the point for the ones that do have
+            // a name: two halves of one street are two features and one name.
+            if !label.text.is_empty() {
+                let seen = placed_text.entry(label.text.as_str()).or_default();
+                if seen.iter().any(|point| {
+                    (point.0 - anchor.point.0).hypot(point.1 - anchor.point.1) < repeat_distance
+                }) {
+                    continue;
+                }
+                seen.push(anchor.point);
             }
-            seen.push(anchor.point);
 
             let before = buffers.glyphs();
             for quad in &quads {
