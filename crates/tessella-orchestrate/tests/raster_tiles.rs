@@ -332,7 +332,14 @@ fn the_encoded_raster_binds_its_picture_to_both_samplers() {
     let picture = TextureId(17);
     let bucket = RasterBucket::whole_tile();
     let mut arena = SlabArena::default();
-    let encoded = encode_raster(&mut arena, GeometryId(2), &bucket, picture, None);
+    let encoded = encode_raster(
+        &mut arena,
+        GeometryId(2),
+        &bucket,
+        picture,
+        None,
+        tessella_capture_abi::envelope::TextureFilter::Linear,
+    );
 
     assert_eq!(encoded.record.builtin_shader, BuiltIn::RasterShader as i32);
     assert_eq!(encoded.record.vertex_count, 4);
@@ -351,6 +358,89 @@ fn the_encoded_raster_binds_its_picture_to_both_samplers() {
     assert!(
         bound.iter().all(|reference| reference.texture == picture),
         "the two samplers do not carry the same picture"
+    );
+}
+
+/// `raster-resampling` decides how the imagery is sampled, and the DEM under it is unaffected.
+///
+/// mbgl's `render_raster_layer.cpp` reads the property and picks `gfx::TextureFilterType::Nearest`
+/// or `Linear`. This build read nothing and always bound linear, so a style asking for nearest got
+/// a blurred picture -- and not slightly: magnified sixteen times over a checkerboard,
+/// `mbgl-render` puts 138 distinct colors on the frame under `linear` and two under `nearest`,
+/// with 240,640 of 262,144 pixels past the parity threshold.
+#[test]
+fn raster_resampling_chooses_the_imagery_sampler() {
+    use tessella_capture_abi::envelope::{
+        GeometryId, TextureFilter, TextureId, TextureRef, WireRecord,
+    };
+    use tessella_orchestrate::emit::{SlabArena, encode_raster};
+    use tessella_orchestrate::ubo::raster_filter;
+
+    let paint_of = |resampling: &str| {
+        let text = format!(
+            r#"{{"version":8,
+                "sources":{{"s":{{"type":"raster","tiles":["http://example.invalid/{{z}}/{{x}}/{{y}}.png"],"tileSize":256}}}},
+                "layers":[{{"id":"r","type":"raster","source":"s","paint":{{{resampling}}}}}]}}"#
+        );
+        let style = Style::parse(&text).expect("the style parses");
+        let layer = style.layer("r").expect("the layer").clone();
+        tessella_style::property::resolve_paint(&layer).expect("the paint resolves")
+    };
+
+    // The property decides the filter, and its absence is linear -- the spec's default, and what
+    // mbgl falls back to because it compares against `Nearest` alone.
+    assert_eq!(
+        raster_filter(&paint_of(r#""raster-resampling":"nearest""#), 13.0),
+        TextureFilter::Nearest
+    );
+    assert_eq!(
+        raster_filter(&paint_of(r#""raster-resampling":"linear""#), 13.0),
+        TextureFilter::Linear
+    );
+    assert_eq!(
+        raster_filter(&paint_of(r#""raster-opacity":1"#), 13.0),
+        TextureFilter::Linear,
+        "an absent raster-resampling is linear"
+    );
+
+    // And the encoder carries it to both imagery samplers while the elevation stays linear.
+    let picture = TextureId(17);
+    let elevation = TextureId(18);
+    let bucket = RasterBucket::whole_tile();
+    let mut arena = SlabArena::default();
+    let encoded = encode_raster(
+        &mut arena,
+        GeometryId(2),
+        &bucket,
+        picture,
+        Some(elevation),
+        TextureFilter::Nearest,
+    );
+
+    let size = core::mem::size_of::<TextureRef>();
+    let start = encoded.record.texture_refs.offset as usize;
+    let bound: Vec<TextureRef> = (0..encoded.record.texture_refs.count as usize)
+        .map(|index| {
+            TextureRef::from_bytes(&encoded.payload[start + index * size..]).expect("a ref")
+        })
+        .collect();
+
+    for reference in bound.iter().filter(|r| r.texture == picture) {
+        assert_eq!(
+            reference.filter,
+            TextureFilter::Nearest as u32,
+            "the imagery takes the layer's resampling, slot {}",
+            reference.slot
+        );
+    }
+    let dem = bound
+        .iter()
+        .find(|r| r.texture == elevation)
+        .expect("the elevation is bound");
+    assert_eq!(
+        dem.filter,
+        TextureFilter::Linear as u32,
+        "a DEM is a height field being interpolated, not a picture being magnified"
     );
 }
 
@@ -373,6 +463,7 @@ fn the_raster_attributes_share_one_interleaved_buffer() {
         &RasterBucket::whole_tile(),
         TextureId(1),
         None,
+        tessella_capture_abi::envelope::TextureFilter::Linear,
     );
 
     let attributes = encoded.attributes();
@@ -488,6 +579,7 @@ fn the_picture_reaches_the_ring_before_the_geometry_that_binds_it() {
         &RasterBucket::whole_tile(),
         picture,
         None,
+        tessella_capture_abi::envelope::TextureFilter::Linear,
     );
     emit::write(producer, &encoded).expect("writes");
 

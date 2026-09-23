@@ -445,6 +445,114 @@ fn a_raster_layer_carries_its_quad_and_its_picture() {
     );
 }
 
+/// `raster-resampling: nearest` survives the whole producer, not just the encoder.
+///
+/// The two halves of this -- reading the property and binding the filter -- are unit-tested in
+/// `raster_tiles.rs`. What is only testable here is that `frame.rs` composes them: a layer asking
+/// for nearest has to reach the ring as nearest, and the line that joins them is exactly the kind
+/// that reads as obviously correct and was missing entirely here.
+#[test]
+fn a_nearest_raster_layer_reaches_the_wire_nearest() {
+    use std::sync::Arc;
+    use tessella_capture_abi::envelope::{GeometryAdd, TextureFilter, WireRecord as _};
+    use tessella_orchestrate::tile::build_raster_tile;
+    use tessella_source::image::Image;
+
+    let filters_for = |resampling: &str| {
+        let text = format!(
+            r#"{{"version": 8,
+                "sources": {{"src": {{"type": "raster", "tiles": [], "tileSize": 512}}}},
+                "layers": [{{"id": "sat", "type": "raster", "source": "src",
+                             "paint": {{{resampling}}}}}]}}"#
+        );
+        let style = Style::parse(&text).expect("the style parses");
+        let picture = Arc::new(Image {
+            width: 2,
+            height: 2,
+            pixels: vec![
+                255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 255, 255, 255, 255,
+            ],
+        });
+
+        let view = view();
+        let tiles = cover::cover(&view).expect("covers");
+        let mut buckets = Vec::new();
+        for tile in &tiles {
+            let built = build_raster_tile(
+                &style,
+                "src",
+                Arc::clone(&picture),
+                &[tessella_tile::mask::WHOLE_TILE],
+            )
+            .expect("the raster tile builds");
+            buckets.push((TileId::new(tile.z, tile.x, tile.y), Arc::new(built)));
+        }
+
+        let mut ring = Ring::new(1 << 22);
+        let (producer, consumer) = ring.split();
+        let mut arena = SlabArena::new();
+        frame::emit(
+            producer,
+            &mut arena,
+            &Frame {
+                projection: ProjectionMode::Mercator,
+                style: &style,
+                view: &view,
+                view_id: ViewId(0),
+                tiles: &tiles,
+                buckets: &buckets,
+                origins: &[],
+                light: &Light::default(),
+                fonts: None,
+                patterns: None,
+            },
+        )
+        .expect("the frame emits");
+
+        let mut filters: Vec<u32> = Vec::new();
+        while let Some(record) = consumer.peek() {
+            if record.kind == EnvelopeKind::GeometryAdd
+                && let Some(add) = GeometryAdd::from_bytes(record.record)
+                && add.builtin_shader == tessella_capture_abi::BuiltIn::RasterShader as i32
+            {
+                filters.extend(read_texture_filters(record.payload, add));
+            }
+            let consumed = record.consumed();
+            consumer.advance(consumed);
+        }
+        filters
+    };
+
+    let nearest = filters_for(r#""raster-resampling": "nearest""#);
+    assert!(!nearest.is_empty(), "no raster geometry was announced");
+    assert!(
+        nearest.iter().all(|&f| f == TextureFilter::Nearest as u32),
+        "a nearest layer bound {nearest:?}"
+    );
+
+    let linear = filters_for(r#""raster-opacity": 1"#);
+    assert_eq!(linear.len(), nearest.len(), "the same drawables either way");
+    assert!(
+        linear.iter().all(|&f| f == TextureFilter::Linear as u32),
+        "an absent raster-resampling should stay linear, bound {linear:?}"
+    );
+}
+
+/// The samplers a geometry's texture references ask for.
+fn read_texture_filters(
+    payload: &[u8],
+    add: tessella_capture_abi::envelope::GeometryAdd,
+) -> Vec<u32> {
+    use tessella_capture_abi::envelope::{TextureRef, WireRecord as _};
+
+    let size = core::mem::size_of::<TextureRef>();
+    let start = add.texture_refs.offset as usize;
+    (0..add.texture_refs.count as usize)
+        .filter_map(|index| TextureRef::from_bytes(&payload[start + index * size..]))
+        .map(|reference| reference.filter)
+        .collect()
+}
+
 /// The texture ids a geometry names.
 fn read_texture_refs(payload: &[u8], add: tessella_capture_abi::envelope::GeometryAdd) -> Vec<u64> {
     use tessella_capture_abi::envelope::{TextureRef, WireRecord as _};

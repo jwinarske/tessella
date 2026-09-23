@@ -27,7 +27,7 @@ use alloc::vec::Vec;
 
 use tessella_capture_abi::EnvelopeKind;
 use tessella_capture_abi::ProjectionMode;
-use tessella_capture_abi::envelope::{Span, UboUpdate, ViewId, WireRecord};
+use tessella_capture_abi::envelope::{Span, TextureFilter, UboUpdate, ViewId, WireRecord};
 use tessella_capture_abi::generated::ubo_layouts;
 use tessella_capture_abi::generated::ubo_slots;
 use tessella_capture_abi::globe_ubo::GlobeBendUbo;
@@ -2965,6 +2965,33 @@ pub fn pack_location_indicator_drawable_buffer(
         }
     }
     out
+}
+
+/// How a raster layer's imagery is sampled, from `raster-resampling`.
+///
+/// mbgl's `render_raster_layer.cpp` makes the same read:
+///
+/// ```cpp
+/// const bool nearest = evaluated.get<RasterResampling>() == RasterResamplingType::Nearest;
+/// const auto filter = nearest ? gfx::TextureFilterType::Nearest : gfx::TextureFilterType::Linear;
+/// ```
+///
+/// Not a subtlety. Magnified sixteen times over a checkerboard, `mbgl-render` puts 138 distinct
+/// colors on the frame under `linear` and two under `nearest`, and 240,640 of 262,144 pixels
+/// differ by more than the parity threshold -- 92% of the frame.
+///
+/// Anything other than `nearest`, the absent property included, is linear: that is the spec's
+/// default and mbgl's comparison is against `Nearest` alone.
+#[must_use]
+pub fn raster_filter(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    zoom: f64,
+) -> TextureFilter {
+    if uniform_enum(paint, "raster-resampling", zoom) == "nearest" {
+        TextureFilter::Nearest
+    } else {
+        TextureFilter::Linear
+    }
 }
 
 /// Packs `RasterEvaluatedPropsUBO`.

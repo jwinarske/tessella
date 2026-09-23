@@ -2998,6 +2998,7 @@ pub fn encode_raster(
     bucket: &RasterBucket,
     image: TextureId,
     elevation: Option<TextureId>,
+    filter: TextureFilter,
 ) -> Encoded {
     let (interleaved, indexes) = alloc_raster(arena, bucket);
 
@@ -3054,11 +3055,10 @@ pub fn encode_raster(
         }],
     );
     let texture_refs = push_span(&mut payload, &{
-        let mut refs = texture_refs(
-            BuiltIn::RasterShader,
-            &[image, image],
-            TextureFilter::Linear,
-        );
+        // The imagery takes the layer's `raster-resampling`; the elevation under it does not.
+        // A DEM is a height field being interpolated, not a picture being magnified, and mbgl
+        // samples it linearly whatever the raster layer above asks for.
+        let mut refs = texture_refs(BuiltIn::RasterShader, &[image, image], filter);
         if let Some(elevation) = elevation {
             refs.push(TextureRef {
                 texture: elevation,
