@@ -25,6 +25,7 @@ maplibre-native build. Regenerating them needs both.
 | `symbol_lines_style.dump` | `crates/tessella-style/tests/symbol_lines_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `relief_style.dump` | `crates/tessella-style/tests/relief_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `extrusion_style.dump` | `crates/tessella-style/tests/extrusion_style.json` | 51.505, -0.11 @ z13, 1024x768 |
+| `circle_style.dump` | `crates/tessella-style/tests/circle_style.json` | 51.505, -0.11 @ z13, **pitch 60**, 1024x768 |
 
 ### The one that needed the backend extended to exist
 
@@ -414,13 +415,18 @@ sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/relief_style
 # same-wound one through `fixupPolygons` and this build does not, which is tessella#255.
 ./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/extrusion_style.json \
     --dump=<tessella>/tests/golden/extrusion_style.dump
+
+# The circle capture. Pitched, because circle-pitch-alignment and circle-pitch-scale coincide at
+# pitch zero and the fixture exists to separate them. Inline GeoJSON, no substitution, no elision.
+./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/circle_style.json \
+    --pitch=60 --dump=<tessella>/tests/golden/circle_style.dump
 ```
 
-`extrusion_style.dump` is the one capture not taken at `ecdaf2588a0b`: it was taken at
-`ad5e73527f3a`, further along the same branch. Re-capturing `joins_style.dump` there differs from
+`extrusion_style.dump` and `circle_style.dump` are the captures not taken at `ecdaf2588a0b`:
+they were taken at `ad5e73527f3a`, further along the same branch. Re-capturing `joins_style.dump` there differs from
 the committed one on ten lines, all of them a `slot=0 tex=` id reading 62 where the dump says 64 —
-a texture-allocation counter, with every vertex count, index count and shader id unchanged. The
-extrusion capture has no `tex=` line at all, so nothing it records can depend on the difference.
+a texture-allocation counter, with every vertex count, index count and shader id unchanged. Neither the extrusion
+nor the circle capture has a `tex=` line at all, so nothing it records can depend on the difference.
 That was checked rather than assumed, because the alternative — moving a shared checkout's HEAD —
 disturbs whatever else is building against it.
 
