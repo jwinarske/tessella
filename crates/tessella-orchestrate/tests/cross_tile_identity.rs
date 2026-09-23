@@ -148,6 +148,7 @@ fn emit(
         layouts,
         placement,
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &scene.style,
             view: &scene.view,

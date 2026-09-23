@@ -115,6 +115,7 @@ fn frame_stream() -> (BTreeMap<u64, Binding>, Vec<OrderEntry>) {
         producer,
         &mut arena,
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,

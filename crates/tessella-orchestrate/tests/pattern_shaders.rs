@@ -69,6 +69,7 @@ fn emit_with(sprites: Option<&Patterns<'_>>) -> (BTreeMap<i32, usize>, u32) {
         producer,
         &mut arena,
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
@@ -241,6 +242,7 @@ fn the_atlas_is_uploaded_and_the_placements_are_written() {
         producer,
         &mut arena,
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
@@ -400,6 +402,7 @@ fn an_extrusion_pattern_binds_its_own_shader() {
         producer,
         &mut arena,
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,

@@ -86,6 +86,7 @@ pub fn emit_frame() -> (Vec<u8>, Vec<u8>, frame::Emitted) {
         &mut producer,
         &mut arena,
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,

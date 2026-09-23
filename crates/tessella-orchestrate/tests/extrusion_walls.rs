@@ -208,6 +208,7 @@ mod through_a_frame {
             producer,
             &mut arena,
             &Frame {
+                published_projection: None,
                 projection: ProjectionMode::Mercator,
                 style: &style,
                 view: &view,

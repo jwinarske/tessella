@@ -309,6 +309,7 @@ mod against_a_ring {
                 &mut frame::SymbolCache::default(),
                 &mut frame::PlacementState::new(),
                 &Frame {
+                    published_projection: None,
                     projection: ProjectionMode::Mercator,
                     style: &scene.style,
                     view: &scene.view,

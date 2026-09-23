@@ -100,6 +100,7 @@ fn a_frame_that_will_not_fit_leaves_nothing_behind() {
         &mut producer,
         &mut arena,
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
@@ -151,6 +152,7 @@ fn the_retry_after_a_full_ring_is_a_whole_frame() {
             producer,
             arena,
             &Frame {
+                published_projection: None,
                 projection: ProjectionMode::Mercator,
                 style: &style,
                 view: &view,

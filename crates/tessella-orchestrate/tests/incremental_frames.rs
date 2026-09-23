@@ -117,6 +117,7 @@ fn emit_frame_for(
         &mut frame::SymbolCache::default(),
         &mut frame::PlacementState::new(),
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &scene.style,
             view: &scene.view,
@@ -285,6 +286,7 @@ fn a_failed_frame_retires_nothing_and_announces_nothing() {
     let light = Light::default();
     fn frame_of<'a>(scene: &'a Scene, light: &'a Light) -> Frame<'a> {
         Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &scene.style,
             view: &scene.view,
@@ -517,6 +519,7 @@ fn a_frame_touches_only_its_own_view() {
                 &mut frame::SymbolCache::default(),
                 &mut frame::PlacementState::new(),
                 &Frame {
+                    published_projection: None,
                     projection: ProjectionMode::Mercator,
                     style: &scene.style,
                     view: &scene.view,
@@ -646,6 +649,7 @@ fn a_parked_view_writes_no_bytes_at_all() {
     let mut session = Session::new();
     let light = Light::default();
     let frame = Frame {
+        published_projection: None,
         projection: ProjectionMode::Mercator,
         style: &scene.style,
         view: &scene.view,
@@ -796,6 +800,7 @@ mod teardown {
 
     fn frame_of<'a>(scene: &'a Scene, view: ViewId, light: &'a Light) -> Frame<'a> {
         Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &scene.style,
             view: &scene.view,
@@ -1016,6 +1021,7 @@ mod under_fault {
             &mut frame::SymbolCache::default(),
             &mut frame::PlacementState::new(),
             &Frame {
+                published_projection: None,
                 projection: ProjectionMode::Mercator,
                 style: &scene.style,
                 view: &scene.view,

@@ -151,6 +151,12 @@ pub struct Frame<'a> {
     /// Beside the camera rather than on it: what the tiles are drawn on is not something a
     /// camera knows, which is the same argument `Map::copies` is held under.
     pub projection: ProjectionMode,
+    /// The consumer's own view-projection, for a view whose camera it owns (DR-9).
+    ///
+    /// Beside `projection` for the same reason that is beside the camera: what a frame is drawn
+    /// through is not something a map camera knows. `None` is a producer-camera view, which is
+    /// every view that has not been handed over, and places its labels exactly as it did.
+    pub published_projection: Option<[f64; 16]>,
     /// Which view this is.
     pub view_id: ViewId,
     /// The cover, for the clip masks.
@@ -961,6 +967,8 @@ fn emit_group(
     // whether it did.
     let opened_at = producer.head();
     let Frame {
+        // Read at the call below, beside `frame.projection`, rather than bound here.
+        published_projection: _,
         projection,
         style,
         view,
@@ -1733,6 +1741,7 @@ fn emit_group(
         style,
         view,
         frame.projection,
+        frame.published_projection.as_ref(),
         &placement,
     );
 
@@ -2578,6 +2587,7 @@ fn place_symbols(
     style: &tessella_style::Style,
     view: &ViewTransform,
     frame_projection: ProjectionMode,
+    published_projection: Option<&[f64; 16]>,
     placement: &core::cell::RefCell<&mut PlacementState>,
 ) -> BTreeMap<(usize, usize), PreparedSymbols> {
     let empty;
@@ -2696,7 +2706,14 @@ fn place_symbols(
         let to_clip = if frame_projection == ProjectionMode::Globe {
             tessella_tile::globe::anchored_matrix(view, tile.z, tile.x, tile.y, wrap)
         } else {
-            match tessella_tile::camera::tile_to_clip(view, tile.z, tile.x, tile.y, wrap) {
+            match tessella_tile::camera::tile_to_clip_through(
+                view,
+                tile.z,
+                tile.x,
+                tile.y,
+                wrap,
+                published_projection,
+            ) {
                 Ok(matrix) => matrix,
                 Err(_) => continue,
             }

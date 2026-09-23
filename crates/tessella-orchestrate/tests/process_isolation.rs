@@ -310,6 +310,7 @@ fn a_consumer_in_another_process_reads_a_live_stream() {
                 &mut frame::SymbolCache::default(),
                 &mut frame::PlacementState::new(),
                 &Frame {
+                    published_projection: None,
                     projection: ProjectionMode::Mercator,
                     style: &scene.style,
                     view: &scene.view,
@@ -400,6 +401,7 @@ fn a_ring_too_small_for_a_frame_never_becomes_writable() {
                 &mut frame::SymbolCache::default(),
                 &mut frame::PlacementState::new(),
                 &Frame {
+                    published_projection: None,
                     projection: ProjectionMode::Mercator,
                     style: &scene.style,
                     view: &scene.view,

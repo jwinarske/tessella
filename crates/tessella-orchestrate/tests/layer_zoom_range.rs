@@ -100,6 +100,7 @@ fn drawn_at(zoom: f64) -> BTreeSet<u32> {
         producer,
         &mut arena,
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,

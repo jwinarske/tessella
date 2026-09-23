@@ -64,6 +64,7 @@ fn emit_at(longitude: f64) -> (Vec<u64>, Vec<String>) {
         producer,
         &mut arena,
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
@@ -179,6 +180,7 @@ fn nothing_is_released_because_nothing_is_retained() {
         producer,
         &mut arena,
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
@@ -261,6 +263,7 @@ fn a_wrapped_tile_is_not_its_own_copy() {
         producer,
         &mut arena,
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
