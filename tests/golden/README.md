@@ -23,6 +23,7 @@ maplibre-native build. Regenerating them needs both.
 | `heatmap_style.dump` | `crates/tessella-style/tests/heatmap_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `joins_style.dump` | `crates/tessella-style/tests/joins_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `symbol_lines_style.dump` | `crates/tessella-style/tests/symbol_lines_style.json` | 51.505, -0.11 @ z13, 1024x768 |
+| `relief_style.dump` | `crates/tessella-style/tests/relief_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 
 ### The one that needed the backend extended to exist
 
@@ -97,6 +98,35 @@ the change moved no line in any of them.
 Neither hides the churn, which is a finding rather than noise — it is per-frame drawable
 creation and a per-frame texture upload for a layer whose ramp never changes, and this build
 should not copy it.
+
+### The one that covers the raster-dem family, and the divergence it found
+
+`relief_style.dump` is one synthetic DEM tile under a `color-relief` and a `hillshade`. The
+raster-dem family had no dump coverage at all before it, and its whole surface is textures and an
+offscreen pass — the part of the stream pixels report on worst, since a border filled wrongly or a
+ramp table a row short shades slightly differently everywhere and identifiably nowhere.
+
+What the capture carries is not drawables. Each layer draws a single quad. It is:
+
+    textures 5
+    texture 5x1 fmt=0 hash=3baf2439cead5d54
+    texture 5x1 fmt=0 hash=cbf29ce484222325
+    texture 258x258 fmt=0 hash=7bc2afdc5ce1fbec
+    rendertargets 2
+    rendertarget 256x256 ct=0
+
+The two `5x1` rows are the ramp's five stops, elevations in one and colors in the other, and this
+build carries them the same way.
+
+**The `258x258` is a divergence, and it is deliberate.** mbgl uploads the *bordered DEM* and
+differentiates it in an offscreen prepare pass — hence two 256x256 render targets per hillshade
+tile. This build differentiates on the CPU: `Dem::prepare` returns the finished slope field at
+the tile's own size, so the texture that reaches the stream is 256x256 and there is no prepare
+pass at all. Both store the border; only one uploads it.
+
+The fixture DEM is `tests/dem-fixtures/8-127-85.png`, a 256-pixel Mapbox-encoded tile generated
+from a closed form — a dome, a ridge and a valley over 14 to 595 m, so slope and aspect both vary.
+One z8 tile is the whole z13 cover of this camera.
 
 ### The one that covers line placement and the icon half
 
@@ -372,6 +402,11 @@ sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/symbol_lines
     > /tmp/symbol_lines.json
 ./mbgl-capture-probe file:///tmp/symbol_lines.json \
     --dump=<tessella>/tests/golden/symbol_lines_style.dump
+
+# The relief capture. Names a DEM tile by path, so it needs the substitution too.
+sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/relief_style.json \
+    > /tmp/relief.json
+./mbgl-capture-probe file:///tmp/relief.json --dump=<tessella>/tests/golden/relief_style.dump
 ```
 
 Produced by `mbgl-capture-probe` at maplibre-native `ecdaf2588a0b`, on the
