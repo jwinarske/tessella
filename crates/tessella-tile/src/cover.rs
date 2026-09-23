@@ -168,13 +168,32 @@ pub fn cover_on(
     copies: WorldCopies,
     surface: crate::store::Surface,
 ) -> Result<Vec<TileCoord>, CoverError> {
+    cover_on_through(view, z, copies, surface, None)
+}
+
+/// [`cover_on`], through a projection the caller supplies rather than one derived from `view`.
+///
+/// `None` is [`cover_on`]. `Some` is a consumer-camera view (DR-9), whose frustum is the
+/// consumer's own; the globe's cover is unaffected, since it asks a spherical-cap question the
+/// frustum does not answer.
+///
+/// # Errors
+///
+/// As [`cover_on`].
+pub fn cover_on_through(
+    view: &ViewTransform,
+    z: u8,
+    copies: WorldCopies,
+    surface: crate::store::Surface,
+    published: Option<&[f64; 16]>,
+) -> Result<Vec<TileCoord>, CoverError> {
     match surface {
         // Terrain covers the plane's tiles: raising the ground moves geometry in z and does not
         // change which ground is under the camera. What it *does* change is how much of that
         // ground is visible past a ridge, which is a horizon question the cover does not ask on a
         // plane either -- see the note on `cover_at_with` about the frustum being the bound.
         crate::store::Surface::Plane | crate::store::Surface::Terrain { .. } => {
-            cover_at_with(view, z, copies)
+            Ok(fold_copies(cover_at_through(view, z, published)?, copies))
         }
         // A globe folds by construction rather than by policy: every wrap of a tile bends to the
         // same patch, so the walk cannot produce a second copy to fold.
@@ -412,8 +431,19 @@ pub fn fold_copies(tiles: Vec<TileCoord>, copies: WorldCopies) -> Vec<TileCoord>
 /// mbgl's `tileLodPitchThreshold`, `(60.0 / 180.0) * pi`, compared with `>` as mbgl compares it.
 const LOD_PITCH_THRESHOLD: f64 = core::f64::consts::PI / 3.0;
 
-fn pitched_cover(view: &ViewTransform, z: u8) -> Result<Vec<TileCoord>, CoverError> {
-    let projection = camera::proj_matrix(view).map_err(|_| CoverError::Pitched)?;
+fn pitched_cover(
+    view: &ViewTransform,
+    z: u8,
+    published: Option<&[f64; 16]>,
+) -> Result<Vec<TileCoord>, CoverError> {
+    // A view whose camera the consumer owns is covered through the consumer's own projection
+    // (DR-9): the frustum is what says which tiles are on screen, and deriving one from the map
+    // camera would answer for a camera the consumer does not have. The center below still comes
+    // from the map camera, which is the half that says which data at what scale.
+    let projection = match published {
+        Some(matrix) => *matrix,
+        None => camera::proj_matrix(view).map_err(|_| CoverError::Pitched)?,
+    };
     let world_size = camera::world_size(view.zoom);
     let frustum = frustum::Frustum::from_projection(&projection, world_size, f64::from(z))
         .ok_or(CoverError::Pitched)?;
@@ -472,8 +502,24 @@ const WORLD_COPIES: i32 = 3;
 /// [`CoverError::Pitched`] when the view has pitch, and [`CoverError::TooLarge`] when the level
 /// asked for needs more than [`MAX_TILES`].
 pub fn cover_at(view: &ViewTransform, z: u8) -> Result<Vec<TileCoord>, CoverError> {
+    cover_at_through(view, z, None)
+}
+
+/// [`cover_at`], through a projection the caller supplies rather than one derived from `view`.
+///
+/// `None` is [`cover_at`]. `Some` is a consumer-camera view (DR-9), where the matrix is the
+/// consumer's and the map camera is what this derived from it.
+///
+/// # Errors
+///
+/// As [`cover_at`].
+pub fn cover_at_through(
+    view: &ViewTransform,
+    z: u8,
+    published: Option<&[f64; 16]>,
+) -> Result<Vec<TileCoord>, CoverError> {
     if view.pitch.abs() > f64::EPSILON {
-        return pitched_cover(view, z.min(MAX_ZOOM));
+        return pitched_cover(view, z.min(MAX_ZOOM), published);
     }
 
     let z = z.min(MAX_ZOOM);

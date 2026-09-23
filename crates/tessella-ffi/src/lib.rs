@@ -1286,6 +1286,14 @@ pub unsafe extern "C" fn tessella_tick(map: MapHandle) -> Status {
                     pitch: camera.pitch,
                     ..*state.map.view()
                 })));
+            // And the matrix the consumer drew with, which is what the cover's frustum is built
+            // from while this map is theirs. The camera above says which data at what scale; this
+            // says where it lands. Both come from the one read, so they are one frame's answer.
+            state.map.see_through(Some(camera.view_projection));
+        } else if state.camera_mode == CameraMode::Producer {
+            // Handed back, so a map returned to the producer covers through its own projection
+            // rather than through whatever was last published to it.
+            state.map.see_through(None);
         }
 
         // Anything landed since the last frame makes this one worth drawing.
