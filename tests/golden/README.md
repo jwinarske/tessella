@@ -430,6 +430,30 @@ nor the circle capture has a `tex=` line at all, so nothing it records can depen
 That was checked rather than assumed, because the alternative — moving a shared checkout's HEAD —
 disturbs whatever else is building against it.
 
+### `extrusion_style.dump` is not byte-reproducible, and the test does not need it to be
+
+The paragraph below says byte-identical across six consecutive runs. That holds for every capture
+here except the extrusion one, which this note corrects: it was asserted for it without being
+checked.
+
+Extrusion is the only family that emits **two drawables per layer per tile** — a depth pass in
+front of a color pass for any translucent layer — and their order is not pinned. Between two runs
+the `#00` and `#01` drawables swap their `flags=` field, 160 lines of it:
+
+```text
+< drawable L00002…v00000019#00 pass=2 vtype=9 flags=1111 idx=30:ce4296272f558221 segs=1
+> drawable L00002…v00000019#00 pass=2 vtype=9 flags=1010 idx=30:ce4296272f558221 segs=1
+```
+
+Nothing else moves: the two passes draw the same geometry, so every vertex count, index count,
+shader id and buffer hash is identical. `extrusion_geometry.rs` reads only layer, tile, vertex
+count and `idx=`, and hashing just those fields over the committed dump and two fresh captures
+gives one answer three times. So the test is immune and the file is not, which is why the file is
+committed as one run of many rather than as the run.
+
+`circle_style.dump` was checked the same way and *is* byte-identical across runs, and matches the
+committed file.
+
 Produced by `mbgl-capture-probe` at maplibre-native `ecdaf2588a0b`, on the
 `capture-backend-phase0` branch whose base commit `b237943` plan.md pins. Byte-identical
 across six consecutive runs; if a regeneration produces a diff on unrelated lines, that is a
