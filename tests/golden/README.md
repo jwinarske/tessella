@@ -22,6 +22,7 @@ maplibre-native build. Regenerating them needs both.
 | `image_text_style.dump` | `crates/tessella-style/tests/image_text_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `heatmap_style.dump` | `crates/tessella-style/tests/heatmap_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `joins_style.dump` | `crates/tessella-style/tests/joins_style.json` | 51.505, -0.11 @ z13, 1024x768 |
+| `symbol_lines_style.dump` | `crates/tessella-style/tests/symbol_lines_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 
 ### The one that needed the backend extended to exist
 
@@ -96,6 +97,26 @@ the change moved no line in any of them.
 Neither hides the churn, which is a finding rather than noise — it is per-frame drawable
 creation and a per-frame texture upload for a layer whose ramp never changes, and this build
 should not copy it.
+
+### The one that covers line placement and the icon half
+
+`symbol_lines_style.dump` exists for the same reason the join capture does: the five symbol
+goldens before it are all point-placed text. None sets `symbol-placement`, none sets
+`icon-image`, and none carries a `*-translate` — so line placement, the icon half and the anchor
+walk had no byte-level test.
+
+Three of the defects pixels found in one week lived in that gap. Two of them move the counts
+here; the third does not, and the difference is worth stating. A repeat-distance guard that
+thinned icon-only symbols takes `line-icon` from 96 vertices to 32, because the three roads are
+deliberately a hair apart and every icon-only symbol keys on the same empty string. A walk
+stepped by the layout's text size instead of the camera's moves **nothing** — those positions go
+into the per-frame dynamic buffer, which the frame writes and the bucket does not, so no capture
+of bucket geometry can see it.
+
+The icon's size is load-bearing and the fixture reads it from the sheet. `get_anchors` takes the
+icon's extent along with the label's, so how many anchors fit on a road depends on how wide the
+sprite is: a made-up 18-pixel icon in place of the fixture's 21-pixel `oneway_road` puts ten
+icons on a tile where the oracle puts nine.
 
 ### The one that covers the join generator
 
@@ -344,6 +365,13 @@ python3 <tessella>/tools/mbgl-codegen/oracles/elide_heatmap_ramp.py \
 # The join capture. Inline GeoJSON, no substitution and no elision -- what it records is counts.
 ./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/joins_style.json \
     --dump=<tessella>/tests/golden/joins_style.dump
+
+# The line-placement capture. Names a font and a sprite sheet, so it needs the substitution the
+# symbol captures need; no elision, since what it records is counts rather than atlas order.
+sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/symbol_lines_style.json \
+    > /tmp/symbol_lines.json
+./mbgl-capture-probe file:///tmp/symbol_lines.json \
+    --dump=<tessella>/tests/golden/symbol_lines_style.dump
 ```
 
 Produced by `mbgl-capture-probe` at maplibre-native `ecdaf2588a0b`, on the
