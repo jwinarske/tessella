@@ -3908,6 +3908,7 @@ fn encode_parts(
             &raster.bucket,
             textures.raster,
             raised.then_some(textures.terrain),
+            ubo::raster_filter(&bucket.paint, zoom),
         )),
         // The raster encoder over the slope field: same quad, same attributes, a different
         // shader and a different texture. mbgl's `HillshadeBucket` shares `RasterBucket`'s mask
