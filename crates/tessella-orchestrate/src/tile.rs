@@ -52,7 +52,7 @@ use tessella_source::clip::{
 };
 use tessella_source::geojson::{GeoJsonFeature, Geometry};
 use tessella_source::tiling::{EXTENT, TilingOptions};
-use tessella_style::property::{ResolvedProperty, paint_specs, resolve_paint};
+use tessella_style::property::{ResolvedProperty, paint_specs, resolve_layout, resolve_paint};
 use tessella_style::{Filter, LayerKind, Style};
 use tessella_tile::cover::ViewTransform;
 use tessella_tile::projection;
@@ -421,6 +421,131 @@ pub trait PatternLookup {
     ) -> Option<([u16; 4], [u16; 4])>;
 }
 
+/// The layout property that reorders a layer's features, for the kinds that have one.
+///
+/// `fill-extrusion` shares the fill arm below and is deliberately absent: mbgl declares no
+/// `fill-extrusion-sort-key`, so an extrusion keeps source order whatever the fill beside it does.
+/// Symbol's is absent too, and for a different reason -- `symbol-sort-key` orders *placement*
+/// rather than the vertex buffer, and `SymbolLayout` already applies it.
+const fn sort_key_property(kind: &LayerKind) -> Option<&'static str> {
+    match kind {
+        LayerKind::Fill => Some("fill-sort-key"),
+        LayerKind::Line => Some("line-sort-key"),
+        LayerKind::Circle => Some("circle-sort-key"),
+        _ => None,
+    }
+}
+
+/// One feature's sort key, defaulting the way the paint binder defaults.
+///
+/// A feature whose key does not evaluate sorts as zero, which is the property's own default:
+/// one feature's bad expression takes that feature's default, not the tile's life.
+fn sort_key_of(
+    property: &ResolvedProperty,
+    feature: &dyn tessella_style::expression::Feature,
+    zoom: f64,
+) -> f64 {
+    property
+        .expression
+        .evaluate(Some(zoom), Some(feature))
+        .ok()
+        .and_then(|value| value.as_number())
+        .unwrap_or(0.0)
+}
+
+/// Feature indices in the order a layer lays them out, or `None` when it names no sort key.
+///
+/// `key_at` reads one feature's key, which is what lets the same rule serve a GeoJSON slice and
+/// a vector tile's indexed layer without either of them collecting.
+///
+/// # Why the vertex buffer and not the draw
+///
+/// mbgl permutes the features at layout time rather than sorting segments at draw time -- once
+/// per tile instead of once per frame. Checked rather than assumed: `--dump-vertices` shows the
+/// buffer itself permuted, the same coordinates in the other order.
+///
+/// ```text
+/// no key:   (2206,10240) (2206,9612) ...  <- feature 0, sort key 10
+///           (3698,9013)  (3698,7815) ...  <- feature 1, sort key 1
+/// with key: (3698,9013)  (3698,7815) ...  <- the lower key lays out first
+///           (2206,10240) (2206,9612) ...
+/// ```
+///
+/// Ascending, so the highest key is laid out last and draws on top. Stable, so equal keys keep
+/// the order the source gave them.
+///
+/// # Why `None` rather than the identity permutation
+///
+/// It is the common path -- almost no layer names a sort key -- and returning indices for it
+/// would allocate a `usize` per feature per layer per tile, which on a 130-layer style is
+/// megabytes of permutation that says nothing. A style that does not ask pays nothing.
+///
+/// # Errors
+///
+/// [`TileError::Property`] when the layer's layout properties do not resolve.
+fn layout_order(
+    layer: &tessella_style::Layer,
+    count: usize,
+    key_at: impl Fn(&ResolvedProperty, usize) -> f64,
+) -> Result<Option<Vec<usize>>, TileError> {
+    let Some(name) = sort_key_property(&layer.kind) else {
+        return Ok(None);
+    };
+    // Only when the style asks for it. Every property resolves to a default, and sorting by a
+    // constant is a permutation nobody wanted -- it would still be stable, but it would cost.
+    if !layer.layout.contains_key(name) {
+        return Ok(None);
+    }
+
+    let layout = resolve_layout(layer).map_err(|source| TileError::Property {
+        layer: layer.id.clone(),
+        source,
+    })?;
+    let Some(property) = layout.get(name) else {
+        return Ok(None);
+    };
+
+    let mut keyed: Vec<(f64, usize)> = (0..count)
+        .map(|index| (key_at(property, index), index))
+        .collect();
+    // `sort_by` is stable, which is the half of mbgl's behavior that ties depend on.
+    // `total_cmp` rather than `partial_cmp`, because a key that evaluates to NaN must still
+    // order rather than panic.
+    keyed.sort_by(|left, right| left.0.total_cmp(&right.0));
+
+    Ok(Some(keyed.into_iter().map(|(_, index)| index).collect()))
+}
+
+/// The indices a layer walks its features by: all of them, or a permutation.
+///
+/// Two shapes so the unsorted path stays a plain walk -- a sort key is rare and should not cost
+/// an indirection on every feature of every other layer.
+enum Walk<'a> {
+    /// Source order, which is what almost every layer takes.
+    Declared(core::ops::Range<usize>),
+    /// A permutation from [`layout_order`].
+    Permuted(core::slice::Iter<'a, usize>),
+}
+
+impl Iterator for Walk<'_> {
+    type Item = usize;
+
+    fn next(&mut self) -> Option<usize> {
+        match self {
+            Self::Declared(range) => range.next(),
+            Self::Permuted(order) => order.next().copied(),
+        }
+    }
+}
+
+/// Walks `count` features in `order`, or in source order when there is none.
+fn walk(count: usize, order: Option<&Vec<usize>>) -> Walk<'_> {
+    match order {
+        Some(order) => Walk::Permuted(order.iter()),
+        None => Walk::Declared(0..count),
+    }
+}
+
 /// Builds every implemented layer's contribution to one tile.
 ///
 /// Layers of a kind this build does not implement are skipped, keeping their index. Layers that
@@ -517,6 +642,12 @@ pub fn build_tile_on_with_patterns(
         let mut binder =
             PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint, bucket_zoom);
         let mut pattern_vertices = PatternVertices::default();
+
+        // Once per layer, before the world-copy walk below: the order is a property of the
+        // layer and its features, not of which copy of the world they land in.
+        let order = layout_order(layer, features.len(), |property, index| {
+            sort_key_of(property, &features[index], bucket_zoom)
+        })?;
 
         let content = match layer.kind {
             // A raster layer over a *feature* source draws nothing, and that is not a silent
@@ -633,7 +764,7 @@ pub fn build_tile_on_with_patterns(
                 let mut kept: Vec<&GeoJsonFeature> = Vec::new();
                 for shift in WORLD_COPIES {
                     let offset = world_offset(tile, shift);
-                    for feature in features {
+                    for feature in walk(features.len(), order.as_ref()).map(|i| &features[i]) {
                         if !copy_reaches(feature, tile, shift, lo, hi) {
                             continue;
                         }
@@ -745,7 +876,7 @@ pub fn build_tile_on_with_patterns(
                         let at = projection::tile_local(p[0], p[1], tile.z, tile.x, tile.y);
                         [at[0] + offset, at[1]]
                     };
-                    for feature in features {
+                    for feature in walk(features.len(), order.as_ref()).map(|i| &features[i]) {
                         if !copy_reaches(feature, tile, shift, lo, hi) {
                             continue;
                         }
@@ -874,7 +1005,7 @@ pub fn build_tile_on_with_patterns(
                 let mut bucket = CircleBucket::default();
                 for shift in WORLD_COPIES {
                     let offset = world_offset(tile, shift);
-                    for feature in features {
+                    for feature in walk(features.len(), order.as_ref()).map(|i| &features[i]) {
                         if !copy_reaches(feature, tile, shift, lo, hi) {
                             continue;
                         }
@@ -1992,7 +2123,16 @@ pub fn build_mvt_tile_on_with_patterns(
                 let mut per_feature: Vec<Vec<Ring>> = Vec::new();
                 let mut kept: Vec<tessella_source::mvt::FeatureRef<'_>> = Vec::new();
                 if let Some(named) = named {
-                    for feature in named.features() {
+                    // Once per layer. `named.feature` indexes, so a permutation costs no
+                    // collect -- see `layout_order`.
+                    let order = layout_order(layer, named.len(), |property, index| {
+                        named
+                            .feature(index)
+                            .map_or(0.0, |feature| sort_key_of(property, &feature, bucket_zoom))
+                    })?;
+                    for feature in
+                        walk(named.len(), order.as_ref()).filter_map(|index| named.feature(index))
+                    {
                         if !filter.matches_on(
                             &feature,
                             Some(bucket_zoom),
@@ -2081,7 +2221,16 @@ pub fn build_mvt_tile_on_with_patterns(
                 let options = line_options(layer);
                 let mut bucket = LineBucket::default();
                 if let Some(named) = named {
-                    for feature in named.features() {
+                    // Once per layer. `named.feature` indexes, so a permutation costs no
+                    // collect -- see `layout_order`.
+                    let order = layout_order(layer, named.len(), |property, index| {
+                        named
+                            .feature(index)
+                            .map_or(0.0, |feature| sort_key_of(property, &feature, bucket_zoom))
+                    })?;
+                    for feature in
+                        walk(named.len(), order.as_ref()).filter_map(|index| named.feature(index))
+                    {
                         if !filter.matches_on(
                             &feature,
                             Some(bucket_zoom),
@@ -2192,7 +2341,16 @@ pub fn build_mvt_tile_on_with_patterns(
 
                 let mut bucket = CircleBucket::default();
                 if let Some(named) = named {
-                    for feature in named.features() {
+                    // Once per layer. `named.feature` indexes, so a permutation costs no
+                    // collect -- see `layout_order`.
+                    let order = layout_order(layer, named.len(), |property, index| {
+                        named
+                            .feature(index)
+                            .map_or(0.0, |feature| sort_key_of(property, &feature, bucket_zoom))
+                    })?;
+                    for feature in
+                        walk(named.len(), order.as_ref()).filter_map(|index| named.feature(index))
+                    {
                         if !filter.matches_on(
                             &feature,
                             Some(bucket_zoom),
