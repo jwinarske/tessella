@@ -2925,6 +2925,7 @@ fn place_symbols(
                     &to_plane_screen,
                     |point| point,
                     walked_text_size,
+                    layout.text_keep_upright,
                     &mut buffers,
                 )
             } else {
@@ -2933,6 +2934,7 @@ fn place_symbols(
                     |point| (point.0 * scale, point.1 * scale),
                     &to_screen,
                     walked_text_size,
+                    layout.text_keep_upright,
                     &mut buffers,
                 )
             };
@@ -2985,6 +2987,7 @@ fn place_symbols(
                         &to_plane_screen,
                         |point| point,
                         icon_size,
+                        layout.icon_keep_upright,
                         shaped,
                     )
                 } else {
@@ -2993,6 +2996,7 @@ fn place_symbols(
                         |point| (point.0 * scale, point.1 * scale),
                         &to_screen,
                         icon_size,
+                        layout.icon_keep_upright,
                         shaped,
                     )
                 };

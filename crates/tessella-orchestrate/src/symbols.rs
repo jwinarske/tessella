@@ -806,6 +806,7 @@ impl ViewSymbols {
         project: P,
         to_screen: S,
         font_size: f32,
+        keep_upright: bool,
         buffers: &mut SymbolBuffers,
     ) -> alloc::vec::Vec<u32>
     where
@@ -840,6 +841,10 @@ impl ViewSymbols {
             };
             let offsets = crate::project::LineOffsets {
                 font_scale: font_size * walk_scale / tessella_glyph::text::ONE_EM,
+                // The half's own `*-keep-upright`. `LineOffsets::default()` says true, which is
+                // `text-keep-upright`'s default and not `icon-keep-upright`'s, so leaving it to
+                // the default flipped whatever the style asked.
+                keep_upright,
                 ..crate::project::LineOffsets::default()
             };
             if label.line.is_empty() {
