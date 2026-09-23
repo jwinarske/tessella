@@ -1,0 +1,307 @@
+{
+ "version": 8,
+ "name": "symbol-lines",
+ "glyphs": "file://TESSELLA/tests/glyph-fixtures/{fontstack}/{range}.pbf",
+ "sprite": "file://TESSELLA/tests/sprite-fixtures/emerald",
+ "sources": {
+  "probe": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {
+       "name": "Alpha"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         -0.16,
+         51.5062
+        ],
+        [
+         -0.146,
+         51.5062
+        ],
+        [
+         -0.132,
+         51.5062
+        ],
+        [
+         -0.118,
+         51.5062
+        ],
+        [
+         -0.104,
+         51.5062
+        ],
+        [
+         -0.09,
+         51.5062
+        ],
+        [
+         -0.076,
+         51.5062
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "name": "Beta"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         -0.16,
+         51.5044
+        ],
+        [
+         -0.146,
+         51.5056
+        ],
+        [
+         -0.132,
+         51.5044
+        ],
+        [
+         -0.118,
+         51.5056
+        ],
+        [
+         -0.104,
+         51.5044
+        ],
+        [
+         -0.09,
+         51.5056
+        ],
+        [
+         -0.076,
+         51.5044
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "name": "Gamma"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         -0.16,
+         51.5027
+        ],
+        [
+         -0.146,
+         51.5049
+        ],
+        [
+         -0.132,
+         51.5027
+        ],
+        [
+         -0.118,
+         51.5049
+        ],
+        [
+         -0.104,
+         51.5027
+        ],
+        [
+         -0.09,
+         51.5049
+        ],
+        [
+         -0.076,
+         51.5027
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "name": "Delta"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -0.115,
+        51.525
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "name": "Epsilon"
+      },
+      "geometry": {
+       "type": "Point",
+       "coordinates": [
+        -0.095,
+        51.525
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "bg",
+   "type": "background",
+   "paint": {
+    "background-color": "#101418"
+   }
+  },
+  {
+   "id": "line-label",
+   "type": "symbol",
+   "source": "probe",
+   "filter": [
+    "==",
+    [
+     "geometry-type"
+    ],
+    "LineString"
+   ],
+   "layout": {
+    "text-field": "{name}",
+    "text-font": [
+     "TestFont"
+    ],
+    "text-size": 16,
+    "symbol-placement": "line",
+    "symbol-spacing": 250,
+    "text-allow-overlap": true
+   }
+  },
+  {
+   "id": "line-icon",
+   "type": "symbol",
+   "source": "probe",
+   "filter": [
+    "==",
+    [
+     "geometry-type"
+    ],
+    "LineString"
+   ],
+   "layout": {
+    "icon-image": "oneway_road",
+    "symbol-placement": "line",
+    "symbol-spacing": 120,
+    "icon-rotation-alignment": "map",
+    "icon-rotate": 90,
+    "icon-allow-overlap": true,
+    "icon-padding": 2
+   }
+  },
+  {
+   "id": "point-both",
+   "type": "symbol",
+   "source": "probe",
+   "filter": [
+    "==",
+    [
+     "geometry-type"
+    ],
+    "Point"
+   ],
+   "layout": {
+    "text-field": "{name}",
+    "text-font": [
+     "TestFont"
+    ],
+    "text-size": 14,
+    "icon-image": "default_marker",
+    "icon-size": 1,
+    "text-offset": [
+     0,
+     1.4
+    ],
+    "text-anchor": "top",
+    "text-allow-overlap": true,
+    "icon-allow-overlap": true
+   }
+  },
+  {
+   "id": "translated",
+   "type": "symbol",
+   "source": "probe",
+   "filter": [
+    "==",
+    [
+     "geometry-type"
+    ],
+    "Point"
+   ],
+   "layout": {
+    "text-field": "{name}",
+    "text-font": [
+     "TestFont"
+    ],
+    "text-size": 14,
+    "icon-image": "dot",
+    "text-allow-overlap": true,
+    "icon-allow-overlap": true
+   },
+   "paint": {
+    "text-translate": [
+     6,
+     -4
+    ],
+    "text-translate-anchor": "viewport",
+    "icon-translate": [
+     -5,
+     3
+    ],
+    "icon-translate-anchor": "map"
+   }
+  },
+  {
+   "id": "zoom-sized",
+   "type": "symbol",
+   "source": "probe",
+   "filter": [
+    "==",
+    [
+     "geometry-type"
+    ],
+    "LineString"
+   ],
+   "layout": {
+    "text-field": "{name}",
+    "text-font": [
+     "TestFont"
+    ],
+    "text-size": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     12,
+     10,
+     16,
+     22
+    ],
+    "symbol-placement": "line",
+    "symbol-spacing": 400,
+    "text-allow-overlap": true
+   }
+  }
+ ]
+}
