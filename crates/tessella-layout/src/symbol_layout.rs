@@ -842,6 +842,19 @@ pub struct SymbolLayout {
     pub text_alignments: Alignments,
     /// What the icons are.
     pub icon_alignments: Alignments,
+    /// `text-keep-upright`: whether a line label that would read right to left is flipped.
+    ///
+    /// mbgl passes this to `reprojectLineLabels` (`placement.cpp:851`) and its default is
+    /// **true**, so a road name on a line drawn east to west is walked the other way to keep it
+    /// readable.
+    pub text_keep_upright: bool,
+    /// `icon-keep-upright`, whose default is **false** where the text one's is true.
+    ///
+    /// The asymmetry is mbgl's, in `symbol_layer_properties.hpp`. It is also unobservable for a
+    /// single-quad icon either side: the flip test compares the first glyph's screen x against
+    /// the last, and with one quad those are the same point. Carried because the property exists
+    /// and the default differs, not because a scene has been found where it shows.
+    pub icon_keep_upright: bool,
 }
 
 impl SymbolLayout {
@@ -889,6 +902,11 @@ impl SymbolLayout {
             .map_or(16.0, |value| value as f32);
 
         // A literal is a constant; an expression is not. See `icons_need_linear`.
+        let flag = |key: &str, default: bool| {
+            layout_value(layer, key, zoom, None)
+                .and_then(|value| value.as_bool())
+                .unwrap_or(default)
+        };
         let literal_number = |key: &str, default: f64| -> Option<f64> {
             match layer.layout.get(key) {
                 None => Some(default),
@@ -929,6 +947,8 @@ impl SymbolLayout {
             },
             text_alignments: Alignments::of(layer, zoom, placement, "text"),
             icon_alignments: Alignments::of(layer, zoom, placement, "icon"),
+            text_keep_upright: flag("text-keep-upright", true),
+            icon_keep_upright: flag("icon-keep-upright", false),
             placement,
         }
     }

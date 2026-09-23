@@ -55,6 +55,10 @@ fn layout(features: &[(&str, &[(i32, i32)])]) -> SymbolLayout {
         // Merging is about geometry; the size these labels draw at never enters it.
         icon_scale: 1.0,
         sort_by_key: false,
+        // Merging is about geometry; whether a backwards label is flipped never enters it. The
+        // values are mbgl's defaults so the struct reads as an ordinary layer.
+        text_keep_upright: true,
+        icon_keep_upright: false,
         text_size: SizeBinding::Constant(16.0),
         icon_size: SizeBinding::Constant(1.0),
         // Merging is about geometry; whether the letters carry a halo never enters it.
