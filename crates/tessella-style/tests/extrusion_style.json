@@ -1,0 +1,327 @@
+{
+ "version": 8,
+ "name": "extrusion",
+ "sources": {
+  "probe": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {
+       "h": 12,
+       "base": 0,
+       "kind": "b"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -0.155,
+          51.498
+         ],
+         [
+          -0.139,
+          51.498
+         ],
+         [
+          -0.139,
+          51.508
+         ],
+         [
+          -0.155,
+          51.508
+         ],
+         [
+          -0.155,
+          51.498
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "h": 45,
+       "base": 0,
+       "kind": "a"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -0.129,
+          51.498
+         ],
+         [
+          -0.113,
+          51.498
+         ],
+         [
+          -0.113,
+          51.508
+         ],
+         [
+          -0.129,
+          51.508
+         ],
+         [
+          -0.129,
+          51.498
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "h": 120,
+       "base": 18,
+       "kind": "b"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -0.103,
+          51.498
+         ],
+         [
+          -0.087,
+          51.498
+         ],
+         [
+          -0.087,
+          51.508
+         ],
+         [
+          -0.103,
+          51.508
+         ],
+         [
+          -0.103,
+          51.498
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "h": 260,
+       "base": 40,
+       "kind": "a"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -0.077,
+          51.498
+         ],
+         [
+          -0.061,
+          51.498
+         ],
+         [
+          -0.061,
+          51.508
+         ],
+         [
+          -0.077,
+          51.508
+         ],
+         [
+          -0.077,
+          51.498
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "h": 8,
+       "base": 3,
+       "kind": "b"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -0.051,
+          51.498
+         ],
+         [
+          -0.035,
+          51.498
+         ],
+         [
+          -0.035,
+          51.508
+         ],
+         [
+          -0.051,
+          51.508
+         ],
+         [
+          -0.051,
+          51.498
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "h": 70,
+       "base": 0,
+       "kind": "b"
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -0.145,
+          51.516
+         ],
+         [
+          -0.105,
+          51.516
+         ],
+         [
+          -0.105,
+          51.529
+         ],
+         [
+          -0.145,
+          51.529
+         ],
+         [
+          -0.145,
+          51.516
+         ]
+        ],
+        [
+         [
+          -0.135,
+          51.52
+         ],
+         [
+          -0.135,
+          51.525
+         ],
+         [
+          -0.115,
+          51.525
+         ],
+         [
+          -0.115,
+          51.52
+         ],
+         [
+          -0.135,
+          51.52
+         ]
+        ]
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "bg",
+   "type": "background",
+   "paint": {
+    "background-color": "#0c1014"
+   }
+  },
+  {
+   "id": "ext-opaque",
+   "type": "fill-extrusion",
+   "source": "probe",
+   "paint": {
+    "fill-extrusion-color": "#8899aa",
+    "fill-extrusion-height": 30,
+    "fill-extrusion-opacity": 1
+   }
+  },
+  {
+   "id": "ext-data-driven",
+   "type": "fill-extrusion",
+   "source": "probe",
+   "paint": {
+    "fill-extrusion-color": "#aa8866",
+    "fill-extrusion-height": [
+     "get",
+     "h"
+    ],
+    "fill-extrusion-base": [
+     "get",
+     "base"
+    ],
+    "fill-extrusion-opacity": 0.7
+   }
+  },
+  {
+   "id": "ext-flat",
+   "type": "fill-extrusion",
+   "source": "probe",
+   "paint": {
+    "fill-extrusion-color": "#66aa88",
+    "fill-extrusion-height": [
+     "get",
+     "h"
+    ],
+    "fill-extrusion-vertical-gradient": false,
+    "fill-extrusion-opacity": 0.9
+   }
+  },
+  {
+   "id": "ext-zoomed",
+   "type": "fill-extrusion",
+   "source": "probe",
+   "paint": {
+    "fill-extrusion-color": [
+     "match",
+     [
+      "get",
+      "kind"
+     ],
+     "a",
+     "#c06040",
+     "#4060c0"
+    ],
+    "fill-extrusion-height": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "zoom"
+     ],
+     12,
+     5,
+     16,
+     90
+    ],
+    "fill-extrusion-opacity": 0.85
+   }
+  }
+ ]
+}
