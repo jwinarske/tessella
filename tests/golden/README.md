@@ -21,6 +21,7 @@ maplibre-native build. Regenerating them needs both.
 | `vertical_style.dump` | `crates/tessella-style/tests/vertical_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `image_text_style.dump` | `crates/tessella-style/tests/image_text_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `heatmap_style.dump` | `crates/tessella-style/tests/heatmap_style.json` | 51.505, -0.11 @ z13, 1024x768 |
+| `joins_style.dump` | `crates/tessella-style/tests/joins_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 
 ### The one that needed the backend extended to exist
 
@@ -95,6 +96,30 @@ the change moved no line in any of them.
 Neither hides the churn, which is a finding rather than noise — it is per-frame drawable
 creation and a per-frame texture upload for a layer whose ramp never changes, and this build
 should not copy it.
+
+### The one that covers the join generator
+
+`joins_style.dump` exists because none of the other ten sets `line-join` at all. Every one of them
+takes the spec's default of `miter`, so the round and bevel arms of the polyline generator — the
+fake-round fan, the flipped bevel, the sharp-corner insertion — were never under a byte-level
+test.
+
+The gap was not theoretical. `line-round-limit` defaults to 1.05 in the style spec and to **1** in
+mbgl (`line_layer_properties.hpp`), this build carried the spec's number, and on one coastline
+ring that is 2,011 joins resolved as miters here against 83 in the oracle. Pixels found it, but
+only after the difference had been written off as antialiasing twice: it is 523 gross on one
+camera, spread over every join in a frame. The counts in this capture name it in one line —
+`join-round` is 168 vertices and reads 158 under the wrong limit.
+
+Ten polylines whose interior angles straddle every classification boundary the generator has: 2
+degrees through 179, a hairpin for the flipped bevel, and a closed ring for the wrap-around join.
+Nine line layers over them vary `line-join`, `line-cap`, `line-round-limit`, `line-miter-limit`,
+`line-gap-width`, `line-offset`, `line-translate` and `line-dasharray` — the last being the only
+golden that carries a translate at all.
+
+What the test reads is the vertex count in each drawable's name and the index count in its `idx=`
+field, totalled per layer. That is the oracle's own answer for how much geometry a join policy
+costs, and it moves the moment a join resolves differently.
 
 ### The one that is not hermetic
 
@@ -315,6 +340,10 @@ python3 <tessella>/tools/mbgl-codegen/oracles/elide_heatmap_ramp.py \
     --dump=<tessella>/tests/golden/composite_style.dump
 ./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/composite_style.json \
     --zoom=13.5 --dump=<tessella>/tests/golden/composite_style_z13_5.dump
+
+# The join capture. Inline GeoJSON, no substitution and no elision -- what it records is counts.
+./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/joins_style.json \
+    --dump=<tessella>/tests/golden/joins_style.dump
 ```
 
 Produced by `mbgl-capture-probe` at maplibre-native `ecdaf2588a0b`, on the
