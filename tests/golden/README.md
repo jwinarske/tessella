@@ -24,6 +24,7 @@ maplibre-native build. Regenerating them needs both.
 | `joins_style.dump` | `crates/tessella-style/tests/joins_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `symbol_lines_style.dump` | `crates/tessella-style/tests/symbol_lines_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `relief_style.dump` | `crates/tessella-style/tests/relief_style.json` | 51.505, -0.11 @ z13, 1024x768 |
+| `extrusion_style.dump` | `crates/tessella-style/tests/extrusion_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 
 ### The one that needed the backend extended to exist
 
@@ -407,7 +408,21 @@ sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/symbol_lines
 sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/relief_style.json \
     > /tmp/relief.json
 ./mbgl-capture-probe file:///tmp/relief.json --dump=<tessella>/tests/golden/relief_style.dump
+
+# The extrusion capture. Inline GeoJSON, no substitution and no elision -- what it records is
+# counts. Its fixture's interior ring must stay wound opposite its exterior; mbgl repairs a
+# same-wound one through `fixupPolygons` and this build does not, which is tessella#255.
+./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/extrusion_style.json \
+    --dump=<tessella>/tests/golden/extrusion_style.dump
 ```
+
+`extrusion_style.dump` is the one capture not taken at `ecdaf2588a0b`: it was taken at
+`ad5e73527f3a`, further along the same branch. Re-capturing `joins_style.dump` there differs from
+the committed one on ten lines, all of them a `slot=0 tex=` id reading 62 where the dump says 64 —
+a texture-allocation counter, with every vertex count, index count and shader id unchanged. The
+extrusion capture has no `tex=` line at all, so nothing it records can depend on the difference.
+That was checked rather than assumed, because the alternative — moving a shared checkout's HEAD —
+disturbs whatever else is building against it.
 
 Produced by `mbgl-capture-probe` at maplibre-native `ecdaf2588a0b`, on the
 `capture-backend-phase0` branch whose base commit `b237943` plan.md pins. Byte-identical
