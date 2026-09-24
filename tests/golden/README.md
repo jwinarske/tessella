@@ -432,32 +432,51 @@ python3 <tessella>/tools/mbgl-codegen/oracles/canonicalize_drawable_index.py \
     --dump=<tessella>/tests/golden/fill_style.dump
 ```
 
-`extrusion_style.dump`, `circle_style.dump` and `fill_style.dump` are the captures not taken at
-`ecdaf2588a0b`: they were taken at `ad5e73527f3a`, further along the same branch. Re-capturing `joins_style.dump` there differs from
-the committed one on ten lines, all of them a `slot=0 tex=` id reading 62 where the dump says 64 —
-a texture-allocation counter, with every vertex count, index count and shader id unchanged. None of those three has a `tex=` line at all, so nothing it records can depend on the difference.
-That was checked rather than assumed, because the alternative — moving a shared checkout's HEAD —
-disturbs whatever else is building against it.
+`extrusion_style.dump`, `circle_style.dump` and `fill_style.dump` were taken at `ad5e73527f3a`
+rather than the `ecdaf2588a0b` the others use, further along the same branch. None of the three has
+a `tex=` line, so the field below cannot reach them, and every count, index count and shader id is
+unchanged across the two commits -- which was checked rather than assumed, because the alternative
+(moving a shared checkout's HEAD) disturbs whatever else is building against it.
 
-### `extrusion_style.dump` needs canonicalizing, and then it is byte-reproducible
+### `tex=` ids vary between runs, and nothing reads them
 
-Extrusion is the only family that emits **two render-state sets per layer per tile** -- a depth
-pass in front of a color pass for any translucent layer -- and which of the pair is `#00` is the
-order mbgl happened to visit them in. Raw, two captures of the same style differ on 160 `flags=`
-fields with every count, shader id and buffer hash identical.
+An earlier revision of this file blamed a `tex=62` against a `tex=64` in `joins_style.dump` on the
+difference between those two probe commits. **That attribution was wrong.** The ids vary run to
+run at one commit. Three consecutive captures of `relief_style.dump`:
 
-`canonicalize_drawable_index.py` is written for exactly this, and its own docstring says so. It
-sorts drawables that share an identity but for the `#NN` by what distinguishes them and renumbers
-from zero, so nothing is discarded but the visit order. Run it and the file settles: two fresh
-captures and the committed one all hash `3c5d3ad311b5ab0d`.
+```text
+r1: tex=34 tex=49 tex=5726 tex=25 tex=26 tex=47
+r2: tex=48 tex=34 tex=5708 tex=24 tex=25 tex=46
+r3: tex=49 tex=33 tex=5777 tex=24 tex=25 tex=47
+```
 
-#256 added this capture without that step and #262 then recorded the file as not reproducible.
-Both were wrong about the cause -- the tool already existed and was not applied. The recipe above
-now applies it.
+Everything else in that capture is stable: sorted, its `ubo`, `texture`, `rendertarget` and
+`drawable` lines hash the same across all three, and only the `tex=` values move. Relief is the
+capture that shows it because it allocates the most textures; the smaller captures usually land on
+the same ids and compare clean, which is why `joins_style.dump` matched on one re-capture and
+differed by two on another.
 
-`circle_style.dump` and `fill_style.dump` were checked the same way: both are byte-identical
-across runs already, and the canonicalization is a no-op on them. Extrusion is the only family
-with a pair to order.
+A `tex=` id addresses a texture the dump does not otherwise name -- `texture` lines carry a size,
+a format and a hash, not an id -- so the only comparable thing in it is *which slots share a
+texture*, and **no test reads the field at all**. Ten goldens carry `tex=` lines and all of them
+are left as captured. If it ever needs to be strict, the treatment is a renumber by first
+appearance, the way `canonicalize_drawable_index.py` handles `#NN`; nothing needs it today.
+
+### Checking the recipe still produces the files
+
+The recipe above is prose, and prose drifts. A capture whose post-processing step was never run
+looks fine -- the tests read counts and pass either way -- and shows up only when the file is
+diffed against a fresh capture. That is how the missing canonicalization in `extrusion_style.dump`
+was found, by accident. `tools/mbgl-codegen/oracles/verify_goldens.sh` is that check on purpose:
+
+```sh
+MBGL_PROBE=<maplibre-native>/build-capture/mbgl-capture-probe \
+    tools/mbgl-codegen/oracles/verify_goldens.sh
+```
+
+It regenerates every golden, applies the documented post-processing, and diffs. A golden that
+differs only in `tex=` passes; anything else fails. `live_protomaps_z5.dump` is skipped and says
+so, because it needs the tile server.
 
 Produced by `mbgl-capture-probe` at maplibre-native `ecdaf2588a0b`, on the
 `capture-backend-phase0` branch whose base commit `b237943` plan.md pins. Byte-identical
