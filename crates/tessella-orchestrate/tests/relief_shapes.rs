@@ -49,6 +49,10 @@
 
 #![cfg(feature = "image")]
 
+mod common;
+
+use common::fnv1a;
+
 use tessella_source::dem::{Dem, Encoding};
 use tessella_style::Style;
 
@@ -82,18 +86,6 @@ fn oracle_hashes() -> Vec<((u32, u32), u64)> {
             ))
         })
         .collect()
-}
-
-/// FNV-1a's offset basis, which is also what the probe reports for a texture it saw no bytes for.
-const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-
-/// FNV-1a, as the probe hashes texture bytes.
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = FNV_OFFSET;
-    for byte in bytes {
-        hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
 }
 
 /// The DEM keeps the border mbgl uploads, and the slope field does not need it.
@@ -208,27 +200,35 @@ fn the_oracle_prepares_offscreen_and_this_build_does_not() {
     }
 }
 
-/// The color table's texels match the oracle's; the elevation table's cannot be compared.
+/// Both stop tables' texels match the oracle's, byte for byte.
 ///
 /// `the_ramp_is_one_row_per_table` checks the two tables' *width* and nothing about their contents,
 /// so a ramp with the stops in the wrong order, or colors narrowed with the wrong rounding, would
-/// pass it (tessella#286). The capture records an FNV-1a per texture, so the color table is
-/// comparable -- and it agrees exactly.
+/// pass it (tessella#286).
 ///
-/// # One of the two 5x1 textures carries no bytes
+/// # This needed the oracle fixed before it could be written
 ///
-/// The capture's second `5x1` hashes to `cbf29ce484222325`, which is FNV-1a's offset basis: the
-/// probe's `hash()` leaves the seed untouched when it is handed a null pointer, so that texture
-/// reached `onTextureUpdate` with no pixels. That is the *elevation* table, by elimination -- the
-/// color table's bytes hash to the other value.
+/// The capture used to record the elevation table as a `5x1` whose hash was `cbf29ce484222325` --
+/// FNV-1a's offset basis, which is what the probe reports for a texture it was handed no bytes for.
+/// The cause was in the capture backend, not the hook: `Texture2D::getPixelStride` handled
+/// `UnsignedByte` and `HalfFloat` and returned zero from a `default`, so `Float` fell through, the
+/// allocation was empty, `upload` skipped its memcpy and `flush` recorded no bytes (tessella#290).
+/// The color table went through `setImage` as an `UnsignedByte` image and was recorded correctly all
+/// along, which is why only one of the pair was affected.
 ///
-/// So this is an oracle gap rather than a difference. mbgl plainly uploads elevations, and the
-/// reason the probe sees none is that the table is a float texture on a path that does not hand it
-/// a host pointer. This build packs its elevations as RGBA float with the value in red
-/// (`pack_relief_elevation_stops`), and nothing in any capture can confirm the layout. Asserted as
-/// far as it goes and named for what it does not, so a clean run is not read as covering it.
+/// # And the fix immediately found a difference
+///
+/// With the bytes recorded, this build's elevation table did *not* match. mbgl fills the three
+/// unused channels asymmetrically -- `0.0f`, `0.0f`, `1.0f` -- and this wrote zero in all three, so
+/// the alpha disagreed on every stop.
+///
+/// Nothing drew differently: no shader reads the channel, and the relief scene reads 0 gross against
+/// `mbgl-render` before and after. It was unobservable twice over -- invisible to pixels because the
+/// value is unused, and invisible to the capture because the capture recorded nothing. Both halves
+/// had to be fixed for one byte in four to become comparable, which is the argument for closing an
+/// oracle gap in a family that looks settled.
 #[test]
-fn the_ramp_texels_match_the_oracle_where_the_capture_has_them() {
+fn both_stop_tables_match_the_oracle() {
     let style = Style::parse(STYLE).expect("the style parses");
     let layer = style.layer("relief").expect("the relief layer");
     let paint = tessella_style::property::resolve_paint(layer).expect("the paint resolves");
@@ -245,32 +245,48 @@ fn the_ramp_texels_match_the_oracle_where_the_capture_has_them() {
 
     #[allow(clippy::cast_possible_truncation)]
     let width = ramp.len() as u32;
-    let rows: Vec<u64> = oracle_hashes()
+    let mut theirs: Vec<u64> = oracle_hashes()
         .into_iter()
         .filter(|&(size, _)| size == (width, 1))
         .map(|(_, hash)| hash)
         .collect();
     assert_eq!(
-        rows.len(),
+        theirs.len(),
         2,
-        "two {width}x1 tables in the capture: {rows:?}"
+        "two {width}x1 tables in the capture: {theirs:?}"
+    );
+    assert!(
+        !theirs.contains(&common::FNV_OFFSET),
+        "a table whose hash is the FNV seed was recorded with no bytes, which tessella#290 fixed \
+         in the probe -- re-capture this golden rather than comparing against it: {theirs:016x?}"
     );
 
+    let mut ours = vec![fnv1a(&colors), fnv1a(&elevations)];
+    ours.sort_unstable();
+    theirs.sort_unstable();
+    assert_eq!(
+        ours, theirs,
+        "both stop tables should be byte-identical to mbgl's: {ours:016x?} against {theirs:016x?}"
+    );
+
+    // Named individually too, so a failure says which table moved rather than that a set differs.
     assert!(
-        rows.contains(&fnv1a(&colors)),
-        "the color table should be byte-identical to mbgl's: {:016x} against {rows:016x?}",
+        theirs.contains(&fnv1a(&colors)),
+        "the color table disagrees: {:016x}",
         fnv1a(&colors)
     );
-
-    // The other row is the empty one, which is what makes the elevation table uncomparable.
-    let empty = rows.iter().filter(|&&hash| hash == FNV_OFFSET).count();
-    assert_eq!(
-        empty, 1,
-        "one of the two tables should have reached the probe with no bytes: {rows:016x?}"
+    assert!(
+        theirs.contains(&fnv1a(&elevations)),
+        "the elevation table disagrees: {:016x}",
+        fnv1a(&elevations)
     );
-    assert_ne!(
-        fnv1a(&elevations),
-        FNV_OFFSET,
-        "this build does pack elevations, so a match against the empty row would be meaningless"
+
+    // The alpha is the byte the oracle gap hid: zero here hashes to e857e8eb648b6b53 and one to
+    // the 0416d7114b5fcfa6 the capture holds, over the same stops.
+    let alpha = &elevations[12..16];
+    assert_eq!(
+        alpha,
+        1.0f32.to_le_bytes(),
+        "mbgl writes 1.0 in the unused alpha, not 0.0"
     );
 }

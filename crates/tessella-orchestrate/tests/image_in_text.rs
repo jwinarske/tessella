@@ -32,6 +32,10 @@
 
 #![cfg(feature = "image")]
 
+mod common;
+
+use common::fnv1a;
+
 use std::collections::BTreeMap;
 
 use tessella_glyph::fonts::{Dependencies, Fonts};
@@ -42,15 +46,6 @@ use tessella_storage::source::{FetchError, FileSource, Response};
 use tessella_style::Style;
 
 const DUMP: &str = include_str!("../../../tests/golden/image_text_style.dump");
-
-/// FNV-1a, as the probe hashes with.
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
-        hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
-}
 
 /// The symbol drawable's vertex count and its layout attribute's field hash.
 fn golden() -> (usize, u64) {

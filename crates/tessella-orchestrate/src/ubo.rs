@@ -3420,15 +3420,32 @@ pub fn pack_color_relief_props(opacity: f32) -> Vec<u8> {
 
 /// The elevation stops as the float texture the shader searches.
 ///
-/// RGBA with the elevation in red and the other three zero, which is mbgl's "RGBA float for
-/// compatibility" -- a one-channel float texture is not something every backend has, and a stop
-/// table is a few hundred texels at most, so the three wasted channels cost nothing worth the
-/// portability.
+/// RGBA with the elevation in red, which is mbgl's "RGBA float for compatibility" -- a
+/// one-channel float texture is not something every backend has, and a stop table is a few
+/// hundred texels at most, so the wasted channels cost nothing worth the portability.
+///
+/// # The alpha is one, not zero
+///
+/// `render_color_relief_layer.cpp` fills the unused channels asymmetrically, and the comments say
+/// "unused" for all three:
+///
+/// ```cpp
+/// (*elevationStopsData)[i * 4 + 0] = elevationStopsVector[i]; // R = elevation
+/// (*elevationStopsData)[i * 4 + 1] = 0.0f;                    // G = unused
+/// (*elevationStopsData)[i * 4 + 2] = 0.0f;                    // B = unused
+/// (*elevationStopsData)[i * 4 + 3] = 1.0f;                    // A = unused
+/// ```
+///
+/// This wrote zero in all three until tessella#290. No shader reads the channel, so nothing drew
+/// differently and the relief scene read 0 gross throughout -- and the capture could not see it
+/// either, because the probe recorded no bytes at all for a float texture. Both had to be fixed
+/// for the difference to become visible, which is the argument for fixing an oracle gap even when
+/// the family it covers looks settled.
 #[must_use]
 pub fn pack_relief_elevation_stops(ramp: &tessella_style::ramp::ReliefRamp) -> Vec<u8> {
     let mut out = Vec::with_capacity(ramp.len() * 16);
     for elevation in &ramp.elevations {
-        push_f32s(&mut out, &[*elevation, 0.0, 0.0, 0.0]);
+        push_f32s(&mut out, &[*elevation, 0.0, 0.0, 1.0]);
     }
     out
 }

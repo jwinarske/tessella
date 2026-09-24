@@ -5,6 +5,10 @@
 //! carrying ninety-six floats, and the comparison is still exact: a hash match over sixty-four
 //! bytes is not a tolerance.
 
+mod common;
+
+use common::fnv1a;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use tessella_capture_abi::ProjectionMode;
@@ -25,15 +29,6 @@ fn probe() -> ViewTransform {
         pitch: 0.0,
         ground_below: 0.0,
     })
-}
-
-/// FNV-1a, as the probe hashes.
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
-        hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3);
-    }
-    hash
 }
 
 /// `layer -> (x, y) -> matrix hash`, from the dump's stencil section.

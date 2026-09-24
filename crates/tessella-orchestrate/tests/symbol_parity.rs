@@ -23,6 +23,10 @@
 //! Making the vertex bytes comparable needs the atlas packed deterministically on mbgl's side,
 //! which is a change to the probe rather than to this.
 
+mod common;
+
+use common::fnv1a;
+
 use std::collections::BTreeMap;
 
 use tessella_glyph::atlas::Atlas;
@@ -61,15 +65,6 @@ fn no_paint() -> tessella_orchestrate::emit::SymbolPaint<'static> {
 
 const DUMP: &str = include_str!("../../../tests/golden/symbol_style.dump");
 const GLYPHS: &[u8] = include_bytes!("../../../tests/glyph-fixtures/TestFont/0-255.pbf");
-
-/// The probe's hash, FNV-1a 64 over a raw buffer.
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
-        hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
-}
 
 /// What the golden says about one symbol drawable.
 #[derive(Debug, Clone, PartialEq, Eq)]

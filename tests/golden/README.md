@@ -451,6 +451,14 @@ a `tex=` line, so the field below cannot reach them, and every count, index coun
 unchanged across the two commits -- which was checked rather than assumed, because the alternative
 (moving a shared checkout's HEAD) disturbs whatever else is building against it.
 
+`relief_style.dump` needs one commit past those: the probe recorded no bytes for a float texture, so
+its elevation stop table showed as a `5x1` whose hash was FNV-1a's offset basis. `getPixelStride`
+handled `UnsignedByte` and `HalfFloat` and returned zero from a `default`, which left `Float`
+allocating nothing and `upload` skipping its memcpy (tessella#290, fixed on the fork's
+`capture-float-stride` off `ad5e73527f3a`). A probe without that fix reproduces the other seventeen
+and reports this one as drifted in two lines: the elevation table's hash, which is
+`0416d7114b5fcfa6` with it and `cbf29ce484222325` without.
+
 ### `tex=` ids vary between runs, and nothing reads them
 
 An earlier revision of this file blamed a `tex=62` against a `tex=64` in `joins_style.dump` on the
