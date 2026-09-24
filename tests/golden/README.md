@@ -27,6 +27,7 @@ maplibre-native build. Regenerating them needs both.
 | `extrusion_style.dump` | `crates/tessella-style/tests/extrusion_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `circle_style.dump` | `crates/tessella-style/tests/circle_style.json` | 51.505, -0.11 @ z13, **pitch 60**, 1024x768 |
 | `fill_style.dump` | `crates/tessella-style/tests/fill_style.json` | 51.505, -0.11 @ z13, 1024x768 |
+| `gradient_style.dump` | `crates/tessella-style/tests/gradient_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 
 ### The one that needed the backend extended to exist
 
@@ -430,6 +431,11 @@ python3 <tessella>/tools/mbgl-codegen/oracles/canonicalize_drawable_index.py \
 # binder across two shaders, and which of the two outline forms each layer draws.
 ./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/fill_style.json \
     --dump=<tessella>/tests/golden/fill_style.dump
+
+# The gradient capture. A lineMetrics source under a plain line and two line-gradient layers; what
+# it records is which shader each takes and the 256-texel ramp mbgl bakes per gradient layer.
+./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/gradient_style.json \
+    --dump=<tessella>/tests/golden/gradient_style.dump
 ```
 
 `extrusion_style.dump`, `circle_style.dump` and `fill_style.dump` were taken at `ad5e73527f3a`

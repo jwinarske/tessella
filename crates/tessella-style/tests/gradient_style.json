@@ -1,0 +1,170 @@
+{
+ "version": 8,
+ "name": "gradients",
+ "sources": {
+  "probe": {
+   "type": "geojson",
+   "lineMetrics": true,
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {
+       "name": "r"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         -0.15,
+         51.508
+        ],
+        [
+         -0.13,
+         51.508
+        ],
+        [
+         -0.11,
+         51.508
+        ],
+        [
+         -0.09,
+         51.508
+        ],
+        [
+         -0.07,
+         51.508
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "name": "r"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         -0.125,
+         51.5
+        ],
+        [
+         -0.115,
+         51.5
+        ],
+        [
+         -0.105,
+         51.5
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "name": "r"
+      },
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         -0.07,
+         51.516
+        ],
+        [
+         -0.09,
+         51.516
+        ],
+        [
+         -0.11,
+         51.516
+        ],
+        [
+         -0.13,
+         51.516
+        ],
+        [
+         -0.15,
+         51.516
+        ]
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "bg",
+   "type": "background",
+   "paint": {
+    "background-color": "#101418"
+   }
+  },
+  {
+   "id": "line-plain",
+   "type": "line",
+   "source": "probe",
+   "paint": {
+    "line-color": "#8899aa",
+    "line-width": 6
+   }
+  },
+  {
+   "id": "line-gradient-five",
+   "type": "line",
+   "source": "probe",
+   "layout": {
+    "line-cap": "round",
+    "line-join": "round"
+   },
+   "paint": {
+    "line-gradient": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "line-progress"
+     ],
+     0,
+     "#0000ff",
+     0.25,
+     "#00ffff",
+     0.5,
+     "#00ff00",
+     0.75,
+     "#ffff00",
+     1,
+     "#ff0000"
+    ],
+    "line-width": 8
+   }
+  },
+  {
+   "id": "line-gradient-two",
+   "type": "line",
+   "source": "probe",
+   "paint": {
+    "line-gradient": [
+     "interpolate",
+     [
+      "linear"
+     ],
+     [
+      "line-progress"
+     ],
+     0,
+     "#ffffff",
+     1,
+     "#000000"
+    ],
+    "line-width": 4
+   }
+  }
+ ]
+}
