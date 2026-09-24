@@ -40,11 +40,13 @@ fn features() -> Vec<GeoJsonFeature> {
             id: None,
             properties: BTreeMap::from([("kind".to_owned(), Value::String("a".into()))]),
             geometry: square(0.0),
+            simplification: Vec::new(),
         },
         GeoJsonFeature {
             id: None,
             properties: BTreeMap::from([("kind".to_owned(), Value::String("b".into()))]),
             geometry: square(0.1),
+            simplification: Vec::new(),
         },
     ]
 }

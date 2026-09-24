@@ -546,6 +546,51 @@ fn walk(count: usize, order: Option<&Vec<usize>>) -> Walk<'_> {
     }
 }
 
+/// A feature's line or ring as this tile keeps it, with geojson-vt's simplification applied.
+///
+/// mbgl filters at tile-cut time, by the *source* geometry's own type and before any bucket sees
+/// it. Two things go: a point whose importance does not clear the tile's threshold, and the whole
+/// line or ring when its own extent does not -- a line shorter than the tolerance, a ring smaller
+/// than its square. `tessella_source::simplify` says where the numbers come from and why the
+/// threshold is six tile units at every zoom.
+///
+/// `None` is the whole part dropped. Borrowed when nothing drops, which is what already-sparse
+/// geometry gets: a vector tile arrives simplified by whoever cut it, and this path is GeoJSON's.
+fn simplified<'a>(
+    points: &'a [[f64; 2]],
+    simplification: Option<&tessella_source::simplify::Simplification>,
+    sq_tolerance: f64,
+    extent_floor: f64,
+) -> Option<alloc::borrow::Cow<'a, [[f64; 2]]>> {
+    // A feature this build made rather than read carries no annotation -- a cluster's synthetic
+    // point, an annotation source's shape -- and nothing about it is simplifiable.
+    let Some(simplification) = simplification else {
+        return Some(alloc::borrow::Cow::Borrowed(points));
+    };
+    // The annotation and the geometry have to describe the same points. If they ever disagree,
+    // filtering by index would drop the wrong ones, so the geometry passes through whole.
+    if simplification.importance.len() != points.len() {
+        return Some(alloc::borrow::Cow::Borrowed(points));
+    }
+    if simplification.extent <= extent_floor {
+        return None;
+    }
+    if simplification
+        .importance
+        .iter()
+        .all(|importance| tessella_source::simplify::keeps(*importance, sq_tolerance))
+    {
+        return Some(alloc::borrow::Cow::Borrowed(points));
+    }
+    let kept: Vec<[f64; 2]> = points
+        .iter()
+        .zip(&simplification.importance)
+        .filter(|(_, importance)| tessella_source::simplify::keeps(**importance, sq_tolerance))
+        .map(|(point, _)| *point)
+        .collect();
+    Some(alloc::borrow::Cow::Owned(kept))
+}
+
 /// Builds every implemented layer's contribution to one tile.
 ///
 /// Layers of a kind this build does not implement are skipped, keeping their index. Layers that
@@ -625,6 +670,17 @@ pub fn build_tile_on_with_patterns(
     // without a zoom it errors, and an erroring filter admits nothing, so the layer would draw
     // nothing at every zoom rather than at the wrong ones.
     let bucket_zoom = f64::from(tile.bucket_zoom());
+    // geojson-vt's simplification threshold for this tile, from the source's own tolerance. Read
+    // from the style rather than carried on the feature because it is the *tile* that filters: one
+    // annotated feature serves every zoom, and each keeps what clears its own threshold.
+    let source_tolerance = match style.source(source) {
+        Some(tessella_style::Source::Geojson(geojson)) => geojson
+            .tolerance
+            .unwrap_or(tessella_source::simplify::DEFAULT_TOLERANCE),
+        _ => tessella_source::simplify::DEFAULT_TOLERANCE,
+    };
+    let simplify_tolerance = tessella_source::simplify::tolerance_at(tile.z, source_tolerance);
+    let simplify_sq = simplify_tolerance * simplify_tolerance;
 
     for (layer_index, layer) in style.layers.iter().enumerate() {
         if !layer.kind.is_built()
@@ -779,15 +835,41 @@ pub fn build_tile_on_with_patterns(
                         // makes no type check — see the note in `build_mvt_tile` — so a point or a
                         // line in a fill layer becomes a degenerate ring, and `classify_rings`
                         // keeps a lone one because it short-circuits before the area filter.
-                        let parts: Vec<&[[f64; 2]]> = match &feature.geometry {
+                        // Simplified as mbgl simplifies: by the *source* geometry's own type, and
+                        // before the clip. A ring is measured by its area and a line by its length,
+                        // which is why the floor differs between the two arms.
+                        let parts: Vec<alloc::borrow::Cow<'_, [[f64; 2]]>> = match &feature.geometry
+                        {
                             Geometry::Polygon(polygons) => polygons
                                 .iter()
-                                .flat_map(|polygon| polygon.iter().map(Vec::as_slice))
+                                .flat_map(|polygon| polygon.iter())
+                                .enumerate()
+                                .filter_map(|(index, ring)| {
+                                    simplified(
+                                        ring,
+                                        feature.simplification.get(index),
+                                        simplify_sq,
+                                        simplify_sq,
+                                    )
+                                })
                                 .collect(),
-                            Geometry::LineString(lines) => {
-                                lines.iter().map(Vec::as_slice).collect()
+                            Geometry::LineString(lines) => lines
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, line)| {
+                                    simplified(
+                                        line,
+                                        feature.simplification.get(index),
+                                        simplify_sq,
+                                        simplify_tolerance,
+                                    )
+                                })
+                                .collect(),
+                            // A point has nothing to drop, which is also why it carries no
+                            // annotation.
+                            Geometry::Point(points) => {
+                                alloc::vec![alloc::borrow::Cow::Borrowed(points.as_slice())]
                             }
-                            Geometry::Point(points) => alloc::vec![points.as_slice()],
                         };
                         let points_only = matches!(feature.geometry, Geometry::Point(_));
                         let mut rings: Vec<Ring> = Vec::new();
@@ -890,7 +972,17 @@ pub fn build_tile_on_with_patterns(
                         }
                         match &feature.geometry {
                             Geometry::LineString(lines) => {
-                                for line in lines {
+                                for (index, line) in lines.iter().enumerate() {
+                                    // Simplified first, as mbgl simplifies before it clips. A line
+                                    // whose whole extent falls under the tolerance goes with it.
+                                    let Some(line) = simplified(
+                                        line,
+                                        feature.simplification.get(index),
+                                        simplify_sq,
+                                        simplify_tolerance,
+                                    ) else {
+                                        continue;
+                                    };
                                     let projected: Vec<[f64; 2]> =
                                         line.iter().map(project).collect();
                                     if metered {

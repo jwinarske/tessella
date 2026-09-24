@@ -495,6 +495,9 @@ impl Clustered {
             id: Some(Value::Number(f64::from(cluster.id))),
             properties: cluster_properties(cluster),
             geometry: Geometry::Point(alloc::vec![unproject(cluster.pos)]),
+            // A cluster is one synthetic point. There is no line or ring to simplify, which is
+            // also what mbgl's supercluster path produces.
+            simplification: alloc::vec::Vec::new(),
         }
     }
 }
