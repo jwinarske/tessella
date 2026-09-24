@@ -30,24 +30,53 @@ trap 'rm -rf "$work"' EXIT
 styles=$tessella/crates/tessella-style/tests
 golden=$tessella/tests/golden
 
-capture() { timeout 300 "$probe" "$@" >/dev/null 2>&1; }
+# A capture that failed or was cut short must say so. Without this check a probe that timed out
+# leaves a short dump behind and the comparison below reports it as drift, which sends the reader
+# looking for a change in the frontend that never happened.
+capture() {
+    local dump=${*: -1}
+    dump=${dump#--dump=}
+    if ! timeout 300 "$probe" "$@" >/dev/null 2>&1; then
+        echo "  capture failed: $*" >&2
+        return 1
+    fi
+    if [[ ! -s $dump ]]; then
+        echo "  capture wrote nothing: $dump" >&2
+        return 1
+    fi
+    if ! head -1 "$dump" | grep -q '^tessella-capture-dump'; then
+        echo "  capture is not a dump: $dump" >&2
+        return 1
+    fi
+    # A dump declares how many drawables it holds, so a file cut off partway is detectable even
+    # though its first line is intact. Truncation is what a killed capture leaves behind, and it
+    # is the shape that reads as drift rather than as failure.
+    local declared actual
+    declared=$(awk '$1 == "drawables" { print $2; exit }' "$dump")
+    actual=$(grep -c '^drawable ' "$dump" || true)
+    if [[ -z $declared || $declared != "$actual" ]]; then
+        echo "  capture is short: $dump declares ${declared:-no} drawables and holds $actual" >&2
+        return 1
+    fi
+}
 
 # The captures whose styles name a font, a sprite sheet or a DEM by path, which the fixture spells
 # as TESSELLA so the tree is relocatable.
 for name in symbol scaled spaced vertical image_text pattern symbol_lines relief; do
     sed "s|TESSELLA|$tessella|" "$styles/${name}_style.json" > "$work/$name.json"
-    capture "file://$work/$name.json" "--dump=$work/${name}_style.dump"
+    capture "file://$work/$name.json" "--dump=$work/${name}_style.dump" || exit 1
 done
 
 # The probe's own built-in style, which reaches no network at all.
-capture "--dump=$work/hermetic_style.dump"
+capture "--dump=$work/hermetic_style.dump" || exit 1
 
 # Inline-GeoJSON fixtures, captured as they are.
-for name in composite joins fill extrusion heatmap; do
-    capture "file://$styles/${name}_style.json" "--dump=$work/${name}_style.dump"
+for name in composite joins fill extrusion heatmap gradient; do
+    capture "file://$styles/${name}_style.json" "--dump=$work/${name}_style.dump" || exit 1
 done
-capture "file://$styles/composite_style.json" --zoom=13.5 "--dump=$work/composite_style_z13_5.dump"
-capture "file://$styles/circle_style.json" --pitch=60 "--dump=$work/circle_style.dump"
+capture "file://$styles/composite_style.json" --zoom=13.5 \
+    "--dump=$work/composite_style_z13_5.dump" || exit 1
+capture "file://$styles/circle_style.json" --pitch=60 "--dump=$work/circle_style.dump" || exit 1
 
 # The documented post-processing. A capture that skips its step is exactly what this looks for, so
 # the list has to match the README's recipe.
@@ -72,13 +101,17 @@ for fresh in "$work"/*_style*.dump; do
         printf '  %-28s identical\n' "$name"
         continue
     fi
-    # Every differing line a `tex=` id, or a real drift?
-    other=$(diff "$fresh" "$committed" | grep '^[<>]' | grep -cv ' tex=[0-9]\+$' || true)
+    # Id noise or real drift? A `tex=` id is an allocation counter that moves between runs, and
+    # some sections order their lines by it, so one changed id shows up as unrelated lines having
+    # moved. Neither is comparable and no test reads the field -- see the golden README. So the
+    # honest comparison blanks the ids and sorts, and only what survives that is drift.
     lines=$(diff "$fresh" "$committed" | grep -c '^[<>]' || true)
-    if [[ $other -eq 0 ]]; then
+    blank() { sed 's/ tex=[0-9]\{1,\}/ tex=*/g' "$1" | sort; }
+    if diff -q <(blank "$fresh") <(blank "$committed") >/dev/null; then
         printf '  %-28s tex= ids only (%s lines)\n' "$name" "$lines"
     else
-        printf '  %-28s DRIFTED (%s lines, %s beyond tex=)\n' "$name" "$lines" "$other"
+        beyond=$(diff <(blank "$fresh") <(blank "$committed") | grep -c '^[<>]' || true)
+        printf '  %-28s DRIFTED (%s lines, %s beyond tex=)\n' "$name" "$lines" "$beyond"
         status=1
     fi
 done
