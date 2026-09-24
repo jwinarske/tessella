@@ -116,3 +116,124 @@ fn every_part_of_a_multipolygon_is_wound() {
         );
     }
 }
+
+// --- the repair pass, tessella#255 ---
+//
+// mbgl runs every GeoJSON polygon through `fixupPolygons` before anything classifies it: a wagyu
+// union with `fill_type_even_odd`, which decides hole-ness by *position* rather than by winding.
+// So mbgl is winding-insensitive here, and a hand-written hole wound the same way as its exterior
+// is still a hole. Turning every ring together preserves relative winding, which is right for
+// well-formed input and left a same-wound hole reading as a second exterior.
+//
+// Measured over the fill of one annulus at z13, 512x512, gross pixels against `mbgl-render`:
+//
+// | case | before | after |
+// |---|---|---|
+// | well-formed hole | 0 | 0 |
+// | hole wound like its exterior | 21,808 (8.3%) | **0** |
+// | the same, both clockwise | 21,808 (8.3%) | **0** |
+// | island inside a hole | 41,700 (15.9%) | **0** |
+// | two disjoint rings | 0 | 0 |
+// | two overlapping rings | 13,950 (5.3%) | 13,950 -- needs the clipper |
+// | one self-crossing ring | 28,186 (10.8%) | 28,186 -- needs the clipper |
+
+/// A ring wound the same way as its exterior is still a hole, and arrives wound like one.
+#[test]
+fn a_same_wound_hole_is_repaired() {
+    let rings = polygon(
+        "[[[-4,-4],[4,-4],[4,4],[-4,4],[-4,-4]],
+          [[-2,-2],[2,-2],[2,2],[-2,2],[-2,-2]]]",
+    );
+    let exterior = shoelace(&rings[0][0]);
+    let hole = shoelace(&rings[0][1]);
+    assert!(
+        exterior * hole < 0.0,
+        "the hole should oppose its exterior: {exterior} and {hole}"
+    );
+}
+
+/// An island inside a hole is at depth two, and even-odd makes it an exterior again.
+///
+/// Three rings all written the same way round. The oracle draws the annulus and the island --
+/// fifteen vertices and thirty indices -- where three separate exteriors would be eighteen.
+#[test]
+fn an_island_inside_a_hole_turns_like_the_exterior() {
+    let rings = polygon(
+        "[[[-6,-6],[6,-6],[6,6],[-6,6],[-6,-6]],
+          [[-4,-4],[4,-4],[4,4],[-4,4],[-4,-4]],
+          [[-2,-2],[2,-2],[2,2],[-2,2],[-2,-2]]]",
+    );
+    let [outer, hole, island] = [
+        shoelace(&rings[0][0]),
+        shoelace(&rings[0][1]),
+        shoelace(&rings[0][2]),
+    ];
+    assert!(outer * hole < 0.0, "depth one opposes: {outer} and {hole}");
+    assert!(
+        outer * island > 0.0,
+        "depth two turns like the exterior again: {outer} and {island}"
+    );
+}
+
+/// Two rings side by side are two exteriors, and neither is turned to look like a hole.
+#[test]
+fn disjoint_rings_stay_exteriors() {
+    let rings = polygon(
+        "[[[-4,-4],[-2,-4],[-2,-2],[-4,-2],[-4,-4]],
+          [[2,2],[4,2],[4,4],[2,4],[2,2]]]",
+    );
+    let (first, second) = (shoelace(&rings[0][0]), shoelace(&rings[0][1]));
+    assert!(
+        first * second > 0.0,
+        "neither contains the other, so both are exteriors: {first} and {second}"
+    );
+}
+
+/// Two rings that merely overlap are not a nesting, and must be left alone.
+///
+/// This is the guard on the containment test. Reading "inside" from one vertex made the second
+/// ring a hole and punched the overlap out of the picture -- twelve indices to six -- where two
+/// overlapping opaque exteriors at least keep the ink. mbgl unions them into twenty-four and
+/// neither answer here matches that; what this pins is that the cheaper one is not made worse.
+#[test]
+fn overlapping_rings_are_not_a_nesting() {
+    let rings = polygon(
+        "[[[-3,-3],[1,-3],[1,1],[-3,1],[-3,-3]],
+          [[-1,-1],[3,-1],[3,3],[-1,3],[-1,-1]]]",
+    );
+    let (first, second) = (shoelace(&rings[0][0]), shoelace(&rings[0][1]));
+    assert!(
+        first * second > 0.0,
+        "an overlap is not a containment: {first} and {second}"
+    );
+}
+
+/// A well-formed polygon comes through exactly as it did before the repair existed.
+///
+/// The repair is meant to be invisible to conformant data: the exterior is at depth zero and the
+/// hole at depth one, which is what their directions already said.
+#[test]
+fn a_well_formed_polygon_is_untouched() {
+    let rings = polygon(
+        "[[[-4,-4],[4,-4],[4,4],[-4,4],[-4,-4]],
+          [[-2,-2],[-2,2],[2,2],[2,-2],[-2,-2]]]",
+    );
+    let exterior = shoelace(&rings[0][0]);
+    let hole = shoelace(&rings[0][1]);
+    assert!(
+        exterior < 0.0,
+        "the exterior still arrives wound like a tile: {exterior}"
+    );
+    assert!(
+        exterior * hole < 0.0,
+        "and the hole still opposes it: {exterior} and {hole}"
+    );
+}
+
+/// A single ring has nothing to nest in and is not walked.
+#[test]
+fn one_ring_skips_the_repair() {
+    let rings = polygon(COUNTER_CLOCKWISE);
+    assert_eq!(rings[0].len(), 1);
+    assert!(shoelace(&rings[0][0]) < 0.0, "still wound like a tile");
+}
