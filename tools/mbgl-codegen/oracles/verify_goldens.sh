@@ -25,9 +25,18 @@
 # allowlist of the affected captures -- would have gutted the check, since four of the eighteen
 # are affected.
 #
-# Exit status is zero when every golden reproduces, byte for byte or differing *only* in `tex=`
-# texture ids, which is the one field known to move with the probe's own allocation history and
-# which no test reads.
+# Measured on 24 consecutive `relief_style` captures once the two canonicalizations below are
+# applied: 20 land the settled shape and 4 do not, so four attempts fail about once in twelve
+# hundred runs. Without the `ubo` ordering it is 9 of 24 and four attempts fail one run in six --
+# which is what made the old blanked-and-globally-sorted comparison look necessary.
+#
+# Exit status is zero when every golden reproduces byte for byte.
+#
+# It used to also pass a capture differing *only* in `tex=` ids, which are the probe's allocation
+# counters and move between runs. That escape hatch is gone: `canonicalize_texture_ids.py`
+# renumbers them by which bindings share a texture, so they are stable and the comparison is
+# equality (tessella#285). Blanking was the weaker check -- it hid a real change to a `tex=` line,
+# and the sort it needed hid lines having moved.
 set -euo pipefail
 
 here=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -78,12 +87,6 @@ capture() {
     fi
 }
 
-# A `tex=` id is an allocation counter that moves between runs, and some sections order their lines
-# by it, so one changed id shows up as unrelated lines having moved. Neither is comparable and no
-# test reads the field -- see the golden README. So the honest comparison blanks the ids and sorts,
-# and only what survives that is drift.
-blank() { sed 's/ tex=[0-9]\{1,\}/ tex=*/g' "$1" | sort; }
-
 # Captures one golden and compares it, retrying a mismatch.
 #
 # `$1` is the dump's name, `$2` a snippet that writes `$work/$1`, and the rest the post-processing
@@ -98,12 +101,17 @@ verify_one() {
         return 1
     fi
 
-    local attempt lines beyond step
+    local attempt lines step
     for ((attempt = 1; attempt <= ATTEMPTS; attempt++)); do
         eval "$make" || return 1
         for step in "${post[@]}"; do
             eval "$step" >/dev/null
         done
+        # Unconditional, and last: every recipe wants both, each is a no-op on a dump without the
+        # section it touches, and the texture ids key on the identities
+        # `canonicalize_drawable_index.py` rewrites, so they go after it.
+        python3 "$here/canonicalize_ubo_order.py" "$work/$name" >/dev/null
+        python3 "$here/canonicalize_texture_ids.py" "$work/$name" >/dev/null
         if cmp -s "$work/$name" "$committed"; then
             if ((attempt == 1)); then
                 printf '  %-28s identical\n' "$name"
@@ -112,17 +120,10 @@ verify_one() {
             fi
             return 0
         fi
-        if diff -q <(blank "$work/$name") <(blank "$committed") >/dev/null; then
-            lines=$(diff "$work/$name" "$committed" | grep -c '^[<>]' || true)
-            printf '  %-28s tex= ids only (%s lines)\n' "$name" "$lines"
-            return 0
-        fi
     done
 
     lines=$(diff "$work/$name" "$committed" | grep -c '^[<>]' || true)
-    beyond=$(diff <(blank "$work/$name") <(blank "$committed") | grep -c '^[<>]' || true)
-    printf '  %-28s DRIFTED in %s attempts (%s lines, %s beyond tex=)\n' \
-        "$name" "$ATTEMPTS" "$lines" "$beyond"
+    printf '  %-28s DRIFTED in %s attempts (%s lines)\n' "$name" "$ATTEMPTS" "$lines"
     return 1
 }
 

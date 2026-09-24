@@ -445,6 +445,17 @@ python3 <tessella>/tools/mbgl-codegen/oracles/canonicalize_drawable_index.py \
     --dump=<tessella>/tests/golden/dash_style.dump
 ```
 
+Then, on **every** dump above, the two canonicalizations every recipe needs -- see the `tex=` section
+below for what they normalize and why. Both are no-ops on a dump without the section they touch, and
+the texture ids go last because they key on identities `canonicalize_drawable_index.py` rewrites:
+
+```sh
+python3 <tessella>/tools/mbgl-codegen/oracles/canonicalize_ubo_order.py <dump>
+python3 <tessella>/tools/mbgl-codegen/oracles/canonicalize_texture_ids.py <dump>
+```
+
+`verify_goldens.sh` applies them itself, so a dump re-recorded through it needs nothing further.
+
 `extrusion_style.dump`, `circle_style.dump` and `fill_style.dump` were taken at `ad5e73527f3a`
 rather than the `ecdaf2588a0b` the others use, further along the same branch. None of the three has
 a `tex=` line, so the field below cannot reach them, and every count, index count and shader id is
@@ -459,7 +470,7 @@ allocating nothing and `upload` skipping its memcpy (tessella#290, fixed on the 
 and reports this one as drifted in two lines: the elevation table's hash, which is
 `0416d7114b5fcfa6` with it and `cbf29ce484222325` without.
 
-### `tex=` ids vary between runs, and nothing reads them
+### `tex=` ids and `ubo` line order vary between runs, and both are canonicalized
 
 An earlier revision of this file blamed a `tex=62` against a `tex=64` in `joins_style.dump` on the
 difference between those two probe commits. **That attribution was wrong.** The ids vary run to
@@ -471,17 +482,33 @@ r2: tex=48 tex=34 tex=5708 tex=24 tex=25 tex=46
 r3: tex=49 tex=33 tex=5777 tex=24 tex=25 tex=47
 ```
 
-Everything else in that capture is stable: sorted, its `ubo`, `texture`, `rendertarget` and
-`drawable` lines hash the same across all three, and only the `tex=` values move. Relief is the
-capture that shows it because it allocates the most textures; the smaller captures usually land on
-the same ids and compare clean, which is why `joins_style.dump` matched on one re-capture and
-differed by two on another.
+A `tex=` id addresses a texture the dump does not otherwise name -- `texture` lines carry a size, a
+format and a hash, not an id -- so the only comparable thing in it is *which bindings share a
+texture*. The `ubo` section moves too, and less visibly: of 24 consecutive `relief_style` captures,
+two shapes accounted for twenty and differed **only** in where two `ubo owner:` lines sat, same
+identity and same bytes.
 
-A `tex=` id addresses a texture the dump does not otherwise name -- `texture` lines carry a size,
-a format and a hash, not an id -- so the only comparable thing in it is *which slots share a
-texture*, and **no test reads the field at all**. Ten goldens carry `tex=` lines and all of them
-are left as captured. If it ever needs to be strict, the treatment is a renumber by first
-appearance, the way `canonicalize_drawable_index.py` handles `#NN`; nothing needs it today.
+Both are canonicalized rather than tolerated, and `verify_goldens.sh` applies both to every capture
+before comparing:
+
+- **`canonicalize_texture_ids.py`** renumbers `tex=` by which bindings share a texture, keyed on the
+  sorted set of `(identity, slot)` pairs rather than on first appearance, so the numbering does not
+  inherit mbgl's visit order. Twelve goldens carry the field.
+- **`canonicalize_ubo_order.py`** sorts the `ubo` section, which is a set emitted in iteration order.
+
+The comparison is then byte equality. It used to be a blanked-and-globally-sorted copy, which was
+weaker in two ways: blanking discarded the `tex=` values instead of comparing them, and the global
+sort it needed would have absorbed a line moving from one section to another. Sorting one section
+keeps the boundaries meaningful.
+
+This also fixed a flake rather than only tightening the check. `tex=` canonicalization alone leaves
+the `ubo` order free, and then only 9 of 24 relief captures match, so four attempts fail one run in
+six. With both applied it is 20 of 24, or about one failure in twelve hundred (tessella#285).
+
+**One test now reads the field.** `dash_atlases.rs` asserts that three line widths bind one dash
+atlas and that a different dasharray and a different cap each bind their own -- five dashed layers
+over three textures. It reads only the partition, never the values, so it was already robust to the
+allocation counter; the canonicalization is what makes the golden it reads byte-stable.
 
 ### A capture can be taken before the frame settles
 
