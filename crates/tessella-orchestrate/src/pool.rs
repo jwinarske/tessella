@@ -300,6 +300,25 @@ impl Pool {
     }
 
     /// Queues one job.
+    ///
+    /// # A job that reads shared state and writes it back has to order itself
+    ///
+    /// Nothing here serializes jobs, so two that read the same state and put an answer back can
+    /// finish in either order and the later write wins whether or not it read the fresher state.
+    /// That cost a seam reconcile: two were in flight, the newer swapped the right DEM border in,
+    /// the older then swapped its stale one over the top, and since nothing was rescheduled the
+    /// edge stayed wrong for the life of the tile (tessella#269).
+    ///
+    /// Every such path in `source.rs` is made safe one of three ways, and a new one wants one of
+    /// them:
+    ///
+    /// - **A sequence number on the input.** A tile build carries its dispatch's `seq` and `land`
+    ///   drops an older build that finishes after a newer one.
+    /// - **A count of accepted writes.** A reseam reads `Landed::reseams` with the state it
+    ///   computes from, and a swap whose count has moved is declined *and rescheduled* -- declining
+    ///   alone would lose the work rather than delay it.
+    /// - **One at a time.** A glyph fetch is gated on a `running` flag and a resolve `take`s its
+    ///   own plan out from under the lock, so a second job cannot exist to race.
     pub fn submit(&self, priority: Priority, job: impl FnOnce() + Send + 'static) {
         self.push(
             priority,

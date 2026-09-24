@@ -116,8 +116,10 @@ pub struct BootTrace {
     pub complete: Duration,
     /// The sprite sheet arrived, for a style that names one.
     ///
-    /// `None` when the style names none *or* when the fetch failed, which
-    /// [`Boot::sprites`] tells apart. Issued beside the source manifests rather than after
+    /// `None` when the style names none *or* when the fetch failed, which `Boot::sprites` tells
+    /// apart -- named without a link because that field is `#[cfg(feature = "image")]`, so the
+    /// link does not resolve in a build without it and `cargo doc -p tessella-orchestrate` fails
+    /// where `--workspace` passes on feature unification. Issued beside the source manifests rather than after
     /// them: a sprite is addressed by the style alone, so nothing it needs is in a manifest and
     /// waiting for one puts a round trip on the critical path for nothing (§12.5).
     pub sprite_fetched: Option<Duration>,
