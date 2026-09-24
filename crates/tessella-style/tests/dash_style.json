@@ -1,0 +1,170 @@
+{
+ "version": 8,
+ "name": "dashes",
+ "sources": {
+  "probe": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         -0.132,
+         51.498
+        ],
+        [
+         -0.12,
+         51.498
+        ],
+        [
+         -0.108,
+         51.498
+        ],
+        [
+         -0.096,
+         51.498
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         -0.13,
+         51.508
+        ],
+        [
+         -0.118,
+         51.508
+        ],
+        [
+         -0.112,
+         51.514
+        ],
+        [
+         -0.1,
+         51.514
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "LineString",
+       "coordinates": [
+        [
+         -0.128,
+         51.52
+        ],
+        [
+         -0.104,
+         51.52
+        ]
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "bg",
+   "type": "background",
+   "paint": {
+    "background-color": "#101418"
+   }
+  },
+  {
+   "id": "plain",
+   "type": "line",
+   "source": "probe",
+   "paint": {
+    "line-color": "#8899aa",
+    "line-width": 6
+   }
+  },
+  {
+   "id": "dash-thin",
+   "type": "line",
+   "source": "probe",
+   "paint": {
+    "line-color": "#c030a0",
+    "line-width": 1,
+    "line-dasharray": [
+     2,
+     1.5
+    ]
+   }
+  },
+  {
+   "id": "dash-mid",
+   "type": "line",
+   "source": "probe",
+   "paint": {
+    "line-color": "#c030a0",
+    "line-width": 6,
+    "line-dasharray": [
+     2,
+     1.5
+    ]
+   }
+  },
+  {
+   "id": "dash-thick",
+   "type": "line",
+   "source": "probe",
+   "paint": {
+    "line-color": "#c030a0",
+    "line-width": 24,
+    "line-dasharray": [
+     2,
+     1.5
+    ]
+   }
+  },
+  {
+   "id": "dash-round",
+   "type": "line",
+   "source": "probe",
+   "paint": {
+    "line-color": "#c030a0",
+    "line-width": 6,
+    "line-dasharray": [
+     2,
+     1.5
+    ]
+   },
+   "layout": {
+    "line-cap": "round",
+    "line-join": "round"
+   }
+  },
+  {
+   "id": "dash-four",
+   "type": "line",
+   "source": "probe",
+   "paint": {
+    "line-color": "#c030a0",
+    "line-width": 6,
+    "line-dasharray": [
+     4,
+     1,
+     2,
+     1
+    ]
+   }
+  }
+ ]
+}
