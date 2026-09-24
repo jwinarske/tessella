@@ -40,6 +40,15 @@
 //!
 //! In the tile where the same polygon is *not* clipped, `4093/2723`, the two agree exactly: ten
 //! vertices and twenty-four indices, a ring and its hole.
+//!
+//! # The capture is canonicalized
+//!
+//! Those two render-state sets are emitted in whichever order mbgl visited them, so a raw capture
+//! of this style differs from the last on 160 `flags=` fields and nothing else.
+//! `canonicalize_drawable_index.py` renumbers the `#NN` by what each drawable *is*, after which
+//! two fresh captures and the committed file are byte-identical. It is part of the regeneration
+//! recipe; this test reads only layer, tile, vertex count and `idx=`, so it passed either way, and
+//! that is why the missing step went unnoticed until the file was diffed.
 
 use std::collections::BTreeMap;
 
