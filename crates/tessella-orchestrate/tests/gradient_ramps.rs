@@ -23,6 +23,10 @@
 //!   five stops. Two families, two conventions, and reading one for the other gives a ramp of the
 //!   wrong width.
 //! - **One ramp per gradient layer, none for a plain line.**
+//! - **The texels themselves**, against the capture's FNV-1a per texture. Added in tessella#286:
+//!   until then the only content assertion was that the two ramps differed from *each other*,
+//!   which would pass if both were baked wrongly in the same way. They agree byte for byte, and
+//!   the five-stop ramp settles the channel order as RGBA on its own.
 //!
 //! # The vertex counts, which this golden could not compare when it was written
 //!
@@ -71,6 +75,35 @@ fn oracle_textures() -> Vec<(u32, u32)> {
             Some((w.parse().ok()?, h.parse().ok()?))
         })
         .collect()
+}
+
+/// Every `texture ... hash=` the capture recorded, as `WxH` against the hash.
+fn oracle_hashes() -> Vec<((u32, u32), u64)> {
+    DUMP.lines()
+        .filter_map(|line| line.strip_prefix("texture "))
+        .filter_map(|rest| {
+            let mut parts = rest.split_whitespace();
+            let (w, h) = parts.next()?.split_once('x')?;
+            let hash = parts.find_map(|part| part.strip_prefix("hash="))?;
+            Some((
+                (w.parse().ok()?, h.parse().ok()?),
+                u64::from_str_radix(hash, 16).ok()?,
+            ))
+        })
+        .collect()
+}
+
+/// FNV-1a, as the probe hashes texture bytes.
+///
+/// `capture_probe.cpp` seeds each texture with the offset basis and folds every upload into the
+/// running value, so a texture uploaded once hashes as plain FNV-1a over the bytes mbgl handed
+/// the backend.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
 }
 
 /// This frame's ramps, keyed by the layer that owns one.
@@ -281,4 +314,75 @@ fn the_line_geometry_matches_the_oracle() {
             "layer {layer} ({name}): {counts:?} against the oracle's {want:?}"
         );
     }
+}
+
+/// The ramps' texels match the oracle's, byte for byte.
+///
+/// Everything above compares sizes and compares the two ramps against *each other*, which would
+/// pass if both were baked wrongly in the same way (tessella#286). The capture records each
+/// texture's FNV-1a, so the bytes themselves are comparable and this is the assertion that a stop
+/// landing one texel off, or a ramp interpolated in the wrong space, would fail.
+///
+/// # The channel order is settled by the five-stop ramp, not assumed
+///
+/// mbgl's `colorRamp` is a `PremultipliedImage`, and neither the order nor the premultiplication
+/// is visible in a `fmt=0` line. The five-stop ramp decides it: its bytes hash to the oracle's
+/// value in RGBA and to nothing in BGRA or ARGB. The two-stop ramp cannot settle it -- white to
+/// black is symmetric under a channel swap, so it matches in BGRA too -- which is exactly why a
+/// fixture with one gray ramp would have left the question open.
+///
+/// Premultiplication is a no-op here because both ramps are opaque, so this does not settle it.
+/// A ramp with a transparent stop would, and none of the goldens has one.
+#[test]
+fn the_ramp_texels_match_the_oracle() {
+    let (gradients, style) = our_gradients();
+    let index = |want: &str| {
+        style
+            .layers
+            .iter()
+            .position(|layer| layer.id == want)
+            .unwrap_or_else(|| panic!("no layer {want}"))
+    };
+
+    let mut ours: Vec<u64> = ["line-gradient-five", "line-gradient-two"]
+        .iter()
+        .map(|named| {
+            let ramp = gradients.get(index(named)).expect("a ramp");
+            assert_eq!(ramp.pixels.len(), 256 * 4);
+            fnv1a(&ramp.pixels)
+        })
+        .collect();
+
+    let mut theirs: Vec<u64> = oracle_hashes()
+        .into_iter()
+        .filter(|&(size, _)| size == (256, 1))
+        .map(|(_, hash)| hash)
+        .collect();
+    assert_eq!(theirs.len(), 2, "two 256x1 ramps in the capture");
+
+    ours.sort_unstable();
+    theirs.sort_unstable();
+    assert_eq!(
+        ours, theirs,
+        "the baked ramps should be byte-identical to mbgl's: {ours:016x?} against {theirs:016x?}"
+    );
+
+    // And the order is RGBA, which the five-stop ramp is asymmetric enough to prove.
+    let five = gradients.get(index("line-gradient-five")).expect("a ramp");
+    assert!(
+        theirs.contains(&fnv1a(&five.pixels)),
+        "the five-stop ramp should match in RGBA"
+    );
+    let swapped: Vec<u8> = five
+        .pixels
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|texel| [texel[2], texel[1], texel[0], texel[3]])
+        .collect();
+    assert!(
+        !theirs.contains(&fnv1a(&swapped)),
+        "a BGRA reading should not match, or the order would be undetermined"
+    );
+    assert_eq!(&five.pixels[..4], &[0, 0, 255, 255], "the ramp starts blue");
 }

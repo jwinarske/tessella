@@ -175,6 +175,35 @@ fn oracle_textures() -> Vec<(u32, u32, u32)> {
         .collect()
 }
 
+/// Every `texture ... hash=` the capture recorded, as `WxH` against the hash.
+fn oracle_hashes() -> Vec<((u32, u32), u64)> {
+    DUMP.lines()
+        .filter_map(|line| line.strip_prefix("texture "))
+        .filter_map(|rest| {
+            let mut parts = rest.split_whitespace();
+            let (w, h) = parts.next()?.split_once('x')?;
+            let hash = parts.find_map(|part| part.strip_prefix("hash="))?;
+            Some((
+                (w.parse().ok()?, h.parse().ok()?),
+                u64::from_str_radix(hash, 16).ok()?,
+            ))
+        })
+        .collect()
+}
+
+/// FNV-1a, as the probe hashes texture bytes.
+///
+/// `capture_probe.cpp` seeds each texture with the offset basis and folds every upload into the
+/// running value, so a texture uploaded once hashes as plain FNV-1a over the bytes mbgl handed
+/// the backend.
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
 /// A layer's UBO record at `slot`, as its raw bytes.
 ///
 /// The dump prints these with their 16-byte blocks sorted, so what comes back is comparable as a
@@ -678,4 +707,65 @@ fn the_line_geometry_matches_the_oracle() {
     let butt = ours[&index(&style, "dash-mid")];
     assert_eq!(round, (96, 234), "round caps and joins");
     assert_eq!(butt, (44, 78), "butt caps and miter joins");
+}
+
+/// The distance fields match the oracle's, byte for byte.
+///
+/// The shape assertions above would pass on a field of the right size holding the wrong ramp, and a
+/// dash's edge is a smoothstep across a few texels -- a field built with the wrong stretch, or with
+/// the dash and gap swapped, moves very few pixels. The capture records each texture's FNV-1a, so
+/// the bytes are comparable (tessella#286).
+///
+/// All three agree, including the 4096-byte round-cap field, so mbgl's `LineAtlas` arithmetic is
+/// reproduced exactly and not merely to the shape.
+#[test]
+fn the_distance_fields_match_the_oracle() {
+    let (style, dashes) = ours();
+
+    // The three distinct fields behind the five per-layer copies -- see the sharing test above.
+    let mut ours: Vec<u64> = ["dash-mid", "dash-round", "dash-four"]
+        .iter()
+        .map(|named| {
+            fnv1a(
+                &dashes
+                    .get(index(&style, named))
+                    .expect("an atlas")
+                    .atlas
+                    .data,
+            )
+        })
+        .collect();
+
+    let mut theirs: Vec<u64> = oracle_hashes()
+        .into_iter()
+        .filter(|&((width, _), _)| width == ATLAS_WIDTH as u32)
+        .map(|(_, hash)| hash)
+        .collect();
+    assert_eq!(theirs.len(), 3, "three dash atlases in the capture");
+
+    ours.sort_unstable();
+    theirs.sort_unstable();
+    assert_eq!(
+        ours, theirs,
+        "the distance fields should be byte-identical to mbgl's: {ours:016x?} against {theirs:016x?}"
+    );
+
+    // And the three layers that share a pattern really do hash alike, which is what makes the
+    // comparison above three values rather than five.
+    let shared: Vec<u64> = ["dash-thin", "dash-mid", "dash-thick"]
+        .iter()
+        .map(|named| {
+            fnv1a(
+                &dashes
+                    .get(index(&style, named))
+                    .expect("an atlas")
+                    .atlas
+                    .data,
+            )
+        })
+        .collect();
+    assert!(
+        shared.windows(2).all(|pair| pair[0] == pair[1]),
+        "three widths, one field: {shared:016x?}"
+    );
 }
