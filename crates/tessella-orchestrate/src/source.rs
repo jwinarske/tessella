@@ -124,6 +124,18 @@ struct Landed {
     /// ground needs.
     keys: BTreeMap<TileId, alloc::collections::BTreeSet<tessella_tile::store::TileKey>>,
     sourceless: BTreeMap<TileId, Arc<Vec<LayerBucket>>>,
+    /// How many seam reconciliations have been swapped in, which orders them against each other.
+    ///
+    /// A reseam reads the store, computes off the pool, and swaps the answer back. Two of them can
+    /// be in flight at once -- `reseam` dispatches on every tick that finds a dirty seam -- and
+    /// without an order the last writer wins whether or not it read the fresher state. Traced on a
+    /// failing run, the fourth reseam swapped the right border and the third then swapped its older
+    /// one over the top, leaving the edge a repeat of itself for the life of the tile with nothing
+    /// scheduled to fix it (tessella#269).
+    ///
+    /// `Build::seq` cannot order them: it is the *dispatch that built the tile*, unchanged by a
+    /// reconcile, so two reseams reading one build both pass that guard.
+    reseams: u64,
 }
 
 impl Landed {
@@ -1511,8 +1523,10 @@ impl<D: TileTransport + 'static> TileSource<D> {
         // spanning two of them, which is every cover mid-zoom, would otherwise have each one's
         // arrivals walk the other's tiles for neighbors that cannot exist.
         let zooms: BTreeSet<u8> = dirty.iter().map(|tile| tile.z).collect();
+        let read_at;
         {
             let held = self.landed.read().unwrap_or_else(PoisonError::into_inner);
+            read_at = held.reseams;
             for (tile, builds) in &held.by_source {
                 if !zooms.contains(&tile.z) {
                     continue;
@@ -1586,7 +1600,7 @@ impl<D: TileTransport + 'static> TileSource<D> {
                 });
                 reseamed.push((key, Arc::new(next), prepared));
             }
-            this.swap_in(&source, &holders, reseamed);
+            this.swap_in(&source, &holders, reseamed, read_at);
         });
     }
 
@@ -1600,9 +1614,28 @@ impl<D: TileTransport + 'static> TileSource<D> {
             Arc<tessella_source::dem::Dem>,
             Option<Arc<tessella_source::image::Image>>,
         )>,
+        read_at: u64,
     ) {
         let mut changed = false;
         let mut held = self.landed.write().unwrap_or_else(PoisonError::into_inner);
+        if held.reseams != read_at {
+            // Another reconcile swapped while this one was computing, so this answer describes a
+            // store that no longer exists and putting it back would undo that one. Declined, and
+            // the seams are recorded again below so the work happens against what is there now --
+            // declining without that would lose the reconcile rather than delay it.
+            drop(held);
+            let stale: alloc::collections::BTreeSet<TileId> =
+                holders.values().flatten().map(|(tile, _)| *tile).collect();
+            // After the store's lock, the order `land` takes them in.
+            self.seams
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .entry(String::from(source))
+                .or_default()
+                .extend(stale);
+            self.generation.fetch_add(1, Ordering::AcqRel);
+            return;
+        }
         for (key, dem, prepared) in reseamed {
             for (tile, seq) in holders.get(&key).into_iter().flatten() {
                 let Some(builds) = held.by_source.get_mut(tile) else {
@@ -1644,6 +1677,9 @@ impl<D: TileTransport + 'static> TileSource<D> {
                 held.by_tile.insert(*tile, Arc::new(merged));
                 changed = true;
             }
+        }
+        if changed {
+            held.reseams = held.reseams.wrapping_add(1);
         }
         drop(held);
         if changed {
