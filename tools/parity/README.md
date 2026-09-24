@@ -71,6 +71,38 @@ The sweep's numbers as of 2026-09-16, which is the gate:
 `holes` is the other measure, for the one scene nothing can be compared against: pixels of a color
 the scene uses for nothing but its background. See `terrain_cover_p` below.
 
+## Properties no camera here can settle
+
+A sweep measures what a frame shows, and some style properties do not reach one. Auditing this
+build against mbgl's own `*_layer_properties.hpp` — 55 properties, which is the authoritative list
+rather than this side's spec tables — left three that nothing here reads, each for its own reason.
+Recorded so they are not investigated a fourth time.
+
+| property | why no scene shows it |
+|---|---|
+| `raster-fade-duration` | Times a tile fading in over its parent. `pack_raster_props` writes the fade *complete* on purpose: a capture is a still frame, and a value invented for the transition would be a number on the wire nothing produced. |
+| `symbol-avoid-edges` | Honored only in `MapMode::Tile`. `placement.cpp` builds a `TilePlacement` for that mode alone, and `getAvoidEdges` is its override — the capture probe runs `MapMode::Continuous` and `mbgl-render` defaults to `Static`, so neither oracle can exercise it. |
+| `symbol-screen-space` | Feeds `defaultOpacityState`, the opacity a symbol carries *before* placement has run on it. Every frame compared here is a settled one, and the sweep runs with `TSF_NO_FADES=1`. |
+
+Each was measured as well as read: setting it moves not one pixel of `mbgl-render`'s output in a
+scene built to exercise it. That is a weaker statement than it looks — a property can be
+implemented and still show nothing in a scene that does not reach it, which is how
+`raster-resampling` hid (tessella #260: the parity raster source is flat enough that 16x
+magnification put 25 distinct colors on the frame and the two filters agreed to within one channel
+value). So the table gives the mechanism, not just the measurement; a zero on its own settles
+nothing.
+
+The other two the audit found were real and are fixed: `raster-resampling` in #260 and the three
+`*-sort-key` properties in #259, with `text-keep-upright` in #261 and
+`fill-extrusion-rounded-corner-distance` in #263 from the same pass.
+
+**A caveat on the audit's reach.** It compares against mbgl's property *headers*, so it sees a
+property this build never declared — which the earlier spec-table version could not. It still
+misses anything mbgl has not declared either, and it needs care with names this build composes at
+runtime: `{prefix}-rotation-alignment` and `{prefix}-pitch-alignment` are read through
+`alloc::format!` and a literal grep reports them missing. Four false positives came from exactly
+that.
+
 ## The scenes
 
 - `families_p` — one layer of every family this build draws, over Berlin. The sweep's scene.
