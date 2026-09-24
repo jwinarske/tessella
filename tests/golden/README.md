@@ -416,6 +416,10 @@ sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/relief_style
 # same-wound one through `fixupPolygons` and this build does not, which is tessella#255.
 ./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/extrusion_style.json \
     --dump=<tessella>/tests/golden/extrusion_style.dump
+# Extrusion is the one family that needs this: two render-state sets per layer per tile, and which
+# of the pair is `#00` swaps between captures. Canonicalizing makes the file byte-reproducible.
+python3 <tessella>/tools/mbgl-codegen/oracles/canonicalize_drawable_index.py \
+    <tessella>/tests/golden/extrusion_style.dump
 
 # The circle capture. Pitched, because circle-pitch-alignment and circle-pitch-scale coincide at
 # pitch zero and the fixture exists to separate them. Inline GeoJSON, no substitution, no elision.
@@ -435,29 +439,25 @@ a texture-allocation counter, with every vertex count, index count and shader id
 That was checked rather than assumed, because the alternative — moving a shared checkout's HEAD —
 disturbs whatever else is building against it.
 
-### `extrusion_style.dump` is not byte-reproducible, and the test does not need it to be
+### `extrusion_style.dump` needs canonicalizing, and then it is byte-reproducible
 
-The paragraph below says byte-identical across six consecutive runs. That holds for every capture
-here except the extrusion one, which this note corrects: it was asserted for it without being
-checked.
+Extrusion is the only family that emits **two render-state sets per layer per tile** -- a depth
+pass in front of a color pass for any translucent layer -- and which of the pair is `#00` is the
+order mbgl happened to visit them in. Raw, two captures of the same style differ on 160 `flags=`
+fields with every count, shader id and buffer hash identical.
 
-Extrusion is the only family that emits **two drawables per layer per tile** — a depth pass in
-front of a color pass for any translucent layer — and their order is not pinned. Between two runs
-the `#00` and `#01` drawables swap their `flags=` field, 160 lines of it:
+`canonicalize_drawable_index.py` is written for exactly this, and its own docstring says so. It
+sorts drawables that share an identity but for the `#NN` by what distinguishes them and renumbers
+from zero, so nothing is discarded but the visit order. Run it and the file settles: two fresh
+captures and the committed one all hash `3c5d3ad311b5ab0d`.
 
-```text
-< drawable L00002…v00000019#00 pass=2 vtype=9 flags=1111 idx=30:ce4296272f558221 segs=1
-> drawable L00002…v00000019#00 pass=2 vtype=9 flags=1010 idx=30:ce4296272f558221 segs=1
-```
+#256 added this capture without that step and #262 then recorded the file as not reproducible.
+Both were wrong about the cause -- the tool already existed and was not applied. The recipe above
+now applies it.
 
-Nothing else moves: the two passes draw the same geometry, so every vertex count, index count,
-shader id and buffer hash is identical. `extrusion_geometry.rs` reads only layer, tile, vertex
-count and `idx=`, and hashing just those fields over the committed dump and two fresh captures
-gives one answer three times. So the test is immune and the file is not, which is why the file is
-committed as one run of many rather than as the run.
-
-`circle_style.dump` was checked the same way and *is* byte-identical across runs, and matches the
-committed file.
+`circle_style.dump` and `fill_style.dump` were checked the same way: both are byte-identical
+across runs already, and the canonicalization is a no-op on them. Extrusion is the only family
+with a pair to order.
 
 Produced by `mbgl-capture-probe` at maplibre-native `ecdaf2588a0b`, on the
 `capture-backend-phase0` branch whose base commit `b237943` plan.md pins. Byte-identical
