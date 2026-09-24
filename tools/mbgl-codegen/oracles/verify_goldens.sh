@@ -22,7 +22,7 @@
 # That is a race rather than drift, and what this script asks is whether the recipe *can* still
 # produce the committed file. So a mismatch is re-captured up to `ATTEMPTS` times and passes if any
 # attempt matches; one that never matches is drift and fails. Tolerating the race instead -- an
-# allowlist of the affected captures -- would have gutted the check, since four of the seventeen
+# allowlist of the affected captures -- would have gutted the check, since four of the eighteen
 # are affected.
 #
 # Exit status is zero when every golden reproduces, byte for byte or differing *only* in `tex=`
@@ -153,7 +153,7 @@ done
 verify_one hermetic_style.dump "capture \"--dump=$work/hermetic_style.dump\"" || status=1
 
 # Inline-GeoJSON fixtures, captured as they are.
-for name in composite joins fill gradient; do
+for name in composite joins fill gradient dash; do
     verify_one "${name}_style.dump" \
         "capture \"file://$styles/${name}_style.json\" \"--dump=$work/${name}_style.dump\"" \
         || status=1

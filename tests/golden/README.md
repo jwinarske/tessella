@@ -28,6 +28,7 @@ maplibre-native build. Regenerating them needs both.
 | `circle_style.dump` | `crates/tessella-style/tests/circle_style.json` | 51.505, -0.11 @ z13, **pitch 60**, 1024x768 |
 | `fill_style.dump` | `crates/tessella-style/tests/fill_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `gradient_style.dump` | `crates/tessella-style/tests/gradient_style.json` | 51.505, -0.11 @ z13, 1024x768 |
+| `dash_style.dump` | `crates/tessella-style/tests/dash_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 
 ### The one that needed the backend extended to exist
 
@@ -436,6 +437,12 @@ python3 <tessella>/tools/mbgl-codegen/oracles/canonicalize_drawable_index.py \
 # it records is which shader each takes and the 256-texel ramp mbgl bakes per gradient layer.
 ./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/gradient_style.json \
     --dump=<tessella>/tests/golden/gradient_style.dump
+
+# The dash capture. One dasharray at three line widths, again with round caps, and a four-entry
+# one; what it records is what keys a dash atlas -- the dasharray and the cap, not the width -- and
+# the sdfgamma each packs. Inline GeoJSON, no substitution and no elision.
+./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/dash_style.json \
+    --dump=<tessella>/tests/golden/dash_style.dump
 ```
 
 `extrusion_style.dump`, `circle_style.dump` and `fill_style.dump` were taken at `ad5e73527f3a`
@@ -504,7 +511,7 @@ MBGL_PROBE=<maplibre-native>/build-capture/mbgl-capture-probe \
 
 It regenerates every golden, applies the documented post-processing, and diffs. A golden that
 differs only in `tex=` passes; anything else is re-captured up to four times and passes if any
-attempt matches, which is what absorbs the race above without an allowlist -- four of the seventeen
+attempt matches, which is what absorbs the race above without an allowlist -- four of the eighteen
 captures are affected, so tolerating them by name would have gutted the check. A golden that never
 matches is drift and fails. `live_protomaps_z5.dump` is skipped and says so, because it needs the
 tile server.
