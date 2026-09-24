@@ -41,6 +41,10 @@
 //! see of the difference, which is to say nothing at all -- the 32 extra vertices were invisible
 //! to it, and only a count ever showed them.
 
+mod common;
+
+use common::fnv1a;
+
 use std::collections::BTreeMap;
 
 use tessella_orchestrate::gradient::Gradients;
@@ -91,19 +95,6 @@ fn oracle_hashes() -> Vec<((u32, u32), u64)> {
             ))
         })
         .collect()
-}
-
-/// FNV-1a, as the probe hashes texture bytes.
-///
-/// `capture_probe.cpp` seeds each texture with the offset basis and folds every upload into the
-/// running value, so a texture uploaded once hashes as plain FNV-1a over the bytes mbgl handed
-/// the backend.
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
-        hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
 }
 
 /// This frame's ramps, keyed by the layer that owns one.

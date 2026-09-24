@@ -71,6 +71,10 @@
 //! different pixels as the set shifted. It costs a texture object and an upload per redundant
 //! dashed layer, which is why it is counted here rather than left implicit -- see tessella#287.
 
+mod common;
+
+use common::fnv1a;
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use tessella_orchestrate::dash::Dashes;
@@ -189,19 +193,6 @@ fn oracle_hashes() -> Vec<((u32, u32), u64)> {
             ))
         })
         .collect()
-}
-
-/// FNV-1a, as the probe hashes texture bytes.
-///
-/// `capture_probe.cpp` seeds each texture with the offset basis and folds every upload into the
-/// running value, so a texture uploaded once hashes as plain FNV-1a over the bytes mbgl handed
-/// the backend.
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
-        hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
 }
 
 /// A layer's UBO record at `slot`, as its raw bytes.

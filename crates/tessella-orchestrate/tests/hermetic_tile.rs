@@ -9,6 +9,10 @@
 //! cause is still open (see `tessella_source::clip`) — but the counts are what the structure of
 //! the tile is made of, and they are exact.
 
+mod common;
+
+use common::fnv1a;
+
 use tessella_orchestrate::Content;
 use tessella_orchestrate::tile::{
     TileId, bucket_for, build_sourceless, build_tile, drawable_count,
@@ -292,15 +296,6 @@ fn line_vertex_counts_match_the_oracle_per_tile() {
             "tile {x}/{y}"
         );
     }
-}
-
-/// FNV-1a 64, the hash the probe uses over a raw buffer.
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in bytes {
-        h = (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    h
 }
 
 /// The line vertex and index buffers are byte-identical to the oracle's.

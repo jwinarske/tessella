@@ -20,6 +20,10 @@
 //! `#pragma mapbox: initialize` choose. A single constant layer cannot tell a packer that
 //! writes the evaluated value from one that writes the *default* — they agree.
 
+mod common;
+
+use common::fnv1a;
+
 use std::collections::BTreeMap;
 
 use tessella_capture_abi::ProjectionMode;
@@ -277,16 +281,6 @@ fn the_bucket_produces_the_oracles_vertex_and_index_counts() {
         assert_eq!(bucket.indices.len(), ilen);
         assert_eq!(bucket.segments.len(), 1);
     }
-}
-
-/// FNV-1a, as the probe hashes a texture's bytes.
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100_0000_01b3);
-    }
-    hash
 }
 
 /// `heatmap-color` parses against a color expectation, as mbgl's

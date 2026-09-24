@@ -27,17 +27,12 @@
 //! size in the right one — which is exactly the failure a capture that could not see any of it
 //! would have let through.
 
+mod common;
+
+use common::fnv1a;
+
 use tessella_glyph::shaping::{Char, Options as ShapeOptions};
 use tessella_glyph::text::ONE_EM;
-
-/// FNV-1a, as the probe hashes with.
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in bytes {
-        hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
-}
 
 const DUMP: &str = include_str!("../../../tests/golden/scaled_style.dump");
 

@@ -37,6 +37,10 @@
 
 #![allow(clippy::print_stdout)]
 
+mod common;
+
+use common::fnv1a;
+
 use std::collections::BTreeMap;
 
 use tessella_orchestrate::tile::{TileId, bucket_for, build_mvt_tile};
@@ -54,15 +58,6 @@ use tessella_style::property::Color;
 
 const STYLE: &str = include_str!("../../tessella-style/tests/live_style.json");
 const DUMP: &str = include_str!("../../../tests/golden/live_protomaps_z5.dump");
-
-/// FNV-1a 64, the hash the probe uses over a raw buffer.
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in bytes {
-        h = (h ^ u64::from(*b)).wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    h
-}
 
 /// The camera the golden was captured at.
 fn probe_view() -> ViewTransform {
