@@ -257,9 +257,11 @@ fn list<T>(
 /// tile's rings untouched -- and with them the edge distances a `fill-extrusion-pattern` wraps
 /// against, which reversing a ring would re-phase.
 ///
-/// Every ring turns together, so a hole stays a hole: `classify_rings` tells an interior ring
-/// from an exterior one by the sign it does *not* share, and flipping only the exterior would
-/// leave the two indistinguishable.
+/// Every ring turns together, so a well-formed hole stays a hole: `classify_rings` tells an
+/// interior ring from an exterior one by the sign it does *not* share, and flipping only the
+/// exterior would leave the two indistinguishable. A ring whose direction does not say what it
+/// is -- which RFC 7946 forbids and hand-written data supplies anyway -- is then repaired by
+/// [`repair_windings`].
 fn rings(type_name: &str, value: &Value) -> Result<PolygonRings, GeoJsonError> {
     let mut rings: PolygonRings = list(type_name, value, |ring| positions(type_name, ring))?;
     // Positive is counter-clockwise in longitude and latitude, which is RFC 7946's exterior and
@@ -273,7 +275,123 @@ fn rings(type_name: &str, value: &Value) -> Result<PolygonRings, GeoJsonError> {
             ring.reverse();
         }
     }
+    repair_windings(&mut rings);
     Ok(rings)
+}
+
+/// Gives each ring the direction its *nesting* says it should have, as mbgl's repair pass does.
+///
+/// # What mbgl does here
+///
+/// Every GeoJSON polygon feature goes through `fixupPolygons` before anything classifies it --
+/// unconditionally, in `geojson_tile_data.hpp`, citing geojson-vt-cpp#44. That is a wagyu union
+/// with `fill_type_even_odd` on both operands, and even-odd decides hole-ness by *position*
+/// rather than by winding: a ring inside an odd number of others is a hole whichever way it
+/// turns. So mbgl is winding-insensitive on this path, and measured over three windings of one
+/// annulus it reports the same ten vertices and twenty-four indices for all of them.
+///
+/// The group turn above preserves *relative* winding, which is right for well-formed input and
+/// leaves a same-wound hole reading as a second exterior. That drew a courtyard filled in, and an
+/// island inside a hole as three separate squares -- eighteen indices where the oracle has thirty.
+///
+/// # Why parity and not a clipper
+///
+/// Even-odd's rule is depth parity, and depth is all this needs: rings at an even depth take the
+/// exterior's direction and rings at an odd depth oppose it, after which `classify_rings` reads
+/// them the way it already reads well-formed rings. It costs one point-in-ring test per ordered
+/// pair, and a feature averages 6.6 rings in mbgl's own benchmarks, so the quadratic is over a
+/// handful.
+///
+/// What this does *not* buy is the rest of what a clipper does: a self-intersecting ring, or two
+/// rings that overlap without one containing the other, are still read as they arrive. Those need
+/// the union itself, which is a polygon clipper on the ingest path for every GeoJSON polygon --
+/// see tessella#255 for why that was not the first move.
+///
+/// # The containment test has to be proper containment
+///
+/// *Every* vertex of the inner ring must be inside the outer one, not merely the first. Testing
+/// one vertex reads two rings that merely overlap as a nesting and punches the overlap out as a
+/// hole -- which is worse than leaving them alone, because two overlapping opaque exteriors
+/// already cover the union that mbgl's clipper would produce. Measured: with the one-vertex test
+/// a pair of half-overlapping squares went from twelve indices to six and lost the overlap from
+/// the picture, where the oracle unions them into twenty-four.
+fn repair_windings(rings: &mut PolygonRings) {
+    if rings.len() < 2 {
+        return;
+    }
+    // The direction the exterior ended up with, which the group turn above has already settled.
+    // Degenerate rings have no direction and are skipped rather than counted.
+    let Some(exterior_positive) = rings
+        .iter()
+        .map(|ring| shoelace(ring))
+        .find(|area| *area != 0.0)
+        .map(|area| area > 0.0)
+    else {
+        return;
+    };
+
+    let depths: Vec<usize> = (0..rings.len())
+        .map(|inner| {
+            (0..rings.len())
+                .filter(|&outer| outer != inner && encloses(&rings[outer], &rings[inner]))
+                .count()
+        })
+        .collect();
+
+    for (ring, depth) in rings.iter_mut().zip(depths) {
+        let area = shoelace(ring);
+        if area == 0.0 {
+            continue;
+        }
+        let turns_like_the_exterior = (area > 0.0) == exterior_positive;
+        let should_turn_like_it = depth % 2 == 0;
+        if turns_like_the_exterior != should_turn_like_it {
+            ring.reverse();
+        }
+    }
+}
+
+/// Whether `outer` properly contains `inner`: every vertex of the inner ring inside the outer.
+///
+/// A bounding-box reject first, because two rings side by side are the common case and comparing
+/// four numbers settles them without a ray cast each.
+fn encloses(outer: &[Position], inner: &[Position]) -> bool {
+    if outer.len() < 3 || inner.is_empty() {
+        return false;
+    }
+    let bounds = |ring: &[Position]| {
+        ring.iter().fold(
+            [f64::MAX, f64::MAX, f64::MIN, f64::MIN],
+            |[west, south, east, north], &[x, y]| {
+                [west.min(x), south.min(y), east.max(x), north.max(y)]
+            },
+        )
+    };
+    let [iw, is, ie, in_] = bounds(inner);
+    let [ow, os, oe, on] = bounds(outer);
+    if iw < ow || is < os || ie > oe || in_ > on {
+        return false;
+    }
+    inner.iter().all(|&point| contains(outer, point))
+}
+
+/// Whether `point` is inside `ring`, by the even-odd rule.
+///
+/// Ray casting, which is the rule wagyu's `fill_type_even_odd` applies to the whole polygon:
+/// count the edges a ray crosses and an odd count is inside. A vertex lying exactly on an edge is
+/// undefined here, and that is the crossing case this does not claim to repair.
+fn contains(ring: &[Position], point: Position) -> bool {
+    let [x, y] = point;
+    let mut inside = false;
+    for index in 0..ring.len() {
+        let [ax, ay] = ring[index];
+        let [bx, by] = ring[(index + 1) % ring.len()];
+        // The half-open rule on y keeps a ray through a shared vertex from counting twice.
+        if (ay > y) != (by > y) && x < (bx - ax) * (y - ay) / (by - ay) + ax {
+            inside = !inside;
+        }
+    }
+    inside
 }
 
 /// Twice a ring's signed area, in longitude and latitude.
