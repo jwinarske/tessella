@@ -24,17 +24,20 @@
 //!   wrong width.
 //! - **One ramp per gradient layer, none for a plain line.**
 //!
-//! # What is deliberately not compared: the vertex counts
+//! # The vertex counts, which this golden could not compare when it was written
 //!
-//! They do not match, and the reason is tessella#274 rather than anything about gradients. mbgl
-//! simplifies GeoJSON geometry as it cuts tiles (`geojson-vt`'s `tolerance = 3`) and this build does
-//! not, so a line carries every point its author wrote. On this fixture the oracle spends 44 line
-//! vertices where this spends 76; on a 400-point route-shaped line it is 44 against 2,316.
+//! They did not match, and the reason had nothing to do with gradients: mbgl simplified GeoJSON
+//! geometry as it cut tiles and this build did not, so the oracle spent 44 line vertices here
+//! where this spent 76 (tessella#274). That is fixed, so they are compared now -- and they agree
+//! exactly, layer for layer.
 //!
-//! The pixels are what agree: this fixture reads **0 gross of 786,432** against `mbgl-render`, with
-//! 17,029 non-background pixels and some 6,800 distinct colors on both sides -- so the ramp really
-//! is drawn and really is sampled across the line. Asserting the vertex counts here would pin a
-//! number that is expected to move the day #274 is closed.
+//! The pixels agreed all along: this fixture reads **0 gross of 786,432** against `mbgl-render`,
+//! with 17,029 non-background pixels and some 6,800 distinct colors on both sides, so the ramp
+//! really is drawn and really is sampled across the line. That is what a gross-pixel suite could
+//! see of the difference, which is to say nothing at all -- the 32 extra vertices were invisible
+//! to it, and only a count ever showed them.
+
+use std::collections::BTreeMap;
 
 use tessella_orchestrate::gradient::Gradients;
 use tessella_orchestrate::tile::{TileId, build_tile};
@@ -202,4 +205,80 @@ fn every_gradient_layer_bakes_a_256_texel_ramp() {
     // The five-stop ramp runs blue to red through cyan, green and yellow, so its ends differ.
     let (first, last) = (&five.pixels[..4], &five.pixels[252 * 4..256 * 4]);
     assert_ne!(first, last, "a ramp whose ends agree is not a ramp");
+}
+
+/// The line geometry agrees with the oracle, layer for layer.
+///
+/// It did not when this golden was written -- see the note above. What makes it comparable is
+/// tessella#277, and what makes it worth asserting is that a regression there would be invisible
+/// to every pixel this fixture draws.
+#[test]
+fn the_line_geometry_matches_the_oracle() {
+    let style = Style::parse(STYLE).expect("the style parses");
+    let tessella_style::Source::Geojson(source) = style.source("probe").expect("a source") else {
+        panic!("the fixture has one geojson source")
+    };
+    let features = tessella_source::geojson::read(&source.data).expect("features read");
+
+    // Per layer, summed over the cover: the oracle's drawable names carry the vertex count and
+    // its `idx=` the index count.
+    let mut oracle: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
+    for line in DUMP.lines() {
+        let Some(rest) = line.strip_prefix("drawable L") else {
+            continue;
+        };
+        if !rest.contains(LINE) && !rest.contains(LINE_GRADIENT) {
+            continue;
+        }
+        let layer: usize = rest[..5].parse().expect("a five-digit layer index");
+        let verts: usize = rest
+            .split(".v")
+            .nth(1)
+            .and_then(|t| t.split('#').next())
+            .expect("a vertex count")
+            .parse()
+            .expect("digits");
+        let indices: usize = line
+            .split("idx=")
+            .nth(1)
+            .and_then(|t| t.split(':').next())
+            .expect("an index count")
+            .parse()
+            .expect("digits");
+        let slot = oracle.entry(layer).or_default();
+        slot.0 += verts;
+        slot.1 += indices;
+    }
+
+    let mut ours: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
+    for (x, y) in TILES {
+        for bucket in &build_tile(
+            &style,
+            "probe",
+            TileId::new(13, x, y),
+            &features,
+            TilingOptions::default(),
+        )
+        .expect("the tile builds")
+        {
+            if let tessella_orchestrate::Content::Line(line) = &bucket.content {
+                let slot = ours.entry(bucket.layer_index).or_default();
+                slot.0 += line.vertices.len();
+                slot.1 += line.indices.len();
+            }
+        }
+    }
+
+    assert!(!ours.is_empty(), "the fixture built no line buckets");
+    for (&layer, &counts) in &ours {
+        let name = style.layers.get(layer).map_or("?", |l| l.id.as_str());
+        let want = oracle
+            .get(&layer)
+            .copied()
+            .unwrap_or_else(|| panic!("the oracle drew nothing for layer {layer} ({name})"));
+        assert_eq!(
+            counts, want,
+            "layer {layer} ({name}): {counts:?} against the oracle's {want:?}"
+        );
+    }
 }
