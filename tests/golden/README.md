@@ -468,6 +468,28 @@ texture*, and **no test reads the field at all**. Ten goldens carry `tex=` lines
 are left as captured. If it ever needs to be strict, the treatment is a renumber by first
 appearance, the way `canonicalize_drawable_index.py` handles `#NN`; nothing needs it today.
 
+### A capture can be taken before the frame settles
+
+The probe captures whatever frame it holds when it stops, and that frame is not always settled. A
+z8 DEM tile appears overscaled to two levels in most captures of `relief_style.json` and to three in
+some, which moves its drawables, their draw order and its prepare targets. Two hundred captures of
+that one style:
+
+| | captures |
+|---|---|
+| matching the committed file | 175 |
+| a different, complete capture | 25, in four distinct shapes |
+
+`pattern_style.dump`, `image_text_style.dump` and `symbol_lines_style.dump` do the same at lower
+rates, since glyph and sprite atlases arrive on their own schedule. It is a race, not drift: every
+odd capture is complete and self-consistent, and the settled one is simply the common outcome.
+
+**It reached a test.** `relief_shapes.rs` asserted exactly two prepare targets, and seven of those
+two hundred captures carry three -- one per overscale level the cover had reached. A regeneration
+landing one of those would have failed, and the obvious repair would have been to expect three,
+pinning an unsettled cover as the answer. The assertion now checks what that test is about, which
+is that a prepare pass is 256x256 because it is the tile's own size rather than the viewport's.
+
 ### Checking the recipe still produces the files
 
 The recipe above is prose, and prose drifts. A capture whose post-processing step was never run
@@ -481,8 +503,11 @@ MBGL_PROBE=<maplibre-native>/build-capture/mbgl-capture-probe \
 ```
 
 It regenerates every golden, applies the documented post-processing, and diffs. A golden that
-differs only in `tex=` passes; anything else fails. `live_protomaps_z5.dump` is skipped and says
-so, because it needs the tile server.
+differs only in `tex=` passes; anything else is re-captured up to four times and passes if any
+attempt matches, which is what absorbs the race above without an allowlist -- four of the seventeen
+captures are affected, so tolerating them by name would have gutted the check. A golden that never
+matches is drift and fails. `live_protomaps_z5.dump` is skipped and says so, because it needs the
+tile server.
 
 Produced by `mbgl-capture-probe` at maplibre-native `ecdaf2588a0b`, on the
 `capture-backend-phase0` branch whose base commit `b237943` plan.md pins. Byte-identical

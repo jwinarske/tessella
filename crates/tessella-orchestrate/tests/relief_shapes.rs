@@ -144,18 +144,34 @@ fn the_ramp_is_one_row_per_table() {
     );
 }
 
-/// mbgl allocates two offscreen targets per hillshade tile; this build allocates none.
+/// mbgl prepares a hillshade offscreen, at the *tile's* size; this build allocates no target at
+/// all.
 ///
 /// Recorded rather than asserted against this build, because there is nothing here to compare it
 /// to — that is the point. If the CPU differentiation is ever traded for a prepare pass, this is
 /// the line that says what mbgl's costs.
+///
+/// # Why the size and not the count
+///
+/// This asserted exactly two targets until tessella#278, and two was incidental: mbgl allocates one
+/// per hillshade tile it prepares, so the number tracks how far the cover had refined when the
+/// capture was taken. That is a race, and it is visible — 200 captures of this style produced 3
+/// targets in 7 of them, where a z8 DEM tile appeared overscaled to three levels rather than two.
+/// A regeneration landing one of those would have failed this test, and the obvious repair would
+/// have been to expect three, pinning an unsettled cover as the answer.
+///
+/// The size is what the test is actually about: a prepare pass is 256x256 because it is the tile's
+/// own, not the 1024x768 viewport's. That holds in every capture measured.
 #[test]
 fn the_oracle_prepares_offscreen_and_this_build_does_not() {
     let targets: Vec<&str> = DUMP
         .lines()
         .filter_map(|line| line.strip_prefix("rendertarget "))
         .collect();
-    assert_eq!(targets.len(), 2, "two targets: {targets:?}");
+    assert!(
+        !targets.is_empty(),
+        "the oracle should prepare a hillshade offscreen"
+    );
     for target in &targets {
         assert!(
             target.starts_with("256x256"),
