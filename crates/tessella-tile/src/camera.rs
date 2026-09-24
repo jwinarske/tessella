@@ -732,7 +732,30 @@ pub fn tile_to_clip(
     y: u32,
     wrap: i32,
 ) -> Result<Mat4, CameraError> {
-    let projection = proj_matrix(view)?;
+    tile_to_clip_through(view, z, x, y, wrap, None)
+}
+
+/// [`tile_to_clip`], through a projection the caller supplies rather than one derived from `view`.
+///
+/// `None` is [`tile_to_clip`]. `Some` is a consumer-camera view (DR-9), whose labels are placed
+/// where the consumer's own projection puts them -- a scene camera that is not a map camera does
+/// not land its symbols where one derived from the map camera would.
+///
+/// # Errors
+///
+/// As [`tile_to_clip`].
+pub fn tile_to_clip_through(
+    view: &ViewTransform,
+    z: u8,
+    x: u32,
+    y: u32,
+    wrap: i32,
+    published: Option<&[f64; 16]>,
+) -> Result<Mat4, CameraError> {
+    let projection = match published {
+        Some(matrix) => *matrix,
+        None => proj_matrix(view)?,
+    };
     Ok(multiply(
         &projection,
         &matrix_for_tile(z, x, y, wrap, view.zoom),

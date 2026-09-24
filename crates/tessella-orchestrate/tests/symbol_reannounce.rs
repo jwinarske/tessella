@@ -99,6 +99,7 @@ fn emit(
         layouts,
         &mut frame::PlacementState::new(),
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style,
             view,

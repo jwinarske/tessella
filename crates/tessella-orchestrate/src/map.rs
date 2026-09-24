@@ -1161,6 +1161,7 @@ impl Map {
             &mut self.layouts,
             &mut self.placement,
             &Frame {
+                published_projection: self.published_projection,
                 projection: self.projection,
                 style: &self.style,
                 view: &self.view,

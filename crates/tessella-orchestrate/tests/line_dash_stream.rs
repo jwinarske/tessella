@@ -75,6 +75,7 @@ fn emit() -> Sent {
         producer,
         &mut arena,
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
@@ -166,6 +167,7 @@ fn the_atlas_goes_up_before_anything_names_it() {
         producer,
         &mut arena,
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,

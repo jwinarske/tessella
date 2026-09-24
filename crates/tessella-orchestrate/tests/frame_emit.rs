@@ -71,6 +71,7 @@ fn emit_frame() -> (Vec<EnvelopeKind>, frame::Emitted, usize) {
         producer,
         &mut arena,
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
@@ -261,6 +262,7 @@ fn a_symbol_layer_carries_its_quads_and_its_atlas() {
         producer,
         &mut arena,
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
@@ -380,6 +382,7 @@ fn a_raster_layer_carries_its_quad_and_its_picture() {
         producer,
         &mut arena,
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &style,
             view: &view,
@@ -495,6 +498,7 @@ fn a_nearest_raster_layer_reaches_the_wire_nearest() {
             producer,
             &mut arena,
             &Frame {
+                published_projection: None,
                 projection: ProjectionMode::Mercator,
                 style: &style,
                 view: &view,
@@ -619,6 +623,7 @@ fn emit_with_projection(projection: ProjectionMode) -> CameraUpdate {
         producer,
         &mut arena,
         &Frame {
+            published_projection: None,
             projection,
             style: &style,
             view: &view,

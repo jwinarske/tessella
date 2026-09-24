@@ -102,6 +102,7 @@ fn emit(scene: &Scene) -> (Session, u64) {
         &mut frame::SymbolCache::default(),
         &mut frame::PlacementState::new(),
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &scene.style,
             view: &scene.view,

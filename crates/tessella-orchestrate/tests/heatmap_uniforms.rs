@@ -404,6 +404,7 @@ fn a_frame_writes_each_pass_block_to_its_own_view() {
         producer,
         &mut arena,
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &style,
             view: &camera,
@@ -583,6 +584,7 @@ fn each_heatmap_layer_emits_a_quad_bound_into_the_map() {
         producer,
         &mut arena,
         &Frame {
+            published_projection: None,
             projection: ProjectionMode::Mercator,
             style: &style,
             view: &camera,
