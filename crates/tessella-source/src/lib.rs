@@ -32,6 +32,7 @@ pub mod kdbush;
 pub mod meshopt;
 pub mod mvt;
 pub mod protobuf;
+pub mod simplify;
 pub mod terrain;
 pub mod tiling;
 
