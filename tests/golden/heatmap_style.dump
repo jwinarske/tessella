@@ -37,12 +37,12 @@ drawable L00000.S00000.t13_00004094_00002724_o13_w+000.sh0003.pk0000.v00000004#0
 drawable L00001.S00000.tnone.sh0021.pk0000.v00000004#00 pass=2 vtype=9 flags=0001 idx=6:165c900af12806ce segs=1
   attr L00001.S00000.tnone.sh0021.pk0000.v00000004#00 id=0 bind=0 dt=9 ddt=9 off=0 voff=0 stride=4 src=4:cf7bba439df01885 fld=cf7bba439df01885
   seg L00001.S00000.tnone.sh0021.pk0000.v00000004#00 v=0 i=0 vlen=4 ilen=6
-  tex L00001.S00000.tnone.sh0021.pk0000.v00000004#00 slot=0 tex=34
+  tex L00001.S00000.tnone.sh0021.pk0000.v00000004#00 slot=0 tex=0
   tex L00001.S00000.tnone.sh0021.pk0000.v00000004#00 slot=1 tex=------ (ramp recreated per frame)
 drawable L00002.S00000.tnone.sh0021.pk0000.v00000004#00 pass=2 vtype=9 flags=0001 idx=6:165c900af12806ce segs=1
   attr L00002.S00000.tnone.sh0021.pk0000.v00000004#00 id=0 bind=0 dt=9 ddt=9 off=0 voff=0 stride=4 src=4:cf7bba439df01885 fld=cf7bba439df01885
   seg L00002.S00000.tnone.sh0021.pk0000.v00000004#00 v=0 i=0 vlen=4 ilen=6
-  tex L00002.S00000.tnone.sh0021.pk0000.v00000004#00 slot=0 tex=43
+  tex L00002.S00000.tnone.sh0021.pk0000.v00000004#00 slot=0 tex=1
   tex L00002.S00000.tnone.sh0021.pk0000.v00000004#00 slot=1 tex=------ (ramp recreated per frame)
 ubos 9
 ubo global:0 slot=0 size=48 bytes=0000804200008042000000440000c0c3000080440000404400009044--------abaaaa3f0000803f0000504100000000 (symbol_fade_change elided)
