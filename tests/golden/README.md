@@ -26,6 +26,7 @@ maplibre-native build. Regenerating them needs both.
 | `relief_style.dump` | `crates/tessella-style/tests/relief_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `extrusion_style.dump` | `crates/tessella-style/tests/extrusion_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `circle_style.dump` | `crates/tessella-style/tests/circle_style.json` | 51.505, -0.11 @ z13, **pitch 60**, 1024x768 |
+| `fill_style.dump` | `crates/tessella-style/tests/fill_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 
 ### The one that needed the backend extended to exist
 
@@ -420,13 +421,17 @@ sed "s|TESSELLA|<tessella>|" <tessella>/crates/tessella-style/tests/relief_style
 # pitch zero and the fixture exists to separate them. Inline GeoJSON, no substitution, no elision.
 ./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/circle_style.json \
     --pitch=60 --dump=<tessella>/tests/golden/circle_style.dump
+
+# The fill capture. Inline GeoJSON, no substitution and no elision -- what it records is the paint
+# binder across two shaders, and which of the two outline forms each layer draws.
+./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/fill_style.json \
+    --dump=<tessella>/tests/golden/fill_style.dump
 ```
 
-`extrusion_style.dump` and `circle_style.dump` are the captures not taken at `ecdaf2588a0b`:
-they were taken at `ad5e73527f3a`, further along the same branch. Re-capturing `joins_style.dump` there differs from
+`extrusion_style.dump`, `circle_style.dump` and `fill_style.dump` are the captures not taken at
+`ecdaf2588a0b`: they were taken at `ad5e73527f3a`, further along the same branch. Re-capturing `joins_style.dump` there differs from
 the committed one on ten lines, all of them a `slot=0 tex=` id reading 62 where the dump says 64 —
-a texture-allocation counter, with every vertex count, index count and shader id unchanged. Neither the extrusion
-nor the circle capture has a `tex=` line at all, so nothing it records can depend on the difference.
+a texture-allocation counter, with every vertex count, index count and shader id unchanged. None of those three has a `tex=` line at all, so nothing it records can depend on the difference.
 That was checked rather than assumed, because the alternative — moving a shared checkout's HEAD —
 disturbs whatever else is building against it.
 

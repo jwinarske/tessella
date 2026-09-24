@@ -1,0 +1,264 @@
+{
+ "version": 8,
+ "name": "fills",
+ "sources": {
+  "probe": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "a",
+       "tone": 0.3
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -0.134,
+          51.519000000000005
+         ],
+         [
+          -0.122,
+          51.519000000000005
+         ],
+         [
+          -0.122,
+          51.507000000000005
+         ],
+         [
+          -0.134,
+          51.507000000000005
+         ],
+         [
+          -0.134,
+          51.519000000000005
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "b",
+       "tone": 0.6
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -0.12200000000000001,
+          51.519000000000005
+         ],
+         [
+          -0.11,
+          51.519000000000005
+         ],
+         [
+          -0.11,
+          51.507000000000005
+         ],
+         [
+          -0.12200000000000001,
+          51.507000000000005
+         ],
+         [
+          -0.12200000000000001,
+          51.519000000000005
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "a",
+       "tone": 0.9
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -0.11,
+          51.519000000000005
+         ],
+         [
+          -0.09799999999999999,
+          51.519000000000005
+         ],
+         [
+          -0.09799999999999999,
+          51.507000000000005
+         ],
+         [
+          -0.11,
+          51.507000000000005
+         ],
+         [
+          -0.11,
+          51.519000000000005
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "b",
+       "tone": 0.4
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -0.134,
+          51.505
+         ],
+         [
+          -0.122,
+          51.505
+         ],
+         [
+          -0.122,
+          51.493
+         ],
+         [
+          -0.134,
+          51.493
+         ],
+         [
+          -0.134,
+          51.505
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {
+       "kind": "a",
+       "tone": 0.7
+      },
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -0.12200000000000001,
+          51.505
+         ],
+         [
+          -0.11,
+          51.505
+         ],
+         [
+          -0.11,
+          51.493
+         ],
+         [
+          -0.12200000000000001,
+          51.493
+         ],
+         [
+          -0.12200000000000001,
+          51.505
+         ]
+        ]
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "bg",
+   "type": "background",
+   "paint": {
+    "background-color": "#101418"
+   }
+  },
+  {
+   "id": "fill-plain",
+   "type": "fill",
+   "source": "probe",
+   "paint": {
+    "fill-color": "#4477aa"
+   }
+  },
+  {
+   "id": "fill-outlined",
+   "type": "fill",
+   "source": "probe",
+   "paint": {
+    "fill-color": "#aa7744",
+    "fill-outline-color": "#ffddaa"
+   }
+  },
+  {
+   "id": "fill-outline-driven",
+   "type": "fill",
+   "source": "probe",
+   "paint": {
+    "fill-color": [
+     "match",
+     [
+      "get",
+      "kind"
+     ],
+     "a",
+     "#cc4466",
+     "#4466cc"
+    ],
+    "fill-outline-color": [
+     "match",
+     [
+      "get",
+      "kind"
+     ],
+     "a",
+     "#ffffff",
+     "#000000"
+    ],
+    "fill-opacity": [
+     "get",
+     "tone"
+    ]
+   }
+  },
+  {
+   "id": "fill-no-aa",
+   "type": "fill",
+   "source": "probe",
+   "paint": {
+    "fill-color": "#66aa88",
+    "fill-outline-color": "#ffffff",
+    "fill-antialias": false
+   }
+  },
+  {
+   "id": "fill-translated",
+   "type": "fill",
+   "source": "probe",
+   "paint": {
+    "fill-color": "#8866aa",
+    "fill-translate": [
+     10,
+     -6
+    ],
+    "fill-translate-anchor": "viewport"
+   }
+  }
+ ]
+}
