@@ -1478,7 +1478,20 @@ pub fn read_geojson_data(
     source: &tessella_style::GeojsonSource,
     document: &tessella_style::Value,
 ) -> Result<SourceData, String> {
-    let features = tessella_source::geojson::read(document).map_err(|error| error.to_string())?;
+    // The source's own maxzoom and tolerance, which set the simplification annotation's
+    // resolution. mbgl passes both into geojson-vt and converts at maxZoom's tolerance, so a
+    // source that names either has to have it honored here rather than at the tile.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let max_zoom = source
+        .maxzoom
+        .map_or(tessella_source::simplify::DEFAULT_MAX_ZOOM, |zoom| {
+            zoom.clamp(0.0, 30.0) as u8
+        });
+    let tolerance = source
+        .tolerance
+        .unwrap_or(tessella_source::simplify::DEFAULT_TOLERANCE);
+    let features = tessella_source::geojson::read_with(document, max_zoom, tolerance)
+        .map_err(|error| error.to_string())?;
     Ok(match clustering_for(source) {
         Some(options) => SourceData::Clustered(alloc::sync::Arc::new(
             tessella_source::cluster::Clustered::new(features, options),

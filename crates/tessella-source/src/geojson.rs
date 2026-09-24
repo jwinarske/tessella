@@ -80,6 +80,13 @@ pub struct GeoJsonFeature {
     pub properties: BTreeMap<String, Value>,
     /// Its geometry.
     pub geometry: Geometry,
+    /// Per line or ring, in the order [`Geometry`]'s own rings flatten: each point's
+    /// Douglas-Peucker importance and the whole-feature metric a tile filters on.
+    ///
+    /// Empty for a point geometry, which mbgl does not simplify, and empty for a feature this
+    /// build made rather than read -- a cluster's synthetic point has no line to simplify.
+    /// [`crate::simplify`] says what the numbers are and where the tolerance comes from.
+    pub simplification: Vec<crate::simplify::Simplification>,
 }
 
 impl Feature for GeoJsonFeature {
@@ -134,6 +141,27 @@ pub enum GeoJsonError {
 ///
 /// [`GeoJsonError`] when the value is not GeoJSON this build can read.
 pub fn read(value: &Value) -> Result<Vec<GeoJsonFeature>, GeoJsonError> {
+    read_with(
+        value,
+        crate::simplify::DEFAULT_MAX_ZOOM,
+        crate::simplify::DEFAULT_TOLERANCE,
+    )
+}
+
+/// As [`read`], with the source's own `maxzoom` and `tolerance`.
+///
+/// Those two set the Douglas-Peucker annotation's resolution, and a source that names either wants
+/// it honored: mbgl passes both into geojson-vt and converts at `maxZoom`'s tolerance. [`read`]
+/// takes the style spec's defaults, which is what a source that names neither gets.
+///
+/// # Errors
+///
+/// [`GeoJsonError`] when the value is not GeoJSON this build can read.
+pub fn read_with(
+    value: &Value,
+    max_zoom: u8,
+    tolerance: f64,
+) -> Result<Vec<GeoJsonFeature>, GeoJsonError> {
     let type_name = value
         .get("type")
         .and_then(Value::as_str)
@@ -148,19 +176,31 @@ pub fn read(value: &Value) -> Result<Vec<GeoJsonFeature>, GeoJsonError> {
                     type_name: "FeatureCollection".to_string(),
                     detail: "`features` must be an array".to_string(),
                 })?;
-            features.iter().map(read_feature).collect()
+            features
+                .iter()
+                .map(|feature| read_feature(feature, max_zoom, tolerance))
+                .collect()
         }
-        "Feature" => Ok(vec![read_feature(value)?]),
+        "Feature" => Ok(vec![read_feature(value, max_zoom, tolerance)?]),
         // A bare geometry is a feature with no id and no properties.
-        _ => Ok(vec![GeoJsonFeature {
-            id: None,
-            properties: BTreeMap::new(),
-            geometry: read_geometry(value)?,
-        }]),
+        _ => {
+            let geometry = read_geometry(value)?;
+            let simplification = simplify_geometry(&geometry, max_zoom, tolerance);
+            Ok(vec![GeoJsonFeature {
+                id: None,
+                properties: BTreeMap::new(),
+                geometry,
+                simplification,
+            }])
+        }
     }
 }
 
-fn read_feature(value: &Value) -> Result<GeoJsonFeature, GeoJsonError> {
+fn read_feature(
+    value: &Value,
+    max_zoom: u8,
+    tolerance: f64,
+) -> Result<GeoJsonFeature, GeoJsonError> {
     let object = value
         .as_object()
         .ok_or(GeoJsonError::NotAnObject(value.type_name()))?;
@@ -182,11 +222,38 @@ fn read_feature(value: &Value) -> Result<GeoJsonFeature, GeoJsonError> {
         _ => BTreeMap::new(),
     };
 
+    let geometry = read_geometry(geometry)?;
+    let simplification = simplify_geometry(&geometry, max_zoom, tolerance);
     Ok(GeoJsonFeature {
         id: object.get("id").filter(|v| **v != Value::Null).cloned(),
         properties,
-        geometry: read_geometry(geometry)?,
+        geometry,
+        simplification,
     })
+}
+
+/// Annotates a geometry's lines and rings, in the order they flatten.
+///
+/// The order is the one every consumer walks -- a polygon's rings across all its parts, then the
+/// next feature -- so a caller can zip this against the geometry without carrying an index.
+fn simplify_geometry(
+    geometry: &Geometry,
+    max_zoom: u8,
+    tolerance: f64,
+) -> Vec<crate::simplify::Simplification> {
+    match geometry {
+        // mbgl simplifies lines and rings. A point has nothing to drop.
+        Geometry::Point(_) => Vec::new(),
+        Geometry::LineString(lines) => lines
+            .iter()
+            .map(|line| crate::simplify::line(line, max_zoom, tolerance))
+            .collect(),
+        Geometry::Polygon(polygons) => polygons
+            .iter()
+            .flat_map(|polygon| polygon.iter())
+            .map(|ring| crate::simplify::ring(ring, max_zoom, tolerance))
+            .collect(),
+    }
 }
 
 fn read_geometry(value: &Value) -> Result<Geometry, GeoJsonError> {

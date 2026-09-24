@@ -43,6 +43,8 @@ fn places() -> Vec<GeoJsonFeature> {
                 id: None,
                 properties,
                 geometry: Geometry::Point(vec![point]),
+                // Points carry no simplification, which is what `read` gives them too.
+                simplification: Vec::new(),
             }
         })
         .collect()

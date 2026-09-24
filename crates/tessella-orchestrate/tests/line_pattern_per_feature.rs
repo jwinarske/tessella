@@ -64,11 +64,13 @@ fn features() -> Vec<GeoJsonFeature> {
             id: None,
             properties,
             geometry: line(0.0),
+            simplification: Vec::new(),
         },
         GeoJsonFeature {
             id: None,
             properties: other,
             geometry: line(20.0),
+            simplification: Vec::new(),
         },
     ]
 }
