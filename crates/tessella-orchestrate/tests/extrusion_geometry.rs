@@ -317,3 +317,120 @@ fn the_oracle_also_emits_an_instanced_copy() {
          {plain}"
     );
 }
+
+/// `fill-extrusion-rounded-corner-distance` rounds the corners, and the oracle says by how much.
+///
+/// The property is mbgl's and was read nowhere here, so a style asking for rounded buildings got
+/// square ones. `roundPolygonCorners` runs between `limitHoles` and the vertex count, turning each
+/// corner into five points -- a start, three arc points and an end.
+///
+/// Counts captured from `mbgl-capture-probe` over this fixture with the property set to 5. They do
+/// not depend on the distance: 5 and 20 give the same counts, because what a corner costs is fixed
+/// and only where the arc sits moves.
+///
+/// | tile | oracle | this build |
+/// |---|---|---|
+/// | 4092/2723 | 83 / 222 | **84** / 222 |
+/// | 4092/2724 | 42 / 108 | 42 / 108 |
+/// | 4093/2723 | 126 / 336 | 126 / 336 |
+/// | 4093/2724 | 84 / 216 | 84 / 216 |
+/// | 4094/2723 | 63 / 162 | 63 / 162 |
+/// | 4094/2724 | 63 / 162 | 63 / 162 |
+///
+/// The one mismatch is the tile [`MERGED_AT_THE_BUFFER_EDGE`] already names, and it is that
+/// divergence rather than a rounding one: unrounded it is 20 against 19. Two rings of four corners
+/// round to `2 * (4 * 5 + 1)` = 42 where one merged ring of eight rounds to `8 * 5 + 1` = 41, so
+/// the difference stays the second ring's closing point -- one vertex, and no triangle. Every
+/// index count agrees, that tile included.
+#[test]
+fn rounding_the_corners_matches_the_oracles_counts() {
+    /// `(tile, vertices, indices)` as the oracle captured them at distance 5.
+    const ORACLE: [((u32, u32), usize, usize); 6] = [
+        ((4092, 2723), 83, 222),
+        ((4092, 2724), 42, 108),
+        ((4093, 2723), 126, 336),
+        ((4093, 2724), 84, 216),
+        ((4094, 2723), 63, 162),
+        ((4094, 2724), 63, 162),
+    ];
+
+    let mut doc: serde_json::Value = serde_json::from_str(STYLE).expect("the fixture parses");
+    for layer in doc["layers"]
+        .as_array_mut()
+        .expect("the style has layers")
+        .iter_mut()
+    {
+        if layer["type"] == "fill-extrusion" {
+            layer["layout"] = serde_json::json!({
+                "fill-extrusion-rounded-corner-distance": 5
+            });
+        }
+    }
+    let style = Style::parse(&doc.to_string()).expect("the rounded style parses");
+    let tessella_style::Source::Geojson(source) = style.source("probe").expect("a source") else {
+        panic!("the fixture has one geojson source")
+    };
+    let features = tessella_source::geojson::read(&source.data).expect("features read");
+
+    for (tile, want_verts, want_indices) in ORACLE {
+        let (x, y) = tile;
+        let buckets = build_tile(
+            &style,
+            "probe",
+            TileId::new(13, x, y),
+            &features,
+            TilingOptions::default(),
+        )
+        .expect("the tile builds");
+        let extrusion = buckets
+            .iter()
+            .find_map(|bucket| match &bucket.content {
+                Content::Fill3d(e) if bucket.layer_index == 1 => Some(e),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("no extrusion bucket at {tile:?}"));
+
+        assert_eq!(
+            extrusion.indices.len(),
+            want_indices,
+            "rounded triangles at {tile:?}"
+        );
+        let allowance = usize::from(tile == MERGED_AT_THE_BUFFER_EDGE);
+        assert_eq!(
+            extrusion.vertices.len(),
+            want_verts + allowance,
+            "rounded vertices at {tile:?}: the oracle's {want_verts} plus {allowance} for the \
+             merged ring"
+        );
+    }
+}
+
+/// Zero is the default and it rounds nothing, which is the whole of the common path.
+#[test]
+fn no_distance_leaves_the_corners_alone() {
+    let style = Style::parse(STYLE).expect("the style parses");
+    let tessella_style::Source::Geojson(source) = style.source("probe").expect("a source") else {
+        panic!("the fixture has one geojson source")
+    };
+    let features = tessella_source::geojson::read(&source.data).expect("features read");
+    let buckets = build_tile(
+        &style,
+        "probe",
+        TileId::new(13, 4093, 2724),
+        &features,
+        TilingOptions::default(),
+    )
+    .expect("the tile builds");
+    let extrusion = buckets
+        .iter()
+        .find_map(|bucket| match &bucket.content {
+            Content::Fill3d(e) if bucket.layer_index == 1 => Some(e),
+            _ => None,
+        })
+        .expect("an extrusion bucket");
+    assert_eq!(
+        (extrusion.vertices.len(), extrusion.indices.len()),
+        (20, 24),
+        "the fixture sets no distance, so this is the unrounded count the golden already pins"
+    );
+}

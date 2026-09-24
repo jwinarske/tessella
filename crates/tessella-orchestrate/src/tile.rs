@@ -819,7 +819,8 @@ pub fn build_tile_on_with_patterns(
                     }
                 }
                 let borrowed: Vec<&[Ring]> = per_feature.iter().map(Vec::as_slice).collect();
-                let (content, ends) = build_fill_content(layer, &paint, &borrowed, fill_step);
+                let (content, ends) =
+                    build_fill_content(layer, &paint, &borrowed, fill_step, bucket_zoom);
                 for (feature, end) in kept.iter().zip(&ends) {
                     binder
                         .push(*end, &paint, *feature)
@@ -1589,6 +1590,7 @@ fn build_fill_content(
     paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
     rings: &[&[Ring]],
     step: i32,
+    zoom: f64,
 ) -> (Content, Vec<usize>) {
     if layer.kind == LayerKind::FillExtrusion {
         // A data-driven opacity cannot be resolved to one number here, and mbgl does not try:
@@ -1603,7 +1605,21 @@ fn build_fill_content(
         // mbgl's `hasPattern`, and unevaluated: what matters is that the style asks for a
         // pattern, not that the atlas had one.
         let patterned = layer.paint.contains_key("fill-extrusion-pattern");
-        let (bucket, ends) = fill_extrusion::build_features_tracked(rings, opaque, patterned);
+        // `fill-extrusion-rounded-corner-distance`, in tile units, which mbgl reads off the
+        // evaluated layout properties and hands to `roundPolygonCorners` before it counts a
+        // vertex. Zero is the default and the whole of the common path: a polygon nobody asked
+        // to round is not walked.
+        let rounded_corners = tessella_style::property::layout_value(
+            layer,
+            "fill-extrusion-rounded-corner-distance",
+            zoom,
+            None,
+        )
+        .as_ref()
+        .and_then(tessella_style::value::Value::as_number)
+        .unwrap_or(0.0);
+        let (bucket, ends) =
+            fill_extrusion::build_features_tracked(rings, opaque, patterned, rounded_corners);
         return (Content::Fill3d(bucket), ends);
     }
     // Split against the grid a globe would bend this level's tiles on. Unconditional, and it
@@ -2182,7 +2198,8 @@ pub fn build_mvt_tile_on_with_patterns(
                     }
                 }
                 let borrowed: Vec<&[Ring]> = per_feature.iter().map(Vec::as_slice).collect();
-                let (content, ends) = build_fill_content(layer, &paint, &borrowed, fill_step);
+                let (content, ends) =
+                    build_fill_content(layer, &paint, &borrowed, fill_step, bucket_zoom);
                 let borrowed_features: Vec<&dyn tessella_style::expression::Feature> = kept
                     .iter()
                     .map(|feature| feature as &dyn tessella_style::expression::Feature)
