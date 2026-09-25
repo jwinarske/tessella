@@ -30,6 +30,7 @@ maplibre-native build. Regenerating them needs both.
 | `gradient_style.dump` | `crates/tessella-style/tests/gradient_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `dash_style.dump` | `crates/tessella-style/tests/dash_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 | `evenodd_style.dump` | `crates/tessella-style/tests/evenodd_style.json` | 51.505, -0.11 @ z13, 1024x768 |
+| `selfcross_style.dump` | `crates/tessella-style/tests/selfcross_style.json` | 51.505, -0.11 @ z13, 1024x768 |
 
 ### The one that needed the backend extended to exist
 
@@ -449,6 +450,12 @@ python3 <tessella>/tools/mbgl-codegen/oracles/canonicalize_drawable_index.py \
 # records is what mbgl's `fixupPolygons` does to a GeoJSON polygon beyond sorting its windings.
 ./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/evenodd_style.json \
     --dump=<tessella>/tests/golden/evenodd_style.dump
+
+# The self-crossing capture. A bowtie, a figure-eight touching at a repeated vertex, and a square
+# with a zero-area spur; what it records is that i_overlay's even-odd and wagyu's agree on rings
+# no union has a single obvious answer for.
+./mbgl-capture-probe file://<tessella>/crates/tessella-style/tests/selfcross_style.json \
+    --dump=<tessella>/tests/golden/selfcross_style.dump
 ```
 
 Then, on **every** dump above, the two canonicalizations every recipe needs -- see the `tex=` section
@@ -552,7 +559,7 @@ MBGL_PROBE=<maplibre-native>/build-capture/mbgl-capture-probe \
 
 It regenerates every golden, applies the documented post-processing, and diffs. A golden that
 differs only in `tex=` passes; anything else is re-captured up to four times and passes if any
-attempt matches, which is what absorbs the race above without an allowlist -- four of the nineteen
+attempt matches, which is what absorbs the race above without an allowlist -- four of the twenty
 captures are affected, so tolerating them by name would have gutted the check. A golden that never
 matches is drift and fails. `live_protomaps_z5.dump` is skipped and says so, because it needs the
 tile server.
