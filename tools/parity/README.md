@@ -86,12 +86,19 @@ Every one of the 2,233 is accounted for, by running `lean.py` over the ranking:
 | the circle-edge floor | 711 | 32% -- one-sided by construction, see the golden README |
 | tessella#297 | 237 | 11% -- a translucent fill-extrusion blended once per tile that carries it |
 | mixed | 223 | 10% -- `add-a-pattern-to-a-polygon`, `render-world-copies` and one more |
-| unattributed | 65 | 3% -- `display-buildings-in-3d` 41 and the multidirectional hillshade 24 |
+| silhouette and edge effects | 65 | 3% -- `display-buildings-in-3d` 41 and the multidirectional hillshade 24 |
 | everything else | 8 | across seven slugs |
 
-**The largest unexplained single camera is 41 pixels.** That is the useful form of this table: not
-that the suite is finished, but that nothing is hiding in it above forty pixels, so the next parity
-defect has to be found by adding a scene rather than by staring at this one.
+**The largest single camera not covered by a named cause is 41 pixels.** That is the useful form of
+this table: not that the suite is finished, but that nothing is hiding in it above forty pixels, so
+the next parity defect has to be found by adding a scene rather than by staring at this one.
+
+That 41 was looked at rather than left as a number. In `display-buildings-in-3d` the differing
+pixels are a thin diagonal line along one building's silhouette where two *opaque* extrusions
+overlap: this side shows the lower roof where the oracle shows the taller block, by less than a
+pixel. It is a boundary effect of the same kind as the two floors above, which is why it is grouped
+with them rather than carried as an open question -- and it is emphatically not tessella#297, whose
+signature needs a translucent layer and a depth pass.
 
 `#297` is worth the note that it covers two examples, not one -- `extrude-polygons-for-3d-indoor-mapping`
 at `fill-extrusion-opacity` 0.5 and `animate-map-camera-around-a-point` at 0.8. A third extrusion
