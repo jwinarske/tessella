@@ -1,0 +1,144 @@
+{
+ "version": 8,
+ "name": "selfcross",
+ "sources": {
+  "probe": {
+   "type": "geojson",
+   "data": {
+    "type": "FeatureCollection",
+    "features": [
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -0.13,
+          51.5
+         ],
+         [
+          -0.106,
+          51.518
+         ],
+         [
+          -0.13,
+          51.518
+         ],
+         [
+          -0.106,
+          51.5
+         ],
+         [
+          -0.13,
+          51.5
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -0.098,
+          51.5
+         ],
+         [
+          -0.086,
+          51.5
+         ],
+         [
+          -0.092,
+          51.509
+         ],
+         [
+          -0.086,
+          51.518
+         ],
+         [
+          -0.098,
+          51.518
+         ],
+         [
+          -0.092,
+          51.509
+         ],
+         [
+          -0.098,
+          51.5
+         ]
+        ]
+       ]
+      }
+     },
+     {
+      "type": "Feature",
+      "properties": {},
+      "geometry": {
+       "type": "Polygon",
+       "coordinates": [
+        [
+         [
+          -0.078,
+          51.5
+         ],
+         [
+          -0.078,
+          51.512
+         ],
+         [
+          -0.06,
+          51.512
+         ],
+         [
+          -0.06,
+          51.5
+         ],
+         [
+          -0.069,
+          51.5
+         ],
+         [
+          -0.069,
+          51.506
+         ],
+         [
+          -0.069,
+          51.5
+         ],
+         [
+          -0.078,
+          51.5
+         ]
+        ]
+       ]
+      }
+     }
+    ]
+   }
+  }
+ },
+ "layers": [
+  {
+   "id": "bg",
+   "type": "background",
+   "paint": {
+    "background-color": "#101418"
+   }
+  },
+  {
+   "id": "shapes",
+   "type": "fill",
+   "source": "probe",
+   "paint": {
+    "fill-color": "#c86432"
+   }
+  }
+ ]
+}
