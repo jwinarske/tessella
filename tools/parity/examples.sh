@@ -5,6 +5,19 @@
 #
 #   examples.sh [slug...]            replay from the snapshot; every example when none is named
 #   PARITY_RECORD=1 examples.sh ...  fetch what the snapshot lacks, and rewrite the manifests
+#   PARITY_FILL_OUTLINES=1 ...       keep fill outlines, which are off by default
+#
+# # Fill outlines are off by default, and that is a choice about the metric
+#
+# mbgl draws a fill outline two ways depending on the backend and they do not agree. The oracle is a
+# Vulkan build and takes the hardware-line path; this side is bit-faithful to the triangulated one
+# and cannot take the other, because Filament exposes no line width. Measured over all 59 cameras on
+# 2026-09-22: 26,225 gross with outlines and 6,886 without, so three quarters of what this reported
+# was one permanent difference -- enough to hide any new defect underneath it.
+#
+# So `no_fill_antialias.py` patches the composed style, which both renderers then read, and the
+# number below is the one to watch. `PARITY_FILL_OUTLINES=1` restores the old measurement. What it
+# gives up is in that script's header.
 #
 # Each `examples/<slug>/fixture.json` is a base style, what the example adds on load, and the
 # settled cameras to compare (compose.py says how). The proxy stands in front of every origin the
@@ -65,6 +78,12 @@ for slug in "$@"; do
     echo "COMPOSE FAILED $slug" >&2
     status=1
     continue
+  fi
+  # Fill outlines off unless asked for, on the composed style, so both renderers get the same one.
+  # mbgl's two outline paths disagree with each other and this side can only take one of them; the
+  # header above and `no_fill_antialias.py` say what that is worth and what it gives up.
+  if [ "${PARITY_FILL_OUTLINES:-}" != 1 ]; then
+    python3 "$PARITY_DIR/no_fill_antialias.py" "$style" >/dev/null
   fi
   # What the example does once its style has loaded, where it does anything: `compose.py` writes
   # it beside the style, and both renderers read that same file.
