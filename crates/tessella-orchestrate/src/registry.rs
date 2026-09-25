@@ -505,26 +505,42 @@ pub struct Textures {
     emissions: u64,
 }
 
-/// The payload a tile texture was last sent from.
+/// The payload a texture was last sent from.
 ///
-/// Held rather than hashed. A tile texture is a quarter of a megabyte and comparing one would
-/// mean reading all of it every frame, on the thread that has to finish before the frame does --
-/// which on a device with one memory bus is the cost this exists to avoid. An `Arc` is its own
-/// identity instead: nothing here mutates a decoded payload in place, so a tile whose content
-/// changed carries a *different* allocation, and two clones of one `Arc` are the same pixels by
-/// construction. The comparison is a pointer.
+/// Identity is per variant, because the two kinds of texture arrive differently.
+///
+/// A *decoded* payload is held rather than hashed. A tile texture is a quarter of a megabyte and
+/// comparing one would mean reading all of it every frame, on the thread that has to finish before
+/// the frame does -- which on a device with one memory bus is the cost this exists to avoid. An
+/// `Arc` is its own identity instead: nothing here mutates a decoded payload in place, so a tile
+/// whose content changed carries a *different* allocation, and two clones of one `Arc` are the same
+/// pixels by construction. The comparison is a pointer.
 ///
 /// Holding the `Arc` rather than the bare address is what makes that sound. An address alone
 /// compares equal to a different payload that landed where a freed one had been, and tile
 /// textures are all the same size, so the allocator handing back the same block is ordinary
 /// rather than remote. The strong reference keeps the allocation from being reissued while a
 /// comparison still names it.
+///
+/// A *generated* payload has no such allocation to compare. Every one of them is rebuilt from the
+/// style each frame (`frame::write_generated` lists the seven), so a fresh `Arc` every time says
+/// nothing about whether the bytes changed. They are compared by value, which they can afford to
+/// be: a dash atlas is 256 bytes and a ramp a kilobyte, against the quarter-megabyte that made the
+/// pointer necessary above. Exact rather than hashed, so there is no collision to reason about -- a
+/// hash that collided would leave the consumer sampling another pattern's bytes, which draws
+/// visibly wrong and would be indistinguishable from a tessellation fault.
 #[derive(Clone, Debug)]
 pub enum TextureContent {
     /// A picture: a raster tile's imagery, or a hillshade's slope field.
     Picture(alloc::sync::Arc<tessella_source::image::Image>),
     /// A DEM, which a color relief samples for height and the ground for its surface.
     Elevation(alloc::sync::Arc<tessella_source::dem::Dem>),
+    /// An upload built from the style rather than decoded from a resource.
+    ///
+    /// The whole upload and not just its pixels. The record carries the extent, the format and the
+    /// rect list, and a glyph atlas re-sent with the same bytes under a different rect list is a
+    /// different write -- the rects are what say which glyphs those bytes are.
+    Generated(alloc::sync::Arc<crate::texture::Upload>),
 }
 
 impl TextureContent {
@@ -535,6 +551,9 @@ impl TextureContent {
             (Self::Picture(ours), Self::Picture(theirs)) => alloc::sync::Arc::ptr_eq(ours, theirs),
             (Self::Elevation(ours), Self::Elevation(theirs)) => {
                 alloc::sync::Arc::ptr_eq(ours, theirs)
+            }
+            (Self::Generated(ours), Self::Generated(theirs)) => {
+                alloc::sync::Arc::ptr_eq(ours, theirs) || ours == theirs
             }
             _ => false,
         }
@@ -609,7 +628,7 @@ impl Textures {
             .get(&texture)
             .is_some_and(|held| match &held.content {
                 TextureContent::Elevation(dem) => dem.stride() == stride,
-                TextureContent::Picture(_) => false,
+                TextureContent::Picture(_) | TextureContent::Generated(_) => false,
             })
     }
 
@@ -627,7 +646,7 @@ impl Textures {
             .get(&texture)
             .is_some_and(|held| match &held.content {
                 TextureContent::Picture(image) => image.width == width && image.height == height,
-                TextureContent::Elevation(_) => false,
+                TextureContent::Elevation(_) | TextureContent::Generated(_) => false,
             })
     }
 
@@ -649,6 +668,29 @@ impl Textures {
         if let Some(held) = self.sent.get_mut(&texture) {
             held.seen = next;
         }
+    }
+
+    /// Whether the consumer already holds exactly this generated upload, or this frame has already
+    /// written it.
+    ///
+    /// One question rather than [`Self::current`] and [`Self::writing`] separately, because both
+    /// answers mean the same thing for a generated texture: do not write it again. A decoded
+    /// payload needs them apart -- the same DEM serves sixteen tiles that each ask in turn -- while
+    /// an atlas is built once per frame and asked about once.
+    ///
+    /// Takes the upload by reference so a parked frame allocates nothing: the comparison reads both
+    /// values in place, and the caller moves the upload into the staged set only on a miss.
+    #[must_use]
+    pub fn holds_generated(&self, texture: TextureId, upload: &crate::texture::Upload) -> bool {
+        let same = |content: &TextureContent| match content {
+            TextureContent::Generated(held) => &**held == upload,
+            TextureContent::Picture(_) | TextureContent::Elevation(_) => false,
+        };
+        self.staged.get(&texture).is_some_and(same)
+            || self
+                .sent
+                .get(&texture)
+                .is_some_and(|held| same(&held.content))
     }
 
     /// Notes a texture this frame has written, to be remembered if the frame commits.

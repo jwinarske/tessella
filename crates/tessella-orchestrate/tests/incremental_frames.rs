@@ -693,6 +693,197 @@ fn a_parked_view_writes_no_bytes_at_all() {
     }
 }
 
+/// The same claim for a scene whose layers carry *generated textures*: a `line-dasharray` and a
+/// `line-gradient`.
+///
+/// `a_parked_view_writes_no_bytes_at_all` above proves the guarantee on a fill, and a fill names no
+/// texture. A dash atlas and a gradient ramp are rebuilt from the style every frame and written
+/// unconditionally, so the scene that has one is the scene that tests the gate.
+#[test]
+fn a_parked_view_with_generated_textures_writes_no_bytes_either() {
+    use tessella_capture_abi::ring::{self, region_size};
+
+    const DASHED: &str = r#"{"version": 8, "sources": {"s": {"type": "vector", "tiles": []}},
+      "layers": [{"id": "f", "type": "fill", "source": "s", "source-layer": "water",
+                  "paint": {"fill-color": "red"}},
+                 {"id": "d", "type": "line", "source": "s", "source-layer": "water",
+                  "paint": {"line-color": "blue", "line-dasharray": [2, 1]}}]}"#;
+
+    let style = Style::parse(DASHED).expect("parses");
+    let view = camera::settled(&ViewTransform {
+        longitude: 0.0,
+        latitude: 0.0,
+        zoom: 3.0,
+        width: 512.0,
+        height: 512.0,
+        bearing: 0.0,
+        pitch: 0.0,
+        ground_below: 0.0,
+    });
+    let tiles = cover::cover(&view).expect("covers");
+    let mut buckets = Vec::new();
+    for tile in &tiles {
+        let id = TileId::new(tile.z, tile.x, tile.y);
+        buckets.push((id, held(&style, id)));
+    }
+
+    const CAPACITY: usize = 1 << 22;
+    let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
+    // SAFETY: sized by `region_size`, eight-aligned as a `Vec<u64>`, outlives both halves, and
+    // nothing else touches it.
+    let (mut producer, _consumer) =
+        unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
+
+    let mut arena = SlabArena::new();
+    let mut session = Session::new();
+    let light = Light::default();
+    let frame = Frame {
+        published_projection: None,
+        projection: ProjectionMode::Mercator,
+        style: &style,
+        view: &view,
+        view_id: ViewId(0),
+        tiles: &tiles,
+        buckets: &buckets,
+        origins: &[],
+        light: &light,
+        fonts: None,
+        patterns: None,
+    };
+
+    frame::emit_incremental(
+        &mut producer,
+        &mut arena,
+        &mut frame::SymbolCache::default(),
+        &mut frame::PlacementState::new(),
+        &frame,
+        &mut session,
+    )
+    .expect("cold");
+    let after_cold = producer.head();
+    assert!(after_cold > 0, "the cold frame wrote something");
+
+    // Past `TEXTURE_GRACE`, which is eight. The registry ages out what a frame did not name, so a
+    // gate that skipped the write without also naming the entry would go quiet for eight frames and
+    // then re-send one -- quieter than before and still not silent.
+    for round in 0..20 {
+        frame::emit_incremental(
+            &mut producer,
+            &mut arena,
+            &mut frame::SymbolCache::default(),
+            &mut frame::PlacementState::new(),
+            &frame,
+            &mut session,
+        )
+        .expect("parked");
+        assert_eq!(
+            producer.head(),
+            after_cold,
+            "round {round} re-sent {} bytes for a view that did not move",
+            producer.head() - after_cold
+        );
+    }
+}
+
+/// And the other half of the gate: an atlas whose bytes *changed* still goes out.
+///
+/// A gate keyed on the texture id alone would pass the test above and never send a second atlas,
+/// leaving a dashed line drawing the pattern it had at the zoom it was first seen at. `line-dasharray`
+/// is scaled by the line's width, so a `step` on `line-width` gives two zooms with two atlases and
+/// one texture id.
+#[test]
+fn an_atlas_whose_bytes_changed_is_sent_again() {
+    use tessella_capture_abi::ring::{self, region_size};
+
+    const STEPPED: &str = r#"{"version": 8, "sources": {"s": {"type": "vector", "tiles": []}},
+      "layers": [{"id": "d", "type": "line", "source": "s", "source-layer": "water",
+                  "paint": {"line-color": "blue", "line-dasharray": [2, 1],
+                            "line-width": ["step", ["zoom"], 2, 4, 9]}}]}"#;
+
+    let style = Style::parse(STEPPED).expect("parses");
+
+    const CAPACITY: usize = 1 << 22;
+    let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
+    // SAFETY: sized by `region_size`, eight-aligned as a `Vec<u64>`, outlives both halves, and
+    // nothing else touches it.
+    let (mut producer, _consumer) =
+        unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
+
+    let mut arena = SlabArena::new();
+    let mut session = Session::new();
+    let light = Light::default();
+
+    // The two zooms the step divides, and the same tile at each so nothing else about the frame
+    // differs. Both sides of the step, so the atlas is rebuilt at a different width.
+    let mut sent_at = Vec::new();
+    for zoom in [3.0_f64, 5.0_f64] {
+        let view = camera::settled(&ViewTransform {
+            longitude: 0.0,
+            latitude: 0.0,
+            zoom,
+            width: 512.0,
+            height: 512.0,
+            bearing: 0.0,
+            pitch: 0.0,
+            ground_below: 0.0,
+        });
+        let tiles = cover::cover(&view).expect("covers");
+        let mut buckets = Vec::new();
+        for tile in &tiles {
+            let id = TileId::new(tile.z, tile.x, tile.y);
+            buckets.push((id, held(&style, id)));
+        }
+        let frame = Frame {
+            published_projection: None,
+            projection: ProjectionMode::Mercator,
+            style: &style,
+            view: &view,
+            view_id: ViewId(0),
+            tiles: &tiles,
+            buckets: &buckets,
+            origins: &[],
+            light: &light,
+            fonts: None,
+            patterns: None,
+        };
+        let before = producer.head();
+        frame::emit_incremental(
+            &mut producer,
+            &mut arena,
+            &mut frame::SymbolCache::default(),
+            &mut frame::PlacementState::new(),
+            &frame,
+            &mut session,
+        )
+        .expect("emits");
+        sent_at.push(producer.head() - before);
+    }
+
+    // Counted as records rather than bytes: the zoom change moves the cover too, so the frame is
+    // not quiet for reasons that have nothing to do with the atlas. What matters is that a
+    // `TextureUpdate` is among what it wrote.
+    let mut consumer = _consumer;
+    let mut textures = 0;
+    while let Some(record) = consumer.peek() {
+        if matches!(
+            record.kind,
+            tessella_capture_abi::EnvelopeKind::TextureUpdate
+        ) {
+            textures += 1;
+        }
+        let consumed = record.consumed();
+        consumer.advance(consumed);
+    }
+    assert!(
+        textures >= 2,
+        "the stepped width gives two atlases; the stream carried {textures} texture updates"
+    );
+    assert!(
+        sent_at.iter().all(|&bytes| bytes > 0),
+        "both zooms wrote something: {sent_at:?}"
+    );
+}
+
 /// A long pan does not accumulate slabs that are mostly dead.
 ///
 /// # The cost DR-21 records
