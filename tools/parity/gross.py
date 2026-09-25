@@ -29,15 +29,19 @@ def over_black(path: str) -> bytes:
     return Image.alpha_composite(black, rgba).convert("RGB").tobytes()
 
 
-threshold = int(sys.argv[3]) if len(sys.argv) > 3 else 48
-a = over_black(sys.argv[1])
-b = over_black(sys.argv[2])
-if len(a) != len(b):
-    sys.exit(f"different sizes: {len(a) // 3} against {len(b) // 3} pixels")
-n = sum(
-    1
-    for i in range(0, len(a), 3)
-    if max(abs(a[i] - b[i]), abs(a[i + 1] - b[i + 1]), abs(a[i + 2] - b[i + 2])) > threshold
-)
-total = len(a) // 3
-print(f"gross {n} of {total}  ({100.0 * n / total:.3f}%)")
+# Behind a guard so `over_black` can be imported. It is the one piece of this file another tool
+# always needs and must not reimplement -- the un-premultiply trap it documents is easy to walk
+# into, and `lean.py` walked into it before this guard existed.
+if __name__ == "__main__":
+    threshold = int(sys.argv[3]) if len(sys.argv) > 3 else 48
+    a = over_black(sys.argv[1])
+    b = over_black(sys.argv[2])
+    if len(a) != len(b):
+        sys.exit(f"different sizes: {len(a) // 3} against {len(b) // 3} pixels")
+    n = sum(
+        1
+        for i in range(0, len(a), 3)
+        if max(abs(a[i] - b[i]), abs(a[i + 1] - b[i + 1]), abs(a[i + 2] - b[i + 2])) > threshold
+    )
+    total = len(a) // 3
+    print(f"gross {n} of {total}  ({100.0 * n / total:.3f}%)")
