@@ -894,6 +894,32 @@ pub fn build_tile_on_with_patterns(
                             }
                             rings.push(to_tile_ring(&clipped));
                         }
+                        // Every GeoJSON polygon, where a vector tile gets this only at version 1.
+                        // mbgl's asymmetry, and its reason is that a hand-written or
+                        // tool-exported polygon has no winding guarantee at all --
+                        // `geojson_tile_data.hpp` runs it unconditionally on the cut tile's
+                        // geometry and cites geojson-vt-cpp#44:
+                        //
+                        // ```cpp
+                        // if (getType() == FeatureType::Polygon) {
+                        //     geometry = fixupPolygons(*geometry);
+                        // }
+                        // ```
+                        //
+                        // After the box clip rather than before, which is mbgl's order too: what
+                        // it repairs is this tile's rings, not the source feature's.
+                        //
+                        // The even-odd union does more than sort windings, which is why the
+                        // winding repair at ingest (tessella#265) did not cover it: two
+                        // overlapping rings become their symmetric difference and a self-crossing
+                        // ring cancels to nothing. Both were measured against the oracle at 5.3%
+                        // and 10.8% of a frame (tessella#267).
+                        if matches!(
+                            feature.geometry,
+                            tessella_source::geojson::Geometry::Polygon(_)
+                        ) {
+                            rings = fill::fixup_polygons(&rings);
+                        }
                         if !rings.is_empty() {
                             per_feature.push(rings);
                             kept.push(feature);
@@ -2270,11 +2296,8 @@ pub fn build_mvt_tile_on_with_patterns(
                         // MVT version 1 left ring winding unspecified, so the exterior-and-holes
                         // structure has to be re-derived rather than read. mbgl gates the same
                         // repair on the same version, and skipping it on a v1 world tile costs
-                        // both Americas.
-                        // MVT version 1 left ring winding unspecified, so the exterior-and-holes
-                        // structure has to be re-derived rather than read. mbgl gates the same
-                        // repair on the same version, and skipping it on a v1 world tile costs
-                        // both Americas.
+                        // both Americas. A v2 tile is trusted; a GeoJSON polygon never is, which
+                        // is the branch above.
                         //
                         // Every v1 polygon, as mbgl does, rather than only the ones that look
                         // broken. Repairing selectively was measured and gained 0.09% of a z0
