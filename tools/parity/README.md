@@ -71,6 +71,33 @@ The sweep's numbers as of 2026-09-16, which is the gate:
 `holes` is the other measure, for the one scene nothing can be compared against: pixels of a color
 the scene uses for nothing but its background. See `terrain_cover_p` below.
 
+### Where the example suite's residual is, as of 2026-09-24
+
+`examples.sh` reads **2,233 gross over 59 cameras**, with **30 of the 59 at exactly zero**. That is
+measured with fill outlines off, which is what that suite compares now and why: mbgl's two outline
+paths disagree with each other and this side can only take one of them, so leaving them in put 90%
+of the number beyond reach of any change. See `no_fill_antialias.py`.
+
+Every one of the 2,233 is accounted for, by running `lean.py` over the ranking:
+
+| | gross | |
+|---|---|---|
+| antialiasing jitter | 989 | 44% -- reads near 50%, finished |
+| the circle-edge floor | 711 | 32% -- one-sided by construction, see the golden README |
+| tessella#297 | 237 | 11% -- a translucent fill-extrusion blended once per tile that carries it |
+| mixed | 223 | 10% -- `add-a-pattern-to-a-polygon`, `render-world-copies` and one more |
+| unattributed | 65 | 3% -- `display-buildings-in-3d` 41 and the multidirectional hillshade 24 |
+| everything else | 8 | across seven slugs |
+
+**The largest unexplained single camera is 41 pixels.** That is the useful form of this table: not
+that the suite is finished, but that nothing is hiding in it above forty pixels, so the next parity
+defect has to be found by adding a scene rather than by staring at this one.
+
+`#297` is worth the note that it covers two examples, not one -- `extrude-polygons-for-3d-indoor-mapping`
+at `fill-extrusion-opacity` 0.5 and `animate-map-camera-around-a-point` at 0.8. A third extrusion
+example, `display-buildings-in-3d`, leaves its opacity at the default and is therefore opaque, which
+is why its 41 is *not* that issue and stays unexplained.
+
 ## Properties no camera here can settle
 
 A sweep measures what a frame shows, and some style properties do not reach one. Auditing this
