@@ -25,13 +25,20 @@ use tessella_style::crossfade::ZoomHistory;
 use tessella_style::{Style, Value};
 
 /// Two squares, one of each `kind`, far enough apart to be separate features in one tile.
+///
+/// Ten degrees a side, because the tile under test is `0/0/0`. At z0 a tile spans the world in 8192
+/// units, so the 0.02-degree squares this used to build measured 0.45 units across and collapsed to
+/// a zero-area ring when cast to the tile's integers. That survived only because nothing downstream
+/// looked: tessella#267 gave the GeoJSON path mbgl's even-odd union, which drops a ring of no area,
+/// and so does mbgl -- its `fixupPolygons` runs *before* `classifyRings`, so the lone-zero-area-ring
+/// case `classify_rings` preserves is reachable for MVT v2 and never for GeoJSON.
 fn features() -> Vec<GeoJsonFeature> {
     let square = |x: f64| {
         Geometry::Polygon(vec![vec![vec![
             [x, 0.0],
-            [x, 0.02],
-            [x + 0.02, 0.02],
-            [x + 0.02, 0.0],
+            [x, 10.0],
+            [x + 10.0, 10.0],
+            [x + 10.0, 0.0],
             [x, 0.0],
         ]]])
     };
@@ -45,7 +52,7 @@ fn features() -> Vec<GeoJsonFeature> {
         GeoJsonFeature {
             id: None,
             properties: BTreeMap::from([("kind".to_owned(), Value::String("b".into()))]),
-            geometry: square(0.1),
+            geometry: square(20.0),
             simplification: Vec::new(),
         },
     ]

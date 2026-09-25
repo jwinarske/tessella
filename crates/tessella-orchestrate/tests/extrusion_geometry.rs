@@ -29,14 +29,16 @@
 //! `FillExtrusionInstancedShader` (`sh0017`), the second drawing a unit quad instanced per
 //! extrusion vertex. Only the first is geometry to compare against; see [`ORACLE_SHADER`].
 //!
-//! **A hole that reaches the tile's buffer edge stops being a hole.** In `4092/2723` the fixture's
-//! interior ring runs out past the tile's buffer, so mbgl's clipper merges it into the outer
-//! boundary and emits one U-shaped ring -- eight corners and a closing point, nine vertices. This
-//! build clips the two rings separately and keeps both, four corners and a closing point each, ten
-//! vertices, and earcut bridges them. **The triangles are the same either way** -- six, and the
-//! same six -- and the only edge the extra vertex adds lies at x=10240, inside the buffer the
-//! stencil mask discards. So the roof and the picture agree and the representation does not; see
-//! [`MERGED_AT_THE_BUFFER_EDGE`].
+//! **A hole that reaches the tile's buffer edge stopped being a hole, and this build kept it.** In
+//! `4092/2723` the fixture's interior ring runs out past the tile's buffer, so mbgl's clipper merged
+//! it into the outer boundary and emitted one U-shaped ring -- eight corners and a closing point,
+//! nine vertices -- where this build clipped the two rings separately and kept both, ten vertices.
+//!
+//! **Closed by tessella#267.** The cause was not the box clip: mbgl runs every GeoJSON polygon
+//! through `fixupPolygons`, an even-odd union, and this build ran it only for MVT version 1. With it
+//! on the GeoJSON path the rings merge here too and the counts agree exactly. The test that pinned
+//! the gap said "if the clipper ever merges the way mbgl's does, this fails and says so", and that is
+//! how it was noticed -- it failed on a change made for a different reason.
 //!
 //! In the tile where the same polygon is *not* clipped, `4093/2723`, the two agree exactly: ten
 //! vertices and twenty-four indices, a ring and its hole.
@@ -76,12 +78,6 @@ const TILES: [(u32, u32); 6] = [
 /// unit quad and its instance attributes point back at this shader's buffer -- so it is filtered
 /// out rather than summed.
 const ORACLE_SHADER: &str = "sh0016";
-
-/// The one tile where the fixture's hole reaches the buffer edge, and the two sides differ.
-///
-/// mbgl merges the ring into the outer boundary there and this build does not. Pinned rather than
-/// fixed: the triangles agree and the extra edge falls in the masked buffer.
-const MERGED_AT_THE_BUFFER_EDGE: (u32, u32) = (4092, 2723);
 
 /// Vertex and index counts per `(layer, tile)`, which is what both sides are compared on.
 type Geometry = BTreeMap<(usize, (u32, u32)), (usize, usize)>;
@@ -216,12 +212,12 @@ fn every_roof_has_the_oracles_triangles() {
     }
 }
 
-/// And the same vertices, except where a hole runs off the tile's buffer.
+/// And the same vertices, on every tile including the one whose hole runs off the buffer.
 ///
-/// The exception is pinned rather than skipped: if the clipper ever merges the way mbgl's does,
-/// this fails and says so.
+/// That tile was the exception until tessella#267 gave the GeoJSON path mbgl's even-odd union; see
+/// the module note. It is asserted like the rest now rather than kept as a special case.
 #[test]
-fn every_ring_has_the_oracles_vertices_except_at_the_buffer_edge() {
+fn every_ring_has_the_oracles_vertices() {
     let oracle = oracle_geometry();
     let Ours {
         geometry, names, ..
@@ -232,15 +228,6 @@ fn every_ring_has_the_oracles_vertices_except_at_the_buffer_edge() {
         let &(want, _) = oracle.get(&(layer, tile)).unwrap_or_else(|| {
             panic!("the oracle drew nothing for layer {layer} ({name}) at {tile:?}")
         });
-        if tile == MERGED_AT_THE_BUFFER_EDGE {
-            assert_eq!(
-                (verts, want),
-                (20, 19),
-                "the merged-ring divergence at {tile:?} is twenty vertices against nineteen; \
-                 layer {layer} ({name}) now reads {verts} against {want}"
-            );
-            continue;
-        }
         assert_eq!(
             verts, want,
             "layer {layer} ({name}) at {tile:?}: {verts} vertices against the oracle's {want}"
@@ -346,11 +333,11 @@ fn the_oracle_also_emits_an_instanced_copy() {
 /// | 4094/2723 | 63 / 162 | 63 / 162 |
 /// | 4094/2724 | 63 / 162 | 63 / 162 |
 ///
-/// The one mismatch is the tile [`MERGED_AT_THE_BUFFER_EDGE`] already names, and it is that
-/// divergence rather than a rounding one: unrounded it is 20 against 19. Two rings of four corners
-/// round to `2 * (4 * 5 + 1)` = 42 where one merged ring of eight rounds to `8 * 5 + 1` = 41, so
-/// the difference stays the second ring's closing point -- one vertex, and no triangle. Every
-/// index count agrees, that tile included.
+/// Every count agrees, on every tile. `4092/2723` used to be one vertex over -- two rings of four
+/// corners round to `2 * (4 * 5 + 1)` = 42 where the oracle's one merged ring of eight rounds to
+/// `8 * 5 + 1` = 41 -- and that was the unmerged hole rather than anything about rounding, closed by
+/// tessella#267. The index counts agreed even then, which is what said the difference was a
+/// representation and not a shape.
 #[test]
 fn rounding_the_corners_matches_the_oracles_counts() {
     /// `(tile, vertices, indices)` as the oracle captured them at distance 5.
@@ -404,12 +391,10 @@ fn rounding_the_corners_matches_the_oracles_counts() {
             want_indices,
             "rounded triangles at {tile:?}"
         );
-        let allowance = usize::from(tile == MERGED_AT_THE_BUFFER_EDGE);
         assert_eq!(
             extrusion.vertices.len(),
-            want_verts + allowance,
-            "rounded vertices at {tile:?}: the oracle's {want_verts} plus {allowance} for the \
-             merged ring"
+            want_verts,
+            "rounded vertices at {tile:?}"
         );
     }
 }

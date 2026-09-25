@@ -223,10 +223,21 @@ pub fn fixup_polygons(rings: &[Ring]) -> Vec<Ring> {
             // edges cross, which is inside the input's own bounds, so nothing here can leave the
             // range the rings arrived in.
             #[allow(clippy::cast_possible_truncation)]
-            let ring: Ring = contour
+            let mut ring: Ring = contour
                 .iter()
                 .map(|point| [point.x as i16, point.y as i16])
                 .collect();
+            // Closed, because every other ring in this build is and because mbgl's is: wagyu's
+            // output goes through `toGeometryCollection`, whose `LinearRing`s repeat their first
+            // point, and `i_overlay` returns an open contour. Left open, a square came back as
+            // four vertices where the oracle has five -- the same two triangles either way, so
+            // the shape was right and the *paint buffer* was a vertex short, which is what
+            // `composite_tile.rs` compares byte for byte.
+            if let (Some(&first), Some(&last)) = (ring.first(), ring.last())
+                && first != last
+            {
+                ring.push(first);
+            }
             if !ring.is_empty() {
                 out.push(ring);
             }
