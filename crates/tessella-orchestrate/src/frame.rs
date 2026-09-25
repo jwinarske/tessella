@@ -952,6 +952,53 @@ fn stage(
     }
 }
 
+/// Writes a texture built from the style, unless the consumer already holds exactly these bytes.
+///
+/// Seven kinds of texture are built from the style rather than decoded from a resource: the glyph
+/// atlases, the sprite atlas, the dash atlases, the gradient ramps, a heatmap's color ramp, a color
+/// relief's two stop tables and a puck's cut-out images. Every one was rebuilt each frame and
+/// written each frame with it. Four kilobytes a layer reads as too little to gate, and on its own it
+/// would be -- but the frame's own commit rule makes it cost far more than it looks. A frame that
+/// writes *anything* has to close with a camera, a stencil and every layer's
+/// uniforms, because the consumer clears its scene at `beginFrame` and the camera is the commit
+/// point; so one 320-byte atlas on a settled map pulled 3,408 bytes of matrices behind it, every
+/// frame, forever. Measured on a two-layer scene with one `line-dasharray`: 3,728 bytes a frame
+/// parked, against zero for the same scene without the dash. §6.5's still-frame guarantee and
+/// §12.8's idle-residency argument are both about exactly that.
+///
+/// So the gate is not an upload optimization; it is what makes the guarantee hold for a scene that
+/// has one of these at all. Without a stream -- `frame::emit`, which announces everything every
+/// frame by contract -- it writes unconditionally, as before.
+///
+/// Takes the upload by value so the gate costs no copy: what the caller built is what the registry
+/// keeps, moved into the `Arc` rather than cloned into it. The retained bytes are the bytes last
+/// sent, one per generated texture id -- which for a glyph atlas is the atlas, and is the price of
+/// not re-sending it sixty times a second.
+fn write_generated(
+    producer: &mut Producer,
+    textures: Option<&mut Textures>,
+    upload: crate::texture::Upload,
+) -> Result<(), FrameError> {
+    let texture = upload.record.texture;
+    let Some(textures) = textures else {
+        texture::write(producer, &upload)?;
+        return Ok(());
+    };
+    if textures.holds_generated(texture, &upload) {
+        // Named by this frame, so it is not aged out from under the next one. Without this the
+        // entry falls out after `TEXTURE_GRACE` emissions and a parked view re-sends every eighth
+        // frame -- quieter than before and still not silent.
+        textures.keep(texture);
+        return Ok(());
+    }
+    texture::write(producer, &upload)?;
+    textures.stage(
+        texture,
+        TextureContent::Generated(alloc::sync::Arc::new(upload)),
+    );
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit_group(
     producer: &mut Producer,
@@ -1049,7 +1096,11 @@ fn emit_group(
                 tessella_capture_abi::TexturePixelType::RGBA,
                 &pixels,
             );
-            texture::write(producer, &upload)?;
+            write_generated(
+                producer,
+                stream.as_deref_mut().map(Session::textures),
+                upload,
+            )?;
         }
     }
 
@@ -1104,7 +1155,11 @@ fn emit_group(
                     height,
                 }];
                 if let Some(upload) = texture::glyph_atlas(glyph_atlas_id(index), atlas, &whole) {
-                    texture::write(producer, &upload)?;
+                    write_generated(
+                        producer,
+                        stream.as_deref_mut().map(Session::textures),
+                        upload,
+                    )?;
                 }
             }
         }
@@ -1117,7 +1172,11 @@ fn emit_group(
         && let Some(upload) =
             texture::pattern_atlas(patterns.texture, patterns.size, patterns.pixels)
     {
-        texture::write(producer, &upload)?;
+        write_generated(
+            producer,
+            stream.as_deref_mut().map(Session::textures),
+            upload,
+        )?;
     }
 
     // And the dash atlases, for the same reason and on the same terms: a dashed line's drawable
@@ -1125,8 +1184,9 @@ fn emit_group(
     // at that slot -- which for a distance field is a line that dashes at somebody else's rhythm
     // rather than one that does not draw.
     //
-    // Re-sent every frame, as the sprite atlas is. A pattern that steps with zoom changes under
-    // a moving camera, and four kilobytes a dashed layer is not worth a dirty flag to avoid.
+    // Rebuilt every frame -- a pattern that steps with zoom changes under a moving camera, so the
+    // atlas is a function of the frame -- but written only when the bytes differ from what the
+    // consumer holds. See `write_generated` for why four kilobytes a layer was not the cost.
     let dashes = crate::dash::Dashes::for_buckets(
         style,
         buckets,
@@ -1135,12 +1195,16 @@ fn emit_group(
         DASH_TEXTURE_BASE,
     );
     for entry in dashes.iter() {
-        texture::write(producer, &texture::dash_atlas(entry.texture, &entry.atlas))?;
+        let upload = texture::dash_atlas(entry.texture, &entry.atlas);
+        write_generated(
+            producer,
+            stream.as_deref_mut().map(Session::textures),
+            upload,
+        )?;
     }
 
-    // And the gradient ramps, after the dashes because a dashed layer takes none. Re-sent every
-    // frame on the dashes' terms: a kilobyte a layer, and the same bytes to the same id collapse
-    // on a latest-wins consumer.
+    // And the gradient ramps, after the dashes because a dashed layer takes none. Rebuilt and
+    // gated on the dashes' terms, a kilobyte a layer.
     let gradients = crate::gradient::Gradients::for_buckets(
         style,
         buckets,
@@ -1158,7 +1222,11 @@ fn emit_group(
             tessella_capture_abi::TexturePixelType::RGBA,
             &entry.pixels,
         );
-        texture::write(producer, &upload)?;
+        write_generated(
+            producer,
+            stream.as_deref_mut().map(Session::textures),
+            upload,
+        )?;
     }
 
     // Derived from the viewport, so it moves when the camera does and not otherwise -- and
@@ -2082,6 +2150,7 @@ fn emit_group(
                 tiles,
                 &dashes,
                 &gradients,
+                textures.as_deref_mut(),
             )?;
         }
     }
@@ -4097,6 +4166,7 @@ fn encode_parts(
 /// evaluated-properties block, at its own slots and strides. Writing a fill's for every tiled
 /// layer — which this did while the line layer did not exist — puts a line layer's uniforms into
 /// the shape a fill shader reads, and the shader has no way to know.
+#[allow(clippy::too_many_arguments)]
 fn write_layer_state(
     producer: &mut Producer,
     frame: &Frame<'_>,
@@ -4105,6 +4175,7 @@ fn write_layer_state(
     tiles: &[TileCoord],
     dashes: &crate::dash::Dashes,
     gradients: &crate::gradient::Gradients,
+    mut textures: Option<&mut Textures>,
 ) -> Result<(), FrameError> {
     let Frame {
         projection,
@@ -5345,17 +5416,19 @@ fn write_layer_state(
 
             #[allow(clippy::cast_possible_truncation)]
             let width = ramp.len() as u32;
-            texture::write(
+            write_generated(
                 producer,
-                &texture::whole_float(
+                textures.as_deref_mut(),
+                texture::whole_float(
                     relief_elevation_stops_id(layer_index),
                     tessella_capture_abi::envelope::Extent { width, height: 1 },
                     &ubo::pack_relief_elevation_stops(&ramp),
                 ),
             )?;
-            texture::write(
+            write_generated(
                 producer,
-                &texture::whole(
+                textures.as_deref_mut(),
+                texture::whole(
                     relief_color_stops_id(layer_index),
                     tessella_capture_abi::envelope::Extent { width, height: 1 },
                     tessella_capture_abi::TexturePixelType::RGBA,
@@ -5546,9 +5619,10 @@ fn write_layer_state(
                     else {
                         continue;
                     };
-                    texture::write(
+                    write_generated(
                         producer,
-                        &texture::whole(
+                        textures.as_deref_mut(),
+                        texture::whole(
                             puck_texture_id(layer_index, image),
                             cut.size,
                             tessella_capture_abi::TexturePixelType::RGBA,
