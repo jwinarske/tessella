@@ -10,6 +10,7 @@ whether or not it meant to.
     tools/parity/sweep.sh        # the five cameras, against the oracle
 
     tools/parity/quad.sh         # the four-pane quad, replayed from its snapshot
+    tools/parity/fixtures.sh     # the golden fixtures' pixels; needs no server at all
 
 The quad is the other half of the gate and is not part of the sweep: four views on one engine,
 which is what catches a regression in layer masking or in the shared scene that a single-view
@@ -27,6 +28,14 @@ Filament build, and the tile and asset servers the scenes name (`serve.sh` on 80
 `assets.py` on 8081). `env.sh` says where each is expected and every path is an override. The
 terrain scenes read `scenes/dem.py` as well, which the sweep starts when nothing is listening on
 its port and stops again when it is done.
+
+`fixtures.sh` is the exception to that paragraph: the style fixtures the golden dumps are captured
+from carry their geometry inline, so it needs the two renderers and nothing else. It exists because
+`verify_goldens.sh` compares those fixtures' *structure* and never a pixel, while the sweep compares
+pixels and never isolates a family -- a dash or a gradient is a few pixels of Berlin, well under the
+noise of everything else in the frame. A shader or material regression in one of those families
+could pass both. One camera per fixture, the family alone on the frame, and a generous budget whose
+job is to notice a fixture that went blank rather than to police a pixel.
 
 `examples.sh` runs the MapLibre GL JS documentation examples the same way, from a recorded
 snapshot of what their origins serve; see [`examples/README.md`](examples/README.md).

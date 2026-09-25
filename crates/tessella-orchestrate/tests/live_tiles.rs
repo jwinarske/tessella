@@ -207,12 +207,28 @@ fn a_manifest_resolves_to_the_same_tileset() {
     assert_eq!(server.paths(), ["/tiles.json"], "the manifest, once");
 }
 
-/// Four views over one cover cost one fetch per tile, not four.
+/// Four views over one cover cost about one fetch per tile, not four.
 ///
 /// The §9.3 flatness assertion, measured at the server rather than in the client's own
 /// bookkeeping: this is the number that must not scale with view count.
+///
+/// # Why "about", and not one apiece
+///
+/// `Coalescing` joins requests that are *in flight together*. `Shared`'s leader deregisters its
+/// key as soon as the work finishes -- deliberately, so a later caller leads instead of waiting on
+/// a finished entry -- so the table is an in-flight set and not a cache. Two calls that do not
+/// overlap in time both fetch, and that is the intended behavior; caching is a different wrapper.
+///
+/// The barrier starts the four threads together and nothing keeps them together afterwards. On a
+/// two-core runner one thread can run ahead, and a URL it finished before a lagging thread reached
+/// `compute`'s table lock is fetched twice. This asserted one request per path and failed about
+/// once in thirty runs under `taskset -c 0,1`, which is what CI is.
+///
+/// So the bound is the claim that survives: a few missed overlaps are allowed and a failure of
+/// coalescing is not. Nine tiles and four views ask thirty-six times; coalescing makes that nine,
+/// the observed flake made it ten, and no coalescing at all would make it thirty-six.
 #[test]
-fn four_views_over_one_cover_fetch_each_tile_once() {
+fn four_views_over_one_cover_share_their_fetches() {
     const VIEWS: usize = 4;
     let server = server();
     let style = inline_style(&server.origin());
@@ -263,13 +279,23 @@ fn four_views_over_one_cover_fetch_each_tile_once() {
     );
     assert_eq!(files.stats().computed(), server.requests());
 
-    // And no tile was fetched more than once, which is the claim that matters.
+    // Every tile was asked for, and the total stayed near one apiece rather than one per view.
     let mut per_path: BTreeMap<String, usize> = BTreeMap::new();
     for path in server.paths() {
         *per_path.entry(path).or_default() += 1;
     }
+    assert_eq!(
+        per_path.len(),
+        urls.len(),
+        "every tile should have been fetched at least once: {per_path:?}"
+    );
+    // Slack for the overlaps a scheduler can miss -- see the note above -- and no more. One extra
+    // fetch per view is the most a lagging thread can cost, and thirty-six is what no coalescing
+    // at all looks like.
+    let ceiling = (urls.len() + VIEWS) as u64;
     assert!(
-        per_path.values().all(|count| *count == 1),
-        "a tile was fetched twice: {per_path:?}"
+        server.requests() <= ceiling,
+        "{} requests for {asked} asks, over the {ceiling} this allows: {per_path:?}",
+        server.requests()
     );
 }
