@@ -1,12 +1,26 @@
-//! A symbol drawable is announced again every frame the camera moves.
+//! A symbol drawable is announced again when the camera changed its bytes, and not otherwise.
 //!
 //! # Why it has to be
 //!
-//! Because a symbol's vertices are a function of the camera and nothing else on the wire is.
-//! `write_line_positions` walks each label along its *projected* road and `write_opacity` bakes
-//! the fade into the same buffer, so the bytes a frame encodes describe that frame's camera. A
-//! fill's do not: its triangles are tile-local and the matrix that places them travels as a UBO,
-//! which is why retention works for every other family.
+//! Because a symbol's vertices *can* be a function of the camera where nothing else on the wire
+//! is. `write_line_positions` walks each label along its *projected* road and `write_opacity`
+//! bakes the fade into the same buffer, so for those labels the bytes a frame encodes describe
+//! that frame's camera. A fill's do not: its triangles are tile-local and the matrix that places
+//! them travels as a UBO, which is why retention works for every other family.
+//!
+//! # Why it is not every symbol
+//!
+//! Because "can be" is per drawable and the exception used to be written per bucket. A label that
+//! is not walked along a road and is not mid-fade has tile-local vertices like a fill's, and the
+//! label-plane and coordinate matrices place it at draw time. Announcing it again sends bytes the
+//! consumer already has.
+//!
+//! Measured on a panning basemap before this was narrowed: two thirds of symbol announcements
+//! carried a payload identical to the one they replaced, and symbols were nine in ten
+//! announcements on the wire. See `symbol_bytes_census.rs`.
+//!
+//! So the case under test is the *discrimination*: a street label, whose glyphs are walked, comes
+//! again when the zoom moves them; a place label, whose anchor is tile-local, does not.
 //!
 //! # What it caught
 //!
@@ -48,7 +62,10 @@ const STYLE: &str = r##"{"version": 8, "sources": {"src": {"type": "vector", "ti
     {"id": "ground", "type": "fill", "source": "src", "source-layer": "earth",
      "paint": {"fill-color": "#eee"}},
     {"id": "labels", "type": "symbol", "source": "src", "source-layer": "places",
-     "layout": {"text-field": "{name}", "text-font": ["TestFont"], "text-size": 16}}]}"##;
+     "layout": {"text-field": "{name}", "text-font": ["TestFont"], "text-size": 16}},
+    {"id": "streets", "type": "symbol", "source": "src", "source-layer": "roads",
+     "layout": {"text-field": "{name}", "text-font": ["TestFont"], "text-size": 14,
+                "symbol-placement": "line"}}]}"##;
 
 struct Fixture;
 impl FileSource for Fixture {
@@ -204,10 +221,18 @@ fn a_camera_move_re_announces_the_labels_and_nothing_else() {
         &mut session,
     );
 
-    assert_eq!(
-        second.symbols, first.symbols,
-        "the camera moved and the labels were not sent again: the consumer is drawing glyph \
-         positions computed for the camera the tile arrived under"
+    // The guarantee, which is what the flying labels were: a label whose glyphs the camera moved
+    // is sent again. Not every label -- the ones whose bytes did not move are the waste this
+    // narrowing removes -- so the assertion is that some came and fewer than all of them.
+    assert!(
+        second.symbols > 0,
+        "the zoom moved the street labels' glyphs and none were sent again: the consumer is \
+         drawing glyph positions computed for the camera the tile arrived under"
+    );
+    assert!(
+        second.symbols < first.symbols,
+        "every label was sent again, including the ones whose bytes the zoom did not touch: the \
+         per-frame exception is deciding per bucket what is only true per drawable"
     );
     assert_eq!(
         second.fills, 0,

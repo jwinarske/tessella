@@ -103,6 +103,14 @@ impl From<crate::view::ViewError> for FrameError {
 pub struct Emitted {
     /// Geometries announced.
     pub geometries: usize,
+    /// Per-frame drawables whose bytes were what had already been announced, and so were not
+    /// announced again.
+    ///
+    /// Only the families the per-frame exception covers can land here -- everything else is held
+    /// back by the registry long before it is encoded. A number that stays at zero on a moving
+    /// map means the exception is doing what it was written for; a large one means it is paying
+    /// for a camera-dependence most of its drawables do not have.
+    pub unchanged: usize,
     /// Per-view uses bound into the order.
     ///
     /// Every drawable in the frame, announced this time or not. A caller comparing this against
@@ -131,6 +139,7 @@ impl Default for Emitted {
     fn default() -> Self {
         Self {
             geometries: 0,
+            unchanged: 0,
             drawables: 0,
             uses: 0,
             removed: 0,
@@ -1968,6 +1977,26 @@ fn emit_group(
             continue;
         }
 
+        // A per-frame family that encoded the same bytes it last announced is not announced
+        // again. The exception above exists because a symbol's vertices *can* move with the
+        // camera; it is written per bucket, and whether they actually moved is a fact about the
+        // drawable. Measured on a panning basemap, two thirds of symbol announcements carried a
+        // payload identical to the one they replaced, and symbols are nine in ten announcements
+        // -- see tests/symbol_bytes_census.rs, where only the fade attribute ever differs.
+        //
+        // Skipping is invisible to a consumer by construction: identical bytes under the same
+        // geometry id draw an identical picture, and the `ViewUse` that binds the drawable is
+        // emitted by its own loop below, which this does not reach. The bytes just encoded are
+        // never retained, and the arena's rule is that an allocation is dead until something
+        // retains it, so they go on the next sweep rather than accumulating.
+        if per_frame
+            && let (Some(held), Some(key)) = (registry.as_deref(), key)
+            && same_bytes(arena, held.refs_of(&key), &emit::slab_refs(&encoded))
+        {
+            emitted.unchanged += 1;
+            continue;
+        }
+
         // What this record names, for the consumer's half to compare against. Only the symbol
         // fade attribute, which is the one under investigation.
         if crate::watch::watching() {
@@ -3520,6 +3549,33 @@ fn project_with(plane: &[f64; 16], padding: f32) -> impl Fn((f32, f32)) -> (f32,
 ///
 /// Built twice per frame -- once to place and once to write -- because what is expensive is
 /// `lay_out`, which is done once and held; this is references and a clone of each instance's box.
+/// Whether two sets of slab references name the same bytes.
+///
+/// Pairwise and in order, which is what makes it cheap enough to run per drawable per frame: the
+/// encoder produces a drawable's references in the same order every time, so a different order is
+/// a different drawable rather than something to search for. A length that differs answers before
+/// anything is read.
+fn same_bytes(
+    arena: &SlabArena,
+    was: &[tessella_capture_abi::envelope::SlabRef],
+    now: &[tessella_capture_abi::envelope::SlabRef],
+) -> bool {
+    was.len() == now.len()
+        && was.iter().zip(now).all(|(before, after)| {
+            before.length == after.length
+                && match (
+                    arena.resolve_written(*before),
+                    arena.resolve_written(*after),
+                ) {
+                    (Some(old), Some(new)) => old == new,
+                    // A reference that will not resolve is not evidence of sameness. Announcing
+                    // again is the safe answer: the cost is one record, where the other way is a
+                    // drawable the consumer never hears about.
+                    _ => false,
+                }
+        })
+}
+
 fn frame_labels<'a>(
     laid: &'a [tessella_layout::symbol_bucket::LaidOut],
     buffers: &SymbolBuffers,

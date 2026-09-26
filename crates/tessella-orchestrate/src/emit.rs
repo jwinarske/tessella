@@ -1026,6 +1026,26 @@ impl SlabArena {
         self.slab_bytes(slab)?.get(start..end)
     }
 
+    /// Resolves a reference against the sealed slabs, or against the one still open.
+    ///
+    /// [`Self::resolve`] answers only for sealed slabs, which is what a caller reading bytes an
+    /// earlier frame wrote wants. A caller comparing what it has *just* encoded against what it
+    /// announced before needs both ends of that comparison: this frame's bytes are in the open
+    /// slab and are not sealed until the frame is.
+    #[must_use]
+    pub fn resolve_written(&self, reference: SlabRef) -> Option<&[u8]> {
+        if let Some(bytes) = self.resolve(reference) {
+            return Some(bytes);
+        }
+        let slab = self
+            .open
+            .as_ref()
+            .filter(|slab| slab.id == reference.slab)?;
+        let start = reference.offset as usize;
+        let end = start.checked_add(reference.length as usize)?;
+        self.slab_bytes(slab)?.get(start..end)
+    }
+
     /// A sealed slab's bytes, wherever they live.
     ///
     /// `None` for a region slab whose range the region no longer covers, which is a producer
