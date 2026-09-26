@@ -1989,7 +1989,22 @@ fn emit_group(
         // emitted by its own loop below, which this does not reach. The bytes just encoded are
         // never retained, and the arena's rule is that an allocation is dead until something
         // retains it, so they go on the next sweep rather than accumulating.
+        //
+        // **Symbols only, though `per_frame` also covers the puck**, because "the same geometry
+        // id" is the part that does not hold there. A location indicator is several drawables and
+        // only the first two -- the circle and its border -- encode the same bytes twice running.
+        // Its image quads differ every frame and come back under *fresh* ids (3,4,5 then 6,7,8
+        // then 21,22,23 on consecutive frames), so the skipped pair is the only thing holding an
+        // id while everything around it churns, and the indicator disappears outright: `puck_p`
+        // went from 0 gross to 1354, one-sided, the whole puck missing. With no images in the
+        // style both drawables are skipped and a still camera announces nothing at all after the
+        // first frame, which is what `location_indicator_layer.rs::every_frame_announces_the_puck`
+        // holds.
+        //
+        // The saving does not argue for chasing that. It was measured on symbols, which are nine
+        // in ten announcements; a puck is a handful of drawables once.
         if per_frame
+            && matches!(bucket.content, Content::Symbol(_))
             && let (Some(held), Some(key)) = (registry.as_deref(), key)
             && same_bytes(arena, held.refs_of(&key), &emit::slab_refs(&encoded))
         {
