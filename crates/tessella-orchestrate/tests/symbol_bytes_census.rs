@@ -274,3 +274,104 @@ fn which_symbol_announcements_carry_different_bytes() {
         }
     }
 }
+
+/// The strongest form of the still-frame guarantee, on the hardest scene: a parked view with two
+/// symbol layers writes **zero** ring bytes.
+///
+/// The test above counts symbol *announcements* and asserts none on a still camera. This counts
+/// every byte, which is a different claim -- an announcement is one record kind among six, and §6.5
+/// asks for silence, not for quiet. A symbol scene is where that is hardest: glyph atlases are
+/// rebuilt from the style each frame, and symbol vertices are a function of the camera, so both of
+/// the reasons a frame has to re-send something are present at once.
+#[test]
+fn a_parked_symbol_scene_writes_no_bytes_at_all() {
+    use tessella_capture_abi::ring::{self, region_size};
+
+    let style = Style::parse(STYLE).expect("the style parses");
+    let decoded = Tile::decode(BERLIN).expect("the fixture decodes");
+    let view = view_at(14.0);
+    let tiles = cover::cover(&view).expect("covers");
+
+    let mut buckets = Vec::new();
+    for tile in &tiles {
+        let id = TileId::new(tile.z, tile.x, tile.y);
+        let built = build_mvt_tile(&style, "src", id, &decoded).expect("the tile builds");
+        buckets.push((id, Arc::new(built)));
+    }
+
+    let mut fonts = Fonts::new("glyphs://{fontstack}/{range}.pbf");
+    for (_, tile_buckets) in &buckets {
+        for bucket in tile_buckets.iter() {
+            if let Some(layout) = bucket.content.as_symbol() {
+                fonts
+                    .fetch(&layout.dependencies(), &Fixture)
+                    .expect("glyphs");
+            }
+        }
+    }
+
+    const CAPACITY: usize = 1 << 24;
+    let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
+    // SAFETY: sized by `region_size`, eight-aligned as a `Vec<u64>`, outlives both halves, and
+    // nothing else touches it.
+    let (mut producer, _consumer) =
+        unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
+
+    let mut arena = SlabArena::new();
+    let mut layouts = frame::SymbolCache::default();
+    let mut placement = frame::PlacementState::new();
+    let mut session = Session::new();
+    let light = Light::default();
+
+    // The caches are carried across frames, unlike the census above, which rebuilds them per frame
+    // to isolate one frame's payloads. Retention is the whole subject here.
+    let emit = |producer: &mut _,
+                arena: &mut SlabArena,
+                layouts: &mut frame::SymbolCache,
+                placement: &mut frame::PlacementState,
+                session: &mut Session| {
+        let frame = Frame {
+            published_projection: None,
+            projection: ProjectionMode::Mercator,
+            style: &style,
+            view: &view,
+            view_id: ViewId(0),
+            tiles: &tiles,
+            buckets: &buckets,
+            origins: &[],
+            light: &light,
+            fonts: Some(&fonts),
+            patterns: None,
+        };
+        frame::emit_incremental(producer, arena, layouts, placement, &frame, session)
+    };
+
+    emit(
+        &mut producer,
+        &mut arena,
+        &mut layouts,
+        &mut placement,
+        &mut session,
+    )
+    .expect("cold");
+    let after_cold = producer.head();
+    assert!(after_cold > 0, "the cold frame wrote something");
+
+    // Past `TEXTURE_GRACE`, so a glyph atlas aged out of the registry would show up here.
+    for round in 0..20 {
+        emit(
+            &mut producer,
+            &mut arena,
+            &mut layouts,
+            &mut placement,
+            &mut session,
+        )
+        .expect("parked");
+        assert_eq!(
+            producer.head(),
+            after_cold,
+            "round {round} wrote {} bytes for a view that did not move",
+            producer.head() - after_cold
+        );
+    }
+}

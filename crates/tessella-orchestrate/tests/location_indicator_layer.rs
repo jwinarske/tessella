@@ -362,3 +362,83 @@ fn alloc_style(paint: &str) -> String {
         {{"id":"puck","type":"location-indicator","paint":{{"location":[52.52,13.405,0],{paint}}}}}]}}"#
     )
 }
+
+/// The puck is announced on *every* frame, which is what makes it a per-frame family.
+///
+/// `emit_incremental` skips re-announcing a per-frame drawable whose bytes match the ones it last
+/// sent. That is right for a symbol and wrong here. A puck is several drawables and only the first
+/// two -- the circle and its border -- encode the same bytes twice running; the image quads differ
+/// each frame and come back under fresh ids, so a skipped pair holds an id while everything around
+/// it churns and the indicator disappears outright. `puck_p` read 1354 gross, one-sided, the whole
+/// puck missing, against 0 before.
+///
+/// Measured here rather than only in the sweep because the sweep is a pixel count on a scene with
+/// a basemap under it, and a family that stops being announced should fail where it is decided.
+#[test]
+fn every_frame_announces_the_puck() {
+    use std::sync::Arc;
+    use tessella_capture_abi::EnvelopeKind;
+    use tessella_capture_abi::ring::Ring;
+    use tessella_orchestrate::SlabArena;
+    use tessella_orchestrate::frame::{self, Frame};
+    use tessella_orchestrate::registry::Session;
+    use tessella_style::light::Light;
+    use tessella_tile::camera;
+
+    let style = Style::parse(STYLE).expect("the style parses");
+    let settled = camera::settled(&view());
+    // The layer belongs to no tile and no source, so this is the only bucket in the frame and
+    // every announcement is the puck's. It is rebuilt per frame, as a caller does: its vertices
+    // are offsets in world pixels at the camera's scale, which is what makes it per-frame.
+    let tile = tessella_orchestrate::tile::TileId::new(0, 0, 0);
+
+    let mut ring = Ring::new(1 << 22);
+    let (producer, consumer) = ring.split();
+    let mut arena = SlabArena::new();
+    let mut session = Session::new();
+    let light = Light::default();
+
+    let mut announced = Vec::new();
+    for _ in 0..3 {
+        let buckets = vec![(tile, Arc::new(build(&style)))];
+        let frame = Frame {
+            published_projection: None,
+            projection: ProjectionMode::Mercator,
+            style: &style,
+            view: &settled,
+            view_id: VIEW,
+            tiles: &[],
+            buckets: &buckets,
+            origins: &[],
+            light: &light,
+            fonts: None,
+            patterns: None,
+        };
+        frame::emit_incremental(
+            producer,
+            &mut arena,
+            &mut frame::SymbolCache::default(),
+            &mut frame::PlacementState::new(),
+            &frame,
+            &mut session,
+        )
+        .expect("emits");
+
+        let mut adds = 0;
+        while let Some(record) = consumer.peek() {
+            if record.kind == EnvelopeKind::GeometryAdd {
+                adds += 1;
+            }
+            let consumed = record.consumed();
+            consumer.advance(consumed);
+        }
+        announced.push(adds);
+    }
+
+    assert!(announced[0] > 0, "the first frame announced no puck at all");
+    assert_eq!(
+        announced,
+        vec![announced[0]; 3],
+        "a still camera dropped puck drawables after the first frame: {announced:?}"
+    );
+}
