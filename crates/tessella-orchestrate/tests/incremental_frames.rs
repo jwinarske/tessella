@@ -1359,3 +1359,128 @@ mod under_fault {
         assert_eq!(session.registry().len(), 0, "nothing is held afterwards");
     }
 }
+
+/// How often the *redundant* dash atlases go out, now that a generated texture is gated on its
+/// bytes (#302).
+///
+/// `dash_atlases.rs::mbgl_shares_an_atlas_between_layers_and_this_does_not` pins the divergence:
+/// this build keys an atlas by the layer where mbgl keys it by `(dasharray, cap)`, so
+/// `dash_style.json`'s five dashed layers take five texture ids behind three distinct distance
+/// fields. Two of the five uploads therefore carry bytes the device already has.
+///
+/// #287 costed that as "two redundant 256-byte uploads a frame", and weighed it against a
+/// correctness contract on id lifetime. The gate changes the denominator: the ids are per layer and
+/// stable, the bytes behind each are unchanged while the camera holds its zoom, so the redundant
+/// pair goes out **once** and not once a frame. A pan is the case that shows it -- the frame is busy
+/// with geometry and matrices, so this is not the parked gate doing the work.
+#[test]
+fn the_redundant_dash_atlases_are_sent_once_and_not_per_frame() {
+    use tessella_capture_abi::EnvelopeKind;
+    use tessella_capture_abi::ring::{self, region_size};
+    use tessella_orchestrate::tile::{bucket_for, build_tile};
+    use tessella_source::geojson;
+    use tessella_source::tiling::TilingOptions;
+    use tessella_style::Source;
+
+    const DASH: &str = include_str!("../../tessella-style/tests/dash_style.json");
+
+    let style = Style::parse(DASH).expect("parses");
+    let Some(Source::Geojson(source)) = style.source("probe") else {
+        panic!("a geojson source");
+    };
+    let features = geojson::read(&source.data).expect("features");
+
+    const CAPACITY: usize = 1 << 22;
+    let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
+    // SAFETY: sized by `region_size`, eight-aligned as a `Vec<u64>`, outlives both halves, and
+    // nothing else touches it.
+    let (mut producer, mut consumer) =
+        unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
+
+    let mut arena = SlabArena::new();
+    let mut session = Session::new();
+    let light = Light::default();
+
+    // Two frames at one zoom, the camera nudged between them so neither is parked.
+    let mut textures_per_frame = Vec::new();
+    for longitude in [-0.11_f64, -0.109_f64] {
+        let view = camera::settled(&ViewTransform {
+            longitude,
+            latitude: 51.505,
+            zoom: 13.0,
+            width: 1024.0,
+            height: 768.0,
+            bearing: 0.0,
+            pitch: 0.0,
+            ground_below: 0.0,
+        });
+        let tiles = cover::cover(&view).expect("covers");
+        let mut buckets = Vec::new();
+        for tile in &tiles {
+            let id = TileId::new(tile.z, tile.x, tile.y);
+            let built = build_tile(&style, "probe", id, &features, TilingOptions::default())
+                .expect("tile builds");
+            buckets.push((id, Arc::new(built)));
+        }
+        // The fixture has to actually carry the dashed layers, or this measures nothing.
+        assert!(
+            buckets
+                .iter()
+                .any(|(_, tile)| bucket_for(tile, "dash-four").is_some()),
+            "the fixture's dashed layers are in the cover"
+        );
+
+        let frame = Frame {
+            published_projection: None,
+            projection: ProjectionMode::Mercator,
+            style: &style,
+            view: &view,
+            view_id: ViewId(0),
+            tiles: &tiles,
+            buckets: &buckets,
+            origins: &[],
+            light: &light,
+            fonts: None,
+            patterns: None,
+        };
+        frame::emit_incremental(
+            &mut producer,
+            &mut arena,
+            &mut frame::SymbolCache::default(),
+            &mut frame::PlacementState::new(),
+            &frame,
+            &mut session,
+        )
+        .expect("emits");
+
+        let mut textures = 0;
+        let mut others = 0;
+        while let Some(record) = consumer.peek() {
+            if record.kind == EnvelopeKind::TextureUpdate {
+                textures += 1;
+            } else {
+                others += 1;
+            }
+            let consumed = record.consumed();
+            consumer.advance(consumed);
+        }
+        assert!(
+            others > 0,
+            "the pan wrote geometry and matrices, so it is not a parked frame"
+        );
+        textures_per_frame.push(textures);
+    }
+
+    // Seven on the cold frame: one atlas per dashed layer, plus the two placeholders every
+    // declaration sends. Asserted as a floor rather than exactly, so a change in how many
+    // placeholders exist is not a failure here -- the claim is about the second frame.
+    assert!(
+        textures_per_frame[0] >= 5,
+        "the cold frame sends at least one atlas per dashed layer: {textures_per_frame:?}"
+    );
+    assert_eq!(
+        textures_per_frame[1], 0,
+        "the pan re-sends none of them, so the two redundant uploads are a one-off and not a \
+         per-frame cost: {textures_per_frame:?}"
+    );
+}

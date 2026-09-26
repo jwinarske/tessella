@@ -489,6 +489,13 @@ fn mbgl_shares_an_atlas_between_layers_and_this_does_not() {
     );
 
     // Which is to say two of the five uploads carry bytes already on the device.
+    //
+    // Once, not once a frame. A generated texture is written only when its bytes differ from what
+    // the consumer holds, and these ids are per layer and stable, so the redundant pair goes out on
+    // the frame that declares the view and never again while the atlas is unchanged --
+    // `incremental_frames.rs::the_redundant_dash_atlases_are_sent_once_and_not_per_frame` measures
+    // that. So the divergence costs two uploads and two texture slots, not a per-frame tax, which is
+    // what #287 was weighing against an id-lifetime contract.
     let mut seen: BTreeMap<&[u8], usize> = BTreeMap::new();
     for named in DASHED {
         let dash = dashes.get(index(&style, named)).expect("an atlas");
