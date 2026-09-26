@@ -788,17 +788,24 @@ fn a_parked_view_with_generated_textures_writes_no_bytes_either() {
 /// And the other half of the gate: an atlas whose bytes *changed* still goes out.
 ///
 /// A gate keyed on the texture id alone would pass the test above and never send a second atlas,
-/// leaving a dashed line drawing the pattern it had at the zoom it was first seen at. `line-dasharray`
-/// is scaled by the line's width, so a `step` on `line-width` gives two zooms with two atlases and
-/// one texture id.
+/// leaving a dashed line drawing the pattern it had at the zoom it was first seen at.
+///
+/// The knob has to be one that reaches the atlas *bytes*, which is narrower than it looks.
+/// `dash_atlases.rs::line_width_does_not_key_the_atlas` shows width entering through `floorwidth` in
+/// the shader and never rebuilding the pattern, so a `step` on `line-width` leaves the bytes
+/// identical -- this test was written that way first and passed without ever re-sending anything. A
+/// `step` on `line-dasharray` itself is a different distance field either side of the step.
 #[test]
 fn an_atlas_whose_bytes_changed_is_sent_again() {
+    use tessella_capture_abi::EnvelopeKind;
     use tessella_capture_abi::ring::{self, region_size};
 
     const STEPPED: &str = r#"{"version": 8, "sources": {"s": {"type": "vector", "tiles": []}},
       "layers": [{"id": "d", "type": "line", "source": "s", "source-layer": "water",
-                  "paint": {"line-color": "blue", "line-dasharray": [2, 1],
-                            "line-width": ["step", ["zoom"], 2, 4, 9]}}]}"#;
+                  "paint": {"line-color": "blue", "line-width": 6,
+                            "line-dasharray": ["step", ["zoom"],
+                                               ["literal", [2, 1]],
+                                               4, ["literal", [8, 1, 1, 1]]]}}]}"#;
 
     let style = Style::parse(STEPPED).expect("parses");
 
@@ -806,16 +813,15 @@ fn an_atlas_whose_bytes_changed_is_sent_again() {
     let mut region = vec![0u64; region_size(CAPACITY).div_ceil(8)];
     // SAFETY: sized by `region_size`, eight-aligned as a `Vec<u64>`, outlives both halves, and
     // nothing else touches it.
-    let (mut producer, _consumer) =
+    let (mut producer, mut consumer) =
         unsafe { ring::init(region.as_mut_ptr().cast::<u8>(), CAPACITY) };
 
     let mut arena = SlabArena::new();
     let mut session = Session::new();
     let light = Light::default();
 
-    // The two zooms the step divides, and the same tile at each so nothing else about the frame
-    // differs. Both sides of the step, so the atlas is rebuilt at a different width.
-    let mut sent_at = Vec::new();
+    // The two zooms the step divides.
+    let mut textures_per_frame = Vec::new();
     for zoom in [3.0_f64, 5.0_f64] {
         let view = camera::settled(&ViewTransform {
             longitude: 0.0,
@@ -846,7 +852,6 @@ fn an_atlas_whose_bytes_changed_is_sent_again() {
             fonts: None,
             patterns: None,
         };
-        let before = producer.head();
         frame::emit_incremental(
             &mut producer,
             &mut arena,
@@ -856,31 +861,26 @@ fn an_atlas_whose_bytes_changed_is_sent_again() {
             &mut session,
         )
         .expect("emits");
-        sent_at.push(producer.head() - before);
+
+        let mut textures = 0;
+        while let Some(record) = consumer.peek() {
+            if record.kind == EnvelopeKind::TextureUpdate {
+                textures += 1;
+            }
+            let consumed = record.consumed();
+            consumer.advance(consumed);
+        }
+        textures_per_frame.push(textures);
     }
 
-    // Counted as records rather than bytes: the zoom change moves the cover too, so the frame is
-    // not quiet for reasons that have nothing to do with the atlas. What matters is that a
-    // `TextureUpdate` is among what it wrote.
-    let mut consumer = _consumer;
-    let mut textures = 0;
-    while let Some(record) = consumer.peek() {
-        if matches!(
-            record.kind,
-            tessella_capture_abi::EnvelopeKind::TextureUpdate
-        ) {
-            textures += 1;
-        }
-        let consumed = record.consumed();
-        consumer.advance(consumed);
-    }
-    assert!(
-        textures >= 2,
-        "the stepped width gives two atlases; the stream carried {textures} texture updates"
-    );
-    assert!(
-        sent_at.iter().all(|&bytes| bytes > 0),
-        "both zooms wrote something: {sent_at:?}"
+    // Per frame, and exactly one on the second. That is what makes this sharp: the placeholders go
+    // out with the declaration on the first frame only, so the second frame's single texture update
+    // is the atlas being re-sent because its bytes differ. Keying the gate on the id alone reads
+    // `[3, 0]` here, which the old `>= 2` over the sum of both frames accepted.
+    assert_eq!(
+        textures_per_frame[1], 1,
+        "the stepped dasharray is a different field past the step, so it is sent again: \
+         {textures_per_frame:?}"
     );
 }
 
