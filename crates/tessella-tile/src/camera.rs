@@ -1191,7 +1191,71 @@ mod tests {
         ordered(a).abs_diff(ordered(b))
     }
 
+    /// How far from the oracle this build is allowed to land on a target the goldens were not
+    /// captured under. Four, because four is what was measured -- not a margin.
+    ///
+    /// Tight enough to be a real check: four ULP is about 1e-16 relative, and an operation taken
+    /// in the wrong order or a formula off by a term misses by orders of magnitude more. This is
+    /// the bound `ulps_apart` exists for and not the relative epsilon its note warns about.
+    const CROSS_TARGET_ULPS: u64 = 4;
+
+    /// The camera is within [`CROSS_TARGET_ULPS`] of the oracle **on every target**.
+    ///
+    /// The bit-exact tests below run only where the oracle dumps were captured. This is what is
+    /// left everywhere else, and it runs everywhere so that no target reports a green camera it
+    /// never checked.
+    ///
+    /// The divergence it tolerates is real and is not the test's doing: a producer built for
+    /// `*-linux-musl` computes element 10 four ULP from a `x86_64-linux-gnu` one, identically on
+    /// x86_64, aarch64 and riscv64, with every input to the matrix bit-identical between the two
+    /// builds and `black_box` on those inputs changing nothing. See #308.
+    #[test]
+    fn the_camera_is_within_four_ulps_of_the_oracle_on_any_target() {
+        let view = settled(&probe());
+
+        let matrix = proj_matrix(&view).expect("an unrotated camera");
+        for (index, &got) in matrix.iter().enumerate() {
+            let oracle = f64::from_bits(ORACLE_PROJ[index]);
+            let apart = ulps_apart(got, oracle);
+            assert!(
+                apart <= CROSS_TARGET_ULPS,
+                "projection element {index}: {apart} ULP from the oracle ({got:?} vs {oracle:?})"
+            );
+        }
+
+        let ppm = pixels_per_meter(&view);
+        let apart = ulps_apart(ppm, f64::from_bits(ORACLE_PIXELS_PER_METER));
+        assert!(apart <= CROSS_TARGET_ULPS, "pixels per meter: {apart} ULP");
+
+        let center = center_zoom0(&view);
+        for (axis, &got) in center.iter().enumerate() {
+            let apart = ulps_apart(got, f64::from_bits(ORACLE_CENTER_ZOOM0[axis]));
+            assert!(
+                apart <= CROSS_TARGET_ULPS,
+                "center axis {axis}: {apart} ULP"
+            );
+        }
+    }
+
     /// Every element of the projection reproduces the oracle bit for bit.
+    ///
+    /// Scoped to the configuration the oracle dumps were captured under, which is the one CI runs
+    /// and the only one `verify_goldens.sh` can run in -- it needs the mbgl probe, an x86_64 binary
+    /// built here. That gate compares `CameraUpdate` *bytes*, so it enforces exactly this claim;
+    /// asserting it here on a target the gate cannot reach would be a stricter promise than the
+    /// contract it guards.
+    ///
+    /// Bit-exact rather than a bound because this is a transcription: `perspective` is mbgl's
+    /// `matrix::perspective` operation for operation, and equality of the result is what
+    /// demonstrates the operations match. A bound admits a different-but-nearby sequence, which is
+    /// the one class of mistake this port must not make -- so the bound above is the portable
+    /// sanity claim and this is the porting claim.
+    ///
+    /// Deliberately not `cfg(target_env = "gnu")`: whether the axis is gnu-against-musl or
+    /// host-against-cross is unresolved (#308), and there is no glibc sysroot here for aarch64 or
+    /// riscv64 to settle it. Naming the reference build rather than a guessed axis means an
+    /// unexpected target fails loudly instead of being quietly excused.
+    #[cfg(all(target_arch = "x86_64", target_env = "gnu"))]
     #[test]
     fn the_projection_matches_the_oracle() {
         let matrix = proj_matrix(&settled(&probe())).expect("an unrotated camera");
@@ -1255,6 +1319,7 @@ mod tests {
 
     /// `pixelsPerMeter` is bit-exact, and is exactly the negation of matrix element 11.
     #[test]
+    #[cfg(all(target_arch = "x86_64", target_env = "gnu"))]
     fn pixels_per_meter_matches_and_is_element_eleven_negated() {
         let view = settled(&probe());
         let ppm = pixels_per_meter(&view);
@@ -1265,7 +1330,10 @@ mod tests {
     }
 
     /// The scale-free center is bit-exact on both axes.
+    ///
+    /// Scoped like `the_projection_matches_the_oracle`, and for the same reason.
     #[test]
+    #[cfg(all(target_arch = "x86_64", target_env = "gnu"))]
     fn the_scale_free_center_matches_the_oracle() {
         let center = center_zoom0(&settled(&probe()));
         assert_eq!(center[0].to_bits(), ORACLE_CENTER_ZOOM0[0]);
