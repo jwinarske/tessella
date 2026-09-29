@@ -2349,7 +2349,23 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   layer's draw order, exactly as a fill's does. Nothing new on the wire for it, which is the point
   of having put the mesh in the geometry id space.
 - **R4** — hardening: ring backpressure under stall ✅, teardown protocol under fault ✅,
-  process-isolation spike (§3.5) ✅, riscv64 soak.
+  process-isolation spike (§3.5) ✅, riscv64 soak ✅.
+  The soak ran on real hardware rather than under emulation, which is the only way it answers
+  R-6: qemu does not reproduce weak memory ordering, and RVWMO reordering is the thing a missing
+  acquire/release would need to expose. A StarFive VisionFive 2 (JH7110, SiFive U74-MC quad,
+  `rv64imafdc_zba_zbb`, Ubuntu 24.04) ran `tessella-capture-abi` — 85 tests, including
+  `spsc_across_threads` and `concurrent_reads_never_see_a_torn_camera` — back to back for forty
+  minutes with two spinners holding the other cores, so the threads interleave differently each
+  pass: **1,840 runs, 0 failures**, about 156,000 test executions. Nothing is installed on the
+  board; it runs statically linked `riscv64gc-unknown-linux-musl` binaries cross-built from the
+  workstation.
+  The wider suite came over with it — 998 tests across 84 binaries, every crate whose
+  dev-dependencies do not pull C (`tessella-storage/cache` brings `libsqlite3-sys`). Three
+  binaries fail there only for want of runtime fixture *files*, which they read by absolute path
+  rather than `include_bytes!`. One real divergence came out of it and is **not** riscv64:
+  three `camera::tests` miss the oracle by four ULP on any musl target, x86_64 included, because
+  LLVM constant-folds `proj_matrix_with` differently per target. See #308 — bit-exactness against
+  the oracle is a property of the build the goldens were captured under, not of the code.
   Two things elsewhere in this document are assigned to this phase and were not on this line,
   which is how a phase comes to look nearly finished while work is still pointed at it. §12.8's
   **pacing counters** ✅. And §13.2's **acknowledged-renderable** ✅.
