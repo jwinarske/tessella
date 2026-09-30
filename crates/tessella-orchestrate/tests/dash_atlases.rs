@@ -108,6 +108,12 @@ const ATLAS_WIDTH: usize = 256;
 const TILE_PROPS_STRIDE: u32 = 64;
 
 /// The layers the fixture declares, in order.
+/// The first texture id this fixture hands out, which `frame.rs` spells `DASH_TEXTURE_BASE`.
+///
+/// Small here so a failure prints a readable id, and named so the test that checks *which* layer
+/// an id belongs to can subtract it.
+const FIXTURE_BASE: u64 = 200;
+
 const DASHED: [&str; 5] = [
     "dash-thin",
     "dash-mid",
@@ -135,7 +141,7 @@ fn ours() -> (Style, Dashes) {
             .expect("the tile builds");
         buckets.push((tile, std::sync::Arc::new(built)));
     }
-    let dashes = Dashes::for_buckets(&style, &buckets, 13.0, ZoomHistory::new(), 200);
+    let dashes = Dashes::for_buckets(&style, &buckets, 13.0, ZoomHistory::new(), FIXTURE_BASE);
     (style, dashes)
 }
 
@@ -451,15 +457,17 @@ fn the_atlas_is_256_wide_and_single_channel() {
     }
 }
 
-/// mbgl shares an atlas between layers that want the same one; this build does not.
+/// An atlas is shared between the layers that want it, as mbgl's is.
 ///
 /// Counted rather than left implicit. The capture holds three dash textures for five dashed
-/// layers -- keyed by (`from`, `to`, cap) -- and this build holds five, one per layer, two of them
-/// byte-identical copies of a third. The reason is id stability under a moving camera and it is
-/// documented in `dash.rs`; the cost is an upload and a texture object per redundant layer, which
-/// is what tessella#287 is about.
+/// layers -- keyed by (`from`, `to`, cap) -- and this build holds three for the same five,
+/// keyed on the atlas bytes, which is the same set by a different route.
+///
+/// The id of a shared atlas is the lowest layer index wanting it, which is what keeps `base + L`
+/// meaning "the atlas layer L wants" and so keeps ids stable under a moving camera. `dash.rs`
+/// has the argument; this pins the numbers it produces. Closed tessella#287.
 #[test]
-fn mbgl_shares_an_atlas_between_layers_and_this_does_not() {
+fn an_atlas_is_shared_between_the_layers_that_want_it() {
     let (style, dashes) = ours();
 
     let theirs: BTreeSet<u32> = DASHED
@@ -484,32 +492,47 @@ fn mbgl_shares_an_atlas_between_layers_and_this_does_not() {
         .collect();
     assert_eq!(
         ids.len(),
-        5,
-        "this build keys by the layer, so five layers are five ids: {ids:?}"
+        theirs.len(),
+        "as many ids as the oracle has textures: {ids:?}"
     );
 
-    // Which is to say two of the five uploads carry bytes already on the device.
+    // Every id is one of the sharing layers' own, and the lowest of them.
     //
-    // Once, not once a frame. A generated texture is written only when its bytes differ from what
-    // the consumer holds, and these ids are per layer and stable, so the redundant pair goes out on
-    // the frame that declares the view and never again while the atlas is unchanged --
-    // `incremental_frames.rs::the_redundant_dash_atlases_are_sent_once_and_not_per_frame` measures
-    // that. So the divergence costs two uploads and two texture slots, not a per-frame tax, which is
-    // what #287 was weighing against an id-lifetime contract.
-    let mut seen: BTreeMap<&[u8], usize> = BTreeMap::new();
+    // Not decoration: an id derived from the pattern instead -- a hash, a counter over the live
+    // set -- would also collapse five to three and would *not* hold this, and the difference is
+    // the whole of why the layer keying was there. `base + L` has to be an atlas L itself wants,
+    // or a layer whose dasharray steps leaves the id naming somebody else's pixels.
+    let mut by_atlas: BTreeMap<&[u8], Vec<usize>> = BTreeMap::new();
     for named in DASHED {
-        let dash = dashes.get(index(&style, named)).expect("an atlas");
-        *seen.entry(dash.atlas.data.as_slice()).or_default() += 1;
+        let at = index(&style, named);
+        by_atlas
+            .entry(dashes.get(at).expect("an atlas").atlas.data.as_slice())
+            .or_default()
+            .push(at);
     }
     assert_eq!(
-        seen.len(),
+        by_atlas.len(),
         3,
-        "three distinct distance fields behind the five ids"
+        "three distinct distance fields behind the three ids"
     );
+    for (_, mut layers) in by_atlas {
+        layers.sort_unstable();
+        let lowest = layers[0];
+        for at in &layers {
+            let id = dashes.get(*at).expect("an atlas").texture.0;
+            let owner = usize::try_from(id - FIXTURE_BASE).expect("an index");
+            assert_eq!(
+                owner, lowest,
+                "layer {at} names the lowest sharing layer's id, not {owner}"
+            );
+        }
+    }
+
+    // And the upload pass sends each atlas once, not once per layer naming it.
     assert_eq!(
-        seen.values().sum::<usize>() - seen.len(),
-        2,
-        "two redundant uploads, which is the whole of the divergence"
+        dashes.iter().count(),
+        3,
+        "three uploads for five dashed layers"
     );
 }
 

@@ -1360,21 +1360,20 @@ mod under_fault {
     }
 }
 
-/// How often the *redundant* dash atlases go out, now that a generated texture is gated on its
-/// bytes (#302).
+/// A dash atlas goes out once per *atlas*, and then not again while it is unchanged.
 ///
-/// `dash_atlases.rs::mbgl_shares_an_atlas_between_layers_and_this_does_not` pins the divergence:
-/// this build keys an atlas by the layer where mbgl keys it by `(dasharray, cap)`, so
-/// `dash_style.json`'s five dashed layers take five texture ids behind three distinct distance
-/// fields. Two of the five uploads therefore carry bytes the device already has.
+/// Two claims, and the second was here first. A generated texture is gated on its bytes (#302), so
+/// a pan re-sends none of them: the ids are stable and the bytes behind each are unchanged while
+/// the camera holds its zoom. A pan is the case that shows it, the frame being busy with geometry
+/// and matrices, so it is not the parked-frame gate doing the work.
 ///
-/// #287 costed that as "two redundant 256-byte uploads a frame", and weighed it against a
-/// correctness contract on id lifetime. The gate changes the denominator: the ids are per layer and
-/// stable, the bytes behind each are unchanged while the camera holds its zoom, so the redundant
-/// pair goes out **once** and not once a frame. A pan is the case that shows it -- the frame is busy
-/// with geometry and matrices, so this is not the parked gate doing the work.
+/// The first claim is #287's: `dash_style.json`'s five dashed layers stand behind three distinct
+/// distance fields, and now take three texture ids rather than five.
+/// `dash_atlases.rs::an_atlas_is_shared_between_the_layers_that_want_it` pins that where the ids
+/// are decided; this pins what actually reaches the wire, which is the thing #287 was costed in --
+/// a texture object, an upload and a descriptor write per redundant layer.
 #[test]
-fn the_redundant_dash_atlases_are_sent_once_and_not_per_frame() {
+fn a_dash_atlas_is_sent_once_per_atlas_and_not_per_frame() {
     use tessella_capture_abi::EnvelopeKind;
     use tessella_capture_abi::ring::{self, region_size};
     use tessella_orchestrate::tile::{bucket_for, build_tile};
@@ -1471,12 +1470,23 @@ fn the_redundant_dash_atlases_are_sent_once_and_not_per_frame() {
         textures_per_frame.push(textures);
     }
 
-    // Seven on the cold frame: one atlas per dashed layer, plus the two placeholders every
-    // declaration sends. Asserted as a floor rather than exactly, so a change in how many
-    // placeholders exist is not a failure here -- the claim is about the second frame.
-    assert!(
-        textures_per_frame[0] >= 5,
-        "the cold frame sends at least one atlas per dashed layer: {textures_per_frame:?}"
+    // Five on the cold frame: three atlases for the five dashed layers, plus the two placeholders
+    // every declaration sends. Seven before #287, when each layer took an atlas of its own.
+    //
+    // Pinned exactly, where this used to be a floor. A floor cannot see the fix -- five atlases
+    // and three both clear `>= 5` -- and the two redundant uploads are precisely what is being
+    // claimed gone. If the placeholder count changes this fails and wants the number moved, which
+    // is the right kind of failure: it says the wire changed.
+    //
+    // What moves this number is the *ids* collapsing, not the upload list: a write of bytes the
+    // consumer already has under that id is absorbed by the #302 gate, so sending a shared atlas
+    // once per layer naming it would still read 5 here. Mutating `owners` alone therefore leaves
+    // this green, and `an_atlas_is_shared_between_the_layers_that_want_it` is what catches that.
+    // Reverting the sharing outright reads 7, which is the regression this exists for.
+    assert_eq!(
+        textures_per_frame[0], 5,
+        "three shared atlases and two placeholders, not one atlas per dashed layer: \
+         {textures_per_frame:?}"
     );
     assert_eq!(
         textures_per_frame[1], 0,
