@@ -149,6 +149,16 @@ that.
 ## The scenes
 
 - `families_p` — one layer of every family this build draws, over Berlin. The sweep's scene.
+- `extrusion_one_p` and `extrusion_pair_p` — the same translucent buildings over Berlin, drawn as
+  one fill-extrusion layer and as two split by a height filter. A pair on purpose, because neither
+  number means anything alone: the consumer's draw-once mask owns a single stencil bit, so one 3D
+  run per frame takes it and any second layer draws unmasked. The control is one run masked and
+  reads **10**; the pair is the same pixels with the second run unmasked and reads **378**, of
+  which 97.4% are darker on this side — a translucent surface blended twice. The 368 between them
+  is what the limitation costs, and it is the only thing either scene is for. One color between
+  the two layers so nothing but the masking differs. See tessella#312, and
+  `FilamentRenderer::drawOnceSkipped`, which counts the runs that wanted the mask and could not
+  have it: 0 for the control and 1 for the pair.
 - `quad_remote` — the four-pane quad's style, read by range out of a planet archive with nothing
   on disk. Used by `quad.sh` rather than by `sweep.sh`, and through the proxy: the URL in it names
   the proxy, which holds the archive's ranges in the snapshot.

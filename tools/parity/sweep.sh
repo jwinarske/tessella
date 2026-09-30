@@ -40,6 +40,11 @@
 # which settles back to 0 when the scene is re-run. The numbers below are the ones they settle on
 # most often, and a run that reads another is that scene rather than a change.
 #
+# The extrusion pair holds 10 and 378, and the gap between them is the point rather than either
+# number: 10 is one masked run against the oracle, and 378 is the same pixels with the second run
+# unmasked. 97.4% of the 378 are darker on this side, which is what a surface blended twice looks
+# like; the 10 are the antialiasing floor. tessella#312.
+#
 # The numbers to hold, as of 2026-09-18: 4 / 16 / 0 / 2 / 30, then 3 / 2, then 0 / 0 / 0; then
 # 0 / 0 and 0 / 0 for the hillshade and relief; 0 / 28 / 0 for the flat terrain; 4 / 16 / 0 / 2
 # / 30 for the families on a flat terrain, the same as without one.
@@ -100,6 +105,18 @@ bash "$P/parity.sh" symbol_translate_p 52.52 13.405 16 1024 768 0 0
 # is visible rather than absorbed.
 bash "$P/parity.sh" paint_translate_p 52.52 13.405 16 1024 768 0 0
 bash "$P/parity.sh" paint_translate_p 52.52 13.405 16 1024 768 60 0
+# Two fill-extrusion layers where one would do, and the same buildings drawn as one layer beside
+# it. The pair is the case the consumer's draw-once mask cannot cover: it owns a single stencil
+# bit, so one 3D run per frame gets it and a second layer draws unmasked, blending some pixels
+# twice where its surfaces meet at equal depth.
+#
+# Both, because the number only means something as a pair. The control is the floor -- one run,
+# masked, at parity -- and the difference between them is the whole of what the limitation costs.
+# One layer split in two by a filter, one color between them, so the two scenes draw the same
+# pixels and nothing but the masking differs. Pitched at sixty, which is where a wall reaches
+# across a neighbor's roof.
+bash "$P/parity.sh" extrusion_one_p 52.52 13.405 16 1024 768 60 0
+bash "$P/parity.sh" extrusion_pair_p 52.52 13.405 16 1024 768 60 0
 bash "$P/parity.sh" terrain_families_p 52.52 13.405 9 2400 900 0
 # Five cameras, not two. The first two were the gate for a while and they are the two kindest in
 # the whole space: every other pitch and every zoom past the DEM's own is far worse, and holding
