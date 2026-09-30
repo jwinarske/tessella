@@ -1,0 +1,17 @@
+[package]
+name = "tessella-consume"
+description = "The renderer-agnostic half of a tessella consumer: reading, joining and batching the capture stream"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish = false
+
+[dependencies]
+tessella-capture-abi.workspace = true
+
+[lints]
+workspace = true
