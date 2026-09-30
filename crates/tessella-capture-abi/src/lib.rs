@@ -18,7 +18,7 @@
 //! # Consumer neutrality (DR-13)
 //!
 //! The stream must contain nothing accidentally Filament-shaped. Two mirrors prove it: the
-//! Fluorite/Filament mirror and the impeller-rs mirror (§3.6), the latter consuming at the
+//! Fluorite/Filament mirror and the emblema mirror (§3.6), the latter consuming at the
 //! entity/HAL level. Consumer-specific needs are met by the §11.7 obligations, never by
 //! changing envelope shape.
 //!
@@ -264,7 +264,7 @@ pub enum ProjectionMode {
 ///
 /// There is one path. The per-drawable-buffer variant of rev 1 is gone, and no fallback
 /// exists: maps require an SSBO-capable backend — Vulkan today, GLES 3.1+ if a consumer ever
-/// implements one. impeller-rs's GLES HAL floors at 3.0 and composites only; it does not draw
+/// implements one. emblema's GLES HAL floors at 3.0 and composites only; it does not draw
 /// maps. The bit is reserved so that a future GLES-3.0-only SKU could add a fallback without
 /// a flag day, not because one is planned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

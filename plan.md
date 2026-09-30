@@ -20,10 +20,10 @@ rev 0.7: DR-16 carried into §3.6 and §11.2, which still described the UBO floo
 (crates.io tessella 0.0.0, github.com/jwinarske/tessella), toolchain pinned to Yocto
 wrynose per DR-17.
 rev 0.6: DR-16 resolves R-12 (SSBO-only, Vulkan-first; GLES 3.0 composites, does not draw);
-impeller mirror sequenced beside the R0 stub; §16 items closed; R0 ABI freeze unblocked.
+emblema mirror sequenced beside the R0 stub; §16 items closed; R0 ABI freeze unblocked.
 rev 0.5: project named tessella; crate prefix mln-* → tessella-*; naming decision DR-15;
 crates.io/GitHub reservation added to §16.
-rev 0.4: added §3.6 (impeller-rs consumer), §11.7 (consumer obligations, both mirrors),
+rev 0.4: added §3.6 (emblema consumer), §11.7 (consumer obligations, both mirrors),
 DR-13/DR-14, R-12; UBO-path caveat amended into §11.2; §16 second-consumer line upgraded;
 Fluorite references generalized where the obligation is consumer-neutral.
 rev 0.3: added §12 (producer hot paths), §13 (zoom regimes, four-view benchmark),
@@ -235,9 +235,9 @@ hold a `GeometryAdd` whose handle the region did not yet cover. §11.3's `SlabAr
 closes it: the producer allocates out of the shared region, and the test's consumer resolves
 every handle it meets from the other process.
 
-### 3.6 Second consumer: impeller-rs (DR-14)
+### 3.6 Second consumer: emblema (DR-14)
 
-impeller-rs (pure-Rust Impeller reimplementation: canvas/recording over an entity layer over
+emblema (pure-Rust Impeller reimplementation: canvas/recording over an entity layer over
 Vulkan + GLES 3.0 HALs, with WSI and DRM/KMS direct-scanout presentation) is the second
 consumer — not a null mirror but a shippable one, covering product shapes Fluorite is heavy
 for: pure-2D cluster maps and direct scanout on a leased DRM connector with no compositor.
@@ -249,12 +249,12 @@ producer is untouched; this section fixes the integration layer.
   interpolation; consuming there forces per-frame vertex-color rewrites — the
   AttributesModified storm the damage model forbids, killing the §13.1 invariant. Canvas is
   for compositing the map *result*. The map draws through a `MapContents`/dedicated pass at
-  the entity/HAL layer, with the mbgl shader family ported into impeller-shaders as another
+  the entity/HAL layer, with the mbgl shader family ported into emblema-shaders as another
   AOT pipeline set (matching its no-runtime-compilation rule).
 - **Stencil**: `StencilTiles` → tile quad × carried matrix through the clip machinery or an
   owned stencil sub-pass inside the map pass.
-- **Text seam**: impeller-text packs caller-supplied coverage and does not rasterize;
-  tessella-glyph rasterizes SDF coverage and owns the shared atlas. Either feed impeller-text or
+- **Text seam**: emblema-text packs caller-supplied coverage and does not rasterize;
+  tessella-glyph rasterizes SDF coverage and owns the shared atlas. Either feed emblema-text or
   draw textured quads from the map atlas — the division of labor matches from both sides.
 - **Tick analog**: the registered frame callback before Recording build; drain ring → build
   command set → submit. The record-and-replay GLES backend wanting the whole scene matches
@@ -2502,7 +2502,7 @@ full-screen overdraw per layer; sub-range buffer updates from UBO dirty ranges; 
 texture uploads from rect lists; hold CameraUpdate until its orderEpoch is held; release slab
 references only after the driver's copy completes. Per consumer: Filament — renderables in
 multiple Scenes, MaterialInstance per (view, layer) over the shared SSBO, release via
-BufferDescriptor callback; impeller-rs — MapContents at entity/HAL level per §3.6, canvas
+BufferDescriptor callback; emblema — MapContents at entity/HAL level per §3.6, canvas
 reserved for composition, in-process slab elision.
 
 ---
@@ -3274,11 +3274,11 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
 - **DR-12 Build posture.** panic=abort, fat LTO, opt-level=s on non-hot crates, dyn boundary
   at style parse; binary size tracked per target in CI (§12.9).
 - **DR-13 Consumer-neutral ABI, proved by two mirrors.** The stream must contain nothing
-  accidentally Filament-shaped; the impeller-rs mirror (§3.6) is the conformance instrument,
+  accidentally Filament-shaped; the emblema mirror (§3.6) is the conformance instrument,
   and consumer-specific needs are met in §11.7 obligations, never in envelope shape.
-- **DR-14 impeller-rs integration at entity/HAL level.** Canvas-level consumption is
+- **DR-14 emblema integration at entity/HAL level.** Canvas-level consumption is
   rejected (per-frame vertex rewrites violate the §13.1 damage invariant); mbgl shader
-  families port into impeller-shaders as AOT pipelines; text divides at the
+  families port into emblema-shaders as AOT pipelines; text divides at the
   coverage/packing seam (§3.6).
 - **DR-15 Name: tessella.** A tessella is the small tile of a mosaic — tiles without the
   picture, which is the architecture. Independent of the MapLibre mark: the repo does not
@@ -3289,9 +3289,9 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
 - **DR-16 Uniform transport: SSBO-only, Vulkan-first (resolves R-12).** One path:
   consolidated buffer per (view, layer), `uboIndex` indexing, no length ceiling. Support
   statement is capability-based: maps require an SSBO-capable backend — Vulkan today, GLES
-  3.1+ if a consumer ever implements one (impeller-rs's GLES HAL floors at 3.0 and
+  3.1+ if a consumer ever implements one (emblema's GLES HAL floors at 3.0 and
   composites only). Mode bit reserved, batch-splitting allowance documented-but-dormant;
-  no fallback path exists, no GLES map-drawing CI lane. Consequences: the impeller-rs
+  no fallback path exists, no GLES map-drawing CI lane. Consequences: the emblema
   mirror exercises the Vulkan HAL only and lands beside the R0 stub; VisionFive 2 is
   producer/soak/cross-compile only, with a rendering path arriving only if the Mesa pvr
   Vulkan driver matures — at zero cost and zero breakage to this design either way.
@@ -3722,7 +3722,7 @@ a subdivision and a draw the consumer no longer makes.
   raster are bounded, fork/join and non-blocking, which is what a work-stealing dequeue is for.
   Two things stand in the way. There is nothing to hand over yet: jobs here interleave fetch and
   decode in one closure — `boot` fetches the sprite sheet and decodes it in the same submission —
-  so the split has to exist before it can be scheduled anywhere. And DR-14 makes impeller-rs the
+  so the split has to exist before it can be scheduled anywhere. And DR-14 makes emblema the
   second consumer, which has no job system; a core that requires Filament's cannot serve it.
   **Blocked mechanically today regardless.** `filament::Engine::getJobSystem()` is exported from
   `libfluorite_core_ffi.so` — 2175 symbols, 493 of them `utils::` — but the count of exported
@@ -3742,7 +3742,7 @@ a subdivision and a draw the consumer no longer makes.
   numbers.
   **If it does measure badly, the answer is not to call `getJobSystem()` from here.** It is to let
   the consumer supply the pool: `Pool` grows a submit trait, `tessella_fluorite` implements it
-  over a C++ shim onto the job system, impeller-rs implements it over whatever it has. That keeps
+  over a C++ shim onto the job system, emblema implements it over whatever it has. That keeps
   policy process-scoped per §5.5, keeps the binding thin, and satisfies DR-14. It costs nothing
   to leave open, since `Pool` is already behind an interface at every call site.
 - **A style whose layers draw from no source paints nothing.** Found while joining the consumer:
@@ -5049,13 +5049,13 @@ a subdivision and a draw the consumer no longer makes.
   closed: the part is asked rather than assumed, so it is one policy rather than one per target.
   `orchestrate::topology` reads the kernel's own capacity numbers and `Affinity` says what to
   make of them, defaulting to scheduler hints. See §5.4.
-- ~~Second-consumer sequencing~~ closed by DR-16: the impeller-rs mirror (Vulkan HAL) lands
+- ~~Second-consumer sequencing~~ closed by DR-16: the emblema mirror (Vulkan HAL) lands
   beside the R0 stub.
 - ~~UBO floor~~ closed by DR-16: SSBO-only, Vulkan-first.
 - ~~Reserve `tessella` on crates.io and GitHub~~ closed: `tessella` 0.0.0 published as a
   dependency-free stub, `github.com/jwinarske/tessella` public, workspace scaffolded to §7
   with the nine `tessella-*` members held at `publish = false` until they carry content.
-- Direct-scanout product shape: tessella-* + impeller-rs single-binary cluster map over a leased
+- Direct-scanout product shape: tessella-* + emblema single-binary cluster map over a leased
   DRM connector (wayland-leased-drm/DLM alignment); scope as its own plan doc if pursued.
 
 - **The collision grid was the viewport exactly, and mbgl's is bigger than that.** *Fixed, but
