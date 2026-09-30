@@ -1,0 +1,82 @@
+{
+ "version": 8,
+ "name": "extrusion_pair",
+ "glyphs": "http://127.0.0.1:8081/glyphs/{fontstack}/{range}.pbf",
+ "sprite": "http://127.0.0.1:8081/sprites/emerald",
+ "sources": {
+  "berlin": {
+   "type": "vector",
+   "url": "http://127.0.0.1:8080/berlin_z15.json"
+  }
+ },
+ "layers": [
+  {
+   "id": "bg",
+   "type": "background",
+   "paint": {
+    "background-color": "#eae6dd"
+   }
+  },
+  {
+   "id": "water",
+   "type": "fill",
+   "source": "berlin",
+   "source-layer": "water",
+   "paint": {
+    "fill-color": "#b8cfe0"
+   }
+  },
+  {
+   "id": "blocks-low",
+   "type": "fill-extrusion",
+   "source": "berlin",
+   "source-layer": "buildings",
+   "filter": [
+    "<",
+    [
+     "get",
+     "height"
+    ],
+    20
+   ],
+   "paint": {
+    "fill-extrusion-color": "#5b3f8c",
+    "fill-extrusion-height": [
+     "get",
+     "height"
+    ],
+    "fill-extrusion-base": [
+     "get",
+     "min_height"
+    ],
+    "fill-extrusion-opacity": 0.5
+   }
+  },
+  {
+   "id": "blocks-high",
+   "type": "fill-extrusion",
+   "source": "berlin",
+   "source-layer": "buildings",
+   "filter": [
+    ">=",
+    [
+     "get",
+     "height"
+    ],
+    20
+   ],
+   "paint": {
+    "fill-extrusion-color": "#5b3f8c",
+    "fill-extrusion-height": [
+     "get",
+     "height"
+    ],
+    "fill-extrusion-base": [
+     "get",
+     "min_height"
+    ],
+    "fill-extrusion-opacity": 0.5
+   }
+  }
+ ]
+}
