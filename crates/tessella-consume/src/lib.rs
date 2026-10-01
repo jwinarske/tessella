@@ -31,4 +31,5 @@
 
 extern crate alloc;
 
+pub mod join;
 pub mod stencil;
