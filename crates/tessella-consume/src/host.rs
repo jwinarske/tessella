@@ -38,7 +38,7 @@ use tessella_capture_abi::envelope::{
 };
 use tessella_capture_abi::ring::Consumer;
 
-use crate::batch::{Batch, Program, collapse_into};
+use crate::batch::{Batches, Program, collapse_into};
 use crate::join::{Announcement, Joiner};
 
 /// What one read of the stream did.
@@ -173,7 +173,7 @@ impl Host {
     /// epoch the held order does not establish — §11.7's "hold `CameraUpdate` until its
     /// `orderEpoch` is held". Drawing under a camera that does not match the order is drawing this
     /// frame's geometry through the last frame's matrices.
-    pub fn plan_into(&self, view: ViewId, out: &mut Vec<Batch>) -> Option<Plan> {
+    pub fn plan_into(&self, view: ViewId, out: &mut Batches) -> Option<Plan> {
         let order = self.orders.get(&view)?;
         if self.cameras.get(&view) != Some(&order.epoch) {
             return None;
