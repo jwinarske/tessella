@@ -32,5 +32,7 @@
 extern crate alloc;
 
 pub mod batch;
+pub mod host;
 pub mod join;
+pub mod slab;
 pub mod stencil;

@@ -108,9 +108,23 @@ pub fn collapsible(builtin_shader: i32) -> bool {
 #[must_use]
 pub fn collapse<'a>(
     entries: &[OrderEntry],
-    mut program: impl FnMut(GeometryId) -> Option<Program<'a>>,
+    program: impl FnMut(GeometryId) -> Option<Program<'a>>,
 ) -> Vec<Batch> {
-    let mut out: Vec<Batch> = Vec::new();
+    let mut out = Vec::new();
+    collapse_into(entries, &mut out, program);
+    out
+}
+
+/// Collapses into a buffer the caller keeps, which is what makes a steady state allocate nothing.
+///
+/// `out` is cleared first. Its capacity is retained between frames, so after the first few the
+/// only cost is refilling it.
+pub fn collapse_into<'a>(
+    entries: &[OrderEntry],
+    out: &mut Vec<Batch>,
+    mut program: impl FnMut(GeometryId) -> Option<Program<'a>>,
+) {
+    out.clear();
     for entry in entries {
         let Some(program) = program(entry.geometry) else {
             continue;
@@ -141,5 +155,4 @@ pub fn collapse<'a>(
             });
         }
     }
-    out
 }

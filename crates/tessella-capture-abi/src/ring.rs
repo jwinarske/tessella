@@ -656,6 +656,20 @@ impl Consumer {
         })
     }
 
+    /// How far this consumer has read, in bytes, monotonic.
+    ///
+    /// The same value [`Producer::consumed_through`] reports, from the half that moves it. A
+    /// consumer needs it to acknowledge: [`crate::reverse::ReverseChannel::ack_geometry`] takes a
+    /// ring position, and [`Consumed`] is opaque on purpose -- it is spendable only on `advance`,
+    /// so it cannot be summed into one. Without this a consumer can read the stream and cannot say
+    /// how far, which leaves the producer unable to reuse a slab.
+    #[must_use]
+    pub fn position(&self) -> u64 {
+        // SAFETY: the region outlives this half.
+        let control = unsafe { control(self.base) };
+        control.tail.load(Ordering::Relaxed)
+    }
+
     /// Consumes the record the given token came from.
     ///
     /// Take the token with [`Record::consumed`], let the record's borrow end, then call this.
