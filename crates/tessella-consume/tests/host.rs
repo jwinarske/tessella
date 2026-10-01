@@ -10,7 +10,6 @@ use tessella_capture_abi::envelope::{
 };
 use tessella_capture_abi::ring::{Producer, Ring};
 use tessella_capture_abi::{EnvelopeKind, RenderPass};
-use tessella_consume::batch::Batches;
 use tessella_consume::host::Host;
 
 const CAPACITY: usize = 1 << 16;
@@ -121,7 +120,6 @@ fn write_frame(producer: &mut Producer, view: u32, epoch: u64, ids: &[u64]) {
 fn a_frame_plans_what_its_order_names() {
     let mut ring = Ring::new(CAPACITY);
     let mut host = Host::new();
-    let mut batches = Batches::new();
 
     {
         let (producer, _) = ring.split();
@@ -133,7 +131,7 @@ fn a_frame_plans_what_its_order_names() {
     assert_eq!(progress.malformed, 0, "and every record parses");
     assert!(host.ready(ViewId(0)), "camera and order agree");
 
-    let plan = host.plan_into(ViewId(0), &mut batches).expect("a plan");
+    let (plan, batches) = host.plan(ViewId(0)).expect("a plan");
     assert_eq!(plan.view, ViewId(0));
     assert_eq!(plan.epoch, OrderEpoch(1));
     assert_eq!(batches.len(), 1, "three like drawables collapse");
@@ -151,7 +149,6 @@ fn a_frame_plans_what_its_order_names() {
 fn a_camera_ahead_of_its_order_does_not_commit() {
     let mut ring = Ring::new(CAPACITY);
     let mut host = Host::new();
-    let mut batches = Batches::new();
 
     {
         let (producer, _) = ring.split();
@@ -173,7 +170,7 @@ fn a_camera_ahead_of_its_order_does_not_commit() {
     host.read(ring.consumer());
 
     assert!(!host.ready(ViewId(0)), "the epochs disagree");
-    assert!(host.plan_into(ViewId(0), &mut batches).is_none());
+    assert!(host.plan(ViewId(0)).is_none());
 
     // The order that establishes the epoch arrives, and the frame commits.
     {
@@ -185,12 +182,7 @@ fn a_camera_ahead_of_its_order_does_not_commit() {
     }
     host.read(ring.consumer());
     assert!(host.ready(ViewId(0)));
-    assert_eq!(
-        host.plan_into(ViewId(0), &mut batches)
-            .expect("a plan")
-            .epoch,
-        OrderEpoch(2)
-    );
+    assert_eq!(host.plan(ViewId(0)).expect("a plan").0.epoch, OrderEpoch(2));
 }
 
 /// The position to acknowledge is the highest at which the plan's geometry was announced.
@@ -198,7 +190,6 @@ fn a_camera_ahead_of_its_order_does_not_commit() {
 fn a_plan_reports_where_to_acknowledge() {
     let mut ring = Ring::new(CAPACITY);
     let mut host = Host::new();
-    let mut batches = Batches::new();
 
     {
         let (producer, _) = ring.split();
@@ -206,7 +197,7 @@ fn a_plan_reports_where_to_acknowledge() {
     }
     host.read(ring.consumer());
 
-    let plan = host.plan_into(ViewId(0), &mut batches).expect("a plan");
+    let (plan, _) = host.plan(ViewId(0)).expect("a plan");
     assert!(plan.announced_through > 0, "something was announced");
     assert!(
         plan.announced_through <= host.read_through(),
@@ -223,7 +214,6 @@ fn a_plan_reports_where_to_acknowledge() {
 fn an_unknown_kind_is_counted_and_survived() {
     let mut ring = Ring::new(CAPACITY);
     let mut host = Host::new();
-    let mut batches = Batches::new();
 
     {
         let (producer, _) = ring.split();
@@ -249,10 +239,7 @@ fn an_unknown_kind_is_counted_and_survived() {
 
     assert_eq!(progress.unknown, 1, "the undispatched kind is counted");
     assert_eq!(progress.records, 5, "and the read did not stop at it");
-    assert!(
-        host.plan_into(ViewId(0), &mut batches).is_some(),
-        "the frame still draws"
-    );
+    assert!(host.plan(ViewId(0)).is_some(), "the frame still draws");
 }
 
 /// A known kind whose bytes will not parse is counted apart from an unknown one.
@@ -282,14 +269,13 @@ fn a_malformed_record_is_counted_apart() {
 fn a_retire_takes_the_geometry_out_of_the_plan() {
     let mut ring = Ring::new(CAPACITY);
     let mut host = Host::new();
-    let mut batches = Batches::new();
 
     {
         let (producer, _) = ring.split();
         write_frame(producer, 0, 1, &[1, 2]);
     }
     host.read(ring.consumer());
-    host.plan_into(ViewId(0), &mut batches).expect("a plan");
+    let (_, batches) = host.plan(ViewId(0)).expect("a plan");
     assert_eq!(batches.get(0).expect("a batch").geometries.len(), 2);
 
     {
@@ -303,7 +289,7 @@ fn a_retire_takes_the_geometry_out_of_the_plan() {
     }
     host.read(ring.consumer());
 
-    host.plan_into(ViewId(0), &mut batches).expect("a plan");
+    let (_, batches) = host.plan(ViewId(0)).expect("a plan");
     assert_eq!(
         batches.get(0).expect("a batch").geometries,
         [GeometryId(2)],
@@ -316,7 +302,6 @@ fn a_retire_takes_the_geometry_out_of_the_plan() {
 fn a_release_leaves_the_other_view() {
     let mut ring = Ring::new(CAPACITY);
     let mut host = Host::new();
-    let mut batches = Batches::new();
 
     {
         let (producer, _) = ring.split();
@@ -346,9 +331,11 @@ fn a_release_leaves_the_other_view() {
     }
     host.read(ring.consumer());
 
-    host.plan_into(ViewId(0), &mut batches).expect("a plan");
-    assert!(batches.is_empty(), "the released view draws nothing");
-    host.plan_into(ViewId(1), &mut batches).expect("a plan");
+    {
+        let (_, batches) = host.plan(ViewId(0)).expect("a plan");
+        assert!(batches.is_empty(), "the released view draws nothing");
+    }
+    let (_, batches) = host.plan(ViewId(1)).expect("a plan");
     assert_eq!(
         batches.get(0).expect("a batch").geometries,
         [GeometryId(1)],
@@ -356,15 +343,15 @@ fn a_release_leaves_the_other_view() {
     );
 }
 
-/// Planning reuses the caller's buffer rather than allocating one.
+/// An unchanged frame is planned once and served from the cache after.
 ///
-/// The whole reason the plan is pulled rather than pushed: a steady state allocates nothing, and
-/// the capacity grown on the first busy frame is the capacity used on every one after.
+/// The reason the host keeps the batches. A still map re-collapsed an identical order every frame
+/// -- 371 microseconds at the quad's entry count, for byte-identical output, while the producer
+/// feeding it emitted nothing.
 #[test]
-fn planning_reuses_the_buffer() {
+fn an_unchanged_frame_is_not_replanned() {
     let mut ring = Ring::new(CAPACITY);
     let mut host = Host::new();
-    let mut batches = Batches::new();
 
     {
         let (producer, _) = ring.split();
@@ -372,24 +359,81 @@ fn planning_reuses_the_buffer() {
     }
     host.read(ring.consumer());
 
-    host.plan_into(ViewId(0), &mut batches).expect("a plan");
-    let capacity = batches.len();
+    assert!(host.stale(ViewId(0)), "nothing planned yet");
+    host.plan(ViewId(0)).expect("a plan");
+    assert!(!host.stale(ViewId(0)), "and now it is cached");
+
     for _ in 0..8 {
-        host.plan_into(ViewId(0), &mut batches).expect("a plan");
-        assert_eq!(
-            batches.len(),
-            1,
-            "and the buffer is cleared, not appended to"
-        );
+        let (_, batches) = host.plan(ViewId(0)).expect("a plan");
+        assert_eq!(batches.len(), 1, "the same batches every time");
+        assert!(!host.stale(ViewId(0)), "and no replanning");
     }
-    assert_eq!(batches.len(), capacity, "no reallocation after the first");
+}
+
+/// Anything that changes what a view draws makes its plan stale.
+///
+/// The order's epoch alone is not enough: a geometry re-announced with a different permutation is
+/// a different program, which moves where the collapse breaks, and it arrives without a new order.
+#[test]
+fn a_re_announcement_makes_the_plan_stale() {
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+
+    {
+        let (producer, _) = ring.split();
+        write_frame(producer, 0, 1, &[1, 2]);
+    }
+    host.read(ring.consumer());
+    host.plan(ViewId(0)).expect("a plan");
+    assert!(!host.stale(ViewId(0)));
+
+    // The same geometry again, a different family: same order, same epoch, different collapse.
+    {
+        let (producer, _) = ring.split();
+        producer
+            .write(EnvelopeKind::GeometryAdd, geometry(1, 20).as_bytes(), &[])
+            .expect("room");
+    }
+    host.read(ring.consumer());
+
+    assert!(
+        host.stale(ViewId(0)),
+        "the order did not change and what it draws did"
+    );
+    let (_, batches) = host.plan(ViewId(0)).expect("a plan");
+    assert_eq!(batches.len(), 2, "the two families no longer collapse");
+}
+
+/// Retiring geometry a view draws makes its plan stale too.
+#[test]
+fn a_retire_makes_the_plan_stale() {
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+
+    {
+        let (producer, _) = ring.split();
+        write_frame(producer, 0, 1, &[1, 2]);
+    }
+    host.read(ring.consumer());
+    host.plan(ViewId(0)).expect("a plan");
+
+    {
+        let (producer, _) = ring.split();
+        let remove = GeometryRemove {
+            geometry: GeometryId(1),
+        };
+        producer
+            .write(EnvelopeKind::GeometryRemove, remove.as_bytes(), &[])
+            .expect("room");
+    }
+    host.read(ring.consumer());
+    assert!(host.stale(ViewId(0)));
 }
 
 /// A view nobody has ordered has no plan, and asking is not an error.
 #[test]
 fn an_unknown_view_has_no_plan() {
-    let host = Host::new();
-    let mut batches = Batches::new();
-    assert!(host.plan_into(ViewId(9), &mut batches).is_none());
+    let mut host = Host::new();
+    assert!(host.plan(ViewId(9)).is_none());
     assert!(!host.ready(ViewId(9)));
 }

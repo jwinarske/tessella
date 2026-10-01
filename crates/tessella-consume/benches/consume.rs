@@ -19,7 +19,6 @@ use tessella_capture_abi::envelope::{
 };
 use tessella_capture_abi::ring::Ring;
 use tessella_capture_abi::{EnvelopeKind, RenderPass};
-use tessella_consume::batch::Batches;
 use tessella_consume::host::Host;
 
 /// Counts allocations, so a claim about not making any can be checked rather than asserted.
@@ -170,31 +169,41 @@ fn main() {
         let read = started.elapsed();
         let read_allocs = allocations() - before;
 
-        let mut batches = Batches::new();
-        // Warm: the first call grows the buffer, which is not what is being measured.
-        host.plan_into(ViewId(0), &mut batches).expect("a plan");
-        let produced = batches.len();
+        // Warm: the first call plans, which is not what the cached figure is about.
+        let produced = host.plan(ViewId(0)).expect("a plan").1.len();
 
-        let mut samples = Vec::with_capacity(200);
+        // Cached: the frame has not changed, so this is what a still map pays.
+        let mut cached = Vec::with_capacity(200);
         let before = allocations();
         for _ in 0..200 {
             let started = Instant::now();
-            host.plan_into(ViewId(0), &mut batches).expect("a plan");
-            samples.push(started.elapsed());
+            host.plan(ViewId(0)).expect("a plan");
+            cached.push(started.elapsed());
         }
         let plan_allocs = (allocations() - before) / 200;
 
-        let (p50, p95, max) = percentiles(samples);
+        // Stale: marked every time, so this is the cost of actually planning.
+        let mut fresh = Vec::with_capacity(200);
+        for _ in 0..200 {
+            host.invalidate(ViewId(0));
+            let started = Instant::now();
+            host.plan(ViewId(0)).expect("a plan");
+            fresh.push(started.elapsed());
+        }
+
+        let (c50, _, _) = percentiles(cached);
+        let (p50, p95, max) = percentiles(fresh);
         println!("{name}: {entries} entries -> {produced} batches");
         println!(
             "  read       {:8.1} us   {read_allocs:6} allocations",
             micros(read)
         );
         println!(
-            "  plan_into  {:8.1} us p50  {:8.1} p95  {:8.1} max   {plan_allocs:6} allocations/call",
+            "  plan       {:8.1} us p50  {:8.1} p95  {:8.1} max   {plan_allocs:6} allocations/call",
             micros(p50),
             micros(p95),
             micros(max)
         );
+        println!("  cached     {:8.3} us p50", micros(c50));
     }
 }

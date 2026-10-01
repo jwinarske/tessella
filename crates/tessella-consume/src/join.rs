@@ -142,6 +142,18 @@ impl Joiner {
             })
     }
 
+    /// Every view holding a claim on a geometry.
+    ///
+    /// Read before retiring it, so a caller can mark those views' work stale: a geometry going
+    /// away changes what they draw, and nothing else tells them.
+    pub fn views(&self, geometry: GeometryId) -> impl Iterator<Item = ViewId> + '_ {
+        self.uses
+            .get(&geometry)
+            .into_iter()
+            .flatten()
+            .map(|use_| use_.view)
+    }
+
     /// Drops one view's claim on a geometry, leaving the geometry for the views that remain.
     ///
     /// Returns whether anything was holding it. `ViewRelease` and `GeometryRemove` are distinct in
