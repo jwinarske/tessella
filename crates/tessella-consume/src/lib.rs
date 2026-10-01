@@ -36,3 +36,4 @@ pub mod host;
 pub mod join;
 pub mod slab;
 pub mod stencil;
+pub mod upload;
