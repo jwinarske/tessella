@@ -34,12 +34,13 @@ use alloc::vec::Vec;
 use tessella_capture_abi::EnvelopeKind;
 use tessella_capture_abi::envelope::{
     AttributeDesc, CameraUpdate, GeometryAdd, GeometryRemove, OrderEntry, OrderEpoch, OrderUpdate,
-    Segment, Span, TextureRef, ViewId, ViewRelease, ViewUse, WireRecord,
+    Segment, Span, TextureRef, TextureUpdate, UboUpdate, ViewId, ViewRelease, ViewUse, WireRecord,
 };
 use tessella_capture_abi::ring::Consumer;
 
 use crate::batch::{Batch, Program, collapse_into};
 use crate::join::{Announcement, Joiner};
+use crate::upload::Uploads;
 
 /// What one read of the stream did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -97,6 +98,7 @@ pub struct Host {
     cameras: BTreeMap<ViewId, OrderEpoch>,
     read_through: u64,
     progress: Progress,
+    uploads: Uploads,
 }
 
 impl Host {
@@ -155,6 +157,24 @@ impl Host {
     #[must_use]
     pub fn joiner(&self) -> &Joiner {
         &self.joiner
+    }
+
+    /// The bytes waiting to reach the device, and where they are.
+    ///
+    /// Uniform blocks and texture pixels are spans into the ring, so they are copied here during
+    /// the read -- the ring's bytes belong to the producer again as soon as the tail passes, and
+    /// reading the next record is what moves it. Geometry is not copied, because a slab stays
+    /// resolvable until it is acknowledged.
+    #[must_use]
+    pub fn uploads(&self) -> &Uploads {
+        &self.uploads
+    }
+
+    /// Drops the upload work and its bytes once the backend has finished with them.
+    ///
+    /// Keeps the buffer's capacity, so a steady state copies into the same allocation every frame.
+    pub fn uploads_done(&mut self) {
+        self.uploads.clear();
     }
 
     /// Whether a view's camera and order agree, so it has something to draw.
@@ -260,6 +280,39 @@ impl Host {
                 );
                 Outcome::Read
             }
+            EnvelopeKind::UboUpdate => {
+                let Some(update) = UboUpdate::from_bytes(bytes) else {
+                    return Outcome::Malformed;
+                };
+                let Some(data) = run_bytes(payload, update.data, 1) else {
+                    return Outcome::Malformed;
+                };
+                self.uploads
+                    .push_uniforms(update.view, update.layer_index, update.slot, data);
+                Outcome::Read
+            }
+            EnvelopeKind::TextureUpdate => {
+                let Some(update) = TextureUpdate::from_bytes(bytes) else {
+                    return Outcome::Malformed;
+                };
+                // A rect count past the array's end is a malformed record, not a clamp: the rects
+                // say which pixels these bytes are, and guessing at that writes them somewhere.
+                let count = update.rect_count as usize;
+                if count > update.rects.len() {
+                    return Outcome::Malformed;
+                }
+                let Some(pixels) = run_bytes(payload, update.pixels, 1) else {
+                    return Outcome::Malformed;
+                };
+                self.uploads.push_texture(
+                    update.texture,
+                    update.size,
+                    update.format,
+                    update.rects[..count].to_vec(),
+                    pixels,
+                );
+                Outcome::Read
+            }
             EnvelopeKind::CameraUpdate => {
                 CameraUpdate::from_bytes(bytes).map_or(Outcome::Malformed, |camera| {
                     self.cameras.insert(camera.view, camera.order_epoch);
@@ -276,6 +329,18 @@ enum Outcome {
     Read,
     Unknown,
     Malformed,
+}
+
+/// The bytes a span names, or `None` if the payload does not hold them.
+///
+/// `width` is the size of one element; a span of bytes has width one. Checked rather than trusted,
+/// because the span arrives from another process and a length past the payload is how a consumer
+/// reads whatever follows it in the ring.
+fn run_bytes(payload: &[u8], span: Span, width: usize) -> Option<&[u8]> {
+    let start = span.offset as usize;
+    let length = (span.count as usize).checked_mul(width)?;
+    let end = start.checked_add(length)?;
+    payload.get(start..end)
 }
 
 /// Reads a run of records out of a payload, or `None` if any of it does not fit.
