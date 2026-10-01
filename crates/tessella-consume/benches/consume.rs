@@ -151,7 +151,61 @@ fn micros(d: Duration) -> f64 {
     d.as_secs_f64() * 1e6
 }
 
+/// Reads announcements and uses separately, so the cost of each is its own number.
+///
+/// `read` is the larger of the two phases and had none of the design attention; this is what it is
+/// made of.
+fn split(entries: usize) {
+    let capacity = (entries * 256usize).next_power_of_two();
+
+    // Announcements alone.
+    let mut ring = Ring::new(capacity);
+    let mut host = Host::new();
+    {
+        let (producer, _) = ring.split();
+        for id in 0..entries as u64 {
+            producer
+                .write(EnvelopeKind::GeometryAdd, geometry(id, 11).as_bytes(), &[])
+                .expect("room");
+        }
+    }
+    let before = allocations();
+    let started = Instant::now();
+    host.read(ring.consumer());
+    let adds = started.elapsed();
+    let add_allocs = allocations() - before;
+
+    // Then the uses for the same geometry, into the same host.
+    {
+        let (producer, _) = ring.split();
+        for id in 0..entries as u64 {
+            producer
+                .write(EnvelopeKind::ViewUse, use_of(id, 0).as_bytes(), &[])
+                .expect("room");
+        }
+    }
+    let before = allocations();
+    let started = Instant::now();
+    host.read(ring.consumer());
+    let uses = started.elapsed();
+    let use_allocs = allocations() - before;
+
+    println!("  split, {entries} geometries:");
+    println!(
+        "    announcements {:8.1} us   {add_allocs:6} allocations   {:.2}/geometry",
+        micros(adds),
+        add_allocs as f64 / entries as f64
+    );
+    println!(
+        "    uses          {:8.1} us   {use_allocs:6} allocations   {:.2}/geometry",
+        micros(uses),
+        use_allocs as f64 / entries as f64
+    );
+}
+
 fn main() {
+    split(7_500);
+
     // Sized from the frames the plan documents: one view of liberty, and the four-view quad.
     for (name, entries, families) in [
         ("one view, 1 family", 1_882, 1),
