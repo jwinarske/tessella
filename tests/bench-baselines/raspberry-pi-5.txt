@@ -1,0 +1,68 @@
+# `tessella-consume` on a Raspberry Pi 5, against the same binary on an x86-64 desktop.
+#
+# Pi 5 Model B Rev 1.0, Debian 13 trixie, kernel 6.18.33+rpt-rpi-2712, 4 cores, 8 GB.
+# Governor `performance`, clock 2400000 throughout, 57 C, `vcgencmd get_throttled` 0x0.
+# Load 0.00 and nothing else running: the consumer is CPU-only, so a busy board is the
+# whole measurement.
+#
+#   RUSTFLAGS="-C target-feature=+crt-static -C linker=rust-lld" \
+#     cargo bench -p tessella-consume --no-run --target aarch64-unknown-linux-musl
+#   scp <the bench binary> pi:/tmp/ && ssh pi /tmp/consume-bench
+#
+# # Why musl, on both sides
+#
+# Static musl, and the x86-64 column is a musl build too. Two reasons, and the second is
+# the one that matters.
+#
+# The only aarch64 glibc sysroot on the build host is 2.42 and the board runs 2.41, so a
+# glibc cross-build risks symbol versions the board does not have. Static musl needs no
+# sysroot and depends on nothing.
+#
+# And musl's allocator is not glibc's. Measuring one side under each would compare two
+# allocators as much as two machines, which is exactly the confound this file exists to
+# avoid -- so both columns are musl and the *ratio* is the sound number. The absolutes are
+# pessimistic against a glibc build; `docs/` in the renderer records that gap at about
+# fourteen per cent on this host.
+#
+# # What each row is
+#
+# `read` drains a cold frame: every geometry announced, every use, the order and the
+# camera. It is a load cost rather than a per-frame one -- geometry is announced once and
+# drawn for many frames -- but a pan landing many tiles at once pays it in one frame.
+#
+# `plan` collapses the order into batches with the cache marked stale, so it is what a
+# frame costs when something changed. `cached` is the same call when nothing did.
+#
+# The quad row is the pessimistic shape: sixteen shader families cycling so that nothing
+# collapses and every entry becomes its own batch. A real style collapses, and the
+# one-family row is that end of the range.
+#
+# Allocation counts are exact and identical on both machines, which is what makes them the
+# metric worth regressing against. Times are three runs; the Pi's spread is about one per
+# cent, the desktop's nearer ten.
+
+scenario                     machine   read us   plan us p50   cached us   allocations
+one view, 1882, 1 family     x86-64      391          51         0.020          630
+one view, 1882, 1 family     pi5         792         225         0.241          630
+one view, 1882, 16 families  x86-64      764          66         0.020          630
+one view, 1882, 16 families  pi5         779         222         0.241          630
+quad, 7500, 16 families      x86-64     1509         390         0.020         2504
+quad, 7500, 16 families      pi5        3666        1144         0.241         2504
+
+# Ratios, Pi 5 against x86-64, on the quad row: read 2.4x, plan 2.9x, cached 12x.
+#
+# The integration estimate this was taken to check had assumed 3.7x from a VisionFive 2's
+# U74. The Pi 5's A76 is better than that, so a plan written against the extrapolation was
+# pessimistic by about a third.
+#
+# # What the numbers decide
+#
+# A moving quad frame spends 1,144 us planning on this board, which is 6.9% of a 16.7 ms
+# budget before anything is drawn. A still one spends 0.241 us. The cache is the difference
+# between a parked map costing seven per cent of every frame and costing nothing, and it is
+# why the host keeps the batches rather than filling a caller's buffer.
+#
+# `read` at 3.7 ms for a cold quad frame is a fifth of a frame. Nothing is wrong with it --
+# 0.33 allocations per geometry is two B-tree inserts and no per-geometry buffer -- but a
+# cover that lands all at once is the case to watch, and §13.1's zoom regimes are where it
+# would show.
