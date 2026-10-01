@@ -18,7 +18,6 @@ use tessella_capture_abi::envelope::{
 };
 use tessella_capture_abi::ring::Ring;
 use tessella_capture_abi::{EnvelopeKind, RenderPass};
-use tessella_consume::batch::Batches;
 use tessella_consume::host::Host;
 
 thread_local! {
@@ -161,16 +160,19 @@ fn frame(n: u64) -> Host {
 /// Once the buffers have grown, planning the same frame again allocates nothing.
 #[test]
 fn planning_a_warm_frame_allocates_nothing() {
-    let host = frame(512);
-    let mut batches = Batches::new();
+    let mut host = frame(512);
 
-    // Warm: the first call grows every buffer, which is the cost this is not about.
-    host.plan_into(ViewId(0), &mut batches).expect("a plan");
-    assert_eq!(batches.len(), 512, "every entry its own batch");
+    // Warm: the first call grows every buffer, which is the cost this is not about. Scoped, so
+    // the borrow on the host ends before the measured calls need it mutably -- the constraint the
+    // cache trades for, visible here.
+    {
+        let (_, batches) = host.plan(ViewId(0)).expect("a plan");
+        assert_eq!(batches.len(), 512, "every entry its own batch");
+    }
 
     let before = allocations();
     for _ in 0..16 {
-        host.plan_into(ViewId(0), &mut batches).expect("a plan");
+        host.plan(ViewId(0)).expect("a plan");
     }
     let during = allocations() - before;
 
@@ -178,6 +180,7 @@ fn planning_a_warm_frame_allocates_nothing() {
         during, 0,
         "sixteen plans of a warm frame allocated {during} times"
     );
+    let (_, batches) = host.plan(ViewId(0)).expect("a plan");
     assert_eq!(
         batches.len(),
         512,
@@ -192,11 +195,10 @@ fn planning_a_warm_frame_allocates_nothing() {
 /// detail, and what matters is that it is not 512 of anything.
 #[test]
 fn the_first_plan_grows_a_handful_of_buffers() {
-    let host = frame(512);
-    let mut batches = Batches::new();
+    let mut host = frame(512);
 
     let before = allocations();
-    host.plan_into(ViewId(0), &mut batches).expect("a plan");
+    host.plan(ViewId(0)).expect("a plan");
     let during = allocations() - before;
 
     assert!(
