@@ -720,6 +720,28 @@ fn generate_shader_attributes(mbgl: &Path) -> Result<String, String> {
     }
     shaders.sort_by(|a, b| a.0.cmp(&b.0));
 
+    // What the shaders themselves declare, which is what this table's `declared` field means.
+    // `AttributeInfo` is a second statement of the same fact and the two disagree seventeen
+    // times; see `correct_declared_types`.
+    let headers = mbgl.join("include/mbgl/shaders/vulkan");
+    let mut header_files: Vec<PathBuf> = std::fs::read_dir(&headers)
+        .map_err(|err| format!("reading {}: {err}", headers.display()))?
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "hpp"))
+        .collect();
+    header_files.sort();
+    let mut declared = Declarations::new();
+    for file in &header_files {
+        let text = std::fs::read_to_string(file)
+            .map_err(|err| format!("reading {}: {err}", file.display()))?;
+        declared.extend(parse_shader_declarations(&text));
+    }
+    if declared.is_empty() {
+        return Err("no shader declared a vertex input; the header parse missed something".into());
+    }
+    let corrections = correct_declared_types(&mut shaders, &declared)?;
+
     let mut out = String::new();
     writeln!(
         out,
@@ -737,7 +759,33 @@ fn generate_shader_attributes(mbgl: &Path) -> Result<String, String> {
         "// Attribute ids from include/mbgl/shaders/shader_defines.hpp; declared types and"
     )
     .unwrap();
-    writeln!(out, "// binding slots from src/mbgl/shaders/vulkan/*.cpp.").unwrap();
+    writeln!(
+        out,
+        "// binding slots from src/mbgl/shaders/vulkan/*.cpp, declared types from the shader text"
+    )
+    .unwrap();
+    writeln!(out, "// in include/mbgl/shaders/vulkan/*.hpp.").unwrap();
+    if !corrections.is_empty() {
+        writeln!(out, "//").unwrap();
+        writeln!(
+            out,
+            "// mbgl states each declared type twice and the two disagree for the following. The"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "// shader text is taken, because that is what a consumer has to bind against, and"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "// `AttributeInfo`'s value is recorded beside it rather than dropped:"
+        )
+        .unwrap();
+        for (name, was, now) in &corrections {
+            writeln!(out, "//   {name}: AttributeInfo {was} -> {now}").unwrap();
+        }
+    }
     writeln!(out).unwrap();
     for line in wrap(
         "Per-shader vertex attribute tables (DR-6). What a shader declares, as data. A producer \
@@ -1270,6 +1318,166 @@ fn parse_shader_textures(text: &str) -> Vec<TextureTable> {
 /// One shader's attributes: binding slot, declared type name, attribute id name.
 /// A shader's name, whether the table is its per-instance one, and its attributes.
 type ShaderTable = (String, bool, Vec<(i32, String, String)>);
+
+/// What a shader's own text declares at each of its vertex inputs: `(shader, location)` to the
+/// GLSL type name.
+type Declarations = BTreeMap<(String, i32), String>;
+
+/// A correction the generator applies where `AttributeInfo` and the shader text disagree about an
+/// attribute's *scalar class*, with the evidence for the type chosen.
+///
+/// A count disagreement is resolved mechanically -- the class from `AttributeInfo`, the count from
+/// the shader -- because that is the whole of what is in dispute and the shader is what the field
+/// is documented to describe. A *class* disagreement is not resolvable that way: GLSL says `ivec2`
+/// for a two-component integer whatever its width, so the width has to come from somewhere else
+/// and somewhere else has to be written down.
+///
+/// Anything not listed here fails the generation rather than being resolved silently in either
+/// direction, which is the point: a disagreement mbgl introduces later should stop a build and
+/// name itself, not quietly change what a consumer binds.
+const CLASS_CORRECTIONS: &[(&str, &str, &str)] = &[(
+    "idBackgroundPosVertexAttribute",
+    "Short2",
+    "`AttributeInfo` says `Float3`; the shader declares `ivec2 in_position` and supplies the \
+     third component itself as `vec4(in_position, 0.0, 1.0)`. The width is `int16_t`: mbgl's own \
+     `MBGL_DEFINE_ATTRIBUTE(int16_t, 2, pos)` is what fills the buffer, through \
+     `PositionOnlyLayoutAttributes`. tessella's producer sends `Short2` for both the supplied and \
+     the declared type, so the table was the only thing saying otherwise.",
+)];
+
+/// The GLSL scalar class and component count of a vertex input's type.
+fn glsl_shape(name: &str) -> Option<(char, u32)> {
+    let (class, rest) = match name {
+        n if n.starts_with("vec") => ('f', &n[3..]),
+        n if n.starts_with("ivec") => ('i', &n[4..]),
+        n if n.starts_with("uvec") => ('u', &n[4..]),
+        "float" => return Some(('f', 1)),
+        "int" => return Some(('i', 1)),
+        "uint" => return Some(('u', 1)),
+        _ => return None,
+    };
+    rest.parse().ok().map(|count| (class, count))
+}
+
+/// The same for an `AttributeDataType` name, and the name's own class and count split apart.
+fn abi_shape(name: &str) -> Option<(char, u32, &str)> {
+    let digits = name.len() - name.trim_end_matches(|c: char| c.is_ascii_digit()).len();
+    let (kind, count) = name.split_at(name.len() - digits);
+    let count: u32 = if digits == 0 { 1 } else { count.parse().ok()? };
+    let class = match kind {
+        "Byte" | "Short" | "Int" => 'i',
+        "UByte" | "UShort" | "UInt" => 'u',
+        "Float" => 'f',
+        _ => return None,
+    };
+    Some((class, count, kind))
+}
+
+/// What the Vulkan shader text declares at each vertex input.
+///
+/// The `.cpp` holds `AttributeInfo`, which is what the generator used to take the declared type
+/// from, and the `.hpp` holds the shader itself. The two are meant to say the same thing and for
+/// seventeen entries they do not, so the shader is read as well and the disagreements are either
+/// resolved from it or refused. Keyed by `BuiltIn::` name and location, which both files carry --
+/// not by position in the file, which would pair the wrong variant the day one is reordered.
+fn parse_shader_declarations(text: &str) -> Declarations {
+    let mut out = Declarations::new();
+    let mut shader: Option<String> = None;
+    let mut in_vertex = false;
+    for line in text.lines() {
+        if let Some(rest) = line.trim().strip_prefix("struct ShaderSource<BuiltIn::")
+            && let Some((name, _)) = rest.split_once(',')
+        {
+            shader = Some(name.trim().to_string());
+            in_vertex = false;
+            continue;
+        }
+        if line.contains("constexpr auto vertex") {
+            in_vertex = true;
+            continue;
+        }
+        if line.contains("constexpr auto fragment") {
+            in_vertex = false;
+            continue;
+        }
+        if !in_vertex {
+            continue;
+        }
+        let Some(shader) = shader.as_ref() else {
+            continue;
+        };
+        // `layout(location = N) in TYPE in_name;`
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("layout(location = ")
+            && let Some((location, rest)) = rest.split_once(')')
+            && let Ok(location) = location.trim().parse::<i32>()
+            && let Some(rest) = rest.trim_start().strip_prefix("in ")
+            && let Some((kind, _)) = rest.trim().split_once(' ')
+        {
+            out.insert((shader.clone(), location), kind.to_string());
+        }
+    }
+    out
+}
+
+/// Replaces each attribute's declared type with what the shader itself declares, where the two
+/// disagree.
+///
+/// Returns the corrections made, for the note the generated file carries.
+///
+/// # Errors
+///
+/// A class disagreement with no entry in [`CLASS_CORRECTIONS`], which is a new one and wants
+/// reading rather than resolving.
+fn correct_declared_types(
+    shaders: &mut [ShaderTable],
+    declared: &Declarations,
+) -> Result<Vec<(String, String, String)>, String> {
+    let mut corrections: Vec<(String, String, String)> = Vec::new();
+    for (shader, _, attributes) in shaders.iter_mut() {
+        for (binding, data_type, id_name) in attributes.iter_mut() {
+            let Some(glsl) = declared.get(&(shader.clone(), *binding)) else {
+                continue;
+            };
+            let (Some((want_class, want_count)), Some((class, count, kind))) =
+                (glsl_shape(glsl), abi_shape(data_type))
+            else {
+                continue;
+            };
+            if (want_class, want_count) == (class, count) {
+                continue;
+            }
+            let corrected = if want_class == class {
+                // Only the count is in dispute, and the shader is what "declared" means.
+                if want_count == 1 {
+                    kind.to_string()
+                } else {
+                    format!("{kind}{want_count}")
+                }
+            } else {
+                let found = CLASS_CORRECTIONS
+                    .iter()
+                    .find(|(name, _, _)| *name == id_name.as_str());
+                let Some((_, corrected, _)) = found else {
+                    return Err(format!(
+                        "{shader} binding {binding} ({id_name}): `AttributeInfo` says \
+                         `{data_type}` and the shader declares `{glsl}`, which disagree about the \
+                         scalar class. A width cannot be read off GLSL, so this one needs an \
+                         entry in CLASS_CORRECTIONS with the evidence for it."
+                    ));
+                };
+                (*corrected).to_string()
+            };
+            if corrected != *data_type {
+                corrections.push((id_name.clone(), data_type.clone(), corrected.clone()));
+                *data_type = corrected;
+            }
+        }
+    }
+    corrections.sort();
+    corrections.dedup();
+    Ok(corrections)
+}
 
 /// Maps attribute id names to their values.
 ///
@@ -2859,4 +3067,144 @@ fn generate_channel_counts(mbgl: &Path) -> Result<String, String> {
     }
     out.push_str("        }\n    }\n}\n");
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        CLASS_CORRECTIONS, Declarations, ShaderTable, abi_shape, correct_declared_types,
+        glsl_shape, parse_shader_declarations,
+    };
+
+    /// Every `AttributeDataType` name splits into a scalar class, a count, and its own kind.
+    #[test]
+    fn an_attribute_type_name_splits_into_class_and_count() {
+        assert_eq!(abi_shape("Float"), Some(('f', 1, "Float")));
+        assert_eq!(abi_shape("Float2"), Some(('f', 2, "Float")));
+        assert_eq!(abi_shape("Short2"), Some(('i', 2, "Short")));
+        assert_eq!(abi_shape("UShort2"), Some(('u', 2, "UShort")));
+        // Eight components, and the count is two digits of nothing if the split is wrong.
+        assert_eq!(abi_shape("UShort8"), Some(('u', 8, "UShort")));
+        assert_eq!(abi_shape("Invalid"), None);
+    }
+
+    /// And every GLSL vertex-input type gives its class and count.
+    #[test]
+    fn a_glsl_type_gives_its_class_and_count() {
+        assert_eq!(glsl_shape("float"), Some(('f', 1)));
+        assert_eq!(glsl_shape("vec2"), Some(('f', 2)));
+        assert_eq!(glsl_shape("ivec2"), Some(('i', 2)));
+        assert_eq!(glsl_shape("uvec4"), Some(('u', 4)));
+        assert_eq!(glsl_shape("mat4"), None);
+    }
+
+    /// A fragment stage's inputs are not vertex inputs, and their locations collide.
+    ///
+    /// Every fragment stage here declares `layout(location = 0) in vec4 frag_color;`. Reading
+    /// those as vertex inputs would say location 0 is a four-component float in every shader --
+    /// which is a disagreement with the position attribute of every family, and "corrected"
+    /// would widen each one to four components. So the parser has to know which string it is in,
+    /// and this is the test that says it does.
+    #[test]
+    fn a_fragment_input_is_not_read_as_a_vertex_input() {
+        let header = r#"
+struct ShaderSource<BuiltIn::ExampleShader, gfx::Backend::Type::Vulkan> {
+    static constexpr auto vertex = R"(
+layout(location = 0) in ivec2 in_position;
+layout(location = 3) in vec2 in_base;
+)";
+    static constexpr auto fragment = R"(
+layout(location = 0) in vec4 frag_color;
+layout(location = 0) out vec4 out_color;
+)";
+};
+"#;
+        let declared = parse_shader_declarations(header);
+        assert_eq!(
+            declared
+                .get(&("ExampleShader".to_string(), 0))
+                .map(String::as_str),
+            Some("ivec2"),
+            "the fragment stage overwrote the vertex input at location 0"
+        );
+        assert_eq!(
+            declared
+                .get(&("ExampleShader".to_string(), 3))
+                .map(String::as_str),
+            Some("vec2")
+        );
+        assert_eq!(
+            declared.len(),
+            2,
+            "something outside the vertex stage was read"
+        );
+    }
+
+    /// A count-only disagreement is resolved from the shader, keeping the width.
+    #[test]
+    fn a_count_disagreement_takes_the_shaders_count() {
+        let mut shaders: Vec<ShaderTable> = vec![(
+            "ExampleShader".to_string(),
+            false,
+            vec![
+                (0, "Short2".to_string(), "idExamplePos".to_string()),
+                (3, "Float".to_string(), "idExampleBase".to_string()),
+            ],
+        )];
+        let mut declared = Declarations::new();
+        declared.insert(("ExampleShader".to_string(), 0), "ivec2".to_string());
+        declared.insert(("ExampleShader".to_string(), 3), "vec2".to_string());
+
+        let corrections = correct_declared_types(&mut shaders, &declared).expect("resolvable");
+        assert_eq!(shaders[0].2[0].1, "Short2", "an agreement is left alone");
+        assert_eq!(
+            shaders[0].2[1].1, "Float2",
+            "the count came from the shader"
+        );
+        assert_eq!(
+            corrections,
+            vec![(
+                "idExampleBase".to_string(),
+                "Float".to_string(),
+                "Float2".to_string()
+            )]
+        );
+    }
+
+    /// A class disagreement with no written-down answer stops the generation.
+    ///
+    /// The width cannot be read off GLSL -- `ivec2` is two integer components of any width -- so
+    /// resolving one of these silently would be picking a number. The error names the attribute.
+    #[test]
+    fn an_unlisted_class_disagreement_is_refused() {
+        let mut shaders: Vec<ShaderTable> = vec![(
+            "ExampleShader".to_string(),
+            false,
+            vec![(0, "Float3".to_string(), "idExampleThing".to_string())],
+        )];
+        let mut declared = Declarations::new();
+        declared.insert(("ExampleShader".to_string(), 0), "ivec2".to_string());
+
+        let why = correct_declared_types(&mut shaders, &declared).expect_err("refused");
+        assert!(why.contains("idExampleThing"), "{why}");
+        assert!(why.contains("CLASS_CORRECTIONS"), "{why}");
+    }
+
+    /// The one class disagreement that is written down carries its answer and its evidence.
+    #[test]
+    fn the_background_position_correction_is_documented() {
+        let (name, corrected, why) = CLASS_CORRECTIONS
+            .iter()
+            .find(|(name, _, _)| *name == "idBackgroundPosVertexAttribute")
+            .expect("the background position is corrected");
+        assert_eq!(*corrected, "Short2");
+        // The evidence matters more than the value: a width nobody can derive needs a reason
+        // somebody can check.
+        assert!(
+            why.contains("int16_t"),
+            "the reason does not name the width's source"
+        );
+        assert!(why.len() > 120, "the reason is too short to be one");
+        let _ = name;
+    }
 }

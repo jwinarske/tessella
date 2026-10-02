@@ -1,6 +1,6 @@
 //! Vertical writing orientation, generated from maplibre-native.
 //!
-//! Source revision: 96c12fdbcf73
+//! Source revision: ad5e73527f3a
 //!
 //! Produced by *running* mbgl rather than by reading it. The predicates behind
 //! these tables are nested block tests with single characters excluded from the
