@@ -1420,6 +1420,57 @@ fn parse_shader_declarations(text: &str) -> Declarations {
     out
 }
 
+/// Attributes `AttributeInfo` declares that the shader has no input at that location for, with
+/// the evidence that each is upstream's and not this generator's.
+///
+/// A consumer that trusts the table binds a buffer at a location the pipeline has no input for.
+/// That is harmless on some drivers and not on others: VeriSilicon's SPIR-V compiler segfaults on
+/// a module declaring a second `Short2` vertex attribute, so on an i.MX8M Plus the entry below for
+/// `ColorReliefShader` is the difference between a family that compiles and one that does not --
+/// measured, see `tessella_emblema`'s `tests/bench-baselines/imx8mp.txt`.
+///
+/// So the list is here rather than the absence being skipped. Anything not in it fails the
+/// generation, for the same reason [`CLASS_CORRECTIONS`] works that way: a disagreement mbgl
+/// introduces later should stop a build and name itself.
+const UNBACKED_ATTRIBUTES: &[(&str, i32, &str, &str)] = &[
+    (
+        "ColorReliefShader",
+        1,
+        "idColorReliefTexturePosVertexAttribute",
+        "The Vulkan shader declares one input and derives the texture coordinate from it: \
+         `frag_position = (vec2(in_position) / 8192.0) * scale + epsilon`, with a comment saying \
+         `use in_position to match GLSL a_pos`. The GL backend has the separate `a_pos`.",
+    ),
+    (
+        "FillExtrusionInstancedShader",
+        1,
+        "idFillExtrusionOutlinePosAttribute",
+        "The instanced shader reads position, color, base and height -- locations 0, 3, 4 and 5. \
+         The outline position is in `instanceAttributes` and no input declares it.",
+    ),
+    (
+        "FillExtrusionInstancedShader",
+        2,
+        "idFillExtrusionDecimalsEdAttribute",
+        "As above: the instanced form takes no packed decimals, where the plain one does at \
+         location 1.",
+    ),
+    (
+        "FillExtrusionPatternInstancedShader",
+        1,
+        "idFillExtrusionOutlinePosAttribute",
+        "The pattern instanced shader declares nothing at 1 either: its inputs are position, \
+         base, height and the two pattern corners, at 0, 3, 4, 5 and 6.",
+    ),
+    (
+        "FillExtrusionPatternInstancedShader",
+        2,
+        "idFillExtrusionDecimalsEdAttribute",
+        "Nor at 2, for the same reason: nothing in that shader's five inputs is the packed \
+         decimals the plain fill extrusion reads at its own location 1.",
+    ),
+];
+
 /// Replaces each attribute's declared type with what the shader itself declares, where the two
 /// disagree.
 ///
@@ -1437,6 +1488,18 @@ fn correct_declared_types(
     for (shader, _, attributes) in shaders.iter_mut() {
         for (binding, data_type, id_name) in attributes.iter_mut() {
             let Some(glsl) = declared.get(&(shader.clone(), *binding)) else {
+                // No input at that location. Recorded with its evidence or it fails here.
+                if !UNBACKED_ATTRIBUTES
+                    .iter()
+                    .any(|(name, at, id, _)| *name == shader && at == binding && *id == id_name)
+                {
+                    return Err(format!(
+                        "{shader} binding {binding} ({id_name}): `AttributeInfo` declares it and \
+                         the shader has no input at that location, so nothing can read what a \
+                         consumer binds there. Add it to UNBACKED_ATTRIBUTES with the evidence, \
+                         or drop it from the table."
+                    ));
+                }
                 continue;
             };
             let (Some((want_class, want_count)), Some((class, count, kind))) =
@@ -3072,9 +3135,64 @@ fn generate_channel_counts(mbgl: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        CLASS_CORRECTIONS, Declarations, ShaderTable, abi_shape, correct_declared_types,
-        glsl_shape, parse_shader_declarations,
+        CLASS_CORRECTIONS, Declarations, ShaderTable, UNBACKED_ATTRIBUTES, abi_shape,
+        correct_declared_types, glsl_shape, parse_shader_declarations,
     };
+
+    /// An attribute the shader has no input for fails the generation unless it is recorded.
+    ///
+    /// The silent alternative is what this replaces: the generator used to skip an
+    /// `AttributeInfo` whose location no input declares, so the table told a consumer to bind a
+    /// buffer nothing could read. Harmless on some drivers; on VeriSilicon's a second `Short2`
+    /// vertex attribute segfaults the shader compiler.
+    #[test]
+    fn an_attribute_with_no_shader_input_is_recorded_or_refused() {
+        let mut shaders: Vec<ShaderTable> = vec![(
+            "ExampleShader".to_string(),
+            false,
+            vec![
+                (0, "Short2".to_string(), "idExamplePosAttribute".to_string()),
+                (
+                    1,
+                    "Short2".to_string(),
+                    "idExampleSpareAttribute".to_string(),
+                ),
+            ],
+        )];
+        let mut declared = Declarations::new();
+        declared.insert(("ExampleShader".to_string(), 0), "ivec2".to_string());
+
+        let why = correct_declared_types(&mut shaders, &declared)
+            .expect_err("an unrecorded attribute with no input is refused");
+        assert!(why.contains("idExampleSpareAttribute"), "{why}");
+        assert!(why.contains("no input at that location"), "{why}");
+
+        // And the one the shader does declare is not reported, so the message names the
+        // attribute at fault rather than every attribute of the shader.
+        assert!(!why.contains("idExamplePosAttribute"), "{why}");
+    }
+
+    /// Each recorded attribute is named once and carries its evidence.
+    ///
+    /// A list of exceptions is only worth having if every line says why it is there -- the same
+    /// rule `CLASS_CORRECTIONS` follows. A duplicate would also mean two entries claiming one
+    /// location, where the second can never be reached.
+    #[test]
+    fn every_recorded_attribute_says_why() {
+        let mut seen = Vec::new();
+        for (shader, binding, id, why) in UNBACKED_ATTRIBUTES {
+            assert!(
+                why.len() > 40,
+                "{shader} binding {binding} ({id}) is recorded without evidence"
+            );
+            assert!(
+                !seen.contains(&(*shader, *binding)),
+                "{shader} binding {binding} is recorded twice"
+            );
+            seen.push((*shader, *binding));
+        }
+        assert_eq!(seen.len(), 5, "the recorded set changed; read the new one");
+    }
 
     /// Every `AttributeDataType` name splits into a scalar class, a count, and its own kind.
     #[test]
