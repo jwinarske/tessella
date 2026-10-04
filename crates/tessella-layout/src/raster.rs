@@ -26,8 +26,13 @@ pub const EXTENT: i32 = 8192;
 
 /// One vertex: where it is in the tile, and where it samples the image.
 ///
-/// The two are the same numbers for a whole-tile quad and diverge for a masked one, which is why
-/// they are separate attributes rather than one. mbgl declares them as `Short2` and `UShort2`.
+/// Two fields rather than one because mbgl declares two attributes, `Short2` and `UShort2`, and
+/// its GL shader reads both. This producer fills them with the same numbers on every path:
+/// `add_quad_on` takes both from one `x` and `y`, `add_skirt` copies the surface vertex it hangs
+/// from, and `masked_on` grids each entry through `add_quad_on`. `x` and `y` are non-negative and
+/// at most `EXTENT`, so the cast to `u16` cannot wrap either. A consumer may therefore take the
+/// coordinate from either field, which is what mbgl's Vulkan shader does -- it declares no second
+/// input and derives the coordinate from the position.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RasterVertex {
     /// Position in tile units.
@@ -380,6 +385,47 @@ mod tests {
             #[allow(clippy::cast_sign_loss)]
             let want = [vertex.position[0] as u16, vertex.position[1] as u16];
             assert_eq!(vertex.texture, want);
+        }
+    }
+
+    /// Every path fills `position` and `texture` alike, which is what lets a consumer take the
+    /// coordinate from either field.
+    ///
+    /// `tessella_fluorite` reads `texture`, as mbgl's GL shader does. mbgl's Vulkan shader
+    /// declares no second input and derives the coordinate from the position instead. Both are
+    /// right only while this holds, and a path that filled the two differently would move one
+    /// consumer's pixels and not the other's -- which is the kind of divergence a parity sweep
+    /// reports against whichever consumer it happens to run.
+    #[test]
+    fn a_vertex_samples_where_it_sits() {
+        use tessella_tile::mask::MaskEntry;
+
+        let mut skirted = RasterBucket::whole_tile();
+        skirted.add_skirt(1);
+        let mut gridded = RasterBucket::default();
+        gridded.add_quad_on(0, 0, 0, 4);
+        gridded.add_skirt(4);
+        let buckets = [
+            RasterBucket::whole_tile(),
+            gridded,
+            skirted,
+            RasterBucket::masked(&[
+                MaskEntry { z: 1, x: 0, y: 1 },
+                MaskEntry { z: 2, x: 3, y: 2 },
+            ]),
+            RasterBucket::masked_on(&[MaskEntry { z: 1, x: 1, y: 0 }], 3),
+        ];
+        for (which, bucket) in buckets.iter().enumerate() {
+            assert!(!bucket.vertices.is_empty(), "bucket {which} built nothing");
+            for vertex in &bucket.vertices {
+                #[allow(clippy::cast_sign_loss)]
+                let from_position = [vertex.position[0] as u16, vertex.position[1] as u16];
+                assert_eq!(
+                    vertex.texture, from_position,
+                    "bucket {which} samples {:?} at {:?}",
+                    vertex.texture, vertex.position
+                );
+            }
         }
     }
 
