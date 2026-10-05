@@ -2409,9 +2409,9 @@ Named above and defined here, because "tile-local transforms in the shared world
 contract until the space is one. Every item is what a consumer must assume and a producer must not
 contradict.
 
-- **Units: metres.** Web Mercator metres about the origin below, multiplied by the cosine of that
+- **Units: meters.** Web Mercator meters about the origin below, multiplied by the cosine of that
   origin's latitude. One factor per view, so a model, a speed, a physics body and an audio
-  distance are all true metres with no per-city correction. Exact at the origin's latitude and
+  distance are all true meters with no per-city correction. Exact at the origin's latitude and
   drifting with distance from it — about 0.15% to 0.27% at 15 km in the mid-latitudes — which
   registers map and scene content against each other because both use the one transform, and
   leaves only absolute size drifting.
@@ -2425,7 +2425,7 @@ contradict.
 - **Wrap: the consumer's, from the tile id.** `TileId::wrap` times the world span at that zoom,
   added to `x`. The producer emits one bucket per tile and names each copy by wrap rather than
   duplicating geometry.
-- **Heights: metres, unscaled.** The latitude cosine applies to the ground plane and not to
+- **Heights: meters, unscaled.** The latitude cosine applies to the ground plane and not to
   height, because a building is as tall as it is. So a height and a horizontal distance are in
   the same unit but not the same scale, which is the one place this frame is not uniform.
 - **Depth bias: the consumer's, from `layer_index` and `sub_layer_index`.** The producer's own
@@ -2434,8 +2434,18 @@ contradict.
 - **Advisory in this mode, and not to be bound:** every per-drawable matrix and the camera
   block's projection. They are the producer-mode values and the producer still computes them for
   its own cover and placement; a consumer that bound one would place geometry through a camera
-  one frame stale. `pixelsPerMeter` is advisory for the same reason — it is derived from the
-  producer's zoom.
+  one frame stale.
+- **Nobody converts a height, and `pixelsPerMeter` is not needed here at all.** It exists because
+  a world-pixel frame is anisotropic — heights arrive in meters while `x` and `y` are world
+  pixels, so a fused matrix needs the ratio or buildings come out too tall by its reciprocal. A
+  meters frame never has that problem: the ground scale is the latitude cosine, a height is passed
+  through, and the ratio has nothing to correct. So it stays on the wire for producer mode and for
+  a consumer that owns the camera but still works in world pixels, and a consumer on this frame
+  ignores it.
+
+  Which answers whether the camera block should carry a meters-to-world scale: it should not. The
+  consumer already holds the one factor its own origin implies, and putting it on the wire would
+  be a layout change that duplicates a number the consumer is better placed to compute.
 
 What the producer still owns in this mode is everything that needs the style rather than the
 camera: zoom-dependent widths, pattern and dash scales, and the zoom mixes. Those read the
