@@ -1317,7 +1317,11 @@ fn generate() -> String {
     emit_enum(
         w,
         "camera_mode",
-        "Which side owns a view's camera. Declared per view at tsl_view_declare.",
+        concat!(
+            "Which side owns a view's camera. Declared per view at tsl_view_declare. In ",
+            "consumer mode a tile's placement comes from its own id and every per-drawable ",
+            "matrix is advisory; see the shared world space in plan section 11.1."
+        ),
         &[("PRODUCER".to_string(), 0), ("CONSUMER".to_string(), 1)],
     );
     emit_enum(

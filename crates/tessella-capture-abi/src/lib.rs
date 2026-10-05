@@ -237,6 +237,13 @@ pub enum CameraMode {
     /// over the reverse channel (§11.1). Pan-to-photon drops to the consumer's own render
     /// latency; the ring leaves the interactive path. See R-8 for the staleness artifacts
     /// this trades against.
+    ///
+    /// The world space is defined in §11.1, and two of its terms decide whether a consumer
+    /// draws anything recognizable: a tile's placement comes from its own id rather than from
+    /// any matrix on the wire, and every per-drawable matrix plus the camera block's
+    /// projection are **advisory** here -- they are the producer-mode values, computed for its
+    /// own cover and placement, and binding one places geometry through a camera a frame
+    /// stale.
     Consumer = 1,
 }
 
