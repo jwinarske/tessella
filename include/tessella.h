@@ -13,7 +13,7 @@
  *
  * By hand, and checked rather than trusted. `tessella_capture_abi.h` is generated from mbgl's own
  * declarations (DR-6) because it is a large table nobody could keep in step by reading it; this
- * is six functions and two structs, and generating it would cost more than it saves. What it
+ * is two dozen functions and two structs, and generating it would cost more than it saves. What it
  * would cost instead is drift, so `c_surface.rs` compiles a probe against this header, links it
  * to the staticlib and drives a whole map lifecycle through it. A declaration that disagrees with
  * the Rust fails to link or fails to run.
@@ -97,7 +97,16 @@ typedef enum tessella_result {
     /* An image could not be read, or its pixel ratio was not positive. Distinct from
      * TESSELLA_BAD_ANNOTATIONS, which says the same of an annotation's image: the two calls take
      * different things and a caller fixing one is not looking at the other. */
-    TESSELLA_BAD_IMAGE = 13
+    TESSELLA_BAD_IMAGE = 13,
+    /* A conversion between the screen and the map has no answer for that point.
+     *
+     * From tessella_screen_to_geo, a pixel whose ray never reaches the surface: above the horizon
+     * on a pitched plane, or beside the globe. From tessella_geo_to_screen, a coordinate the
+     * camera cannot see: behind it on a plane, or on the globe's far side.
+     *
+     * Not a failure, and the out parameters are left untouched rather than clamped. There is an
+     * answer available in both cases and it is worse than none -- see the two calls. */
+    TESSELLA_OFF_THE_MAP = 14
 } tessella_result;
 
 /* How far along a map's sources are.
@@ -336,6 +345,55 @@ tessella_result tessella_publish_camera(tessella_map* map,
  *
  * Does not emit; the next tessella_tick does. */
 tessella_result tessella_advance(tessella_map* map, double elapsed_millis);
+
+/* Which coordinate a screen pixel is over.
+ *
+ * The pixel is in viewport coordinates, x from the left and y *down from the top*, which is where
+ * a touch or a pointer arrives in. The answer is against the map's current camera, viewport and
+ * projection: a globe is met as a sphere and a plane as a plane, so a host that switches
+ * projection does not switch arithmetic.
+ *
+ * This is what a gesture is built from. Zooming about the point under two fingers is the
+ * coordinate under them held fixed while the zoom changes, and panning by pixels is the difference
+ * between two of these. Neither is expressible from the camera alone, because the relation between
+ * a pixel and the ground is not uniform under pitch: a pixel near the top of a pitched screen
+ * covers far more ground than one at the bottom, and no single scale describes both.
+ *
+ * TESSELLA_OFF_THE_MAP, with the out parameters untouched, when the pixel is over nothing -- a
+ * pitched camera's upper screen is sky and a globe does not fill its viewport. A condition of the
+ * pixel rather than an error, and the answer for a pixel that is not a number as well.
+ * TESSELLA_FAILED when the viewport has no area.
+ *
+ * Answers against the map's own camera, which under TESSELLA_CAMERA_OWNER_CONSUMER is the camera
+ * last published -- its scalars, not its matrix. A consumer's view_projection is in the consumer's
+ * own world space, whose origin never travels, so it cannot be inverted here; a consumer with a
+ * scene camera that is not a map camera is the side holding both the matrix and the origin, and is
+ * the side that can answer. */
+tessella_result tessella_screen_to_geo(const tessella_map* map,
+                                       double x,
+                                       double y,
+                                       double* out_latitude,
+                                       double* out_longitude);
+
+/* Where a coordinate lands on the screen.
+ *
+ * The inverse of tessella_screen_to_geo, in the same viewport coordinates with y down from the
+ * top. What a host places its own overlays with: a marker, a route's end, a label drawn outside
+ * the map, or the arithmetic that asks where a set of coordinates would land before deciding they
+ * fit on the screen.
+ *
+ * TESSELLA_OFF_THE_MAP for a coordinate the camera cannot see, out parameters untouched. Two cases
+ * reach it: on a plane a coordinate *behind* a pitched camera, which the projection divides by a
+ * negative w and so reflects through the center of the screen; on a globe the half of the world
+ * the planet is in front of. Neither has a pixel, and both have one that looks usable. A
+ * coordinate that is not a number is answered the same way.
+ *
+ * TESSELLA_FAILED when the viewport has no area. */
+tessella_result tessella_geo_to_screen(const tessella_map* map,
+                                       double latitude,
+                                       double longitude,
+                                       double* out_x,
+                                       double* out_y);
 
 /* Changes the viewport a map draws into.
  *

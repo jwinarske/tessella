@@ -87,6 +87,109 @@ int main(void) {
     printf("projection_null %d\n",
            (int)tessella_set_projection(NULL, TESSELLA_PROJECTION_GLOBE));
 
+    /* The two conversions, which are the only calls that answer a question about the camera
+     * rather than changing it. Driven here because the viewport is known: 800 x 600 from the
+     * resize above, a flat north-up camera, and the plane. */
+    {
+        double latitude = 0.0;
+        double longitude = 0.0;
+        double x = 0.0;
+        double y = 0.0;
+
+        /* The middle of the screen is the camera's own coordinate, and projecting it back is the
+         * middle of the screen. A y convention that disagreed with the Rust would come back
+         * mirrored about the center, which is why the round trip is off-center. */
+        printf("screen_to_geo %d\n",
+               (int)tessella_screen_to_geo(map, 400.0, 300.0, &latitude, &longitude));
+        printf("screen_to_geo_center %d\n",
+               (latitude > 48.84 && latitude < 48.86 && longitude > 2.34 && longitude < 2.36) ? 1
+                                                                                             : 0);
+        printf("geo_to_screen %d\n",
+               (int)tessella_geo_to_screen(map, 48.85, 2.35, &x, &y));
+        printf("geo_to_screen_center %d\n",
+               (x > 399.9 && x < 400.1 && y > 299.9 && y < 300.1) ? 1 : 0);
+
+        /* Off-center, and y down from the top: a pixel above the middle is north of the center. */
+        printf("screen_to_geo_upper %d\n",
+               (int)tessella_screen_to_geo(map, 400.0, 100.0, &latitude, &longitude));
+        printf("upper_is_north %d\n", latitude > 48.85 ? 1 : 0);
+        printf("geo_to_screen_roundtrip %d\n",
+               (int)tessella_geo_to_screen(map, latitude, longitude, &x, &y));
+        printf("roundtrip_pixel %d\n", (x > 399.9 && x < 400.1 && y > 99.9 && y < 100.1) ? 1 : 0);
+
+        /* The header's own number for the status these two answer with, so a header that drifted
+         * from the Rust fails here rather than in a consumer's log. */
+        printf("off_the_map_value %d\n", (int)TESSELLA_OFF_THE_MAP);
+
+        /* Null arguments are answered rather than dereferenced, and a null handle is still not a
+         * map. */
+        printf("screen_to_geo_null_out %d\n",
+               (int)tessella_screen_to_geo(map, 400.0, 300.0, NULL, &longitude));
+        printf("geo_to_screen_null_out %d\n",
+               (int)tessella_geo_to_screen(map, 48.85, 2.35, &x, NULL));
+        printf("screen_to_geo_null_map %d\n",
+               (int)tessella_screen_to_geo(NULL, 400.0, 300.0, &latitude, &longitude));
+        printf("geo_to_screen_null_map %d\n",
+               (int)tessella_geo_to_screen(NULL, 48.85, 2.35, &x, &y));
+
+        /* Pitched, where the top of the screen is sky. The sentinels say the out parameters were
+         * left alone rather than clamped to something plausible. */
+        printf("pitch %d\n", (int)tessella_set_camera(map, 48.85, 2.35, 11.0, 0.0, 75.0));
+        latitude = -1000.0;
+        longitude = -1000.0;
+        printf("sky %d\n",
+               (int)tessella_screen_to_geo(map, 400.0, 20.0, &latitude, &longitude));
+        printf("sky_untouched %d\n",
+               (latitude == -1000.0 && longitude == -1000.0) ? 1 : 0);
+        /* And the ground below the middle still answers. */
+        printf("ground %d\n",
+               (int)tessella_screen_to_geo(map, 400.0, 500.0, &latitude, &longitude));
+
+        /* A coordinate behind a pitched camera has no pixel either, which is the same condition
+         * read in the other direction. */
+        x = -1000.0;
+        y = -1000.0;
+        printf("behind %d\n", (int)tessella_geo_to_screen(map, 44.0, 2.35, &x, &y));
+        printf("behind_untouched %d\n", (x == -1000.0 && y == -1000.0) ? 1 : 0);
+
+        /* The globe. Same camera as the plane's checks, which is a zoom where the planet fills
+         * the viewport: the center pixel is still the coordinate under the camera. */
+        printf("globe %d\n", (int)tessella_set_projection(map, TESSELLA_PROJECTION_GLOBE));
+        printf("globe_camera %d\n", (int)tessella_set_camera(map, 48.85, 2.35, 11.0, 0.0, 0.0));
+        printf("globe_center %d\n",
+               (int)tessella_screen_to_geo(map, 400.0, 300.0, &latitude, &longitude));
+        printf("globe_center_is_camera %d\n",
+               (latitude > 48.84 && latitude < 48.86 && longitude > 2.34 && longitude < 2.36) ? 1
+                                                                                             : 0);
+        /* The far side of the planet has no pixel, which the plane has no equivalent of: a
+         * Mercator map has no hidden half. */
+        x = -1000.0;
+        y = -1000.0;
+        printf("far_side %d\n",
+               (int)tessella_geo_to_screen(map, -48.85, 2.35 - 180.0, &x, &y));
+        printf("far_side_untouched %d\n", (x == -1000.0 && y == -1000.0) ? 1 : 0);
+
+        /* Zoomed out until the ball no longer fills the viewport, where a corner pixel is beside
+         * the planet rather than on it. The camera is constrained at that zoom -- a map does not
+         * show the world's edge -- so this asks nothing about where the center is. */
+        printf("globe_out %d\n", (int)tessella_set_camera(map, 0.0, 0.0, 0.0, 0.0, 0.0));
+        latitude = -1000.0;
+        longitude = -1000.0;
+        printf("beside_the_globe %d\n",
+               (int)tessella_screen_to_geo(map, 2.0, 2.0, &latitude, &longitude));
+        printf("beside_untouched %d\n",
+               (latitude == -1000.0 && longitude == -1000.0) ? 1 : 0);
+        /* And the middle of that same screen is on it. */
+        printf("globe_out_center %d\n",
+               (int)tessella_screen_to_geo(map, 400.0, 300.0, &latitude, &longitude));
+
+        /* Back to the camera and the projection the rest of the probe expects. */
+        printf("back_to_plane %d\n",
+               (int)tessella_set_projection(map, TESSELLA_PROJECTION_MERCATOR));
+        printf("back_to_camera %d\n",
+               (int)tessella_set_camera(map, 48.85, 2.35, 11.0, 0.0, 0.0));
+    }
+
     printf("tick_first %d\n", (int)tessella_tick(map));
     printf("tick_second %d\n", (int)tessella_tick(map));
 

@@ -86,6 +86,19 @@ pub enum Status {
     /// Distinct from [`Self::BadAnnotations`], which says the same of an *annotation's* image: the
     /// two calls take different things and a caller fixing one is not looking at the other.
     BadImage = 13,
+    /// The conversion between the screen and the map has no answer for that point.
+    ///
+    /// From [`tessella_screen_to_geo`], a pixel whose ray never reaches the surface: above the
+    /// horizon on a pitched plane, or beside the globe. From [`tessella_geo_to_screen`], a
+    /// coordinate the camera cannot see: behind it on a plane, or on the globe's far side.
+    ///
+    /// Not a failure, and the out parameters are left untouched rather than clamped. There is an
+    /// answer available in both cases and it is worse than none: mbgl's own above-the-horizon
+    /// answer is the near point, which is a coordinate the pixel is not over, and a coordinate
+    /// behind the camera projects to a pixel that is a reflection through the center of the
+    /// screen -- on the screen, in the half where distant ground is drawn. A caller that took
+    /// either would place something at a plausible wrong position rather than drop it.
+    OffTheMap = 14,
 }
 
 extern crate alloc;
@@ -122,6 +135,7 @@ use tessella_style::Style;
 use tessella_tile::camera;
 use tessella_tile::cover::{self, ViewTransform};
 use tessella_tile::projection::TILE_SIZE;
+use tessella_tile::screen;
 
 /// The texture the sprite atlas is uploaded as.
 ///
@@ -141,6 +155,13 @@ const SPRITE_TEXTURE: tessella_capture_abi::envelope::TextureId =
 /// Null is never handed out, so a caller that ignores a status cannot mistake a failed create
 /// for a working map.
 pub type MapHandle = *mut MapState;
+
+/// The same handle where the call only reads the map.
+///
+/// C declares these parameters `const tessella_map*`, which a caller holding an ordinary handle
+/// passes without a cast. The older read-only calls predate this and take [`MapHandle`]; making
+/// them const would be source- and ABI-compatible and is not this type's business.
+pub type ConstMapHandle = *const MapState;
 
 /// Where a consumer reads from.
 ///
@@ -724,6 +745,154 @@ pub unsafe extern "C" fn tessella_advance(map: MapHandle, elapsed_millis: f64) -
         };
         state.map.advance(elapsed_millis);
         Status::Ok
+    })
+}
+
+/// Which coordinate a screen pixel is over.
+///
+/// The pixel is in viewport coordinates, `x` from the left and `y` **down from the top**, which is
+/// where a touch or a pointer arrives in. The answer is against the map's current camera,
+/// viewport and projection: a globe is met as a sphere and a plane as a plane, so a host that
+/// switches projection does not switch arithmetic.
+///
+/// # What it is for
+///
+/// A gesture, and a hit test the host runs itself. Zooming about the point under two fingers is
+/// the coordinate under them held fixed while the zoom changes, and panning by pixels is the
+/// difference between two of these. Neither is expressible from the camera alone, because the
+/// relation between a pixel and the ground is not uniform under pitch -- a pixel near the top of
+/// a pitched screen covers far more ground than one at the bottom, and no single scale describes
+/// both.
+///
+/// # When there is no answer
+///
+/// [`Status::OffTheMap`], with the out parameters untouched: a pitched camera's upper screen is
+/// sky, and a globe does not fill its viewport. That is a condition of the pixel rather than an
+/// error, and it is reported rather than clamped for the reason the status describes.
+///
+/// [`Status::Failed`] when the viewport has no area, which is the only way a camera has no
+/// projection at all. A pixel that is not a number is answered as [`Status::OffTheMap`] with the
+/// rest: it is not over the map either.
+///
+/// # The camera this answers against
+///
+/// The map's own, which under [`CameraOwner::Consumer`] is the camera last *published* -- the
+/// scalars, not the matrix. A consumer's `view_projection` is in the consumer's own world space,
+/// whose origin never travels (plan.md 11.1), so it cannot be inverted here. For a published map
+/// camera the two agree; for a scene camera that is not a map camera they do not, and the
+/// consumer is the side that can answer at all, since it holds both the matrix and the origin.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed, and both out
+/// pointers must be non-null and writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_screen_to_geo(
+    map: ConstMapHandle,
+    x: f64,
+    y: f64,
+    out_latitude: *mut f64,
+    out_longitude: *mut f64,
+) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_ref() }) else {
+            return Status::NoSuchMap;
+        };
+        if out_latitude.is_null() || out_longitude.is_null() {
+            return Status::NullArgument;
+        }
+        if !x.is_finite() || !y.is_finite() {
+            // A pixel that is not a number is not over the map either, and this is the answer the
+            // sphere's quadratic reaches on its own.
+            return Status::OffTheMap;
+        }
+        let view = state.map.view();
+        // Viewport pixels to the convention `screen` works in, which is y up from the bottom
+        // edge -- `TransformState`'s, not the one a caller hands us. See that module's note.
+        let point = [x, view.height - y];
+        let found = match state.map.projection() {
+            ProjectionMode::Globe => screen::from_screen_on_sphere(view, point),
+            ProjectionMode::Mercator => match screen::from_screen_detail(view, point) {
+                None => Err(screen::NoAnswer::NoView),
+                Some(found) if !found.met_the_plane => Err(screen::NoAnswer::NotOnTheSurface),
+                Some(found) => Ok(found.coordinate),
+            },
+        };
+        match found {
+            Ok(coordinate) => {
+                unsafe {
+                    *out_latitude = coordinate[1];
+                    *out_longitude = coordinate[0];
+                }
+                Status::Ok
+            }
+            Err(screen::NoAnswer::NotOnTheSurface) => Status::OffTheMap,
+            Err(screen::NoAnswer::NoView) => Status::Failed,
+        }
+    })
+}
+
+/// Where a coordinate lands on the screen.
+///
+/// The inverse of [`tessella_screen_to_geo`] and in the same viewport coordinates, `y` down from
+/// the top. What a host places its own overlays with: a marker, a route's end, a label it draws
+/// outside the map, or the camera-fitting arithmetic that asks where a set of coordinates would
+/// land before deciding they fit.
+///
+/// # When there is no answer
+///
+/// [`Status::OffTheMap`] for a coordinate the camera cannot see, with the out parameters
+/// untouched. Two different cases reach it. On a plane it is a coordinate *behind* a pitched
+/// camera, which the projection divides by a negative `w` and so reflects through the center of
+/// the screen; on a globe it is the half of the world the planet is in front of. Neither has a
+/// pixel, and both have one that looks usable. A coordinate that is not a number is answered the
+/// same way.
+///
+/// [`Status::Failed`] when the viewport has no area.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed, and both out
+/// pointers must be non-null and writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_geo_to_screen(
+    map: ConstMapHandle,
+    latitude: f64,
+    longitude: f64,
+    out_x: *mut f64,
+    out_y: *mut f64,
+) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_ref() }) else {
+            return Status::NoSuchMap;
+        };
+        if out_x.is_null() || out_y.is_null() {
+            return Status::NullArgument;
+        }
+        if !latitude.is_finite() || !longitude.is_finite() {
+            return Status::OffTheMap;
+        }
+        let view = state.map.view();
+        let landed = match state.map.projection() {
+            ProjectionMode::Globe => screen::to_screen_on_sphere(view, longitude, latitude),
+            ProjectionMode::Mercator => match screen::to_screen_detail(view, longitude, latitude) {
+                None => Err(screen::NoAnswer::NoView),
+                Some(landed) if !landed.in_front => Err(screen::NoAnswer::NotOnTheSurface),
+                Some(landed) => Ok(landed.point),
+            },
+        };
+        match landed {
+            Ok(point) => {
+                unsafe {
+                    *out_x = point[0];
+                    // Back to the caller's convention, y down from the top.
+                    *out_y = view.height - point[1];
+                }
+                Status::Ok
+            }
+            Err(screen::NoAnswer::NotOnTheSurface) => Status::OffTheMap,
+            Err(screen::NoAnswer::NoView) => Status::Failed,
+        }
     })
 }
 
