@@ -241,18 +241,37 @@ emblema (pure-Rust Impeller reimplementation: canvas/recording over an entity la
 Vulkan + GLES 3.0 HALs, with WSI and DRM/KMS direct-scanout presentation) is the second
 consumer — not a null mirror but a shippable one, covering product shapes Fluorite is heavy
 for: pure-2D cluster maps and direct scanout on a leased DRM connector with no compositor.
-Both run on the Vulkan HAL; DR-16 puts GLES-only silicon outside the map-drawing set. The
-producer is untouched; this section fixes the integration layer.
+Both need Vulkan; DR-16 puts GLES-only silicon outside the map-drawing set. The producer is
+untouched; this section fixes the integration layer.
 
-- **Entity/HAL level, never canvas level.** The canvas `Vertices` model (positions + colors +
+- **A pass of its own, never canvas level.** The canvas `Vertices` model (positions + colors +
   texcoords, paint materials) cannot express custom attribute layouts or `_t`-uniform zoom
   interpolation; consuming there forces per-frame vertex-color rewrites — the
   AttributesModified storm the damage model forbids, killing the §13.1 invariant. Canvas is
-  for compositing the map *result*. The map draws through a `MapContents`/dedicated pass at
-  the entity/HAL layer, with the mbgl shader family ported into emblema-shaders as another
-  AOT pipeline set (matching its no-runtime-compilation rule).
-- **Stencil**: `StencilTiles` → tile quad × carried matrix through the clip machinery or an
-  owned stencil sub-pass inside the map pass.
+  for compositing the map *result*.
+
+  *Amended:* the pass is not inside emblema's HAL either, and does not live in emblema.
+  `tessella_emblema` draws with raw `ash` on the `VkDevice` and `VkQueue` emblema already owns,
+  into an image emblema created, and hands that image back for the canvas to composite over;
+  the HAL trait is untouched. What ruled the HAL out: emblema's entity layer is coverage-only
+  with nothing routed through it, and the HAL takes a *batch* — one fixed vertex, a closed
+  material enum, fragment-only runtime programs, every submit re-uploading all geometry, no
+  buffer or storage-buffer API, no depth attachment, whole-texture writes only — while its
+  architecture puts retained mode and 3D out of scope and pins every vertex's depth to zero as
+  a load-bearing invariant. A map pass needs the opposite of most of that: retained
+  device-local geometry keyed by `GeometryId`, a vertex layout and vertex stage per family,
+  §11.7's consolidated storage buffer per (view, layer), depth for extrusions and the opaque
+  pass, a stencil it owns, and sub-rect texture updates.
+
+  The no-runtime-compilation rule is kept where it came from: shaders are WGSL compiled
+  through naga to SPIR-V in `tessella_emblema` itself, one module per (family, surface) with
+  permutations as specialization constants, rather than ported into emblema-shaders. emblema is
+  asked for small seams instead of a map renderer — `VulkanTexture::assume_layout`
+  (emblema#133), which is required and absent, because an image emblema tracks as `UNDEFINED`
+  is transitioned from `UNDEFINED` at first sample and the driver may discard the map's pixels;
+  and device selection by UUID or DRM render node (emblema#134).
+- **Stencil**: `StencilTiles` → tile quad × carried matrix through a stencil the map pass owns.
+  emblema's clip machinery is not in the path.
 - **Text seam**: emblema-text packs caller-supplied coverage and does not rasterize;
   tessella-glyph rasterizes SDF coverage and owns the shared atlas. Either feed emblema-text or
   draw textured quads from the map atlas — the division of labor matches from both sides.
@@ -262,7 +281,7 @@ producer is untouched; this section fixes the integration layer.
 - **In-process Rust elision**: same ABI, but a Rust consumer holds slab `Arc`s directly —
   geometry "copy" degenerates to a refcount bump. Not a second transport; the ring is
   unchanged for Fluorite and for process isolation (§3.5).
-- **Hardware matrix effect**: the mirror exercises the Vulkan HAL only (DR-16). The GLES 3.0
+- **Hardware matrix effect**: the mirror exercises Vulkan only (DR-16). The GLES 3.0
   HAL composites a map result but cannot draw one — it has no SSBO — so it does not widen the
   *rendering* matrix. VisionFive 2 stays producer, soak, and cross-compile only, and joins the
   rendering matrix if and when the Mesa pvr Vulkan driver matures. The frontend was always
@@ -2550,7 +2569,7 @@ full-screen overdraw per layer; sub-range buffer updates from UBO dirty ranges; 
 texture uploads from rect lists; hold CameraUpdate until its orderEpoch is held; release slab
 references only after the driver's copy completes. Per consumer: Filament — renderables in
 multiple Scenes, MaterialInstance per (view, layer) over the shared SSBO, release via
-BufferDescriptor callback; emblema — MapContents at entity/HAL level per §3.6, canvas
+BufferDescriptor callback; emblema — a raw-Vulkan pass on emblema's own device per §3.6, canvas
 reserved for composition, in-process slab elision.
 
 ---
@@ -3324,10 +3343,14 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
 - **DR-13 Consumer-neutral ABI, proved by two mirrors.** The stream must contain nothing
   accidentally Filament-shaped; the emblema mirror (§3.6) is the conformance instrument,
   and consumer-specific needs are met in §11.7 obligations, never in envelope shape.
-- **DR-14 emblema integration at entity/HAL level.** Canvas-level consumption is
-  rejected (per-frame vertex rewrites violate the §13.1 damage invariant); mbgl shader
-  families port into emblema-shaders as AOT pipelines; text divides at the
-  coverage/packing seam (§3.6).
+- **DR-14 emblema integration: a raw-Vulkan pass on emblema's device.** Canvas-level
+  consumption is rejected (per-frame vertex rewrites violate the §13.1 damage invariant); the
+  canvas composites the result; text divides at the coverage/packing seam (§3.6).
+  *Amended:* entity/HAL level is dropped. emblema's entity layer is coverage-only and its HAL
+  takes batches with no buffer, storage-buffer or depth API, so `tessella_emblema` draws with
+  raw `ash` on the device emblema owns and the HAL trait is untouched. Pipelines are still
+  built ahead of time — WGSL through naga, in `tessella_emblema` rather than emblema-shaders.
+  emblema is asked only for small seams (emblema#133, #134).
 - **DR-15 Name: tessella.** A tessella is the small tile of a mosaic — tiles without the
   picture, which is the architecture. Independent of the MapLibre mark: the repo does not
   lead with "maplibre" or the `mln` namespace (maplibre-native's own C++ namespace);
@@ -3340,7 +3363,7 @@ Four-view synchronized zoom sweep, z8→z16→z8 continuous, on RK3566:
   3.1+ if a consumer ever implements one (emblema's GLES HAL floors at 3.0 and
   composites only). Mode bit reserved, batch-splitting allowance documented-but-dormant;
   no fallback path exists, no GLES map-drawing CI lane. Consequences: the emblema
-  mirror exercises the Vulkan HAL only and lands beside the R0 stub; VisionFive 2 is
+  mirror exercises Vulkan only and lands beside the R0 stub; VisionFive 2 is
   producer/soak/cross-compile only, with a rendering path arriving only if the Mesa pvr
   Vulkan driver matures — at zero cost and zero breakage to this design either way.
 
@@ -5097,7 +5120,7 @@ a subdivision and a draw the consumer no longer makes.
   closed: the part is asked rather than assumed, so it is one policy rather than one per target.
   `orchestrate::topology` reads the kernel's own capacity numbers and `Affinity` says what to
   make of them, defaulting to scheduler hints. See §5.4.
-- ~~Second-consumer sequencing~~ closed by DR-16: the emblema mirror (Vulkan HAL) lands
+- ~~Second-consumer sequencing~~ closed by DR-16: the emblema mirror (Vulkan) lands
   beside the R0 stub.
 - ~~UBO floor~~ closed by DR-16: SSBO-only, Vulkan-first.
 - ~~Reserve `tessella` on crates.io and GitHub~~ closed: `tessella` 0.0.0 published as a
