@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: BSD-2-Clause
 
 //! What a drawable is placed by under each projection — plan.md §13.4's producer half.
 //!
