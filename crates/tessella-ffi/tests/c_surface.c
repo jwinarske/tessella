@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: Apache-2.0
+/* SPDX-License-Identifier: BSD-2-Clause
  *
  * Drives a whole map lifecycle through `tessella.h` and nothing else.
  *

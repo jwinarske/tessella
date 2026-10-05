@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: BSD-2-Clause
 
 //! The triangulation is `earcut.hpp`'s, not merely a valid one.
 //!

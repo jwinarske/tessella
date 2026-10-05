@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: BSD-2-Clause
 
 //! The anchored bend's per-drawable block — plan.md §17, an extension beyond the oracle.
 //!

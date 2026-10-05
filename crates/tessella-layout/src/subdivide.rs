@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: BSD-2-Clause
 
 //! Splitting flat tile geometry onto a grid, so it can be bent — plan.md §13.4's consumer half.
 //!

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: BSD-2-Clause
 
 //! `["number-format", value, options]`, which turns a number into the text a person reads.
 //!
