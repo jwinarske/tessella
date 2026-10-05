@@ -92,7 +92,9 @@ typedef enum tsl_mesh_format {
     TSL_MESH_FORMAT_GLB = 1,
 } tsl_mesh_format;
 
-/* Which side owns a view's camera. Declared per view at tsl_view_declare. */
+/* Which side owns a view's camera. Declared per view at tsl_view_declare. In consumer mode a */
+/* tile's placement comes from its own id and every per-drawable matrix is advisory; see the */
+/* shared world space in plan section 11.1. */
 typedef enum tsl_camera_mode {
     TSL_CAMERA_MODE_PRODUCER = 0,
     TSL_CAMERA_MODE_CONSUMER = 1,

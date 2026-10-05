@@ -2403,6 +2403,44 @@ optimization pass, so
 it lands before R0 (see DR-9) — retrofitting it moves the world-space convention under the
 consumer.
 
+#### The shared world space
+
+Named above and defined here, because "tile-local transforms in the shared world space" is not a
+contract until the space is one. Every item is what a consumer must assume and a producer must not
+contradict.
+
+- **Units: metres.** Web Mercator metres about the origin below, multiplied by the cosine of that
+  origin's latitude. One factor per view, so a model, a speed, a physics body and an audio
+  distance are all true metres with no per-city correction. Exact at the origin's latitude and
+  drifting with distance from it — about 0.15% to 0.27% at 15 km in the mid-latitudes — which
+  registers map and scene content against each other because both use the one transform, and
+  leaves only absolute size drifting.
+- **Origin: the consumer's, tile-aligned, one per view.** Not on the wire. The producer never
+  needs it: a tile's placement is derivable from its own id, which is what makes the id the
+  placement (and what keeps a bucket camera-free, §5.1).
+- **Axes: a relabel of the producer's, not a rotation.** The producer works in `x` east, `y`
+  *south* — tile coordinates increase downward — and height in `z`. A y-up consumer takes
+  `(x, y, h)` to `(x, h, y)`. Right-handedness survives because east × up is south, so there is
+  no sign flip to forget. A consumer whose scene is z-up has nothing to do at all.
+- **Wrap: the consumer's, from the tile id.** `TileId::wrap` times the world span at that zoom,
+  added to `x`. The producer emits one bucket per tile and names each copy by wrap rather than
+  duplicating geometry.
+- **Heights: metres, unscaled.** The latitude cosine applies to the ground plane and not to
+  height, because a building is as tall as it is. So a height and a horizontal distance are in
+  the same unit but not the same scale, which is the one place this frame is not uniform.
+- **Depth bias: the consumer's, from `layer_index` and `sub_layer_index`.** The producer's own
+  bias lives in the projection it no longer supplies, so the indices on the wire are the whole
+  input and the consumer decides the epsilon. They are already per drawable.
+- **Advisory in this mode, and not to be bound:** every per-drawable matrix and the camera
+  block's projection. They are the producer-mode values and the producer still computes them for
+  its own cover and placement; a consumer that bound one would place geometry through a camera
+  one frame stale. `pixelsPerMeter` is advisory for the same reason — it is derived from the
+  producer's zoom.
+
+What the producer still owns in this mode is everything that needs the style rather than the
+camera: zoom-dependent widths, pattern and dash scales, and the zoom mixes. Those read the
+published zoom (§11.4), which is why the reverse channel is not optional here.
+
 ### 11.2 Tick budget and object collapse
 
 The tick runs inside the ECS update on the Filament API thread; every microsecond is stolen
