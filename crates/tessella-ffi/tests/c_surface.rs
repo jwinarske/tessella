@@ -186,6 +186,131 @@ fn the_c_header_describes_the_library_it_claims_to() {
         0,
         "switching back to the plane was refused",
     );
+    // The two conversions. TESSELLA_OFF_THE_MAP is 14, and the "untouched" lines are what say
+    // the call left the caller's doubles alone instead of clamping them to a plausible answer.
+    check("screen_to_geo", 0, "the center pixel had no coordinate");
+    check(
+        "screen_to_geo_center",
+        1,
+        "the center pixel was not the camera's own coordinate",
+    );
+    check("geo_to_screen", 0, "the camera's coordinate had no pixel");
+    check(
+        "geo_to_screen_center",
+        1,
+        "the camera's coordinate did not land in the middle of the screen",
+    );
+    check(
+        "screen_to_geo_upper",
+        0,
+        "an off-center pixel had no coordinate",
+    );
+    check(
+        "upper_is_north",
+        1,
+        "y is not down from the top: a pixel above the center came back south of it",
+    );
+    check("geo_to_screen_roundtrip", 0, "the round trip had no pixel");
+    check(
+        "roundtrip_pixel",
+        1,
+        "the two directions do not invert each other through the header",
+    );
+    check(
+        "off_the_map_value",
+        14,
+        "the header's TESSELLA_OFF_THE_MAP is not the status the Rust answers with",
+    );
+    check(
+        "screen_to_geo_null_out",
+        1,
+        "a null out-pointer was not rejected",
+    );
+    check(
+        "geo_to_screen_null_out",
+        1,
+        "a null out-pointer was not rejected",
+    );
+    check(
+        "screen_to_geo_null_map",
+        2,
+        "a null handle was not rejected",
+    );
+    check(
+        "geo_to_screen_null_map",
+        2,
+        "a null handle was not rejected",
+    );
+    check("pitch", 0, "pitching the camera was refused");
+    check(
+        "sky",
+        14,
+        "a pixel above the horizon was answered with a coordinate",
+    );
+    check(
+        "sky_untouched",
+        1,
+        "a pixel above the horizon wrote an out parameter",
+    );
+    check(
+        "ground",
+        0,
+        "a pixel below the center had no coordinate under pitch",
+    );
+    check(
+        "behind",
+        14,
+        "a coordinate behind a pitched camera was answered with a pixel",
+    );
+    check(
+        "behind_untouched",
+        1,
+        "a coordinate behind the camera wrote an out parameter",
+    );
+    check("globe", 0, "the globe projection was refused");
+    check("globe_camera", 0, "the globe's camera was refused");
+    check(
+        "globe_center",
+        0,
+        "the center pixel had no coordinate on a globe",
+    );
+    check(
+        "globe_center_is_camera",
+        1,
+        "the center pixel was not the camera's own coordinate on a globe",
+    );
+    check(
+        "far_side",
+        14,
+        "a coordinate on the globe's far side was answered with a pixel",
+    );
+    check(
+        "far_side_untouched",
+        1,
+        "a coordinate on the far side wrote an out parameter",
+    );
+    check("globe_out", 0, "zooming the globe out was refused");
+    check(
+        "beside_the_globe",
+        14,
+        "a pixel beside the globe was answered with a coordinate",
+    );
+    check(
+        "beside_untouched",
+        1,
+        "a pixel beside the globe wrote an out parameter",
+    );
+    check(
+        "globe_out_center",
+        0,
+        "the middle of the screen missed the globe too, so the corner proves nothing",
+    );
+    check(
+        "back_to_plane",
+        0,
+        "switching back to the plane was refused",
+    );
+    check("back_to_camera", 0, "restoring the camera was refused");
     check("tick_first", 0, "the first tick failed");
     check("tick_second", 0, "the second tick failed");
     check("status", 0, "the status call failed");
