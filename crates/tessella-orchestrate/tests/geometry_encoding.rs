@@ -162,13 +162,20 @@ fn an_extrusion_supplies_its_packed_fraction() {
     assert_eq!(position.source, decimals.source);
 }
 
-/// Every fixed attribute binds where its shader declares it, rather than where the encoder guessed.
+/// Every attribute binds where its shader declares it, rather than where the encoder guessed.
 ///
 /// The binding is what the consumer uses to attach a buffer to a shader input. An encoder that
 /// invents one produces a geometry the shader reads through the wrong slot, and the generated
 /// table is the only place the true answer lives.
+///
+/// The rule covers an attribute the table does *not* carry as well, and that half is what this
+/// used to skip: it checked ids 0 and 1 only, which is why the skirt at id 2 rode the wire for
+/// months with no table entry (tessella#331). The ABI has one answer for an attribute a shader
+/// does not declare -- binding `-1`, which tells the consumer to drop it -- so an undeclared
+/// attribute at a positive slot is neither bindable nor droppable, and a consumer reading the
+/// table loses bytes the producer meant it to have.
 #[test]
-fn fixed_attributes_bind_where_the_shader_declares() {
+fn every_attribute_binds_where_the_shader_declares() {
     for (kind, extra, family, shader) in [
         (
             "line",
@@ -185,20 +192,97 @@ fn fixed_attributes_bind_where_the_shader_declares() {
         ),
     ] {
         let encoded = encode(kind, extra, family, shader);
-        for attribute in encoded.attributes().iter().filter(|a| a.attr_id <= 1) {
-            let declared = declared_for(shader, attribute.attr_id)
-                .unwrap_or_else(|| panic!("{kind}: attribute {} is undeclared", attribute.attr_id));
+        declared_or_dropped(kind, shader, &encoded);
+    }
+}
+
+/// Every attribute of an `Encoded` is in its shader's table, or is on the wire at `-1`.
+fn declared_or_dropped(what: &str, shader: BuiltIn, encoded: &Encoded) {
+    assert!(
+        !encoded.attributes().is_empty(),
+        "{what}: nothing was described at all"
+    );
+    for attribute in encoded.attributes() {
+        let Some(declared) = declared_for(shader, attribute.attr_id) else {
             assert_eq!(
-                attribute.binding, declared.binding,
-                "{kind}: attribute {} bound at {} but declared at {}",
-                attribute.attr_id, attribute.binding, declared.binding
+                attribute.binding, -1,
+                "{what}: attribute {} is on the wire at binding {} and no table declares it, so a \
+                 consumer building its vertex input from the table loses it",
+                attribute.attr_id, attribute.binding
             );
-            assert_eq!(
-                attribute.declared_data_type, declared.declared as u8,
-                "{kind}: attribute {} declares the wrong type",
-                attribute.attr_id
-            );
-        }
+            continue;
+        };
+        assert_eq!(
+            attribute.binding, declared.binding,
+            "{what}: attribute {} bound at {} but declared at {}",
+            attribute.attr_id, attribute.binding, declared.binding
+        );
+        assert_eq!(
+            attribute.declared_data_type, declared.declared as u8,
+            "{what}: attribute {} declares the wrong type",
+            attribute.attr_id
+        );
+    }
+}
+
+/// Every encoder over the raster vertex describes its skirt flag, which is this producer's own
+/// attribute rather than mbgl's.
+///
+/// None of the three is built from an MVT layer, so none goes through `encode` above -- and each
+/// sends a third attribute mbgl's shader has no input for. It is not optional: with the per-layer
+/// curtain not emitted, every `gross` row of the parity sweep is identical to the pixel while
+/// `terrain_cover_p` counts up to 2382 holes of 1,620,000 at the high-pitch cameras.
+///
+/// Hillshade is here because this test found it. tessella#331 named the raster and the relief, and
+/// the third shares `alloc_raster`'s vertex with them and had the same undeclared slot.
+#[test]
+fn every_raster_family_encoder_describes_its_skirt() {
+    use tessella_capture_abi::envelope::{TextureFilter, TextureId};
+    use tessella_layout::raster::RasterBucket;
+    use tessella_orchestrate::emit::{encode_color_relief, encode_hillshade, encode_raster};
+
+    let bucket = RasterBucket::whole_tile();
+
+    let mut arena = SlabArena::new();
+    let raster = encode_raster(
+        &mut arena,
+        GeometryId(1),
+        &bucket,
+        TextureId(1),
+        None,
+        TextureFilter::Linear,
+    );
+    declared_or_dropped("raster", BuiltIn::RasterShader, &raster);
+
+    let relief = encode_color_relief(
+        &mut arena,
+        GeometryId(2),
+        &bucket,
+        TextureId(2),
+        TextureId(3),
+        TextureId(4),
+        None,
+    );
+    declared_or_dropped("color relief", BuiltIn::ColorReliefShader, &relief);
+
+    let hillshade = encode_hillshade(&mut arena, GeometryId(3), &bucket, TextureId(5), None);
+    declared_or_dropped("hillshade", BuiltIn::HillshadeShader, &hillshade);
+
+    // And the skirt is the third of the three, named rather than merely consistent: the checks
+    // above pass just as well for a producer that stopped sending it.
+    for (what, shader, encoded) in [
+        ("raster", BuiltIn::RasterShader, &raster),
+        ("color relief", BuiltIn::ColorReliefShader, &relief),
+        ("hillshade", BuiltIn::HillshadeShader, &hillshade),
+    ] {
+        let attributes = encoded.attributes();
+        let skirt = attributes
+            .iter()
+            .find(|attribute| attribute.binding == 2)
+            .unwrap_or_else(|| panic!("{what}: no attribute at binding 2"));
+        let declared = declared_for(shader, skirt.attr_id).expect("the table declares it");
+        assert_eq!(declared.name, "tessellaSkirtVertexAttribute", "{what}");
+        assert_eq!(declared.declared, AttributeDataType::Short2, "{what}");
     }
 }
 

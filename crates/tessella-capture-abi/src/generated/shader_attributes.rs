@@ -14,11 +14,19 @@
 //   idSymbolHaloBlurVertexAttribute: AttributeInfo Float -> Float2
 //   idSymbolHaloWidthVertexAttribute: AttributeInfo Float -> Float2
 //   idSymbolOpacityVertexAttribute: AttributeInfo Float -> Float2
+//
+// These are this producer's own attributes rather than mbgl's, so the source above
+// does not account for them. Each is on the wire for every bucket of its family and
+// a consumer that does not bind it draws holes; see PRODUCER_ATTRIBUTES in
+// `mbgl-codegen` for the evidence:
+//   ColorReliefShader binding 2: tessellaSkirtVertexAttribute, Short2
+//   RasterShader binding 2: tessellaSkirtVertexAttribute, Short2
+//   HillshadeShader binding 2: tessellaSkirtVertexAttribute, Short2
 
-//! Per-shader vertex attribute tables (DR-6). What a shader declares, as data. A producer reads
-//! the declared type from here rather than guessing it, which is what makes `declaredDataType` on
-//! the wire mean anything; and an attribute absent from a shader's table binds at -1 and is
-//! dropped by the consumer.
+//! Per-shader vertex attribute tables (DR-6). What a shader declares, as data, plus the few
+//! attributes this producer adds of its own. A producer reads the declared type from here rather
+//! than guessing it, which is what makes `declaredDataType` on the wire mean anything; and an
+//! attribute absent from a shader's table binds at -1 and is dropped by the consumer.
 
 use super::mbgl_enums::{AttributeDataType, BuiltIn};
 
@@ -31,7 +39,8 @@ pub struct ShaderAttribute {
     pub declared: AttributeDataType,
     /// Shader-side attribute id.
     pub attr_id: u32,
-    /// Name of the id in `shader_defines.hpp`, for diagnostics.
+    /// Name of the id in `shader_defines.hpp`, for diagnostics -- or this producer's own
+    /// name for an attribute mbgl has no id for, which the note at the top lists.
     pub name: &'static str,
 }
 
@@ -174,7 +183,7 @@ pub const COLLISION_CIRCLE_SHADER: [ShaderAttribute; 4] = [
 ];
 
 /// Attributes declared by `ColorReliefShader`.
-pub const COLOR_RELIEF_SHADER: [ShaderAttribute; 2] = [
+pub const COLOR_RELIEF_SHADER: [ShaderAttribute; 3] = [
     ShaderAttribute {
         binding: 0,
         declared: AttributeDataType::Short2,
@@ -186,6 +195,12 @@ pub const COLOR_RELIEF_SHADER: [ShaderAttribute; 2] = [
         declared: AttributeDataType::Short2,
         attr_id: 1,
         name: "idColorReliefTexturePosVertexAttribute",
+    },
+    ShaderAttribute {
+        binding: 2,
+        declared: AttributeDataType::Short2,
+        attr_id: 2,
+        name: "tessellaSkirtVertexAttribute",
     },
 ];
 
@@ -556,7 +571,7 @@ pub const HILLSHADE_PREPARE_SHADER: [ShaderAttribute; 2] = [
 ];
 
 /// Attributes declared by `HillshadeShader`.
-pub const HILLSHADE_SHADER: [ShaderAttribute; 2] = [
+pub const HILLSHADE_SHADER: [ShaderAttribute; 3] = [
     ShaderAttribute {
         binding: 0,
         declared: AttributeDataType::Short2,
@@ -568,6 +583,12 @@ pub const HILLSHADE_SHADER: [ShaderAttribute; 2] = [
         declared: AttributeDataType::Short2,
         attr_id: 1,
         name: "idHillshadeTexturePosVertexAttribute",
+    },
+    ShaderAttribute {
+        binding: 2,
+        declared: AttributeDataType::Short2,
+        attr_id: 2,
+        name: "tessellaSkirtVertexAttribute",
     },
 ];
 
@@ -810,7 +831,7 @@ pub const LOCATION_INDICATOR_TEXTURED_SHADER: [ShaderAttribute; 2] = [
 ];
 
 /// Attributes declared by `RasterShader`.
-pub const RASTER_SHADER: [ShaderAttribute; 2] = [
+pub const RASTER_SHADER: [ShaderAttribute; 3] = [
     ShaderAttribute {
         binding: 0,
         declared: AttributeDataType::Short2,
@@ -822,6 +843,12 @@ pub const RASTER_SHADER: [ShaderAttribute; 2] = [
         declared: AttributeDataType::Short2,
         attr_id: 1,
         name: "idRasterTexturePosVertexAttribute",
+    },
+    ShaderAttribute {
+        binding: 2,
+        declared: AttributeDataType::Short2,
+        attr_id: 2,
+        name: "tessellaSkirtVertexAttribute",
     },
 ];
 
