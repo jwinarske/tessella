@@ -129,12 +129,32 @@ impl Live {
         Self { map, consumer }
     }
 
-    /// Ticks until the wire goes quiet, and counts what it carried.
-    fn settle(&mut self, seconds: u64) -> Counted {
+    /// Ticks until `wanted` is satisfied and the wire has then gone quiet.
+    ///
+    /// # Why a quiet window alone will not do
+    ///
+    /// This loop used to stop after twelve quiet ticks whatever had arrived -- a hundred and twenty
+    /// milliseconds, which is enough on an idle machine and not enough on a loaded one. A cold map
+    /// is quiet for as long as its first tiles take, so the loop returned zero and the assertion
+    /// read "the first style drew nothing", which is the message a real regression would produce.
+    /// The same shape in `feature_state.rs` passed here and failed CI's stable canary; both
+    /// reproduce by setting the window to one tick.
+    ///
+    /// # Why the condition is the caller's
+    ///
+    /// A coarser rule -- "any geometry or view record, then quiet" -- is still wrong, and measurably
+    /// so: a restyle emits the old revision's removes and releases *before* the new document's adds,
+    /// so a window that closes in between returns `adds: 0, removes: 8` and fails the same way. What
+    /// each phase can wait for is the thing it is about to assert, which only it knows.
+    ///
+    /// A phase whose claim is that nothing is announced passes a condition that is never true and
+    /// waits out its deadline. That is the honest answer for it, and is why such a call asks for
+    /// three seconds rather than twenty.
+    fn settle_until(&mut self, seconds: u64, wanted: impl Fn(&Counted) -> bool) -> Counted {
         let mut counted = Counted::default();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
         let mut quiet = 0;
-        while std::time::Instant::now() < deadline && quiet < 12 {
+        while std::time::Instant::now() < deadline && (!wanted(&counted) || quiet < 12) {
             // SAFETY: a live map.
             assert_eq!(unsafe { tessella_ffi::tessella_tick(self.map) }, Status::Ok);
             let mut records = 0;
@@ -208,14 +228,15 @@ fn a_restyle_redraws_and_with_a_store_refetches_nothing() {
     let origin = server.origin();
 
     let mut live = Live::create(&one_layer("day", &origin), Some(&path));
-    let first = live.settle(20);
+    let first = live.settle_until(20, |seen| seen.adds > 0);
     assert!(first.adds > 0, "the first style drew nothing: {first:?}");
     assert_eq!(first.removes, 0, "nothing to remove yet: {first:?}");
     let fetched = server.requests();
     assert!(fetched > 0, "the first style reached no origin at all");
 
     assert_eq!(live.restyle(&two_layers("night", &origin)), Status::Ok);
-    let second = live.settle(20);
+    // The old revision's removes come before the new document's adds, so both are waited for.
+    let second = live.settle_until(20, |seen| seen.adds > 0 && seen.removes > 0);
 
     assert!(
         second.adds >= first.adds * 2,
@@ -265,7 +286,7 @@ fn a_restyle_without_a_store_refetches() {
     let origin = server.origin();
 
     let mut live = Live::create(&one_layer("plain-day", &origin), None);
-    let first = live.settle(20);
+    let first = live.settle_until(20, |seen| seen.adds > 0);
     assert!(first.adds > 0, "the first style drew nothing: {first:?}");
     let fetched = server.requests();
 
@@ -273,7 +294,7 @@ fn a_restyle_without_a_store_refetches() {
         live.restyle(&two_layers("plain-night", &origin)),
         Status::Ok
     );
-    let second = live.settle(20);
+    let second = live.settle_until(20, |seen| seen.adds > 0);
     assert!(second.adds > 0, "the second style drew nothing: {second:?}");
     assert!(
         server.requests() > fetched,
@@ -295,7 +316,7 @@ fn a_restyle_with_nothing_to_fetch_still_redraws() {
     let origin = server.origin();
 
     let mut live = Live::create(&one_layer("before", &origin), None);
-    let first = live.settle(20);
+    let first = live.settle_until(20, |seen| seen.adds > 0);
     assert!(first.adds > 0, "the first style drew nothing: {first:?}");
 
     // Two hashes, because a color is a `#` immediately after a quote and one hash ends the string
@@ -304,7 +325,7 @@ fn a_restyle_with_nothing_to_fetch_still_redraws() {
         "layers": [{"id": "bg", "type": "background",
                     "paint": {"background-color": "#101418"}}]}"##;
     assert_eq!(live.restyle(BACKGROUND), Status::Ok);
-    let second = live.settle(10);
+    let second = live.settle_until(10, |seen| seen.removes > 0 || seen.releases > 0);
     assert!(
         second.removes > 0 || second.releases > 0,
         "nothing was emitted for a restyle with no tiles to wait for, so the old drawables stay \
@@ -322,11 +343,13 @@ fn a_style_that_does_not_parse_changes_nothing() {
     let origin = server.origin();
 
     let mut live = Live::create(&one_layer("kept", &origin), None);
-    let first = live.settle(20);
+    let first = live.settle_until(20, |seen| seen.adds > 0);
     assert!(first.adds > 0, "the first style drew nothing: {first:?}");
 
     assert_eq!(live.restyle("{ this is not a style"), Status::BadStyle);
-    let after = live.settle(3);
+    // A condition that is never true: this phase's claim is that nothing is announced, so the
+    // wait is the deadline and the assertion below is what reports it.
+    let after = live.settle_until(3, |_| false);
     assert_eq!(
         after,
         Counted::default(),
