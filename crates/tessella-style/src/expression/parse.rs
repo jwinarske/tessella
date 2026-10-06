@@ -603,6 +603,12 @@ fn parse_rooted(
             expect_arity(operator, args, 0, 0)?;
             Ok(Expr::Properties)
         }
+        "feature-state" => {
+            expect_arity(operator, args, 1, 1)?;
+            Ok(Expr::FeatureState {
+                key: Box::new(parse_in(&args[0], scope)?),
+            })
+        }
         "get" => {
             // With a second argument the lookup is in *that* object rather than in the feature,
             // which also means the expression stops depending on the feature at all — the

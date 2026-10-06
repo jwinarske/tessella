@@ -77,6 +77,20 @@ pub trait Feature {
     fn properties(&self) -> Value {
         Value::Null
     }
+
+    /// Per-feature state a host set, by key, or `None` for a feature with none.
+    ///
+    /// Not a property: it is not in the tile and not in the style, and it changes while the tile
+    /// it belongs to stays as it is -- a hover, a selection, a route segment marked. The default
+    /// answers `None` for every key, which is what a feature with no state means and what every
+    /// implementation that predates the operator keeps answering.
+    ///
+    /// Keyed by the caller however it likes. The specification keys state by source, source layer
+    /// and feature id, and a feature here already knows which of those it is.
+    fn state(&self, key: &str) -> Option<Value> {
+        let _ = key;
+        None
+    }
 }
 
 /// A feature's coordinates, as the geometry operators read them.
@@ -782,6 +796,13 @@ pub(super) fn evaluate(expr: &Expr, context: &Context<'_>) -> Result<Value, Eval
                 }
                 None => Ok(context.feature()?.property(&key).unwrap_or(Value::Null)),
             }
+        }
+        Expr::FeatureState { key } => {
+            let key = expect_str(key, context)?;
+            // Absent state is null, as an absent property is, and for the same reason: a style
+            // reads it through `case` or `coalesce` against a default. Erroring instead would
+            // make every unhighlighted feature a failed evaluation.
+            Ok(context.feature()?.state(&key).unwrap_or(Value::Null))
         }
         Expr::Has { key, object } => {
             let key = expect_str(key, context)?;

@@ -217,6 +217,18 @@ pub enum PropertyError {
         /// What the style wrote.
         got: &'static str,
     },
+    /// A layout property reads per-feature state, which the specification allows in a paint
+    /// property only.
+    ///
+    /// Worth its own error for [`Self::NotDataDriven`]'s reason, and a sharper one: layout decides
+    /// a feature's geometry and is cut once when the tile is built, so a value a host changes
+    /// between frames has no way to reach it. Tolerating it would draw the state the tile happened
+    /// to be built with and never change again -- a highlight that works until the first pan.
+    #[error("`{property}` is a layout property and cannot read feature state")]
+    FeatureStateInLayout {
+        /// Property name.
+        property: String,
+    },
     /// A property varies per feature that the spec does not allow to.
     ///
     /// Worth its own error rather than being tolerated: a data-driven expression on a property
@@ -1127,10 +1139,18 @@ pub fn layout_value(
 ) -> Option<Value> {
     match layer.layout.get(key)? {
         PropertyValue::Literal(literal) => Some(literal.clone()),
-        PropertyValue::Expression(expression) => Expression::parse(expression.value())
-            .ok()?
-            .evaluate(Some(zoom), feature)
-            .ok(),
+        PropertyValue::Expression(expression) => {
+            let parsed = Expression::parse(expression.value()).ok()?;
+            // Layout cannot read per-feature state, for the reason `Half::Layout` gives: layout is
+            // cut once when the tile is built and state is set between frames. [`resolve_layout`]
+            // refuses it as an error; this answers `None`, which is the caller's own default --
+            // there is no error channel here, and the layer kinds that reach this function are
+            // exactly the ones that table has no specs for.
+            if parsed.dependency().needs_state() {
+                return None;
+            }
+            parsed.evaluate(Some(zoom), feature).ok()
+        }
     }
 }
 
@@ -1148,7 +1168,7 @@ pub fn resolve_paint(
     layer: &Layer,
 ) -> Result<BTreeMap<&'static str, ResolvedProperty>, PropertyError> {
     let specs = paint_specs(&layer.kind).unwrap_or(&[]);
-    let mut resolved = resolve(specs, &layer.paint)?;
+    let mut resolved = resolve(specs, &layer.paint, Half::Paint)?;
     apply_layer_rules(layer, &mut resolved);
     Ok(resolved)
 }
@@ -1198,12 +1218,25 @@ pub fn resolve_layout(
     layer: &Layer,
 ) -> Result<BTreeMap<&'static str, ResolvedProperty>, PropertyError> {
     let specs = layout_specs(&layer.kind).unwrap_or(&[]);
-    resolve(specs, &layer.layout)
+    resolve(specs, &layer.layout, Half::Layout)
+}
+
+/// Which of a layer's two property maps is being resolved.
+///
+/// The only thing it decides is whether `["feature-state", …]` is allowed, which is the one rule
+/// that differs between them: a paint property may read state, and a layout property may not --
+/// layout decides a feature's geometry, which is cut once at build, so a value a host changes
+/// between frames cannot reach it. The specification says so and mbgl refuses it the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Half {
+    Paint,
+    Layout,
 }
 
 fn resolve(
     specs: &'static [PropertySpec],
     written: &BTreeMap<String, PropertyValue>,
+    half: Half,
 ) -> Result<BTreeMap<&'static str, ResolvedProperty>, PropertyError> {
     let mut resolved = BTreeMap::new();
     for spec in specs {
@@ -1242,6 +1275,11 @@ fn resolve(
         };
 
         let dependency = expression.dependency();
+        if half == Half::Layout && dependency.needs_state() {
+            return Err(PropertyError::FeatureStateInLayout {
+                property: spec.name.to_string(),
+            });
+        }
         if dependency.needs_feature() && !spec.data_driven {
             return Err(PropertyError::NotDataDriven {
                 property: spec.name.to_string(),

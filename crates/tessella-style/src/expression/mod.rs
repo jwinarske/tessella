@@ -74,6 +74,16 @@ impl Dependency {
     /// Re-evaluated per frame. Never cached across a zoom interval, because it changes inside
     /// one.
     pub const CAMERA: Self = Self(1 << 2);
+    /// Per-feature state a host set, which is not in the tile and not in the style.
+    ///
+    /// Always joined with [`Self::FEATURE`], because a state lookup has to know *which* feature,
+    /// and never on its own. The bit is separate anyway, because the two change on different
+    /// occasions and at different costs: a feature's properties arrive with the tile and are
+    /// fixed for its life, while its state is set by a host mid-frame -- a hover, a selection, a
+    /// route segment marked -- and what has to be redone for a change is less than a relayout.
+    ///
+    /// mbgl keeps the same distinction for the same reason, as `Dependency::FeatureState`.
+    pub const STATE: Self = Self(1 << 3);
 
     /// The least dependency covering both.
     #[must_use]
@@ -109,6 +119,18 @@ impl Dependency {
     #[must_use]
     pub const fn needs_camera(self) -> bool {
         self.0 & Self::CAMERA.0 != 0
+    }
+
+    /// True when per-feature state is involved.
+    ///
+    /// What a caller does with this is refuse or re-evaluate. The specification allows
+    /// `["feature-state", …]` in a *paint* property only -- a filter decides which features exist
+    /// at all and a layout property decides their geometry, and neither can depend on something
+    /// a host changes without the tile being rebuilt -- so a filter or a layout property reading
+    /// this is refused where it is compiled.
+    #[must_use]
+    pub const fn needs_state(self) -> bool {
+        self.0 & Self::STATE.0 != 0
     }
 }
 
@@ -841,6 +863,18 @@ pub enum Expr {
         /// The object tested, or `None` to test the feature.
         object: Option<Box<Expr>>,
     },
+    /// Per-feature state a host set: `["feature-state", key]`.
+    ///
+    /// Not a property and not in the style. A host sets it to mark a feature -- hovered,
+    /// selected, part of a route -- and a paint property reads it, which is what lets the
+    /// highlight change without the tile being rebuilt from its bytes.
+    ///
+    /// Absent state is `null`, as an absent property is: a style reads it through `case` or
+    /// `coalesce` against a default, which is the idiom the specification's own examples use.
+    FeatureState {
+        /// State key.
+        key: Box<Expr>,
+    },
     /// The feature's geometry type: `Point`, `LineString` or `Polygon`.
     GeometryType,
     /// The feature's id.
@@ -1242,14 +1276,29 @@ impl Expression {
     ///
     /// As [`Expression::parse`].
     pub fn parse_filter(value: &Value) -> Result<Self, ParseError> {
-        Self::parse_rooted(
+        let parsed = Self::parse_rooted(
             value,
             &PropertySpec {
                 default: None,
                 expected: None,
             },
             false,
-        )
+        )?;
+        // A filter decides which features exist at all, and what the index built from it holds.
+        // State is set by a host between frames, so a filter reading it would say that a hover
+        // changes which features are in the tile -- which is not a thing the tile can answer, and
+        // not a thing this would do: the filter runs once at build and the answer would simply be
+        // stale. The specification allows the operator in a paint property only, and mbgl refuses
+        // it here too.
+        if parsed.dependency().needs_state() {
+            return Err(ParseError::Malformed {
+                operator: "feature-state".into(),
+                detail: "a filter cannot read feature state; the specification allows it in a \
+                         paint property only"
+                    .into(),
+            });
+        }
+        Ok(parsed)
     }
 
     fn parse_rooted(
@@ -2102,6 +2151,7 @@ fn children(expr: &Expr) -> Vec<&Expr> {
             out.extend(object.as_deref());
             out
         }
+        Expr::FeatureState { key } => alloc::vec![&**key],
         Expr::Compare { lhs, rhs, .. } => alloc::vec![&**lhs, &**rhs],
         #[cfg(feature = "collator")]
         Expr::CompareWith {
@@ -2291,6 +2341,13 @@ fn classify(expr: &Expr) -> Dependency {
             Some(object) => classify(key).join(classify(object)),
             None => Dependency::FEATURE.join(classify(key)),
         },
+        // Both bits. The feature, because a state lookup has to know whose state; and the state,
+        // because what has to be redone when it changes is not what has to be redone when a
+        // tile's features change. A caller that only looked at `needs_feature` still binds this
+        // as a per-vertex attribute, which is correct and is the behavior that existed before.
+        Expr::FeatureState { key } => Dependency::FEATURE
+            .join(Dependency::STATE)
+            .join(classify(key)),
         // The join over whatever the options read, which is the feature in the specification's
         // own case: it takes the locale and the digit bounds off the feature's tags.
         Expr::NumberFormat { .. } => children(expr)
