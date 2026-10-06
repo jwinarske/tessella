@@ -88,6 +88,42 @@ int main(int argc, char** argv) {
         printf("cache_on_hosted_handle %d\n", hosted_store == NULL ? 1 : 0);
     }
 
+    /* Marking a feature, and unmarking it. The probe's style reads no state, so what is checked
+     * here is the call and its refusals rather than a changed pixel. */
+    {
+        static const char* const SRC = "fixture";
+        static const char* const LAYER = "roads";
+        static const char* const STATE = "{\"hover\": true}";
+        printf("feature_state %d\n",
+               (int)tessella_set_feature_state(map, (const uint8_t*)SRC, strlen(SRC),
+                                               (const uint8_t*)LAYER, strlen(LAYER), 7,
+                                               (const uint8_t*)STATE, strlen(STATE)));
+        /* Null state is the feature no longer marked, which is a thing a host has to be able to
+         * say -- not an argument fault. */
+        printf("feature_state_clear_one %d\n",
+               (int)tessella_set_feature_state(map, (const uint8_t*)SRC, strlen(SRC),
+                                               (const uint8_t*)LAYER, strlen(LAYER), 7, NULL, 0));
+        /* An array is not a state object. TESSELLA_BAD_FEATURE_STATE. */
+        static const char* const NOT_AN_OBJECT = "[1, 2, 3]";
+        printf("feature_state_bad %d\n",
+               (int)tessella_set_feature_state(map, (const uint8_t*)SRC, strlen(SRC),
+                                               (const uint8_t*)LAYER, strlen(LAYER), 7,
+                                               (const uint8_t*)NOT_AN_OBJECT,
+                                               strlen(NOT_AN_OBJECT)));
+        printf("feature_state_null_source %d\n",
+               (int)tessella_set_feature_state(map, NULL, 0, (const uint8_t*)LAYER, strlen(LAYER),
+                                               7, (const uint8_t*)STATE, strlen(STATE)));
+        printf("feature_state_no_map %d\n",
+               (int)tessella_set_feature_state(NULL, (const uint8_t*)SRC, strlen(SRC),
+                                               (const uint8_t*)LAYER, strlen(LAYER), 7,
+                                               (const uint8_t*)STATE, strlen(STATE)));
+        printf("feature_state_clear_all %d\n", (int)tessella_clear_feature_state(map));
+        printf("feature_state_clear_twice %d\n", (int)tessella_clear_feature_state(map));
+        printf("feature_state_clear_no_map %d\n", (int)tessella_clear_feature_state(NULL));
+        /* And the map still ticks, which is the whole of what a refused state has to mean. */
+        printf("tick_after_state %d\n", (int)tessella_tick(map));
+    }
+
     /* A new style on a running map. The same document, so what is checked here is the call and
      * not the content: a second revision of a style with no sources needs no network. */
     printf("set_style %d\n",

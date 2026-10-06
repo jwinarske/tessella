@@ -97,6 +97,7 @@ pub fn emit_frame() -> (Vec<u8>, Vec<u8>, frame::Emitted) {
             light: &Light::default(),
             fonts: None,
             patterns: None,
+            states: None,
         },
     )
     .expect("the frame emits");

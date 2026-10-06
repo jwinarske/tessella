@@ -337,6 +337,44 @@ fn the_c_header_describes_the_library_it_claims_to() {
         store_exists,
         "the cached map did not open its store, so the path was accepted and dropped"
     );
+    // Marking a feature. TESSELLA_BAD_FEATURE_STATE is 18.
+    check("feature_state", 0, "marking a feature was refused");
+    check(
+        "feature_state_clear_one",
+        0,
+        "a null state was read as an argument fault rather than as unmarking",
+    );
+    check(
+        "feature_state_bad",
+        18,
+        "an array was accepted as a feature's state",
+    );
+    check(
+        "feature_state_null_source",
+        1,
+        "a null source was not rejected",
+    );
+    check("feature_state_no_map", 2, "a null handle was not rejected");
+    check(
+        "feature_state_clear_all",
+        0,
+        "clearing every state was refused",
+    );
+    check(
+        "feature_state_clear_twice",
+        0,
+        "clearing a map with nothing marked was an error",
+    );
+    check(
+        "feature_state_clear_no_map",
+        2,
+        "a null handle was not rejected",
+    );
+    check(
+        "tick_after_state",
+        0,
+        "the map did not tick after a refused state, so something was set anyway",
+    );
     // A restyle on a running map. TESSELLA_BAD_STYLE is 4, TESSELLA_NULL_ARGUMENT is 1,
     // TESSELLA_NO_SUCH_MAP is 2.
     check("set_style", 0, "a running map refused a new style");

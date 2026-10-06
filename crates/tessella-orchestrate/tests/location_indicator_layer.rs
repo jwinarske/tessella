@@ -413,6 +413,7 @@ fn every_frame_announces_the_puck() {
             light: &light,
             fonts: None,
             patterns: None,
+            states: None,
         };
         frame::emit_incremental(
             producer,

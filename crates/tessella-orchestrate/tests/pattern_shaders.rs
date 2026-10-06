@@ -80,6 +80,7 @@ fn emit_with(sprites: Option<&Patterns<'_>>) -> (BTreeMap<i32, usize>, u32) {
             light: &Light::default(),
             fonts: None,
             patterns: sprites,
+            states: None,
         },
     )
     .expect("emits");
@@ -253,6 +254,7 @@ fn the_atlas_is_uploaded_and_the_placements_are_written() {
             light: &Light::default(),
             fonts: None,
             patterns: Some(&patterns),
+            states: None,
         },
     )
     .expect("emits");
@@ -413,6 +415,7 @@ fn an_extrusion_pattern_binds_its_own_shader() {
             light: &Light::default(),
             fonts: None,
             patterns: Some(&patterns),
+            states: None,
         },
     )
     .expect("emits");

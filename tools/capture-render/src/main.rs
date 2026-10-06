@@ -357,6 +357,7 @@ fn run() -> Result<String, String> {
                 light: &Light::default(),
                 fonts: fonts.as_ref(),
                 patterns: None,
+                states: None,
             },
         )
         .map_err(|error| format!("emitting: {error}"))?

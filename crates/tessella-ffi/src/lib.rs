@@ -123,6 +123,13 @@ pub enum Status {
     /// a second start would be two threads claiming resources for one region. Cancel it or wait
     /// for it; a finished one may be started again, which is how a download resumes.
     AlreadyRunning = 17,
+    /// A feature's state was not a JSON object of values.
+    ///
+    /// Distinct from [`Self::BadGeojson`] and [`Self::BadAnnotations`] for the reason those are
+    /// distinct from each other: the three calls take different documents, and a caller fixing one
+    /// is not looking at the others. State is an object -- `{"hover": true}` -- because that is what
+    /// a style reads keys out of; an array or a bare number names nothing.
+    BadFeatureState = 18,
 }
 
 extern crate alloc;
@@ -815,6 +822,109 @@ static CACHES: Mutex<Caches> = Mutex::new(BTreeMap::new());
 /// is still finishing a build on a worker survives the destroy and goes at the next sweep.
 fn forget_unused(caches: &mut Caches) {
     caches.retain(|_, cache| cache.strong_count() > 0);
+}
+
+/// Marks one feature, or clears its mark.
+///
+/// What a hover, a selection or a route segment is: state a host sets on a feature, which a paint
+/// property reads through `["feature-state", key]`. Keyed by source, source layer and the feature's
+/// own id, which is what the specification keys it by -- a feature with no id in its tile cannot be
+/// named, and a GeoJSON feature whose id is a string cannot either.
+///
+/// `state_json` is a JSON object of values, as `{"hover": true}`. Null clears this feature's state,
+/// which is how a host says "no longer hovered": the state of a feature is replaced whole rather
+/// than merged per key, as mbgl's `setFeatureState` takes it, so a merge could not remove anything.
+///
+/// # What it costs
+///
+/// Nothing is refetched and no tile is rebuilt. The geometry stays exactly as it was built, and the
+/// next frame re-paints the recorded features of every layer whose paint reads state -- which is one
+/// layer in a style rather than all of them. A style that uses no feature state pays nothing at all,
+/// because a layer that cannot be affected records nothing to re-paint.
+///
+/// The map is the owner, not the source: a source is shared by every map on its style, and a hover
+/// is one map's. Two views of one basemap therefore highlight independently.
+///
+/// # Afterwards
+///
+/// The next [`tessella_tick`] emits, without the camera having moved: the drawables of the layers
+/// that read state are re-announced with their new bytes, and nothing else in the cover is touched.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed, and each byte range
+/// must be valid for its stated length.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_set_feature_state(
+    map: MapHandle,
+    source: *const u8,
+    source_len: usize,
+    source_layer: *const u8,
+    source_layer_len: usize,
+    feature_id: u64,
+    state_json: *const u8,
+    state_len: usize,
+) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_mut() }) else {
+            return Status::NoSuchMap;
+        };
+        if source.is_null() || source_layer.is_null() {
+            return Status::NullArgument;
+        }
+        // SAFETY: the caller's contract.
+        let (Some(source), Some(source_layer)) =
+            (unsafe { borrowed(source, source_len) }, unsafe {
+                borrowed(source_layer, source_layer_len)
+            })
+        else {
+            return Status::NotUtf8;
+        };
+
+        // Null is a feature no longer marked, which is a thing a host has to be able to say.
+        let marked = if state_json.is_null() || state_len == 0 {
+            None
+        } else {
+            // SAFETY: as above.
+            let Some(text) = (unsafe { borrowed(state_json, state_len) }) else {
+                return Status::BadFeatureState;
+            };
+            let Ok(document) = serde_json::from_str::<tessella_style::Value>(&text) else {
+                return Status::BadFeatureState;
+            };
+            // An object, because that is what a style reads keys out of.
+            let Some(object) = document.as_object() else {
+                return Status::BadFeatureState;
+            };
+            Some(object.clone())
+        };
+
+        state
+            .map
+            .set_feature_state(&source, &source_layer, feature_id, marked);
+        Status::Ok
+    })
+}
+
+/// Clears every feature's state on this map.
+///
+/// What a host does when a selection is dismissed or a layer is hidden: the alternative is one call
+/// per marked feature, and a host that has lost track of which those were cannot make them.
+///
+/// Costs nothing on a map with nothing marked, and does not emit -- the next tick does.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_clear_feature_state(map: MapHandle) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_mut() }) else {
+            return Status::NoSuchMap;
+        };
+        state.map.clear_feature_state();
+        Status::Ok
+    })
 }
 
 /// Gives a running map a new style.

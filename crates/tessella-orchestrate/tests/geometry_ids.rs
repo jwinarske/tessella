@@ -75,6 +75,7 @@ fn emit_at(longitude: f64) -> (Vec<u64>, Vec<String>) {
             light: &Light::default(),
             fonts: None,
             patterns: None,
+            states: None,
         },
     )
     .expect("emits");
@@ -191,6 +192,7 @@ fn nothing_is_released_because_nothing_is_retained() {
             light: &Light::default(),
             fonts: None,
             patterns: None,
+            states: None,
         },
     )
     .expect("emits");
@@ -274,6 +276,7 @@ fn a_wrapped_tile_is_not_its_own_copy() {
             light: &Light::default(),
             fonts: None,
             patterns: None,
+            states: None,
         },
     )
     .expect("emits");

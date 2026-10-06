@@ -122,7 +122,12 @@ typedef enum tessella_result {
      * through tessella_offline_progress, so a second start would be two threads claiming
      * resources for one region. Cancel it or wait for it; a finished one may be started again,
      * which is how a download resumes. */
-    TESSELLA_ALREADY_RUNNING = 17
+    TESSELLA_ALREADY_RUNNING = 17,
+    /* A feature's state was not a JSON object of values. Distinct from TESSELLA_BAD_GEOJSON and
+     * TESSELLA_BAD_ANNOTATIONS for the reason those are distinct from each other: the three calls
+     * take different documents. State is an object -- {"hover": true} -- because that is what a
+     * style reads keys out of; an array or a bare number names nothing. */
+    TESSELLA_BAD_FEATURE_STATE = 18
 } tessella_result;
 
 /* How far along a map's sources are.
@@ -321,6 +326,42 @@ tessella_result tessella_answer(tessella_map* map,
  * with the status it said it with. The map treats it as any transport failure: the tile is a
  * hole, counted and named by tessella_status, and the next tick may ask again. */
 tessella_result tessella_fail_request(tessella_map* map, uint64_t ticket);
+
+/* Marks one feature, or clears its mark.
+ *
+ * What a hover, a selection or a route segment is: state a host sets on a feature, which a paint
+ * property reads through ["feature-state", key]. Keyed by source, source layer and the feature's own
+ * id, which is what the specification keys it by -- a feature with no id in its tile cannot be named,
+ * and one whose id is a string cannot either.
+ *
+ * `state_json` is a JSON object of values, as {"hover": true}. Null clears this feature's state,
+ * which is how a host says "no longer hovered": a feature's state is replaced whole rather than
+ * merged per key, so a merge could not remove anything.
+ *
+ * Nothing is refetched and no tile is rebuilt. The geometry stays exactly as it was built, and the
+ * next frame re-paints the recorded features of every layer whose paint reads state -- which is one
+ * layer in a style rather than all of them. A style that uses no feature state pays nothing at all.
+ *
+ * The map owns this, not the source: a source is shared by every map on its style and a hover is one
+ * map's, so two views of one basemap highlight independently.
+ *
+ * Does not emit. The next tessella_tick does, without the camera having moved: the drawables of the
+ * layers that read state are re-announced with their new bytes and nothing else is touched. */
+tessella_result tessella_set_feature_state(tessella_map* map,
+                                           const uint8_t* source,
+                                           size_t source_len,
+                                           const uint8_t* source_layer,
+                                           size_t source_layer_len,
+                                           uint64_t feature_id,
+                                           const uint8_t* state_json,
+                                           size_t state_len);
+
+/* Clears every feature's state on this map.
+ *
+ * What a host does when a selection is dismissed: the alternative is one call per marked feature,
+ * and a host that has lost track of which those were cannot make them. Costs nothing on a map with
+ * nothing marked, and does not emit. */
+tessella_result tessella_clear_feature_state(tessella_map* map);
 
 /* Gives a running map a new style.
  *

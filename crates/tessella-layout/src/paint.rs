@@ -168,6 +168,91 @@ pub struct Painted {
     pub vertices: core::ops::Range<usize>,
 }
 
+/// One source layer's feature state, as the thing a binder reads.
+///
+/// Held in an `Arc` by [`FeatureStates`] so that handing it to a binder is a refcount bump rather
+/// than a copy of the map: a frame does that per state-reading layer per tile.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct LayerStates(BTreeMap<u64, BTreeMap<alloc::string::String, Value>>);
+
+impl StateLookup for LayerStates {
+    fn state(&self, id: u64, key: &str) -> Option<Value> {
+        self.0.get(&id)?.get(key).cloned()
+    }
+}
+
+/// Per-feature state a host set, by source, source layer and feature id.
+///
+/// Not a style revision and not a property of a tile: a host sets it to mark a feature -- hovered,
+/// selected, part of a route -- and it changes while the tile stays as it is. So it lives beside the
+/// map rather than in the store, and a tile is built without it; what applies it is the frame, which
+/// re-paints the recorded features of a state-reading layer as it encodes them.
+///
+/// Keyed by source *and* source layer because a feature id is only unique within one: two layers of
+/// one tileset each have a feature 7.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct FeatureStates {
+    by_layer: BTreeMap<(alloc::string::String, alloc::string::String), Arc<LayerStates>>,
+}
+
+impl FeatureStates {
+    /// Sets one feature's whole state, or removes it when `state` is `None`.
+    ///
+    /// Whole rather than per key, which is what `Map::setFeatureState` takes in mbgl and what a host
+    /// has in hand: the state of a feature is a small object it owns, and merging per key would make
+    /// "no longer hovered" impossible to say.
+    pub fn set(
+        &mut self,
+        source: &str,
+        source_layer: &str,
+        id: u64,
+        state: Option<BTreeMap<alloc::string::String, Value>>,
+    ) {
+        let key = (
+            alloc::string::String::from(source),
+            alloc::string::String::from(source_layer),
+        );
+        match state {
+            Some(state) => {
+                // Clone-on-write over one source layer's map, so marking a feature does not copy
+                // another layer's states.
+                let scoped = self.by_layer.entry(key).or_default();
+                Arc::make_mut(scoped).0.insert(id, state);
+            }
+            None => {
+                if let Some(scoped) = self.by_layer.get_mut(&key) {
+                    Arc::make_mut(scoped).0.remove(&id);
+                    if scoped.0.is_empty() {
+                        self.by_layer.remove(&key);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Everything a host set, cleared.
+    pub fn clear(&mut self) {
+        self.by_layer.clear();
+    }
+
+    /// Whether anything is set at all, which is what lets a frame skip the whole mechanism.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.by_layer.is_empty()
+    }
+
+    /// The state for one source layer, ready to hand to a binder.
+    #[must_use]
+    pub fn scoped(&self, source: &str, source_layer: &str) -> Option<Arc<dyn StateLookup>> {
+        let key = (
+            alloc::string::String::from(source),
+            alloc::string::String::from(source_layer),
+        );
+        let scoped = self.by_layer.get(&key)?;
+        Some(Arc::clone(scoped) as Arc<dyn StateLookup>)
+    }
+}
+
 /// A feature reconstructed from a [`Painted`] record, for re-evaluating paint without the tile.
 ///
 /// Everything an expression can ask of a feature except its coordinates, which are not recorded --
@@ -477,39 +562,63 @@ impl PaintBinder {
         resolved: &BTreeMap<&'static str, ResolvedProperty>,
         states: Option<Arc<dyn StateLookup>>,
     ) -> Result<(), BinderError> {
+        self.data = self.restated(resolved, states.as_deref())?;
         self.states = states;
+        Ok(())
+    }
+
+    /// The buffer this binder would have with the state it is holding, without changing it.
+    ///
+    /// What a frame uses: it applies the host's state as it encodes, so the bucket stays exactly as
+    /// it was built and remains shareable between views -- two maps of one style highlighting
+    /// different features are one bucket and two buffers.
+    ///
+    /// Returns the buffer unchanged for a binder that recorded nothing, which is every layer whose
+    /// paint cannot be affected by state.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::restate`].
+    pub fn restated(
+        &self,
+        resolved: &BTreeMap<&'static str, ResolvedProperty>,
+        states: Option<&dyn StateLookup>,
+    ) -> Result<Vec<u8>, BinderError> {
+        let mut data = self.data.clone();
+        self.repaint(resolved, states, &mut data)?;
+        Ok(data)
+    }
+
+    /// Re-evaluates the state-driven slots of every recorded feature into `data`.
+    fn repaint(
+        &self,
+        resolved: &BTreeMap<&'static str, ResolvedProperty>,
+        states: Option<&dyn StateLookup>,
+        data: &mut [u8],
+    ) -> Result<(), BinderError> {
         if self.index.is_empty() || self.stride == 0 {
             return Ok(());
         }
-        // Collected first: evaluating borrows the index through `Recorded`, and writing borrows the
-        // buffer. One pass each rather than one pass with an awkward dance between them -- the
-        // recorded set is a highlight layer's features, not a tile's.
-        let mut written: Vec<(core::ops::Range<usize>, PaintValues)> =
-            Vec::with_capacity(self.index.len());
+        let mut scratch = alloc::vec![0u8; self.stride];
         for painted in &self.index {
-            let feature = Recorded(painted);
-            let values = self.evaluate(resolved, &feature)?;
-            written.push((painted.vertices.clone(), values));
-        }
-
-        for (vertices, values) in written {
-            self.scratch.clear();
-            self.scratch.resize(self.stride, 0);
+            let values = self.evaluate_with(resolved, &Recorded(painted), states)?;
             for (slot, (min, max)) in self.slots.iter().zip(&values.values) {
                 let property = resolved
                     .get(slot.name)
                     .expect("a slot exists only for a resolved property");
                 // Only the slots that read state. The others were evaluated against the feature
                 // the tile carried and have not changed, and rewriting them would be a second
-                // chance to differ from the build for no reason.
+                // chance to differ from the build for no reason -- which is not hypothetical: a
+                // layer whose color reads state and whose width reads geometry is indexed, and the
+                // width cannot be answered from a record.
                 if !property.expression.dependency().needs_state() {
                     continue;
                 }
-                let out = &mut self.scratch[slot.offset..slot.offset + slot.width];
+                let out = &mut scratch[slot.offset..slot.offset + slot.width];
                 encode(slot, min, max.as_ref(), out, &property.spec.default)?;
-                for vertex in vertices.clone() {
+                for vertex in painted.vertices.clone() {
                     let at = vertex * self.stride + slot.offset;
-                    self.data[at..at + slot.width].copy_from_slice(out);
+                    data[at..at + slot.width].copy_from_slice(out);
                 }
             }
         }
@@ -532,14 +641,26 @@ impl PaintBinder {
         resolved: &BTreeMap<&'static str, ResolvedProperty>,
         feature: &dyn Feature,
     ) -> Result<PaintValues, BinderError> {
-        // One place, which is why the state is held on the binder: `push` goes through here too,
-        // and so does the symbol path that evaluates before it has vertices to write.
+        self.evaluate_with(resolved, feature, self.states.as_deref())
+    }
+
+    /// [`Self::evaluate`] against a lookup that is not the one this binder holds.
+    ///
+    /// Which is what a frame needs: the bucket was built without state, stays that way, and the
+    /// state belongs to whoever is looking at the map. One place, too -- `push` reaches here, and so
+    /// does the symbol path that evaluates before it has vertices to write.
+    fn evaluate_with(
+        &self,
+        resolved: &BTreeMap<&'static str, ResolvedProperty>,
+        feature: &dyn Feature,
+        states: Option<&dyn StateLookup>,
+    ) -> Result<PaintValues, BinderError> {
         let wrapped;
-        let feature: &dyn Feature = match &self.states {
+        let feature: &dyn Feature = match states {
             Some(states) => {
                 wrapped = Stateful {
                     inner: feature,
-                    states: &**states,
+                    states,
                 };
                 &wrapped
             }
