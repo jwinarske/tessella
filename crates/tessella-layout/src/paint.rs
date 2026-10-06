@@ -108,6 +108,12 @@ pub struct PaintBinder {
     /// `Arc` rather than a borrow because a binder outlives the build that filled it: it travels
     /// in the bucket, and a lifetime here would reach every type that holds one.
     states: Option<Arc<dyn StateLookup>>,
+    /// What each feature contributed, for re-evaluating its state-driven paint in place.
+    ///
+    /// Empty unless a slot's expression reads state, which is the only thing this is for: a
+    /// highlight layer records its features and every other layer records nothing. See
+    /// [`Self::restate`].
+    index: Vec<Painted>,
     data: Vec<u8>,
     /// One feature's bytes, reused across features.
     ///
@@ -117,6 +123,75 @@ pub struct PaintBinder {
     /// bytes that are copied out immediately — none of it expression evaluation, though it only
     /// happens when a property is data-driven and so was easy to read as evaluation cost.
     scratch: Vec<u8>,
+}
+
+/// A feature's id as the `u64` state is keyed by, or `None` for anything else.
+///
+/// MVT states an id as a `uint64`; a GeoJSON source may give a string, and such a feature cannot be
+/// named by a host. It paints as unmarked rather than taking somebody else's state.
+fn numeric_id(id: Value) -> Option<u64> {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    match id {
+        Value::Number(number) if number >= 0.0 && number.fract() == 0.0 => Some(number as u64),
+        _ => None,
+    }
+}
+
+/// The spec's four geometry-type names, as `'static` strings.
+///
+/// Interned rather than owned: a record per feature holding a `String` for one of four constants is
+/// an allocation per feature for nothing. An unrecognized name maps to `Unknown`, which is what a
+/// tile's `Unknown` geometry produces and what `["geometry-type"]` answers for it.
+fn static_geometry_type(name: &str) -> &'static str {
+    match name {
+        "Point" => "Point",
+        "LineString" => "LineString",
+        "Polygon" => "Polygon",
+        _ => "Unknown",
+    }
+}
+
+/// What one feature contributed to a binder's buffer, enough to paint it again.
+///
+/// Recorded only by a layer whose paint reads per-feature state. A hover changes which features are
+/// highlighted and nothing else, so what has to be redone is those features' slots over those
+/// vertices -- not the tile, which is why the tile's bytes are not kept.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Painted {
+    /// The feature's id, which is what state is keyed by. `None` cannot be named by a host.
+    pub id: Option<u64>,
+    /// `Point`, `LineString`, `Polygon` or `Unknown`, for `["geometry-type"]`.
+    pub geometry_type: &'static str,
+    /// The feature's own tags, for every operator that reads one.
+    pub properties: Value,
+    /// Vertices this feature filled, as an index range into the buffer.
+    pub vertices: core::ops::Range<usize>,
+}
+
+/// A feature reconstructed from a [`Painted`] record, for re-evaluating paint without the tile.
+///
+/// Everything an expression can ask of a feature except its coordinates, which are not recorded --
+/// a ring list per feature is the tile over again. [`PaintBinder::restate`] therefore refuses to
+/// index a layer whose state-reading paint also reads geometry, so this is never asked.
+struct Recorded<'a>(&'a Painted);
+
+impl Feature for Recorded<'_> {
+    fn property(&self, key: &str) -> Option<Value> {
+        self.0.properties.as_object()?.get(key).cloned()
+    }
+
+    fn geometry_type(&self) -> &str {
+        self.0.geometry_type
+    }
+
+    fn id(&self) -> Option<Value> {
+        #[allow(clippy::cast_precision_loss)]
+        self.0.id.map(|id| Value::Number(id as f64))
+    }
+
+    fn properties(&self) -> Value {
+        self.0.properties.clone()
+    }
 }
 
 /// Two binders are equal when they would write the same bytes.
@@ -266,6 +341,7 @@ impl PaintBinder {
             stride,
             zoom,
             states: None,
+            index: Vec::new(),
             data: Vec::new(),
             scratch: Vec::new(),
         }
@@ -335,8 +411,109 @@ impl PaintBinder {
         if self.stride == 0 || vertex_count <= self.vertex_count() {
             return Ok(());
         }
+        let start = self.vertex_count();
         let values = self.evaluate(resolved, feature)?;
-        self.push_values(vertex_count, resolved, &values)
+        self.push_values(vertex_count, resolved, &values)?;
+        // Recorded after the write, so the range is what was actually filled: `push_values`
+        // returns early for a feature that produced no vertices, and an entry for one would send
+        // `restate` writing outside its own bytes.
+        if self.indexes(resolved) && self.vertex_count() > start {
+            self.index.push(Painted {
+                id: feature.id().and_then(numeric_id),
+                geometry_type: static_geometry_type(feature.geometry_type()),
+                properties: feature.properties(),
+                vertices: start..self.vertex_count(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Whether this layer's paint is worth recording features for.
+    ///
+    /// Exactly when a slot reads state *and* none of the state-reading slots reads geometry. The
+    /// second half is the honest half: a recorded feature has its tags and not its coordinates, so
+    /// `["within", …]` cannot be answered again -- and answering "outside" rather than refusing
+    /// would be a highlight that silently changed what the tile was built with.
+    fn indexes(&self, resolved: &BTreeMap<&'static str, ResolvedProperty>) -> bool {
+        let mut reads_state = false;
+        for slot in &self.slots {
+            let property = resolved
+                .get(slot.name)
+                .expect("a slot exists only for a resolved property");
+            if !property.expression.dependency().needs_state() {
+                continue;
+            }
+            if property.expression.reads_geometry() {
+                return false;
+            }
+            reads_state = true;
+        }
+        reads_state
+    }
+
+    /// What was recorded, which is empty for every layer whose paint does not read state.
+    #[must_use]
+    pub fn index(&self) -> &[Painted] {
+        &self.index
+    }
+
+    /// Re-writes the state-driven slots for every recorded feature, in place.
+    ///
+    /// What a host setting feature state needs: a hover changes which features are highlighted, so
+    /// what has to be redone is those slots over those features' vertices. The geometry is
+    /// untouched, nothing is refetched, and the slots that do not read state keep the bytes they
+    /// were built with -- which is checked by this writing *exactly* what a fresh build with the
+    /// same state writes, byte for byte.
+    ///
+    /// A binder that recorded nothing is unchanged, which covers every layer that cannot be
+    /// affected: no state-reading slot, or one that also reads geometry.
+    ///
+    /// # Errors
+    ///
+    /// [`BinderError`] when a property does not evaluate for a recorded feature, which is the same
+    /// failure a build would have met with the same inputs.
+    pub fn restate(
+        &mut self,
+        resolved: &BTreeMap<&'static str, ResolvedProperty>,
+        states: Option<Arc<dyn StateLookup>>,
+    ) -> Result<(), BinderError> {
+        self.states = states;
+        if self.index.is_empty() || self.stride == 0 {
+            return Ok(());
+        }
+        // Collected first: evaluating borrows the index through `Recorded`, and writing borrows the
+        // buffer. One pass each rather than one pass with an awkward dance between them -- the
+        // recorded set is a highlight layer's features, not a tile's.
+        let mut written: Vec<(core::ops::Range<usize>, PaintValues)> =
+            Vec::with_capacity(self.index.len());
+        for painted in &self.index {
+            let feature = Recorded(painted);
+            let values = self.evaluate(resolved, &feature)?;
+            written.push((painted.vertices.clone(), values));
+        }
+
+        for (vertices, values) in written {
+            self.scratch.clear();
+            self.scratch.resize(self.stride, 0);
+            for (slot, (min, max)) in self.slots.iter().zip(&values.values) {
+                let property = resolved
+                    .get(slot.name)
+                    .expect("a slot exists only for a resolved property");
+                // Only the slots that read state. The others were evaluated against the feature
+                // the tile carried and have not changed, and rewriting them would be a second
+                // chance to differ from the build for no reason.
+                if !property.expression.dependency().needs_state() {
+                    continue;
+                }
+                let out = &mut self.scratch[slot.offset..slot.offset + slot.width];
+                encode(slot, min, max.as_ref(), out, &property.spec.default)?;
+                for vertex in vertices.clone() {
+                    let at = vertex * self.stride + slot.offset;
+                    self.data[at..at + slot.width].copy_from_slice(out);
+                }
+            }
+        }
+        Ok(())
     }
 
     /// One feature's values, evaluated but not yet written.
