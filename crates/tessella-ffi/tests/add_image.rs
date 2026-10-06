@@ -47,6 +47,8 @@ fn create() -> MapHandle {
         // ring cannot take. That is the same upload a style with its own sprite makes.
         ring_capacity: 1 << 24,
         slab_capacity: 0,
+        cache_path: core::ptr::null(),
+        cache_path_len: 0,
     };
     let mut map: MapHandle = core::ptr::null_mut();
     // SAFETY: both pointers are valid and the style outlives the call.

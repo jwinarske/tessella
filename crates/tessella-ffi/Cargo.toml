@@ -59,3 +59,9 @@ image = ["tessella-orchestrate/image", "tessella-glyph/image"]
 # publishes: every style URL in the wild is https, and a consumer meets `TLS required, but
 # transport is unsecured` at the status call rather than a map.
 tls = ["tessella-storage/tls"]
+# A response cache on disk, which is also what makes a downloaded region readable. Off by default
+# for `tessella-storage`'s reason and one more: `rusqlite` bundles C, which the cross lane has no
+# toolchain for, and that lane checks default features exactly so that it needs none. Without this
+# a `cache_path` is refused at `tessella_create` rather than ignored -- a map that quietly fetched
+# everything over a metered link because the build had no cache is the failure this avoids.
+cache = ["tessella-storage/cache"]

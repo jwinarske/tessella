@@ -316,6 +316,8 @@ fn main() -> ExitCode {
         height: options.height,
         ring_capacity: options.ring_bytes,
         slab_capacity: 0,
+        cache_path: core::ptr::null(),
+        cache_path_len: 0,
     };
     let mut held: Vec<Held> = Vec::new();
     for view in &views {

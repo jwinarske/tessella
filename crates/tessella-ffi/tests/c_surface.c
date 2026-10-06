@@ -27,7 +27,11 @@ static const char* const STYLE =
     "{\"id\": \"bg\", \"type\": \"background\","
     " \"paint\": {\"background-color\": \"#101418\"}}]}";
 
-int main(void) {
+int main(int argc, char** argv) {
+    /* Where a cached map may keep its store, handed over by the Rust side so the probe writes
+     * nothing of its own choosing. Absent means that part is skipped. */
+    const char* cache_path = argc > 1 ? argv[1] : NULL;
+
     tessella_config config = {0};
     /* A byte range, so a C caller casts rather than relying on a terminator the ABI no longer
      * looks for. `strlen` here because the literal is one; a caller with a `std::string` or a
@@ -59,6 +63,28 @@ int main(void) {
     printf("null_config %d\n", (int)tessella_create(NULL, 0.0, 0.0, 0.0, &map));
     printf("null_out %d\n", (int)tessella_create(&config, 0.0, 0.0, 0.0, NULL));
     printf("null_map_tick %d\n", (int)tessella_tick(NULL));
+
+    /* The store. A cached map opens it at create -- the fetching starts on the first tick, so this
+     * says the file was opened and nothing was asked of the network. */
+    if (cache_path != NULL) {
+        tessella_config cached = config;
+        cached.cache_path = (const uint8_t*)cache_path;
+        cached.cache_path_len = strlen(cache_path);
+
+        tessella_map* with_store = NULL;
+        printf("cache_native %d\n",
+               (int)tessella_create(&cached, 51.505, -0.11, 13.0, &with_store));
+        printf("cache_native_handle %d\n", with_store != NULL ? 1 : 0);
+        tessella_destroy(with_store);
+
+        /* A hosted map fetches nothing, so there is no request for a cache to answer. Refused
+         * rather than ignored: a caller that asked for a cache and got none would be fetching
+         * everything over a link it thought was cached. */
+        tessella_map* hosted_store = NULL;
+        printf("cache_on_hosted %d\n",
+               (int)tessella_create_hosted(&cached, 51.505, -0.11, 13.0, &hosted_store));
+        printf("cache_on_hosted_handle %d\n", hosted_store == NULL ? 1 : 0);
+    }
 
     printf("set_camera %d\n", (int)tessella_set_camera(map, 48.85, 2.35, 11.0, 0.0, 0.0));
 

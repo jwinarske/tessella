@@ -25,6 +25,16 @@ fn the_config_lays_out_the_way_the_header_says() {
     assert_eq!(offset_of!(Config, style_json), 0);
     assert_eq!(offset_of!(Config, style_json_len), PTR);
     assert_eq!(offset_of!(Config, width), 2 * PTR);
+    // The tail. `width` and `height` are four bytes each and share the third word, so every offset
+    // past them rests on that -- which is why the two the header names by arithmetic are checked
+    // here by name, and why the size is stated at all: a caller compiled against an earlier header
+    // passes a shorter struct, and a field past its end reads whatever was on the stack.
+    assert_eq!(offset_of!(Config, height), 2 * PTR + 4);
+    assert_eq!(offset_of!(Config, ring_capacity), 3 * PTR);
+    assert_eq!(offset_of!(Config, slab_capacity), 4 * PTR);
+    assert_eq!(offset_of!(Config, cache_path), 5 * PTR);
+    assert_eq!(offset_of!(Config, cache_path_len), 6 * PTR);
+    assert_eq!(size_of::<Config>(), 7 * PTR);
     // Not asserted by the header, and asserted here because it is the property the header's
     // arithmetic rests on: a pointer and a `size_t` are the same width, so `2 * sizeof(void*)`
     // describes where `width` lands only while that holds.
@@ -59,6 +69,8 @@ mod supplied {
             height: 256,
             ring_capacity: 1 << 20,
             slab_capacity: 0,
+            cache_path: core::ptr::null(),
+            cache_path_len: 0,
         }
     }
 

@@ -34,6 +34,8 @@ fn create() -> MapHandle {
         ring_capacity: 1 << 22,
         // The default, which is ample for a test cover.
         slab_capacity: 0,
+        cache_path: core::ptr::null(),
+        cache_path_len: 0,
     };
     let mut map: MapHandle = core::ptr::null_mut();
     // SAFETY: both pointers are valid and the style outlives the call.
@@ -162,6 +164,8 @@ fn the_boundary_refuses_what_it_cannot_use() {
         ring_capacity: 1 << 22,
         // The default, which is ample for a test cover.
         slab_capacity: 0,
+        cache_path: core::ptr::null(),
+        cache_path_len: 0,
     };
     // SAFETY: the config is valid; the out pointer deliberately is not.
     let status =
