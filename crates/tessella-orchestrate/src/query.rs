@@ -29,29 +29,40 @@
 //! feature's nested properties. So [`Tags`] carries whichever shape the source actually had, and
 //! the accessors are what the two have in common.
 //!
+//! The MVT arm does not copy its slice either. A layer's property table is *already* one flat
+//! buffer of every property of every feature, which its `Feature` indexes with a `Range<u32>`, so a
+//! record that copied its own slice out would be copying a table that exists. It holds the table
+//! and the range instead.
+//!
 //! [`mvt::Value::String(Arc<str>)`]: tessella_source::mvt::Value::String
 //!
 //! # What it weighs
 //!
-//! Measured on `protomaps-berlin-14-8802-5373.mvt` -- 89,859 bytes of tile, every source layer it
-//! carries named by a fill layer so that every feature is recorded once: 905 records over 2,971
-//! property pairs, which is about 80 KiB of record and 119 KiB of tag, or roughly twice the tile's
-//! own encoded size. That is the cost of a tile being queryable, and it is paid whether or not a
-//! host ever asks, as mbgl pays for keeping its `GeometryTileData`.
+//! Measured on `protomaps-berlin-14-8802-5373.mvt`, 89,859 bytes of tile, two ways -- because the
+//! answer depends on the style and the first measurement here used the shape that flatters a copy.
 //!
-//! What it costs to write is small beside that. `expression_cost`'s z10 streets tile, 593 features
-//! over fourteen layers, with the recording in place against the same build with
-//! `Recording::add` returning immediately: 377.32 us against 370.48 us of data-driven build and
-//! 333.95 us against 326.92 us of constant, so about 2% either way, for 127 allocations and 38 KiB.
-//! The control is the point -- the absolute numbers move with the machine, the difference between
-//! two runs of one binary does not.
+//! | style | records | pairs | tables | a copy per feature | this | difference |
+//! | --- | --- | --- | --- | --- | --- | --- |
+//! | one layer per source layer | 905 | 2,971 | 7 | 140,560 B | 204,920 B | **+64 KiB** |
+//! | twelve `line` layers over `roads` | 2,880 | 15,816 | **1** | 701,760 B | 306,160 B | **-386 KiB** |
 //!
-//! The 119 KiB is the part that can still go. A record could hold its layer in an
-//! `Arc<mvt::Layer>` and its own property `Range<u32>` into that layer's tables instead of a
-//! `Vec` of pairs, which is what the decoder already does internally and would leave the tag cost
-//! at zero. It is not done here because `mvt::Feature::properties` is private and the builders
-//! take a `&Tile` they do not own, so the change is a signature change through `boot` rather than
-//! an addition.
+//! The second row is the shape a real style has: a source layer is named by many style layers --
+//! a dozen road layers over `roads` is ordinary -- and each becomes its own bucket. A copy per
+//! feature pays for the table once per bucket, so its cost grows with the number of layers; sharing
+//! it does not, which is the whole of the 2.3x there.
+//!
+//! The first row is the price of that, and it is real: one table per source layer keeps the pairs of
+//! features the style *filtered out* as well, where a copy keeps only what was kept. Two things
+//! would take it back, neither done here: a `Queryable` is 88 bytes, of which 16 are recoverable by
+//! narrowing `id` from a [`Value`] and `geometry_type` from a `&'static str`; and the builder
+//! already knows how many style layers name each source layer, so it could copy for the ones named
+//! once and share for the rest.
+//!
+//! What it costs to write is small either way. `expression_cost`'s z10 streets tile, 593 features
+//! over fourteen layers, with the recording in place against the same binary with `Recording::add`
+//! returning immediately: 377.32 us against 370.48 us of data-driven build and 333.95 us against
+//! 326.92 us of constant, so about 2%. The control is the point -- the absolute numbers move with
+//! the machine, the difference between two runs of one binary does not.
 //!
 //! # The overlap with feature state
 //!
@@ -75,8 +86,16 @@ use tessella_style::Value;
 /// See the module note on why this is not one type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Tags {
-    /// An MVT feature's tags, sharing its layer's key and value tables.
-    Mvt(Vec<(Arc<str>, mvt::Value)>),
+    /// An MVT feature's tags, as a window on its layer's own property table.
+    ///
+    /// The table is the layer's, shared: one per source layer however many style layers name it,
+    /// and sixteen bytes in the record rather than a `Vec` of pairs per feature.
+    Mvt {
+        /// Every property of every feature of the layer, in feature order.
+        table: Arc<Vec<(Arc<str>, mvt::Value)>>,
+        /// This feature's slice of it.
+        range: Range<u32>,
+    },
     /// A GeoJSON feature's own properties, which it owns and which may nest.
     Json(BTreeMap<String, Value>),
 }
@@ -89,11 +108,28 @@ impl Tags {
     #[must_use]
     pub fn get(&self, key: &str) -> Option<Value> {
         match self {
-            Self::Mvt(tags) => tags
+            Self::Mvt { .. } => self
+                .tags()
                 .iter()
                 .find(|(name, _)| &**name == key)
                 .map(|(_, value)| widen(value)),
             Self::Json(map) => map.get(key).cloned(),
+        }
+    }
+
+    /// An MVT feature's own slice of its layer's table, or nothing for a GeoJSON one.
+    ///
+    /// Clamped rather than indexed: the range came from the layer the table came from, so it is in
+    /// bounds, and a panic in a query is worse than an empty answer if it ever is not.
+    #[must_use]
+    fn tags(&self) -> &[(Arc<str>, mvt::Value)] {
+        match self {
+            Self::Mvt { table, range } => {
+                let end = (range.end as usize).min(table.len());
+                let start = (range.start as usize).min(end);
+                &table[start..end]
+            }
+            Self::Json(_) => &[],
         }
     }
 
@@ -103,25 +139,25 @@ impl Tags {
     pub fn iter(&self) -> impl Iterator<Item = (&str, Value)> + '_ {
         // Two arms of one iterator rather than a boxed `dyn`: this runs once per returned feature
         // per query, and the crate is `no_std` for its own code.
-        let mvt = match self {
-            Self::Mvt(tags) => Some(tags.iter().map(|(name, value)| (&**name, widen(value)))),
-            Self::Json(_) => None,
-        };
+        let mvt = self
+            .tags()
+            .iter()
+            .map(|(name, value)| (&**name, widen(value)));
         let json = match self {
             Self::Json(map) => Some(
                 map.iter()
                     .map(|(name, value)| (name.as_str(), value.clone())),
             ),
-            Self::Mvt(_) => None,
+            Self::Mvt { .. } => None,
         };
-        mvt.into_iter().flatten().chain(json.into_iter().flatten())
+        mvt.chain(json.into_iter().flatten())
     }
 
     /// How many properties there are.
     #[must_use]
     pub fn len(&self) -> usize {
         match self {
-            Self::Mvt(tags) => tags.len(),
+            Self::Mvt { .. } => self.tags().len(),
             Self::Json(map) => map.len(),
         }
     }
@@ -202,7 +238,10 @@ impl Described for mvt::FeatureRef<'_> {
     }
 
     fn query_tags(&self) -> Tags {
-        Tags::Mvt(self.properties().to_vec())
+        Tags::Mvt {
+            table: Arc::clone(self.property_table()),
+            range: self.property_range(),
+        }
     }
 }
 
