@@ -264,6 +264,13 @@ pub struct LayerBucket {
     /// is a field of the bucket rather than a variant of [`Content`]: whether a layer has one
     /// is a property of its paint, not of its geometry.
     pub binder: PaintBinder,
+    /// What each feature left in this bucket's geometry, for a rendered-feature query.
+    ///
+    /// Empty for every family that draws from no features -- a background, a raster, a hillshade,
+    /// a terrain, a color relief, a location indicator -- which is structural rather than a gap:
+    /// there is no feature for a query to report. See [`crate::query`] for why this is a record
+    /// written during layout rather than something derived from the tile afterwards.
+    pub features: alloc::vec::Vec<crate::query::Queryable>,
 }
 
 impl LayerBucket {
@@ -698,6 +705,10 @@ pub fn build_tile_on_with_patterns(
         let mut binder =
             PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint, bucket_zoom);
         let mut pattern_vertices = PatternVertices::default();
+        // One record per feature that reached the geometry, for a rendered-feature query. Written
+        // here because this is the only place that knows both the feature and the vertices it
+        // filled -- see [`crate::query`].
+        let mut recording = crate::query::Recording::default();
 
         // Once per layer, before the world-copy walk below: the order is a property of the
         // layer and its features, not of which copy of the world they land in.
@@ -929,6 +940,10 @@ pub fn build_tile_on_with_patterns(
                 let borrowed: Vec<&[Ring]> = per_feature.iter().map(Vec::as_slice).collect();
                 let (content, ends) =
                     build_fill_content(layer, &paint, &borrowed, fill_step, bucket_zoom);
+                // `ends` is cumulative, so each feature owns the vertices from the previous
+                // entry to its own -- the boundaries the binder writes between, and the ones a
+                // query reads back.
+                let mut recorded_to = 0usize;
                 for (feature, end) in kept.iter().zip(&ends) {
                     binder
                         .push(*end, &paint, *feature)
@@ -936,6 +951,8 @@ pub fn build_tile_on_with_patterns(
                             layer: layer.id.clone(),
                             source,
                         })?;
+                    recording.add(*feature, recorded_to, *end);
+                    recorded_to = *end;
                 }
                 // A pattern that varies with the feature, one pair of rectangles per vertex.
                 // `ends` is the cumulative vertex count, so each feature owns the range from the
@@ -973,6 +990,9 @@ pub fn build_tile_on_with_patterns(
                         if geojson.line_metrics == Some(true)
                 );
                 let mut bucket = LineBucket::default();
+                // Vertices already attributed. The next feature's geometry begins where the
+                // last one's ended, so this is its start.
+                let mut recorded_to = 0usize;
                 // The same two lists the fill arm keeps, and for the same reason: a data-driven
                 // `line-pattern` needs to know which vertices belong to which feature, and the
                 // boundary is already being computed here for the binder — it was simply not
@@ -1089,6 +1109,8 @@ pub fn build_tile_on_with_patterns(
                                 layer: layer.id.clone(),
                                 source,
                             })?;
+                        recording.add(feature, recorded_to, bucket.vertices.len());
+                        recorded_to = bucket.vertices.len();
                         kept.push(feature);
                         ends.push(bucket.vertices.len());
                     }
@@ -1122,6 +1144,9 @@ pub fn build_tile_on_with_patterns(
                 };
 
                 let mut bucket = CircleBucket::default();
+                // Vertices already attributed. The next feature's geometry begins where the
+                // last one's ended, so this is its start.
+                let mut recorded_to = 0usize;
                 for shift in WORLD_COPIES {
                     let offset = world_offset(tile, shift);
                     for feature in walk(features.len(), order.as_ref()).map(|i| &features[i]) {
@@ -1156,6 +1181,8 @@ pub fn build_tile_on_with_patterns(
                                 layer: layer.id.clone(),
                                 source,
                             })?;
+                        recording.add(feature, recorded_to, bucket.vertices.len());
+                        recorded_to = bucket.vertices.len();
                     }
                 }
                 Content::Circle(bucket)
@@ -1174,6 +1201,9 @@ pub fn build_tile_on_with_patterns(
                 };
 
                 let mut bucket = HeatmapBucket::default();
+                // Vertices already attributed. The next feature's geometry begins where the
+                // last one's ended, so this is its start.
+                let mut recorded_to = 0usize;
                 for shift in WORLD_COPIES {
                     let offset = world_offset(tile, shift);
                     for feature in features {
@@ -1206,6 +1236,8 @@ pub fn build_tile_on_with_patterns(
                                 layer: layer.id.clone(),
                                 source,
                             })?;
+                        recording.add(feature, recorded_to, bucket.vertices.len());
+                        recorded_to = bucket.vertices.len();
                     }
                 }
                 Content::Heatmap(bucket)
@@ -1223,6 +1255,7 @@ pub fn build_tile_on_with_patterns(
             binder,
             outline_under_fill: crate::ubo::fill_outline_under_fill(layer),
             pattern_vertices,
+            features: recording.into_vec(),
         });
     }
 
@@ -1441,6 +1474,8 @@ pub fn build_sourceless(style: &Style, tile: TileId) -> Result<Vec<LayerBucket>,
             outline_under_fill: crate::ubo::fill_outline_under_fill(layer),
             // A background and a raster have no features, so no per-feature pattern.
             pattern_vertices: PatternVertices::default(),
+            // And nothing for a query to report, for the same reason.
+            features: alloc::vec::Vec::new(),
         });
     }
     Ok(buckets)
@@ -1502,6 +1537,7 @@ pub fn build_location_indicators(
             outline_under_fill: false,
             // No features, so nothing to vary a pattern over -- and the family has no pattern.
             pattern_vertices: PatternVertices::default(),
+            features: alloc::vec::Vec::new(),
         });
     }
     Ok(buckets)
@@ -1853,6 +1889,9 @@ pub fn build_raster_tile_on(
             // says what it is, and one that did not would be the one nobody checked.
             outline_under_fill: false,
             pattern_vertices: PatternVertices::default(),
+            // A height field and an image have no features, so a query has nothing to report
+            // here either.
+            features: alloc::vec::Vec::new(),
         });
     }
     Ok(buckets)
@@ -1920,6 +1959,9 @@ pub fn build_dem_tile_on(
             binder: PaintBinder::default(),
             outline_under_fill: false,
             pattern_vertices: PatternVertices::default(),
+            // A height field and an image have no features, so a query has nothing to report
+            // here either.
+            features: alloc::vec::Vec::new(),
         });
     }
     Ok(buckets)
@@ -2047,6 +2089,9 @@ pub fn build_terrain_tile_on(
             binder: PaintBinder::default(),
             outline_under_fill: false,
             pattern_vertices: PatternVertices::default(),
+            // A height field and an image have no features, so a query has nothing to report
+            // here either.
+            features: alloc::vec::Vec::new(),
         });
     }
     Ok(buckets)
@@ -2093,6 +2138,9 @@ pub fn build_relief_tile_on(
             binder: PaintBinder::default(),
             outline_under_fill: false,
             pattern_vertices: PatternVertices::default(),
+            // A height field and an image have no features, so a query has nothing to report
+            // here either.
+            features: alloc::vec::Vec::new(),
         });
     }
     Ok(buckets)
@@ -2225,6 +2273,10 @@ pub fn build_mvt_tile_on_with_patterns(
         let mut binder =
             PaintBinder::new(paint_specs(&layer.kind).unwrap_or(&[]), &paint, bucket_zoom);
         let mut pattern_vertices = PatternVertices::default();
+        // One record per feature that reached the geometry, for a rendered-feature query. Written
+        // here because this is the only place that knows both the feature and the vertices it
+        // filled -- see [`crate::query`].
+        let mut recording = crate::query::Recording::default();
 
         let content = match layer.kind {
             LayerKind::Background => Content::Background,
@@ -2326,6 +2378,10 @@ pub fn build_mvt_tile_on_with_patterns(
                     &borrowed_features,
                     &ends,
                 );
+                // `ends` is cumulative, so each feature owns the vertices from the previous
+                // entry to its own -- the boundaries the binder writes between, and the ones a
+                // query reads back.
+                let mut recorded_to = 0usize;
                 for (feature, end) in kept.iter().zip(&ends) {
                     binder
                         .push(*end, &paint, feature)
@@ -2333,6 +2389,8 @@ pub fn build_mvt_tile_on_with_patterns(
                             layer: layer.id.clone(),
                             source,
                         })?;
+                    recording.add(feature, recorded_to, *end);
+                    recorded_to = *end;
                 }
                 content
             }
@@ -2352,6 +2410,9 @@ pub fn build_mvt_tile_on_with_patterns(
 
                 let options = line_options(layer);
                 let mut bucket = LineBucket::default();
+                // Vertices already attributed. The next feature's geometry begins where the
+                // last one's ended, so this is its start.
+                let mut recorded_to = 0usize;
                 if let Some(named) = named {
                     // Once per layer. `named.feature` indexes, so a permutation costs no
                     // collect -- see `layout_order`.
@@ -2397,6 +2458,8 @@ pub fn build_mvt_tile_on_with_patterns(
                                 layer: layer.id.clone(),
                                 source,
                             })?;
+                        recording.add(&feature, recorded_to, bucket.vertices.len());
+                        recorded_to = bucket.vertices.len();
                     }
                 }
                 Content::Line(bucket)
@@ -2472,6 +2535,9 @@ pub fn build_mvt_tile_on_with_patterns(
                     .and_then(|name| decoded.layer(name));
 
                 let mut bucket = CircleBucket::default();
+                // Vertices already attributed. The next feature's geometry begins where the
+                // last one's ended, so this is its start.
+                let mut recorded_to = 0usize;
                 if let Some(named) = named {
                     // Once per layer. `named.feature` indexes, so a permutation costs no
                     // collect -- see `layout_order`.
@@ -2508,6 +2574,8 @@ pub fn build_mvt_tile_on_with_patterns(
                                 layer: layer.id.clone(),
                                 source,
                             })?;
+                        recording.add(&feature, recorded_to, bucket.vertices.len());
+                        recorded_to = bucket.vertices.len();
                     }
                 }
                 Content::Circle(bucket)
@@ -2530,6 +2598,9 @@ pub fn build_mvt_tile_on_with_patterns(
                     .and_then(|name| decoded.layer(name));
 
                 let mut bucket = HeatmapBucket::default();
+                // Vertices already attributed. The next feature's geometry begins where the
+                // last one's ended, so this is its start.
+                let mut recorded_to = 0usize;
                 if let Some(named) = named {
                     for feature in named.features() {
                         if !filter.matches_on(
@@ -2553,6 +2624,8 @@ pub fn build_mvt_tile_on_with_patterns(
                                 layer: layer.id.clone(),
                                 source,
                             })?;
+                        recording.add(&feature, recorded_to, bucket.vertices.len());
+                        recorded_to = bucket.vertices.len();
                     }
                 }
                 Content::Heatmap(bucket)
@@ -2580,6 +2653,7 @@ pub fn build_mvt_tile_on_with_patterns(
             binder,
             outline_under_fill: crate::ubo::fill_outline_under_fill(layer),
             pattern_vertices,
+            features: recording.into_vec(),
         });
     }
 
