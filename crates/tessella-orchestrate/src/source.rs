@@ -567,6 +567,39 @@ impl<D: TileTransport + 'static> TileSource<D> {
         })
     }
 
+    /// The same transport, a new style, the next revision.
+    ///
+    /// A compiled style is immutable and a change is a new revision views repoint to (§5.1), and
+    /// the revision is in every tile key -- so this is what a restyle is: a second source over the
+    /// first one's transport, resolving the new document from scratch. Nothing is carried over but
+    /// the transport itself, which matters for the two reasons a transport is shared at all: a new
+    /// HTTP source would open a second connection pool to the same origin, and a hosted one would
+    /// lose the ticket table the host is still answering into.
+    ///
+    /// What is *not* carried over, deliberately: the resolution, the glyphs, the sprite outcome and
+    /// what the setters pushed. The new document names its own sources, and a source resolved
+    /// against the old one would answer for layers that no longer exist. Readiness therefore starts
+    /// at `Idle` again, which is what a caller polls while the new style resolves.
+    ///
+    /// The cache is the caller's to choose because it is keyed per style: two revisions share a
+    /// store safely -- the revision is in the key -- and a caller that gives each its own lets the
+    /// old builds go with the old source.
+    pub fn restyled(&self, style_text: String, cache: Arc<TileCache<BootError>>) -> Arc<Self> {
+        Self::with_transport(
+            style_text,
+            Arc::clone(&self.deferred),
+            cache,
+            self.pool,
+            self.style_rev + 1,
+        )
+    }
+
+    /// Which revision this source builds against, which is in every tile key it produces.
+    #[must_use]
+    pub const fn style_rev(&self) -> u64 {
+        self.style_rev
+    }
+
     /// Layers the style asked for that this build cannot draw, and why the first one was refused.
     ///
     /// Not a failure: a document naming one thing this build does not have still draws every

@@ -441,6 +441,41 @@ impl Map {
         self.mark_dirty();
     }
 
+    /// Repoints the map at a new style revision.
+    ///
+    /// A compiled style is immutable, so this is a replacement rather than an edit: the document a
+    /// host switches to -- day for night, a layer toggled, a `config` value set, its own layers for
+    /// a route -- is a new revision, and the tiles are rebuilt against it because a changed filter
+    /// admits different features.
+    ///
+    /// What survives, which is the whole reason this exists rather than destroying the map: the
+    /// camera, the viewport, the session's drawable identities, the arena, the glyphs and the
+    /// sheet. A destroy-and-recreate loses all of those, and the visible cost of losing them is a
+    /// map that blinks.
+    ///
+    /// What does not: the layouts and the label identities, because the layers on the other side of
+    /// a restyle are not the ones the index named, and the terrain grid, because whether there is a
+    /// ground at all is the new document's to say.
+    ///
+    /// Annotations are the caller's to re-apply. They are synthesized *into* a style, so the
+    /// document that replaces it does not have them -- and only the caller still holds the store
+    /// they were synthesized from.
+    pub fn restyle(&mut self, mut style: Style) {
+        // As `with_arena` does it, and for the reason it gives: the frame's style is what decides
+        // what is drawn, so a terrain synthesized into only the planning copy builds every bucket
+        // correctly and draws none of them.
+        style.synthesize_terrain();
+        self.light = Light::resolve(style.light.as_ref()).unwrap_or_default();
+        self.style = style;
+        // Keyed against a layer list that no longer means the same thing.
+        self.layouts.invalidate();
+        self.placement.invalidate();
+        // Whether there is a ground, and how finely it is split, is the new document's answer.
+        self.terrain_cells = 1;
+        self.terrain_grid_settled = false;
+        self.mark_dirty();
+    }
+
     /// Hands the map the sprite atlas its patterns and icons draw from.
     pub fn set_sprites(&mut self, sprites: SpriteAtlas) {
         self.sprites = Some(sprites);

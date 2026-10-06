@@ -22,6 +22,9 @@
 #include <time.h>
 #include <string.h>
 
+/* A document that does not parse, for the calls that have to refuse one. */
+static const char* const BAD = "{ this is not a style";
+
 static const char* const STYLE =
     "{\"version\": 8, \"sources\": {}, \"layers\": ["
     "{\"id\": \"bg\", \"type\": \"background\","
@@ -52,7 +55,6 @@ int main(int argc, char** argv) {
 
     /* A style that will not parse must fail at create, and must not hand back a handle. */
     tessella_config bad = config;
-    static const char* const BAD = "{ this is not a style";
     bad.style_json = (const uint8_t*)BAD;
     bad.style_json_len = strlen(BAD);
     tessella_map* rejected = NULL;
@@ -85,6 +87,20 @@ int main(int argc, char** argv) {
                (int)tessella_create_hosted(&cached, 51.505, -0.11, 13.0, &hosted_store));
         printf("cache_on_hosted_handle %d\n", hosted_store == NULL ? 1 : 0);
     }
+
+    /* A new style on a running map. The same document, so what is checked here is the call and
+     * not the content: a second revision of a style with no sources needs no network. */
+    printf("set_style %d\n",
+           (int)tessella_set_style(map, (const uint8_t*)STYLE, strlen(STYLE)));
+    /* A document that will not parse changes nothing and says so, which is what lets a host offer
+     * one it is unsure of. */
+    printf("set_style_bad %d\n",
+           (int)tessella_set_style(map, (const uint8_t*)BAD, strlen(BAD)));
+    printf("set_style_null %d\n", (int)tessella_set_style(map, NULL, 0));
+    printf("set_style_no_map %d\n",
+           (int)tessella_set_style(NULL, (const uint8_t*)STYLE, strlen(STYLE)));
+    /* And the map still ticks, which is the whole of what "changes nothing" has to mean. */
+    printf("tick_after_style %d\n", (int)tessella_tick(map));
 
     printf("set_camera %d\n", (int)tessella_set_camera(map, 48.85, 2.35, 11.0, 0.0, 0.0));
 
