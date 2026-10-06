@@ -337,6 +337,54 @@ fn the_c_header_describes_the_library_it_claims_to() {
         store_exists,
         "the cached map did not open its store, so the path was accepted and dropped"
     );
+    // The regions in that store, through the same header. TESSELLA_NO_SUCH_REGION is 16.
+    check(
+        "offline_open",
+        0,
+        "the store would not open for its regions",
+    );
+    check("offline_handle", 1, "open returned OK without a handle");
+    check("offline_estimate", 0, "the estimate refused");
+    check(
+        "estimate_tiles",
+        0,
+        "a style with no sources has no tiles to count",
+    );
+    check(
+        "estimate_resources",
+        1,
+        "the style document itself is a resource",
+    );
+    check(
+        "estimate_precise",
+        1,
+        "nothing in that style is unknowable, so the count is exact",
+    );
+    check("offline_define", 0, "the region was not recorded");
+    check("offline_list", 0, "the list refused");
+    check("offline_listed", 1, "one region, listed");
+    check("offline_listed_id", 1, "the list named another region");
+    check("offline_progress", 0, "progress refused");
+    check(
+        "offline_idle",
+        0,
+        "a region nobody downloaded is not idle (TESSELLA_OFFLINE_IDLE is 0)",
+    );
+    check("offline_nothing_stored", 1, "nothing is claimed yet");
+    check(
+        "offline_no_such",
+        16,
+        "an identifier the store does not have was answered as a region",
+    );
+    check("offline_delete", 0, "the delete refused");
+    check(
+        "offline_delete_twice",
+        16,
+        "a deleted region was deleted again",
+    );
+    check("offline_list_after", 0, "the count-only list refused");
+    check("offline_empty", 0, "the deleted region is still listed");
+    check("offline_closed", 1, "the probe did not get past closing");
     check("tick_first", 0, "the first tick failed");
     check("tick_second", 0, "the second tick failed");
     check("status", 0, "the status call failed");

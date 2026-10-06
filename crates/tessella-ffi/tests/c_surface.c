@@ -209,6 +209,76 @@ int main(int argc, char** argv) {
         printf("globe_out_center %d\n",
                (int)tessella_screen_to_geo(map, 400.0, 300.0, &latitude, &longitude));
 
+        /* The regions in that same store, through the same header. Opened a second time while
+         * the map above still holds its own handle to the file, which is the arrangement the
+         * header describes: a region outlives every map that draws it. */
+        {
+            tessella_offline* offline = NULL;
+            printf("offline_open %d\n",
+                   (int)tessella_offline_open((const uint8_t*)cache_path, strlen(cache_path),
+                                              &offline));
+            printf("offline_handle %d\n", offline != NULL ? 1 : 0);
+
+            static const char* const STYLE_URL = "https://host.invalid/style.json";
+            tessella_region_spec spec;
+            memset(&spec, 0, sizeof spec);
+            spec.style_url = (const uint8_t*)STYLE_URL;
+            spec.style_url_len = strlen(STYLE_URL);
+            spec.west = 13.3;
+            spec.south = 52.45;
+            spec.east = 13.5;
+            spec.north = 52.58;
+            spec.min_zoom = 10.0;
+            spec.max_zoom = 11.0;
+            spec.pixel_ratio = 1.0;
+
+            /* Sized before it is agreed to, from the style the host already has. This one has no
+             * sources, so the only resource is the style document itself -- and the count is
+             * exact, which is what a style with nothing to fetch a manifest for means. */
+            tessella_offline_cost cost;
+            memset(&cost, 0, sizeof cost);
+            printf("offline_estimate %d\n",
+                   (int)tessella_offline_estimate(offline, &spec, (const uint8_t*)STYLE,
+                                                  strlen(STYLE), &cost));
+            printf("estimate_tiles %d\n", (int)cost.tiles);
+            printf("estimate_resources %d\n", cost.resources >= 1 ? 1 : 0);
+            printf("estimate_precise %d\n", (int)cost.precise);
+
+            uint64_t id = 0;
+            printf("offline_define %d\n",
+                   (int)tessella_offline_define(offline, &spec, &id));
+
+            size_t listed = 0;
+            uint64_t ids[4];
+            printf("offline_list %d\n",
+                   (int)tessella_offline_list(offline, ids, 4, &listed));
+            printf("offline_listed %d\n", (int)listed);
+            printf("offline_listed_id %d\n", listed == 1 && ids[0] == id ? 1 : 0);
+
+            tessella_offline_counters counters;
+            memset(&counters, 0, sizeof counters);
+            printf("offline_progress %d\n",
+                   (int)tessella_offline_progress(offline, id, &counters));
+            printf("offline_idle %d\n", (int)counters.state);
+            printf("offline_nothing_stored %d\n", counters.stored_resources == 0 ? 1 : 0);
+
+            /* An identifier the store does not have, which is not a region at nothing percent. */
+            printf("offline_no_such %d\n",
+                   (int)tessella_offline_progress(offline, id + 999, &counters));
+
+            printf("offline_delete %d\n", (int)tessella_offline_delete(offline, id));
+            printf("offline_delete_twice %d\n", (int)tessella_offline_delete(offline, id));
+            listed = 7;
+            printf("offline_list_after %d\n",
+                   (int)tessella_offline_list(offline, NULL, 0, &listed));
+            printf("offline_empty %d\n", (int)listed);
+
+            tessella_offline_close(offline);
+            /* Null is accepted, as every destructor here is. */
+            tessella_offline_close(NULL);
+            printf("offline_closed %d\n", 1);
+        }
+
         /* Back to the camera and the projection the rest of the probe expects. */
         printf("back_to_plane %d\n",
                (int)tessella_set_projection(map, TESSELLA_PROJECTION_MERCATOR));

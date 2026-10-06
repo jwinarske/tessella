@@ -110,9 +110,25 @@ pub enum Status {
     /// Distinct from [`Self::Failed`] for [`Self::NotHosted`]'s reason: the caller asked for
     /// something this map cannot do, and only the caller can decide what to do instead.
     NoCache = 15,
+    /// No region in the store has that identifier.
+    ///
+    /// Distinct from [`Self::Failed`] because it is the one answer a caller can act on: a region
+    /// it deleted, or an identifier from another store. Every call that names a region answers
+    /// this, including after a delete, so a stale identifier is never mistaken for a region with
+    /// nothing in it.
+    NoSuchRegion = 16,
+    /// That region is already downloading.
+    ///
+    /// A download runs on a thread of its own and reports through `tessella_offline_progress`, so
+    /// a second start would be two threads claiming resources for one region. Cancel it or wait
+    /// for it; a finished one may be started again, which is how a download resumes.
+    AlreadyRunning = 17,
 }
 
 extern crate alloc;
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+pub mod offline;
 
 use alloc::collections::BTreeMap;
 use alloc::string::String;
@@ -425,7 +441,7 @@ fn hand_over_sheet(state: &mut MapState) {
 /// invariant after a panic? — is answered by the boundary rather than by the types. A panic ends
 /// the call and the caller gets a status; the only state that could be half-written is the map's,
 /// and a caller that meets `Failed` has no operation to resume.
-fn guarded<F: FnOnce() -> Status>(body: F) -> Status {
+pub(crate) fn guarded<F: FnOnce() -> Status>(body: F) -> Status {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)).unwrap_or(Status::Failed)
 }
 
@@ -440,7 +456,7 @@ fn guarded<F: FnOnce() -> Status>(body: F) -> Status {
 /// # Safety
 ///
 /// `text` must be non-null and valid for reads of `len` bytes.
-unsafe fn borrowed(text: *const u8, len: usize) -> Option<String> {
+pub(crate) unsafe fn borrowed(text: *const u8, len: usize) -> Option<String> {
     // SAFETY: the caller guarantees `len` readable bytes at a non-null `text`. A zero length is
     // allowed and yields an empty slice, which `from_raw_parts` requires an aligned non-null
     // pointer for -- hence the caller's null check rather than a shrug here.
