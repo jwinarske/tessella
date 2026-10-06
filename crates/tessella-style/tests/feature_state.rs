@@ -264,3 +264,31 @@ fn the_arity_is_one() {
         assert!(Expression::parse(&value).is_err(), "{json}");
     }
 }
+
+/// `["within", …]` is the one operator that reads a feature's coordinates rather than its tags.
+///
+/// Asked by a caller that holds a feature's properties and not its geometry -- which is what
+/// re-evaluating a paint property from a recorded index is. It cannot answer `within` at all, and
+/// the honest move is to not re-evaluate rather than to answer "outside" and be quietly wrong.
+#[test]
+fn reads_geometry_names_the_one_operator_that_does() {
+    let polygon = r#"["within", {"type": "Polygon",
+        "coordinates": [[[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0], [0.0, 0.0]]]}]"#;
+    assert!(parse(polygon).reads_geometry());
+
+    // Nested, which is the shape it would really take: a highlight whose default arm is a
+    // geometry test.
+    let nested = format!(r#"["case", ["==", ["feature-state", "hover"], true], true, {polygon}]"#);
+    let value: Value = serde_json::from_str(&nested).expect("json");
+    assert!(Expression::parse(&value).expect("parses").reads_geometry());
+
+    // And the ordinary expressions do not.
+    for json in [
+        r#"["get", "kind"]"#,
+        r#"["feature-state", "hover"]"#,
+        r#"["geometry-type"]"#,
+        r#"["interpolate", ["linear"], ["zoom"], 0, 1, 16, 4]"#,
+    ] {
+        assert!(!parse(json).reads_geometry(), "{json}");
+    }
+}

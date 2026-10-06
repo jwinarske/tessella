@@ -1484,6 +1484,27 @@ impl Expression {
         self.dependency
     }
 
+    /// Whether anything in this expression reads the feature's *geometry* rather than its tags.
+    ///
+    /// `["within", …]` is the only operator that does, and the question is asked by a caller that
+    /// holds a feature's properties and not its coordinates -- which is what re-evaluating a paint
+    /// property from a recorded index is. Such a caller cannot answer `within` at all, and the
+    /// honest move is to not re-evaluate rather than to answer "outside" and be quietly wrong.
+    ///
+    /// Not a [`Dependency`] bit, because it is not a different occasion to re-evaluate on: a
+    /// feature's geometry arrives and changes with its properties. It is a question about what an
+    /// expression *needs in hand*, which is why it is a walk rather than a classification.
+    #[must_use]
+    pub fn reads_geometry(&self) -> bool {
+        fn walk(expr: &Expr) -> bool {
+            if matches!(expr, Expr::Within(_)) {
+                return true;
+            }
+            children(expr).into_iter().any(walk)
+        }
+        walk(&self.root)
+    }
+
     /// The value, when the expression is constant.
     ///
     /// This is DR-11's constant folding: a property whose expression turns out to depend on
