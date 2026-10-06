@@ -591,3 +591,152 @@ fn an_operator_head_is_read_as_an_expression() {
         assert_eq!(all_found, expect_complete, "{layout}");
     }
 }
+
+/// A style's own sources, read the way a caller sizing a region has to read them.
+mod from_a_style {
+    use std::collections::BTreeMap;
+
+    use tessella_storage::offline::{SourceContribution, SourceKind, contributions};
+    use tessella_storage::tileset::TileSet;
+    use tessella_storage::url::{Scheme, ZoomRange};
+
+    fn style(sources: &str, rest: &str) -> tessella_style::Style {
+        tessella_style::Style::parse(&format!(
+            r#"{{"version": 8, "sources": {sources}, "layers": []{rest}}}"#
+        ))
+        .expect("the style parses")
+    }
+
+    /// A source given inline states its zooms, so it is counted without a round trip.
+    #[test]
+    fn an_inline_source_needs_no_manifest() {
+        let style = style(
+            r#"{"v": {"type": "vector", "tiles": ["https://host/{z}/{x}/{y}.pbf"],
+                      "minzoom": 4, "maxzoom": 12}}"#,
+            "",
+        );
+        let (sources, assets, complete) = contributions(&style, &BTreeMap::new());
+        assert_eq!(
+            sources,
+            vec![SourceContribution::Tiles {
+                kind: SourceKind::Vector,
+                zooms: ZoomRange { min: 4, max: 12 },
+                from_manifest: false,
+            }]
+        );
+        assert!(complete);
+        assert!(!assets.has_glyphs);
+        assert_eq!(assets.sprites, 0);
+    }
+
+    /// A source given by URL does not, and says so rather than guessing a range.
+    ///
+    /// Guessing would be the worst answer available: the spec's default is zoom 0 to 22, which
+    /// over a city is millions of tiles, so a region sized that way is refused for a cost it does
+    /// not have.
+    #[test]
+    fn a_source_by_url_is_unknown_until_its_manifest_is_held() {
+        let style = style(
+            r#"{"v": {"type": "vector", "url": "https://host/t.json"}}"#,
+            "",
+        );
+        let (sources, _, _) = contributions(&style, &BTreeMap::new());
+        assert_eq!(sources, vec![SourceContribution::Unknown]);
+
+        let mut manifests = BTreeMap::new();
+        manifests.insert(
+            "v".to_string(),
+            TileSet {
+                templates: vec!["https://host/{z}/{x}/{y}.pbf".into()],
+                zooms: ZoomRange { min: 0, max: 9 },
+                scheme: Scheme::Xyz,
+                tile_size: 512,
+            },
+        );
+        let (held, _, complete) = contributions(&style, &manifests);
+        assert_eq!(
+            held,
+            vec![SourceContribution::Tiles {
+                kind: SourceKind::Vector,
+                zooms: ZoomRange { min: 0, max: 9 },
+                from_manifest: true,
+            }]
+        );
+        assert!(complete, "a held manifest leaves nothing unknown");
+    }
+
+    /// A raster source's tile size travels, because it decides which zoom is covered.
+    #[test]
+    fn a_rasters_tile_size_reaches_the_contribution() {
+        let style = style(
+            r#"{"r": {"type": "raster", "tiles": ["https://host/{z}/{x}/{y}.png"],
+                      "tileSize": 256, "maxzoom": 8}}"#,
+            "",
+        );
+        let (sources, _, _) = contributions(&style, &BTreeMap::new());
+        assert_eq!(
+            sources,
+            vec![SourceContribution::Tiles {
+                kind: SourceKind::Raster { tile_size: 256 },
+                zooms: ZoomRange { min: 0, max: 8 },
+                from_manifest: false,
+            }]
+        );
+    }
+
+    /// GeoJSON costs a document by URL and nothing inline, and annotations cost nothing at all.
+    #[test]
+    fn the_sources_that_are_not_tiled() {
+        let style = style(
+            r#"{"remote": {"type": "geojson", "data": "https://host/points.json"},
+                "local": {"type": "geojson",
+                          "data": {"type": "FeatureCollection", "features": []}},
+                "marks": {"type": "annotation"}}"#,
+            "",
+        );
+        let (sources, _, complete) = contributions(&style, &BTreeMap::new());
+        assert_eq!(sources, vec![SourceContribution::Document]);
+        assert!(complete);
+    }
+
+    /// Glyphs and sprites are the style's own, and both are counted per style rather than per
+    /// source.
+    #[test]
+    fn the_styles_own_assets() {
+        let style = tessella_style::Style::parse(
+            r#"{"version": 8, "sources": {},
+                "glyphs": "https://host/{fontstack}/{range}.pbf",
+                "sprite": "https://host/sprite",
+                "layers": [
+                  {"id": "a", "type": "symbol", "layout": {"text-font": ["Noto Sans Regular"]}},
+                  {"id": "b", "type": "symbol", "layout": {"text-font": ["Noto Sans Italic"]}},
+                  {"id": "c", "type": "symbol", "layout": {"text-font": ["Noto Sans Regular"]}}
+                ]}"#,
+        )
+        .expect("the style parses");
+        let (sources, assets, complete) = contributions(&style, &BTreeMap::new());
+        assert!(sources.is_empty());
+        assert!(assets.has_glyphs);
+        assert_eq!(assets.sprites, 1);
+        assert_eq!(assets.font_stacks, 2, "the repeated stack is one stack");
+        assert!(complete);
+    }
+
+    /// A `text-font` that is computed per feature is not enumerable, and that is reported.
+    ///
+    /// The stacks a region needs are then not a property of the style at all -- they depend on the
+    /// features in each tile -- so a count over them is a lower bound however the sources resolve.
+    #[test]
+    fn a_computed_font_stack_is_not_complete() {
+        let style = tessella_style::Style::parse(
+            r#"{"version": 8, "sources": {},
+                "glyphs": "https://host/{fontstack}/{range}.pbf",
+                "layers": [{"id": "a", "type": "symbol",
+                            "layout": {"text-font": ["get", "font"]}}]}"#,
+        )
+        .expect("the style parses");
+        let (_, assets, complete) = contributions(&style, &BTreeMap::new());
+        assert!(!complete, "a computed stack cannot be enumerated");
+        assert_eq!(assets.font_stacks, 0);
+    }
+}

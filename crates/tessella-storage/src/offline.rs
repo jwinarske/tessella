@@ -450,6 +450,110 @@ fn glyph_ranges(include_ideographs: bool) -> impl Iterator<Item = (u32, u32)> {
     })
 }
 
+/// What each of a style's sources contributes to a region, and what the style itself needs.
+///
+/// [`estimate`] takes both and does the arithmetic; this is the part that reads the style. They are
+/// separate because the arithmetic is also useful with contributions a caller states by hand --
+/// which is how its own tests are written -- while this is the walk a caller should not have to
+/// repeat.
+///
+/// # What it needs the network for, and does not
+///
+/// Nothing. [`plan`] names every URL and so needs each tiled source's manifest; this needs only a
+/// zoom range, which a source given inline states in the style. A source given by URL does not, so
+/// without its manifest it comes back [`SourceContribution::Unknown`] and the estimate says it is a
+/// lower bound. That is the point of sizing a region at all: a user picks a box, is shown what it
+/// costs, and accepts or declines, and a round trip per source before the question can be put is
+/// what makes the question expensive.
+///
+/// Pass the manifests a caller happens to hold -- a map on this style has already fetched them --
+/// and those sources are counted exactly.
+///
+/// # The third return
+///
+/// Whether everything in the style could be enumerated. [`Estimate::precise`] covers a source
+/// whose manifest is missing; this covers the other way of not knowing -- a `text-font` that is
+/// computed per feature rather than stated, so the stacks a region needs are not a property of the
+/// style. A caller reporting precision should require both.
+#[must_use]
+pub fn contributions(
+    style: &tessella_style::Style,
+    manifests: &std::collections::BTreeMap<String, crate::tileset::TileSet>,
+) -> (Vec<SourceContribution>, StyleAssets, bool) {
+    use tessella_style::Source;
+
+    let mut sources = Vec::new();
+    let mut complete = true;
+
+    for (id, source) in &style.sources {
+        let (kind, tiles) = match source {
+            Source::Vector(tiles) => (SourceKind::Vector, tiles),
+            Source::Raster(tiles) | Source::RasterDem(tiles) => (
+                SourceKind::Raster {
+                    #[allow(clippy::cast_possible_truncation)]
+                    tile_size: tiles.tile_size.unwrap_or(512) as u16,
+                },
+                tiles,
+            ),
+            Source::Geojson(geojson) => {
+                match crate::geojson::origin(geojson) {
+                    // One document. Inline costs nothing more: it is already in the style.
+                    Ok(crate::geojson::Origin::Url(_)) => {
+                        sources.push(SourceContribution::Document);
+                    }
+                    Ok(crate::geojson::Origin::Inline) => {}
+                    Err(_) => complete = false,
+                }
+                continue;
+            }
+            // The caller's own, already in memory. A region that omits them is not incomplete.
+            Source::Annotation => continue,
+            Source::Other(_) => {
+                sources.push(SourceContribution::Unknown);
+                continue;
+            }
+        };
+
+        // The manifest when it is held, the style's own range when the source states one, and
+        // neither when the source is a URL nobody has fetched.
+        if let Some(manifest) = manifests.get(id) {
+            sources.push(SourceContribution::Tiles {
+                kind,
+                zooms: manifest.zooms,
+                from_manifest: true,
+            });
+        } else if tiles.tiles.is_some() {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let zoom = |value: Option<f64>, fallback: u8| {
+                value.map_or(fallback, |zoom| zoom.clamp(0.0, 30.0) as u8)
+            };
+            let default = crate::url::ZoomRange::default();
+            sources.push(SourceContribution::Tiles {
+                kind,
+                zooms: crate::url::ZoomRange {
+                    min: zoom(tiles.minzoom, default.min),
+                    max: zoom(tiles.maxzoom, default.max),
+                },
+                from_manifest: false,
+            });
+        } else {
+            sources.push(SourceContribution::Unknown);
+        }
+    }
+
+    let (stacks, all_found) = font_stacks(style);
+    complete &= all_found;
+    let assets = StyleAssets {
+        font_stacks: stacks.len() as u64,
+        // Not derivable from a style: a face fetched whole rather than by range is a thing a
+        // caller knows about its own fonts, and the spec has no field for it.
+        font_faces: 0,
+        sprites: u64::from(style.sprite.is_some()),
+        has_glyphs: style.glyphs.is_some(),
+    };
+    (sources, assets, complete)
+}
+
 /// What a download will fetch, resolved down to URLs.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Plan {

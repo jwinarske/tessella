@@ -42,6 +42,40 @@ fn the_config_lays_out_the_way_the_header_says() {
     assert_eq!(align_of::<Config>(), PTR);
 }
 
+/// The offline structs, which are the three the header asserts by hand.
+///
+/// `tessella_region_spec` is the one worth checking closely: six byte-range words, seven doubles
+/// and a flag, and every number a `double` precisely so that nothing in the middle of it needs
+/// padding. A field that changed width would move every field after it with nothing but this to
+/// say so.
+#[cfg(feature = "cache")]
+#[test]
+fn the_offline_structs_lay_out_the_way_the_header_says() {
+    use tessella_ffi::offline::{Cost, Counters, RegionSpec};
+
+    assert_eq!(size_of::<RegionSpec>(), 14 * PTR);
+    assert_eq!(offset_of!(RegionSpec, style_url), 0);
+    assert_eq!(offset_of!(RegionSpec, geojson), 2 * PTR);
+    assert_eq!(offset_of!(RegionSpec, description), 4 * PTR);
+    assert_eq!(offset_of!(RegionSpec, west), 6 * PTR);
+    assert_eq!(offset_of!(RegionSpec, min_zoom), 10 * PTR);
+    assert_eq!(offset_of!(RegionSpec, pixel_ratio), 12 * PTR);
+    assert_eq!(offset_of!(RegionSpec, include_ideographs), 13 * PTR);
+
+    // Eight counts and a state, which the header states in bytes rather than in words: these are
+    // fixed-width on every target, so a word is the wrong unit for them.
+    assert_eq!(size_of::<Counters>(), 72);
+    assert_eq!(offset_of!(Counters, completed), 0);
+    assert_eq!(offset_of!(Counters, stored_resources), 48);
+    assert_eq!(offset_of!(Counters, stored_bytes), 56);
+    assert_eq!(offset_of!(Counters, state), 64);
+
+    assert_eq!(size_of::<Cost>(), 24);
+    assert_eq!(offset_of!(Cost, tiles), 0);
+    assert_eq!(offset_of!(Cost, resources), 8);
+    assert_eq!(offset_of!(Cost, precise), 16);
+}
+
 #[test]
 fn the_regions_are_four_words_as_the_header_says() {
     assert_eq!(size_of::<Regions>(), 4 * PTR);

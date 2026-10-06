@@ -113,7 +113,16 @@ typedef enum tessella_result {
      * so there is no store to open and the alternative would be fetching everything over a link
      * the caller thought was cached. Or the map is hosted, where the caller does the fetching and
      * therefore owns the caching too, and a cache on this side would see no request to answer. */
-    TESSELLA_NO_CACHE = 15
+    TESSELLA_NO_CACHE = 15,
+    /* No region in the store has that identifier -- one the caller deleted, or one from another
+     * store. Every call that names a region answers this, so a stale identifier is never mistaken
+     * for a region with nothing in it. */
+    TESSELLA_NO_SUCH_REGION = 16,
+    /* That region is already downloading. A download runs on a thread of its own and reports
+     * through tessella_offline_progress, so a second start would be two threads claiming
+     * resources for one region. Cancel it or wait for it; a finished one may be started again,
+     * which is how a download resumes. */
+    TESSELLA_ALREADY_RUNNING = 17
 } tessella_result;
 
 /* How far along a map's sources are.
@@ -633,6 +642,226 @@ tessella_result tessella_regions(tessella_map* map, tessella_map_regions* out);
  * The regions it handed out are invalid the moment this returns, so a consumer with buffers still
  * in flight must have acknowledged them first. */
 void tessella_destroy(tessella_map* map);
+
+/* ---------------------------------------------------------------------------------------------
+ * Offline regions
+ *
+ * An area a user asked to have available offline: a style, a shape, a zoom range. The resources
+ * are rows in the same store `tessella_config.cache_path` names, so a map pointed at that path
+ * draws a downloaded region with no network at all -- which is the point of the whole thing, and
+ * the reason these calls and that field are one feature rather than two.
+ *
+ * A handle of its own rather than a call on a map. A region outlives every map that draws it, and
+ * a host manages one with no map alive: a settings screen listing what is downloaded, or a refresh
+ * while the app is in the background. SQLite is in WAL mode, so a download writing does not block
+ * a map reading.
+ *
+ * Every call here answers TESSELLA_NO_CACHE when the library was built without its `cache`
+ * feature, rather than failing to link -- the symbols exist either way, so one build of a consumer
+ * runs against both. On wasm32 they are absent rather than refusing: there is no filesystem to
+ * open a store in, as there are no sockets for tessella_create to fetch over.
+ * ------------------------------------------------------------------------------------------- */
+
+/* A store's regions, and the downloads filling them. Opaque and non-null. */
+typedef struct tessella_offline tessella_offline;
+
+/* Where a region's download has got to. */
+typedef enum tessella_offline_state {
+    /* Nothing started in this process. The stored counts still say what it holds. */
+    TESSELLA_OFFLINE_IDLE = 0,
+    /* Running now, and the live counters are moving. */
+    TESSELLA_OFFLINE_RUNNING = 1,
+    /* Finished, every resource dealt with. */
+    TESSELLA_OFFLINE_DONE = 2,
+    /* Stopped because it was asked to. What was stored stays, so starting it again resumes. */
+    TESSELLA_OFFLINE_CANCELED = 3,
+    /* Stopped by a failure. As above: what was stored stays. */
+    TESSELLA_OFFLINE_FAILED = 4
+} tessella_offline_state;
+
+/* What a region is, as a caller states it.
+ *
+ * Byte ranges rather than C strings, as everything here is, and doubles for every number so there
+ * is one convention. */
+typedef struct tessella_region_spec {
+    /* The style to make available, as a URL -- not bytes, which is the asymmetry with
+     * tessella_config.style_json and is deliberate: a map draws a style the host already holds,
+     * while a region has to fetch its style again on a device that has been offline since. */
+    const uint8_t* style_url;
+    size_t style_url_len;
+    /* The area, as a GeoJSON Polygon or MultiPolygon *geometry*, or null to use the box below. */
+    const uint8_t* geojson;
+    size_t geojson_len;
+    /* What a user called it, or null. */
+    const uint8_t* description;
+    size_t description_len;
+    /* The box, used when `geojson` is null. */
+    double west;
+    double south;
+    double east;
+    double north;
+    /* The zooms to include. */
+    double min_zoom;
+    double max_zoom;
+    /* Device pixel ratio, which selects between @2x and plain assets. */
+    double pixel_ratio;
+    /* Whether to download CJK glyph ranges, which are the bulk of a glyph download and are
+     * usually rendered locally -- which is why mbgl makes this a choice rather than always
+     * fetching them. */
+    uint8_t include_ideographs;
+} tessella_region_spec;
+
+TESSELLA_ASSERT(sizeof(tessella_region_spec) == 14 * sizeof(void*),
+                "tessella_region_spec changed size");
+TESSELLA_ASSERT(offsetof(tessella_region_spec, west) == 6 * sizeof(void*),
+                "tessella_region_spec.west moved");
+TESSELLA_ASSERT(offsetof(tessella_region_spec, include_ideographs) == 13 * sizeof(void*),
+                "tessella_region_spec.include_ideographs moved");
+
+/* What a region will cost. */
+typedef struct tessella_offline_cost {
+    /* Tiles, across every source. */
+    uint64_t tiles;
+    /* Every resource, tiles included. */
+    uint64_t resources;
+    /* Whether `resources` is exact or a lower bound. A source given by TileJSON URL states its
+     * zoom range in a manifest rather than in the style, so its tiles cannot be counted until
+     * that is fetched -- and fetching it before the question can be put is what makes asking as
+     * expensive as agreeing. A text-font computed per feature is the other way of not knowing. */
+    uint8_t precise;
+} tessella_offline_cost;
+
+TESSELLA_ASSERT(sizeof(tessella_offline_cost) == 24, "tessella_offline_cost changed size");
+
+/* How far a download has got, live and stored. */
+typedef struct tessella_offline_counters {
+    /* Resources dealt with -- fetched, claimed or found absent. Live, so zero before a start. */
+    uint64_t completed;
+    /* Of those, fetched from the origin. */
+    uint64_t fetched;
+    /* Of those, already held and merely claimed. */
+    uint64_t held;
+    /* Of those, confirmed unchanged by the origin. Only a refresh produces these. */
+    uint64_t unchanged;
+    /* Of those, absent at the origin. */
+    uint64_t missing;
+    /* Resources the plan named, or zero before it is known. */
+    uint64_t required;
+    /* Resources the store holds against this region, which survives a restart. */
+    uint64_t stored_resources;
+    /* Bytes those resources occupy. */
+    uint64_t stored_bytes;
+    /* One of tessella_offline_state. */
+    uint32_t state;
+} tessella_offline_counters;
+
+TESSELLA_ASSERT(sizeof(tessella_offline_counters) == 72,
+                "tessella_offline_counters changed size");
+TESSELLA_ASSERT(offsetof(tessella_offline_counters, state) == 64,
+                "tessella_offline_counters.state moved");
+
+/* Opens or creates the store at `path`, for managing its regions.
+ *
+ * The same file a map takes as tessella_config.cache_path. */
+tessella_result tessella_offline_open(const uint8_t* path,
+                                      size_t path_len,
+                                      tessella_offline** out);
+
+/* Stops every download this handle started and releases it.
+ *
+ * Waits for each to notice, which is at most one resource. A download stopped this way resumes
+ * rather than restarts: whatever was stored stays claimed. Null is accepted and does nothing. */
+void tessella_offline_close(tessella_offline* offline);
+
+/* Records a region, and returns the identifier every other call names it by.
+ *
+ * Creating it claims nothing: the region exists with no resources until a download stores them,
+ * which is what makes a download resumable rather than all-or-nothing. It appears in
+ * tessella_offline_list immediately, at nothing percent.
+ *
+ * TESSELLA_BAD_GEOJSON for a geometry that is not a Polygon or MultiPolygon. */
+tessella_result tessella_offline_define(tessella_offline* offline,
+                                        const tessella_region_spec* spec,
+                                        uint64_t* out_region);
+
+/* What a region would cost, from the style the caller is displaying.
+ *
+ * The style's bytes rather than its URL, because this answers without the network. Takes a spec
+ * rather than an identifier, so a host can size a box a user is still dragging. */
+tessella_result tessella_offline_estimate(tessella_offline* offline,
+                                          const tessella_region_spec* spec,
+                                          const uint8_t* style_json,
+                                          size_t style_json_len,
+                                          tessella_offline_cost* out);
+
+/* Fetches, stores and claims everything the region names, on a thread of its own.
+ *
+ * Returns as soon as the thread is running; the work is hours of fetching over a connection that
+ * will drop, and tessella_offline_progress is how it is watched. It runs at the pool's background
+ * class and never above, so a download in flight cannot end up on the critical path of a view
+ * that is trying to draw.
+ *
+ * Assets first and tiles second, with a barrier between them: a download stopped halfway is far
+ * more useful with a style and no tiles than with tiles and nothing to draw them with.
+ *
+ * Resumable rather than transactional. Whatever was stored stays stored and claimed, so calling
+ * this again after a cancel or a failure continues rather than starting over.
+ *
+ * TESSELLA_ALREADY_RUNNING when one is in flight for that region, TESSELLA_NO_SUCH_REGION for an
+ * identifier the store does not have, TESSELLA_BAD_STYLE for bytes that will not parse. */
+tessella_result tessella_offline_download(tessella_offline* offline,
+                                          uint64_t region,
+                                          const uint8_t* style_json,
+                                          size_t style_json_len);
+
+/* Brings a region up to date against its origin, the same way.
+ *
+ * Unlike a download, a held resource is revalidated rather than accepted: a download alone leaves
+ * a region a snapshot of the day it was taken, which is correct -- the user paid for that snapshot
+ * and it is served however old it gets -- and this is how they ask for a newer one. A completed
+ * refresh also releases claims the plan no longer names. */
+tessella_result tessella_offline_refresh(tessella_offline* offline,
+                                         uint64_t region,
+                                         const uint8_t* style_json,
+                                         size_t style_json_len);
+
+/* How far a region's download has got.
+ *
+ * Both halves, because they answer different questions: the live counters are this process's
+ * download and are zero before one starts, and the stored counts are what the file holds and
+ * survive a restart -- which is what a progress bar should show for a region nobody has resumed.
+ *
+ * A download that ended is reported until the same region is started again, so a caller that polls
+ * after the last resource still learns how it finished. */
+tessella_result tessella_offline_progress(tessella_offline* offline,
+                                          uint64_t region,
+                                          tessella_offline_counters* out);
+
+/* Asks a running download to stop, and returns without waiting.
+ *
+ * Polled before each resource, so it stops within one. TESSELLA_OK for a region with nothing
+ * running, which is what cancelling twice means. */
+tessella_result tessella_offline_cancel(tessella_offline* offline, uint64_t region);
+
+/* Every region in the store, oldest first, as identifiers.
+ *
+ * Writes at most `cap` of them and reports how many there are, so a caller whose buffer is too
+ * small learns the count and asks again rather than being truncated silently. `out` may be null
+ * with a `cap` of zero, which is how the count alone is asked for. */
+tessella_result tessella_offline_list(tessella_offline* offline,
+                                      uint64_t* out,
+                                      size_t cap,
+                                      size_t* out_count);
+
+/* Removes a region and releases its claims.
+ *
+ * The resources are not deleted: one an overlapping region or ordinary use also wants stays, and
+ * what is left unclaimed re-enters the ambient budget and is evicted when the store needs the
+ * room. That is the whole of what a claim is -- a count on the row, not a copy of the body.
+ *
+ * A running download is stopped and waited for first, since it would otherwise go on claiming
+ * resources for a region that is gone. */
+tessella_result tessella_offline_delete(tessella_offline* offline, uint64_t region);
 
 #ifdef __cplusplus
 } /* extern "C" */
