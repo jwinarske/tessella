@@ -113,12 +113,28 @@ impl Live {
         Self { map, consumer }
     }
 
-    /// Ticks until the wire goes quiet, collecting what was announced.
-    fn settle(&mut self, seconds: u64) -> Seen {
+    /// Ticks until `wanted` is satisfied and the wire has then gone quiet.
+    ///
+    /// # Why a quiet window alone will not do
+    ///
+    /// This loop used to stop after twelve quiet ticks whatever had arrived -- a hundred and twenty
+    /// milliseconds, which is more than the fixture needs on an idle machine and less than it needs
+    /// on a loaded one. A cold map is quiet for as long as its first tiles take, so the loop
+    /// returned `adds: 0` and the assertion read "the first frames drew nothing", which is the
+    /// message a real regression would produce. It passed here and failed CI's stable canary, and
+    /// reproduces exactly by setting the window to one tick.
+    ///
+    /// The condition is the caller's because a coarser one is still wrong: the first tick emits a
+    /// camera block before any tile is built, so "any record, then quiet" starts the count
+    /// immediately and brings the early exit back. What a phase can wait for is the thing it is
+    /// about to assert.
+    ///
+    /// A phase whose claim is that nothing is announced uses [`Self::idle_for`] instead.
+    fn settle_until(&mut self, seconds: u64, wanted: impl Fn(&Seen) -> bool) -> Seen {
         let mut seen = Seen::default();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(seconds);
         let mut quiet = 0;
-        while std::time::Instant::now() < deadline && quiet < 12 {
+        while std::time::Instant::now() < deadline && (!wanted(&seen) || quiet < 12) {
             // SAFETY: a live map.
             assert_eq!(unsafe { tessella_ffi::tessella_tick(self.map) }, Status::Ok);
             let mut records = 0;
@@ -136,6 +152,31 @@ impl Live {
                 quiet += 1;
             } else {
                 quiet = 0;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        seen
+    }
+
+    /// Ticks for `millis`, reporting whatever arrived.
+    ///
+    /// For a phase whose whole claim is that nothing is announced. [`Self::settle`] cannot say that:
+    /// its rule is "something, then quiet", so asking it about silence means waiting out its
+    /// deadline and learning nothing the wall clock did not already decide.
+    fn idle_for(&mut self, millis: u64) -> Seen {
+        let mut seen = Seen::default();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(millis);
+        while std::time::Instant::now() < deadline {
+            // SAFETY: a live map.
+            assert_eq!(unsafe { tessella_ffi::tessella_tick(self.map) }, Status::Ok);
+            while let Some(record) = self.consumer.peek() {
+                match record.kind {
+                    EnvelopeKind::GeometryAdd => seen.adds += 1,
+                    EnvelopeKind::GeometryRemove => seen.removes += 1,
+                    _ => {}
+                }
+                let consumed = record.consumed();
+                self.consumer.advance(consumed);
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
@@ -184,7 +225,7 @@ fn server() -> tile_server::Server {
 fn marking_a_feature_repaints_without_fetching() {
     let server = server();
     let mut live = Live::create(&highlight(&server.origin()));
-    let first = live.settle(20);
+    let first = live.settle_until(20, |seen| seen.adds > 0);
     assert!(first.adds > 1, "both layers drew nothing: {first:?}");
     let fetched = server.requests();
     assert!(fetched > 0, "the map never asked the origin for anything");
@@ -192,7 +233,7 @@ fn marking_a_feature_repaints_without_fetching() {
     // The fixture's `earth` layer carries two features and the second's id is 1, so marking it
     // names something real -- checked against the tile rather than assumed.
     assert_eq!(live.mark(1, Some(r#"{"hover": true}"#)), Status::Ok);
-    let hovered = live.settle(20);
+    let hovered = live.settle_until(20, |seen| seen.adds > 0);
 
     assert!(
         hovered.adds > 0,
@@ -211,7 +252,7 @@ fn marking_a_feature_repaints_without_fetching() {
 
     // Unmarking is the same shape, which is what makes a hover that moves affordable.
     assert_eq!(live.mark(1, None), Status::Ok);
-    let unhovered = live.settle(20);
+    let unhovered = live.settle_until(20, |seen| seen.adds > 0);
     assert!(
         unhovered.adds > 0,
         "unmarking announced nothing: {unhovered:?}"
@@ -228,12 +269,14 @@ fn marking_a_feature_repaints_without_fetching() {
 fn a_style_without_state_is_unaffected() {
     let server = server();
     let mut live = Live::create(&plain(&server.origin()));
-    let first = live.settle(20);
+    let first = live.settle_until(20, |seen| seen.adds > 0);
     assert!(first.adds > 0, "the first frames drew nothing");
     let fetched = server.requests();
 
     assert_eq!(live.mark(1, Some(r#"{"hover": true}"#)), Status::Ok);
-    let after = live.settle(5);
+    // Not `settle`: this phase's claim is that nothing is announced, and `settle` waits for
+    // something before it will call the wire quiet.
+    let after = live.idle_for(750);
 
     assert_eq!(
         server.requests(),

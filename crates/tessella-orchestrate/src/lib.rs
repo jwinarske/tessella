@@ -53,6 +53,7 @@ pub mod deferred;
 pub mod emit;
 pub mod frame;
 pub mod gradient;
+pub mod hit;
 pub mod map;
 #[cfg(all(feature = "std", feature = "offline"))]
 pub mod offline;
