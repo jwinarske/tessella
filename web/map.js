@@ -13,6 +13,23 @@ import { Ring, Slabs } from "./ring.js";
 /** What `tessella_result` calls success. */
 const OK = 0;
 
+/**
+ * `TESSELLA_OFF_THE_MAP`, which the screen conversions answer for a point that is not on the map.
+ *
+ * Not a failure: a pitched camera's upper screen is sky and a globe does not fill its viewport.
+ * Reported rather than clamped, because the answer available in both cases is worse than none --
+ * mbgl's own above-the-horizon answer is the near point, a coordinate the pixel is not over.
+ */
+const OFF_THE_MAP = 14;
+
+/**
+ * `sizeof(tessella_config)` on wasm32: eight fields, four bytes each.
+ *
+ * A pointer and a `size_t` are both 32 bits here, and the two `uint32_t`s need no padding beside
+ * them, so the struct is flat. Stated once rather than spelled into the two views that write it.
+ */
+const CONFIG_BYTES = 32;
+
 /** Where a hosted map is told to look, and what to call the answer. */
 const DEFAULT_RING_BYTES = 1 << 22;
 
@@ -103,13 +120,25 @@ export class TessellaMap {
     }
     new Uint8Array(wasm.memory.buffer, scratch.style, styleBytes.length).set(styleBytes);
 
-    const config = new DataView(wasm.memory.buffer, scratch.config, 40);
+    // Zeroed first, then every field written. The struct has grown twice -- `slab_capacity`, then
+    // `cache_path` and its length -- and a consumer that writes only the fields it knows about
+    // leaves the rest reading whatever is in the scratch. Today that is zero: nothing else writes
+    // those bytes and a fresh instance starts zeroed, which is a property of the instance rather
+    // than of this code. The scratch block is shared by every map in an instance (see `hosted`),
+    // so the next thing to write near it decides whether a stale tail becomes a `cache_path` the
+    // producer refuses -- which is what the test that pokes this slot before creating is for.
+    //
+    // Eight fields of four bytes on wasm32, where a pointer and a `size_t` are both 32 bits.
+    new Uint8Array(wasm.memory.buffer, scratch.config, CONFIG_BYTES).fill(0);
+    const config = new DataView(wasm.memory.buffer, scratch.config, CONFIG_BYTES);
     config.setUint32(0, scratch.style, true); // style_json
     config.setUint32(4, styleBytes.length, true); // style_json_len
     config.setUint32(8, width, true);
     config.setUint32(12, height, true);
     config.setUint32(16, ringBytes, true); // ring_capacity
     config.setUint32(20, slabBytes, true); // slab_capacity: zero is the producer's default
+    // cache_path at 24 and its length at 28 stay zero: there is no filesystem here to keep a store
+    // in, and a non-null path is answered with TESSELLA_NO_CACHE rather than ignored.
 
     const out = scratch.out;
     const status = wasm.tessella_create_hosted(scratch.config, latitude, longitude, zoom, out);
@@ -141,6 +170,50 @@ export class TessellaMap {
   /** Moves the camera. */
   setCamera(latitude, longitude, zoom, bearing = 0, pitch = 0) {
     return this.wasm.tessella_set_camera(this.handle, latitude, longitude, zoom, bearing, pitch);
+  }
+
+  /**
+   * Which coordinate a screen pixel is over, or `null` when it is over nothing.
+   *
+   * Viewport pixels, `y` down from the top left, which is where a pointer event arrives in. `null`
+   * is `TESSELLA_OFF_THE_MAP`: a pitched camera's upper screen is sky and a globe does not fill its
+   * viewport, and both are conditions of the pixel rather than failures -- a wheel handler that
+   * threw on them would break at high pitch.
+   *
+   * This is what a wheel-zoom about the cursor is built from: the coordinate under the pointer,
+   * held fixed while the zoom changes.
+   */
+  screenToGeo(x, y) {
+    const at = scratchAt(this.wasm).geo;
+    const status = this.wasm.tessella_screen_to_geo(this.handle, x, y, at, at + 8);
+    if (status === OFF_THE_MAP) {
+      return null;
+    }
+    if (status !== OK) {
+      throw new Error(`tessella_screen_to_geo answered ${status}`);
+    }
+    const view = new DataView(this.memory.buffer);
+    return { latitude: view.getFloat64(at, true), longitude: view.getFloat64(at + 8, true) };
+  }
+
+  /**
+   * Where a coordinate lands on the screen, in the same viewport pixels, or `null` for one the
+   * camera cannot see.
+   *
+   * `null` is a coordinate behind a pitched camera or on a globe's far side. Both have a pixel the
+   * projection would hand back and neither is on the map, which is why they are not a position.
+   */
+  geoToScreen(latitude, longitude) {
+    const at = scratchAt(this.wasm).geo;
+    const status = this.wasm.tessella_geo_to_screen(this.handle, latitude, longitude, at, at + 8);
+    if (status === OFF_THE_MAP) {
+      return null;
+    }
+    if (status !== OK) {
+      throw new Error(`tessella_geo_to_screen answered ${status}`);
+    }
+    const view = new DataView(this.memory.buffer);
+    return { x: view.getFloat64(at, true), y: view.getFloat64(at + 8, true) };
   }
 
   /** Tells the map how much time has passed. The only clock it has. */
@@ -310,6 +383,7 @@ function scratchAt(wasm) {
     out: base + SCRATCH.out,
     regions: base + SCRATCH.regions,
     ticket: base + SCRATCH.ticket,
+    geo: base + SCRATCH.geo,
     pending: base + SCRATCH.pending,
     url: base + SCRATCH.url,
     urlLen: base + SCRATCH.urlLen,
@@ -325,6 +399,9 @@ const SCRATCH = Object.freeze({
   regions: 128,
   ticket: 192,
   pending: 384,
+  // Two doubles, for the pair of out parameters the screen conversions write. Sixteen bytes in a
+  // slot of sixty-four, like every other slot here.
+  geo: 448,
   url: 256,
   urlLen: 320,
   style: 4096,

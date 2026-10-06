@@ -25,16 +25,20 @@ fn the_config_lays_out_the_way_the_header_says() {
     assert_eq!(offset_of!(Config, style_json), 0);
     assert_eq!(offset_of!(Config, style_json_len), PTR);
     assert_eq!(offset_of!(Config, width), 2 * PTR);
-    // The tail. `width` and `height` are four bytes each and share the third word, so every offset
-    // past them rests on that -- which is why the two the header names by arithmetic are checked
-    // here by name, and why the size is stated at all: a caller compiled against an earlier header
-    // passes a shorter struct, and a field past its end reads whatever was on the stack.
+    // The tail, stated because a caller compiled against an earlier header passes a shorter struct
+    // and a field past its end reads whatever was on the stack.
+    //
+    // `+ 8` rather than a multiple of `PTR`: `width` and `height` are four bytes each whatever a
+    // pointer is, so they share the third word on a 64-bit target and occupy two of their own on a
+    // 32-bit one. Spelled as multiples of a pointer these read correctly here and describe the
+    // wrong struct on wasm32 -- which this crate is built for -- and the same spelling in the
+    // header's own assertions fails to compile there outright, which is how it was noticed.
     assert_eq!(offset_of!(Config, height), 2 * PTR + 4);
-    assert_eq!(offset_of!(Config, ring_capacity), 3 * PTR);
-    assert_eq!(offset_of!(Config, slab_capacity), 4 * PTR);
-    assert_eq!(offset_of!(Config, cache_path), 5 * PTR);
-    assert_eq!(offset_of!(Config, cache_path_len), 6 * PTR);
-    assert_eq!(size_of::<Config>(), 7 * PTR);
+    assert_eq!(offset_of!(Config, ring_capacity), 2 * PTR + 8);
+    assert_eq!(offset_of!(Config, slab_capacity), 3 * PTR + 8);
+    assert_eq!(offset_of!(Config, cache_path), 4 * PTR + 8);
+    assert_eq!(offset_of!(Config, cache_path_len), 5 * PTR + 8);
+    assert_eq!(size_of::<Config>(), 6 * PTR + 8);
     // Not asserted by the header, and asserted here because it is the property the header's
     // arithmetic rests on: a pointer and a `size_t` are the same width, so `2 * sizeof(void*)`
     // describes where `width` lands only while that holds.

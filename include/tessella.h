@@ -198,12 +198,16 @@ TESSELLA_ASSERT(offsetof(tessella_config, style_json_len) == sizeof(void*),
 TESSELLA_ASSERT(offsetof(tessella_config, width) == 2 * sizeof(void*),
                 "tessella_config.width moved");
 /* The tail, which is the half a mismatched build gets wrong: a caller compiled against an earlier
- * header passes a shorter struct, and the fields past its end are whatever was on the stack. The
- * two before this one are checked by arithmetic rather than by name -- `width` and `height` are
- * four bytes each and share a word -- so this is where the count is stated. */
-TESSELLA_ASSERT(offsetof(tessella_config, cache_path) == 5 * sizeof(void*),
+ * header passes a shorter struct, and the fields past its end are whatever was on the stack.
+ *
+ * The `+ 8` is `width` and `height`, which are four bytes each whatever a pointer is -- so this
+ * arithmetic holds on a 32-bit consumer as well, where they do not share a word with anything. The
+ * assertions that predate these were written the same way and for the same reason. Written as
+ * `5 * sizeof(void*)` and `7 * sizeof(void*)`, which is what the 64-bit numbers also come to, they
+ * fail to compile on an ILP32 target -- checked rather than reasoned, with `-m32`. */
+TESSELLA_ASSERT(offsetof(tessella_config, cache_path) == 4 * sizeof(void*) + 8,
                 "tessella_config.cache_path moved");
-TESSELLA_ASSERT(sizeof(tessella_config) == 7 * sizeof(void*),
+TESSELLA_ASSERT(sizeof(tessella_config) == 6 * sizeof(void*) + 8,
                 "tessella_config changed size");
 
 /* Where a consumer reads from.
