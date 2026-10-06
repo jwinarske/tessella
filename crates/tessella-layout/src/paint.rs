@@ -48,6 +48,7 @@
 //! the buffer rather than present and wrong.
 
 use alloc::collections::BTreeMap;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 
 use tessella_style::expression::{EvaluationError, Feature};
@@ -91,11 +92,22 @@ pub enum BinderError {
 }
 
 /// The interleaved paint attribute buffer for one layer of one tile.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default)]
 pub struct PaintBinder {
     slots: Vec<Slot>,
     stride: usize,
     zoom: f64,
+    /// Per-feature state a host set, for the layer this binder belongs to.
+    ///
+    /// Held here rather than passed per feature because this is the scope it is constant over: a
+    /// binder belongs to one style layer, which reads one source layer, and state is keyed by the
+    /// feature's id within that. Every caller that pushes a feature therefore gets it without
+    /// knowing it exists, which is the point -- there are eight such calls and the operator is
+    /// read in one place.
+    ///
+    /// `Arc` rather than a borrow because a binder outlives the build that filled it: it travels
+    /// in the bucket, and a lifetime here would reach every type that holds one.
+    states: Option<Arc<dyn StateLookup>>,
     data: Vec<u8>,
     /// One feature's bytes, reused across features.
     ///
@@ -105,6 +117,83 @@ pub struct PaintBinder {
     /// bytes that are copied out immediately — none of it expression evaluation, though it only
     /// happens when a property is data-driven and so was easy to read as evaluation cost.
     scratch: Vec<u8>,
+}
+
+/// Two binders are equal when they would write the same bytes.
+///
+/// Hand-written because a state lookup is a trait object and cannot be compared, and `Arc::ptr_eq`
+/// would be the wrong answer anyway: what a caller comparing two binders means is "the same
+/// buffer", and the lookup is an input to producing it rather than part of it. Two binders with
+/// the same slots, zoom and bytes *have* produced the same buffer, whichever lookup they read.
+///
+/// The field is excluded rather than ignored, which is a distinction worth keeping: if a future
+/// comparison needs to tell a binder that read state from one that did not, it needs a different
+/// question than this one -- the bytes are already the answer to "did it come out the same".
+impl PartialEq for PaintBinder {
+    fn eq(&self, other: &Self) -> bool {
+        self.slots == other.slots
+            && self.stride == other.stride
+            && self.zoom == other.zoom
+            && self.data == other.data
+    }
+}
+
+/// Per-feature state a host set, for one source layer.
+///
+/// `["feature-state", key]` reads it, and a paint property is the only place the specification
+/// allows that -- a filter decides which features exist and a layout property decides their
+/// geometry, and both are answered once when the tile is cut.
+///
+/// Scoped to a source layer by whoever implements it, so the only key left is the feature's own
+/// id: a binder belongs to one style layer, which reads one source layer. The id is the
+/// specification's own key for state, which is also why a feature without one can have none.
+pub trait StateLookup: core::fmt::Debug + Send + Sync {
+    /// The state value for a feature's id and key, or `None` for a feature with none.
+    fn state(&self, id: u64, key: &str) -> Option<Value>;
+}
+
+/// A feature with its state attached, for the evaluator to read both through one object.
+///
+/// The operator reads state off the feature being evaluated, as `["get", …]` reads a property --
+/// so the state has to arrive the same way. Wrapping here rather than at each of the eight places
+/// a feature reaches a binder is what keeps those call sites unaware of it.
+struct Stateful<'a> {
+    inner: &'a dyn Feature,
+    states: &'a dyn StateLookup,
+}
+
+impl Feature for Stateful<'_> {
+    fn property(&self, key: &str) -> Option<Value> {
+        self.inner.property(key)
+    }
+
+    fn geometry(&self) -> Option<tessella_style::expression::FeatureGeometry> {
+        self.inner.geometry()
+    }
+
+    fn geometry_type(&self) -> &str {
+        self.inner.geometry_type()
+    }
+
+    fn id(&self) -> Option<Value> {
+        self.inner.id()
+    }
+
+    fn properties(&self) -> Value {
+        self.inner.properties()
+    }
+
+    fn state(&self, key: &str) -> Option<Value> {
+        // A feature with no id cannot be named by a host, so it has no state -- which is the
+        // specification's own consequence of keying state by id rather than this crate's rule.
+        // Non-integer ids do not occur in a tile: MVT states the id as a `uint64`.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let id = match self.inner.id()? {
+            Value::Number(number) if number >= 0.0 && number.fract() == 0.0 => number as u64,
+            _ => return None,
+        };
+        self.states.state(id, key)
+    }
 }
 
 /// Bytes a property of this kind occupies.
@@ -176,9 +265,21 @@ impl PaintBinder {
             slots,
             stride,
             zoom,
+            states: None,
             data: Vec::new(),
             scratch: Vec::new(),
         }
+    }
+
+    /// The same binder, reading per-feature state through `states`.
+    ///
+    /// Builder-style rather than a fourth parameter on [`Self::new`]: a state lookup is the
+    /// exception -- one layer in a style has one, and only when a host has set state for its
+    /// source -- and every existing caller says what it means by passing nothing.
+    #[must_use]
+    pub fn with_state(mut self, states: Option<Arc<dyn StateLookup>>) -> Self {
+        self.states = states;
+        self
     }
 
     /// The bucket zoom this binder's composite endpoints were evaluated at.
@@ -254,6 +355,19 @@ impl PaintBinder {
         resolved: &BTreeMap<&'static str, ResolvedProperty>,
         feature: &dyn Feature,
     ) -> Result<PaintValues, BinderError> {
+        // One place, which is why the state is held on the binder: `push` goes through here too,
+        // and so does the symbol path that evaluates before it has vertices to write.
+        let wrapped;
+        let feature: &dyn Feature = match &self.states {
+            Some(states) => {
+                wrapped = Stateful {
+                    inner: feature,
+                    states: &**states,
+                };
+                &wrapped
+            }
+            None => feature,
+        };
         let mut values = Vec::with_capacity(self.slots.len());
         for slot in &self.slots {
             let property = resolved
