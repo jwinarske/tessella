@@ -700,7 +700,7 @@ fn generate_shader_attributes(mbgl: &Path) -> Result<String, String> {
     let defines_path = mbgl.join("include/mbgl/shaders/shader_defines.hpp");
     let defines = std::fs::read_to_string(&defines_path)
         .map_err(|err| format!("reading {}: {err}", defines_path.display()))?;
-    let ids = parse_attribute_ids(&defines);
+    let mut ids = parse_attribute_ids(&defines);
 
     let dir = mbgl.join("src/mbgl/shaders/vulkan");
     let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
@@ -741,6 +741,7 @@ fn generate_shader_attributes(mbgl: &Path) -> Result<String, String> {
         return Err("no shader declared a vertex input; the header parse missed something".into());
     }
     let corrections = correct_declared_types(&mut shaders, &declared)?;
+    let producer = add_producer_attributes(&mut shaders, &mut ids)?;
 
     let mut out = String::new();
     writeln!(
@@ -786,12 +787,35 @@ fn generate_shader_attributes(mbgl: &Path) -> Result<String, String> {
             writeln!(out, "//   {name}: AttributeInfo {was} -> {now}").unwrap();
         }
     }
+    if !producer.is_empty() {
+        writeln!(out, "//").unwrap();
+        writeln!(
+            out,
+            "// These are this producer's own attributes rather than mbgl's, so the source above"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "// does not account for them. Each is on the wire for every bucket of its family and"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "// a consumer that does not bind it draws holes; see PRODUCER_ATTRIBUTES in"
+        )
+        .unwrap();
+        writeln!(out, "// `mbgl-codegen` for the evidence:").unwrap();
+        for line in &producer {
+            writeln!(out, "//   {line}").unwrap();
+        }
+    }
     writeln!(out).unwrap();
     for line in wrap(
-        "Per-shader vertex attribute tables (DR-6). What a shader declares, as data. A producer \
-         reads the declared type from here rather than guessing it, which is what makes \
-         `declaredDataType` on the wire mean anything; and an attribute absent from a shader's \
-         table binds at -1 and is dropped by the consumer.",
+        "Per-shader vertex attribute tables (DR-6). What a shader declares, as data, plus the \
+         few attributes this producer adds of its own. A producer reads the declared type from \
+         here rather than guessing it, which is what makes `declaredDataType` on the wire mean \
+         anything; and an attribute absent from a shader's table binds at -1 and is dropped by \
+         the consumer.",
         94,
     ) {
         if line.is_empty() {
@@ -823,7 +847,12 @@ fn generate_shader_attributes(mbgl: &Path) -> Result<String, String> {
     writeln!(out, "    pub attr_id: u32,").unwrap();
     writeln!(
         out,
-        "    /// Name of the id in `shader_defines.hpp`, for diagnostics."
+        "    /// Name of the id in `shader_defines.hpp`, for diagnostics -- or this producer's own"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "    /// name for an attribute mbgl has no id for, which the note at the top lists."
     )
     .unwrap();
     writeln!(out, "    pub name: &'static str,").unwrap();
@@ -1470,6 +1499,117 @@ const UNBACKED_ATTRIBUTES: &[(&str, i32, &str, &str)] = &[
          decimals the plain fill extrusion reads at its own location 1.",
     ),
 ];
+
+/// Vertex attributes this producer sends that mbgl has no id and no shader input for.
+///
+/// The generated tables are what describe the wire to a consumer, and until these were in them the
+/// wire carried an attribute the tables did not mention: `encode_color_relief` and `encode_raster`
+/// write three descriptors each and their shaders declare two (tessella#331). A consumer building
+/// its vertex input from the table bound two of the three and lost the skirt silently. `-1`, the
+/// ABI's one drop rule, would be the wrong answer -- it means the consumer *should* drop it, and
+/// this is a positive slot with real bytes behind it.
+///
+/// That the skirt is load-bearing was measured rather than argued. With the per-layer curtain not
+/// emitted, every `gross` row of the parity sweep is identical to the pixel while
+/// `terrain_cover_p` counts up to 2382 holes of 1,620,000 at the high-pitch cameras. The gross
+/// gate cannot see it because what shows through a crack is the ground, which takes the
+/// background's color and reads as bare ground rather than as a seam.
+///
+/// Each entry is `(shader, binding, attr_id, declared type, name, why)`, where the binding and the
+/// id are what the producer sends. A `name` is not an id from `shader_defines.hpp`, there being
+/// none, so it is spelled to say whose it is.
+const PRODUCER_ATTRIBUTES: &[(&str, i32, u32, &str, &str, &str)] = &[
+    (
+        "ColorReliefShader",
+        2,
+        2,
+        "Short2",
+        "tessellaSkirtVertexAttribute",
+        "`encode_color_relief` writes it at binding 2 for every relief bucket: one `i16` flag \
+         and two bytes of padding, declared `Short2` like the pair before it because Filament \
+         draws nothing at all from a single short.",
+    ),
+    (
+        "RasterShader",
+        2,
+        2,
+        "Short2",
+        "tessellaSkirtVertexAttribute",
+        "`encode_raster`, the same shape over the same vertex: a raster layer on the terrain \
+         has its own edges, and its own curtain over them.",
+    ),
+    (
+        "HillshadeShader",
+        2,
+        2,
+        "Short2",
+        "tessellaSkirtVertexAttribute",
+        "`encode_hillshade`, which shares `alloc_raster`'s vertex with the two above and so \
+         sends the flag at the same slot. tessella#331 named the other two; this one is the \
+         same defect and was found by testing for it rather than by reading. \
+         `HillshadePrepareShader` gets no entry: this producer computes the slope field \
+         itself and never emits that family.",
+    ),
+];
+
+/// Adds [`PRODUCER_ATTRIBUTES`] to the parsed tables, and their ids to the id map.
+///
+/// Runs after [`correct_declared_types`], which checks each row against the shader's own inputs:
+/// these have no input to check against, which is the whole reason they are a list here rather
+/// than something read out of mbgl.
+///
+/// Returns one line per addition, for the note the generated file carries.
+///
+/// # Errors
+///
+/// An entry naming a shader with no table, a binding or an id an mbgl attribute already holds, or
+/// a name whose id disagrees with an existing one. Each would mean the producer and upstream now
+/// claim the same slot, which is a thing to read rather than to resolve here.
+fn add_producer_attributes(
+    shaders: &mut [ShaderTable],
+    ids: &mut BTreeMap<String, u32>,
+) -> Result<Vec<String>, String> {
+    let mut added = Vec::new();
+    for (shader, binding, attr_id, data_type, name, _why) in PRODUCER_ATTRIBUTES {
+        let Some((_, _, attributes)) = shaders
+            .iter_mut()
+            .find(|(candidate, instanced, _)| candidate == shader && !*instanced)
+        else {
+            return Err(format!(
+                "{shader}: PRODUCER_ATTRIBUTES names a shader with no table of its own, so \
+                 there is nothing for {name} to be added to."
+            ));
+        };
+        if let Some((at, _, held)) = attributes.iter().find(|(at, _, _)| at == binding) {
+            return Err(format!(
+                "{shader} binding {at}: mbgl declares {held} there and PRODUCER_ATTRIBUTES \
+                 claims it for {name}. One of the two has to move."
+            ));
+        }
+        if let Some((_, _, held)) = attributes
+            .iter()
+            .find(|(_, _, id_name)| ids.get(id_name.as_str()) == Some(attr_id))
+        {
+            return Err(format!(
+                "{shader}: attribute id {attr_id} is mbgl's {held}, and PRODUCER_ATTRIBUTES \
+                 claims it for {name}."
+            ));
+        }
+        if let Some(held) = ids.get(*name)
+            && held != attr_id
+        {
+            return Err(format!(
+                "{name}: PRODUCER_ATTRIBUTES gives it id {attr_id} here and {held} elsewhere. \
+                 One name is one id."
+            ));
+        }
+        ids.insert((*name).to_string(), *attr_id);
+        attributes.push((*binding, (*data_type).to_string(), (*name).to_string()));
+        attributes.sort_by_key(|(at, _, _)| *at);
+        added.push(format!("{shader} binding {binding}: {name}, {data_type}"));
+    }
+    Ok(added)
+}
 
 /// Replaces each attribute's declared type with what the shader itself declares, where the two
 /// disagree.
@@ -3134,9 +3274,12 @@ fn generate_channel_counts(mbgl: &Path) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{
-        CLASS_CORRECTIONS, Declarations, ShaderTable, UNBACKED_ATTRIBUTES, abi_shape,
-        correct_declared_types, glsl_shape, parse_shader_declarations,
+        CLASS_CORRECTIONS, Declarations, PRODUCER_ATTRIBUTES, ShaderTable, UNBACKED_ATTRIBUTES,
+        abi_shape, add_producer_attributes, correct_declared_types, glsl_shape,
+        parse_shader_declarations,
     };
 
     /// An attribute the shader has no input for fails the generation unless it is recorded.
@@ -3192,6 +3335,156 @@ mod tests {
             seen.push((*shader, *binding));
         }
         assert_eq!(seen.len(), 5, "the recorded set changed; read the new one");
+    }
+
+    /// Each producer attribute says why it is on the wire, and no two claim one slot.
+    ///
+    /// `UNBACKED_ATTRIBUTES` above follows the same rule for the same reason. These carry more
+    /// weight than that list does: an entry here puts an attribute in a consumer's vertex input
+    /// that mbgl knows nothing about, so the evidence is the only thing saying it belongs there.
+    #[test]
+    fn every_producer_attribute_says_why() {
+        let mut seen = Vec::new();
+        for (shader, binding, attr_id, data_type, name, why) in PRODUCER_ATTRIBUTES {
+            assert!(
+                why.len() > 40,
+                "{shader} binding {binding} ({name}) is declared without evidence"
+            );
+            assert!(
+                !seen.contains(&(*shader, *binding)),
+                "{shader} binding {binding} is declared twice"
+            );
+            assert!(
+                abi_shape(data_type).is_some(),
+                "{shader} binding {binding} ({name}) declares `{data_type}`, which is not an \
+                 `AttributeDataType`"
+            );
+            assert!(
+                *binding >= 0,
+                "{shader} ({name}) is declared at {binding}; -1 means the consumer drops it, \
+                 which is the opposite of what this list is for"
+            );
+            assert!(
+                name.starts_with("tessella"),
+                "{name} reads as an id from `shader_defines.hpp`, and there is no such id"
+            );
+            let _ = attr_id;
+            seen.push((*shader, *binding));
+        }
+        assert_eq!(seen.len(), 3, "the declared set changed; read the new one");
+    }
+
+    /// A producer attribute whose slot mbgl already holds fails the generation.
+    ///
+    /// Which is the case that matters later rather than now: upstream declaring an input at a
+    /// location this producer is already using would otherwise overwrite one of the two silently,
+    /// and whichever lost would be a buffer nothing reads or a seam nothing covers.
+    #[test]
+    fn a_producer_attribute_cannot_take_a_slot_mbgl_holds() {
+        // Both tables, because the list is walked in order and a missing one is its own refusal.
+        let mut shaders: Vec<ShaderTable> = vec![
+            (
+                "ColorReliefShader".to_string(),
+                false,
+                vec![(
+                    0,
+                    "Short2".to_string(),
+                    "idColorReliefPosVertexAttribute".to_string(),
+                )],
+            ),
+            (
+                "RasterShader".to_string(),
+                false,
+                vec![
+                    (
+                        0,
+                        "Short2".to_string(),
+                        "idRasterPosVertexAttribute".to_string(),
+                    ),
+                    (
+                        2,
+                        "Short2".to_string(),
+                        "idRasterSomethingNewUpstreamAdded".to_string(),
+                    ),
+                ],
+            ),
+            (
+                "HillshadeShader".to_string(),
+                false,
+                vec![(
+                    0,
+                    "Short2".to_string(),
+                    "idHillshadePosVertexAttribute".to_string(),
+                )],
+            ),
+        ];
+        let mut ids = BTreeMap::new();
+        let why = add_producer_attributes(&mut shaders, &mut ids)
+            .expect_err("a slot mbgl declares is not this producer's to take");
+        assert!(why.contains("idRasterSomethingNewUpstreamAdded"), "{why}");
+        assert!(why.contains("tessellaSkirtVertexAttribute"), "{why}");
+    }
+
+    /// And one naming a shader with no table of its own fails rather than being dropped.
+    #[test]
+    fn a_producer_attribute_needs_a_table_to_join() {
+        let mut shaders: Vec<ShaderTable> = Vec::new();
+        let mut ids = BTreeMap::new();
+        let why = add_producer_attributes(&mut shaders, &mut ids)
+            .expect_err("there is no table to add to");
+        assert!(why.contains("no table of its own"), "{why}");
+    }
+
+    /// The attribute lands in binding order with its id, which is what a consumer binds by.
+    #[test]
+    fn a_producer_attribute_joins_the_table_in_order() {
+        let mut shaders: Vec<ShaderTable> = vec![
+            (
+                "ColorReliefShader".to_string(),
+                false,
+                vec![(
+                    0,
+                    "Short2".to_string(),
+                    "idColorReliefPosVertexAttribute".to_string(),
+                )],
+            ),
+            (
+                "RasterShader".to_string(),
+                false,
+                vec![(
+                    0,
+                    "Short2".to_string(),
+                    "idRasterPosVertexAttribute".to_string(),
+                )],
+            ),
+            (
+                "HillshadeShader".to_string(),
+                false,
+                vec![(
+                    0,
+                    "Short2".to_string(),
+                    "idHillshadePosVertexAttribute".to_string(),
+                )],
+            ),
+        ];
+        let mut ids = BTreeMap::new();
+        ids.insert("idColorReliefPosVertexAttribute".to_string(), 0);
+        ids.insert("idRasterPosVertexAttribute".to_string(), 0);
+        ids.insert("idHillshadePosVertexAttribute".to_string(), 0);
+
+        let added = add_producer_attributes(&mut shaders, &mut ids).expect("every table takes it");
+        assert_eq!(added.len(), PRODUCER_ATTRIBUTES.len(), "{added:?}");
+        for (_, _, attributes) in &shaders {
+            assert_eq!(
+                attributes
+                    .iter()
+                    .map(|(binding, _, _)| *binding)
+                    .collect::<Vec<_>>(),
+                vec![0, 2],
+                "{attributes:?}"
+            );
+        }
+        assert_eq!(ids.get("tessellaSkirtVertexAttribute"), Some(&2));
     }
 
     /// Every `AttributeDataType` name splits into a scalar class, a count, and its own kind.
