@@ -86,6 +86,7 @@ fn emit() -> Sent {
             light: &Light::default(),
             fonts: None,
             patterns: None,
+            states: None,
         },
     )
     .expect("the frame emits");
@@ -178,6 +179,7 @@ fn the_atlas_goes_up_before_anything_names_it() {
             light: &Light::default(),
             fonts: None,
             patterns: None,
+            states: None,
         },
     )
     .expect("the frame emits");

@@ -113,6 +113,7 @@ fn emit(scene: &Scene) -> (Session, u64) {
             light: &Light::default(),
             fonts: None,
             patterns: None,
+            states: None,
         },
         &mut session,
     )

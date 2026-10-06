@@ -34,10 +34,11 @@ use alloc::vec::Vec;
 use tessella_capture_abi::envelope::{GeometryId, SlabRef, TextureId, TileId, ViewId};
 
 /// What a retained drawable's content was built from, beyond its key: the ground it stands on,
-/// the size of its build, which build it is, and which sprite sheet its pattern was resolved
-/// against. Separate numbers rather than one mixed from them, so no pair of different builds can
-/// compare equal. See [`GeometryRegistry::content_changed`].
-pub type ContentStamp = [u64; 4];
+/// the size of its build, which build it is, which sprite sheet its pattern was resolved against,
+/// and which revision of the host's feature state it was painted with. Separate numbers rather than
+/// one mixed from them, so no pair of different builds can compare equal. See
+/// [`GeometryRegistry::content_changed`].
+pub type ContentStamp = [u64; 5];
 
 /// What names one drawable across frames.
 ///

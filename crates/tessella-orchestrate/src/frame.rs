@@ -195,6 +195,12 @@ pub struct Frame<'a> {
     /// evaluated at the zooms a fade can reach. A caller that has not made that round trip has
     /// nothing to pass, and every pattern layer then draws as a plain fill.
     pub patterns: Option<&'a Patterns<'a>>,
+    /// Per-feature state, for the layers whose paint reads it.
+    ///
+    /// `None` is a map nobody has marked a feature on, which is every map until a host does -- and
+    /// the frame then does nothing at all, so the mechanism costs a style that does not use it
+    /// nothing. See [`StateApplication`].
+    pub states: Option<&'a StateApplication<'a>>,
 }
 
 impl crate::tile::PatternLookup for Patterns<'_> {
@@ -212,6 +218,19 @@ impl crate::tile::PatternLookup for Patterns<'_> {
             .iter()
             .find_map(|property| self.feature_placement(layer, property, zoom, feature))
     }
+}
+
+/// Per-feature state a host set, and how many times it has changed.
+///
+/// A late input like the sprite atlas and the glyphs: the frame is handed it rather than owning it,
+/// because a hover belongs to whoever is looking at the map. Bundled into one field for the reason
+/// [`Patterns`] is -- a revision travels with the thing it is a revision of, and a frame that had the
+/// state without the count could not tell the consumer that anything had changed.
+pub struct StateApplication<'a> {
+    /// What the host set, by source, source layer and feature id.
+    pub states: &'a tessella_layout::paint::FeatureStates,
+    /// How many times it has changed, for the content stamp of the buckets whose paint reads state.
+    pub revision: u64,
 }
 
 /// The sprites a frame's patterns resolve against, and where the camera has been.
@@ -1035,6 +1054,7 @@ fn emit_group(
         light,
         fonts,
         patterns,
+        states,
     } = *frame;
 
     let mut session = ViewSession::new();
@@ -1634,7 +1654,24 @@ fn emit_group(
                 } else {
                     0
                 };
-                let stamp = [ground_stamp, size, data_rev, pattern_rev];
+                // And which revision of the host's feature state the buffer was painted with, for
+                // the buckets whose paint reads it and no others -- exactly as `pattern_rev` above
+                // is zero for a bucket that carries no pattern. A hover therefore re-announces a
+                // highlight layer's drawables and leaves the rest of the cover alone.
+                //
+                // Read off the recorded features rather than off the paint: a bucket records them
+                // only when its state-reading properties are answerable from a record, so a layer
+                // whose highlight also reads geometry is not re-announced for a change the frame
+                // would not apply.
+                let state_rev = tile_buckets
+                    .iter()
+                    .find(|bucket| {
+                        i32::try_from(bucket.layer_index).is_ok_and(|at| at == binding.layer_index)
+                    })
+                    .filter(|bucket| !bucket.binder.index().is_empty())
+                    .and_then(|_| states.map(|application| application.revision))
+                    .unwrap_or(0);
+                let stamp = [ground_stamp, size, data_rev, pattern_rev, state_rev];
                 if registry.is_new(&key) || registry.content_changed(&key, stamp) {
                     fresh.insert(key);
                 }
@@ -1764,7 +1801,7 @@ fn emit_group(
                 }
                 // A heatmap's second pass is a viewport quad on no tile, so there is no ground
                 // under it and nothing frame-dependent for a stamp to carry.
-                let id = registry.id_for(key, [0, 0, 0, 0]);
+                let id = registry.id_for(key, [0, 0, 0, 0, 0]);
                 keyed.insert(id.0, key);
                 id
             }
@@ -1920,6 +1957,15 @@ fn emit_group(
             continue;
         }
 
+        // Scoped here, where the style is -- the state is keyed by source and source layer and a
+        // bucket carries neither -- and bound to a local because `Encoding` is `Copy` and holds a
+        // borrow rather than the count.
+        let scoped = states.and_then(|application: &StateApplication<'_>| {
+            let layer = style.layers.get(bucket.layer_index)?;
+            application
+                .states
+                .scoped(layer.source.as_deref()?, layer.source_layer.as_deref()?)
+        });
         let records = match packed_bytes.get(&(tile_index, bucket_index)) {
             Some(records) => records,
             None => {
@@ -1934,6 +1980,7 @@ fn emit_group(
                         stacks: &stacks,
                         prepared: &prepared,
                         key: (tile_index, bucket_index),
+                        states: scoped.as_deref(),
                         terrain: terrain_mesh.as_deref(),
                         raised: buckets
                             .get(tile_index)
@@ -2413,6 +2460,12 @@ struct Encoding<'a> {
     /// of every view draws the same 17,415 vertices. Built once and borrowed rather than per
     /// bucket, which would rebuild a fixed 101,376-index array for each tile of each cover.
     /// `None` when no bucket in this frame is terrain, which is every style without one.
+    /// The host's state for *this bucket's* source layer, scoped by the caller.
+    ///
+    /// Scoped there rather than here because that is where the style is: a bucket knows its layer
+    /// index and not its source. `None` is every bucket of every map until a host marks a feature,
+    /// and the encoder then reads the buffer the tile was built with.
+    states: Option<&'a dyn tessella_layout::paint::StateLookup>,
     terrain: Option<&'a tessella_layout::terrain::TerrainMesh>,
     /// Whether *this tile* carries an elevation, which is what a family's terrain variant reads
     /// to raise itself.
@@ -3760,12 +3813,30 @@ fn encode_parts(
         stacks,
         prepared,
         key,
+        states,
         terrain,
         raised,
         dashes,
         gradients,
         background_cells,
     } = context;
+    // The attribute bytes this bucket's parts read, with the host's feature state applied.
+    //
+    // Once per bucket rather than once per part: a fill announces its triangles and its outline and
+    // both read the same buffer. Borrowed -- and so free -- for every bucket that recorded no
+    // features, which is every layer whose paint does not read state.
+    let attributes: alloc::borrow::Cow<'_, [u8]> = match states {
+        Some(scoped) if !bucket.binder.index().is_empty() => {
+            match bucket.binder.restated(&bucket.paint, Some(scoped)) {
+                Ok(data) => alloc::borrow::Cow::Owned(data),
+                // A property that will not evaluate for a recorded feature is the layer's paint
+                // being wrong rather than this hover's, and the buffer the tile was built with is
+                // the answer a frame without state would have given.
+                Err(_) => alloc::borrow::Cow::Borrowed(bucket.binder.data()),
+            }
+        }
+        _ => alloc::borrow::Cow::Borrowed(bucket.binder.data()),
+    };
     let bind = |family: &[BuiltIn], shader: BuiltIn| {
         let ids = attribute_ids(family);
         let key = permutation_key(&bucket.paint, &ids);
@@ -3797,9 +3868,8 @@ fn encode_parts(
                 .map(|patterns| patterns.texture);
             fill_atlas = atlas;
             let (encoded, buffers) = emit::encode_fill(arena, PLACEHOLDER, fill, &{
-                let draw =
-                    emit::FillDraw::new(&vertex_layout, bucket.binder.data(), key, None, atlas)
-                        .on_terrain(raised.then_some(textures.terrain));
+                let draw = emit::FillDraw::new(&vertex_layout, &attributes, key, None, atlas)
+                    .on_terrain(raised.then_some(textures.terrain));
                 // A data-driven pattern's rectangles, when the bucket build resolved any.
                 if bucket.pattern_vertices.covers(fill.vertices.len()) {
                     draw.with_pattern_vertices(&bucket.pattern_vertices)
@@ -3852,7 +3922,7 @@ fn encode_parts(
                 line,
                 &emit::LineDraw {
                     layout: &vertex_layout,
-                    attributes: bucket.binder.data(),
+                    attributes: &attributes,
                     permutation_key: key,
                     pattern_atlas: atlas,
                     dash_atlas: dash.map(|dash| dash.texture),
@@ -3873,7 +3943,7 @@ fn encode_parts(
                 PLACEHOLDER,
                 circle,
                 &vertex_layout,
-                bucket.binder.data(),
+                &attributes,
                 key,
                 // The ground the circle stands on, where one is under it.
                 raised.then_some(textures.terrain),
@@ -3886,7 +3956,7 @@ fn encode_parts(
                 PLACEHOLDER,
                 heatmap,
                 &vertex_layout,
-                bucket.binder.data(),
+                &attributes,
                 key,
             ))
         }
@@ -3910,7 +3980,7 @@ fn encode_parts(
                 PLACEHOLDER,
                 extrusion,
                 &vertex_layout,
-                bucket.binder.data(),
+                &attributes,
                 key,
                 atlas,
             );
@@ -4178,7 +4248,7 @@ fn encode_parts(
                     fill,
                     &emit::FillDraw {
                         layout: &vertex_layout,
-                        attributes: bucket.binder.data(),
+                        attributes: &attributes,
                         permutation_key: key,
                         shared: Some(shared),
                         pattern_atlas: fill_atlas,

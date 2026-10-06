@@ -321,6 +321,7 @@ fn a_consumer_in_another_process_reads_a_live_stream() {
                     light: &Light::default(),
                     fonts: None,
                     patterns: None,
+                    states: None,
                 },
                 &mut session,
             )
@@ -412,6 +413,7 @@ fn a_ring_too_small_for_a_frame_never_becomes_writable() {
                     light: &Light::default(),
                     fonts: None,
                     patterns: None,
+                    states: None,
                 },
                 &mut session,
             )

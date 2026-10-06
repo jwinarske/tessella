@@ -409,6 +409,7 @@ fn a_frame_writes_each_pass_block_to_its_own_view() {
             light: &Light::default(),
             fonts: None,
             patterns: None,
+            states: None,
         },
     )
     .expect("the frame emits");
@@ -589,6 +590,7 @@ fn each_heatmap_layer_emits_a_quad_bound_into_the_map() {
             light: &Light::default(),
             fonts: None,
             patterns: None,
+            states: None,
         },
     )
     .expect("the frame emits");

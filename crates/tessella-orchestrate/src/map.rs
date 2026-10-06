@@ -274,6 +274,19 @@ pub struct Map {
     fonts: Option<Fonts>,
     /// The sprite atlas, once a caller has one. Patterns *and* icons: one sheet serves both.
     sprites: Option<SpriteAtlas>,
+    /// Per-feature state a host set, which the frame applies as it encodes.
+    ///
+    /// The map's rather than the source's, deliberately. A source is shared by every map on its
+    /// style, and a hover is one map's: two views of one basemap highlighting each other's features
+    /// would be the consequence of putting this below. It is also why a tile is built without it --
+    /// the bucket stays shareable, and what differs between two maps is only what the frame paints.
+    states: tessella_layout::paint::FeatureStates,
+    /// How many times [`Self::set_feature_state`] has changed anything.
+    ///
+    /// Travels in the content stamp of the buckets whose paint reads state, and only those, so a
+    /// hover re-announces a highlight layer's drawables and leaves the rest of the cover alone --
+    /// which is exactly what `sprites_rev` does for a sheet arriving late.
+    state_rev: u64,
     /// Which way the camera last crossed an integer zoom.
     ///
     /// Kept by the map because it is a property of the camera's *path*, not of any frame: a
@@ -356,6 +369,8 @@ impl Map {
             zoom_velocity: 0.0,
             fonts: None,
             sprites: None,
+            states: tessella_layout::paint::FeatureStates::default(),
+            state_rev: 0,
             zoom: ZoomHistory::new(),
         }
     }
@@ -439,6 +454,51 @@ impl Map {
         self.layouts.invalidate();
         self.placement.invalidate();
         self.mark_dirty();
+    }
+
+    /// Sets or clears one feature's state, by source, source layer and id.
+    ///
+    /// Not a style change and not a tile change: the geometry stays as it is, nothing is refetched,
+    /// and what happens on the next frame is that the recorded features of a state-reading layer are
+    /// re-painted in place. `None` removes the feature's state, which is how a host says "no longer
+    /// hovered" -- a per-key merge could not.
+    ///
+    /// Whole state per feature, as mbgl's `setFeatureState` takes it.
+    pub fn set_feature_state(
+        &mut self,
+        source: &str,
+        source_layer: &str,
+        id: u64,
+        state: Option<alloc::collections::BTreeMap<alloc::string::String, tessella_style::Value>>,
+    ) {
+        self.states.set(source, source_layer, id, state);
+        self.state_rev += 1;
+        // Nothing landed and no camera moved, so without this the damage gate calls the next frame
+        // idle and the highlight never reaches the consumer -- the same reason `set_geojson_data`
+        // bumps its source's generation.
+        self.mark_dirty();
+    }
+
+    /// Clears every feature's state.
+    pub fn clear_feature_state(&mut self) {
+        if self.states.is_empty() {
+            return;
+        }
+        self.states.clear();
+        self.state_rev += 1;
+        self.mark_dirty();
+    }
+
+    /// The state a host has set, for the frame to apply.
+    #[must_use]
+    pub const fn states(&self) -> &tessella_layout::paint::FeatureStates {
+        &self.states
+    }
+
+    /// How many times the state has changed, for the content stamp.
+    #[must_use]
+    pub const fn state_rev(&self) -> u64 {
+        self.state_rev
     }
 
     /// Repoints the map at a new style revision.
@@ -1189,6 +1249,13 @@ impl Map {
             history: self.zoom,
         });
 
+        // Nothing at all when no feature has been marked, which is every map until a host marks
+        // one: the frame then takes the buckets' own bytes and the mechanism costs nothing.
+        let states = (!self.states.is_empty()).then_some(frame::StateApplication {
+            states: &self.states,
+            revision: self.state_rev,
+        });
+
         self.layouts.begin_frame();
         let emitted = frame::emit_incremental(
             producer,
@@ -1207,6 +1274,7 @@ impl Map {
                 light: &self.light,
                 fonts: self.fonts.as_ref(),
                 patterns: patterns.as_ref(),
+                states: states.as_ref(),
             },
             &mut self.session,
         )?;

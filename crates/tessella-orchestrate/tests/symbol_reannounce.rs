@@ -127,6 +127,7 @@ fn emit(
             light: &Light::default(),
             fonts: Some(fonts),
             patterns: None,
+            states: None,
         },
         session,
     )

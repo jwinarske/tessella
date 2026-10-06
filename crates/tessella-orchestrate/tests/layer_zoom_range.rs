@@ -111,6 +111,7 @@ fn drawn_at(zoom: f64) -> BTreeSet<u32> {
             light: &Light::default(),
             fonts: None,
             patterns: None,
+            states: None,
         },
     )
     .expect("the frame emits");

@@ -128,6 +128,7 @@ fn emit_frame_for(
             light: &Light::default(),
             fonts: None,
             patterns: None,
+            states: None,
         },
         registry,
     )
@@ -297,6 +298,7 @@ fn a_failed_frame_retires_nothing_and_announces_nothing() {
             light,
             fonts: None,
             patterns: None,
+            states: None,
         }
     }
     frame::emit_incremental(
@@ -530,6 +532,7 @@ fn a_frame_touches_only_its_own_view() {
                     light: &Light::default(),
                     fonts: None,
                     patterns: None,
+                    states: None,
                 },
                 &mut registry,
             )
@@ -660,6 +663,7 @@ fn a_parked_view_writes_no_bytes_at_all() {
         light: &light,
         fonts: None,
         patterns: None,
+        states: None,
     };
 
     frame::emit_incremental(
@@ -749,6 +753,7 @@ fn a_parked_view_with_generated_textures_writes_no_bytes_either() {
         light: &light,
         fonts: None,
         patterns: None,
+        states: None,
     };
 
     frame::emit_incremental(
@@ -851,6 +856,7 @@ fn an_atlas_whose_bytes_changed_is_sent_again() {
             light: &light,
             fonts: None,
             patterns: None,
+            states: None,
         };
         frame::emit_incremental(
             &mut producer,
@@ -1002,6 +1008,7 @@ mod teardown {
             light,
             fonts: None,
             patterns: None,
+            states: None,
         }
     }
 
@@ -1223,6 +1230,7 @@ mod under_fault {
                 light: &light,
                 fonts: None,
                 patterns: None,
+                states: None,
             },
             session,
         )
@@ -1441,6 +1449,7 @@ fn a_dash_atlas_is_sent_once_per_atlas_and_not_per_frame() {
             light: &light,
             fonts: None,
             patterns: None,
+            states: None,
         };
         frame::emit_incremental(
             &mut producer,

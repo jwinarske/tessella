@@ -111,6 +111,7 @@ fn a_frame_that_will_not_fit_leaves_nothing_behind() {
             light: &Light::default(),
             fonts: None,
             patterns: None,
+            states: None,
         },
     );
 
@@ -163,6 +164,7 @@ fn the_retry_after_a_full_ring_is_a_whole_frame() {
                 light: &Light::default(),
                 fonts: None,
                 patterns: None,
+                states: None,
             },
         )
     };

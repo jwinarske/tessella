@@ -320,6 +320,7 @@ mod against_a_ring {
                     light: &Light::default(),
                     fonts: None,
                     patterns: None,
+                    states: None,
                 },
                 &mut session,
             );

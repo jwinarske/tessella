@@ -115,6 +115,7 @@ fn emit_payloads(
             light: &Light::default(),
             fonts: Some(fonts),
             patterns: None,
+            states: None,
         },
         session,
     )
@@ -342,6 +343,7 @@ fn a_parked_symbol_scene_writes_no_bytes_at_all() {
             light: &light,
             fonts: Some(&fonts),
             patterns: None,
+            states: None,
         };
         frame::emit_incremental(producer, arena, layouts, placement, &frame, session)
     };

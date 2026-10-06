@@ -219,6 +219,7 @@ mod through_a_frame {
                 light: &Light::default(),
                 fonts: None,
                 patterns: None,
+                states: None,
             },
         )
         .expect("the frame emits");
