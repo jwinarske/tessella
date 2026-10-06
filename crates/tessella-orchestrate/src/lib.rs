@@ -61,6 +61,7 @@ pub mod pacing;
 #[cfg(feature = "std")]
 pub mod pool;
 pub mod project;
+pub mod query;
 pub mod registry;
 #[cfg(feature = "std")]
 pub mod source;
