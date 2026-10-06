@@ -265,6 +265,22 @@ impl<'a> FeatureRef<'a> {
         self.feature.geom_type
     }
 
+    /// Its layer's whole property table, to share rather than copy.
+    ///
+    /// Paired with [`Self::property_range`]: together they are this feature's properties without a
+    /// per-feature allocation, which is what a record outliving the tile holds. [`Self::properties`]
+    /// is for reading them here and now.
+    #[must_use]
+    pub fn property_table(&self) -> &'a Arc<Vec<(Arc<str>, Value)>> {
+        &self.layer.properties
+    }
+
+    /// Where this feature's properties sit in [`Self::property_table`].
+    #[must_use]
+    pub fn property_range(&self) -> Range<u32> {
+        self.feature.properties.clone()
+    }
+
     /// Its properties, resolved against the layer's key and value tables.
     #[must_use]
     pub fn properties(&self) -> &'a [(Arc<str>, Value)] {
@@ -350,7 +366,17 @@ pub struct Layer {
     /// Where each ring ends in `points`, exclusive and monotonic across the whole layer.
     ends: Vec<u32>,
     /// Every property of every feature, in feature order.
-    properties: Vec<(Arc<str>, Value)>,
+    ///
+    /// Shared rather than owned so that something outliving the tile can point into it with a
+    /// [`FeatureRef::property_range`] instead of copying its own slice out. A rendered-feature
+    /// record does exactly that: the table is 122 KiB on a Berlin z14 tile and a style names one
+    /// source layer from many style layers, so copying per feature per bucket multiplies it by the
+    /// number of those layers while sharing it does not.
+    ///
+    /// Appended through [`Arc::make_mut`], which is a move while the table is uniquely owned --
+    /// which it is for the whole of decoding, since nothing can hold a reference to a layer that
+    /// is still being built.
+    properties: Arc<Vec<(Arc<str>, Value)>>,
 }
 
 impl Layer {
@@ -406,7 +432,7 @@ impl Layer {
     ) {
         #[allow(clippy::cast_possible_truncation)]
         let property_start = self.properties.len() as u32;
-        self.properties.extend(properties);
+        Arc::make_mut(&mut self.properties).extend(properties);
         #[allow(clippy::cast_possible_truncation)]
         let property_end = self.properties.len() as u32;
         #[allow(clippy::cast_possible_truncation)]
@@ -439,7 +465,7 @@ impl Layer {
     ) {
         #[allow(clippy::cast_possible_truncation)]
         let property_start = self.properties.len() as u32;
-        self.properties.extend(properties);
+        Arc::make_mut(&mut self.properties).extend(properties);
         #[allow(clippy::cast_possible_truncation)]
         let property_end = self.properties.len() as u32;
 
@@ -580,7 +606,7 @@ fn decode_layer(data: &[u8]) -> Result<Layer, MvtError> {
     let bytes: usize = raw_features.iter().map(|raw| raw.len()).sum();
     out.points.reserve(bytes / 2);
     out.ends.reserve(raw_features.len() * 2);
-    out.properties.reserve(raw_features.len() * 2);
+    Arc::make_mut(&mut out.properties).reserve(raw_features.len() * 2);
 
     let mut scratch = Scratch::default();
     let name = out.name.clone();

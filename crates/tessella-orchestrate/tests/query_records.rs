@@ -334,78 +334,162 @@ fn a_background_records_nothing() {
     assert_eq!(bucket.features.len(), 0);
 }
 
-/// An MVT record shares its layer's key and value tables rather than copying them.
+/// Every MVT record points at one shared property table, not at a copy of its own.
 ///
-/// The design claim in `query`'s module doc, measured instead of asserted in prose: `mvt::Value`
-/// holds its strings in an `Arc` precisely so a value repeated across ten thousand features is
-/// stored once, and a record that widened them into a `tessella_style::Value` would copy every key
-/// and every string per feature. `Arc::ptr_eq` across two features is what tells the two apart --
-/// equal strings would pass a `==` either way.
+/// This is the whole shape of the MVT arm, measured rather than asserted in prose. A layer's
+/// `properties` is already one flat table of every property of every feature, which a `Feature`
+/// indexes with a range -- so a record that copied its slice out would copy a table that already
+/// exists. On a Berlin z14 tile that table is 122 KiB.
+///
+/// `Arc::ptr_eq` is the only thing that tells a share from a copy: two copies of one table compare
+/// equal under `==`, so the pointer is the assertion.
+///
+/// The second half is the part that pays. A real style names one source layer from many style
+/// layers -- a dozen road layers over `roads` is ordinary -- and each becomes its own bucket. Under
+/// a per-feature copy each of those buckets carries its own slice of the same table, so the cost is
+/// the table times the number of layers. Here the table is one.
 #[test]
-fn mvt_records_share_the_layers_tables() {
-    // Every layer the tile carries, so the records cover it rather than a filtered corner.
-    let names = [
-        "earth",
-        "landuse",
-        "natural",
-        "water",
-        "physical_line",
-        "buildings",
-        "roads",
-        "boundaries",
-        "places",
-        "pois",
-        "transit",
-    ];
-    let layers: Vec<String> = names
-        .iter()
-        .map(|name| {
-            format!(
-                r##"{{"id":"{name}","type":"fill","source":"p","source-layer":"{name}","paint":{{"fill-color":"#ff0000"}}}}"##
-            )
-        })
-        .collect();
-    let style_json = format!(
-        r##"{{"version":8,"sources":{{"p":{{"type":"vector","tiles":["http://x/{{z}}/{{x}}/{{y}}"]}}}},"layers":[{}]}}"##,
-        layers.join(",")
-    );
-    let style = Style::parse(&style_json).expect("the style parses");
+fn every_mvt_record_points_at_one_shared_table() {
+    // Four style layers over *one* source layer, filtered differently so they are not the same
+    // bucket twice: the shape a real style has, and the one a per-feature copy multiplies.
+    let style_json = r##"{"version":8,
+      "sources":{"p":{"type":"vector","tiles":["http://x/{z}/{x}/{y}"]}},
+      "layers":[
+        {"id":"r1","type":"line","source":"p","source-layer":"roads",
+         "paint":{"line-color":"#ff0000"}},
+        {"id":"r2","type":"line","source":"p","source-layer":"roads",
+         "filter":["==",["geometry-type"],"LineString"],"paint":{"line-color":"#00ff00"}},
+        {"id":"r3","type":"line","source":"p","source-layer":"roads",
+         "paint":{"line-color":"#0000ff","line-width":3.0}},
+        {"id":"r4","type":"fill","source":"p","source-layer":"roads",
+         "paint":{"fill-color":"#ffff00"}}]}"##;
+    let style = Style::parse(style_json).expect("the style parses");
     let tile = tessella_source::mvt::Tile::decode(BERLIN).expect("the fixture decodes");
     let buckets =
         build_mvt_tile(&style, "p", TileId::new(14, 8802, 5373), &tile).expect("the tile builds");
 
-    // A key held by two different features of one bucket, which is what the table is for.
-    let mut shared = None;
+    assert_eq!(buckets.len(), 4, "four style layers over one source layer");
+
+    // Raw pointers, not `Arc` clones: cloning one per record would bump the very count asserted
+    // below, which is how the first version of this test read 1865 where it expected 934.
+    let mut pointers: Vec<*const Vec<(Arc<str>, tessella_source::mvt::Value)>> = Vec::new();
+    let mut records = 0usize;
+    let mut handle = None;
     for bucket in &buckets {
-        let mut seen: Vec<(Arc<str>, usize)> = Vec::new();
-        for (at, record) in bucket.features.iter().enumerate() {
-            let Tags::Mvt(tags) = &record.properties else {
+        assert!(
+            !bucket.features.is_empty(),
+            "every one of these layers draws something"
+        );
+        for record in &bucket.features {
+            records += 1;
+            let Tags::Mvt { table, range } = &record.properties else {
                 panic!("an MVT feature's tags are not a JSON object");
             };
-            for (key, _) in tags {
-                if let Some((first, first_at)) = seen
-                    .iter()
-                    .find(|(name, first_at)| name == key && *first_at != at)
-                {
-                    shared = Some((Arc::clone(first), Arc::clone(key)));
-                    let _ = first_at;
-                    break;
-                }
-                seen.push((Arc::clone(key), at));
+            assert!(
+                range.end as usize <= table.len(),
+                "a record's range is inside the table it points at"
+            );
+            pointers.push(Arc::as_ptr(table));
+            if handle.is_none() {
+                handle = Some(Arc::clone(table));
             }
-            if shared.is_some() {
-                break;
-            }
-        }
-        if shared.is_some() {
-            break;
         }
     }
 
-    let (first, second) = shared.expect("some key is carried by two features of one layer");
     assert!(
-        Arc::ptr_eq(&first, &second),
-        "two features' records point at one key in the layer's table, not at two copies of it"
+        records > 400,
+        "a Berlin roads layer four times over: {records}"
+    );
+    let first = pointers[0];
+    assert!(
+        pointers.iter().all(|table| core::ptr::eq(*table, first)),
+        "all {records} records across all four buckets point at one table, not at copies of it"
+    );
+    // And one allocation rather than one per record: a per-feature copy would be 900-odd tables
+    // with 122 KiB of pairs between them. The `+ 2` is the decoded layer and this test's handle.
+    assert_eq!(
+        Arc::strong_count(handle.as_ref().expect("some record was seen")),
+        records + 2,
+        "one table, referenced once per record plus the layer and this test's own handle"
+    );
+}
+
+/// Every MVT record's range selects its *own* feature's properties out of the shared table.
+///
+/// The test the sharing needs and the one two mutations walked straight through: widening the range
+/// to the whole table, and dropping its start so every record reads from zero, both left the suite
+/// green. Nothing was checking that a record's window is the right window -- the only MVT property
+/// assertions were "some record has a `kind`" and a count compared against the range it came from,
+/// which is true of any range at all.
+///
+/// Pinned by index rather than by id, because this layer has two adjacent features carrying the
+/// *same* id and different tags -- which is also what makes it a good discriminator: a slice read
+/// from the wrong start lands on a neighbor whose tags differ although its id does not.
+#[test]
+fn an_mvt_records_window_is_its_own_features() {
+    let style_json = r##"{"version":8,
+      "sources":{"p":{"type":"vector","tiles":["http://x/{z}/{x}/{y}"]}},
+      "layers":[{"id":"roads","type":"line","source":"p","source-layer":"roads",
+                 "paint":{"line-color":"#ff0000"}}]}"##;
+    let style = Style::parse(style_json).expect("the style parses");
+    let tile = tessella_source::mvt::Tile::decode(BERLIN).expect("the fixture decodes");
+    let layer = tile.layer("roads").expect("the tile carries roads");
+    let buckets =
+        build_mvt_tile(&style, "p", TileId::new(14, 8802, 5373), &tile).expect("the tile builds");
+    let bucket = buckets.first().expect("one roads bucket");
+
+    // No filter and no sort key, so the arm keeps every feature in source order and record `i` is
+    // feature `i`. Asserted rather than assumed -- the mapping is what the rest of this test rests
+    // on, and a dropped feature would slide every comparison after it.
+    assert_eq!(
+        bucket.features.len(),
+        layer.len(),
+        "an unfiltered layer records every feature"
+    );
+
+    let mut checked = 0usize;
+    for (at, record) in bucket.features.iter().enumerate() {
+        let feature = layer.feature(at).expect("a feature at every index");
+        let expected: Vec<(String, String)> = feature
+            .properties()
+            .iter()
+            .map(|(key, value)| (key.to_string(), format!("{value:?}")))
+            .collect();
+        let got: Vec<(String, String)> = record
+            .properties
+            .iter()
+            .map(|(key, value)| (key.to_string(), format!("{value:?}")))
+            .collect();
+        assert_eq!(
+            got.len(),
+            expected.len(),
+            "record {at} reports {} properties where its feature has {}",
+            got.len(),
+            expected.len()
+        );
+        for ((got_key, got_value), (want_key, want_value)) in got.iter().zip(&expected) {
+            assert_eq!(got_key, want_key, "record {at}: key order is the tile's");
+            // The values are compared through `Debug` because one side is an `mvt::Value` and the
+            // other the `Value` it widens into; the point is that it is the same property, not that
+            // the two enums are one type.
+            assert!(
+                want_value.contains(
+                    got_value
+                        .trim_start_matches("String(")
+                        .trim_end_matches(')')
+                ) || got_value.contains(
+                    want_value
+                        .trim_start_matches("String(")
+                        .trim_end_matches(')')
+                ),
+                "record {at} key {got_key}: {got_value} is not its feature's {want_value}"
+            );
+        }
+        checked += got.len();
+    }
+    assert!(
+        checked > 1000,
+        "the whole layer's properties were compared, not a corner: {checked}"
     );
 }
 
@@ -482,12 +566,12 @@ fn properties_iterate_in_both_shapes() {
         .iter()
         .find(|f| f.properties.len() > 1)
         .expect("some road carries more than one tag");
-    let Tags::Mvt(tags) = &record.properties else {
+    let Tags::Mvt { range, .. } = &record.properties else {
         panic!("an MVT feature's tags")
     };
     assert_eq!(
         record.properties.iter().count(),
-        tags.len(),
-        "the iterator yields every tag"
+        (range.end - range.start) as usize,
+        "the iterator yields every tag of the feature's own slice, not the whole table"
     );
 }
