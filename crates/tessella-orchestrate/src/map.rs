@@ -489,6 +489,190 @@ impl Map {
         self.mark_dirty();
     }
 
+    /// Which features are drawn under a screen rectangle, topmost first.
+    ///
+    /// mbgl's `queryRenderedFeatures`. `x0, y0` and `x1, y1` are opposite corners in screen pixels,
+    /// in the same space [`crate::project`] and `tessella_screen_to_geo` use; equal corners are a
+    /// tap. `layers`, when given, keeps only those layer ids -- a host that wants the POI under the
+    /// finger and not the landuse polygon behind it says so here rather than filtering the answer.
+    ///
+    /// # What "rendered" means
+    ///
+    /// Only what is on screen now. A feature in a tile that has not arrived is not drawn and is not
+    /// returned, which is the same rule the name carries in mbgl, and the reason this takes the same
+    /// `tiles` store a tick does: the answer is a property of the cover, not of the style.
+    ///
+    /// Topmost first is the reverse of paint order, so the first entry is what a host should act on.
+    /// Within one layer the order is the order features were recorded, which is the order they were
+    /// drawn in.
+    ///
+    /// # Limits, stated rather than discovered
+    ///
+    /// The region is the screen rectangle unprojected onto the map **plane**. Under terrain the
+    /// ground is not the plane, so a tap on a hill answers for where the ground would have been --
+    /// off by the displacement, uphill. On a globe the unprojection is a different one again and
+    /// this does not do it: [`Surface::Sphere`] returns nothing rather than something wrong.
+    ///
+    /// A corner whose ray never descends to the plane makes the whole query answer nothing, because
+    /// `from_screen`'s answer there is mbgl's near point -- a real coordinate, but not the one the
+    /// pixel is over, so reporting what sits on it would be a hit invented out of sky. No camera this
+    /// crate builds reaches that: measured at zoom 6 over pitches from 45 to 89.2 degrees, against a
+    /// `MAX_PITCH` of 89.25, the top row of pixels descends every time. It is a guard against a
+    /// projection that is not ours rather than something a host can observe.
+    ///
+    /// Symbols are absent: whether a label is drawn is placement's answer, and a `Candidate` carries
+    /// no feature identity to map it back. That is the next slice.
+    ///
+    /// A feature with **no id** can be answered more than once. A tile is built from a *buffered*
+    /// box, so a feature near a seam is in its neighbor's buffer as well and is drawn by both; the
+    /// dedupe below needs a name to recognize the two as one, and anything else it could key on --
+    /// the properties -- would merge two genuinely different features that happen to agree. mbgl
+    /// returns duplicates here too. A host that minds can key on the geometry it already has.
+    #[must_use]
+    pub fn query_rendered_features<T: Tiles>(
+        &self,
+        tiles: &T,
+        corners: [[f64; 2]; 2],
+        layers: Option<&[&str]>,
+    ) -> Vec<crate::query::Hit> {
+        if self.surface() != Surface::Plane {
+            return Vec::new();
+        }
+        let Some(region_of) = self.unproject_region(corners) else {
+            return Vec::new();
+        };
+
+        // Keyed as the frame keys it: a canonical `TileId` carries no wrap, so two copies of the
+        // world are one key and deduping on the id alone would answer for one of them.
+        let mut served: alloc::collections::BTreeSet<(TileId, i32)> =
+            alloc::collections::BTreeSet::new();
+        let mut found: Vec<(usize, crate::query::Hit)> = Vec::new();
+
+        for entry in &self.drawn {
+            let cover = TileId::new(entry.z, entry.x, entry.y);
+            for (id, ready) in tiles.serving(cover) {
+                if !served.insert((id, entry.wrap)) {
+                    continue;
+                }
+                let Some(region) = region_of(id, entry.wrap) else {
+                    continue;
+                };
+                // mbgl's `pixelsToTileUnits`: a paint property is in screen pixels and the region is
+                // in this tile's units, so the two are related by how far the tile is from the
+                // view's own zoom.
+                let units_per_pixel = f64::from(tessella_source::tiling::EXTENT)
+                    / (tessella_tile::projection::TILE_SIZE
+                        * 2f64.powf(self.view.zoom - f64::from(id.z)));
+                for bucket in ready.iter() {
+                    let Some(layer) = self.style.layers.get(bucket.layer_index) else {
+                        continue;
+                    };
+                    if layer.id != bucket.layer_id {
+                        continue;
+                    }
+                    if layers.is_some_and(|wanted| !wanted.contains(&layer.id.as_str())) {
+                        continue;
+                    }
+                    for at in crate::hit::touched(
+                        &bucket.content,
+                        &bucket.features,
+                        &bucket.paint,
+                        self.view.zoom,
+                        units_per_pixel,
+                        &region,
+                    ) {
+                        let record = &bucket.features[at];
+                        found.push((
+                            bucket.layer_index,
+                            crate::query::Hit {
+                                layer_id: layer.id.clone(),
+                                source: layer.source.clone(),
+                                source_layer: layer.source_layer.clone(),
+                                id: record.id.clone(),
+                                geometry_type: record.geometry_type,
+                                properties: record.properties.clone(),
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Topmost first, and stable within a layer so that the order inside one is the order the
+        // features were drawn in. A layer's index is its paint order, so the reverse of it is what
+        // a host should try first.
+        // `sort_by_key`, which is stable, so the order inside one layer stays the order the
+        // features were recorded in -- which is the order they were drawn in.
+        found.sort_by_key(|entry| core::cmp::Reverse(entry.0));
+        let mut hits: Vec<crate::query::Hit> = Vec::with_capacity(found.len());
+        for (_, hit) in found {
+            // One feature drawn in two tiles -- which a feature crossing a tile boundary is -- is
+            // one answer. Deduped on what names it rather than on the record, because the two tiles
+            // hold different halves of its geometry and so different records. A feature with no id
+            // cannot be named, so it is kept: dropping it would lose every unnamed hit but the
+            // first in its layer.
+            let named = hit.id.is_some()
+                && hits.iter().any(|kept| {
+                    kept.layer_id == hit.layer_id && kept.id == hit.id && kept.source == hit.source
+                });
+            if !named {
+                hits.push(hit);
+            }
+        }
+        hits
+    }
+
+    /// A function from a drawn tile to the query region in its own units.
+    ///
+    /// Built once per query rather than per tile: the unprojection is four matrix inversions and the
+    /// rest is arithmetic. `None` when the view will not invert, or when every corner is sky.
+    fn unproject_region(
+        &self,
+        corners: [[f64; 2]; 2],
+    ) -> Option<impl Fn(TileId, i32) -> Option<crate::hit::Region> + '_> {
+        let [[x0, y0], [x1, y1]] = corners;
+        let tap = (x0 - x1).abs() < f64::EPSILON && (y0 - y1).abs() < f64::EPSILON;
+        let screen = if tap {
+            alloc::vec![[x0, y0]]
+        } else {
+            alloc::vec![
+                [x0.min(x1), y0.min(y1)],
+                [x0.max(x1), y0.min(y1)],
+                [x0.max(x1), y0.max(y1)],
+                [x0.min(x1), y0.max(y1)],
+            ]
+        };
+        let mut geo = Vec::with_capacity(screen.len());
+        for point in &screen {
+            let answer = tessella_tile::screen::from_screen_detail(&self.view, *point)?;
+            // Sky. `from_screen` answers the near point there, which is a real coordinate and not
+            // the one the pixel is over, so a hit found on it would be invented.
+            if !answer.met_the_plane {
+                return None;
+            }
+            geo.push(answer.coordinate);
+        }
+        Some(move |id: TileId, wrap: i32| {
+            let mut local = Vec::with_capacity(geo.len());
+            for point in &geo {
+                // The world copy this tile is drawn in, taken off the longitude rather than added to
+                // the tile units: `project` clamps latitude and leaves longitude alone, so a whole
+                // world of degrees is exactly a whole world of units.
+                let longitude = point[0] - f64::from(wrap) * 360.0;
+                local.push(tessella_tile::projection::tile_local(
+                    longitude, point[1], id.z, id.x, id.y,
+                ));
+            }
+            match local.len() {
+                1 => Some(crate::hit::Region::at(local[0])),
+                4 => Some(crate::hit::Region::quad([
+                    local[0], local[1], local[2], local[3],
+                ])),
+                _ => None,
+            }
+        })
+    }
+
     /// The state a host has set, for the frame to apply.
     #[must_use]
     pub const fn states(&self) -> &tessella_layout::paint::FeatureStates {

@@ -297,3 +297,29 @@ impl Recording {
         self.0
     }
 }
+
+/// One feature a rendered-feature query found.
+///
+/// A [`Queryable`] says what a feature is; this says where it was drawn from as well, which is what
+/// a host acts on -- the same feature can be in two layers over one source, and "the POI layer's
+/// bakery" is a different answer from "the label layer's bakery".
+///
+/// The vertex range is deliberately absent. It is an index into one bucket's buffer, which is a fact
+/// about this frame's tiles and means nothing to a host: by the time it reads the answer the tile may
+/// have been rebuilt at another zoom.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Hit {
+    /// The style layer that drew it.
+    pub layer_id: String,
+    /// The source that layer draws from, absent only for a background -- which has no features and
+    /// is never a hit.
+    pub source: Option<String>,
+    /// The layer within a vector source, absent for a GeoJSON one.
+    pub source_layer: Option<String>,
+    /// The feature's id as its source gave it, which may be a string and may be absent.
+    pub id: Option<Value>,
+    /// `Point`, `LineString`, `Polygon` or `Unknown`.
+    pub geometry_type: &'static str,
+    /// Its properties.
+    pub properties: Tags,
+}
