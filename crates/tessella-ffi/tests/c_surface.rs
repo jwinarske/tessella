@@ -337,6 +337,17 @@ fn the_c_header_describes_the_library_it_claims_to() {
         store_exists,
         "the cached map did not open its store, so the path was accepted and dropped"
     );
+    // A restyle on a running map. TESSELLA_BAD_STYLE is 4, TESSELLA_NULL_ARGUMENT is 1,
+    // TESSELLA_NO_SUCH_MAP is 2.
+    check("set_style", 0, "a running map refused a new style");
+    check("set_style_bad", 4, "a style that cannot parse was accepted");
+    check("set_style_null", 1, "a null document was not rejected");
+    check("set_style_no_map", 2, "a null handle was not rejected");
+    check(
+        "tick_after_style",
+        0,
+        "the map did not tick after a refused style, so something was replaced anyway",
+    );
     // The regions in that store, through the same header. TESSELLA_NO_SUCH_REGION is 16.
     check(
         "offline_open",

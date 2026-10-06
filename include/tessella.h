@@ -318,6 +318,37 @@ tessella_result tessella_answer(tessella_map* map,
  * hole, counted and named by tessella_status, and the next tick may ask again. */
 tessella_result tessella_fail_request(tessella_map* map, uint64_t ticket);
 
+/* Gives a running map a new style.
+ *
+ * A compiled style is immutable and a change is a new revision, so this is a replacement: the
+ * document a host switches to -- day for night, a layer toggled, a config value such as the label
+ * language, its own layers for a route or a puck -- becomes the next revision and the tiles are
+ * rebuilt against it, because a changed filter admits different features.
+ *
+ * The alternative it replaces is destroying the map and creating another, which loses the camera,
+ * the label identities and their fades, the drawable ids the consumer is holding, and every tile. A
+ * restyle keeps all of that but the second pair: the camera and the viewport are untouched, the
+ * session goes on numbering drawables, and the arena keeps its geometry until the frame that
+ * replaces it.
+ *
+ * What it costs: the buckets, always, since the revision is in every tile key precisely so that a
+ * bucket built against one style is not reused against another. The *bytes*, only without a store --
+ * a map created with tessella_config.cache_path serves every tile from it and a restyle reaches no
+ * origin at all. Without one, a restyle refetches what it rebuilds.
+ *
+ * Afterwards the map is resolving again, so tessella_status reports its readiness from the start and
+ * the first few ticks draw what the previous style left until the new buckets land.
+ *
+ * A style that does not parse changes nothing at all and answers TESSELLA_BAD_STYLE, so a host can
+ * offer a document it is not sure of.
+ *
+ * Annotations survive, because the map holds them and re-applies them to the new revision. Data
+ * pushed with tessella_set_geojson_data does not: the style that named the source is gone, and
+ * nothing here kept a copy. Re-apply it once the new style reports ready. */
+tessella_result tessella_set_style(tessella_map* map,
+                                   const uint8_t* style_json,
+                                   size_t style_json_len);
+
 /* Moves the camera.
  *
  * Does not draw. A camera that has not moved emits nothing on the next tick, which is what keeps

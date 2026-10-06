@@ -817,6 +817,93 @@ fn forget_unused(caches: &mut Caches) {
     caches.retain(|_, cache| cache.strong_count() > 0);
 }
 
+/// Gives a running map a new style.
+///
+/// A compiled style is immutable and a change is a new revision (plan.md 5.1), so this is a
+/// replacement: the document a host switches to -- day for night, a layer toggled, a `config` value
+/// such as the label language, its own layers for a route or a puck -- becomes the next revision and
+/// the tiles are rebuilt against it, because a changed filter admits different features.
+///
+/// The alternative this replaces is destroying the map and creating another, which loses the camera,
+/// the label identities and their fades, the drawable ids the consumer is holding, and every tile.
+/// What a restyle keeps is all of that but the second pair: the camera and the viewport are
+/// untouched, the session goes on numbering drawables, and the arena keeps its geometry until the
+/// frame that replaces it.
+///
+/// # What it costs
+///
+/// The buckets, always: the revision is in every tile key precisely so that a bucket built against
+/// one style is not reused against another. The *bytes*, only without a store -- a map created with
+/// `tessella_config.cache_path` serves every tile from it and the restyle reaches no origin at all,
+/// which is measured rather than asserted. Without one, a restyle refetches what it rebuilds.
+///
+/// # Afterwards
+///
+/// The map is resolving again, so [`tessella_status`] reports its readiness from the start and the
+/// first few ticks draw what the previous style left until the new buckets land. A style that does
+/// not parse changes nothing at all and answers [`Status::BadStyle`], so a host can offer a document
+/// it is not sure of.
+///
+/// Annotations survive, because this map holds them and re-applies them to the new revision. Data
+/// pushed with [`tessella_set_geojson_data`] does not: the style that named the source is gone, and
+/// nothing here kept a copy. Re-apply it once the new style reports ready.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed, and `style_json`
+/// must be valid for reads of `style_json_len` bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_set_style(
+    map: MapHandle,
+    style_json: *const u8,
+    style_json_len: usize,
+) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_mut() }) else {
+            return Status::NoSuchMap;
+        };
+        if style_json.is_null() {
+            return Status::NullArgument;
+        }
+        // SAFETY: the caller's contract.
+        let Some(style_text) = (unsafe { borrowed(style_json, style_json_len) }) else {
+            return Status::BadStyle;
+        };
+        // Parsed before anything is replaced, so a document that will not parse leaves the map
+        // exactly as it was. A host offering a style it is unsure of is the case this is for.
+        let Ok(style) = Style::parse(&style_text) else {
+            return Status::BadStyle;
+        };
+
+        // The new revision over the same transport. Not a new transport: a second HTTP source
+        // would open another connection pool to the same origin, and a hosted one would lose the
+        // ticket table the host is still answering into.
+        let hosted = state.source.transport().hosted().is_some();
+        let source = state
+            .source
+            .restyled(style_text.clone(), shared_cache(hosted, &style_text));
+        state.source = source;
+        state.map.restyle(style);
+
+        // The annotations are this map's rather than the style's, so they are synthesized into the
+        // new revision the way `tessella_set_annotations` does it -- into both styles, because the
+        // source's decides which layer a bucket is built for and the map's decides what is drawn.
+        if !state.annotations.is_empty() {
+            state.source.set_annotations(state.annotations.clone());
+            state.map.set_annotations(&state.annotations);
+        }
+
+        // The new document names its own sprite, so the sheet is handed over again when the new
+        // resolution produces one. The map keeps the old one until then rather than drawing
+        // patterned fills with no atlas bound.
+        state.sprites_set = false;
+        // Nothing has landed against this source yet, so the next tick is a frame worth drawing
+        // whatever the generation counter happened to be.
+        state.generation = 0;
+        Status::Ok
+    })
+}
+
 /// Moves the camera.
 ///
 /// Does not draw. A camera that has not moved emits nothing on the next tick, which is what
