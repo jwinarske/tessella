@@ -133,3 +133,79 @@ test("a map with nothing to fetch asks for nothing", async () => {
   assert.deepEqual(asked, [], "a style with no sources went to the network");
   map.destroy();
 });
+
+test("the screen conversions invert each other through linear memory", async () => {
+  const module = await readFile(MODULE);
+  const map = await TessellaMap.create(
+    module,
+    JSON.stringify({
+      version: 8,
+      sources: {},
+      layers: [{ id: "bg", type: "background", paint: { "background-color": "#101418" } }],
+    }),
+    { latitude: 52.52, longitude: 13.405, zoom: 13, width: 800, height: 600 },
+  );
+
+  // The middle of the screen is the camera's own coordinate.
+  const middle = map.screenToGeo(400, 300);
+  assert.ok(middle !== null, "the center pixel is over nothing");
+  assert.ok(Math.abs(middle.latitude - 52.52) < 0.01, `latitude ${middle.latitude}`);
+  assert.ok(Math.abs(middle.longitude - 13.405) < 0.01, `longitude ${middle.longitude}`);
+
+  // And it lands back in the middle. Off-center for the round trip, because the center is
+  // symmetric in both axes: a y convention that disagreed with the producer's would come back
+  // mirrored about it and this is what notices.
+  const upper = map.screenToGeo(400, 100);
+  assert.ok(upper !== null, "a pixel above the center is over nothing");
+  assert.ok(upper.latitude > middle.latitude, "y is not down from the top of the viewport");
+
+  const back = map.geoToScreen(upper.latitude, upper.longitude);
+  assert.ok(back !== null, "the round trip has no pixel");
+  assert.ok(Math.abs(back.x - 400) < 0.01, `x ${back.x}`);
+  assert.ok(Math.abs(back.y - 100) < 0.01, `y ${back.y}`);
+
+  // A pitched camera's upper screen is sky, which is a condition of the pixel rather than an
+  // error: `null`, not a throw, so a wheel handler keeps working at high pitch.
+  map.setCamera(52.52, 13.405, 13, 0, 75);
+  assert.equal(map.screenToGeo(400, 20), null, "a pixel above the horizon answered a coordinate");
+  assert.ok(map.screenToGeo(400, 500) !== null, "the ground below the center is over nothing");
+
+  map.destroy();
+});
+
+test("a map is created from a config written in full, over a dirty scratch", async () => {
+  // Every map in one instance shares the scratch block, and `tessella_config` has grown twice --
+  // `slab_capacity`, then `cache_path` and its length. A consumer that writes only the fields it
+  // knows about leaves the tail reading whatever is there, and a non-null `cache_path` on a hosted
+  // map is TESSELLA_NO_CACHE rather than something ignored.
+  //
+  // Nothing writes those bytes today, so they are zero from instantiation and six of eight fields
+  // happens to work. This writes rubbish over the whole slot first, which is the only way to tell
+  // a consumer that zeroes-and-writes-every-field from one that relies on a fresh instance.
+  const module = await readFile(MODULE);
+  // The bytes form, which answers `{module, instance}`; handed a `Module` it answers the instance
+  // itself and the destructuring above it would read `undefined`.
+  const { instance } = await WebAssembly.instantiate(module, {});
+  const style = JSON.stringify({
+    version: 8,
+    sources: {},
+    layers: [{ id: "bg", type: "background", paint: { "background-color": "#101418" } }],
+  });
+
+  // The config slot is at `__heap_base`, which is where `scratchAt` puts it. Grown first, because
+  // the reservation is below the heap and a fresh module has not got there yet.
+  const base = instance.exports.__heap_base.valueOf();
+  const need = base + 64;
+  if (instance.exports.memory.buffer.byteLength < need) {
+    instance.exports.memory.grow(1);
+  }
+  new Uint8Array(instance.exports.memory.buffer, base, 64).fill(0xff);
+
+  const map = TessellaMap.hosted(instance, style, { width: 256, height: 256 });
+  assert.equal(map.pending, 0, "a map created over a dirty config has work in flight");
+  map.destroy();
+
+  // And a second one in the same instance, which is the arrangement `hosted` documents.
+  const second = TessellaMap.hosted(instance, style, { width: 256, height: 256 });
+  second.destroy();
+});
