@@ -98,7 +98,14 @@ fn the_c_header_describes_the_library_it_claims_to() {
         String::from_utf8_lossy(&done.stderr)
     );
 
-    let run = Command::new(&out).output().expect("the probe runs");
+    // The store the probe may open, inside the scratch directory that is removed with it. Passed
+    // rather than chosen by the probe, which writes nothing of its own.
+    let store = dir.join("probe-cache.sqlite");
+    let run = Command::new(&out)
+        .arg(&store)
+        .output()
+        .expect("the probe runs");
+    let store_exists = store.exists();
     std::fs::remove_dir_all(&dir).ok();
     assert!(
         run.status.success(),
@@ -311,6 +318,25 @@ fn the_c_header_describes_the_library_it_claims_to() {
         "switching back to the plane was refused",
     );
     check("back_to_camera", 0, "restoring the camera was refused");
+    // The store. `staticlib()` builds with `--all-features`, so the probe always links a library
+    // with the cache compiled in -- which is why a native cached create is expected to work here
+    // whatever features this test run itself was given. TESSELLA_NO_CACHE is 15.
+    check("cache_native", 0, "a native map refused a cache path");
+    check("cache_native_handle", 1, "a cached create wrote no handle");
+    check(
+        "cache_on_hosted",
+        15,
+        "a hosted map accepted a cache it has no request to answer",
+    );
+    check(
+        "cache_on_hosted_handle",
+        1,
+        "a refused create wrote a handle",
+    );
+    assert!(
+        store_exists,
+        "the cached map did not open its store, so the path was accepted and dropped"
+    );
     check("tick_first", 0, "the first tick failed");
     check("tick_second", 0, "the second tick failed");
     check("status", 0, "the status call failed");

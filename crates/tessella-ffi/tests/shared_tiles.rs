@@ -64,6 +64,8 @@ impl Held {
             height: 512,
             ring_capacity: 1 << 22,
             slab_capacity: 0,
+            cache_path: core::ptr::null(),
+            cache_path_len: 0,
         };
         let mut map: MapHandle = core::ptr::null_mut();
         // SAFETY: the config and the style it names outlive the call, which copies the style.

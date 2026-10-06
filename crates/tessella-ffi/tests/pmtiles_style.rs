@@ -92,6 +92,8 @@ fn a_map_draws_from_an_archive_on_an_origin() {
         height: 512,
         ring_capacity: 1 << 22,
         slab_capacity: 0,
+        cache_path: core::ptr::null(),
+        cache_path_len: 0,
     };
     let mut map: MapHandle = core::ptr::null_mut();
     // SAFETY: both pointers are valid for the call, and the style is a live byte range.

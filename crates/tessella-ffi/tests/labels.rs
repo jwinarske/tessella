@@ -59,6 +59,8 @@ fn a_map_created_through_c_draws_its_labels() {
         ring_capacity: 1 << 22,
         // The default, which is ample for a test cover.
         slab_capacity: 0,
+        cache_path: core::ptr::null(),
+        cache_path_len: 0,
     };
     let mut map: MapHandle = core::ptr::null_mut();
     // SAFETY: both pointers are valid and the style outlives the call.

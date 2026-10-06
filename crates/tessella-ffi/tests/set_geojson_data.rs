@@ -54,6 +54,8 @@ fn create(style_json: &str) -> MapHandle {
         height: 512,
         ring_capacity: 1 << 22,
         slab_capacity: 0,
+        cache_path: core::ptr::null(),
+        cache_path_len: 0,
     };
     let mut map: MapHandle = core::ptr::null_mut();
     // SAFETY: both pointers are valid and the style outlives the call.

@@ -99,6 +99,17 @@ pub enum Status {
     /// screen -- on the screen, in the half where distant ground is drawn. A caller that took
     /// either would place something at a plausible wrong position rather than drop it.
     OffTheMap = 14,
+    /// A cache was asked for on a map that cannot have one.
+    ///
+    /// Two ways to get here, and the fix differs. This build has no cache at all -- the `cache`
+    /// feature is off, so there is no SQLite to open and the alternative would be fetching
+    /// everything over a link the caller thought was cached. Or the map is hosted, where the
+    /// caller does the fetching and therefore owns the caching too; a cache on this side would
+    /// see no request to answer.
+    ///
+    /// Distinct from [`Self::Failed`] for [`Self::NotHosted`]'s reason: the caller asked for
+    /// something this map cannot do, and only the caller can decide what to do instead.
+    NoCache = 15,
 }
 
 extern crate alloc;
@@ -217,6 +228,21 @@ pub struct Config {
     /// compacted, so a region that is too small shows as a map that will not finish drawing
     /// rather than as corruption.
     pub slab_capacity: usize,
+    /// Where to keep fetched resources between runs, or null for none.
+    ///
+    /// A path to an SQLite file the map opens or creates. With one, every resource the map fetches
+    /// is stored with its validator and served from there on the next run -- a warm start that
+    /// reaches first geometry in 0.4 ms against 3.8 ms cold, with no round trips against ten. It
+    /// is also what makes a downloaded region readable: a region's tiles are rows in this file,
+    /// and a map pointed at it draws them with no network at all.
+    ///
+    /// Null, or a length of zero, means no cache and is what a zeroed config asks for.
+    ///
+    /// Needs the `cache` feature, and [`Status::NoCache`] says so rather than ignoring the path.
+    /// A hosted map answers the same: its fetching is the caller's, and so is its caching.
+    pub cache_path: *const u8,
+    /// Its length in bytes.
+    pub cache_path_len: usize,
 }
 
 /// Slab region capacity when [`Config::slab_capacity`] is zero.
@@ -251,7 +277,7 @@ pub enum Transport {
     /// Absent on wasm32, where `ureq` is `std::net` and there are no sockets. Leaving it in would
     /// be a megabyte of dead weight behind an entry point that could only ever fail.
     #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-    Pooled(PoolBacked<Coalesced<Router>>),
+    Pooled(PoolBacked<Coalesced<Origins>>),
     /// Hosted: the consumer fetches, which is the only thing a browser can do.
     Hosted(HostTransport),
 }
@@ -457,12 +483,12 @@ pub unsafe extern "C" fn tessella_create(
 ) -> Status {
     // SAFETY: the caller's contract, unchanged, and passed straight through.
     unsafe {
-        create(config, latitude, longitude, zoom, out, || {
-            Transport::Pooled(PoolBacked::new(
-                Arc::new(Coalesced(Arc::new(Coalescing::new(origins())))),
+        create(config, latitude, longitude, zoom, out, |cache_path| {
+            Ok(Transport::Pooled(PoolBacked::new(
+                Arc::new(Coalesced(Arc::new(Coalescing::new(origins(cache_path)?)))),
                 Pool::shared(),
                 Priority::Background,
-            ))
+            )))
         })
     }
 }
@@ -498,8 +524,12 @@ pub unsafe extern "C" fn tessella_create_hosted(
 ) -> Status {
     // SAFETY: the caller's contract, unchanged, and passed straight through.
     unsafe {
-        create(config, latitude, longitude, zoom, out, || {
-            Transport::Hosted(HostTransport::new())
+        create(config, latitude, longitude, zoom, out, |cache_path| {
+            if cache_path.is_some() {
+                // A hosted map fetches nothing, so a cache here would have no request to answer.
+                return Err(Status::NoCache);
+            }
+            Ok(Transport::Hosted(HostTransport::new()))
         })
     }
 }
@@ -514,9 +544,9 @@ pub unsafe extern "C" fn tessella_create_hosted(
 /// `Router` documents and §9.3's flatness counters depend on: a router of coalescers gives each
 /// origin its own in-flight table, and four views over one cover stop costing one fetch.
 #[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
-fn origins() -> Router {
+fn origins(cache_path: Option<&str>) -> Result<Origins, Status> {
     let http = Arc::new(HttpFileSource::new(std::time::Duration::from_secs(30)));
-    Router::new()
+    let router = Router::new()
         // An archive read where it lies. Without the range transport this would refuse every
         // `pmtiles://https://` url naming the constructor it wanted, which is why it is handed
         // the same source the fallback uses.
@@ -524,7 +554,83 @@ fn origins() -> Router {
             pmtiles_source::accepts,
             PmtilesFileSource::with_ranges(Arc::clone(&http) as Arc<dyn RangeFetch>),
         )
-        .otherwise(http)
+        .otherwise(http);
+
+    let Some(path) = cache_path else {
+        return Ok(Origins::Direct(router));
+    };
+    #[cfg(feature = "cache")]
+    {
+        let Ok(store) = tessella_storage::cache::SqliteCache::open(std::path::Path::new(path))
+        else {
+            // The path, not the database: a file that cannot be opened or a directory that does
+            // not exist is the one thing the caller can fix from here.
+            return Err(Status::NoCache);
+        };
+        Ok(Origins::Cached(
+            tessella_storage::cache::CachingFileSource::new(router, store),
+        ))
+    }
+    #[cfg(not(feature = "cache"))]
+    {
+        let _ = path;
+        Err(Status::NoCache)
+    }
+}
+
+/// Where a native map's bytes come from, with or without the store in front of them.
+///
+/// An enum rather than a `dyn FileSource` for [`Transport`]'s reason: there are exactly two
+/// arrangements, the trait is two methods, and the fetch path is the one place in this crate where
+/// a virtual call would sit under every resource a map asks for.
+///
+/// # Which of the two methods the store actually sees
+///
+/// `CachingFileSource::fetch_conditional` deliberately *bypasses* the store -- a caller holding a
+/// copy and revalidating it must not be answered with an unconditional cached body -- while
+/// [`Transport::Pooled`] calls only `fetch_conditional`. The store is read anyway, and the reason
+/// is one layer up: `Coalesced` keys in-flight requests by URL alone, so it cannot honor an etag
+/// and takes the trait's default, which drops it and calls `fetch`. That is correct rather than
+/// lossy -- two callers with different etags are not one request -- and it is what routes every
+/// resource through the store.
+///
+/// So this wiring depends on a property of the coalescer, not on the cache. `offline_cache.rs`
+/// draws a map with the origin gone, which is what would fail if that ever changed.
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+pub enum Origins {
+    /// The router alone. Every resource comes from its origin, every run.
+    Direct(Router),
+    /// The router behind a response cache on disk, which answers what it holds and stores what it
+    /// does not -- and holds a downloaded region's tiles indefinitely, since the user paid for
+    /// them.
+    #[cfg(feature = "cache")]
+    Cached(tessella_storage::cache::CachingFileSource<Router>),
+}
+
+#[cfg(not(all(target_family = "wasm", target_os = "unknown")))]
+impl tessella_storage::source::FileSource for Origins {
+    fn fetch(
+        &self,
+        url: &str,
+    ) -> Result<tessella_storage::source::Response, tessella_storage::source::FetchError> {
+        match self {
+            Self::Direct(router) => router.fetch(url),
+            #[cfg(feature = "cache")]
+            Self::Cached(cached) => cached.fetch(url),
+        }
+    }
+
+    fn fetch_conditional(
+        &self,
+        url: &str,
+        etag: Option<&str>,
+    ) -> Result<tessella_storage::source::Response, tessella_storage::source::FetchError> {
+        match self {
+            Self::Direct(router) => router.fetch_conditional(url, etag),
+            #[cfg(feature = "cache")]
+            Self::Cached(cached) => cached.fetch_conditional(url, etag),
+        }
+    }
 }
 
 /// The body both constructors share, differing only in where the bytes will come from.
@@ -538,7 +644,7 @@ unsafe fn create(
     longitude: f64,
     zoom: f64,
     out: *mut MapHandle,
-    transport: impl FnOnce() -> Transport,
+    transport: impl FnOnce(Option<&str>) -> Result<Transport, Status>,
 ) -> Status {
     guarded(move || {
         if config.is_null() || out.is_null() {
@@ -602,7 +708,21 @@ unsafe fn create(
         };
         let arena = tessella_orchestrate::emit::SlabArena::in_region(mapping, SLAB_SLOTS);
 
-        let transport = transport();
+        // The cache path, if there is one. A null pointer or a zero length is no cache, which is
+        // what a zeroed config asks for; bytes that are not UTF-8 are a path this build cannot
+        // open rather than a bad argument.
+        let store = if config.cache_path.is_null() || config.cache_path_len == 0 {
+            None
+        } else {
+            let Some(path) = (unsafe { borrowed(config.cache_path, config.cache_path_len) }) else {
+                return Status::NotUtf8;
+            };
+            Some(path)
+        };
+        let transport = match transport(store.as_deref()) {
+            Ok(transport) => transport,
+            Err(status) => return status,
+        };
         let cache = shared_cache(transport.hosted().is_some(), &style_text);
         let source =
             TileSource::with_transport(style_text, Arc::new(transport), cache, Pool::shared(), 1);
