@@ -869,6 +869,8 @@ pub unsafe extern "C" fn tessella_set_feature_state(
     source_layer: *const u8,
     source_layer_len: usize,
     feature_id: u64,
+    feature_id_text: *const u8,
+    feature_id_text_len: usize,
     state_json: *const u8,
     state_len: usize,
 ) -> Status {
@@ -906,9 +908,23 @@ pub unsafe extern "C" fn tessella_set_feature_state(
             Some(object.clone())
         };
 
+        // The id is a number or a string, and the two are not the same feature. A null text pointer
+        // means the `uint64_t` names it, which is every MVT case and keeps the ordinary call short; a
+        // non-null one names a GeoJSON feature whose id is a string, which a query can hand back and
+        // this could not accept before #361.
+        let named = if feature_id_text.is_null() || feature_id_text_len == 0 {
+            tessella_orchestrate::FeatureKey::Number(feature_id)
+        } else {
+            // SAFETY: as above.
+            let Some(text) = (unsafe { borrowed(feature_id_text, feature_id_text_len) }) else {
+                return Status::NotUtf8;
+            };
+            tessella_orchestrate::FeatureKey::Text(text.to_string())
+        };
+
         state
             .map
-            .set_feature_state(&source, &source_layer, feature_id, marked);
+            .set_feature_state(&source, &source_layer, named, marked);
         Status::Ok
     })
 }
@@ -2403,4 +2419,105 @@ pub unsafe extern "C" fn tessella_destroy(map: MapHandle) {
         // It may have been the last map on its style.
         forget_unused(&mut CACHES.lock().unwrap_or_else(PoisonError::into_inner));
     }));
+}
+
+#[cfg(test)]
+mod feature_key_boundary {
+    //! That the C entry point stores the key the caller named.
+    //!
+    //! In-crate rather than in `tests/`, and for one reason: the C surface has no way to read a
+    //! feature's state back, so an integration test can see that the call returns `OK` and nothing
+    //! more. A mutation that ignored `feature_id_text` and always keyed on the `uint64_t` passed
+    //! every test in `tests/feature_state.rs` -- the content stamp carries the host's *revision*, so
+    //! any mark re-announces whether or not it named something real.
+    //!
+    //! A unit test can reach `MapState` and ask the map what it stored, which is the only place that
+    //! distinction is visible without adding a readback to the ABI for the sake of a test.
+
+    use super::{Config, MapHandle, Status};
+    use tessella_orchestrate::FeatureKey;
+
+    const STYLE: &str = r##"{"version":8,
+      "sources":{"s":{"type":"geojson","data":{"type":"FeatureCollection","features":[
+        {"type":"Feature","id":"ribbon","properties":{},
+         "geometry":{"type":"Point","coordinates":[13.4,52.5]}}]}}},
+      "layers":[{"id":"dots","type":"circle","source":"s",
+        "paint":{"circle-color":["case",["==",["feature-state","hover"],true],
+                                 "#ff0000","#204060"]}}]}"##;
+
+    /// The key a mark stored, read off the map the handle owns.
+    fn stored(text: Option<&str>, number: u64) -> Option<FeatureKey> {
+        let config = Config {
+            style_json: STYLE.as_ptr(),
+            style_json_len: STYLE.len(),
+            width: 256,
+            height: 256,
+            ring_capacity: 1 << 20,
+            slab_capacity: 0,
+            cache_path: core::ptr::null(),
+            cache_path_len: 0,
+        };
+        let mut map: MapHandle = core::ptr::null_mut();
+        // SAFETY: both pointers are valid and the style outlives the call.
+        let status = unsafe { super::tessella_create(&config, 52.5, 13.4, 12.0, &mut map) };
+        assert_eq!(status, Status::Ok, "the map did not create");
+
+        let source = "s";
+        let layer = "";
+        let state = r#"{"hover": true}"#;
+        // SAFETY: a live map; every range is valid for its length.
+        let marked = unsafe {
+            super::tessella_set_feature_state(
+                map,
+                source.as_ptr(),
+                source.len(),
+                layer.as_ptr(),
+                layer.len(),
+                number,
+                text.map_or(core::ptr::null(), str::as_ptr),
+                text.map_or(0, str::len),
+                state.as_ptr(),
+                state.len(),
+            )
+        };
+        assert_eq!(marked, Status::Ok, "the mark was refused");
+
+        // SAFETY: the handle is live until `tessella_destroy` below.
+        let held = unsafe { map.as_ref() }.expect("a live map");
+        let scoped = held.map.states().scoped(source, layer);
+        let found = scoped.and_then(|lookup| {
+            // Which key is stored is the question, so both are asked and exactly one must answer.
+            let by_name = text.and_then(|name| {
+                lookup
+                    .state(&FeatureKey::Text(name.to_string()), "hover")
+                    .map(|_| FeatureKey::Text(name.to_string()))
+            });
+            by_name.or_else(|| {
+                lookup
+                    .state(&FeatureKey::Number(number), "hover")
+                    .map(|_| FeatureKey::Number(number))
+            })
+        });
+        // SAFETY: a live map, destroyed once.
+        unsafe { super::tessella_destroy(map) };
+        found
+    }
+
+    #[test]
+    fn a_text_id_is_stored_as_text() {
+        assert_eq!(
+            stored(Some("ribbon"), 0),
+            Some(FeatureKey::Text("ribbon".to_string())),
+            "naming a feature by a string stored something else, so the text id is ignored"
+        );
+    }
+
+    #[test]
+    fn a_null_text_id_stores_the_number() {
+        assert_eq!(
+            stored(None, 7),
+            Some(FeatureKey::Number(7)),
+            "a null text pointer did not fall back to the number"
+        );
+    }
 }

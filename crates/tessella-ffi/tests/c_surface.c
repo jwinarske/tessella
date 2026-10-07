@@ -98,26 +98,43 @@ int main(int argc, char** argv) {
         printf("feature_state %d\n",
                (int)tessella_set_feature_state(map, (const uint8_t*)SRC, strlen(SRC),
                                                (const uint8_t*)LAYER, strlen(LAYER), 7,
+                                               NULL, 0,
                                                (const uint8_t*)STATE, strlen(STATE)));
         /* Null state is the feature no longer marked, which is a thing a host has to be able to
          * say -- not an argument fault. */
         printf("feature_state_clear_one %d\n",
                (int)tessella_set_feature_state(map, (const uint8_t*)SRC, strlen(SRC),
-                                               (const uint8_t*)LAYER, strlen(LAYER), 7, NULL, 0));
+                                               (const uint8_t*)LAYER, strlen(LAYER), 7, NULL, 0, NULL, 0));
         /* An array is not a state object. TESSELLA_BAD_FEATURE_STATE. */
         static const char* const NOT_AN_OBJECT = "[1, 2, 3]";
         printf("feature_state_bad %d\n",
                (int)tessella_set_feature_state(map, (const uint8_t*)SRC, strlen(SRC),
                                                (const uint8_t*)LAYER, strlen(LAYER), 7,
+                                               NULL, 0,
                                                (const uint8_t*)NOT_AN_OBJECT,
                                                strlen(NOT_AN_OBJECT)));
         printf("feature_state_null_source %d\n",
                (int)tessella_set_feature_state(map, NULL, 0, (const uint8_t*)LAYER, strlen(LAYER),
-                                               7, (const uint8_t*)STATE, strlen(STATE)));
+                                               7, NULL, 0,
+                                               (const uint8_t*)STATE, strlen(STATE)));
         printf("feature_state_no_map %d\n",
                (int)tessella_set_feature_state(NULL, (const uint8_t*)SRC, strlen(SRC),
                                                (const uint8_t*)LAYER, strlen(LAYER), 7,
+                                               NULL, 0,
                                                (const uint8_t*)STATE, strlen(STATE)));
+        /* A string id, which is what a GeoJSON source may give and what a query hands back. The
+         * number is ignored when the text is present, so the 0 here names nothing. */
+        static const char* const NAMED = "ribbon";
+        printf("feature_state_by_name %d\n",
+               (int)tessella_set_feature_state(map, (const uint8_t*)SRC, strlen(SRC),
+                                               (const uint8_t*)LAYER, strlen(LAYER), 0,
+                                               (const uint8_t*)NAMED, strlen(NAMED),
+                                               (const uint8_t*)STATE, strlen(STATE)));
+        /* Unmarking it by the same name. */
+        printf("feature_state_by_name_clear %d\n",
+               (int)tessella_set_feature_state(map, (const uint8_t*)SRC, strlen(SRC),
+                                               (const uint8_t*)LAYER, strlen(LAYER), 0,
+                                               (const uint8_t*)NAMED, strlen(NAMED), NULL, 0));
         printf("feature_state_clear_all %d\n", (int)tessella_clear_feature_state(map));
         printf("feature_state_clear_twice %d\n", (int)tessella_clear_feature_state(map));
         printf("feature_state_clear_no_map %d\n", (int)tessella_clear_feature_state(NULL));

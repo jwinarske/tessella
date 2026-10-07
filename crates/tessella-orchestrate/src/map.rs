@@ -463,12 +463,21 @@ impl Map {
     /// re-painted in place. `None` removes the feature's state, which is how a host says "no longer
     /// hovered" -- a per-key merge could not.
     ///
+    /// What names a feature, re-exported so a caller setting state does not need `tessella-layout`
+    /// as a dependency of its own -- which `tessella-ffi` does not have.
+    ///
     /// Whole state per feature, as mbgl's `setFeatureState` takes it.
+    ///
+    /// `id` is a [`FeatureKey`] rather than a number because a GeoJSON source may name a feature with
+    /// a string, and a query hands that string straight back to a host -- see #361, where the two
+    /// halves of this API disagreed about what names a feature.
+    ///
+    /// [`FeatureKey`]: tessella_layout::paint::FeatureKey
     pub fn set_feature_state(
         &mut self,
         source: &str,
         source_layer: &str,
-        id: u64,
+        id: tessella_layout::paint::FeatureKey,
         state: Option<alloc::collections::BTreeMap<alloc::string::String, tessella_style::Value>>,
     ) {
         self.states.set(source, source_layer, id, state);

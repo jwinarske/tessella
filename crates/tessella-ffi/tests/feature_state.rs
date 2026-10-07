@@ -186,6 +186,13 @@ impl Live {
 
 impl Live {
     fn mark(&self, id: u64, state: Option<&str>) -> Status {
+        self.mark_named(id, None, state)
+    }
+
+    /// As [`Self::mark`], naming the feature by a string instead when `name` is given.
+    ///
+    /// A null text pointer means the number names the feature, which is every vector-tile case.
+    fn mark_named(&self, id: u64, name: Option<&str>, state: Option<&str>) -> Status {
         let source = "fixture";
         let layer = "earth";
         // SAFETY: a live map; every range is valid for its length and outlives the call.
@@ -197,6 +204,8 @@ impl Live {
                 layer.as_ptr(),
                 layer.len(),
                 id,
+                name.map_or(core::ptr::null(), str::as_ptr),
+                name.map_or(0, str::len),
                 state.map_or(core::ptr::null(), str::as_ptr),
                 state.map_or(0, str::len),
             )
@@ -286,5 +295,77 @@ fn a_style_without_state_is_unaffected() {
     assert_eq!(
         after.adds, 0,
         "a layer that cannot be affected by state was re-announced anyway: {after:?}"
+    );
+}
+
+/// A feature named by a string is marked, and a number does not mark it.
+///
+/// The whole of #361. `tessella_query_rendered_features` hands a host the feature's id as its source
+/// gave it, which for a GeoJSON source may be a string -- and before this, the only call that could
+/// act on it took a `uint64_t`, so the id a query produced was one nothing could consume.
+///
+/// A GeoJSON source rather than the vector fixture above, because MVT states an id as a `uint64` and
+/// cannot carry a string at all: this is reachable only through GeoJSON.
+///
+/// What this layer can see is that the call is accepted and the layer re-announces. It cannot see
+/// *which* feature was marked: the content stamp carries the host's state **revision**, so any
+/// `set_feature_state` re-announces every indexed bucket whether or not it named something real --
+/// which the first assertion below pins, because it is easy to mistake for the feature having been
+/// found. That a number does not mark a string-named feature is a claim about the bytes, and it is
+/// asserted where the bytes are legible: `tessella-layout`'s `a_string_id_is_named_by_the_lookup`
+/// compares a buffer marked by `Number(7)` against one marked by `Text("motorway-7")`.
+#[test]
+fn a_feature_named_by_a_string_is_marked() {
+    const STYLE: &str = r##"{
+  "version": 8,
+  "name": "named",
+  "sources": {
+    "s": {"type": "geojson", "data": {"type": "FeatureCollection", "features": [
+      {"type": "Feature", "id": "ribbon", "properties": {"kind": "road"},
+       "geometry": {"type": "Polygon", "coordinates": [
+         [[13.2, 52.4], [13.8, 52.4], [13.8, 52.6], [13.2, 52.6], [13.2, 52.4]]]}}]}}
+  },
+  "layers": [
+    {"id": "earth", "type": "fill", "source": "s",
+      "paint": {"fill-color": ["case", ["==", ["feature-state", "hover"], true],
+                               "#ff0000", "#204060"]}}
+  ]
+}"##;
+
+    let mut live = Live::create(STYLE);
+    let first = live.settle_until(20, |seen| seen.adds > 0);
+    assert!(first.adds > 0, "the fixture never drew: {first:?}");
+
+    // A number names nothing here -- the feature has no numeric id at all -- and the call is still
+    // accepted and still re-announces, because the stamp carries the revision rather than the id.
+    // Pinned so that the assertion below is not read as proving more than it does.
+    assert_eq!(
+        live.mark_named(7, None, Some(r#"{"hover": true}"#)),
+        Status::Ok
+    );
+    let by_number = live.settle_until(20, |seen| seen.adds > 0);
+    assert!(
+        by_number.adds > 0,
+        "the stamp stopped carrying the revision: {by_number:?}"
+    );
+
+    // Its own name does, which is the call that did not exist before #361.
+    assert_eq!(
+        live.mark_named(0, Some("ribbon"), Some(r#"{"hover": true}"#)),
+        Status::Ok
+    );
+    let by_name = live.settle_until(20, |seen| seen.adds > 0);
+    assert!(
+        by_name.adds > 0,
+        "a feature named by a string was not re-painted, so a query can find what nothing can \
+         mark: {by_name:?}"
+    );
+
+    // And unmarking by the same name is the same shape, which is what a hover leaving needs.
+    assert_eq!(live.mark_named(0, Some("ribbon"), None), Status::Ok);
+    let unmarked = live.settle_until(20, |seen| seen.adds > 0);
+    assert!(
+        unmarked.adds > 0,
+        "unmarking by name announced nothing: {unmarked:?}"
     );
 }

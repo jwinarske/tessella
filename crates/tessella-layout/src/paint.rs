@@ -125,18 +125,6 @@ pub struct PaintBinder {
     scratch: Vec<u8>,
 }
 
-/// A feature's id as the `u64` state is keyed by, or `None` for anything else.
-///
-/// MVT states an id as a `uint64`; a GeoJSON source may give a string, and such a feature cannot be
-/// named by a host. It paints as unmarked rather than taking somebody else's state.
-fn numeric_id(id: Value) -> Option<u64> {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    match id {
-        Value::Number(number) if number >= 0.0 && number.fract() == 0.0 => Some(number as u64),
-        _ => None,
-    }
-}
-
 /// The spec's four geometry-type names, as `'static` strings.
 ///
 /// Interned rather than owned: a record per feature holding a `String` for one of four constants is
@@ -159,7 +147,11 @@ fn static_geometry_type(name: &str) -> &'static str {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Painted {
     /// The feature's id, which is what state is keyed by. `None` cannot be named by a host.
-    pub id: Option<u64>,
+    ///
+    /// A [`FeatureKey`] rather than a number, so a string-id feature's state reaches it. Narrowing it
+    /// here was the second half of #361: a host could set the state and the re-paint would still not
+    /// find the feature, because the recorded id had already dropped the string.
+    pub id: Option<FeatureKey>,
     /// `Point`, `LineString`, `Polygon` or `Unknown`, for `["geometry-type"]`.
     pub geometry_type: &'static str,
     /// The feature's own tags, for every operator that reads one.
@@ -168,16 +160,51 @@ pub struct Painted {
     pub vertices: core::ops::Range<usize>,
 }
 
+/// What names a feature, for the state a host sets on it.
+///
+/// A number **or** a string, and the two are not the same feature. MVT states an id as a `uint64`
+/// and can state nothing else; a GeoJSON source may give either, and MapLibre's own styles use
+/// strings. Keeping them apart rather than flattening both to text is the one choice here mbgl does
+/// not make -- its key is a string, so a numeric id and its decimal spelling collide.
+///
+/// A feature with no id at all is `None` beside this rather than a third variant: it cannot be named
+/// by a host, so there is nothing for a key to hold.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FeatureKey {
+    /// A numeric id. Non-negative and integral, which is what a `uint64` can hold.
+    Number(u64),
+    /// A string id, which only a GeoJSON source can give.
+    Text(alloc::string::String),
+}
+
+impl FeatureKey {
+    /// The key a feature's own id makes, or `None` for an id that names nothing.
+    ///
+    /// A negative or fractional number is `None` rather than truncated: it cannot have come from an
+    /// MVT tile, and rounding a GeoJSON `1.5` onto feature `1` would mark the wrong one.
+    #[must_use]
+    pub fn of(id: &Value) -> Option<Self> {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        match id {
+            Value::Number(number) if *number >= 0.0 && number.fract() == 0.0 => {
+                Some(Self::Number(*number as u64))
+            }
+            Value::String(text) => Some(Self::Text(text.clone())),
+            _ => None,
+        }
+    }
+}
+
 /// One source layer's feature state, as the thing a binder reads.
 ///
 /// Held in an `Arc` by [`FeatureStates`] so that handing it to a binder is a refcount bump rather
 /// than a copy of the map: a frame does that per state-reading layer per tile.
 #[derive(Debug, Default, Clone, PartialEq)]
-pub struct LayerStates(BTreeMap<u64, BTreeMap<alloc::string::String, Value>>);
+pub struct LayerStates(BTreeMap<FeatureKey, BTreeMap<alloc::string::String, Value>>);
 
 impl StateLookup for LayerStates {
-    fn state(&self, id: u64, key: &str) -> Option<Value> {
-        self.0.get(&id)?.get(key).cloned()
+    fn state(&self, id: &FeatureKey, key: &str) -> Option<Value> {
+        self.0.get(id)?.get(key).cloned()
     }
 }
 
@@ -205,7 +232,7 @@ impl FeatureStates {
         &mut self,
         source: &str,
         source_layer: &str,
-        id: u64,
+        id: FeatureKey,
         state: Option<BTreeMap<alloc::string::String, Value>>,
     ) {
         let key = (
@@ -271,7 +298,10 @@ impl Feature for Recorded<'_> {
 
     fn id(&self) -> Option<Value> {
         #[allow(clippy::cast_precision_loss)]
-        self.0.id.map(|id| Value::Number(id as f64))
+        match self.0.id.as_ref()? {
+            FeatureKey::Number(id) => Some(Value::Number(*id as f64)),
+            FeatureKey::Text(text) => Some(Value::String(text.clone())),
+        }
     }
 
     fn properties(&self) -> Value {
@@ -309,7 +339,7 @@ impl PartialEq for PaintBinder {
 /// specification's own key for state, which is also why a feature without one can have none.
 pub trait StateLookup: core::fmt::Debug + Send + Sync {
     /// The state value for a feature's id and key, or `None` for a feature with none.
-    fn state(&self, id: u64, key: &str) -> Option<Value>;
+    fn state(&self, id: &FeatureKey, key: &str) -> Option<Value>;
 }
 
 /// A feature with its state attached, for the evaluator to read both through one object.
@@ -345,14 +375,11 @@ impl Feature for Stateful<'_> {
 
     fn state(&self, key: &str) -> Option<Value> {
         // A feature with no id cannot be named by a host, so it has no state -- which is the
-        // specification's own consequence of keying state by id rather than this crate's rule.
-        // Non-integer ids do not occur in a tile: MVT states the id as a `uint64`.
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let id = match self.inner.id()? {
-            Value::Number(number) if number >= 0.0 && number.fract() == 0.0 => number as u64,
-            _ => return None,
-        };
-        self.states.state(id, key)
+        // specification's own consequence of keying state by id rather than this crate's rule. A
+        // *string* id can be named, which is what #361 fixed: it used to fall in here beside the
+        // missing ones and lose its state silently.
+        let id = FeatureKey::of(&self.inner.id()?)?;
+        self.states.state(&id, key)
     }
 }
 
@@ -504,7 +531,7 @@ impl PaintBinder {
         // `restate` writing outside its own bytes.
         if self.indexes(resolved) && self.vertex_count() > start {
             self.index.push(Painted {
-                id: feature.id().and_then(numeric_id),
+                id: feature.id().as_ref().and_then(FeatureKey::of),
                 geometry_type: static_geometry_type(feature.geometry_type()),
                 properties: feature.properties(),
                 vertices: start..self.vertex_count(),

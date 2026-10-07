@@ -63,6 +63,11 @@ pub mod pacing;
 pub mod pool;
 pub mod project;
 pub mod query;
+/// What names a feature for the state a host sets on it, re-exported from `tessella-layout`.
+///
+/// Here because the callers that set state -- `tessella-ffi`, and a host through it -- reach this
+/// crate and not the layout one, and a type they have to name should not drag in a dependency.
+pub use tessella_layout::paint::FeatureKey;
 pub mod registry;
 #[cfg(feature = "std")]
 pub mod source;
