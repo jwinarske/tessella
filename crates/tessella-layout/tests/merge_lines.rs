@@ -21,6 +21,12 @@ fn layout(features: &[(&str, &[(i32, i32)])]) -> SymbolLayout {
         .map(|(text, points)| Pending {
             // Merging is about geometry; nothing here sets a sort key.
             sort_key: 0.0,
+            // Nor an identity: what a query would read off a label is not what merging moves.
+            named: tessella_layout::symbol_layout::Named {
+                id: None,
+                geometry_type: "LineString",
+                properties: tessella_style::Value::Null,
+            },
             text: (*text).to_string(),
             sections: vec![tessella_layout::symbol::Section {
                 text: (*text).to_string(),

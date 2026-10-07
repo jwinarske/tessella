@@ -699,6 +699,44 @@ impl Pending {
     }
 }
 
+/// What feature a symbol came from, for a query that finds its label.
+///
+/// A label is the one thing a host most wants to tap and the one thing nothing downstream could
+/// attribute: the shaping, the anchoring and the collision box are all that survive the layout, and
+/// none of them says whose text this is.
+///
+/// Carried as `tessella_style::Value`, which owns its strings, rather than the shared table the
+/// per-vertex records use. A symbol layer records once per *label* -- hundreds on a tile, not the
+/// tens of thousands a road layer has -- and the layout beside this already clones the text, the
+/// sections and the font stack per label, so the shared form would be a saving against a cost that
+/// is not here.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Named {
+    /// The feature's id as its source gave it, which may be a string and may be absent.
+    pub id: Option<Value>,
+    /// `Point`, `LineString`, `Polygon` or `Unknown`.
+    pub geometry_type: &'static str,
+    /// Its properties, as the object an expression reads.
+    pub properties: Value,
+}
+
+impl Named {
+    /// Reads a feature's identity off it.
+    #[must_use]
+    pub fn of(feature: &dyn Feature) -> Self {
+        Self {
+            id: feature.id(),
+            geometry_type: match feature.geometry_type() {
+                "Point" => "Point",
+                "LineString" => "LineString",
+                "Polygon" => "Polygon",
+                _ => "Unknown",
+            },
+            properties: feature.properties(),
+        }
+    }
+}
+
 /// One feature's symbol, resolved but not shaped.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Pending {
@@ -731,6 +769,12 @@ pub struct Pending {
     /// feature is in scope. `build_symbols` decides the vertex order and the orchestrator writes
     /// these against it. Empty for a layer whose paint is entirely the layer's.
     pub paint: crate::PaintValues,
+    /// What feature this came from, for a rendered-feature query.
+    ///
+    /// One feature can anchor several times -- a road named along its length is one feature and
+    /// several pendings -- so this repeats, and a query answering twice for one road is deduped by
+    /// whoever assembles the answer rather than here.
+    pub named: Named,
     /// How *this feature's* text is set.
     ///
     /// The layer's, unless a layout property is data-driven — `text-size` is the one styles
@@ -1020,6 +1064,7 @@ impl SymbolLayout {
                 icon,
                 fonts,
                 anchoring: Anchoring::Line(lines),
+                named: Named::of(feature),
                 symbol: text_options(layer, zoom, Some(feature), &self.text_size),
                 icon_options: icon_options(layer, zoom, Some(feature), &self.icon_size),
                 paint,
@@ -1049,6 +1094,7 @@ impl SymbolLayout {
                     icon: icon.clone(),
                     fonts: fonts.clone(),
                     anchoring,
+                    named: Named::of(feature),
                     symbol: text_options(layer, zoom, Some(feature), &self.text_size),
                     icon_options: icon_options(layer, zoom, Some(feature), &self.icon_size),
                     // One feature can anchor several times -- a road named along its length is
