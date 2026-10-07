@@ -21,6 +21,13 @@ const OK = 0;
  * mbgl's own above-the-horizon answer is the near point, a coordinate the pixel is not over.
  */
 const OFF_THE_MAP = 14;
+/**
+ * `TESSELLA_TOO_SMALL`, which a query answers when its buffer will not hold the whole document.
+ *
+ * Not a truncation: half a JSON document is a syntax error rather than a smaller answer, so nothing
+ * is written and the length is reported instead.
+ */
+const TOO_SMALL = 19;
 
 /**
  * `sizeof(tessella_config)` on wasm32: eight fields, four bytes each.
@@ -194,6 +201,95 @@ export class TessellaMap {
     }
     const view = new DataView(this.memory.buffer);
     return { latitude: view.getFloat64(at, true), longitude: view.getFloat64(at + 8, true) };
+  }
+
+  /**
+   * Which features are drawn under a screen rectangle, topmost first.
+   *
+   * `x0, y0` and `x1, y1` are opposite corners in the same viewport pixels every other call here
+   * takes -- y down from the top edge, which is where a `PointerEvent` already measures it. Equal
+   * corners are a tap, which is the ordinary case: `queryRenderedFeatures(event.offsetX,
+   * event.offsetY)`.
+   *
+   * `layers`, when given, keeps only those layer ids. That is how a host says which of the things
+   * under the finger it is willing to act on, rather than filtering the answer afterwards.
+   *
+   * Returns the `features` array of the GeoJSON `FeatureCollection` the producer writes: each entry
+   * has its `properties`, and its `layer`, `source`, `sourceLayer` and `geometryType` beside them,
+   * where MapLibre's own query puts them. `geometry` is always `null` -- a query keeps the identity
+   * and the properties, and a host that wants geometry has it already, keyed by the `id` here.
+   *
+   * Empty for a tap on nothing, which is not an error, and empty for a point that is not on the map
+   * at all -- a pitched camera's sky, or a globe's surround.
+   *
+   * Only what is on screen now: a feature in a tile that has not arrived is not returned, and a
+   * label a collision suppressed is not returned either.
+   */
+  queryRenderedFeatures(x0, y0, x1 = x0, y1 = y0, layers = []) {
+    const scratch = scratchAt(this.wasm);
+    // The layer names, written into the staging block: the pointer array first, then the length
+    // array, then the bytes. Laid out in that order so each array is contiguous, which is what the
+    // ABI reads.
+    const encoder = new TextEncoder();
+    const encoded = layers.map((name) => encoder.encode(name));
+    const pointerBytes = encoded.length * 4;
+    const lengthBytes = encoded.length * 4;
+    const textAt = scratch.queryArgs + pointerBytes + lengthBytes;
+    const textBytes = encoded.reduce((total, bytes) => total + bytes.length, 0);
+    if (pointerBytes + lengthBytes + textBytes > 1 << 16) {
+      throw new Error(`${layers.length} layer names do not fit the query's staging block`);
+    }
+    {
+      const view = new DataView(this.memory.buffer);
+      let at = textAt;
+      encoded.forEach((bytes, index) => {
+        view.setUint32(scratch.queryArgs + index * 4, at, true);
+        view.setUint32(scratch.queryArgs + pointerBytes + index * 4, bytes.length, true);
+        new Uint8Array(this.memory.buffer, at, bytes.length).set(bytes);
+        at += bytes.length;
+      });
+    }
+    const ids = encoded.length === 0 ? 0 : scratch.queryArgs;
+    const lens = encoded.length === 0 ? 0 : scratch.queryArgs + pointerBytes;
+
+    const room = SCRATCH.total - SCRATCH.query;
+    const status = this.wasm.tessella_query_rendered_features(
+      this.handle,
+      x0,
+      y0,
+      x1,
+      y1,
+      ids,
+      lens,
+      encoded.length,
+      scratch.query,
+      room,
+      scratch.queryLen,
+    );
+    if (status === OFF_THE_MAP) {
+      return [];
+    }
+    if (status === TOO_SMALL) {
+      // The scratch block is fixed, so this is a real limit rather than a retry: the answer is
+      // bigger than the megabyte reserved for it. Said plainly, with the size, because the fix is a
+      // smaller rectangle or fewer layers and nothing the caller can do to the buffer.
+      const needed = new DataView(this.memory.buffer).getUint32(scratch.queryLen, true);
+      throw new Error(
+        `a query answered ${needed} bytes and the scratch block holds ${room}; ask about a smaller rectangle`,
+      );
+    }
+    if (status !== OK) {
+      throw new Error(`tessella_query_rendered_features answered ${status}`);
+    }
+    const length = new DataView(this.memory.buffer).getUint32(scratch.queryLen, true);
+    if (length === 0) {
+      return [];
+    }
+    const bytes = new Uint8Array(this.memory.buffer, scratch.query, length);
+    // Decoded from a copy, because `TextDecoder` over a view of the wasm memory is fine today and
+    // the view is invalidated by any growth -- and `JSON.parse` is the only thing between here and
+    // returning, which cannot grow it. The slice keeps that from being something to remember.
+    return JSON.parse(new TextDecoder().decode(bytes.slice())).features;
   }
 
   /**
@@ -384,6 +480,9 @@ function scratchAt(wasm) {
     regions: base + SCRATCH.regions,
     ticket: base + SCRATCH.ticket,
     geo: base + SCRATCH.geo,
+    queryLen: base + SCRATCH.queryLen,
+    queryArgs: base + SCRATCH.queryArgs,
+    query: base + SCRATCH.query,
     pending: base + SCRATCH.pending,
     url: base + SCRATCH.url,
     urlLen: base + SCRATCH.urlLen,
@@ -404,7 +503,15 @@ const SCRATCH = Object.freeze({
   geo: 448,
   url: 256,
   urlLen: 320,
+  // One `usize`, for the length a query reports.
+  queryLen: 512,
   style: 4096,
   body: 1 << 20,
-  total: (1 << 20) + (16 << 20),
+  // A query's answer, and the arrays naming the layers it is given. Past `body` rather than carved
+  // out of the low slots because the answer is a whole JSON document: a tap is a few hundred bytes
+  // and a box over a dense layer is not, so it gets a megabyte and the pointer arrays get the
+  // sixty-four kilobytes in front of it.
+  queryArgs: (1 << 20) + (16 << 20),
+  query: (1 << 20) + (16 << 20) + (1 << 16),
+  total: (1 << 20) + (16 << 20) + (1 << 16) + (1 << 20),
 });

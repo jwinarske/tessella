@@ -375,6 +375,64 @@ fn the_c_header_describes_the_library_it_claims_to() {
         0,
         "the map did not tick after a refused state, so something was set anyway",
     );
+    // Querying what is drawn. TESSELLA_TOO_SMALL is 19, TESSELLA_OFF_THE_MAP is 14.
+    check(
+        "query_size",
+        19,
+        "a sizing call with no buffer did not ask for one",
+    );
+    check(
+        "query_needed",
+        1,
+        "the sizing call reported a length of zero, so there is nothing to allocate",
+    );
+    check(
+        "query_fill",
+        0,
+        "a buffer of the reported length was refused",
+    );
+    check(
+        "query_written",
+        1,
+        "the second call reported a different length than the first",
+    );
+    check(
+        "query_is_json",
+        1,
+        "the answer does not begin with a brace, so it is not a FeatureCollection",
+    );
+    check(
+        "query_too_small",
+        19,
+        "a four-byte buffer was accepted for a whole document",
+    );
+    check(
+        "query_too_small_untouched",
+        1,
+        "a refused query wrote into the buffer anyway, which is half a document",
+    );
+    check(
+        "query_by_layer",
+        19,
+        "naming a layer changed the status rather than the answer",
+    );
+    check("query_no_map", 2, "a null handle was not rejected");
+    check("query_null_out_len", 1, "a null out_len was not rejected");
+    check(
+        "query_null_layers",
+        1,
+        "a layer count with no array was not rejected",
+    );
+    check(
+        "query_not_a_number",
+        14,
+        "a corner that is not a number was treated as a place on the map",
+    );
+    check(
+        "tick_after_query",
+        0,
+        "the map did not tick after a query, so a query is not read-only",
+    );
     // A restyle on a running map. TESSELLA_BAD_STYLE is 4, TESSELLA_NULL_ARGUMENT is 1,
     // TESSELLA_NO_SUCH_MAP is 2.
     check("set_style", 0, "a running map refused a new style");

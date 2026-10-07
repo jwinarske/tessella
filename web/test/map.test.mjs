@@ -209,3 +209,89 @@ test("a map is created from a config written in full, over a dirty scratch", asy
   const second = TessellaMap.hosted(instance, style, { width: 256, height: 256 });
   second.destroy();
 });
+
+test("a query names the feature under a pointer, and not the one at its mirror", async () => {
+  const module = await readFile(MODULE);
+  // A square north of the camera's center, so its pixels are not their own mirror. A y convention
+  // that disagreed with the producer's would answer about the empty band below the middle instead,
+  // which is the one mistake this call cannot make visibly.
+  const square = {
+    type: "FeatureCollection",
+    features: [
+      {
+        type: "Feature",
+        id: 4242,
+        properties: { kind: "park", name: "Tiergarten" },
+        geometry: {
+          type: "Polygon",
+          coordinates: [
+            [
+              [13.2, 52.55],
+              [13.8, 52.55],
+              [13.8, 52.65],
+              [13.2, 52.65],
+              [13.2, 52.55],
+            ],
+          ],
+        },
+      },
+    ],
+  };
+  const map = await TessellaMap.create(
+    module,
+    JSON.stringify({
+      version: 8,
+      sources: { s: { type: "geojson", data: square } },
+      layers: [
+        { id: "bg", type: "background", paint: { "background-color": "#101418" } },
+        { id: "parks", type: "fill", source: "s", paint: { "fill-color": "#00ff00" } },
+      ],
+    }),
+    { latitude: 52.5, longitude: 13.5, zoom: 9, width: 800, height: 600 },
+  );
+
+  // A GeoJSON source is still being cut into tiles for the first frames, so the cover is ticked
+  // until the query finds something rather than a fixed number of times.
+  const inside = map.geoToScreen(52.6, 13.5);
+  assert.ok(inside !== null, "the square's middle is off screen");
+  let found = [];
+  for (let round = 0; round < 200 && found.length === 0; round += 1) {
+    map.tick();
+    found = map.queryRenderedFeatures(inside.x, inside.y);
+  }
+
+  assert.equal(found.length, 1, `one square, one layer: ${JSON.stringify(found)}`);
+  assert.equal(found[0].properties.name, "Tiergarten");
+  assert.equal(found[0].id, 4242);
+  assert.equal(found[0].layer, "parks");
+  assert.equal(found[0].source, "s");
+  assert.equal(found[0].geometryType, "Polygon");
+  assert.equal(found[0].geometry, null, "a query keeps no geometry, and says so");
+
+  // The mirror of that pixel across the middle of the viewport, which is empty ground.
+  const mirrored = { x: inside.x, y: 600 - inside.y };
+  assert.ok(
+    Math.abs(mirrored.y - inside.y) > 100,
+    `the fixture's premise: ${inside.y} and ${mirrored.y} are far apart`,
+  );
+  assert.deepEqual(
+    map.queryRenderedFeatures(mirrored.x, mirrored.y),
+    [],
+    "the feature was answered at the mirror of where it is drawn, so y is inverted",
+  );
+
+  // Naming a layer is a filter, and naming one that drew nothing is an empty answer rather than an
+  // error -- a host may hold a layer list that outlives a restyle.
+  assert.equal(
+    map.queryRenderedFeatures(inside.x, inside.y, inside.x, inside.y, ["parks"]).length,
+    1,
+    "naming the layer that drew it kept nothing",
+  );
+  assert.deepEqual(
+    map.queryRenderedFeatures(inside.x, inside.y, inside.x, inside.y, ["absent"]),
+    [],
+    "naming another layer kept it anyway",
+  );
+
+  map.destroy();
+});
