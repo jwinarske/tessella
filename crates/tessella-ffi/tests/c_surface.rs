@@ -356,6 +356,16 @@ fn the_c_header_describes_the_library_it_claims_to() {
     );
     check("feature_state_no_map", 2, "a null handle was not rejected");
     check(
+        "feature_state_by_name",
+        0,
+        "a string id was refused, so a feature a query can name cannot be marked",
+    );
+    check(
+        "feature_state_by_name_clear",
+        0,
+        "unmarking by name was refused",
+    );
+    check(
         "feature_state_clear_all",
         0,
         "clearing every state was refused",

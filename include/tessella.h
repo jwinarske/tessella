@@ -351,6 +351,12 @@ tessella_result tessella_fail_request(tessella_map* map, uint64_t ticket);
  * The map owns this, not the source: a source is shared by every map on its style and a hover is one
  * map's, so two views of one basemap highlight independently.
  *
+ * A feature is named by a number or by a string, and the two are not the same feature. Pass NULL for
+ * feature_id_text and the uint64_t names it, which is every vector-tile case: MVT states an id as a
+ * uint64 and can state nothing else. Pass a byte range and it names a GeoJSON feature whose id is a
+ * string -- which tessella_query_rendered_features hands back verbatim, so the id a query gives is
+ * always one this accepts.
+ *
  * Does not emit. The next tessella_tick does, without the camera having moved: the drawables of the
  * layers that read state are re-announced with their new bytes and nothing else is touched. */
 tessella_result tessella_set_feature_state(tessella_map* map,
@@ -359,6 +365,8 @@ tessella_result tessella_set_feature_state(tessella_map* map,
                                            const uint8_t* source_layer,
                                            size_t source_layer_len,
                                            uint64_t feature_id,
+                                           const uint8_t* feature_id_text,
+                                           size_t feature_id_text_len,
                                            const uint8_t* state_json,
                                            size_t state_len);
 

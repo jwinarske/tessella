@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use tessella_layout::paint::{PaintBinder, StateLookup};
+use tessella_layout::paint::{FeatureKey, PaintBinder, StateLookup};
 use tessella_style::expression::Feature;
 use tessella_style::property::{PropertySpec, ResolvedProperty, paint_specs};
 use tessella_style::{Layer, Value, property::resolve_paint};
@@ -39,12 +39,17 @@ impl Feature for Road {
     }
 }
 
-/// State for one source layer: feature id to key to value.
+/// State for one source layer: feature key to key to value.
 #[derive(Debug, Default)]
-struct States(BTreeMap<u64, BTreeMap<String, Value>>);
+struct States(BTreeMap<FeatureKey, BTreeMap<String, Value>>);
 
 impl States {
     fn with(id: u64, key: &str, value: Value) -> Arc<Self> {
+        Self::named(FeatureKey::Number(id), key, value)
+    }
+
+    /// The same, for a feature named by a string rather than a number.
+    fn named(id: FeatureKey, key: &str, value: Value) -> Arc<Self> {
         let mut outer = BTreeMap::new();
         outer.insert(id, [(key.to_string(), value)].into_iter().collect());
         Arc::new(Self(outer))
@@ -52,8 +57,8 @@ impl States {
 }
 
 impl StateLookup for States {
-    fn state(&self, id: u64, key: &str) -> Option<Value> {
-        self.0.get(&id)?.get(key).cloned()
+    fn state(&self, id: &FeatureKey, key: &str) -> Option<Value> {
+        self.0.get(id)?.get(key).cloned()
     }
 }
 
@@ -144,7 +149,7 @@ fn a_feature_without_an_id_has_no_state() {
 /// which is the safe end to fail at. Naming them would mean a second key, and that is the place to
 /// start if a host needs it.
 #[test]
-fn a_string_id_cannot_be_named_by_the_lookup() {
+fn a_string_id_is_named_by_the_lookup() {
     struct Named;
     impl Feature for Named {
         fn property(&self, _key: &str) -> Option<Value> {
@@ -159,10 +164,28 @@ fn a_string_id_cannot_be_named_by_the_lookup() {
     }
 
     let plain = bytes(None, &Named);
-    let marked = bytes(Some(States::with(7, "hover", Value::Bool(true))), &Named);
+
+    // Feature 7's state is not this feature's: a number and a string are different keys, which is
+    // the half of #361 that keeps `Number(7)` from marking `Text("motorway-7")`.
+    let someone_else = bytes(Some(States::with(7, "hover", Value::Bool(true))), &Named);
     assert_eq!(
+        plain, someone_else,
+        "a feature whose id is a string took the state of feature 7"
+    );
+
+    // Its own name does mark it, which it could not before #361 -- a string id fell in beside the
+    // features that have none and lost its state silently.
+    let marked = bytes(
+        Some(States::named(
+            FeatureKey::Text("motorway-7".into()),
+            "hover",
+            Value::Bool(true),
+        )),
+        &Named,
+    );
+    assert_ne!(
         plain, marked,
-        "a feature whose id is a string was given the state of feature 7"
+        "a feature named by a string was not marked, so a query can find it and nothing can mark it"
     );
 }
 
@@ -294,7 +317,7 @@ fn the_index_is_only_for_a_layer_that_reads_state() {
         1,
         "a highlight layer records its features"
     );
-    assert_eq!(reads.index()[0].id, Some(7));
+    assert_eq!(reads.index()[0].id, Some(FeatureKey::Number(7)));
     assert_eq!(reads.index()[0].vertices, 0..2);
 
     // The same layer kind with ordinary data-driven paint records nothing.
@@ -435,4 +458,40 @@ fn restating_does_not_rewrite_the_slots_it_did_not_change() {
     );
     assert_ne!(built, binder.data(), "the hover did nothing at all");
     assert_eq!(binder.data().len(), stride * 2, "the buffer changed size");
+}
+
+/// What a feature's own id makes of a key, including what it refuses.
+///
+/// `FeatureKey::of` is the one place an id becomes a key, so what it drops is what a host can never
+/// mark. The fractional and negative rows are the ones with no test before #361: a truncating
+/// conversion would quietly route `1.5` onto feature `1` and mark the wrong one.
+#[test]
+fn an_id_becomes_a_key_or_nothing() {
+    assert_eq!(
+        FeatureKey::of(&Value::Number(7.0)),
+        Some(FeatureKey::Number(7))
+    );
+    assert_eq!(
+        FeatureKey::of(&Value::String("ribbon".into())),
+        Some(FeatureKey::Text("ribbon".into()))
+    );
+    assert_eq!(
+        FeatureKey::of(&Value::Number(1.5)),
+        None,
+        "a fractional id was truncated onto a neighboring feature"
+    );
+    assert_eq!(
+        FeatureKey::of(&Value::Number(-1.0)),
+        None,
+        "a negative id was cast to a u64, which wraps to something enormous"
+    );
+    assert_eq!(FeatureKey::of(&Value::Null), None);
+    assert_eq!(FeatureKey::of(&Value::Bool(true)), None);
+
+    // And a number is not its own spelling, which is the distinction mbgl's string key loses.
+    assert_ne!(
+        FeatureKey::of(&Value::Number(7.0)),
+        FeatureKey::of(&Value::String("7".into())),
+        "feature 7 and feature \"7\" became one key"
+    );
 }
