@@ -1843,7 +1843,7 @@ fn emit_group(
 
     // Resolved once and used twice: placement walks it backwards, encoding forwards.
     let order = draw_order.resolve();
-    let prepared = place_symbols(
+    let (prepared, placed, placed_margin) = place_symbols(
         &order,
         &source,
         buckets,
@@ -1858,6 +1858,11 @@ fn emit_group(
         frame.published_projection.as_ref(),
         &placement,
     );
+    {
+        let mut held = placement.borrow_mut();
+        held.placed = Some(placed);
+        held.placed_margin = placed_margin;
+    }
 
     let mut packed: BTreeSet<u64> = BTreeSet::new();
     let mut open: Option<u32> = None;
@@ -2553,6 +2558,17 @@ pub struct PlacementState {
     /// one `maxCrossTileID` on `CrossTileSymbolIndex` and passes it to each layer's index by
     /// reference, for this reason.
     next_cross_tile_id: u32,
+    /// The grid the last frame placed in, in screen space with the margin around it.
+    ///
+    /// Kept because it is the answer to "which labels are drawn here", and it is already exactly
+    /// that: [`tessella_place::placement::place`] adds a symbol to it only when the symbol *wins*,
+    /// so what the grid holds is the placed set and nothing else. A query asking it therefore cannot
+    /// return a label that lost, without any separate record of which did.
+    ///
+    /// mbgl keeps its `CollisionIndex` for the same purpose and queries it the same way.
+    placed: Option<tessella_place::grid::GridIndex<u32>>,
+    /// The margin [`Self::placed`] was built with, which a screen coordinate is offset into.
+    placed_margin: f32,
     /// How far a fade moves on the next frame.
     ///
     /// One is *instant*, and it is the right answer for a still picture: mbgl's
@@ -2579,6 +2595,12 @@ struct Indexed {
     bucket: u32,
     /// One identity per laid-out symbol, in the order they were laid out.
     ids: Vec<u32>,
+    /// What feature each of those symbols came from, positionally against [`Self::ids`].
+    ///
+    /// Here rather than in a map keyed by identity, so that it is evicted with the bucket it belongs
+    /// to: `remove_stale_buckets` drops this entry and the names go with it. A separate map would be
+    /// a second thing to evict and a cross-tile id is reused.
+    named: Vec<tessella_layout::symbol_layout::Named>,
 }
 
 impl PlacementState {
@@ -2589,6 +2611,63 @@ impl PlacementState {
             increment: 1.0,
             ..Self::default()
         }
+    }
+
+    /// Which named labels the last frame drew inside a screen rectangle.
+    ///
+    /// The symbol half of a rendered-feature query. Answers `(layer_index, name)` per placed symbol
+    /// the rectangle touches, in no particular order -- the caller orders the whole answer.
+    ///
+    /// # Why this cannot return a label that was not drawn
+    ///
+    /// Because the grid it asks is the placed set. `place` inserts a symbol only when the symbol
+    /// wins its space, so a label suppressed by a collision was never put in, and one that lost to a
+    /// higher layer was not either. There is no separate visibility test here and none is needed,
+    /// which is also why this is the half that answers #338's "so a hidden label is not returned".
+    ///
+    /// Empty before the first frame that placed anything: a query is about what is drawn, and
+    /// nothing is.
+    #[must_use]
+    pub fn labels_in(
+        &self,
+        viewport_height: f32,
+        min: (f32, f32),
+        max: (f32, f32),
+    ) -> Vec<(usize, &tessella_layout::symbol_layout::Named)> {
+        let Some(grid) = &self.placed else {
+            return Vec::new();
+        };
+        // Two conversions, and both of them are easy to miss.
+        //
+        // The margin: `project_with` offsets every symbol into the grid's border, so a screen
+        // coordinate has to be moved the same way or the answer is off by it in both axes.
+        //
+        // And the y axis, which runs the other way. `to_screen` and `from_screen` measure y from the
+        // *top* -- `from_screen_detail` flips it before unprojecting -- while a projected symbol
+        // lands in the matrix's own bottom-up space and is put in the grid unflipped. Measured: the
+        // fixture's label is drawn at screen y 571 and sits in the grid at y 297, which is
+        // `768 - 571 + 100`. Without the flip a query is mirrored about the middle of the viewport,
+        // which answers correctly for a label in the center and wrongly for every other one.
+        let margin = self.placed_margin;
+        let query = tessella_place::grid::Bounds::new(
+            (min.0 + margin, viewport_height - max.1 + margin),
+            (max.0 + margin, viewport_height - min.1 + margin),
+        );
+        let mut found = Vec::new();
+        for id in grid.query_box(query) {
+            // Resolved by walking the per-bucket assignments rather than through a map keyed by
+            // identity: the lists are what owns the names, a tap touches a handful of labels, and a
+            // second map would be a second thing to keep evicted.
+            for ((layer, _), indexed) in &self.indexed {
+                if let Some(at) = indexed.ids.iter().position(|held| *held == id) {
+                    if let Some(name) = indexed.named.get(at) {
+                        found.push((*layer as usize, name));
+                    }
+                    break;
+                }
+            }
+        }
+        found
     }
 
     /// How far the fades move on the next frame, from the time that has passed.
@@ -2755,7 +2834,11 @@ fn place_symbols(
     frame_projection: ProjectionMode,
     published_projection: Option<&[f64; 16]>,
     placement: &core::cell::RefCell<&mut PlacementState>,
-) -> BTreeMap<(usize, usize), PreparedSymbols> {
+) -> (
+    BTreeMap<(usize, usize), PreparedSymbols>,
+    tessella_place::grid::GridIndex<u32>,
+    f32,
+) {
     let empty;
     let fonts = match fonts {
         Some(fonts) => fonts,
@@ -2990,12 +3073,31 @@ fn place_symbols(
                 next_cross_tile_id,
             );
             let ids: Vec<u32> = symbols.iter().map(|symbol| symbol.cross_tile_id).collect();
+            // Positionally against `ids`, through the same `instance.pending` hop the keys above
+            // took: `laid[i]` is the symbol `ids[i]` names, and its pending is the feature it came
+            // from. A line label is several instances of one pending, so the identity repeats here
+            // exactly as the text does.
+            let named: Vec<tessella_layout::symbol_layout::Named> = laid
+                .iter()
+                .map(|instance| {
+                    layout
+                        .pending
+                        .get(instance.pending)
+                        .map(|pending| pending.named.clone())
+                        .unwrap_or_else(|| tessella_layout::symbol_layout::Named {
+                            id: None,
+                            geometry_type: "Unknown",
+                            properties: tessella_style::Value::Null,
+                        })
+                })
+                .collect();
             held.indexed.insert(
                 indexed_key,
                 Indexed {
                     origin: origin.cloned(),
                     bucket: bucket_id,
                     ids: ids.clone(),
+                    named,
                 },
             );
             ids
@@ -3387,7 +3489,10 @@ fn place_symbols(
             },
         );
     }
-    prepared
+    // The grid this frame competed in, handed back for a rendered-feature query. Returned rather
+    // than stored from here: a borrow of `placement` is outstanding at this point, and reaching for
+    // another one panics -- which is how this was first written.
+    (prepared, grid, grid_padding)
 }
 
 /// One bucket between being shaped and being written.

@@ -541,6 +541,8 @@ impl Map {
         let Some(region_of) = self.unproject_region(corners) else {
             return Vec::new();
         };
+        let [[x0, y0], [x1, y1]] = corners;
+        let (low, high) = ([x0.min(x1), y0.min(y1)], [x0.max(x1), y0.max(y1)]);
 
         // Keyed as the frame keys it: a canonical `TileId` carries no wrap, so two copies of the
         // world are one key and deduping on the id alone would answer for one of them.
@@ -598,11 +600,42 @@ impl Map {
             }
         }
 
-        // Topmost first, and stable within a layer so that the order inside one is the order the
-        // features were drawn in. A layer's index is its paint order, so the reverse of it is what
-        // a host should try first.
-        // `sort_by_key`, which is stable, so the order inside one layer stays the order the
-        // features were recorded in -- which is the order they were drawn in.
+        // Symbols, from the grid rather than from a bucket. A label's extent is its collision box,
+        // which is screen space and has already competed, so the query is the screen rectangle
+        // itself -- no region, and no paint to put back.
+        #[allow(clippy::cast_possible_truncation)]
+        for (layer_index, named) in self.placement.labels_in(
+            self.view.height as f32,
+            (low[0] as f32, low[1] as f32),
+            (high[0] as f32, high[1] as f32),
+        ) {
+            let Some(layer) = self.style.layers.get(layer_index) else {
+                continue;
+            };
+            if layers.is_some_and(|wanted| !wanted.contains(&layer.id.as_str())) {
+                continue;
+            }
+            found.push((
+                layer_index,
+                crate::query::Hit {
+                    layer_id: layer.id.clone(),
+                    source: layer.source.clone(),
+                    source_layer: layer.source_layer.clone(),
+                    id: named.id.clone(),
+                    geometry_type: named.geometry_type,
+                    properties: match &named.properties {
+                        tessella_style::Value::Object(map) => crate::query::Tags::Json(map.clone()),
+                        // Neither source produces a non-object there, and an empty set is the
+                        // honest reading of one that did.
+                        _ => crate::query::Tags::Json(alloc::collections::BTreeMap::new()),
+                    },
+                },
+            ));
+        }
+
+        // Topmost first: a layer's index is its paint order, so the reverse of it is what a host
+        // should try first. `sort_by_key` is stable, so the order inside one layer stays the order
+        // the features were recorded in -- which is the order they were drawn in.
         found.sort_by_key(|entry| core::cmp::Reverse(entry.0));
         let mut hits: Vec<crate::query::Hit> = Vec::with_capacity(found.len());
         for (_, hit) in found {
