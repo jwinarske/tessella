@@ -127,7 +127,13 @@ typedef enum tessella_result {
      * TESSELLA_BAD_ANNOTATIONS for the reason those are distinct from each other: the three calls
      * take different documents. State is an object -- {"hover": true} -- because that is what a
      * style reads keys out of; an array or a bare number names nothing. */
-    TESSELLA_BAD_FEATURE_STATE = 18
+    TESSELLA_BAD_FEATURE_STATE = 18,
+    /* The buffer handed over was too small, and the call's out_len says how many bytes are needed.
+     * Not a truncation: a query's answer is one JSON document and half of one is a syntax error
+     * rather than a smaller answer, so nothing is written. Call once with no buffer to learn the
+     * length and once with one that long; a host keeping a buffer around pays the first call only
+     * when it grows. */
+    TESSELLA_TOO_SMALL = 19
 } tessella_result;
 
 /* How far along a map's sources are.
@@ -355,6 +361,45 @@ tessella_result tessella_set_feature_state(tessella_map* map,
                                            uint64_t feature_id,
                                            const uint8_t* state_json,
                                            size_t state_len);
+
+/* Which features are drawn under a screen rectangle, as GeoJSON.
+ *
+ * What makes a map interactive: a tap on a POI, a road or a route alternative. (x0, y0) and (x1, y1)
+ * are opposite corners in viewport pixels with y down from the top edge, which is where a pointer
+ * event already measures it; equal corners are a tap.
+ *
+ * layer_ids and layer_lens are parallel arrays of layer_count byte ranges -- not C strings, for the
+ * reason nothing else here takes one -- and a layer_count of zero considers every layer. Naming
+ * layers is not only a filter: it is how a host says which of the things under the finger it is
+ * willing to act on.
+ *
+ * The answer is a FeatureCollection written to out WITHOUT a terminator, with out_len set to its
+ * length, topmost first -- so the first feature is the one to act on. Each feature carries its
+ * properties, and its layer, source, sourceLayer and geometryType beside them, where maplibre's own
+ * query puts them. Its geometry is null: what a query keeps is the identity and the properties, and
+ * a host that wants geometry has it already, keyed by the id this returns.
+ *
+ * A cap too small writes nothing and answers TESSELLA_TOO_SMALL with out_len set; out may be NULL
+ * when cap is zero, which is the sizing call.
+ *
+ * Only what is on screen now. A feature in a tile that has not arrived is not drawn and is not
+ * returned, and a label suppressed by a collision is not returned either -- what is asked is the
+ * grid the last frame placed in, which holds the labels that won their space.
+ *
+ * Under terrain the answer is for where the ground would have been: the rectangle is unprojected
+ * onto the map plane, and raised ground is not the plane. A globe answers nothing rather than
+ * something wrong. */
+tessella_result tessella_query_rendered_features(const tessella_map* map,
+                                                 double x0,
+                                                 double y0,
+                                                 double x1,
+                                                 double y1,
+                                                 const uint8_t* const* layer_ids,
+                                                 const size_t* layer_lens,
+                                                 size_t layer_count,
+                                                 uint8_t* out,
+                                                 size_t cap,
+                                                 size_t* out_len);
 
 /* Clears every feature's state on this map.
  *

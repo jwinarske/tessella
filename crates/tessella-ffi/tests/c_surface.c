@@ -20,6 +20,7 @@
 
 #include <stdio.h>
 #include <time.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* A document that does not parse, for the calls that have to refuse one. */
@@ -122,6 +123,65 @@ int main(int argc, char** argv) {
         printf("feature_state_clear_no_map %d\n", (int)tessella_clear_feature_state(NULL));
         /* And the map still ticks, which is the whole of what a refused state has to mean. */
         printf("tick_after_state %d\n", (int)tessella_tick(map));
+    }
+
+    /* Querying what is drawn. The probe has no tiles here, so what this checks is the ABI: the two
+     * calls, the refusals, and that a sizing call with no buffer is not an argument fault. */
+    {
+        size_t needed = 0;
+        /* Sizing: no buffer, so TESSELLA_TOO_SMALL unless the answer is empty -- and an empty
+         * FeatureCollection is still 44 bytes of JSON, so it is TOO_SMALL either way. */
+        printf("query_size %d\n",
+               (int)tessella_query_rendered_features(map, 10.0, 10.0, 10.0, 10.0, NULL, NULL, 0,
+                                                     NULL, 0, &needed));
+        printf("query_needed %d\n", needed > 0 ? 1 : 0);
+        /* And then a buffer that long, which must be enough. */
+        {
+            uint8_t* room = (uint8_t*)malloc(needed);
+            size_t written = 0;
+            printf("query_fill %d\n",
+                   (int)tessella_query_rendered_features(map, 10.0, 10.0, 10.0, 10.0, NULL, NULL, 0,
+                                                         room, needed, &written));
+            printf("query_written %d\n", written == needed ? 1 : 0);
+            /* A FeatureCollection, not a terminated string: the first byte is the brace and nothing
+             * past `written` was touched. */
+            printf("query_is_json %d\n", needed > 0 && room[0] == '{' ? 1 : 0);
+            free(room);
+        }
+        /* One byte short of the answer writes nothing. */
+        {
+            uint8_t small[4] = {0, 0, 0, 0};
+            size_t written = 0;
+            printf("query_too_small %d\n",
+                   (int)tessella_query_rendered_features(map, 10.0, 10.0, 10.0, 10.0, NULL, NULL, 0,
+                                                         small, sizeof small, &written));
+            printf("query_too_small_untouched %d\n", small[0] == 0 ? 1 : 0);
+        }
+        /* A named layer, as a byte range rather than a C string. */
+        {
+            static const char* const WANTED = "roads";
+            const uint8_t* ids[1] = {(const uint8_t*)WANTED};
+            size_t lens[1] = {strlen(WANTED)};
+            size_t written = 0;
+            printf("query_by_layer %d\n",
+                   (int)tessella_query_rendered_features(map, 10.0, 10.0, 20.0, 20.0, ids, lens, 1,
+                                                         NULL, 0, &written));
+        }
+        /* The refusals. */
+        size_t sink = 0;
+        printf("query_no_map %d\n",
+               (int)tessella_query_rendered_features(NULL, 1.0, 1.0, 1.0, 1.0, NULL, NULL, 0, NULL,
+                                                     0, &sink));
+        printf("query_null_out_len %d\n",
+               (int)tessella_query_rendered_features(map, 1.0, 1.0, 1.0, 1.0, NULL, NULL, 0, NULL,
+                                                     0, NULL));
+        printf("query_null_layers %d\n",
+               (int)tessella_query_rendered_features(map, 1.0, 1.0, 1.0, 1.0, NULL, NULL, 2, NULL,
+                                                     0, &sink));
+        printf("query_not_a_number %d\n",
+               (int)tessella_query_rendered_features(map, 1.0, 0.0 / 0.0, 1.0, 1.0, NULL, NULL, 0,
+                                                     NULL, 0, &sink));
+        printf("tick_after_query %d\n", (int)tessella_tick(map));
     }
 
     /* A new style on a running map. The same document, so what is checked here is the call and

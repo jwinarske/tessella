@@ -130,6 +130,13 @@ pub enum Status {
     /// is not looking at the others. State is an object -- `{"hover": true}` -- because that is what
     /// a style reads keys out of; an array or a bare number names nothing.
     BadFeatureState = 18,
+    /// The buffer handed over was too small, and `out_len` says how many bytes are needed.
+    ///
+    /// Not a truncation. A query's answer is one JSON document and half of one is not a smaller
+    /// answer, it is a syntax error -- so nothing is written and the caller is told the size. The
+    /// shape that follows is the usual two calls: once with no buffer to learn the length, once with
+    /// one that long. A caller that keeps a buffer around pays the first call only when it grows.
+    TooSmall = 19,
 }
 
 extern crate alloc;
@@ -2011,6 +2018,197 @@ pub unsafe extern "C" fn tessella_status(
                 *reason.add(end) = 0;
             }
         }
+        Status::Ok
+    })
+}
+
+/// The answer to a rendered-feature query, as a GeoJSON `FeatureCollection`.
+///
+/// # Why the geometry is null
+///
+/// A `Feature`'s geometry may be null, and here it always is. What a query carries back is the
+/// feature's identity, its properties and where it was drawn from -- which is what #338 asked for and
+/// what a tap handler acts on. The geometry is deliberately not kept: a record names a range of
+/// *extruded, clipped, tile-local* vertices, and turning that back into a source geometry would be a
+/// different shape from the one the host's data has. A host that wants the geometry has it already,
+/// keyed by the id this returns.
+///
+/// `layer`, `source` and `sourceLayer` sit beside `properties` rather than inside it, which is where
+/// mbgl's own `queryRenderedFeatures` puts them, so a host that has read those docs finds them where
+/// it expects. `geometryType` is beside them because the geometry that would have carried it is null.
+fn as_geojson(hits: &[tessella_orchestrate::query::Hit]) -> String {
+    use serde_json::{Map, Value as Json};
+
+    let features: Vec<Json> = hits
+        .iter()
+        .map(|hit| {
+            let mut properties = Map::new();
+            for (key, value) in hit.properties.iter() {
+                properties.insert(key.to_string(), as_json(&value));
+            }
+            let mut feature = Map::new();
+            feature.insert("type".into(), Json::String("Feature".into()));
+            feature.insert("geometry".into(), Json::Null);
+            if let Some(id) = &hit.id {
+                feature.insert("id".into(), as_json(id));
+            }
+            feature.insert("properties".into(), Json::Object(properties));
+            feature.insert("layer".into(), Json::String(hit.layer_id.clone()));
+            if let Some(source) = &hit.source {
+                feature.insert("source".into(), Json::String(source.clone()));
+            }
+            if let Some(layer) = &hit.source_layer {
+                feature.insert("sourceLayer".into(), Json::String(layer.clone()));
+            }
+            feature.insert(
+                "geometryType".into(),
+                Json::String(hit.geometry_type.into()),
+            );
+            Json::Object(feature)
+        })
+        .collect();
+
+    let mut collection = Map::new();
+    collection.insert("type".into(), Json::String("FeatureCollection".into()));
+    collection.insert("features".into(), Json::Array(features));
+    Json::Object(collection).to_string()
+}
+
+/// A style value as JSON.
+///
+/// `Color` is the one that cannot round-trip: it exists only as something an expression coerced to,
+/// nothing deserializes into it, and a feature's own properties never hold one -- so it is written as
+/// its four channels rather than given a syntax the spec does not have.
+fn as_json(value: &tessella_style::Value) -> serde_json::Value {
+    use serde_json::Value as Json;
+    match value {
+        tessella_style::Value::Null => Json::Null,
+        tessella_style::Value::Bool(flag) => Json::Bool(*flag),
+        tessella_style::Value::Number(number) => {
+            serde_json::Number::from_f64(*number).map_or(Json::Null, Json::Number)
+        }
+        tessella_style::Value::String(text) => Json::String(text.clone()),
+        tessella_style::Value::Array(items) => Json::Array(items.iter().map(as_json).collect()),
+        tessella_style::Value::Object(map) => Json::Object(
+            map.iter()
+                .map(|(key, held)| (key.clone(), as_json(held)))
+                .collect(),
+        ),
+        tessella_style::Value::Color(color) => Json::Array(
+            [color.r, color.g, color.b, color.a]
+                .iter()
+                .map(|channel| {
+                    serde_json::Number::from_f64(f64::from(*channel))
+                        .map_or(Json::Null, Json::Number)
+                })
+                .collect(),
+        ),
+    }
+}
+
+/// Which features are drawn under a screen rectangle, as GeoJSON.
+///
+/// mbgl's `queryRenderedFeatures`, and what makes a map interactive: a tap on a POI, a road or a
+/// route alternative. `x0, y0` and `x1, y1` are opposite corners in viewport pixels with **y down
+/// from the top edge**, which is the convention every other call here takes and the one a host's
+/// pointer event has; equal corners are a tap.
+///
+/// `layer_ids` and `layer_lens` are parallel arrays of `layer_count` byte ranges -- not C strings,
+/// for the reason nothing else here takes one -- and when `layer_count` is zero every layer is
+/// considered. Naming layers is not only a filter: it is how a host says which of the things under
+/// the finger it is willing to act on.
+///
+/// The answer is written to `out` *without* a terminator, and `out_len` is set to its length. A
+/// `cap` too small for it writes nothing and answers [`Status::TooSmall`] with `out_len` set, so the
+/// shape is one call to size and one to fill. `out` may be null when `cap` is zero, which is the
+/// sizing call.
+///
+/// Topmost first. The first entry is what a host should act on.
+///
+/// # Errors
+///
+/// [`Status::NoSuchMap`] for a map that is not live, [`Status::NullArgument`] for a null `out_len` or
+/// a null layer array with a non-zero count, [`Status::NotUtf8`] for a layer id that is not UTF-8,
+/// and [`Status::TooSmall`] as above.
+///
+/// # Safety
+///
+/// `map` must be a handle from [`tessella_create`] that has not been destroyed. `out_len` must be
+/// writable. `out` must be writable for `cap` bytes unless `cap` is zero. Each layer range must be
+/// valid for its stated length.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tessella_query_rendered_features(
+    map: ConstMapHandle,
+    x0: f64,
+    y0: f64,
+    x1: f64,
+    y1: f64,
+    layer_ids: *const *const u8,
+    layer_lens: *const usize,
+    layer_count: usize,
+    out: *mut u8,
+    cap: usize,
+    out_len: *mut usize,
+) -> Status {
+    guarded(move || {
+        let Some(state) = (unsafe { map.as_ref() }) else {
+            return Status::NoSuchMap;
+        };
+        if out_len.is_null() {
+            return Status::NullArgument;
+        }
+        if layer_count > 0 && (layer_ids.is_null() || layer_lens.is_null()) {
+            return Status::NullArgument;
+        }
+        if out.is_null() && cap > 0 {
+            return Status::NullArgument;
+        }
+        if ![x0, y0, x1, y1].iter().all(|at| at.is_finite()) {
+            // A corner that is not a number is not over the map, and an empty answer is the reading
+            // of that -- the same answer a tap off the map gets, rather than an error about one.
+            // SAFETY: checked non-null above.
+            unsafe { *out_len = 0 };
+            return Status::OffTheMap;
+        }
+
+        let mut wanted: Vec<&str> = Vec::with_capacity(layer_count);
+        for at in 0..layer_count {
+            // SAFETY: both arrays are valid for `layer_count` entries, checked non-null above, and
+            // each range is valid for its stated length by the caller's contract.
+            let (pointer, len) = unsafe { (*layer_ids.add(at), *layer_lens.add(at)) };
+            if pointer.is_null() && len > 0 {
+                return Status::NullArgument;
+            }
+            // SAFETY: as above; a null pointer with a zero length reads nothing.
+            let bytes = if len == 0 {
+                &[][..]
+            } else {
+                unsafe { core::slice::from_raw_parts(pointer, len) }
+            };
+            match core::str::from_utf8(bytes) {
+                Ok(name) => wanted.push(name),
+                Err(_) => return Status::NotUtf8,
+            }
+        }
+
+        // Into the convention `screen` works in, which is y up from the bottom edge. The same flip
+        // `tessella_screen_to_geo` makes, and for the same reason: a host's pointer event is measured
+        // from the top and the unprojection is not.
+        let height = state.map.view().height;
+        let hits = state.map.query_rendered_features(
+            &state.source,
+            [[x0, height - y0], [x1, height - y1]],
+            (layer_count > 0).then_some(wanted.as_slice()),
+        );
+
+        let json = as_geojson(&hits);
+        // SAFETY: checked non-null above.
+        unsafe { *out_len = json.len() };
+        if cap < json.len() {
+            return Status::TooSmall;
+        }
+        // SAFETY: `out` is writable for `cap` bytes and `cap >= json.len()`.
+        unsafe { core::ptr::copy_nonoverlapping(json.as_ptr(), out, json.len()) };
         Status::Ok
     })
 }

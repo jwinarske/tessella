@@ -492,9 +492,20 @@ impl Map {
     /// Which features are drawn under a screen rectangle, topmost first.
     ///
     /// mbgl's `queryRenderedFeatures`. `x0, y0` and `x1, y1` are opposite corners in screen pixels,
-    /// in the same space [`crate::project`] and `tessella_screen_to_geo` use; equal corners are a
-    /// tap. `layers`, when given, keeps only those layer ids -- a host that wants the POI under the
-    /// finger and not the landuse polygon behind it says so here rather than filtering the answer.
+    /// and equal corners are a tap. `layers`, when given, keeps only those layer ids -- a host that
+    /// wants the POI under the finger and not the landuse polygon behind it says so here rather than
+    /// filtering the answer.
+    ///
+    /// # Which way y runs
+    ///
+    /// **Up from the bottom edge**, which is [`tessella_tile::screen`]'s convention and not a host's.
+    /// Measured: at a camera centered on 51.505, `to_screen` puts 51.515 -- the more *northern*
+    /// coordinate -- at y 571 and 51.495 at y 197 of a 768-pixel viewport.
+    ///
+    /// This is the convention because the unprojection below is `from_screen_detail`, which works in
+    /// it; a caller holding a tap in the ordinary top-down convention passes `height - y`, as
+    /// `tessella_screen_to_geo` does for the same reason. An earlier version of this doc said the two
+    /// took the same space, which was wrong in the one direction that matters.
     ///
     /// # What "rendered" means
     ///
