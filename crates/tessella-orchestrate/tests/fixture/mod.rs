@@ -125,10 +125,13 @@ pub fn emit_frame() -> (Vec<u8>, Vec<u8>, frame::Emitted) {
         },
     ];
     let format = TexturePixelType::Alpha;
-    let bytes: usize = damage
-        .iter()
-        .map(|rect| usize::from(rect.w) * usize::from(rect.h) * format.channels() as usize)
-        .sum();
+    // The *whole* atlas, which is what a real caller has and what `regions` needs to pack from.
+    // This used to pass only the rectangles' own bytes, which is not a buffer the producer can
+    // read rows out of: its `fits` test refuses to pack, falls back to sending the payload whole,
+    // and the record then claims a 64x64 texture in fourteen bytes. No correct consumer accepts
+    // that -- the C one only did because it sized a non-packed payload with packed arithmetic --
+    // so the rect path this fixture exists to exercise was being exercised in its broken form.
+    let bytes: usize = 64 * 64 * format.channels() as usize;
     let upload = texture::regions(
         TextureId(64),
         Extent {
@@ -141,6 +144,22 @@ pub fn emit_frame() -> (Vec<u8>, Vec<u8>, frame::Emitted) {
     )
     .expect("two rectangles are within the cap");
     texture::write(&mut producer, &upload).expect("the upload writes");
+
+    // And a texture whose channels are *floats*, which is the other rule a consumer cannot get
+    // from the format alone. A color relief's elevation stops are RGBA and Float together --
+    // eight bits across the planet's elevation range is a forty-meter step -- so a texel here is
+    // sixteen bytes and not four. A consumer sizing it by the channel count reads it at a quarter
+    // of its stride, which is the right rows at the wrong addresses rather than a failure, so the
+    // frame carries one to make that arithmetic observable from C.
+    let stops = texture::whole_float(
+        TextureId(65),
+        Extent {
+            width: 4,
+            height: 4,
+        },
+        &vec![0x3C; 4 * 4 * 4 * 4],
+    );
+    texture::write(&mut producer, &stops).expect("the float upload writes");
 
     // A mesh, a retirement and a teardown, none of which a settled first frame produces. Each is
     // a record a mirror must act on and none of them draws anything, so a fixture without them
