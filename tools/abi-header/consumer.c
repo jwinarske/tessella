@@ -240,7 +240,7 @@ int main(int argc, char **argv) {
      * struct is right and the rule for reading it is not written down -- so a consumer that
      * walks them is what proves the header enough for a real mirror. */
     uint64_t textures = 0, texture_rects = 0, texture_bytes = 0, texture_bad = 0;
-    uint64_t whole_texture_uploads = 0;
+    uint64_t whole_texture_uploads = 0, packed_texture_uploads = 0;
     uint64_t stencils = 0, stencil_tiles = 0, stencil_bad = 0;
     /* The rest of the twelve kinds. A mirror has to act on every one of these -- a retirement
      * frees GPU resources, a view declaration opens a scene -- and a consumer that walked only
@@ -521,19 +521,32 @@ int main(int argc, char **argv) {
             }
             texture_bytes += texture.pixels.count;
 
-            /* How many bytes the pixels *should* be, which is the check that needs the header to
-             * say more than the format's name. A count that does not match the area is an
-             * upload that will run off the end of the surface or leave part of it stale, and
-             * nothing else in the record contradicts it. */
-            uint32_t pixel = tsl_texture_pixel_size(texture.format);
-            if (pixel == 0) {
+            /* How many bytes a texel *is*, which is the check that needs the header to say more
+             * than the format's name -- and it needs both of mbgl's factors, not just the
+             * channel count. A color relief's elevation stops are RGBA and FLOAT together, four
+             * bytes a channel; sized by the channel count alone they come to a quarter of their
+             * real size, so a valid record reads as a bad one and every row after the first is
+             * sourced from inside the one before it. */
+            uint32_t channels = tsl_texture_pixel_size(texture.format);
+            uint32_t channel = tsl_texture_channel_size(texture.channel_type);
+            if (channels == 0 || channel == 0) {
+                texture_bad++;
+                break;
+            }
+            uint32_t pixel = channels * channel;
+            /* packed is zero or one and nothing else. It was taken from the record's padding, so
+             * a producer that has never heard of it writes zero; a value that is neither is a
+             * producer this consumer does not understand, and reading it as != 0 would guess at
+             * the payload's shape. */
+            if (texture.packed > 1) {
                 texture_bad++;
                 break;
             }
             if (texture.rect_count == 0) {
                 /* A whole-texture upload. The header says rect_count of zero means this, and a
                  * consumer that took it as "no damage" would upload nothing and sample a blank
-                 * atlas -- which is a map with no labels and no error anywhere. */
+                 * atlas -- which is a map with no labels and no error anywhere. packed is
+                 * meaningless here: the payload is the whole texture either way. */
                 whole_texture_uploads++;
                 uint64_t want = (uint64_t)texture.size.width * texture.size.height * pixel;
                 if (want != texture.pixels.count) {
@@ -541,22 +554,37 @@ int main(int argc, char **argv) {
                 }
                 break;
             }
-            /* Every rectangle has to fall inside the texture it damages, and together they have
-             * to account for the bytes. A rect that does not fit is an upload past the end of
-             * the surface, which is the shape of failure a wrong offset produces here: the array
-             * is read from the wrong place and the coordinates come back as neighboring
-             * fields. */
-            uint64_t want = 0;
+            /* Every rectangle has to fall inside the texture it damages. A rect that does not fit
+             * is an upload past the end of the surface, which is the shape of failure a wrong
+             * offset produces here: the array is read from the wrong place and the coordinates
+             * come back as neighboring fields. */
             for (unsigned r = 0; r < texture.rect_count; r++) {
                 uint32_t right = (uint32_t)texture.rects[r].x + texture.rects[r].w;
                 uint32_t bottom = (uint32_t)texture.rects[r].y + texture.rects[r].h;
                 if (right > texture.size.width || bottom > texture.size.height) {
                     texture_bad++;
                 }
-                want += (uint64_t)texture.rects[r].w * texture.rects[r].h * pixel;
             }
-            if (want != texture.pixels.count) {
-                texture_bad++;
+            /* And the bytes have to account for the shape the record says they are in. The two
+             * shapes do not agree: packed carries the rects' own pixels tight at their own
+             * widths, so the payload is the sum of their areas, while a whole payload carries the
+             * entire texture however little of it moved. Checking the sum against a whole payload
+             * calls a valid record bad; checking the whole against a packed one does the same the
+             * other way. */
+            if (texture.packed) {
+                packed_texture_uploads++;
+                uint64_t want = 0;
+                for (unsigned r = 0; r < texture.rect_count; r++) {
+                    want += (uint64_t)texture.rects[r].w * texture.rects[r].h * pixel;
+                }
+                if (want != texture.pixels.count) {
+                    texture_bad++;
+                }
+            } else {
+                uint64_t want = (uint64_t)texture.size.width * texture.size.height * pixel;
+                if (want != texture.pixels.count) {
+                    texture_bad++;
+                }
             }
             break;
         }
@@ -661,6 +689,7 @@ int main(int argc, char **argv) {
     printf("texture_bytes %llu\n", (unsigned long long)texture_bytes);
     printf("texture_bad %llu\n", (unsigned long long)texture_bad);
     printf("whole_texture_uploads %llu\n", (unsigned long long)whole_texture_uploads);
+    printf("packed_texture_uploads %llu\n", (unsigned long long)packed_texture_uploads);
     printf("stencils %llu\n", (unsigned long long)stencils);
     printf("stencil_tiles %llu\n", (unsigned long long)stencil_tiles);
     printf("stencil_bad %llu\n", (unsigned long long)stencil_bad);

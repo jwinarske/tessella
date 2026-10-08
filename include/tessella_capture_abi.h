@@ -127,12 +127,12 @@ typedef enum tsl_texture_channel_data_type {
 } tsl_texture_channel_data_type;
 
 /*
- * How many bytes one pixel of a format occupies.
+ * How many channels one pixel of a format carries.
  *
- * Every channel is one byte on this stream: mbgl's channel storage size is per channel
- * data type, and nothing here sends anything but unsigned bytes. So a whole-texture
- * upload -- rect_count of zero -- carries width * height * this many bytes, and a
- * rectangle's rows are w * this many bytes apart.
+ * Half of a texel's size. The other half is tsl_texture_channel_size, and mbgl
+ * multiplies the two in getStorageSize -- so a consumer sizing a texture must too.
+ * This used to say every channel on the stream was one byte; a color relief's
+ * elevation stops are floats, and it stopped being true.
  */
 static inline uint32_t tsl_texture_pixel_size(int format) {
     switch (format) {
@@ -141,6 +141,23 @@ static inline uint32_t tsl_texture_pixel_size(int format) {
     case TSL_TEXTURE_PIXEL_TYPE_STENCIL: return 1;
     case TSL_TEXTURE_PIXEL_TYPE_DEPTH: return 1;
     case TSL_TEXTURE_PIXEL_TYPE_LUMINANCE: return 1;
+    default: return 0;
+    }
+}
+
+/*
+ * How many bytes one channel of a type occupies.
+ *
+ * The other half of a texel. A texel is tsl_texture_pixel_size(format) *
+ * tsl_texture_channel_size(channel_type), and a consumer that assumes one byte reads
+ * a float texture at a quarter of its stride -- which lands the right rows at the
+ * wrong addresses rather than failing.
+ */
+static inline uint32_t tsl_texture_channel_size(int channel_type) {
+    switch (channel_type) {
+    case TSL_TEXTURE_CHANNEL_DATA_TYPE_UNSIGNED_BYTE: return 1;
+    case TSL_TEXTURE_CHANNEL_DATA_TYPE_HALF_FLOAT: return 2;
+    case TSL_TEXTURE_CHANNEL_DATA_TYPE_FLOAT: return 4;
     default: return 0;
     }
 }

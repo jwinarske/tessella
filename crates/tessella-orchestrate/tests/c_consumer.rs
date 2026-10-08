@@ -189,6 +189,12 @@ fn c_reads_the_textures_and_the_stencil_tiles() {
         counts.get("texture_rects").copied().unwrap_or(0) >= 2,
         "the two-rectangle upload was not walked, so the strided path is unproven: {counts:?}"
     );
+    assert!(
+        counts.get("packed_texture_uploads").copied().unwrap_or(0) > 0,
+        "the rect upload is not packed, so the payload shape the wire actually carries is \
+         unproven. A rect list whose pixels were sent whole is what the producer falls back to \
+         when it cannot pack, and that record is one no consumer should accept: {counts:?}"
+    );
     assert_eq!(
         counts.get("texture_bad").copied(),
         Some(0),

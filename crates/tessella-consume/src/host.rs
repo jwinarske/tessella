@@ -33,16 +33,16 @@
 use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
-use tessella_capture_abi::EnvelopeKind;
 use tessella_capture_abi::envelope::{
     AttributeDesc, CameraUpdate, GeometryAdd, GeometryRemove, OrderEntry, OrderEpoch, OrderUpdate,
     Segment, Span, TextureRef, TextureUpdate, UboUpdate, ViewId, ViewRelease, ViewUse, WireRecord,
 };
 use tessella_capture_abi::ring::Consumer;
+use tessella_capture_abi::{EnvelopeKind, TextureChannelDataType, TexturePixelType};
 
 use crate::batch::{Batches, Program, collapse_into};
 use crate::join::{Announcement, Joiner};
-use crate::upload::Uploads;
+use crate::upload::{self, Uploads};
 
 /// What one read of the stream did.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -358,13 +358,39 @@ impl Host {
                 let Some(pixels) = run_bytes(payload, update.pixels, 1) else {
                     return Outcome::Malformed;
                 };
-                self.uploads.push_texture(
-                    update.texture,
-                    update.size,
-                    update.format,
-                    update.rects[..count].to_vec(),
-                    pixels,
-                );
+                // Both halves of mbgl's two-part format, decoded here rather than carried as
+                // discriminants: a value neither enum knows is a producer this consumer cannot
+                // read, and passing it on would have the backend choose an image format from it.
+                let Some(format) = TexturePixelType::from_repr(update.format) else {
+                    return Outcome::Malformed;
+                };
+                let Some(channel) = TextureChannelDataType::from_repr(update.channel_type) else {
+                    return Outcome::Malformed;
+                };
+                // The rects and the bytes have to describe the same thing. The producer tests this
+                // before it packs and sends the texture whole when it fails; `TextureUpdate::packed`
+                // calls the check here "the second half of the same guard", and without it a
+                // backend reads past what it was given.
+                let rects = update.rects[..count].to_vec();
+                // Zero or one, and nothing else. The field was taken from the padding, so a
+                // producer that has never heard of it writes zero -- but a value that is neither
+                // is a producer this consumer does not understand, and reading it as `!= 0` would
+                // guess at the payload's shape. Refused for the reason an unknown format is.
+                let packed = match update.packed {
+                    0 => false,
+                    1 => true,
+                    _ => return Outcome::Malformed,
+                };
+                let shape = upload::Shape {
+                    format,
+                    channel,
+                    packed,
+                };
+                if upload::rows(update.size, shape, &rects, pixels.len()).is_err() {
+                    return Outcome::Malformed;
+                }
+                self.uploads
+                    .push_texture(update.texture, update.size, shape, rects, pixels);
                 Outcome::Read
             }
             EnvelopeKind::CameraUpdate => {

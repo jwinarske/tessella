@@ -1353,24 +1353,28 @@ fn generate() -> String {
     // the reader, because the alternative is every consumer hard-coding a mapping that mbgl
     // could change under them.
     writeln!(w, "/*").unwrap();
-    writeln!(w, " * How many bytes one pixel of a format occupies.").unwrap();
+    writeln!(w, " * How many channels one pixel of a format carries.").unwrap();
     writeln!(w, " *").unwrap();
     writeln!(
         w,
-        " * Every channel is one byte on this stream: mbgl's channel storage size is per channel"
+        " * Half of a texel's size. The other half is tsl_texture_channel_size, and mbgl"
     )
     .unwrap();
     writeln!(
         w,
-        " * data type, and nothing here sends anything but unsigned bytes. So a whole-texture"
+        " * multiplies the two in getStorageSize -- so a consumer sizing a texture must too."
     )
     .unwrap();
     writeln!(
         w,
-        " * upload -- rect_count of zero -- carries width * height * this many bytes, and a"
+        " * This used to say every channel on the stream was one byte; a color relief's"
     )
     .unwrap();
-    writeln!(w, " * rectangle's rows are w * this many bytes apart.").unwrap();
+    writeln!(
+        w,
+        " * elevation stops are floats, and it stopped being true."
+    )
+    .unwrap();
     writeln!(w, " */").unwrap();
     writeln!(
         w,
@@ -1384,6 +1388,46 @@ fn generate() -> String {
             "    case TSL_TEXTURE_PIXEL_TYPE_{}: return {};",
             screaming(&format!("{kind:?}")),
             kind.channels()
+        )
+        .unwrap();
+    }
+    writeln!(w, "    default: return 0;").unwrap();
+    writeln!(w, "    }}").unwrap();
+    writeln!(w, "}}").unwrap();
+    writeln!(w).unwrap();
+
+    writeln!(w, "/*").unwrap();
+    writeln!(w, " * How many bytes one channel of a type occupies.").unwrap();
+    writeln!(w, " *").unwrap();
+    writeln!(
+        w,
+        " * The other half of a texel. A texel is tsl_texture_pixel_size(format) *"
+    )
+    .unwrap();
+    writeln!(
+        w,
+        " * tsl_texture_channel_size(channel_type), and a consumer that assumes one byte reads"
+    )
+    .unwrap();
+    writeln!(
+        w,
+        " * a float texture at a quarter of its stride -- which lands the right rows at the"
+    )
+    .unwrap();
+    writeln!(w, " * wrong addresses rather than failing.").unwrap();
+    writeln!(w, " */").unwrap();
+    writeln!(
+        w,
+        "static inline uint32_t tsl_texture_channel_size(int channel_type) {{"
+    )
+    .unwrap();
+    writeln!(w, "    switch (channel_type) {{").unwrap();
+    for kind in TextureChannelDataType::ALL {
+        writeln!(
+            w,
+            "    case TSL_TEXTURE_CHANNEL_DATA_TYPE_{}: return {};",
+            screaming(&format!("{kind:?}")),
+            kind.storage_size()
         )
         .unwrap();
     }

@@ -9,7 +9,7 @@ use tessella_capture_abi::envelope::{
     Extent, Rect16, Span, TextureId, UboUpdate, ViewId, WireRecord,
 };
 use tessella_capture_abi::ring::Ring;
-use tessella_capture_abi::{EnvelopeKind, TexturePixelType};
+use tessella_capture_abi::{EnvelopeKind, TextureChannelDataType, TexturePixelType};
 use tessella_consume::host::Host;
 use tessella_consume::upload::Upload;
 
@@ -28,7 +28,12 @@ fn uniforms(view: u32, layer: i32, slot: u32, len: u32) -> UboUpdate {
     }
 }
 
-/// A texture update over `rects`, whose pixels are `len` bytes of payload.
+/// A texture update over `rects`, whose pixels are `len` bytes of packed payload.
+///
+/// Packed, because that is what `texture::regions` sends whenever the rects fit -- which is the
+/// ordinary case -- and because the alternative here would be a 16 KiB payload to describe four
+/// texels of damage. `len` is passed rather than derived so a test can hand over a payload that
+/// does not match the rects on purpose.
 fn texture(id: u64, rects: &[Rect16], len: u32) -> Vec<u8> {
     let mut filled = [Rect16::default(); 4];
     filled[..rects.len()].copy_from_slice(rects);
@@ -45,8 +50,8 @@ fn texture(id: u64, rects: &[Rect16], len: u32) -> Vec<u8> {
         },
         format: TexturePixelType::RGBA as u8,
         rect_count: u8::try_from(rects.len()).unwrap(),
-        channel_type: 0,
-        packed: 0,
+        channel_type: TextureChannelDataType::UnsignedByte as u8,
+        packed: 1,
         _pad: [0; 4],
     };
     update.as_bytes().to_vec()
@@ -151,7 +156,8 @@ fn a_texture_update_keeps_its_rects() {
     {
         let (producer, _) = ring.split();
         producer
-            .write(EnvelopeKind::TextureUpdate, &texture(5, &two, 16), &[7; 16])
+            // 2x2 and 4x4 RGBA texels, packed: (4 + 16) * 4 bytes.
+            .write(EnvelopeKind::TextureUpdate, &texture(5, &two, 80), &[7; 80])
             .expect("room");
     }
     host.read(ring.consumer());
@@ -160,7 +166,7 @@ fn a_texture_update_keeps_its_rects() {
         texture: id,
         rects,
         bytes,
-        format,
+        shape,
         ..
     } = &host.uploads().work()[0]
     else {
@@ -168,8 +174,8 @@ fn a_texture_update_keeps_its_rects() {
     };
     assert_eq!(*id, TextureId(5));
     assert_eq!(rects.as_slice(), two.as_slice(), "both rects, and no more");
-    assert_eq!(*format, TexturePixelType::RGBA as u8);
-    assert_eq!(host.uploads().bytes(bytes).map(<[u8]>::len), Some(16));
+    assert_eq!(shape.format, TexturePixelType::RGBA);
+    assert_eq!(host.uploads().bytes(bytes).map(<[u8]>::len), Some(80));
 }
 
 /// A rect count past the array is refused rather than clamped.
@@ -182,17 +188,19 @@ fn a_rect_count_past_the_array_is_malformed() {
     let mut ring = Ring::new(CAPACITY);
     let mut host = Host::new();
 
-    let mut bytes = texture(1, &[rect(0, 0, 1, 1)], 4);
-    // Find `rect_count` by the value the fixture gave it rather than by counting backwards from
-    // the end: the struct has gained a tail field before and an offset computed here would go on
-    // compiling and stop testing anything.
-    let one = tessella_capture_abi::envelope::TextureUpdate::from_bytes(&bytes).expect("reads");
+    // Written through the field rather than by finding a byte that holds its value. This test
+    // used to search for the last `1` in the record, which its own comment worried about -- and it
+    // was right: `packed` is a later field that is also 1 on the ordinary path, so the search
+    // moved onto it and the test went on compiling while testing nothing.
+    let mut one = tessella_capture_abi::envelope::TextureUpdate::from_bytes(&texture(
+        1,
+        &[rect(0, 0, 1, 1)],
+        4,
+    ))
+    .expect("reads");
     assert_eq!(one.rect_count, 1, "the fixture wrote one rect");
-    let at = bytes
-        .iter()
-        .rposition(|byte| *byte == 1)
-        .expect("the rect count");
-    bytes[at] = 9;
+    one.rect_count = 9;
+    let bytes = one.as_bytes().to_vec();
 
     {
         let (producer, _) = ring.split();
@@ -334,4 +342,254 @@ fn an_empty_update_is_legal() {
     assert_eq!(progress.malformed, 0);
     assert_eq!(host.uploads().work().len(), 1);
     assert_eq!(host.uploads().held(), 0);
+}
+
+/// A pixel format this consumer does not know is malformed, not passed on.
+///
+/// The backend picks an image format from it. Passing an unknown discriminant through would have
+/// it choose from a number it cannot interpret, on a texture it would then sample.
+#[test]
+fn an_unknown_pixel_format_is_malformed() {
+    let mut one = tessella_capture_abi::envelope::TextureUpdate::from_bytes(&texture(
+        1,
+        &[rect(0, 0, 1, 1)],
+        4,
+    ))
+    .expect("reads");
+    one.format = 200;
+
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+    {
+        let (producer, _) = ring.split();
+        producer
+            .write(EnvelopeKind::TextureUpdate, one.as_bytes(), &[0; 4])
+            .expect("room");
+    }
+    assert_eq!(host.read(ring.consumer()).malformed, 1);
+    assert!(host.uploads().work().is_empty());
+}
+
+/// A channel type this consumer does not know is malformed too.
+///
+/// The other half of mbgl's two-part format, and the half that decides how many bytes a channel
+/// is. A guess here is a stride.
+#[test]
+fn an_unknown_channel_type_is_malformed() {
+    let mut one = tessella_capture_abi::envelope::TextureUpdate::from_bytes(&texture(
+        1,
+        &[rect(0, 0, 1, 1)],
+        4,
+    ))
+    .expect("reads");
+    one.channel_type = 7;
+
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+    {
+        let (producer, _) = ring.split();
+        producer
+            .write(EnvelopeKind::TextureUpdate, one.as_bytes(), &[0; 4])
+            .expect("room");
+    }
+    assert_eq!(host.read(ring.consumer()).malformed, 1);
+    assert!(host.uploads().work().is_empty());
+}
+
+/// `packed` is zero or one, and anything else is malformed.
+///
+/// It was taken from the record's padding, so a producer that has never heard of it writes zero.
+/// A value that is neither is a producer this consumer does not understand, and reading it as
+/// `!= 0` would guess at the payload's shape.
+#[test]
+fn a_packed_flag_that_is_neither_is_malformed() {
+    let mut one = tessella_capture_abi::envelope::TextureUpdate::from_bytes(&texture(
+        1,
+        &[rect(0, 0, 1, 1)],
+        4,
+    ))
+    .expect("reads");
+    one.packed = 2;
+
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+    {
+        let (producer, _) = ring.split();
+        producer
+            .write(EnvelopeKind::TextureUpdate, one.as_bytes(), &[0; 4])
+            .expect("room");
+    }
+    assert_eq!(host.read(ring.consumer()).malformed, 1);
+    assert!(host.uploads().work().is_empty());
+}
+
+/// A payload shorter than the rects claim is malformed rather than uploaded in part.
+///
+/// The consumer's half of the guard the producer's `fits` test is the first half of. One texel of
+/// RGBA is four bytes and the rect names one texel, so three bytes cannot describe it.
+#[test]
+fn a_payload_shorter_than_the_rects_is_malformed() {
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+    {
+        let (producer, _) = ring.split();
+        producer
+            .write(
+                EnvelopeKind::TextureUpdate,
+                &texture(1, &[rect(0, 0, 1, 1)], 3),
+                &[0; 3],
+            )
+            .expect("room");
+    }
+    assert_eq!(host.read(ring.consumer()).malformed, 1);
+    assert!(host.uploads().work().is_empty());
+}
+
+/// The carried flag and channel type reach the work list, and `rows` agrees with them.
+///
+/// The end-to-end form: a packed record decoded by `Host` must produce the packed layout, because
+/// a backend reads the layout and never the flag.
+#[test]
+fn a_packed_record_yields_the_packed_layout() {
+    let two = [rect(0, 0, 2, 2), rect(8, 8, 4, 4)];
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+    {
+        let (producer, _) = ring.split();
+        producer
+            .write(EnvelopeKind::TextureUpdate, &texture(5, &two, 80), &[7; 80])
+            .expect("room");
+    }
+    host.read(ring.consumer());
+
+    let work = &host.uploads().work()[0];
+    let Upload::Texture { shape, .. } = work else {
+        panic!("a texture update");
+    };
+    assert!(
+        shape.packed,
+        "the record said packed and the work list must say so"
+    );
+    assert_eq!(shape.channel, TextureChannelDataType::UnsignedByte);
+
+    let rows = work.rows().expect("a texture").expect("a layout");
+    assert_eq!(
+        rows,
+        [
+            tessella_consume::upload::Rows { at: 0, stride: 8 },
+            tessella_consume::upload::Rows { at: 16, stride: 16 },
+        ],
+        "the second region is read from byte 16, not from byte 2080"
+    );
+}
+
+/// A `Float` record's channel type reaches the work list, and changes the stride.
+///
+/// The color relief's elevation stops: `RGBA` and `Float` together, which is the pair
+/// `texture::whole_float` sends and the reason the channel type is carried at all. Every other
+/// fixture here is `UnsignedByte`, so without this one a consumer that hardcoded the common case
+/// would pass the whole file.
+#[test]
+fn a_float_record_carries_its_channel_type() {
+    // Two by two RGBA floats, whole: 2 * 2 * 4 channels * 4 bytes.
+    let update = tessella_capture_abi::envelope::TextureUpdate {
+        texture: TextureId(9),
+        size: Extent {
+            width: 2,
+            height: 2,
+        },
+        rects: [Rect16::default(); 4],
+        pixels: Span {
+            offset: 0,
+            count: 64,
+        },
+        format: TexturePixelType::RGBA as u8,
+        rect_count: 0,
+        channel_type: TextureChannelDataType::Float as u8,
+        packed: 0,
+        _pad: [0; 4],
+    };
+
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+    {
+        let (producer, _) = ring.split();
+        producer
+            .write(EnvelopeKind::TextureUpdate, update.as_bytes(), &[0; 64])
+            .expect("room");
+    }
+    host.read(ring.consumer());
+
+    let work = &host.uploads().work()[0];
+    let Upload::Texture { shape, .. } = work else {
+        panic!("a texture update");
+    };
+    assert_eq!(
+        shape.channel,
+        TextureChannelDataType::Float,
+        "a byte channel type here is a ramp quantized to forty-meter steps"
+    );
+
+    let rows = work.rows().expect("a texture").expect("a layout");
+    assert_eq!(
+        rows,
+        [tessella_consume::upload::Rows { at: 0, stride: 32 }],
+        "two RGBA float texels a row is 32 bytes, not 8"
+    );
+}
+
+/// An `Alpha` record's format reaches the work list, and changes the stride.
+///
+/// The glyph atlas, which is `Alpha` and packed -- the commonest texture of this shape on the
+/// wire. Every other fixture here is `RGBA`, so without this one a consumer that hardcoded the
+/// four-channel case would pass the whole file while reading every glyph at four times its width.
+#[test]
+fn an_alpha_record_carries_its_format() {
+    let two = [rect(0, 0, 2, 2), rect(4, 4, 3, 3)];
+    let mut filled = [Rect16::default(); 4];
+    filled[..two.len()].copy_from_slice(&two);
+    let update = tessella_capture_abi::envelope::TextureUpdate {
+        texture: TextureId(11),
+        size: Extent {
+            width: 16,
+            height: 16,
+        },
+        rects: filled,
+        pixels: Span {
+            offset: 0,
+            // (2*2 + 3*3) single-byte texels.
+            count: 13,
+        },
+        format: TexturePixelType::Alpha as u8,
+        rect_count: 2,
+        channel_type: TextureChannelDataType::UnsignedByte as u8,
+        packed: 1,
+        _pad: [0; 4],
+    };
+
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+    {
+        let (producer, _) = ring.split();
+        producer
+            .write(EnvelopeKind::TextureUpdate, update.as_bytes(), &[0; 13])
+            .expect("room");
+    }
+    host.read(ring.consumer());
+
+    let work = &host.uploads().work()[0];
+    let Upload::Texture { shape, .. } = work else {
+        panic!("a texture update");
+    };
+    assert_eq!(shape.format, TexturePixelType::Alpha);
+
+    let rows = work.rows().expect("a texture").expect("a layout");
+    assert_eq!(
+        rows,
+        [
+            tessella_consume::upload::Rows { at: 0, stride: 2 },
+            tessella_consume::upload::Rows { at: 4, stride: 3 },
+        ],
+        "one byte a texel, so the second glyph starts at byte 4 rather than byte 16"
+    );
 }

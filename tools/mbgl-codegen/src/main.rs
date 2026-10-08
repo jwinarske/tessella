@@ -3191,39 +3191,38 @@ fn generate_vertical_orientation(mbgl: &Path) -> Result<Option<String>, String> 
     Ok(Some(out))
 }
 
-/// Where mbgl decides how many channels a pixel format has.
+/// Where mbgl decides how many channels a pixel format has, and how large a channel is.
 const CHANNEL_SOURCE: &str = "src/mbgl/gl/resource_pool.cpp";
 
-/// Generates `TexturePixelType::channels`, from mbgl's own switch.
+/// One `switch` over an enum, as a list of names and the value each returns.
 ///
-/// The enum names the formats and says nothing about how large a pixel of each is, which is
-/// enough for a Rust producer — every caller sizes its own pixel slice — and not enough for a
-/// consumer. A `TextureUpdate` with `rect_count` zero is a whole-texture upload, and the only
-/// way to know whether its byte count matches its extent is to know the channel count. A C
-/// consumer with just the header had to hard-code that mapping, which is the drift this
-/// generator exists to prevent: mbgl adding a format would leave the table right and the
-/// consumer's guess wrong, silently, on one texture kind.
+/// Both of mbgl's two texture-size switches have the same shape, and the fall-through cases are
+/// the point in both: four pixel formats share `channelCount`'s `return 1`, so reading only the
+/// labeled case would give three of them a count of zero.
 ///
-/// Parsed from `Texture2DDesc::channelCount`, where the fall-through cases are the point: four
-/// formats share the `return 1` and reading only the labeled one would give three of them a
-/// channel count of zero.
-fn generate_channel_counts(mbgl: &Path) -> Result<String, String> {
-    let path = mbgl.join(CHANNEL_SOURCE);
-    let text = std::fs::read_to_string(&path)
-        .map_err(|err| format!("reading {}: {err}", path.display()))?;
+/// # Errors
+///
+/// A body that cannot be found or that parses to nothing, which is how a rename or a rewrite
+/// upstream is caught rather than silently producing an empty table.
+fn parse_size_switch(
+    text: &str,
+    path: &Path,
+    signature: &str,
+    case_prefix: &str,
+) -> Result<Vec<(String, u32)>, String> {
     let body = text
-        .split_once("size_t Texture2DDesc::channelCount() const {")
+        .split_once(signature)
         .map(|(_, rest)| rest)
         .and_then(|rest| rest.split_once("\n}"))
         .map(|(body, _)| body)
-        .ok_or_else(|| format!("{}: no channelCount body", path.display()))?;
+        .ok_or_else(|| format!("{}: no {signature} body", path.display()))?;
 
     // Cases accumulate until a `return`, which is what makes the fall-through readable.
-    let mut counts: Vec<(String, u32)> = Vec::new();
+    let mut found: Vec<(String, u32)> = Vec::new();
     let mut pending: Vec<String> = Vec::new();
     for line in body.lines() {
         let line = line.trim();
-        if let Some(rest) = line.strip_prefix("case gfx::TexturePixelType::") {
+        if let Some(rest) = line.strip_prefix(case_prefix) {
             if let Some(name) = rest.strip_suffix(':') {
                 pending.push(name.to_string());
             }
@@ -3232,40 +3231,95 @@ fn generate_channel_counts(mbgl: &Path) -> Result<String, String> {
                 continue;
             };
             for name in pending.drain(..) {
-                counts.push((name, value));
+                found.push((name, value));
             }
         }
     }
-    if counts.is_empty() {
+    if found.is_empty() {
         return Err(format!(
-            "{}: channelCount parsed to nothing — has it changed shape?",
+            "{}: {signature} parsed to nothing — has it changed shape?",
             path.display()
         ));
     }
+    Ok(found)
+}
+
+/// Generates the two halves of a texel's size, from mbgl's own switches.
+///
+/// The enum names the formats and says nothing about how large a pixel of each is, which is
+/// enough for a Rust producer — every caller sizes its own pixel slice — and not enough for a
+/// consumer. A `TextureUpdate` with `rect_count` zero is a whole-texture upload, and the only
+/// way to know whether its byte count matches its extent is to know how large a texel is. A C
+/// consumer with just the header had to hard-code that mapping, which is the drift this
+/// generator exists to prevent: mbgl adding a format would leave the table right and the
+/// consumer's guess wrong, silently, on one texture kind.
+///
+/// Both halves are needed, not just the channel count. mbgl's `getStorageSize` is
+/// `channelCount() * channelStorageSize()`, and a color relief's elevation stops are the texture
+/// that makes the second factor matter: `RGBA` and `Float` together, four bytes a channel rather
+/// than one. A consumer multiplying by the channel count alone sizes that texture at a quarter.
+fn generate_channel_counts(mbgl: &Path) -> Result<String, String> {
+    let path = mbgl.join(CHANNEL_SOURCE);
+    let text = std::fs::read_to_string(&path)
+        .map_err(|err| format!("reading {}: {err}", path.display()))?;
+
+    let counts = parse_size_switch(
+        &text,
+        &path,
+        "size_t Texture2DDesc::channelCount() const {",
+        "case gfx::TexturePixelType::",
+    )?;
+    let sizes = parse_size_switch(
+        &text,
+        &path,
+        "size_t Texture2DDesc::channelStorageSize() const {",
+        "case gfx::TextureChannelDataType::",
+    )?;
 
     let revision = tree_revision(mbgl);
     let mut out = String::new();
-    out.push_str("//! How many channels a texture pixel format carries, generated from\n");
-    out.push_str("//! maplibre-native.\n//!\n");
+    out.push_str("//! How large a texel is, generated from maplibre-native.\n//!\n");
     out.push_str(&format!("//! Source revision: {revision}\n//!\n"));
-    out.push_str("//! From `Texture2DDesc::channelCount`. The enum alone says which formats\n");
-    out.push_str("//! exist and not how large a pixel of each is, which is enough for a\n");
-    out.push_str("//! producer — every caller sizes its own slice — and not enough for a\n");
-    out.push_str("//! consumer: a whole-texture upload's byte count can only be checked\n");
-    out.push_str("//! against its extent by something that knows this.\n//!\n");
+    out.push_str("//! From `Texture2DDesc::channelCount` and\n");
+    out.push_str("//! `Texture2DDesc::channelStorageSize`. The enums alone say which\n");
+    out.push_str("//! formats exist and not how large a pixel of each is, which is enough\n");
+    out.push_str("//! for a producer — every caller sizes its own slice — and not enough\n");
+    out.push_str("//! for a consumer: a whole-texture upload's byte count can only be\n");
+    out.push_str("//! checked against its extent by something that knows this.\n//!\n");
     out.push_str("//! Generated by `cargo run -p mbgl-codegen`. Do not edit.\n\n");
-    out.push_str("use crate::generated::mbgl_enums::TexturePixelType;\n\n");
+    out.push_str(
+        "use crate::generated::mbgl_enums::{TextureChannelDataType, TexturePixelType};\n\n",
+    );
+
     out.push_str("impl TexturePixelType {\n");
     out.push_str("    /// How many channels one pixel of this format carries.\n");
     out.push_str("    ///\n");
-    out.push_str("    /// Every channel is one byte on this stream: mbgl's\n");
-    out.push_str("    /// `channelStorageSize` is per *channel data type*, and nothing here\n");
-    out.push_str("    /// sends anything but unsigned bytes.\n");
+    out.push_str("    /// Half of a texel's size. The other half is\n");
+    out.push_str("    /// [`TextureChannelDataType::storage_size`], and mbgl multiplies the\n");
+    out.push_str("    /// two in `getStorageSize` — so anything sizing a texture here must\n");
+    out.push_str("    /// too. This used to carry a note saying every channel on this stream\n");
+    out.push_str("    /// was one byte; a color relief's elevation stops are `Float`, and it\n");
+    out.push_str("    /// stopped being true.\n");
     out.push_str("    #[must_use]\n");
     out.push_str("    pub const fn channels(self) -> u32 {\n");
     out.push_str("        match self {\n");
     for (name, value) in &counts {
         // The enum generator keeps mbgl's own spelling, `RGBA` included, so this must too.
+        out.push_str(&format!("            Self::{name} => {value},\n"));
+    }
+    out.push_str("        }\n    }\n}\n\n");
+
+    out.push_str("impl TextureChannelDataType {\n");
+    out.push_str("    /// How many bytes one channel of this type occupies.\n");
+    out.push_str("    ///\n");
+    out.push_str("    /// The other half of a texel's size, from\n");
+    out.push_str("    /// `Texture2DDesc::channelStorageSize`. A consumer that assumes one\n");
+    out.push_str("    /// byte reads a `Float` texture at a quarter of its stride, which\n");
+    out.push_str("    /// lands the right rows at the wrong addresses rather than failing.\n");
+    out.push_str("    #[must_use]\n");
+    out.push_str("    pub const fn storage_size(self) -> u32 {\n");
+    out.push_str("        match self {\n");
+    for (name, value) in &sizes {
         out.push_str(&format!("            Self::{name} => {value},\n"));
     }
     out.push_str("        }\n    }\n}\n");
