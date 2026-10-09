@@ -166,7 +166,7 @@ fn planning_a_warm_frame_allocates_nothing() {
     // the borrow on the host ends before the measured calls need it mutably -- the constraint the
     // cache trades for, visible here.
     {
-        let (_, batches) = host.plan(ViewId(0)).expect("a plan");
+        let batches = host.plan(ViewId(0)).expect("a plan").batches;
         assert_eq!(batches.len(), 512, "every entry its own batch");
     }
 
@@ -180,7 +180,7 @@ fn planning_a_warm_frame_allocates_nothing() {
         during, 0,
         "sixteen plans of a warm frame allocated {during} times"
     );
-    let (_, batches) = host.plan(ViewId(0)).expect("a plan");
+    let batches = host.plan(ViewId(0)).expect("a plan").batches;
     assert_eq!(
         batches.len(),
         512,
