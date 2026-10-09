@@ -160,6 +160,25 @@ impl Joiner {
         self.uses.remove(&(geometry, view)).is_some()
     }
 
+    /// Drops every use belonging to one view, and answers how many there were.
+    ///
+    /// What a `ViewUndeclare` costs: the view is gone, so its uses are too. The *announcements* are
+    /// not touched -- geometry is shared and another view may still hold it, which is the whole
+    /// point of the split. One that nothing uses any more is retired by the producer in its own
+    /// time.
+    pub fn release_view(&mut self, view: ViewId) -> usize {
+        let held: Vec<(GeometryId, ViewId)> = self
+            .uses
+            .keys()
+            .filter(|(_, held)| *held == view)
+            .copied()
+            .collect();
+        for key in &held {
+            self.uses.remove(key);
+        }
+        held.len()
+    }
+
     /// Retires a geometry and every view's use of it.
     ///
     /// Returns whether it was held. A retire for something never announced is not an error: the

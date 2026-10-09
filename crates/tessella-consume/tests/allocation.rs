@@ -14,10 +14,10 @@ use std::cell::Cell;
 use tessella_capture_abi::envelope::DrawFlags;
 use tessella_capture_abi::envelope::{
     CameraUpdate, GeometryAdd, GeometryId, OrderEntry, OrderEpoch, OrderUpdate, SlabRef, Span,
-    TileId, ViewId, ViewUse, WireRecord,
+    TileId, ViewDeclare, ViewId, ViewUse, WireRecord,
 };
 use tessella_capture_abi::ring::Ring;
-use tessella_capture_abi::{EnvelopeKind, RenderPass};
+use tessella_capture_abi::{CameraMode, EnvelopeKind, RenderPass};
 use tessella_consume::host::Host;
 
 thread_local! {
@@ -109,6 +109,16 @@ fn frame(n: u64) -> Host {
     let mut ring = Ring::new(1 << 20);
     {
         let (producer, _) = ring.split();
+        // The view first: a `ViewUse` naming one that was never declared is dropped, which the ABI
+        // calls a protocol fault and `Progress::undeclared` counts.
+        let declare = ViewDeclare {
+            view: ViewId(0),
+            camera_mode: CameraMode::Producer as u8,
+            _reserved: [0; 3],
+        };
+        producer
+            .write(EnvelopeKind::ViewDeclare, declare.as_bytes(), &[])
+            .expect("room");
         for id in 0..n {
             // A different family each time, so nothing collapses and every entry is a batch.
             let shader = 11 + i32::try_from(id % 16).unwrap();
