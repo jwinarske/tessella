@@ -1011,9 +1011,15 @@ fn structs() -> Vec<Struct> {
                 (
                     opaque_pass_cutoff,
                     "uint32_t opaque_pass_cutoff",
-                    "Draw-order index where the opaque pass ends."
+                    "Depth slot where the opaque pass ends. Not a draw-order index: mbgl \
+                     compares it against the layer's own slot, so a draw-order position \
+                     substituted for it cuts the passes in the wrong place."
                 ),
-                (depth_range_size, "float depth_range_size", "Depth range."),
+                (
+                    depth_range_size,
+                    "float depth_range_size",
+                    "Depth range the layer slots divide, as mbgl's depthRangeSize."
+                ),
                 (
                     projection,
                     "uint8_t projection",

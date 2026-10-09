@@ -22,7 +22,8 @@
 //! header mirrors, and what R-6 checks on every target.
 
 use crate::{
-    AttributeDataType, BuiltIn, CameraMode, RenderPass, TextureChannelDataType, TexturePixelType,
+    AttributeDataType, BuiltIn, CameraMode, ProjectionMode, RenderPass, TextureChannelDataType,
+    TexturePixelType,
 };
 
 /// Identifies a view — one map instance's camera, cover, and draw order.
@@ -988,7 +989,7 @@ pub struct CameraUpdate {
     /// enough at high zoom that the precision matters.
     pub proj_matrix: [f64; 16],
     /// Unit-sphere-to-clip, column-major. Zero unless `projection` is
-    /// [`ProjectionMode::Globe`](crate::ProjectionMode::Globe).
+    /// [`ProjectionMode::Globe`].
     ///
     /// The last step of the bend, and the only linear one: a globe draws tile geometry through
     /// `tile-local -> normalized Mercator -> sphere -> clip`, and the middle step is a pair of
@@ -1020,11 +1021,22 @@ pub struct CameraUpdate {
     pub order_epoch: OrderEpoch,
     /// View this camera belongs to.
     pub view: ViewId,
-    /// Index into the draw order at which the opaque pass ends.
+    /// The depth slot at which the opaque pass ends.
+    ///
+    /// Not an index into the draw order, which is what it looks like. mbgl compares it against
+    /// the layer's own slot -- `if (currentLayer < opaquePassCutoff)` -- so it is a threshold on
+    /// the layer list, and a draw-order position substituted for it cuts the passes in the wrong
+    /// place as soon as a layer contributes more than one drawable. `DrawOrder::opaque_cutoff`
+    /// returned a draw-order position before the oracle was consulted; this is the quantity
+    /// mbgl's shaders expect.
     pub opaque_pass_cutoff: u32,
-    /// Depth range.
+    /// The depth range the layer slots divide, as mbgl's `depthRangeSize`.
+    ///
+    /// A slot is a sub-range of it, so a consumer honoring the opaque/translucent split needs
+    /// both this and [`Self::opaque_pass_cutoff`] -- and neither reaches a consumer from
+    /// anywhere else.
     pub depth_range_size: f32,
-    /// The surface this view draws on, as a [`ProjectionMode`](crate::ProjectionMode).
+    /// The surface this view draws on, as a [`ProjectionMode`].
     ///
     /// Says which of the two matrices above is authoritative. A consumer that does not know a
     /// value must refuse the camera rather than fall back to the plane: falling back draws a flat
@@ -1032,6 +1044,19 @@ pub struct CameraUpdate {
     pub projection: u8,
     /// Padding. Must be zero.
     pub _pad: [u8; 3],
+}
+
+impl CameraUpdate {
+    /// Which surface this view draws on, or `None` if the discriminant is not one this build
+    /// knows.
+    ///
+    /// The field's own note makes reading this obligatory rather than optional: an unknown value
+    /// must refuse the camera, because falling back to the plane draws a flat map where a round
+    /// one was asked for and looks like a bug in the style.
+    #[must_use]
+    pub const fn projection(&self) -> Option<ProjectionMode> {
+        ProjectionMode::from_repr(self.projection)
+    }
 }
 
 impl TextureRef {

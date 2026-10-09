@@ -271,6 +271,13 @@ pub struct Frame<'a> {
     pub joiner: &'a Joiner,
     /// The masks to draw and the assignments to draw them with.
     pub clips: &'a Clips,
+    /// The camera this frame draws under. Its `order_epoch` is [`Plan::epoch`].
+    ///
+    /// From the same borrow as the batches, and for the same reason the batches are here rather
+    /// than fetched: what a caller gets is the camera this plan was gated on, not whichever one
+    /// the host holds by the time it asks. [`Host::camera`] is the other question -- what a view's
+    /// camera is when no frame can be planned at all.
+    pub camera: &'a CameraUpdate,
 }
 
 /// Reads the stream and plans frames from it.
@@ -278,7 +285,14 @@ pub struct Frame<'a> {
 pub struct Host {
     joiner: Joiner,
     orders: BTreeMap<ViewId, Order>,
-    cameras: BTreeMap<ViewId, OrderEpoch>,
+    /// Each view's camera, whole.
+    ///
+    /// The epoch alone was kept here once, because gating `plan` on it was all anything did with a
+    /// camera. Nothing else could then be done with one: `depth_range_size` and
+    /// `opaque_pass_cutoff` arrive nowhere else, so no consumer could honor §11.7's
+    /// opaque/translucent split, and a `CameraMode::Consumer` view -- which owns its own placement
+    /// -- got no matrices to place anything with.
+    cameras: BTreeMap<ViewId, CameraUpdate>,
     read_through: u64,
     progress: Progress,
     uploads: Uploads,
@@ -391,7 +405,7 @@ impl Host {
     #[must_use]
     pub fn ready(&self, view: ViewId) -> bool {
         match (self.orders.get(&view), self.cameras.get(&view)) {
-            (Some(order), Some(epoch)) => order.epoch == *epoch,
+            (Some(order), Some(camera)) => order.epoch == camera.order_epoch,
             _ => false,
         }
     }
@@ -417,7 +431,8 @@ impl Host {
     /// copies are done -- but it is a real constraint and not a free one.
     pub fn plan(&mut self, view: ViewId) -> Option<Frame<'_>> {
         let order = self.orders.get(&view)?;
-        if self.cameras.get(&view) != Some(&order.epoch) {
+        let camera = self.cameras.get(&view)?;
+        if camera.order_epoch != order.epoch {
             return None;
         }
 
@@ -446,6 +461,7 @@ impl Host {
             batches: self.plans.get(&view).expect("planned above"),
             joiner: &self.joiner,
             clips: self.clips.get(&view).unwrap_or(&self.unclipped),
+            camera,
         })
     }
 
@@ -477,6 +493,17 @@ impl Host {
     #[must_use]
     pub fn camera_mode(&self, view: ViewId) -> Option<CameraMode> {
         self.views.get(&view).copied()
+    }
+
+    /// A view's last readable camera, whatever epoch it names.
+    ///
+    /// [`Frame::camera`] is what a frame draws under, and is the one to reach for while drawing --
+    /// this one may name an epoch no held order establishes. It is here for what is true of a view
+    /// between frames: whether a camera has arrived at all, and what the producer last said about
+    /// the light and the projection.
+    #[must_use]
+    pub fn camera(&self, view: ViewId) -> Option<&CameraUpdate> {
+        self.cameras.get(&view)
     }
 
     /// Whether a view is declared.
@@ -780,7 +807,18 @@ impl Host {
             }
             EnvelopeKind::CameraUpdate => {
                 CameraUpdate::from_bytes(bytes).map_or(Outcome::Malformed, |camera| {
-                    self.cameras.insert(camera.view, camera.order_epoch);
+                    // The field says to: an unknown projection "must refuse the camera rather
+                    // than fall back to the plane", because falling back draws a flat map where a
+                    // round one was asked for and looks like a bug in the style. The same answer
+                    // tessella#364 settled for the other discriminants on this wire, and the same
+                    // one `ViewDeclare`'s `camera_mode` gets above.
+                    //
+                    // Refused whole -- not stored -- so the view keeps the last camera it could
+                    // read and draws stale rather than blank.
+                    if camera.projection().is_none() {
+                        return Outcome::Malformed;
+                    }
+                    self.cameras.insert(camera.view, camera);
                     Outcome::Read
                 })
             }

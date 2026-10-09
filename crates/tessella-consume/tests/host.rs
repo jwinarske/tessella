@@ -11,7 +11,7 @@ use tessella_capture_abi::envelope::{
 };
 use tessella_capture_abi::ring::{Producer, Ring};
 use tessella_capture_abi::{
-    CameraMode, EnvelopeKind, RenderPass, TextureChannelDataType, TexturePixelType,
+    CameraMode, EnvelopeKind, ProjectionMode, RenderPass, TextureChannelDataType, TexturePixelType,
 };
 use tessella_consume::host::Host;
 
@@ -263,6 +263,131 @@ fn a_camera_ahead_of_its_order_does_not_commit() {
     assert_eq!(
         host.plan(ViewId(0)).expect("a plan").plan.epoch,
         OrderEpoch(2)
+    );
+}
+
+/// A frame carries the camera its plan was gated on, and the host carries one besides.
+///
+/// The gate means the two agree whenever a frame exists, so what this pins is that the frame's
+/// camera is whole and is that one -- not the epoch alone, which is all `host` kept of a camera
+/// until it kept the record. `depth_range_size` and `opaque_pass_cutoff` arrive nowhere else, so
+/// a consumer that cannot reach them cannot honor the opaque/translucent split at all.
+#[test]
+fn a_frame_draws_under_the_camera_it_was_gated_on() {
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+
+    {
+        let (producer, _) = ring.split();
+        declare(producer, 0);
+        producer
+            .write(EnvelopeKind::GeometryAdd, geometry(1, 11).as_bytes(), &[])
+            .expect("room");
+        producer
+            .write(EnvelopeKind::ViewUse, use_of(1, 0, 0).as_bytes(), &[])
+            .expect("room");
+        let (update, payload) = order(0, 1, &[entry(1, 0, 0)]);
+        producer
+            .write(EnvelopeKind::OrderUpdate, update.as_bytes(), &payload)
+            .expect("room");
+        let mut sent = camera(0, 1);
+        sent.depth_range_size = 1.5;
+        sent.opaque_pass_cutoff = 3;
+        sent.pixels_per_meter = 2.25;
+        producer
+            .write(EnvelopeKind::CameraUpdate, sent.as_bytes(), &[])
+            .expect("room");
+    }
+    host.read(ring.consumer());
+
+    let frame = host.plan(ViewId(0)).expect("a frame");
+    assert_eq!(
+        frame.camera.order_epoch, frame.plan.epoch,
+        "the frame's camera is the one its plan was gated on"
+    );
+    assert_eq!(frame.camera.depth_range_size, 1.5);
+    assert_eq!(frame.camera.opaque_pass_cutoff, 3);
+    assert_eq!(
+        frame.camera.pixels_per_meter, 2.25,
+        "which a consumer owning the camera cannot get from the projection"
+    );
+    assert_eq!(frame.camera.projection(), Some(ProjectionMode::Mercator));
+
+    // The other question: a camera ahead of its order commits no frame, and is still a camera the
+    // view has. `Host::camera` answers that; `Frame::camera` cannot, there being no frame.
+    {
+        let (producer, _) = ring.split();
+        producer
+            .write(EnvelopeKind::CameraUpdate, camera(0, 9).as_bytes(), &[])
+            .expect("room");
+    }
+    host.read(ring.consumer());
+    assert!(host.plan(ViewId(0)).is_none(), "the epochs disagree");
+    assert_eq!(
+        host.camera(ViewId(0)).map(|held| held.order_epoch),
+        Some(OrderEpoch(9)),
+        "and the camera is held, which is what the gate means"
+    );
+    assert!(host.camera(ViewId(1)).is_none(), "a view with no camera");
+}
+
+/// A camera naming a projection this build does not know is refused.
+///
+/// The field says to: an unknown value "must refuse the camera rather than fall back to the
+/// plane", because falling back draws a flat map where a round one was asked for and looks like a
+/// bug in the style. Refused whole, so the view keeps the last camera it could read -- a map
+/// missing the frames a newer producer names comes out stale rather than blank.
+#[test]
+fn a_camera_with_an_unknown_projection_is_refused() {
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+
+    {
+        let (producer, _) = ring.split();
+        declare(producer, 0);
+        let (update, payload) = order(0, 1, &[]);
+        producer
+            .write(EnvelopeKind::OrderUpdate, update.as_bytes(), &payload)
+            .expect("room");
+        producer
+            .write(EnvelopeKind::CameraUpdate, camera(0, 1).as_bytes(), &[])
+            .expect("room");
+    }
+    host.read(ring.consumer());
+    assert_eq!(host.progress().malformed, 0, "nothing refused yet");
+    assert_eq!(
+        host.plan(ViewId(0)).expect("a frame").plan.epoch,
+        OrderEpoch(1)
+    );
+
+    // A newer producer's projection, on an otherwise good camera.
+    {
+        let (producer, _) = ring.split();
+        let mut newer = camera(0, 1);
+        newer.projection = 2;
+        assert_eq!(newer.projection(), None, "not a mode this build knows");
+        producer
+            .write(EnvelopeKind::CameraUpdate, newer.as_bytes(), &[])
+            .expect("room");
+    }
+    host.read(ring.consumer());
+
+    let progress = host.progress();
+    assert_eq!(
+        progress.malformed, 1,
+        "the camera was refused -- counted as tessella#364 settled for this wire's other \
+         discriminants, and as `ViewDeclare`'s camera_mode is"
+    );
+    assert_eq!(progress.unknown, 0, "not as unknown: the kind is known");
+    assert_eq!(
+        host.camera(ViewId(0)).map(|held| held.projection),
+        Some(ProjectionMode::Mercator as u8),
+        "the refused camera did not replace the one the view had"
+    );
+    assert_eq!(
+        host.plan(ViewId(0)).expect("still a frame").plan.epoch,
+        OrderEpoch(1),
+        "so the view draws stale rather than blank"
     );
 }
 
