@@ -6,7 +6,7 @@
 use tessella_capture_abi::envelope::DrawFlags;
 use tessella_capture_abi::envelope::{
     CameraUpdate, GeometryAdd, GeometryId, GeometryRemove, OrderEntry, OrderEpoch, OrderUpdate,
-    Span, TileId, ViewId, ViewRelease, ViewUse, WireRecord,
+    Span, StencilTile, StencilTiles, TileId, ViewId, ViewRelease, ViewUse, WireRecord,
 };
 use tessella_capture_abi::ring::{Producer, Ring};
 use tessella_capture_abi::{EnvelopeKind, RenderPass};
@@ -44,6 +44,48 @@ fn use_of(id: u64, view: u32, layer: i32) -> ViewUse {
         has_tile: 0,
         _pad: [0; 5],
     }
+}
+
+/// A tile, as the producer names one.
+fn tile(z: u8, x: u32, y: u32) -> TileId {
+    TileId {
+        z,
+        x,
+        y,
+        overscaled_z: z,
+        wrap: 0,
+    }
+}
+
+/// One tile's mask, with a matrix that names the tile so a mix-up is visible.
+fn clip(z: u8, x: u32, y: u32) -> StencilTile {
+    let mut matrix = [0.0f32; 16];
+    matrix[0] = x as f32;
+    matrix[5] = y as f32;
+    matrix[15] = 1.0;
+    StencilTile {
+        matrix,
+        tile: tile(z, x, y),
+    }
+}
+
+/// Writes one layer group's clip set.
+fn stencil_tiles(producer: &mut Producer, view: u32, layer: i32, tiles: &[StencilTile]) {
+    let mut payload = Vec::new();
+    for one in tiles {
+        payload.extend_from_slice(one.as_bytes());
+    }
+    let update = StencilTiles {
+        view: ViewId(view),
+        layer_index: layer,
+        tiles: Span {
+            offset: 0,
+            count: u32::try_from(tiles.len()).expect("a small cover"),
+        },
+    };
+    producer
+        .write(EnvelopeKind::StencilTiles, update.as_bytes(), &payload)
+        .expect("room");
 }
 
 fn entry(id: u64, layer: u32, ubo: u32) -> OrderEntry {
@@ -475,5 +517,151 @@ fn a_frame_holds_its_batches_beside_its_joiner() {
     assert_eq!(
         resolved, 2,
         "the joiner has to resolve every drawable the batches name"
+    );
+}
+
+/// A view with no `StencilTiles` clips nothing, and says so rather than having no answer.
+///
+/// `Partition`'s own words: "a tile absent here has no mask; its geometry is left unclipped". So the
+/// absence is a usable answer and a consumer needs no special case -- which is why `Frame` carries
+/// a `Clips` rather than an `Option<&Clips>`.
+#[test]
+fn a_view_with_no_masks_clips_nothing() {
+    let mut ring = Ring::new(CAPACITY);
+    write_frame(ring.producer(), 0, 1, &[1]);
+    let mut host = Host::new();
+    host.read(ring.consumer());
+
+    let frame = host.plan(ViewId(0)).expect("a plan");
+    assert!(frame.clips.is_empty(), "no masks were sent");
+    assert_eq!(frame.clips.len(), 0);
+    assert!(
+        frame.clips.partition().tiles.is_empty(),
+        "and so no tile has an assignment"
+    );
+    assert!(
+        !frame.clips.partition().partitioned,
+        "an empty partition is the fallback, not a fitted one"
+    );
+}
+
+/// The tiles a layer group names become assignments, and the masks keep their matrices.
+///
+/// `stencil::partition` was written and tested and nothing fed it from the stream: `StencilTiles`
+/// was one of five envelope kinds the read did not match, so `record::content` had no partition to
+/// look a drawable's tile up in and every layer drew unclipped.
+#[test]
+fn a_stencil_set_becomes_a_partition() {
+    let mut ring = Ring::new(CAPACITY);
+    write_frame(ring.producer(), 0, 1, &[1]);
+    let cover = [clip(14, 8000, 5000), clip(14, 8001, 5000)];
+    stencil_tiles(ring.producer(), 0, 0, &cover);
+
+    let mut host = Host::new();
+    let progress = host.read(ring.consumer());
+    assert_eq!(progress.unknown, 0, "StencilTiles is a kind this reads");
+    assert_eq!(progress.malformed, 0);
+
+    let frame = host.plan(ViewId(0)).expect("a plan");
+    assert_eq!(frame.clips.len(), 2, "one mask per tile");
+    let partition = frame.clips.partition();
+    assert_eq!(partition.tiles.len(), 2, "and one assignment per tile");
+
+    // Two tiles at one zoom take distinct values in a shared field, which is what the whole scheme
+    // is for -- the same value for both would clip each to the other's shape as well.
+    let first = partition.tiles[&cover[0].tile];
+    let second = partition.tiles[&cover[1].tile];
+    assert_ne!(
+        first.value, second.value,
+        "two tiles of one cover must not share a reference"
+    );
+    assert_eq!(first.read_mask, second.read_mask, "one zoom, one field");
+
+    // The matrices come back beside their tiles, because the mask quad is drawn with them.
+    let masks: Vec<(TileId, [f32; 16])> = frame
+        .clips
+        .masks()
+        .map(|(tile, matrix)| (tile, *matrix))
+        .collect();
+    assert_eq!(masks.len(), 2);
+    for sent in &cover {
+        assert!(
+            masks.contains(&(sent.tile, sent.matrix)),
+            "the matrix for {:?} did not survive the decode",
+            sent.tile
+        );
+    }
+}
+
+/// A later set for the same group replaces the earlier one rather than adding to it.
+///
+/// `StencilTiles` is "emitted on change only", so what arrives is the group's whole tile set. Tiles
+/// the producer dropped must lose their masks: a matrix kept for a tile no group names any more is
+/// a mask quad drawn over the map.
+#[test]
+fn a_later_set_replaces_the_earlier_one() {
+    let mut ring = Ring::new(CAPACITY);
+    write_frame(ring.producer(), 0, 1, &[1]);
+    stencil_tiles(
+        ring.producer(),
+        0,
+        0,
+        &[clip(14, 8000, 5000), clip(14, 8001, 5000)],
+    );
+    let mut host = Host::new();
+    host.read(ring.consumer());
+    assert_eq!(host.clips(ViewId(0)).len(), 2);
+
+    // The cover moves on: one tile stays, one is new, one is gone.
+    stencil_tiles(
+        ring.producer(),
+        0,
+        0,
+        &[clip(14, 8001, 5000), clip(14, 8002, 5000)],
+    );
+    host.read(ring.consumer());
+
+    let clips = host.clips(ViewId(0));
+    assert_eq!(clips.len(), 2, "two tiles, not three");
+    let tiles: Vec<TileId> = clips.masks().map(|(tile, _)| tile).collect();
+    assert!(
+        !tiles.contains(&tile(14, 8000, 5000)),
+        "the dropped tile kept its mask"
+    );
+    assert!(
+        tiles.contains(&tile(14, 8002, 5000)),
+        "the new tile has none"
+    );
+}
+
+/// A short tile run is refused rather than clipping a layer to some of its tiles.
+#[test]
+fn a_short_stencil_run_is_malformed() {
+    let mut ring = Ring::new(CAPACITY);
+    let sent = [clip(14, 8000, 5000), clip(14, 8001, 5000)];
+    let mut payload = Vec::new();
+    for one in &sent {
+        payload.extend_from_slice(one.as_bytes());
+    }
+    // The record claims both and the payload carries one and a half.
+    payload.truncate(payload.len() - core::mem::size_of::<StencilTile>() / 2);
+    let update = StencilTiles {
+        view: ViewId(0),
+        layer_index: 0,
+        tiles: Span {
+            offset: 0,
+            count: 2,
+        },
+    };
+    ring.producer()
+        .write(EnvelopeKind::StencilTiles, update.as_bytes(), &payload)
+        .expect("room");
+
+    let mut host = Host::new();
+    let progress = host.read(ring.consumer());
+    assert_eq!(progress.malformed, 1, "a short run is malformed");
+    assert!(
+        host.clips(ViewId(0)).is_empty(),
+        "and nothing was taken from it"
     );
 }
