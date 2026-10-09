@@ -35,11 +35,11 @@ use alloc::vec::Vec;
 
 use tessella_capture_abi::envelope::{
     AttributeDesc, CameraUpdate, GeometryAdd, GeometryRemove, OrderEntry, OrderEpoch, OrderUpdate,
-    Segment, Span, StencilTile, StencilTiles, TextureRef, TextureUpdate, TileId, UboUpdate, ViewId,
-    ViewRelease, ViewUse, WireRecord,
+    Segment, Span, StencilTile, StencilTiles, TextureRef, TextureUpdate, TileId, UboUpdate,
+    ViewDeclare, ViewId, ViewRelease, ViewUndeclare, ViewUse, WireRecord,
 };
 use tessella_capture_abi::ring::Consumer;
-use tessella_capture_abi::{EnvelopeKind, TextureChannelDataType, TexturePixelType};
+use tessella_capture_abi::{CameraMode, EnvelopeKind, TextureChannelDataType, TexturePixelType};
 
 use crate::batch::{Batches, Program, collapse_into};
 use crate::join::{Announcement, Joiner};
@@ -57,6 +57,14 @@ pub struct Progress {
     /// predates. Counted rather than ignored, because a stream that is *mostly* unknown is a
     /// version mismatch presenting as a blank map, and a blank map has many other explanations.
     pub unknown: u64,
+    /// Records naming a view that was never declared, and were dropped for it.
+    ///
+    /// A protocol fault rather than a malformed record: the bytes parse. The ABI states the rule --
+    /// a `ViewUse` "naming a view the consumer has not seen declared is a protocol fault", and
+    /// `ViewDeclare` is "ordered ahead of any `ViewUse` naming the view" -- so a use that arrives
+    /// first is a producer out of order, not a producer sending rubbish, and the two are worth
+    /// telling apart when a map comes out blank.
+    pub undeclared: u64,
     /// Records this build knows but could not read, the bytes being malformed.
     ///
     /// Separate from `unknown` on purpose. An unknown kind is a newer producer; a known kind that
@@ -69,6 +77,7 @@ impl Progress {
     fn merge(&mut self, other: Self) {
         self.records += other.records;
         self.unknown += other.unknown;
+        self.undeclared += other.undeclared;
         self.malformed += other.malformed;
     }
 }
@@ -224,6 +233,11 @@ pub struct Host {
     stale: BTreeSet<ViewId>,
     /// Where each view's last plan was announced through, beside the batches it belongs to.
     announced: BTreeMap<ViewId, u64>,
+    /// The views the producer has declared, and which side owns each one's camera.
+    ///
+    /// DR-18's per-view state. A view is in here from its `ViewDeclare` until its `ViewUndeclare`,
+    /// and a record naming one that is not is dropped -- the ABI calls that a protocol fault.
+    views: BTreeMap<ViewId, CameraMode>,
     /// Each view's clip masks and the partition over them.
     clips: BTreeMap<ViewId, Clips>,
     /// What a view with no `StencilTiles` gets: no masks, and a partition that clips nothing.
@@ -265,6 +279,7 @@ impl Host {
                 Outcome::Read => {}
                 Outcome::Unknown => did.unknown += 1,
                 Outcome::Malformed => did.malformed += 1,
+                Outcome::Undeclared => did.undeclared += 1,
             }
             did.records += 1;
             consumer.advance(consumed);
@@ -372,6 +387,41 @@ impl Host {
         })
     }
 
+    /// Which side owns a view's camera, or `None` for a view that is not declared.
+    ///
+    /// What DR-9 settles per view, and the thing a consumer cannot guess: in consumer mode every
+    /// per-drawable matrix on the wire is advisory and a tile's placement comes from its own id, so
+    /// a backend that read them as authoritative would place geometry through the producer's camera
+    /// instead of its own.
+    #[must_use]
+    pub fn camera_mode(&self, view: ViewId) -> Option<CameraMode> {
+        self.views.get(&view).copied()
+    }
+
+    /// Whether a view is declared.
+    #[must_use]
+    pub fn declared(&self, view: ViewId) -> bool {
+        self.views.contains_key(&view)
+    }
+
+    /// Drops a view and everything held for it.
+    ///
+    /// What a `ViewUndeclare` costs. Every map here keyed by a view loses its entry, and the
+    /// joiner loses that view's uses -- but not the announcements behind them, because geometry is
+    /// shared and another view may still hold it. A consumer that dropped only the order would keep
+    /// the clips, the camera and the uses of a view that no longer exists, which on a cluster
+    /// adding and removing insets is a leak per inset.
+    fn forget(&mut self, view: ViewId) {
+        self.views.remove(&view);
+        self.orders.remove(&view);
+        self.cameras.remove(&view);
+        self.clips.remove(&view);
+        self.plans.remove(&view);
+        self.announced.remove(&view);
+        self.stale.remove(&view);
+        self.joiner.release_view(view);
+    }
+
     /// A view's clip masks, whether or not it has a frame to draw.
     ///
     /// [`Frame`] carries the same thing for a view that is ready; this is for a caller that wants
@@ -438,8 +488,36 @@ impl Host {
                     Outcome::Read
                 })
             }
+            EnvelopeKind::ViewDeclare => {
+                let Some(declare) = ViewDeclare::from_bytes(bytes) else {
+                    return Outcome::Malformed;
+                };
+                // The mode decides what a per-drawable matrix *means* -- in consumer mode every one
+                // of them is advisory and a tile's placement comes from its own id -- so a
+                // discriminant this build does not know is refused rather than defaulted. Guessing
+                // it is how geometry gets placed through a camera that is not the one drawing.
+                let Some(mode) = CameraMode::from_repr(declare.camera_mode) else {
+                    return Outcome::Malformed;
+                };
+                self.views.insert(declare.view, mode);
+                Outcome::Read
+            }
+            EnvelopeKind::ViewUndeclare => {
+                let Some(undeclare) = ViewUndeclare::from_bytes(bytes) else {
+                    return Outcome::Malformed;
+                };
+                self.forget(undeclare.view);
+                Outcome::Read
+            }
             EnvelopeKind::ViewUse => {
                 ViewUse::from_bytes(bytes).map_or(Outcome::Malformed, |use_| {
+                    // A use of a view that was never declared is a protocol fault, which the ABI
+                    // says of this record: `ViewDeclare` is "ordered ahead of any `ViewUse` naming
+                    // the view". Dropped rather than joined -- a view with no declaration has no
+                    // camera mode, so nothing downstream knows what its matrices mean.
+                    if !self.views.contains_key(&use_.view) {
+                        return Outcome::Undeclared;
+                    }
                     self.joiner.used(use_);
                     Outcome::Read
                 })
@@ -560,6 +638,8 @@ enum Outcome {
     Read,
     Unknown,
     Malformed,
+    /// The record parsed and named a view that was never declared.
+    Undeclared,
 }
 
 /// The bytes a span names, or `None` if the payload does not hold them.

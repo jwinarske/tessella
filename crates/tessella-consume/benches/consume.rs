@@ -15,10 +15,10 @@ use std::time::{Duration, Instant};
 use tessella_capture_abi::envelope::DrawFlags;
 use tessella_capture_abi::envelope::{
     CameraUpdate, GeometryAdd, GeometryId, OrderEntry, OrderEpoch, OrderUpdate, Span, TileId,
-    ViewId, ViewUse, WireRecord,
+    ViewDeclare, ViewId, ViewUse, WireRecord,
 };
 use tessella_capture_abi::ring::Ring;
-use tessella_capture_abi::{EnvelopeKind, RenderPass};
+use tessella_capture_abi::{CameraMode, EnvelopeKind, RenderPass};
 use tessella_consume::host::Host;
 
 /// Counts allocations, so a claim about not making any can be checked rather than asserted.
@@ -98,6 +98,16 @@ fn camera(view: u32, epoch: u64) -> CameraUpdate {
 /// A frame of `entries` drawables, `families` of them so the order breaks into that many batches.
 fn write(ring: &mut Ring, entries: usize, families: i32) {
     let (producer, _) = ring.split();
+    // The view first: a `ViewUse` naming one that was never declared is dropped, which the ABI
+    // calls a protocol fault.
+    let declare = ViewDeclare {
+        view: ViewId(0),
+        camera_mode: CameraMode::Producer as u8,
+        _reserved: [0; 3],
+    };
+    producer
+        .write(EnvelopeKind::ViewDeclare, declare.as_bytes(), &[])
+        .expect("room");
     for id in 0..entries as u64 {
         let shader = 11 + (id as i32 % families);
         producer

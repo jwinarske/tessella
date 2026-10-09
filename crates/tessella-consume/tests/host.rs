@@ -6,10 +6,11 @@
 use tessella_capture_abi::envelope::DrawFlags;
 use tessella_capture_abi::envelope::{
     CameraUpdate, GeometryAdd, GeometryId, GeometryRemove, OrderEntry, OrderEpoch, OrderUpdate,
-    Span, StencilTile, StencilTiles, TileId, ViewId, ViewRelease, ViewUse, WireRecord,
+    Span, StencilTile, StencilTiles, TileId, ViewDeclare, ViewId, ViewRelease, ViewUndeclare,
+    ViewUse, WireRecord,
 };
 use tessella_capture_abi::ring::{Producer, Ring};
-use tessella_capture_abi::{EnvelopeKind, RenderPass};
+use tessella_capture_abi::{CameraMode, EnvelopeKind, RenderPass};
 use tessella_consume::host::Host;
 
 const CAPACITY: usize = 1 << 16;
@@ -129,8 +130,24 @@ fn camera(view: u32, epoch: u64) -> CameraUpdate {
     update
 }
 
-/// Writes the usual shape: a geometry, a view using it, an order, then the camera committing it.
+/// Declares a view, which has to come before anything that names it.
+///
+/// DR-18: `ViewDeclare` carries the per-view state once and is "ordered ahead of any `ViewUse`
+/// naming the view". A use that arrives first is dropped and counted in `Progress::undeclared`.
+fn declare(producer: &mut Producer, view: u32) {
+    let record = ViewDeclare {
+        view: ViewId(view),
+        camera_mode: CameraMode::Producer as u8,
+        _reserved: [0; 3],
+    };
+    producer
+        .write(EnvelopeKind::ViewDeclare, record.as_bytes(), &[])
+        .expect("room");
+}
+
+/// Writes the usual shape: a view, a geometry, a use of it, an order, then the camera committing it.
 fn write_frame(producer: &mut Producer, view: u32, epoch: u64, ids: &[u64]) {
+    declare(producer, view);
     for id in ids {
         producer
             .write(EnvelopeKind::GeometryAdd, geometry(*id, 11).as_bytes(), &[])
@@ -265,12 +282,15 @@ fn an_unknown_kind_is_counted_and_survived() {
         producer
             .write(EnvelopeKind::GeometryAdd, geometry(1, 11).as_bytes(), &[])
             .expect("room");
+        declare(producer, 0);
         producer
             .write(EnvelopeKind::ViewUse, use_of(1, 0, 0).as_bytes(), &[])
             .expect("room");
-        // A kind this host does not dispatch.
+        // A kind this host does not dispatch. `MeshAdd` is the one left -- `ViewDeclare` was, until
+        // it was read -- so whoever implements #93's mesh item changes this to `ViewTarget` and the
+        // last of them turns this case into one that can no longer be written.
         producer
-            .write(EnvelopeKind::ViewDeclare, &[0u8; 16], &[])
+            .write(EnvelopeKind::MeshAdd, &[0u8; 16], &[])
             .expect("room");
         let (update, payload) = order(0, 1, &[entry(1, 0, 0)]);
         producer
@@ -283,7 +303,7 @@ fn an_unknown_kind_is_counted_and_survived() {
     let progress = host.read(ring.consumer());
 
     assert_eq!(progress.unknown, 1, "the undispatched kind is counted");
-    assert_eq!(progress.records, 5, "and the read did not stop at it");
+    assert_eq!(progress.records, 6, "and the read did not stop at it");
     assert!(host.plan(ViewId(0)).is_some(), "the frame still draws");
 }
 
@@ -354,6 +374,7 @@ fn a_release_leaves_the_other_view() {
             .write(EnvelopeKind::GeometryAdd, geometry(1, 11).as_bytes(), &[])
             .expect("room");
         for view in 0..2 {
+            declare(producer, view);
             producer
                 .write(EnvelopeKind::ViewUse, use_of(1, view, 0).as_bytes(), &[])
                 .expect("room");
@@ -663,5 +684,169 @@ fn a_short_stencil_run_is_malformed() {
     assert!(
         host.clips(ViewId(0)).is_empty(),
         "and nothing was taken from it"
+    );
+}
+
+/// A use of a view that was never declared is dropped and counted.
+///
+/// The ABI's own words for `ViewUse`: it "carries nothing about the view itself -- that is
+/// `ViewDeclare`'s job (DR-18)", and one "naming a view the consumer has not seen declared is a
+/// protocol fault". Dropped rather than joined, because a view with no declaration has no camera
+/// mode, and in consumer mode every per-drawable matrix on the wire is advisory -- a backend that
+/// joined it anyway would not know what the matrices it is about to bind mean.
+///
+/// Counted apart from `malformed`: the bytes parse. A producer out of order and a producer sending
+/// rubbish are different faults and the numbers should say which.
+#[test]
+fn a_use_of_an_undeclared_view_is_dropped() {
+    let mut ring = Ring::new(CAPACITY);
+    {
+        let (producer, _) = ring.split();
+        producer
+            .write(EnvelopeKind::GeometryAdd, geometry(1, 11).as_bytes(), &[])
+            .expect("room");
+        // No `ViewDeclare` before it.
+        producer
+            .write(EnvelopeKind::ViewUse, use_of(1, 0, 0).as_bytes(), &[])
+            .expect("room");
+        let (update, payload) = order(0, 1, &[entry(1, 0, 0)]);
+        producer
+            .write(EnvelopeKind::OrderUpdate, update.as_bytes(), &payload)
+            .expect("room");
+        producer
+            .write(EnvelopeKind::CameraUpdate, camera(0, 1).as_bytes(), &[])
+            .expect("room");
+    }
+    let mut host = Host::new();
+    let progress = host.read(ring.consumer());
+
+    assert_eq!(progress.undeclared, 1, "the use is counted as a fault");
+    assert_eq!(
+        progress.malformed, 0,
+        "and not as malformed: the bytes parse"
+    );
+    assert_eq!(progress.records, 4, "the read did not stop at it");
+    assert!(!host.declared(ViewId(0)));
+    assert_eq!(host.camera_mode(ViewId(0)), None);
+
+    // The order and the camera still arrived, so there is a plan -- with nothing in it, because the
+    // use that would have put the geometry in this view was dropped.
+    let frame = host.plan(ViewId(0)).expect("an order and a camera agree");
+    assert!(
+        frame.batches.is_empty(),
+        "a dropped use must not leave a drawable in the plan"
+    );
+}
+
+/// A declared view says which side owns its camera.
+#[test]
+fn a_declared_view_carries_its_camera_mode() {
+    let mut ring = Ring::new(CAPACITY);
+    {
+        let (producer, _) = ring.split();
+        let record = ViewDeclare {
+            view: ViewId(3),
+            camera_mode: CameraMode::Consumer as u8,
+            _reserved: [0; 3],
+        };
+        producer
+            .write(EnvelopeKind::ViewDeclare, record.as_bytes(), &[])
+            .expect("room");
+    }
+    let mut host = Host::new();
+    let progress = host.read(ring.consumer());
+    assert_eq!(progress.malformed, 0);
+    assert!(host.declared(ViewId(3)));
+    assert_eq!(host.camera_mode(ViewId(3)), Some(CameraMode::Consumer));
+}
+
+/// A camera mode this build does not know is refused rather than defaulted.
+///
+/// The mode decides what a per-drawable matrix *means*, so guessing it is how geometry gets placed
+/// through a camera that is not the one drawing. Refused the same way an unknown texture format is,
+/// which tessella#364 settled for the other two discriminants on this wire.
+#[test]
+fn an_unknown_camera_mode_is_malformed() {
+    let mut ring = Ring::new(CAPACITY);
+    {
+        let (producer, _) = ring.split();
+        let record = ViewDeclare {
+            view: ViewId(4),
+            camera_mode: 7,
+            _reserved: [0; 3],
+        };
+        producer
+            .write(EnvelopeKind::ViewDeclare, record.as_bytes(), &[])
+            .expect("room");
+    }
+    let mut host = Host::new();
+    let progress = host.read(ring.consumer());
+    assert_eq!(progress.malformed, 1);
+    assert!(
+        !host.declared(ViewId(4)),
+        "a view whose mode did not decode is not declared"
+    );
+}
+
+/// Undeclaring a view drops everything held for it, and leaves the other view alone.
+///
+/// Every map in the host keyed by a view: its order, its camera, its clips, its cached batches and
+/// its uses. A consumer that dropped only the order would keep the rest for a view that no longer
+/// exists, which on a cluster adding and removing insets is a leak per inset.
+///
+/// The announcements are deliberately not dropped: geometry is shared, and the other view here
+/// still holds the same one.
+#[test]
+fn undeclaring_a_view_drops_what_was_held_for_it() {
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+    {
+        let (producer, _) = ring.split();
+        producer
+            .write(EnvelopeKind::GeometryAdd, geometry(1, 11).as_bytes(), &[])
+            .expect("room");
+        for view in 0..2 {
+            declare(producer, view);
+            producer
+                .write(EnvelopeKind::ViewUse, use_of(1, view, 0).as_bytes(), &[])
+                .expect("room");
+            let (update, payload) = order(view, 1, &[entry(1, 0, 0)]);
+            producer
+                .write(EnvelopeKind::OrderUpdate, update.as_bytes(), &payload)
+                .expect("room");
+            producer
+                .write(EnvelopeKind::CameraUpdate, camera(view, 1).as_bytes(), &[])
+                .expect("room");
+        }
+        stencil_tiles(producer, 0, 0, &[clip(14, 8000, 5000)]);
+    }
+    host.read(ring.consumer());
+    assert!(host.plan(ViewId(0)).is_some(), "view zero draws");
+    assert_eq!(host.clips(ViewId(0)).len(), 1, "and has a mask");
+
+    {
+        let (producer, _) = ring.split();
+        let record = ViewUndeclare { view: ViewId(0) };
+        producer
+            .write(EnvelopeKind::ViewUndeclare, record.as_bytes(), &[])
+            .expect("room");
+    }
+    host.read(ring.consumer());
+
+    assert!(!host.declared(ViewId(0)));
+    assert!(host.plan(ViewId(0)).is_none(), "its order is gone");
+    assert!(host.clips(ViewId(0)).is_empty(), "and its masks");
+    assert!(
+        host.joiner().drawable(GeometryId(1), ViewId(0)).is_none(),
+        "and its use of the geometry"
+    );
+
+    // The other view is untouched, which is what says the drop is per view rather than wholesale.
+    assert!(host.declared(ViewId(1)));
+    let frame = host.plan(ViewId(1)).expect("the other view still draws");
+    assert_eq!(
+        frame.batches.get(0).expect("a batch").geometries,
+        [GeometryId(1)],
+        "through the announcement, which is shared and was not dropped"
     );
 }
