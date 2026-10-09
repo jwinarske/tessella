@@ -5,12 +5,14 @@
 
 use tessella_capture_abi::envelope::DrawFlags;
 use tessella_capture_abi::envelope::{
-    CameraUpdate, GeometryAdd, GeometryId, GeometryRemove, OrderEntry, OrderEpoch, OrderUpdate,
-    Span, StencilTile, StencilTiles, TileId, ViewDeclare, ViewId, ViewRelease, ViewUndeclare,
-    ViewUse, WireRecord,
+    CameraUpdate, Extent, GeometryAdd, GeometryId, GeometryRemove, OrderEntry, OrderEpoch,
+    OrderUpdate, Span, StencilTile, StencilTiles, TextureId, TileId, ViewDeclare, ViewId,
+    ViewRelease, ViewTarget, ViewUndeclare, ViewUse, WireRecord,
 };
 use tessella_capture_abi::ring::{Producer, Ring};
-use tessella_capture_abi::{CameraMode, EnvelopeKind, RenderPass};
+use tessella_capture_abi::{
+    CameraMode, EnvelopeKind, RenderPass, TextureChannelDataType, TexturePixelType,
+};
 use tessella_consume::host::Host;
 
 const CAPACITY: usize = 1 << 16;
@@ -128,6 +130,23 @@ fn camera(view: u32, epoch: u64) -> CameraUpdate {
     update.view = ViewId(view);
     update.order_epoch = OrderEpoch(epoch);
     update
+}
+
+/// Makes a declared view draw into a texture, sized against its parent.
+fn target(producer: &mut Producer, view: u32, parent: u32, num: u16, den: u16) {
+    let record = ViewTarget {
+        view: ViewId(view),
+        parent: ViewId(parent),
+        texture: TextureId(70),
+        scale_num: num,
+        scale_den: den,
+        format: TexturePixelType::RGBA as u8,
+        channel_type: TextureChannelDataType::HalfFloat as u8,
+        _pad: [0; 2],
+    };
+    producer
+        .write(EnvelopeKind::ViewTarget, record.as_bytes(), &[])
+        .expect("room");
 }
 
 /// Declares a view, which has to come before anything that names it.
@@ -849,4 +868,176 @@ fn undeclaring_a_view_drops_what_was_held_for_it() {
         [GeometryId(1)],
         "through the announcement, which is shared and was not dropped"
     );
+}
+
+/// One view's target, and a frame knows to draw it first.
+///
+/// DR-25: a heatmap draws its kernels into a half-resolution target and then draws that target
+/// through a color ramp. Two of the eighteen families are that shape, so a consumer with no
+/// `ViewTarget` cannot draw them at all.
+#[test]
+fn an_offscreen_view_names_what_it_draws_into() {
+    let mut ring = Ring::new(CAPACITY);
+    {
+        let (producer, _) = ring.split();
+        declare(producer, 0);
+        declare(producer, 1);
+        target(producer, 1, 0, 1, 2);
+    }
+    let mut host = Host::new();
+    let progress = host.read(ring.consumer());
+    assert_eq!(progress.malformed, 0);
+    assert_eq!(progress.undeclared, 0);
+
+    let found = host.target(ViewId(1)).copied().expect("a target");
+    assert_eq!(found.parent, ViewId(0));
+    assert_eq!(found.texture, TextureId(70));
+    // A heatmap target is `RGBA` and `HalfFloat` together, which is the pair the ABI calls out:
+    // the kernel sum runs past one and eight bits clips it to a flat cap.
+    assert_eq!(found.format, TexturePixelType::RGBA);
+    assert_eq!(found.channel, TextureChannelDataType::HalfFloat);
+
+    // Half of the parent, rounded *up*: a target one pixel short of its parent samples its own edge
+    // where the parent's last column reads.
+    assert_eq!(
+        found.size(Extent {
+            width: 64,
+            height: 64
+        }),
+        Extent {
+            width: 32,
+            height: 32
+        }
+    );
+    assert_eq!(
+        found.size(Extent {
+            width: 65,
+            height: 1
+        }),
+        Extent {
+            width: 33,
+            height: 1
+        },
+        "an odd parent still gets a target that covers it"
+    );
+
+    // And the parent knows what to draw before itself.
+    assert_eq!(host.feeding(ViewId(0)).collect::<Vec<_>>(), [ViewId(1)]);
+    assert_eq!(
+        host.feeding(ViewId(1)).count(),
+        0,
+        "the offscreen view feeds nothing, because nesting is refused"
+    );
+    assert!(
+        host.target(ViewId(0)).is_none(),
+        "the parent is on the screen"
+    );
+}
+
+/// A target naming a view that was never declared is the fault a use would be.
+#[test]
+fn a_target_of_an_undeclared_view_is_dropped() {
+    for (view, parent) in [(1, 0), (0, 1)] {
+        let mut ring = Ring::new(CAPACITY);
+        {
+            let (producer, _) = ring.split();
+            // Only one of the two is declared, whichever way round.
+            declare(producer, 0);
+            target(producer, view, parent, 1, 2);
+        }
+        let mut host = Host::new();
+        let progress = host.read(ring.consumer());
+        assert_eq!(
+            progress.undeclared, 1,
+            "view {view} parent {parent}: one of them is not declared"
+        );
+        assert!(host.target(ViewId(view)).is_none());
+    }
+}
+
+/// The three shapes of target a consumer refuses.
+///
+/// A denominator of zero is a protocol fault the ABI names. A view that is its own parent is a
+/// frame that draws before itself. And a target whose parent is *itself* offscreen is what
+/// `ViewError::NestedTarget` refuses on the producer's side -- refused here too, because that is
+/// what makes `feeding` a flat set and a frame's first pass recursion-free.
+#[test]
+fn a_nested_or_degenerate_target_is_malformed() {
+    // A denominator of zero.
+    let mut ring = Ring::new(CAPACITY);
+    {
+        let (producer, _) = ring.split();
+        declare(producer, 0);
+        declare(producer, 1);
+        target(producer, 1, 0, 1, 0);
+    }
+    let mut host = Host::new();
+    assert_eq!(
+        host.read(ring.consumer()).malformed,
+        1,
+        "a zero denominator"
+    );
+    assert!(host.target(ViewId(1)).is_none());
+
+    // Its own parent.
+    let mut ring = Ring::new(CAPACITY);
+    {
+        let (producer, _) = ring.split();
+        declare(producer, 2);
+        target(producer, 2, 2, 1, 2);
+    }
+    let mut host = Host::new();
+    assert_eq!(host.read(ring.consumer()).malformed, 1, "its own parent");
+    assert!(host.target(ViewId(2)).is_none());
+
+    // A parent that is itself a target.
+    let mut ring = Ring::new(CAPACITY);
+    {
+        let (producer, _) = ring.split();
+        for view in 0..3 {
+            declare(producer, view);
+        }
+        target(producer, 1, 0, 1, 2);
+        target(producer, 2, 1, 1, 2);
+    }
+    let mut host = Host::new();
+    assert_eq!(host.read(ring.consumer()).malformed, 1, "a nested target");
+    assert!(host.target(ViewId(1)).is_some(), "the first one stands");
+    assert!(host.target(ViewId(2)).is_none(), "the nested one does not");
+}
+
+/// Undeclaring a parent takes the views that fed it, wholly.
+///
+/// An offscreen view exists to be sampled by its parent, so one whose parent is gone is a pass
+/// nothing will ever read. Dropping only its target would leave it declared and drawing, onto a
+/// screen it was never meant to reach.
+#[test]
+fn undeclaring_a_parent_takes_what_fed_it() {
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+    {
+        let (producer, _) = ring.split();
+        declare(producer, 0);
+        declare(producer, 1);
+        target(producer, 1, 0, 1, 2);
+        write_frame(producer, 1, 1, &[1]);
+    }
+    host.read(ring.consumer());
+    assert!(host.declared(ViewId(1)));
+    assert!(host.plan(ViewId(1)).is_some(), "the offscreen view draws");
+
+    {
+        let (producer, _) = ring.split();
+        let record = ViewUndeclare { view: ViewId(0) };
+        producer
+            .write(EnvelopeKind::ViewUndeclare, record.as_bytes(), &[])
+            .expect("room");
+    }
+    host.read(ring.consumer());
+
+    assert!(!host.declared(ViewId(0)), "the parent is gone");
+    assert!(!host.declared(ViewId(1)), "and so is what fed it");
+    assert!(host.target(ViewId(1)).is_none());
+    assert!(host.plan(ViewId(1)).is_none(), "it draws nothing now");
+    assert_eq!(host.feeding(ViewId(0)).count(), 0);
 }

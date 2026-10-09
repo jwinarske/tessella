@@ -34,9 +34,10 @@ use alloc::collections::{BTreeMap, BTreeSet};
 use alloc::vec::Vec;
 
 use tessella_capture_abi::envelope::{
-    AttributeDesc, CameraUpdate, GeometryAdd, GeometryRemove, OrderEntry, OrderEpoch, OrderUpdate,
-    Segment, Span, StencilTile, StencilTiles, TextureRef, TextureUpdate, TileId, UboUpdate,
-    ViewDeclare, ViewId, ViewRelease, ViewUndeclare, ViewUse, WireRecord,
+    AttributeDesc, CameraUpdate, Extent, GeometryAdd, GeometryRemove, OrderEntry, OrderEpoch,
+    OrderUpdate, Segment, Span, StencilTile, StencilTiles, TextureId, TextureRef, TextureUpdate,
+    TileId, UboUpdate, ViewDeclare, ViewId, ViewRelease, ViewTarget, ViewUndeclare, ViewUse,
+    WireRecord,
 };
 use tessella_capture_abi::ring::Consumer;
 use tessella_capture_abi::{CameraMode, EnvelopeKind, TextureChannelDataType, TexturePixelType};
@@ -101,6 +102,65 @@ pub struct Plan {
     /// The highest ring position at which any geometry this plan draws was announced. Below it the
     /// producer may reuse slabs; at or above it, it may not until this is acknowledged.
     pub announced_through: u64,
+}
+
+/// What makes a view draw into a texture rather than onto the screen.
+///
+/// DR-25's offscreen view. A heatmap draws its kernels into a half-resolution target and then draws
+/// that target through a color ramp; a hillshade prepare pass has the same shape. Two of the
+/// eighteen families cannot draw at all without one.
+///
+/// # Why nesting is forbidden, and what that buys
+///
+/// The producer refuses a target whose parent is itself offscreen -- `ViewError::NestedTarget` --
+/// and this refuses one too. So the children of a view are a flat set rather than a tree, and a
+/// consumer drawing a frame runs them in any order and then draws the parent. No recursion, no
+/// cycle to detect, and no depth to bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Target {
+    /// The view this is sized against, and in whose frame it is drawn first.
+    pub parent: ViewId,
+    /// The id this view's output is bound by, in `TextureUpdate`'s id space.
+    ///
+    /// Never the subject of one: nothing uploads pixels to a render target. So a consumer holds an
+    /// image under this id that no `Upload::Texture` will ever name.
+    pub texture: TextureId,
+    /// Numerator of the size against the parent.
+    pub scale_num: u16,
+    /// Denominator of the size against the parent.
+    pub scale_den: u16,
+    /// What channels its texels carry.
+    pub format: TexturePixelType,
+    /// What one channel holds.
+    ///
+    /// Not derivable from the format: a heatmap target is `RGBA` *and* `HalfFloat` together,
+    /// because "the kernel sum runs past one, and an 8-bit target clips it to a flat cap over every
+    /// dense cluster -- which reads as a ramp that has lost its top stop rather than as a format
+    /// bug".
+    pub channel: TextureChannelDataType,
+}
+
+impl Target {
+    /// The target's size, from the parent's.
+    ///
+    /// Rounded up, so a parent of an odd width still gives a half-resolution target that covers it:
+    /// 65 at one half is 33 and not 32, and a target one pixel short of its parent samples its own
+    /// edge where the parent's last column reads.
+    ///
+    /// At least one pixel each way. A scale that rounds to nothing is a target `vkCreateImage`
+    /// refuses, and the caller should not have to know which call says so.
+    #[must_use]
+    pub fn size(&self, parent: Extent) -> Extent {
+        let scale = |at: u32| {
+            let num = u64::from(at).saturating_mul(u64::from(self.scale_num));
+            let den = u64::from(self.scale_den).max(1);
+            u32::try_from(num.div_ceil(den)).unwrap_or(u32::MAX).max(1)
+        };
+        Extent {
+            width: scale(parent.width),
+            height: scale(parent.height),
+        }
+    }
 }
 
 /// A view's clip masks: one per tile, and which tiles each layer group clips.
@@ -238,6 +298,8 @@ pub struct Host {
     /// DR-18's per-view state. A view is in here from its `ViewDeclare` until its `ViewUndeclare`,
     /// and a record naming one that is not is dropped -- the ABI calls that a protocol fault.
     views: BTreeMap<ViewId, CameraMode>,
+    /// The offscreen views, and what each draws into.
+    targets: BTreeMap<ViewId, Target>,
     /// Each view's clip masks and the partition over them.
     clips: BTreeMap<ViewId, Clips>,
     /// What a view with no `StencilTiles` gets: no masks, and a partition that clips nothing.
@@ -387,6 +449,25 @@ impl Host {
         })
     }
 
+    /// What an offscreen view draws into, or `None` for one that draws on the screen.
+    #[must_use]
+    pub fn target(&self, view: ViewId) -> Option<&Target> {
+        self.targets.get(&view)
+    }
+
+    /// The offscreen views that feed `view`, which a frame draws before it.
+    ///
+    /// Flat rather than recursive, because nesting is refused: a target whose parent is itself
+    /// offscreen is malformed here and `ViewError::NestedTarget` on the producer's side. So this is
+    /// the whole of what a frame has to draw first, and the order among them does not matter --
+    /// they write different textures and none samples another.
+    pub fn feeding(&self, view: ViewId) -> impl Iterator<Item = ViewId> + '_ {
+        self.targets
+            .iter()
+            .filter(move |(_, target)| target.parent == view)
+            .map(|(child, _)| *child)
+    }
+
     /// Which side owns a view's camera, or `None` for a view that is not declared.
     ///
     /// What DR-9 settles per view, and the thing a consumer cannot guess: in consumer mode every
@@ -412,7 +493,19 @@ impl Host {
     /// the clips, the camera and the uses of a view that no longer exists, which on a cluster
     /// adding and removing insets is a leak per inset.
     fn forget(&mut self, view: ViewId) {
+        // The views that fed it go too, and wholly: an offscreen view exists to be sampled by its
+        // parent, so one whose parent is gone is a pass nothing will ever read. Dropping only its
+        // *target* would leave it declared and drawing, onto a screen it was never meant to reach.
+        //
+        // Collected first, and one level deep by construction: nesting is refused, so a child has
+        // no children and this cannot recurse.
+        let orphaned: Vec<ViewId> = self.feeding(view).collect();
+        for child in orphaned {
+            self.forget(child);
+        }
+
         self.views.remove(&view);
+        self.targets.remove(&view);
         self.orders.remove(&view);
         self.cameras.remove(&view);
         self.clips.remove(&view);
@@ -500,6 +593,48 @@ impl Host {
                     return Outcome::Malformed;
                 };
                 self.views.insert(declare.view, mode);
+                Outcome::Read
+            }
+            EnvelopeKind::ViewTarget => {
+                let Some(target) = ViewTarget::from_bytes(bytes) else {
+                    return Outcome::Malformed;
+                };
+                // Both views declared, and the offscreen one before its target -- the producer
+                // writes the pair in that order, "because a target naming an undeclared view is the
+                // same protocol fault a use would be".
+                if !self.views.contains_key(&target.view)
+                    || !self.views.contains_key(&target.parent)
+                {
+                    return Outcome::Undeclared;
+                }
+                // Nesting is what `ViewError::NestedTarget` refuses on the producer's side, and
+                // refusing it here is what lets a consumer draw a frame without recursion: the
+                // children of a view are a flat set.
+                if self.targets.contains_key(&target.parent) {
+                    return Outcome::Malformed;
+                }
+                // A denominator of zero is a protocol fault the ABI names, and a view that is its
+                // own parent is a frame that draws before itself.
+                if target.scale_den == 0 || target.view == target.parent {
+                    return Outcome::Malformed;
+                }
+                let Some(format) = TexturePixelType::from_repr(target.format) else {
+                    return Outcome::Malformed;
+                };
+                let Some(channel) = TextureChannelDataType::from_repr(target.channel_type) else {
+                    return Outcome::Malformed;
+                };
+                self.targets.insert(
+                    target.view,
+                    Target {
+                        parent: target.parent,
+                        texture: target.texture,
+                        scale_num: target.scale_num,
+                        scale_den: target.scale_den,
+                        format,
+                        channel,
+                    },
+                );
                 Outcome::Read
             }
             EnvelopeKind::ViewUndeclare => {
