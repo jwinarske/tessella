@@ -35,13 +35,15 @@ use alloc::vec::Vec;
 
 use tessella_capture_abi::envelope::{
     AttributeDesc, CameraUpdate, GeometryAdd, GeometryRemove, OrderEntry, OrderEpoch, OrderUpdate,
-    Segment, Span, TextureRef, TextureUpdate, UboUpdate, ViewId, ViewRelease, ViewUse, WireRecord,
+    Segment, Span, StencilTile, StencilTiles, TextureRef, TextureUpdate, TileId, UboUpdate, ViewId,
+    ViewRelease, ViewUse, WireRecord,
 };
 use tessella_capture_abi::ring::Consumer;
 use tessella_capture_abi::{EnvelopeKind, TextureChannelDataType, TexturePixelType};
 
 use crate::batch::{Batches, Program, collapse_into};
 use crate::join::{Announcement, Joiner};
+use crate::stencil::{self, Partition};
 use crate::upload::{self, Uploads};
 
 /// What one read of the stream did.
@@ -92,6 +94,87 @@ pub struct Plan {
     pub announced_through: u64,
 }
 
+/// A view's clip masks: one per tile, and which tiles each layer group clips.
+///
+/// `StencilTiles` is "the tile set a layer group wants clipped, emitted on change only", one record
+/// per (view, layer group), each carrying a run of [`StencilTile`] -- a tile and the column-major
+/// matrix its mask quad is drawn by.
+///
+/// Both halves are kept because both are needed and the record carries them together: the tile sets
+/// decide the [`Partition`], and the matrices are what a mask is actually drawn with. Dropping the
+/// matrices would mean decoding the same record again later.
+///
+/// # The partition is computed here, not per frame
+///
+/// `StencilTiles` arrives on change, so the partition changes only then -- recomputing it per frame
+/// would be work for a map that is not moving. It is rebuilt when a group's tiles are replaced,
+/// which is the only thing that can change it.
+///
+/// Per *record*, which means a zoom crossing that moves every group pays one rebuild per group
+/// rather than one for the frame. That is the cost of `clips` being a shared accessor: a staleness
+/// flag would need `&mut` to bring level, and a `&self` reader would then have to be able to hand
+/// back a stale partition, which is a worse thing to have than a few extra rebuilds.
+///
+/// A rebuild between two groups' records is over a mixed state -- one group's new tiles beside
+/// another's old ones -- and is replaced by the next one. No frame sees it: [`Host::read`] drains
+/// what is available before anything calls [`Host::plan`].
+#[derive(Debug, Clone, Default)]
+pub struct Clips {
+    /// One mask per tile, whichever group named it, with the matrix it is drawn by.
+    masks: BTreeMap<TileId, [f32; 16]>,
+    /// Each layer group's own tile set, which is what decides whose field clears whose.
+    groups: BTreeMap<i32, BTreeSet<TileId>>,
+    /// The assignments, rebuilt whenever the groups change.
+    partition: Partition,
+}
+
+impl Clips {
+    /// Replaces one layer group's tiles and rebuilds the partition.
+    fn set(&mut self, layer: i32, tiles: &[StencilTile]) {
+        for tile in tiles {
+            self.masks.insert(tile.tile, tile.matrix);
+        }
+        self.groups
+            .insert(layer, tiles.iter().map(|tile| tile.tile).collect());
+
+        // Every bit of the byte. A consumer holding some back for its own use would pass fewer --
+        // this one has its own depth attachment, so the stencil is entirely the clip's.
+        let every: BTreeSet<TileId> = self.groups.values().flatten().copied().collect();
+        self.partition = stencil::partition(&every, &self.groups, stencil::ALL_BITS);
+
+        // A tile no group names any more has no mask to draw. Dropped rather than kept, because the
+        // matrices are a frame's worth of mask draws and a stale one is a quad drawn over the map.
+        self.masks.retain(|tile, _| every.contains(tile));
+    }
+
+    /// How each tile's mask is painted and how its geometry tests against it.
+    ///
+    /// A view that has had no `StencilTiles` answers the default, which is `partitioned: false` with
+    /// no tiles -- and `Partition`'s own words for that are "a tile absent here has no mask; its
+    /// geometry is left unclipped". So a consumer needs no special case for a view with no clips.
+    #[must_use]
+    pub fn partition(&self) -> &Partition {
+        &self.partition
+    }
+
+    /// Each tile's mask and the matrix it is drawn by, in tile order.
+    pub fn masks(&self) -> impl Iterator<Item = (TileId, &[f32; 16])> + '_ {
+        self.masks.iter().map(|(tile, matrix)| (*tile, matrix))
+    }
+
+    /// How many masks this view draws.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.masks.len()
+    }
+
+    /// Whether this view has no masks, and so clips nothing.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.masks.is_empty()
+    }
+}
+
 /// One frame's worth of what a backend draws, from a single borrow of the host.
 ///
 /// The batches *and* the joiner, because recording needs both: the batches say which program and
@@ -117,6 +200,8 @@ pub struct Frame<'a> {
     pub batches: &'a Batches,
     /// Where a drawable's tile is looked up.
     pub joiner: &'a Joiner,
+    /// The masks to draw and the assignments to draw them with.
+    pub clips: &'a Clips,
 }
 
 /// Reads the stream and plans frames from it.
@@ -139,6 +224,14 @@ pub struct Host {
     stale: BTreeSet<ViewId>,
     /// Where each view's last plan was announced through, beside the batches it belongs to.
     announced: BTreeMap<ViewId, u64>,
+    /// Each view's clip masks and the partition over them.
+    clips: BTreeMap<ViewId, Clips>,
+    /// What a view with no `StencilTiles` gets: no masks, and a partition that clips nothing.
+    ///
+    /// Held rather than returned by value because [`Frame`] carries a reference, and an empty one
+    /// is the same for every view. `Partition`'s own words for it are "a tile absent here has no
+    /// mask; its geometry is left unclipped", so a consumer needs no special case.
+    unclipped: Clips,
 }
 
 impl Host {
@@ -275,7 +368,18 @@ impl Host {
             },
             batches: self.plans.get(&view).expect("planned above"),
             joiner: &self.joiner,
+            clips: self.clips.get(&view).unwrap_or(&self.unclipped),
         })
+    }
+
+    /// A view's clip masks, whether or not it has a frame to draw.
+    ///
+    /// [`Frame`] carries the same thing for a view that is ready; this is for a caller that wants
+    /// them before the camera and the order agree -- a backend sizing its mask buffer, which is a
+    /// function of the tile count rather than of the frame.
+    #[must_use]
+    pub fn clips(&self, view: ViewId) -> &Clips {
+        self.clips.get(&view).unwrap_or(&self.unclipped)
     }
 
     /// Marks a view's plan stale, so the next [`Host::plan`] rebuilds it.
@@ -362,6 +466,23 @@ impl Host {
                     },
                 );
                 self.stale.insert(update.view);
+                Outcome::Read
+            }
+            EnvelopeKind::StencilTiles => {
+                let Some(update) = StencilTiles::from_bytes(bytes) else {
+                    return Outcome::Malformed;
+                };
+                // All or nothing, as for an order's entries: a short run is a layer clipped to some
+                // of its tiles, which draws the rest unclipped rather than not at all.
+                let Some(tiles) = read_run::<StencilTile>(payload, update.tiles) else {
+                    return Outcome::Malformed;
+                };
+                self.clips
+                    .entry(update.view)
+                    .or_default()
+                    .set(update.layer_index, &tiles);
+                // Not `stale`: the batches do not depend on the clips. What changed is which tile
+                // each drawable tests against, and that is read per draw rather than collapsed.
                 Outcome::Read
             }
             EnvelopeKind::UboUpdate => {
