@@ -92,6 +92,33 @@ pub struct Plan {
     pub announced_through: u64,
 }
 
+/// One frame's worth of what a backend draws, from a single borrow of the host.
+///
+/// The batches *and* the joiner, because recording needs both: the batches say which program and
+/// which drawables, and the joiner says which tile each drawable is in -- which is the stencil
+/// reference it draws with. Returning only the batches made that impossible to express. The
+/// batches borrow the host, so asking it for the joiner afterwards is
+///
+/// ```text
+/// error[E0502]: cannot borrow `host` as immutable because it is also borrowed as mutable
+/// ```
+///
+/// and there is no way round it from outside: cloning the batches defeats the cache
+/// [`Host::plan`] exists to serve, and taking the joiner first conflicts the other way.
+///
+/// Both references come from the one borrow, so the guarantee [`Host::plan`] had is kept -- these
+/// batches are the ones just planned, and not a cache a caller might have forgotten to bring
+/// level.
+#[derive(Debug)]
+pub struct Frame<'a> {
+    /// What this frame is: the view, the epoch, and how far to acknowledge.
+    pub plan: Plan,
+    /// The batches to walk, in draw order.
+    pub batches: &'a Batches,
+    /// Where a drawable's tile is looked up.
+    pub joiner: &'a Joiner,
+}
+
 /// Reads the stream and plans frames from it.
 #[derive(Debug, Clone, Default)]
 pub struct Host {
@@ -199,7 +226,9 @@ impl Host {
         }
     }
 
-    /// The batches a view draws, planned if they are stale and returned from the cache if not.
+    /// One frame of a view: what to draw, the batches to walk and the joiner to resolve them.
+    ///
+    /// Planned if the batches are stale and returned from the cache if not.
     ///
     /// `None` when the view has no order, no camera, or a camera naming an epoch the held order
     /// does not establish -- §11.7's "hold `CameraUpdate` until its `orderEpoch` is held". Drawing
@@ -216,7 +245,7 @@ impl Host {
     /// The cost is this signature: drawing holds a borrow, so acknowledging has to follow it
     /// rather than interleave. That is the order a backend works in anyway -- draw, then say the
     /// copies are done -- but it is a real constraint and not a free one.
-    pub fn plan(&mut self, view: ViewId) -> Option<(Plan, &Batches)> {
+    pub fn plan(&mut self, view: ViewId) -> Option<Frame<'_>> {
         let order = self.orders.get(&view)?;
         if self.cameras.get(&view) != Some(&order.epoch) {
             return None;
@@ -238,14 +267,15 @@ impl Host {
             self.announced.insert(view, announced_through);
         }
 
-        Some((
-            Plan {
+        Some(Frame {
+            plan: Plan {
                 view,
                 epoch: order.epoch,
                 announced_through: self.announced.get(&view).copied().unwrap_or_default(),
             },
-            self.plans.get(&view).expect("planned above"),
-        ))
+            batches: self.plans.get(&view).expect("planned above"),
+            joiner: &self.joiner,
+        })
     }
 
     /// Marks a view's plan stale, so the next [`Host::plan`] rebuilds it.

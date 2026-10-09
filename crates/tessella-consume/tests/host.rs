@@ -131,12 +131,12 @@ fn a_frame_plans_what_its_order_names() {
     assert_eq!(progress.malformed, 0, "and every record parses");
     assert!(host.ready(ViewId(0)), "camera and order agree");
 
-    let (plan, batches) = host.plan(ViewId(0)).expect("a plan");
-    assert_eq!(plan.view, ViewId(0));
-    assert_eq!(plan.epoch, OrderEpoch(1));
-    assert_eq!(batches.len(), 1, "three like drawables collapse");
+    let frame = host.plan(ViewId(0)).expect("a plan");
+    assert_eq!(frame.plan.view, ViewId(0));
+    assert_eq!(frame.plan.epoch, OrderEpoch(1));
+    assert_eq!(frame.batches.len(), 1, "three like drawables collapse");
     assert_eq!(
-        batches.get(0).expect("a batch").geometries,
+        frame.batches.get(0).expect("a batch").geometries,
         [GeometryId(1), GeometryId(2), GeometryId(3)]
     );
 }
@@ -182,7 +182,10 @@ fn a_camera_ahead_of_its_order_does_not_commit() {
     }
     host.read(ring.consumer());
     assert!(host.ready(ViewId(0)));
-    assert_eq!(host.plan(ViewId(0)).expect("a plan").0.epoch, OrderEpoch(2));
+    assert_eq!(
+        host.plan(ViewId(0)).expect("a plan").plan.epoch,
+        OrderEpoch(2)
+    );
 }
 
 /// The position to acknowledge is the highest at which the plan's geometry was announced.
@@ -197,7 +200,7 @@ fn a_plan_reports_where_to_acknowledge() {
     }
     host.read(ring.consumer());
 
-    let (plan, _) = host.plan(ViewId(0)).expect("a plan");
+    let plan = host.plan(ViewId(0)).expect("a plan").plan;
     assert!(plan.announced_through > 0, "something was announced");
     assert!(
         plan.announced_through <= host.read_through(),
@@ -275,7 +278,7 @@ fn a_retire_takes_the_geometry_out_of_the_plan() {
         write_frame(producer, 0, 1, &[1, 2]);
     }
     host.read(ring.consumer());
-    let (_, batches) = host.plan(ViewId(0)).expect("a plan");
+    let batches = host.plan(ViewId(0)).expect("a plan").batches;
     assert_eq!(batches.get(0).expect("a batch").geometries.len(), 2);
 
     {
@@ -289,7 +292,7 @@ fn a_retire_takes_the_geometry_out_of_the_plan() {
     }
     host.read(ring.consumer());
 
-    let (_, batches) = host.plan(ViewId(0)).expect("a plan");
+    let batches = host.plan(ViewId(0)).expect("a plan").batches;
     assert_eq!(
         batches.get(0).expect("a batch").geometries,
         [GeometryId(2)],
@@ -332,10 +335,10 @@ fn a_release_leaves_the_other_view() {
     host.read(ring.consumer());
 
     {
-        let (_, batches) = host.plan(ViewId(0)).expect("a plan");
+        let batches = host.plan(ViewId(0)).expect("a plan").batches;
         assert!(batches.is_empty(), "the released view draws nothing");
     }
-    let (_, batches) = host.plan(ViewId(1)).expect("a plan");
+    let batches = host.plan(ViewId(1)).expect("a plan").batches;
     assert_eq!(
         batches.get(0).expect("a batch").geometries,
         [GeometryId(1)],
@@ -364,7 +367,7 @@ fn an_unchanged_frame_is_not_replanned() {
     assert!(!host.stale(ViewId(0)), "and now it is cached");
 
     for _ in 0..8 {
-        let (_, batches) = host.plan(ViewId(0)).expect("a plan");
+        let batches = host.plan(ViewId(0)).expect("a plan").batches;
         assert_eq!(batches.len(), 1, "the same batches every time");
         assert!(!host.stale(ViewId(0)), "and no replanning");
     }
@@ -400,7 +403,7 @@ fn a_re_announcement_makes_the_plan_stale() {
         host.stale(ViewId(0)),
         "the order did not change and what it draws did"
     );
-    let (_, batches) = host.plan(ViewId(0)).expect("a plan");
+    let batches = host.plan(ViewId(0)).expect("a plan").batches;
     assert_eq!(batches.len(), 2, "the two families no longer collapse");
 }
 
@@ -436,4 +439,41 @@ fn an_unknown_view_has_no_plan() {
     let mut host = Host::new();
     assert!(host.plan(ViewId(9)).is_none());
     assert!(!host.ready(ViewId(9)));
+}
+
+/// A frame's batches and its joiner are held at the same time.
+///
+/// Which is the whole of what `Frame` is for, and the assertion is that this *compiles*. Recording
+/// a draw needs both -- the batches say which program and which drawables, the joiner says which
+/// tile each drawable is in and so which stencil reference it draws with -- and when `plan`
+/// returned only the batches, a caller asking for the joiner afterwards got
+///
+/// ```text
+/// error[E0502]: cannot borrow `host` as immutable because it is also borrowed as mutable
+/// ```
+///
+/// There was no way round it from outside: cloning the batches defeats the cache, and taking the
+/// joiner first conflicts the other way. So this is a compile-time guard with a run-time shape,
+/// and it would have failed to build rather than failed to pass.
+#[test]
+fn a_frame_holds_its_batches_beside_its_joiner() {
+    let mut ring = Ring::new(CAPACITY);
+    let (producer, consumer) = ring.split();
+    write_frame(producer, 0, 1, &[1, 2]);
+
+    let mut host = Host::new();
+    host.read(consumer);
+
+    let frame = host.plan(ViewId(0)).expect("a plan");
+    // Both at once, which is what a backend recording a frame does.
+    let resolved = frame
+        .batches
+        .iter()
+        .flat_map(|batch| batch.geometries.to_vec())
+        .filter(|geometry| frame.joiner.drawable(*geometry, frame.plan.view).is_some())
+        .count();
+    assert_eq!(
+        resolved, 2,
+        "the joiner has to resolve every drawable the batches name"
+    );
 }

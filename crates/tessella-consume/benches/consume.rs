@@ -224,7 +224,7 @@ fn main() {
         let read_allocs = allocations() - before;
 
         // Warm: the first call plans, which is not what the cached figure is about.
-        let produced = host.plan(ViewId(0)).expect("a plan").1.len();
+        let produced = host.plan(ViewId(0)).expect("a plan").batches.len();
 
         // Cached: the frame has not changed, so this is what a still map pays.
         let mut cached = Vec::with_capacity(200);
