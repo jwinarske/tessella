@@ -427,6 +427,26 @@ pub enum TextureFilter {
     Nearest = 1,
 }
 
+impl TextureFilter {
+    /// Converts a wire value into a `TextureFilter`, rejecting anything unrecognized.
+    ///
+    /// `TextureUpdate::format` and `channel_type` each have one; this field had none, so every
+    /// consumer wrote the match itself. Two copies of a match can be wrong the same way and
+    /// still agree.
+    ///
+    /// Rejects rather than defaults. Zero *is* `Linear`, so a producer that never set the field
+    /// reads correctly; a third value names something this build cannot do, and reading it as
+    /// `Linear` would sharpen an atlas that asked not to be.
+    #[must_use]
+    pub const fn from_repr(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Linear),
+            1 => Some(Self::Nearest),
+            _ => None,
+        }
+    }
+}
+
 /// Binds a texture to a shader slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(C)]
@@ -1014,6 +1034,14 @@ pub struct CameraUpdate {
     pub _pad: [u8; 3],
 }
 
+impl TextureRef {
+    /// How to sample it, or `None` if the discriminant is not one this build knows.
+    #[must_use]
+    pub const fn filter(&self) -> Option<TextureFilter> {
+        TextureFilter::from_repr(self.filter)
+    }
+}
+
 impl AttributeDesc {
     /// The type the buffer supplies, or `None` if the discriminant is not one this build knows.
     #[must_use]
@@ -1247,6 +1275,39 @@ const _: () = {
 mod tests {
     use super::*;
     use core::mem::offset_of;
+
+    /// A filter decodes the two values it has and refuses the rest.
+    ///
+    /// Zero being `Linear` is load-bearing: the field was padding through R0, so a producer that
+    /// never set it keeps the behavior it had.
+    #[test]
+    fn a_filter_decodes_or_refuses() {
+        assert_eq!(TextureFilter::from_repr(0), Some(TextureFilter::Linear));
+        assert_eq!(TextureFilter::from_repr(1), Some(TextureFilter::Nearest));
+        assert_eq!(
+            TextureFilter::default(),
+            TextureFilter::Linear,
+            "and the default agrees with zero, which is what makes the padding harmless"
+        );
+        for unknown in [2, 3, u32::MAX] {
+            assert_eq!(
+                TextureFilter::from_repr(unknown),
+                None,
+                "{unknown} is not a filter this build knows, and reading it as Linear would \
+                 sharpen an atlas that asked not to be"
+            );
+        }
+
+        // Through the record, which is how a consumer reaches it.
+        let bound = TextureRef {
+            texture: TextureId(1),
+            slot: 0,
+            filter: 1,
+        };
+        assert_eq!(bound.filter(), Some(TextureFilter::Nearest));
+        let odd = TextureRef { filter: 9, ..bound };
+        assert_eq!(odd.filter(), None);
+    }
 
     /// Field *order* is protocol just as much as size is, and the const block above cannot see
     /// it: swapping two same-sized fields keeps every size and alignment identical while

@@ -1041,3 +1041,43 @@ fn undeclaring_a_parent_takes_what_fed_it() {
     assert!(host.plan(ViewId(1)).is_none(), "it draws nothing now");
     assert_eq!(host.feeding(ViewId(0)).count(), 0);
 }
+
+/// Two views' batches are held at once, which `Frame` alone cannot do.
+///
+/// DR-25's offscreen views are why: a backend records the child's pass and the parent's in one
+/// submission, so it needs both views' batches alive together. `Host::plan` takes `&mut self` and
+/// hands back references into the host, so the second call is refused while the first's `Frame`
+/// lives -- planning each in turn and reading them back is the shape that works.
+#[test]
+fn two_views_batches_are_held_at_once() {
+    let mut ring = Ring::new(CAPACITY);
+    {
+        let (producer, _) = ring.split();
+        write_frame(producer, 0, 1, &[1]);
+        write_frame(producer, 1, 1, &[2]);
+    }
+    let mut host = Host::new();
+    host.read(ring.consumer());
+
+    // Planned in turn, each `Frame` dropped before the next.
+    for view in 0..2 {
+        assert!(
+            host.plan(ViewId(view)).is_some(),
+            "view {view} has an order and a camera"
+        );
+    }
+
+    let first = host.batches(ViewId(0)).expect("view zero was planned");
+    let second = host.batches(ViewId(1)).expect("view one was planned");
+    assert_eq!(
+        first.get(0).expect("a batch").geometries,
+        [GeometryId(1)],
+        "and both are readable together"
+    );
+    assert_eq!(second.get(0).expect("a batch").geometries, [GeometryId(2)]);
+
+    assert!(
+        host.batches(ViewId(9)).is_none(),
+        "a view never planned has none"
+    );
+}

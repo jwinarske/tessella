@@ -525,6 +525,27 @@ impl Host {
         self.clips.get(&view).unwrap_or(&self.unclipped)
     }
 
+    /// A view's batches, as the last [`Host::plan`] of it left them.
+    ///
+    /// `None` for a view that has never been planned, or whose camera and order did not agree when
+    /// it was. [`Host::plan`] is what brings them level; this only reads them.
+    ///
+    /// # Why this exists beside `Frame`
+    ///
+    /// Because a frame can have more than one view, and `plan` cannot serve two. It takes `&mut
+    /// self` and hands back references into the host, so the second call is refused while the first
+    /// one's `Frame` is alive -- and DR-25's offscreen views mean a backend needs the child's
+    /// batches *and* the parent's in one recording.
+    ///
+    /// So a caller drawing several views plans each in turn, dropping each `Frame`, and then reads
+    /// them back through this. What it gives up is the guarantee `Frame` carries -- that these are
+    /// the batches just planned rather than a cache someone forgot to bring level -- which is why
+    /// `Frame` is still what a single-view caller should use.
+    #[must_use]
+    pub fn batches(&self, view: ViewId) -> Option<&Batches> {
+        self.plans.get(&view)
+    }
+
     /// Marks a view's plan stale, so the next [`Host::plan`] rebuilds it.
     ///
     /// Reading the stream does this where it has to. This is for a caller that knows something the
