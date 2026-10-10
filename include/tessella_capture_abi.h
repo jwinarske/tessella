@@ -2286,9 +2286,11 @@ typedef struct tsl_camera_update {
     uint64_t order_epoch;
     /* View this camera belongs to. */
     uint32_t view;
-    /* Draw-order index where the opaque pass ends. */
+    /* Depth slot where the opaque pass ends. Not a draw-order index: mbgl compares it against */
+    /* the layer's own slot, so a draw-order position substituted for it cuts the passes in the */
+    /* wrong place. */
     uint32_t opaque_pass_cutoff;
-    /* Depth range. */
+    /* Depth range the layer slots divide, as mbgl's depthRangeSize. */
     float depth_range_size;
     /* tsl_projection_mode: which of the two matrices above is authoritative. Refuse a value */
     /* this build does not know rather than falling back to the plane, which draws a flat map */
