@@ -939,10 +939,47 @@ pub struct OrderUpdate {
     pub order_epoch: OrderEpoch,
     /// View this order belongs to.
     pub view: ViewId,
-    /// Padding. Must be zero.
-    pub _pad: u32,
+    /// Layers in the style this order was built from.
+    ///
+    /// What [`OrderEntry::layer_index`] is measured against, and the only thing that makes
+    /// [`CameraUpdate::opaque_pass_cutoff`] mean anything: the cutoff is a threshold on the
+    /// depth slot, [`depth_slot`] computes a slot from an index and this count, and nothing
+    /// downstream can recover the count from the order itself. A style layer that contributes
+    /// no drawable this frame is simply absent, so counting the entries undercounts and shifts
+    /// every slot.
+    ///
+    /// This was padding through R1, so zero is what a producer that does not send it sends --
+    /// and zero is a count no drawing style has, which is how a consumer tells that apart from
+    /// a real one rather than computing slots against a base of nothing.
+    pub layer_count: u32,
     /// [`OrderEntry`] run in the payload region, in draw order.
     pub entries: Span,
+}
+
+/// Where a layer's drawables sit in the depth range, measured from the top of the style.
+///
+/// mbgl's own inversion, and the quantity [`CameraUpdate::opaque_pass_cutoff`] is compared
+/// against -- `if (currentLayer < opaquePassCutoff)`. The style's first layer is the furthest
+/// back and gets the highest slot.
+///
+/// Here rather than on the producer's side because both halves need the identical arithmetic:
+/// the producer to derive the cutoff, a consumer to compare against it. Two copies of this
+/// could be wrong the same way and still agree with each other, which is the one class of
+/// disagreement a second implementation cannot catch.
+///
+/// Saturating throughout. `layer_count` of zero is a producer that did not send one, and the
+/// answer then is slot zero rather than an underflow -- a consumer that cannot place a layer
+/// should leave the passes alone, which is what [`OrderUpdate::layer_count`] says to do.
+#[must_use]
+pub const fn depth_slot(layer_index: i32, layer_count: u32) -> u32 {
+    #[allow(clippy::cast_sign_loss)]
+    let index = if layer_index < 0 {
+        0
+    } else {
+        layer_index as u32
+    };
+    let top = layer_count.saturating_sub(1);
+    top.saturating_sub(if index < top { index } else { top })
 }
 
 /// The style's light — the sun.
@@ -1334,12 +1371,45 @@ mod tests {
         assert_eq!(odd.filter(), None);
     }
 
+    /// A layer's depth slot runs opposite its style index, and saturates at both ends.
+    ///
+    /// The quantity `CameraUpdate::opaque_pass_cutoff` is a threshold on. One implementation
+    /// rather than two: `tessella_orchestrate::order` re-exports this and derives the cutoff
+    /// from it, so a consumer comparing against the cutoff uses the arithmetic that produced
+    /// it. Two copies could be wrong the same way and still agree with each other.
+    #[test]
+    fn a_depth_slot_runs_opposite_the_style_index() {
+        assert_eq!(depth_slot(0, 5), 4, "the style's first layer is deepest");
+        assert_eq!(depth_slot(4, 5), 0, "and its last is shallowest");
+        assert!(depth_slot(1, 5) > depth_slot(2, 5), "and it descends");
+
+        // Out of range in either direction, rather than wrapping.
+        assert_eq!(depth_slot(99, 5), 0, "past the top is the top");
+        assert_eq!(depth_slot(-1, 5), 4, "and a negative index is the bottom");
+
+        // A producer that does not send a count. `OrderUpdate::layer_count` was padding, so
+        // this is what it sends, and the answer has to be a number rather than an underflow --
+        // `Frame::depth_slot` is what refuses to use it.
+        assert_eq!(depth_slot(0, 0), 0);
+        assert_eq!(depth_slot(7, 0), 0);
+        assert_eq!(depth_slot(0, 1), 0, "a style of one layer has one slot");
+    }
+
     /// Field *order* is protocol just as much as size is, and the const block above cannot see
     /// it: swapping two same-sized fields keeps every size and alignment identical while
     /// silently reinterpreting the stream. These pin the offsets the generated C header
     /// mirrors, for the records where a swap would be both easy and quiet.
     #[test]
     fn field_offsets_are_pinned() {
+        // `layer_count` replaced `_pad` in place, which is the whole reason that was free to
+        // do: a consumer built against either reads every other field at the same offset, and
+        // the record is the same twenty-four bytes.
+        assert_eq!(offset_of!(OrderUpdate, order_epoch), 0);
+        assert_eq!(offset_of!(OrderUpdate, view), 8);
+        assert_eq!(offset_of!(OrderUpdate, layer_count), 12);
+        assert_eq!(offset_of!(OrderUpdate, entries), 16);
+        assert_eq!(core::mem::size_of::<OrderUpdate>(), 24);
+
         assert_eq!(offset_of!(AttributeDesc, attr_id), 0);
         assert_eq!(offset_of!(AttributeDesc, binding), 4);
         assert_eq!(offset_of!(AttributeDesc, source), 8);

@@ -1163,7 +1163,7 @@ export const LAYOUT = Object.freeze({
     at: {
       order_epoch: 0,
       view: 8,
-      _pad: 12,
+      layer_count: 12,
       entries: 16,
     },
   },

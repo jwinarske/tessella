@@ -88,6 +88,12 @@ impl Progress {
 struct Order {
     epoch: OrderEpoch,
     entries: Vec<OrderEntry>,
+    /// Layers in the style this order was built from, from `OrderUpdate::layer_count`.
+    ///
+    /// Kept because a slot is measured against it and the order cannot supply it: a style layer
+    /// contributing no drawable this frame is absent from the entries, so counting them
+    /// undercounts and shifts every slot.
+    layer_count: u32,
 }
 
 /// A frame ready to draw.
@@ -271,6 +277,21 @@ pub struct Frame<'a> {
     pub joiner: &'a Joiner,
     /// The masks to draw and the assignments to draw them with.
     pub clips: &'a Clips,
+    /// Where each layer sits in the depth range, or `None` if the producer did not say.
+    ///
+    /// [`Self::camera`]'s `opaque_pass_cutoff` is a threshold on this, so the two are only
+    /// useful together -- and a frame whose order carried no layer count cannot place a layer
+    /// at all. `None` rather than zero, because zero is what that producer sends and comparing
+    /// slots against a base of nothing would cut the passes somewhere arbitrary.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// if let Some(slot) = frame.depth_slot(entry.layer_index) {
+    ///     let opaque = slot < frame.camera.opaque_pass_cutoff;
+    /// }
+    /// ```
+    pub layer_count: Option<core::num::NonZeroU32>,
     /// The camera this frame draws under. Its `order_epoch` is [`Plan::epoch`].
     ///
     /// From the same borrow as the batches, and for the same reason the batches are here rather
@@ -278,6 +299,38 @@ pub struct Frame<'a> {
     /// the host holds by the time it asks. [`Host::camera`] is the other question -- what a view's
     /// camera is when no frame can be planned at all.
     pub camera: &'a CameraUpdate,
+}
+
+impl Frame<'_> {
+    /// Where a layer's drawables sit in the depth range, or `None` if the order carried no
+    /// layer count.
+    ///
+    /// The quantity [`CameraUpdate::opaque_pass_cutoff`] is a threshold on, by way of
+    /// [`tessella_capture_abi::envelope::depth_slot`] -- the one implementation, so the
+    /// comparison here is against the same arithmetic the producer derived the cutoff from.
+    ///
+    /// `None` is a producer older than the field, and the honest answer then is to leave the
+    /// passes alone: `layer_count` was padding, so that producer sends zero, and slots measured
+    /// against a base of nothing would cut the opaque pass somewhere arbitrary.
+    #[must_use]
+    pub fn depth_slot(&self, layer_index: u32) -> Option<u32> {
+        let count = self.layer_count?;
+        let index = i32::try_from(layer_index).unwrap_or(i32::MAX);
+        Some(tessella_capture_abi::envelope::depth_slot(
+            index,
+            count.get(),
+        ))
+    }
+
+    /// Whether a layer draws in the opaque pass, by mbgl's own comparison.
+    ///
+    /// `if (currentLayer < opaquePassCutoff)`. `None` where [`Self::depth_slot`] is `None`:
+    /// without a slot there is nothing to compare, and guessing which side of the cutoff a
+    /// layer falls on is how a translucent layer gets depth writes.
+    #[must_use]
+    pub fn in_opaque_pass(&self, layer_index: u32) -> Option<bool> {
+        Some(self.depth_slot(layer_index)? < self.camera.opaque_pass_cutoff)
+    }
 }
 
 /// Reads the stream and plans frames from it.
@@ -435,6 +488,7 @@ impl Host {
         if camera.order_epoch != order.epoch {
             return None;
         }
+        let layer_count = order.layer_count;
 
         if self.stale.remove(&view) || !self.plans.contains_key(&view) {
             let batches = self.plans.entry(view).or_default();
@@ -462,6 +516,7 @@ impl Host {
             joiner: &self.joiner,
             clips: self.clips.get(&view).unwrap_or(&self.unclipped),
             camera,
+            layer_count: core::num::NonZeroU32::new(layer_count),
         })
     }
 
@@ -724,6 +779,7 @@ impl Host {
                     Order {
                         epoch: update.order_epoch,
                         entries,
+                        layer_count: update.layer_count,
                     },
                 );
                 self.stale.insert(update.view);

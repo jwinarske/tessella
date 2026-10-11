@@ -145,14 +145,12 @@ impl Placed {
 /// walking the layer list in the direction each pass draws. The absolute base is a consumer-side
 /// depth mapping and mbgl's own count includes groups this frontend does not model, so what is
 /// reproduced here is the ordering, not mbgl's particular integers.
-#[must_use]
-pub fn depth_slot(layer_index: i32, layer_count: u32) -> u32 {
-    #[allow(clippy::cast_sign_loss)]
-    let index = layer_index.max(0) as u32;
-    layer_count
-        .saturating_sub(1)
-        .saturating_sub(index.min(layer_count.saturating_sub(1)))
-}
+///
+/// The arithmetic is [`tessella_capture_abi::envelope::depth_slot`] and not a copy of it:
+/// `opaque_pass_cutoff` is a threshold on this quantity, so a consumer needs the identical
+/// inversion to compare against it, and two copies could be wrong the same way and still agree.
+/// Kept as a re-export here because this module is where the ordering is reasoned about.
+pub use tessella_capture_abi::envelope::depth_slot;
 
 /// A view's draw order, and the epoch naming the last one emitted.
 #[derive(Debug, Default)]
@@ -375,7 +373,7 @@ impl DrawOrder {
         let record = OrderUpdate {
             order_epoch: OrderEpoch(self.epoch),
             view,
-            _pad: 0,
+            layer_count: self.layer_count,
             entries: Span {
                 offset: 0,
                 count: resolved.len() as u32,
@@ -702,6 +700,47 @@ mod tests {
 
     fn background(x: u32) -> GeometryBinding {
         binding(0, 0, x, background_pass(), background_flags())
+    }
+
+    /// The emitted record carries the style's layer count.
+    ///
+    /// The one thing the consumer cannot derive and the only thing that makes
+    /// `CameraUpdate::opaque_pass_cutoff` mean anything: the cutoff is a threshold on a depth
+    /// slot, and a slot is measured against this. A style layer contributing no drawable this
+    /// frame is absent from the entries, so counting them undercounts and shifts every slot --
+    /// which is why this is asserted against `DrawOrder::new`'s argument and not against the
+    /// number of entries emitted.
+    ///
+    /// Read back off the ring rather than from the struct, because what is under test is what a
+    /// consumer receives.
+    #[test]
+    fn an_emitted_order_carries_the_layer_count() {
+        use tessella_capture_abi::envelope::OrderUpdate;
+        use tessella_capture_abi::envelope::WireRecord;
+        use tessella_capture_abi::ring::Ring;
+
+        // Five layers in the style, two of which draw -- so a consumer counting entries would
+        // read two and place every layer three slots too shallow.
+        let mut order = DrawOrder::new(5);
+        order.bind(fill(1, 0, 4092));
+        order.bind(fill(2, 0, 4093));
+
+        let mut ring = Ring::new(1 << 16);
+        {
+            let (producer, _) = ring.split();
+            order.emit(producer, ViewId(0)).expect("room");
+        }
+        let consumer = ring.consumer();
+        let record = consumer.peek().expect("a record");
+        assert_eq!(record.kind, EnvelopeKind::OrderUpdate);
+        let update = OrderUpdate::from_bytes(record.record).expect("an order");
+        assert_eq!(update.layer_count, 5, "the style's count, not the order's");
+        assert_eq!(update.entries.count, 2, "and two entries were emitted");
+        assert_eq!(
+            depth_slot(1, update.layer_count),
+            3,
+            "which is what the count is for"
+        );
     }
 
     /// Pass first, then depth slot, then sublayer — and the input order does not survive.
