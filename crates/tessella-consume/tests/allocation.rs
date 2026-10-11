@@ -149,7 +149,8 @@ fn frame(n: u64) -> Host {
         let update = OrderUpdate {
             order_epoch: OrderEpoch(1),
             view: ViewId(0),
-            _pad: 0,
+            // A style of four layers, so a slot has a base to be measured against.
+            layer_count: 4,
             entries: Span {
                 offset: 0,
                 count: u32::try_from(n).unwrap(),

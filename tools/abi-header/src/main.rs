@@ -929,7 +929,14 @@ fn structs() -> Vec<Struct> {
                     "Epoch this order establishes."
                 ),
                 (view, "uint32_t view", "View this order belongs to."),
-                (_pad, "uint32_t _pad", "Must be zero."),
+                (
+                    layer_count,
+                    "uint32_t layer_count",
+                    "Layers in the style this order was built from. What layer_index is \
+                     measured against, and what makes opaque_pass_cutoff meaningful: the \
+                     cutoff is a threshold on the depth slot, which is derived from an index \
+                     and this count. Zero means a producer that does not send it."
+                ),
                 (
                     entries,
                     "tsl_span entries",

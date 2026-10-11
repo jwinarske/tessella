@@ -2206,8 +2206,11 @@ typedef struct tsl_order_update {
     uint64_t order_epoch;
     /* View this order belongs to. */
     uint32_t view;
-    /* Must be zero. */
-    uint32_t _pad;
+    /* Layers in the style this order was built from. What layer_index is measured against, and */
+    /* what makes opaque_pass_cutoff meaningful: the cutoff is a threshold on the depth slot, */
+    /* which is derived from an index and this count. Zero means a producer that does not send */
+    /* it. */
+    uint32_t layer_count;
     /* tsl_order_entry run, in draw order. */
     tsl_span entries;
 } tsl_order_update;
@@ -2216,7 +2219,7 @@ TSL_ASSERT(sizeof(tsl_order_update) == 24, "tsl_order_update size differs from t
 TSL_ASSERT(TSL_ALIGNOF(tsl_order_update) == 8, "tsl_order_update alignment differs from the Rust definition");
 TSL_ASSERT(offsetof(tsl_order_update, order_epoch) == 0, "tsl_order_update.order_epoch moved");
 TSL_ASSERT(offsetof(tsl_order_update, view) == 8, "tsl_order_update.view moved");
-TSL_ASSERT(offsetof(tsl_order_update, _pad) == 12, "tsl_order_update._pad moved");
+TSL_ASSERT(offsetof(tsl_order_update, layer_count) == 12, "tsl_order_update.layer_count moved");
 TSL_ASSERT(offsetof(tsl_order_update, entries) == 16, "tsl_order_update.entries moved");
 
 /*

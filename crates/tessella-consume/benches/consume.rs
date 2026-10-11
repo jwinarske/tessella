@@ -137,7 +137,7 @@ fn write(ring: &mut Ring, entries: usize, families: i32) {
     let update = OrderUpdate {
         order_epoch: OrderEpoch(1),
         view: ViewId(0),
-        _pad: 0,
+        layer_count: 4,
         entries: Span {
             offset: 0,
             count: entries as u32,

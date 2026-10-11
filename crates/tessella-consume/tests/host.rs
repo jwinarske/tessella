@@ -112,7 +112,9 @@ fn order(view: u32, epoch: u64, entries: &[OrderEntry]) -> (OrderUpdate, Vec<u8>
         OrderUpdate {
             order_epoch: OrderEpoch(epoch),
             view: ViewId(view),
-            _pad: 0,
+            // A style of four layers. Every slot a fixture here asks for is measured against
+            // this, and zero would be a producer that does not send one.
+            layer_count: 4,
             entries: Span {
                 offset: 0,
                 count: u32::try_from(entries.len()).unwrap(),
@@ -388,6 +390,78 @@ fn a_camera_with_an_unknown_projection_is_refused() {
         host.plan(ViewId(0)).expect("still a frame").plan.epoch,
         OrderEpoch(1),
         "so the view draws stale rather than blank"
+    );
+}
+
+/// A frame places a layer in the depth range, and refuses to when the producer did not say.
+///
+/// `opaque_pass_cutoff` is a threshold on the depth slot, and the slot is measured against the
+/// style's layer count -- which did not cross the wire at all until `OrderUpdate::layer_count`
+/// (#373). The count cannot come from the order: a style layer contributing no drawable this
+/// frame is absent from the entries, so counting them undercounts and shifts every slot.
+#[test]
+fn a_frame_places_a_layer_in_the_depth_range() {
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+
+    {
+        let (producer, _) = ring.split();
+        declare(producer, 0);
+        let (update, payload) = order(0, 1, &[]);
+        producer
+            .write(EnvelopeKind::OrderUpdate, update.as_bytes(), &payload)
+            .expect("room");
+        let mut sent = camera(0, 1);
+        // Two of the four layers are opaque, so the cutoff is the slot above the deeper one.
+        sent.opaque_pass_cutoff = 3;
+        producer
+            .write(EnvelopeKind::CameraUpdate, sent.as_bytes(), &[])
+            .expect("room");
+    }
+    host.read(ring.consumer());
+
+    let frame = host.plan(ViewId(0)).expect("a frame");
+    // Four layers, so the style's first is slot 3 and its last is slot 0 -- opposite the index,
+    // which is what the cutoff is compared against.
+    assert_eq!(frame.depth_slot(0), Some(3));
+    assert_eq!(frame.depth_slot(3), Some(0));
+    assert_eq!(
+        frame.depth_slot(99),
+        Some(0),
+        "an index past the style saturates rather than wrapping"
+    );
+    // `if (currentLayer < opaquePassCutoff)`, which is mbgl's own comparison.
+    assert_eq!(frame.in_opaque_pass(1), Some(true), "slot 2 is under 3");
+    assert_eq!(frame.in_opaque_pass(0), Some(false), "slot 3 is not");
+
+    // A producer older than the field sends zero, and then there is nothing to measure against.
+    {
+        let (producer, _) = ring.split();
+        let (mut update, payload) = order(0, 2, &[]);
+        update.layer_count = 0;
+        producer
+            .write(EnvelopeKind::OrderUpdate, update.as_bytes(), &payload)
+            .expect("room");
+        producer
+            .write(EnvelopeKind::CameraUpdate, camera(0, 2).as_bytes(), &[])
+            .expect("room");
+    }
+    host.read(ring.consumer());
+
+    let frame = host.plan(ViewId(0)).expect("a frame at the new epoch");
+    assert_eq!(
+        frame.layer_count, None,
+        "zero is the producer that does not send one"
+    );
+    assert_eq!(
+        frame.depth_slot(0),
+        None,
+        "and a slot measured against nothing would cut the passes arbitrarily"
+    );
+    assert_eq!(
+        frame.in_opaque_pass(0),
+        None,
+        "so neither is the pass known"
     );
 }
 
