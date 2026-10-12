@@ -33,7 +33,8 @@ mod scene;
 use std::process::ExitCode;
 
 use tessella_capture_abi::BuiltIn;
-use tessella_capture_abi::envelope::{AttributeDesc, ViewId};
+use tessella_capture_abi::capture;
+use tessella_capture_abi::envelope::{AttributeDesc, SlabRef, ViewId};
 use tessella_capture_abi::generated::{ubo_layouts, ubo_slots};
 use tessella_capture_abi::ring::Ring;
 use tessella_glyph::fonts::Fonts;
@@ -115,6 +116,13 @@ struct Args {
     /// than a map: the same features repeat across the viewport, each copy correctly placed for
     /// an address that is not the tile's own.
     at: Option<(u8, u32, u32)>,
+    /// Write the frame's records and slabs here instead of rendering it.
+    ///
+    /// Instead rather than as well: the records are read out of the ring to write them, which
+    /// advances the tail, so a second drain would find it empty and render nothing. Capturing and
+    /// rendering one frame would mean reading the ring twice, and this tool's own purpose is the
+    /// render -- so a capture is its own run.
+    capture: Option<String>,
     view: ViewTransform,
 }
 
@@ -126,6 +134,7 @@ fn parse_args() -> Result<Args, String> {
     let mut glyphs = None;
     let mut at = None;
     let mut raster = None;
+    let mut capture = None;
     let (mut lon, mut lat, mut zoom) = (0.0, 0.0, 0.0);
     let (mut width, mut height) = (1024.0, 768.0);
     let (mut bearing, mut pitch) = (0.0, 0.0);
@@ -144,6 +153,7 @@ fn parse_args() -> Result<Args, String> {
             "--glyphs" => glyphs = Some(value()?),
             "--tile-at" => at = Some(address(&value()?)?),
             "--raster" => raster = Some(value()?),
+            "--capture" => capture = Some(value()?),
             "--lon" => lon = number(&value()?)?,
             "--lat" => lat = number(&value()?)?,
             "--zoom" => zoom = number(&value()?)?,
@@ -166,6 +176,7 @@ fn parse_args() -> Result<Args, String> {
         glyphs,
         raster,
         at,
+        capture,
         view: camera::settled(&ViewTransform {
             longitude: lon,
             latitude: lat,
@@ -217,9 +228,72 @@ fn address_from_name(path: &str) -> Option<(u8, u32, u32)> {
     Some((z, x, y))
 }
 
+/// Writes the frame on the ring, and the slabs it refers to, as a capture.
+///
+/// # The table is indexed by handle, not by iteration
+///
+/// `SlabRef::slab` indexes the table, and `SlabArena::slabs` is
+/// `self.slots.iter().filter_map(Option::as_ref)` -- it *skips empty slots*. Building the table by
+/// iterating it would shift every handle past the first gap, and a consumer would resolve a
+/// geometry to another slab's bytes with nothing to say so. `SlabArena::slab`'s own note says the
+/// same thing from the other side: "the handle indexes, rather than being searched for [...] the
+/// two have to agree or a consumer across a mapping resolves a handle to a different slab's bytes
+/// than this side does."
+///
+/// So this walks `0..=highest` and asks for each handle, writing a zero-length entry where there
+/// is no slab. A gap costs sixteen bytes and keeps every handle meaning what the producer meant.
+fn dump(ring: &mut Ring, arena: &SlabArena) -> Result<Vec<u8>, String> {
+    let mut builder = capture::Builder::new();
+    let consumer = ring.consumer();
+    while let Some(record) = consumer.peek() {
+        // `kind as u32` because a capture carries the discriminant rather than the decoded enum.
+        // Every kind here is one this build knows: the producer that wrote the ring is this
+        // binary, so there is no newer sender to carry a kind that would not decode.
+        let (kind, fixed, payload) = (record.kind as u32, record.record, record.payload);
+        builder.push(kind, fixed, payload);
+        let consumed = record.consumed();
+        consumer.advance(consumed);
+    }
+
+    let mut region: Vec<u8> = Vec::new();
+    let mut table: Vec<capture::Slab> = Vec::new();
+    if let Some(highest) = arena.slabs().map(|slab| slab.id).max() {
+        for id in 0..=highest {
+            // An absent handle is a gap and gets a zero-length entry. A handle that is *present*
+            // and will not resolve is a different thing and fails the dump: writing it as empty
+            // would produce a capture whose geometry has no bytes, which a consumer sees as a
+            // drawable that draws nothing -- the quietest possible way for this to be wrong.
+            let bytes = match arena.slab(id) {
+                None => &[][..],
+                Some(slab) => {
+                    let length = u32::try_from(slab.len())
+                        .map_err(|_| format!("slab {id} holds {} bytes", slab.len()))?;
+                    arena
+                        .resolve(SlabRef {
+                            slab: id,
+                            offset: 0,
+                            length,
+                        })
+                        .ok_or_else(|| {
+                            format!("slab {id} is sealed at {length} bytes and did not resolve")
+                        })?
+                }
+            };
+            table.push(capture::Slab {
+                offset: region.len() as u64,
+                length: bytes.len() as u64,
+            });
+            region.extend_from_slice(bytes);
+        }
+    }
+
+    Ok(builder.finish(&table, &region))
+}
+
 fn usage() -> String {
     "usage: capture-render --style <path> --tile <path.mvt> [--out map.png] [--source src]\n\
      \x20                     [--glyphs <dir>] [--raster <image>] [--tile-at z/x/y]\n\
+      \x20                     [--capture <path.tslcap>]\n\
       \x20                     [--lon 0] [--lat 0] [--zoom 0]\n\
       \x20                     [--width 1024] [--height 768] [--bearing 0] [--pitch 0]"
         .to_string()
@@ -369,6 +443,23 @@ fn run() -> Result<String, String> {
     // The layer that disappears is whichever happened to be encoded last, which is why the
     // symptom moves when the style changes.
     arena.seal();
+
+    if let Some(path) = &args.capture {
+        let bytes = dump(&mut ring, &arena)?;
+        let (written, region) = (
+            bytes.len(),
+            capture::decode(&bytes).map(|c| c.region().len()),
+        );
+        std::fs::write(path, &bytes).map_err(|why| format!("writing {path}: {why}"))?;
+        // The region's size is reported because it is the one number that says whether the
+        // geometry came along: a capture with records and an empty region replays as a frame of
+        // drawables that resolve to nothing.
+        return Ok(format!(
+            "wrote {path}: {written} bytes, {} geometries announced, {} bytes of slab",
+            emitted.geometries,
+            region.map_or_else(|| "?".to_string(), |n| n.to_string()),
+        ));
+    }
 
     let scene = Scene::drain(ring.consumer(), &arena);
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
