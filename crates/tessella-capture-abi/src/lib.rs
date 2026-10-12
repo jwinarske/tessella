@@ -53,6 +53,7 @@
 #![cfg_attr(not(test), no_std)]
 
 /// Producer-side coalescing for the state envelopes (§4).
+pub mod capture;
 pub mod coalesce;
 pub mod envelope;
 pub mod mapping;
