@@ -309,8 +309,31 @@ impl DrawFlags {
     /// all.
     pub const ON_TERRAIN: Self = Self(1 << 4);
 
+    /// Every flag this protocol defines, which is what [`Self::VALID_BITS`] is the union of.
+    pub const ALL: [Self; 5] = [
+        Self::IS_3D,
+        Self::ENABLE_STENCIL,
+        Self::ENABLE_DEPTH,
+        Self::ENABLE_COLOR,
+        Self::ON_TERRAIN,
+    ];
+
     /// Every bit this protocol defines.
-    pub const VALID_BITS: u8 = 0b1111;
+    ///
+    /// The union of [`Self::ALL`] rather than a mask written out beside it. Written out, it said
+    /// `0b1111` for as long as [`Self::ON_TERRAIN`] had existed -- so [`Self::from_bits`] refused
+    /// every raised drawable the producer sent, and a test pinned the refusal because it restated
+    /// the same hand-written number. The one other mask of this shape, `RenderPass::VALID_BITS`,
+    /// is generated from mbgl's enum and could not drift that way.
+    pub const VALID_BITS: u8 = {
+        let mut bits = 0;
+        let mut at = 0;
+        while at < Self::ALL.len() {
+            bits |= Self::ALL[at].0;
+            at += 1;
+        }
+        bits
+    };
 
     /// Converts a wire value into [`DrawFlags`], rejecting undefined bits.
     #[must_use]
@@ -1574,8 +1597,43 @@ mod tests {
         assert!(opaque_quad.contains(DrawFlags::ENABLE_COLOR));
         assert!(!opaque_quad.contains(DrawFlags::IS_3D));
 
-        assert_eq!(DrawFlags::from_bits(0b1_0000), None);
+        assert_eq!(DrawFlags::from_bits(0b10_0000), None);
         assert_eq!(DrawFlags::from_bits(u8::MAX), None);
+    }
+
+    /// Every named flag survives `from_bits`, and the mask is the union of them.
+    ///
+    /// Derived from `ALL` rather than restated, which is the whole point of it. The assertion this
+    /// sits beside used to read `from_bits(0b1_0000) == None` -- the value of `ON_TERRAIN` -- so
+    /// the flag and the mask that refused it were wrong together and agreed with each other. A
+    /// sixth flag added above is in this test by being in `ALL`, and `VALID_BITS` follows it.
+    #[test]
+    fn every_named_flag_round_trips_and_the_mask_is_their_union() {
+        let mut union = DrawFlags::NONE;
+        for flag in DrawFlags::ALL {
+            assert_eq!(
+                flag.bits().count_ones(),
+                1,
+                "{flag:?} is not a single bit, so the mask cannot be a union of bits"
+            );
+            assert!(
+                !union.contains(flag),
+                "{flag:?} shares a bit with a flag before it"
+            );
+            assert_eq!(
+                DrawFlags::from_bits(flag.bits()),
+                Some(flag),
+                "{flag:?} is a flag this protocol defines and does not survive from_bits"
+            );
+            union = union | flag;
+        }
+        assert_eq!(
+            union.bits(),
+            DrawFlags::VALID_BITS,
+            "VALID_BITS is not the union of ALL"
+        );
+        assert_eq!(DrawFlags::from_bits(union.bits()), Some(union));
+        assert_eq!(DrawFlags::from_bits(!DrawFlags::VALID_BITS), None);
     }
 
     /// A depth- or stencil-only draw clears ENABLE_COLOR, so an empty mask has to be a legal

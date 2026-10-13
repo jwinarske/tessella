@@ -1,11 +1,12 @@
 //! Collapsing a draw order, and the orders it must refuse to collapse.
 //!
-//! The merge key is §11.7's: layer, shader permutation, texture set, scoped to a pass. What the
-//! tests are really about is R-9 — that collapse never reorders, which is a property of adjacency
-//! rather than of the key.
+//! The merge key is §11.7's three — layer, shader permutation, texture set — scoped to a pass, plus
+//! the drawable's `draw_flags`, because §11.7 names what a renderable is and a batch has to name
+//! what a *program* is. What the tests are mostly about is R-9 — that collapse never reorders,
+//! which is a property of adjacency rather than of the key.
 
 use tessella_capture_abi::RenderPass;
-use tessella_capture_abi::envelope::{GeometryId, OrderEntry, TextureId, TextureRef};
+use tessella_capture_abi::envelope::{DrawFlags, GeometryId, OrderEntry, TextureId, TextureRef};
 use tessella_capture_abi::generated::mbgl_enums::BuiltIn;
 use tessella_consume::batch::{Batches, Program, collapse_into, collapsible};
 
@@ -31,6 +32,7 @@ fn one_program(_: GeometryId) -> Option<Program<'static>> {
     Some(Program {
         builtin_shader: FILL,
         permutation_key: 0,
+        draw_flags: 0,
         texture_refs: &[],
     })
 }
@@ -78,6 +80,7 @@ fn a_program_or_texture_change_breaks_the_run() {
         Some(Program {
             builtin_shader: if id == GeometryId(2) { LINE } else { FILL },
             permutation_key: 0,
+            draw_flags: 0,
             texture_refs: &[],
         })
     });
@@ -97,6 +100,7 @@ fn a_program_or_texture_change_breaks_the_run() {
         Some(Program {
             builtin_shader: FILL,
             permutation_key: 0,
+            draw_flags: 0,
             texture_refs: if id == GeometryId(2) { &ATLAS } else { &[] },
         })
     });
@@ -116,10 +120,55 @@ fn a_permutation_change_breaks_the_run() {
         Some(Program {
             builtin_shader: FILL,
             permutation_key: u64::from(id == GeometryId(2)),
+            draw_flags: 0,
             texture_refs: &[],
         })
     });
     assert_eq!(batches.len(), 2);
+}
+
+/// Every bit of `draw_flags` is part of the key, because every bit of it is pipeline state.
+///
+/// `ON_TERRAIN` is the one that matters most and the one that varies: it is set per binding where a
+/// ground covers the drawable's *tile*, so two tiles of one layer are raised and flat while the DEM
+/// is still loading -- and it chooses a surface variant, which is a different shader module. Merged,
+/// the consumer binds one pipeline for both and half the layer is placed on the wrong surface.
+///
+/// The other three are the depth test, the stencil test and the color write mask. None is read by a
+/// consumer here yet, and all four are in the key together for that reason: a key carrying the one
+/// bit someone needed today would have to be widened again by whoever reads the next.
+#[test]
+fn a_flag_change_breaks_the_run() {
+    let order = [entry(1, 0, 0), entry(2, 0, 1)];
+    for flag in DrawFlags::ALL {
+        let mut batches = Batches::new();
+        collapse_into(&order, &mut batches, |id| {
+            Some(Program {
+                builtin_shader: FILL,
+                permutation_key: 0,
+                draw_flags: if id == GeometryId(2) { flag.bits() } else { 0 },
+                texture_refs: &[],
+            })
+        });
+        assert_eq!(
+            batches.len(),
+            2,
+            "{flag:?} differs between the two and they merged anyway"
+        );
+    }
+
+    // And the same flag on both still collapses, so what breaks the run is the difference rather
+    // than the flag being set at all.
+    let mut batches = Batches::new();
+    collapse_into(&order, &mut batches, |_| {
+        Some(Program {
+            builtin_shader: FILL,
+            permutation_key: 0,
+            draw_flags: DrawFlags::ON_TERRAIN.bits(),
+            texture_refs: &[],
+        })
+    });
+    assert_eq!(batches.len(), 1, "two raised drawables are one renderable");
 }
 
 /// **R-9.** A matching entry on the far side of a different one does not reach back to it.
@@ -166,6 +215,7 @@ fn collapse_never_reorders() {
         Some(Program {
             builtin_shader: if id.0 % 3 == 0 { LINE } else { FILL },
             permutation_key: id.0 % 2,
+            draw_flags: 0,
             texture_refs: &[],
         })
     });
@@ -190,6 +240,7 @@ fn symbols_do_not_collapse() {
         Some(Program {
             builtin_shader: SYMBOL,
             permutation_key: 0,
+            draw_flags: 0,
             texture_refs: &[],
         })
     });
@@ -229,6 +280,7 @@ fn an_unknown_geometry_is_skipped() {
         (id != GeometryId(2)).then_some(Program {
             builtin_shader: FILL,
             permutation_key: 0,
+            draw_flags: 0,
             texture_refs: &[],
         })
     });

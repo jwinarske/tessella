@@ -195,6 +195,82 @@ fn write_frame(producer: &mut Producer, view: u32, epoch: u64, ids: &[u64]) {
         .expect("room");
 }
 
+/// A raised drawable and a flat one of the same layer are two batches, read off a real ring.
+///
+/// `draw_flags` is the only thing that differs: one layer, one family, one permutation, no
+/// textures, adjacent in the order. The flag lives on the `ViewUse` -- the same geometry drawn by
+/// two views can be raised in one and flat in the other -- so this is the only place that join can
+/// be checked. `tests/batch.rs` checks the key; what it cannot check is whether anything fills the
+/// field in, and a plan that passed a constant there collapsed the two and passed every test.
+///
+/// Two tiles of one layer differing this way is the ordinary transient state of a terrain style,
+/// not a contrived one: `ON_TERRAIN` is set where a ground covers the drawable's tile, and the DEM
+/// arrives on its own schedule.
+#[test]
+fn a_raised_drawable_does_not_merge_with_a_flat_one() {
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+    {
+        let (producer, _) = ring.split();
+        declare(producer, 0);
+        for id in [1u64, 2] {
+            producer
+                .write(EnvelopeKind::GeometryAdd, geometry(id, 11).as_bytes(), &[])
+                .expect("room");
+            let mut use_ = use_of(id, 0, 0);
+            if id == 2 {
+                use_.draw_flags = DrawFlags::ON_TERRAIN;
+            }
+            producer
+                .write(EnvelopeKind::ViewUse, use_.as_bytes(), &[])
+                .expect("room");
+        }
+        let entries = [entry(1, 0, 0), entry(2, 0, 1)];
+        let (update, payload) = order(0, 1, &entries);
+        producer
+            .write(EnvelopeKind::OrderUpdate, update.as_bytes(), &payload)
+            .expect("room");
+        producer
+            .write(EnvelopeKind::CameraUpdate, camera(0, 1).as_bytes(), &[])
+            .expect("room");
+    }
+    let progress = host.read(ring.consumer());
+    assert_eq!(progress.malformed, 0, "every record parses");
+
+    let frame = host.plan(ViewId(0)).expect("a plan");
+    assert_eq!(
+        frame.batches.len(),
+        2,
+        "one is raised and one is not, so they are two programs"
+    );
+    let flags: Vec<u8> = frame
+        .batches
+        .iter()
+        .map(|batch| batch.key.draw_flags)
+        .collect();
+    assert_eq!(
+        flags,
+        vec![0, DrawFlags::ON_TERRAIN.bits()],
+        "the flags reached the key in the order the drawables were used"
+    );
+
+    // The control: the same frame with both flat is one batch, so what split them is the
+    // difference and not the second drawable.
+    let mut ring = Ring::new(CAPACITY);
+    let mut host = Host::new();
+    {
+        let (producer, _) = ring.split();
+        write_frame(producer, 0, 1, &[1, 2]);
+    }
+    host.read(ring.consumer());
+    let frame = host.plan(ViewId(0)).expect("a plan");
+    assert_eq!(
+        frame.batches.len(),
+        1,
+        "two flat drawables are one renderable"
+    );
+}
+
 /// A frame read off a ring plans the draws its order names.
 #[test]
 fn a_frame_plans_what_its_order_names() {
