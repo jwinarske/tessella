@@ -856,6 +856,33 @@ fn generate_shader_attributes(mbgl: &Path) -> Result<String, String> {
     )
     .unwrap();
     writeln!(out, "    pub name: &'static str,").unwrap();
+    writeln!(
+        out,
+        "    /// mbgl's name for the UBO binding this attribute's buffer is *also* bound to, as a"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "    /// storage buffer -- `AttributeInfo`'s fourth field, `None` for a plain vertex"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "    /// attribute. A consumer must give such a buffer both usages: the instanced"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "    /// fill-extrusion bodies index the storage view to reach the instance after their"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "    /// own, which an attribute fetch cannot do, and the non-instanced ones read the same"
+    )
+    .unwrap();
+    writeln!(out, "    /// bytes as attributes.").unwrap();
+    writeln!(out, "    pub shared_buffer: Option<&'static str>,").unwrap();
     writeln!(out, "}}").unwrap();
     writeln!(out).unwrap();
 
@@ -874,13 +901,19 @@ fn generate_shader_attributes(mbgl: &Path) -> Result<String, String> {
             attributes.len()
         )
         .unwrap();
-        for (binding, data_type, id_name) in attributes {
+        for (binding, data_type, id_name, shared) in attributes {
             let id = ids.get(id_name).copied().unwrap_or(u32::MAX);
             writeln!(out, "    ShaderAttribute {{").unwrap();
             writeln!(out, "        binding: {binding},").unwrap();
             writeln!(out, "        declared: AttributeDataType::{data_type},").unwrap();
             writeln!(out, "        attr_id: {id},").unwrap();
             writeln!(out, "        name: \"{id_name}\",").unwrap();
+            match shared {
+                None => writeln!(out, "        shared_buffer: None,").unwrap(),
+                Some(name) => {
+                    writeln!(out, "        shared_buffer: Some(\"{name}\"),").unwrap();
+                }
+            }
             writeln!(out, "    }},").unwrap();
         }
         writeln!(out, "];").unwrap();
@@ -1344,9 +1377,10 @@ fn parse_shader_textures(text: &str) -> Vec<TextureTable> {
     out
 }
 
-/// One shader's attributes: binding slot, declared type name, attribute id name.
+/// One shader's attributes: binding slot, declared type name, attribute id name, and the name
+/// of the UBO binding this attribute's buffer is *also* bound to as a storage buffer, if any.
 /// A shader's name, whether the table is its per-instance one, and its attributes.
-type ShaderTable = (String, bool, Vec<(i32, String, String)>);
+type ShaderTable = (String, bool, Vec<(i32, String, String, Option<String>)>);
 
 /// What a shader's own text declares at each of its vertex inputs: `(shader, location)` to the
 /// GLSL type name.
@@ -1580,15 +1614,15 @@ fn add_producer_attributes(
                  there is nothing for {name} to be added to."
             ));
         };
-        if let Some((at, _, held)) = attributes.iter().find(|(at, _, _)| at == binding) {
+        if let Some((at, _, held, _)) = attributes.iter().find(|(at, _, _, _)| at == binding) {
             return Err(format!(
                 "{shader} binding {at}: mbgl declares {held} there and PRODUCER_ATTRIBUTES \
                  claims it for {name}. One of the two has to move."
             ));
         }
-        if let Some((_, _, held)) = attributes
+        if let Some((_, _, held, _)) = attributes
             .iter()
-            .find(|(_, _, id_name)| ids.get(id_name.as_str()) == Some(attr_id))
+            .find(|(_, _, id_name, _)| ids.get(id_name.as_str()) == Some(attr_id))
         {
             return Err(format!(
                 "{shader}: attribute id {attr_id} is mbgl's {held}, and PRODUCER_ATTRIBUTES \
@@ -1604,8 +1638,13 @@ fn add_producer_attributes(
             ));
         }
         ids.insert((*name).to_string(), *attr_id);
-        attributes.push((*binding, (*data_type).to_string(), (*name).to_string()));
-        attributes.sort_by_key(|(at, _, _)| *at);
+        attributes.push((
+            *binding,
+            (*data_type).to_string(),
+            (*name).to_string(),
+            None,
+        ));
+        attributes.sort_by_key(|(at, _, _, _)| *at);
         added.push(format!("{shader} binding {binding}: {name}, {data_type}"));
     }
     Ok(added)
@@ -1626,7 +1665,7 @@ fn correct_declared_types(
 ) -> Result<Vec<(String, String, String)>, String> {
     let mut corrections: Vec<(String, String, String)> = Vec::new();
     for (shader, _, attributes) in shaders.iter_mut() {
-        for (binding, data_type, id_name) in attributes.iter_mut() {
+        for (binding, data_type, id_name, _shared) in attributes.iter_mut() {
             let Some(glsl) = declared.get(&(shader.clone(), *binding)) else {
                 // No input at that location. Recorded with its evidence or it fails here.
                 if !UNBACKED_ATTRIBUTES
@@ -1798,17 +1837,24 @@ fn parse_shader_attributes(text: &str) -> Vec<ShaderTable> {
             if let Some(rest) = line.strip_prefix("AttributeInfo{") {
                 let body = rest.trim_end_matches("},").trim_end_matches('}');
                 let parts: Vec<&str> = body.split(',').map(str::trim).collect();
-                // Three fields, or four: fill-extrusion's static attributes carry a fourth
-                // naming the instance-rate id they share with the instanced shader. Requiring
-                // exactly three silently dropped those two, which left the generated table with
-                // a fill-extrusion shader that declared its data-driven attributes and not its
-                // position — a producer reading it would have emitted a drawable with no
-                // geometry binding at all.
+                // Three fields, or four. `AttributeInfo`'s fourth is `ubo`, and mbgl's Vulkan
+                // backend uses it for one thing: `VertexAttribute::getBufferUsage` adds
+                // `STORAGE_BUFFER_BIT` to the buffer when it is set, and
+                // `Drawable::setSharedBuffers` registers that same buffer at that UBO binding. So
+                // the attribute's bytes are bound *both* as vertex input and as a storage buffer,
+                // which is how `FillExtrusionInstancedShader` reads the instance after its own --
+                // an attribute fetch cannot look ahead and a storage buffer can.
+                //
+                // Requiring exactly three fields once silently dropped the two that carry it,
+                // which left the generated table with a fill-extrusion shader that declared its
+                // data-driven attributes and not its position -- a producer reading it would have
+                // emitted a drawable with no geometry binding at all.
                 if (parts.len() == 3 || parts.len() == 4)
                     && let Ok(binding) = parts[0].parse::<i32>()
                 {
                     let data_type = parts[1].rsplit("::").next().unwrap_or(parts[1]).to_string();
-                    attributes.push((binding, data_type, parts[2].to_string()));
+                    let shared = parts.get(3).map(|name| (*name).to_string());
+                    attributes.push((binding, data_type, parts[2].to_string(), shared));
                 }
             }
         }
@@ -3348,11 +3394,17 @@ mod tests {
             "ExampleShader".to_string(),
             false,
             vec![
-                (0, "Short2".to_string(), "idExamplePosAttribute".to_string()),
+                (
+                    0,
+                    "Short2".to_string(),
+                    "idExamplePosAttribute".to_string(),
+                    None,
+                ),
                 (
                     1,
                     "Short2".to_string(),
                     "idExampleSpareAttribute".to_string(),
+                    None,
                 ),
             ],
         )];
@@ -3444,6 +3496,7 @@ mod tests {
                     0,
                     "Short2".to_string(),
                     "idColorReliefPosVertexAttribute".to_string(),
+                    None,
                 )],
             ),
             (
@@ -3454,11 +3507,13 @@ mod tests {
                         0,
                         "Short2".to_string(),
                         "idRasterPosVertexAttribute".to_string(),
+                        None,
                     ),
                     (
                         2,
                         "Short2".to_string(),
                         "idRasterSomethingNewUpstreamAdded".to_string(),
+                        None,
                     ),
                 ],
             ),
@@ -3469,6 +3524,7 @@ mod tests {
                     0,
                     "Short2".to_string(),
                     "idHillshadePosVertexAttribute".to_string(),
+                    None,
                 )],
             ),
         ];
@@ -3500,6 +3556,7 @@ mod tests {
                     0,
                     "Short2".to_string(),
                     "idColorReliefPosVertexAttribute".to_string(),
+                    None,
                 )],
             ),
             (
@@ -3509,6 +3566,7 @@ mod tests {
                     0,
                     "Short2".to_string(),
                     "idRasterPosVertexAttribute".to_string(),
+                    None,
                 )],
             ),
             (
@@ -3518,6 +3576,7 @@ mod tests {
                     0,
                     "Short2".to_string(),
                     "idHillshadePosVertexAttribute".to_string(),
+                    None,
                 )],
             ),
         ];
@@ -3532,7 +3591,7 @@ mod tests {
             assert_eq!(
                 attributes
                     .iter()
-                    .map(|(binding, _, _)| *binding)
+                    .map(|(binding, _, _, _)| *binding)
                     .collect::<Vec<_>>(),
                 vec![0, 2],
                 "{attributes:?}"
@@ -3612,8 +3671,8 @@ layout(location = 0) out vec4 out_color;
             "ExampleShader".to_string(),
             false,
             vec![
-                (0, "Short2".to_string(), "idExamplePos".to_string()),
-                (3, "Float".to_string(), "idExampleBase".to_string()),
+                (0, "Short2".to_string(), "idExamplePos".to_string(), None),
+                (3, "Float".to_string(), "idExampleBase".to_string(), None),
             ],
         )];
         let mut declared = Declarations::new();
@@ -3645,7 +3704,7 @@ layout(location = 0) out vec4 out_color;
         let mut shaders: Vec<ShaderTable> = vec![(
             "ExampleShader".to_string(),
             false,
-            vec![(0, "Float3".to_string(), "idExampleThing".to_string())],
+            vec![(0, "Float3".to_string(), "idExampleThing".to_string(), None)],
         )];
         let mut declared = Declarations::new();
         declared.insert(("ExampleShader".to_string(), 0), "ivec2".to_string());
