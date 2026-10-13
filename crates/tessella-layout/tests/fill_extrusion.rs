@@ -9,7 +9,9 @@
 //! four extra vertices and six extra indices to build a wall. With it, a building is its ring
 //! points and an earcut roof, and the walls are instanced over the same buffer.
 
-use tessella_layout::fill_extrusion::{build, build_features, pack_vertex};
+use tessella_layout::fill_extrusion::{
+    FillExtrusionBucket, build, build_features, build_features_tracked, pack_vertex,
+};
 
 /// A closed square ring, counter-clockwise, in the winding `classify_rings` reads as exterior.
 fn square(size: i16) -> Vec<[i16; 2]> {
@@ -210,5 +212,109 @@ fn indices_are_relative_to_their_segment() {
     assert!(
         bucket.indices.iter().any(|index| *index >= 5),
         "the second feature's roof indexes its own vertices"
+    );
+}
+
+/// The buffer's last point always carries the discard flag, whatever shape built it.
+///
+/// This is the invariant the instanced wall shader's lookahead rests on. It reads the *next*
+/// outline point to get the edge a wall stands on — mbgl's
+/// `instanceVector.instance[gl_InstanceIndex + 1]` — and nothing clamps that index. What keeps
+/// it inside the buffer is the order of the two reads: the shader tests the discard flag and
+/// returns before it looks ahead, so the lookahead is only ever reached from a point that is not
+/// the last one. A buffer whose final point were unflagged would read eight bytes past its end
+/// every frame it was drawn in.
+///
+/// It holds structurally rather than by luck: [`pack_vertex`] is called with `next.is_none()`, so
+/// every ring's closing point is flagged, and the buffer ends at some ring's closing point. The
+/// shapes below are the ways that last point changes hands — a hole, a second feature, a capped
+/// hole, a dropped polygon, an empty ring, a rounded corner, a ring that was never closed. None
+/// of them computes the flag differently, which is the point: there is no case to special-case.
+///
+/// Each case states its vertex count as well, so a shape that stopped exercising what it is
+/// named for fails here rather than passing on a buffer that ends the same way for a different
+/// reason.
+#[test]
+fn the_buffer_always_ends_on_a_discarded_point() {
+    /// The bucket's last point, as the consumer reads it: low bit of the packed decimals.
+    #[track_caller]
+    fn ends_discarded(bucket: &FillExtrusionBucket, points: usize, what: &str) {
+        assert_eq!(bucket.vertices.len(), points, "{what}: not the shape meant");
+        let last = bucket
+            .vertices
+            .last()
+            .unwrap_or_else(|| panic!("{what} emitted nothing to check"));
+        assert_eq!(
+            last.decimals & 1,
+            1,
+            "{what}: the lookahead would run past this point"
+        );
+    }
+
+    ends_discarded(&build(&[square(100)]), 5, "one ring");
+
+    let inner = vec![[25, 25], [25, 75], [75, 75], [75, 25], [25, 25]];
+    ends_discarded(
+        &build(&[square(100), inner]),
+        10,
+        "an exterior and its hole",
+    );
+
+    ends_discarded(
+        &build_features(&[&[square(100)], &[square(50)]]),
+        10,
+        "two features",
+    );
+
+    // More holes than mbgl keeps. `limit_holes` drops the rest, so which ring ends the buffer is
+    // decided by the cap rather than by the input: a hundred of the six hundred are gone.
+    let mut capped = vec![square(4096)];
+    for at in 0..600i16 {
+        let (x, y) = ((at % 60) * 64 + 8, (at / 60) * 64 + 8);
+        capped.push(vec![
+            [x, y],
+            [x, y + 32],
+            [x + 32, y + 32],
+            [x + 32, y],
+            [x, y],
+        ]);
+    }
+    let capped = build(&capped);
+    assert_eq!(
+        capped
+            .vertices
+            .iter()
+            .filter(|vertex| vertex.decimals & 1 == 1)
+            .count(),
+        501,
+        "one flag per kept ring: the exterior and five hundred holes"
+    );
+    ends_discarded(&capped, 2505, "six hundred holes, five hundred kept");
+
+    // A polygon with more points than a segment can index is dropped whole, so the buffer ends on
+    // the feature before it.
+    let too_many: Vec<[i16; 2]> = (0..=u16::MAX)
+        .map(|at| [(at % 256) as i16, (at / 256) as i16])
+        .collect();
+    ends_discarded(
+        &build_features(&[&[square(100)], &[too_many]]),
+        5,
+        "a dropped polygon after a kept one",
+    );
+
+    // An empty ring contributes nothing, so it cannot become the point the lookahead starts from.
+    ends_discarded(&build(&[square(100), Vec::new()]), 5, "an empty ring");
+
+    // Rounded corners replace the ring with a longer one of the rounder's own making, so the
+    // closing point is one it produced rather than one the tile sent.
+    let (rounded, _) = build_features_tracked(&[&[square(100)]], false, false, 10.0);
+    ends_discarded(&rounded, 21, "a rounded ring");
+
+    // mbgl flags `!p2` — the absence of a next point — not the repetition of the first, so a
+    // ring the tile never closed ends the same way.
+    ends_discarded(
+        &build(&[vec![[0, 0], [100, 0], [100, 100]]]),
+        3,
+        "a ring that was never closed",
     );
 }
