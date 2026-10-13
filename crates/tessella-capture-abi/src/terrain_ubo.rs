@@ -41,6 +41,19 @@ pub const BUILTIN_TERRAIN_SHADER: i32 = 128;
 /// Past mbgl's nought-to-ten and past the globe bend's eleven.
 pub const ID_TERRAIN_DRAWABLE_UBO: u32 = 128;
 
+/// The texture slot a raised drawable samples the ground's elevation at.
+///
+/// Not a block but a *texture* binding, and here for the same reason the block's slot is: it is a
+/// number both sides have to agree on and mbgl has none to mirror. Past every slot mbgl's own
+/// families use -- the symbol's two are the highest at nought and one -- so a terrain variant's
+/// extra texture cannot land on one the flat variant already reads.
+///
+/// It was a private constant of the producer's encoder, which left the consumer to agree with a
+/// number it could not see: `tessella_emblema::surface::TERRAIN_ELEVATION_SLOT`'s own note is that
+/// "the producer holds this as a private constant and publishes no table for it, so the number is
+/// agreed rather than derived". Published here, it is derived.
+pub const TERRAIN_ELEVATION_SLOT: u32 = 8;
+
 /// One terrain tile's block.
 ///
 /// # Why the sampling is pre-scaled

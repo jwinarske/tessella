@@ -1123,6 +1123,20 @@ impl Encoded {
             .collect()
     }
 
+    /// The texture references, decoded.
+    ///
+    /// What the drawable samples and at which slot: its family's own atlases, and the ground's
+    /// elevation where the terrain raises it. Decoded here for the reason the others are -- the
+    /// span addresses the payload and reading it by hand is easy to get subtly wrong.
+    #[must_use]
+    pub fn texture_refs(&self) -> Vec<TextureRef> {
+        let size = core::mem::size_of::<TextureRef>();
+        let start = self.record.texture_refs.offset as usize;
+        (0..self.record.texture_refs.count as usize)
+            .filter_map(|index| TextureRef::from_bytes(&self.payload[start + index * size..]))
+            .collect()
+    }
+
     /// The segments, decoded.
     #[must_use]
     pub fn segments(&self) -> Vec<AbiSegment> {
@@ -2038,11 +2052,12 @@ fn location_indicator_part(
     Encoded { record, payload }
 }
 
-/// Where a raised family samples the elevation.
+/// Where a raised family samples the elevation, which the ABI publishes.
 ///
-/// Past every slot mbgl's own families use, so a terrain variant's second texture cannot land on
-/// one the flat variant already reads.
-const TERRAIN_ELEVATION_SLOT: u32 = 8;
+/// Was a constant of this module's own, which left every consumer to agree with a number it could
+/// not see. It is `tessella_capture_abi::terrain_ubo::TERRAIN_ELEVATION_SLOT` now, beside the slot
+/// the terrain block binds at -- the same kind of fact, agreed in the same place.
+use tessella_capture_abi::terrain_ubo::TERRAIN_ELEVATION_SLOT;
 
 /// Where the skirt flag rides, beside the position.
 const TERRAIN_SKIRT_ATTRIBUTE: u32 = 1;
@@ -2550,6 +2565,7 @@ pub fn encode_heatmap(
 /// The bucket is the *instanced* branch's, so what is here is the ground outline and the earcut
 /// roof. The walls are instances the shader raises over the same buffer; a consumer drawing only
 /// these vertices gets roofs and outlines, which is a flat city rather than an empty one.
+#[allow(clippy::too_many_arguments)]
 pub fn encode_extrusion(
     arena: &mut SlabArena,
     geometry: GeometryId,
@@ -2558,6 +2574,7 @@ pub fn encode_extrusion(
     attributes: &[u8],
     permutation_key: u64,
     pattern_atlas: Option<TextureId>,
+    elevation: Option<TextureId>,
 ) -> (Encoded, ExtrusionShared) {
     let mut vertex_bytes = Vec::with_capacity(bucket.vertices.len() * EXTRUSION_STRIDE as usize);
     for vertex in &bucket.vertices {
@@ -2585,22 +2602,31 @@ pub fn encode_extrusion(
         outline: vertices,
         interleaved,
     };
-    let roof = geometry_add(
+    let shader = if pattern_atlas.is_some() {
+        // The roof and outline. The walls are a second drawable over the same buffer — see
+        // [`encode_extrusion_walls`], which the capture shows beside this one on every tile.
+        BuiltIn::FillExtrusionPatternShader
+    } else {
+        BuiltIn::FillExtrusionShader
+    };
+    // Textured for its pattern, where it has one, and for the ground it stands on. The elevation
+    // is what the raised variant of this family samples per vertex, and a raised drawable that
+    // does not name it is a set the consumer cannot write -- "the set has 1 texture bindings and
+    // 0 arrived" -- so the layer draws nothing rather than drawing flat. The fill, the line and
+    // the circle each pass it; this did not, and nothing could see it until a consumer had a
+    // raised extrusion module to bind.
+    let roof = geometry_add_textured(
         geometry,
         permutation_key,
         indexes,
         bucket.vertices.len(),
         &descriptors,
+        &[],
         &bucket.segments,
-        // The roof and outline. The walls are a second drawable over the same buffer — see
-        // [`encode_extrusion_walls`], which the capture shows beside this one on every tile.
-        if pattern_atlas.is_some() {
-            BuiltIn::FillExtrusionPatternShader
-        } else {
-            BuiltIn::FillExtrusionShader
-        },
-        pattern_atlas,
+        shader,
+        pattern_atlas.as_slice(),
         TextureFilter::Linear,
+        elevation,
     );
     (roof, shared)
 }
@@ -2673,6 +2699,7 @@ pub fn encode_extrusion_walls(
     layout: &VertexLayout,
     permutation_key: u64,
     pattern_atlas: Option<TextureId>,
+    elevation: Option<TextureId>,
 ) -> Encoded {
     let shader = if pattern_atlas.is_some() {
         BuiltIn::FillExtrusionPatternInstancedShader
@@ -2752,7 +2779,9 @@ pub fn encode_extrusion_walls(
         index_length: WALL_INDICES.len() as u32,
     };
 
-    geometry_add_instanced(
+    // The roof's elevation, for the roof's reason: a wall stands on the same ground and its raised
+    // variant samples the same texture, so the two drawables of one building name the same images.
+    geometry_add_textured(
         geometry,
         permutation_key,
         indexes,
@@ -2761,8 +2790,9 @@ pub fn encode_extrusion_walls(
         &instances,
         core::slice::from_ref(&segment),
         shader,
-        pattern_atlas,
+        pattern_atlas.as_slice(),
         TextureFilter::Linear,
+        elevation,
     )
 }
 

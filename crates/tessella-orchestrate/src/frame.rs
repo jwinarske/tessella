@@ -3956,6 +3956,9 @@ fn encode_parts(
     let mut fill_atlas = None;
     let mut extrusion_shared = None;
     let mut extrusion_atlas = None;
+    // And the ground under it, kept for the same reason: the walls are encoded after the match and
+    // stand on whatever the roof did.
+    let mut extrusion_elevation = None;
     // The circle's vertices, once the interior has allocated them: its border draws over the
     // same seventy-three points.
     let mut puck_shared = None;
@@ -4080,6 +4083,7 @@ fn encode_parts(
             // used by both passes. That is the next change; the encoder for the walls exists and
             // is checked against the capture.
             extrusion_atlas = atlas;
+            extrusion_elevation = raised.then_some(textures.terrain);
             let (roof, buffers) = emit::encode_extrusion(
                 arena,
                 PLACEHOLDER,
@@ -4088,6 +4092,8 @@ fn encode_parts(
                 &attributes,
                 key,
                 atlas,
+                // The ground the building stands on, where one is under it.
+                raised.then_some(textures.terrain),
             );
             extrusion_shared = Some(buffers);
             Some(roof)
@@ -4399,6 +4405,8 @@ fn encode_parts(
             &wall_layout,
             key,
             extrusion_atlas,
+            // The same ground as the roof's: the two are one building.
+            extrusion_elevation,
         ));
     }
     Some(parts)
