@@ -24,6 +24,18 @@
 //! to half a unit — visible as a seam between a building and its own shadow. mbgl keeps seven
 //! bits per axis: `(frac.x * 256 + frac.y) * 2 + discarded`.
 //!
+//! # The closing point is load-bearing, and not for its position
+//!
+//! The wall shader reads the *next* outline point to get the edge a wall stands on, as
+//! `instance[gl_InstanceIndex + 1]`, and nothing clamps that index. It stays inside the buffer
+//! only because the shader tests the discard flag and returns before it looks ahead — so the
+//! buffer's last point has to carry the flag, every time, or a consumer reads eight bytes past
+//! the end of the buffer on every frame that draws it.
+//!
+//! It does, structurally: every ring's closing point is flagged, and the buffer ends at some
+//! ring's closing point. Nothing here may drop a closing point as a duplicate of its ring's
+//! first, however much it looks like one. `tests/fill_extrusion.rs` holds the guard.
+//!
 //! # Edge distance is for patterns, and it wraps
 //!
 //! `edgeDistance` accumulates along a ring so a `fill-extrusion-pattern` can run continuously

@@ -145,6 +145,68 @@ fn a_patterned_extrusion_takes_the_instanced_pattern_shader() {
     );
 }
 
+/// The slab's last instance carries the discard flag, which is what bounds the lookahead.
+///
+/// `tessella-layout`'s own suite proves the *bucket* ends on a flagged point. This proves the
+/// bytes the consumer divides by the stride do, which is the form the invariant has to hold in:
+/// the instance count is not on the wire — it is the outline slab's length over its stride — so
+/// the last instance is the slab's last eight bytes, and the shader reads one past them unless
+/// those bytes say to stop.
+///
+/// mbgl's body is `instance[gl_InstanceIndex + 1]` with nothing clamping the index, and it is
+/// safe only because the discard test returns first. A producer that stopped flagging the closing
+/// point would not draw anything wrong here; it would read past the end of a storage buffer on
+/// every device, which is why this is checked on the producer's side of the wire.
+#[test]
+fn the_slabs_last_instance_is_flagged_discarded() {
+    let mut arena = SlabArena::new();
+    let bucket = bucket();
+    let layout = VertexLayout::default();
+    let (_, shared) = encode_extrusion(&mut arena, GeometryId(1), &bucket, &layout, &[], 0, None);
+    let walls = encode_extrusion_walls(&mut arena, GeometryId(2), shared, &layout, 0, None);
+
+    let decimals = walls
+        .instance_attributes()
+        .iter()
+        .find(|attribute| attribute.attr_id == 1)
+        .copied()
+        .expect("the decimals and edge distance attribute");
+    let bytes = arena
+        .resolve_written(decimals.source)
+        .expect("the outline slab this frame wrote");
+
+    let stride = decimals.stride as usize;
+    assert_eq!(
+        bytes.len() % stride,
+        0,
+        "the slab does not divide into instances: {} over {stride}",
+        bytes.len()
+    );
+    let instances = bytes.len() / stride;
+    assert_eq!(
+        instances,
+        bucket.vertices.len(),
+        "one instance per outline point, which is how the consumer derives the count"
+    );
+
+    let at = (instances - 1) * stride + decimals.offset as usize;
+    let last = u16::from_le_bytes([bytes[at], bytes[at + 1]]);
+    assert_eq!(
+        last & 1,
+        1,
+        "the last instance is where `gl_InstanceIndex + 1` leaves the slab"
+    );
+
+    // And it is the only one here: a single ring, so every other point has an edge leaving it.
+    let flagged = (0..instances)
+        .filter(|instance| {
+            let at = instance * stride + decimals.offset as usize;
+            u16::from_le_bytes([bytes[at], bytes[at + 1]]) & 1 == 1
+        })
+        .count();
+    assert_eq!(flagged, 1, "one closing point, one flag");
+}
+
 /// And they reach the wire, through a real frame.
 ///
 /// The encoder being right is half of it; the other half is that the drawable dispatch asks for
