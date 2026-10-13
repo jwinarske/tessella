@@ -500,6 +500,10 @@ impl Host {
                 Some(Program {
                     builtin_shader: drawable.geometry.add.builtin_shader,
                     permutation_key: drawable.geometry.add.permutation_key,
+                    // From the *use* rather than the announcement: the same geometry drawn by two
+                    // views can be raised in one and flat in the other, which is what puts this
+                    // field on `ViewUse` in the first place.
+                    draw_flags: drawable.use_.draw_flags.bits(),
                     texture_refs: &drawable.geometry.texture_refs,
                 })
             });

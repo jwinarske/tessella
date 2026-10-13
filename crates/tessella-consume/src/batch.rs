@@ -3,6 +3,11 @@
 //! §11.7 asks a consumer for geometry batching, merged by (layer, shader permutation, texture
 //! set). R-9 is why that is not a group-by.
 //!
+//! The key is wider than §11.7's three, because §11.7 names what a *renderable* is and this has to
+//! name what a **program** is. The pass is in it because collapse is scoped to (layer, pass), and
+//! `draw_flags` is in it because every bit of that byte is pipeline state -- including the one that
+//! chooses a surface variant, which is a different module and not a different uniform.
+//!
 //! # Why adjacency, and not grouping
 //!
 //! R-9: merging drawables into multi-primitive renderables assumes layer-contiguous draw order and
@@ -45,6 +50,20 @@ pub struct Key {
     pub builtin_shader: i32,
     /// Which data-driven variant of that family, which is a different program.
     pub permutation_key: u64,
+    /// The render state and the surface variant, as `ViewUse::draw_flags`.
+    ///
+    /// The whole byte rather than the bits a consumer happens to read today, because every one of
+    /// them decides something a pipeline is built with: `ENABLE_DEPTH` and `ENABLE_COLOR` are the
+    /// depth test and the write mask, `ENABLE_STENCIL` is the stencil test, and `ON_TERRAIN` says
+    /// which *surface variant* of the family's module draws this -- a different module, not a
+    /// different uniform.
+    ///
+    /// It is here because it varies within what was otherwise one batch. `ON_TERRAIN` is set per
+    /// binding where a ground covers the drawable's tile, and a terrain style's DEM arrives on its
+    /// own schedule -- so two tiles of one layer, adjacent in the order, are raised and flat while
+    /// the elevation is still loading. Merged, the consumer binds one pipeline for both and half
+    /// the layer is placed on the wrong surface.
+    pub draw_flags: u8,
     /// The textures bound, as a range into the flat array.
     textures: Range<u32>,
 }
@@ -58,6 +77,7 @@ impl Key {
             && self.pass == other.pass
             && self.builtin_shader == other.builtin_shader
             && self.permutation_key == other.permutation_key
+            && self.draw_flags == other.draw_flags
             && mine == theirs
     }
 }
@@ -158,6 +178,8 @@ pub struct Program<'a> {
     pub builtin_shader: i32,
     /// Data-driven variant.
     pub permutation_key: u64,
+    /// Render state and surface variant, from the drawable's `ViewUse`.
+    pub draw_flags: u8,
     /// Textures bound.
     pub texture_refs: &'a [TextureRef],
 }
@@ -207,6 +229,7 @@ pub fn collapse_into<'a>(
             pass: entry.pass.bits(),
             builtin_shader: program.builtin_shader,
             permutation_key: program.permutation_key,
+            draw_flags: program.draw_flags,
             textures: from..out.textures.len() as u32,
         };
 
