@@ -1443,7 +1443,11 @@ fn tile_kind(raster: bool, dem: bool, set: &TileSet) -> SourceKind {
 /// but the style is what a scene writes and what both renderers are handed. An unknown name and
 /// an absent one both fall to the spec's default, which is Mapbox Terrain-RGB -- the same thing
 /// mbgl does with a name it does not know.
-fn dem_encoding(style: &Style, source: &str) -> tessella_source::dem::Encoding {
+///
+/// Public for `tools/capture-render`, which decodes a DEM handed to it on the command line and has
+/// to read the encoding the way the boot path does. A copy there would be three lines that drift.
+#[must_use]
+pub fn dem_encoding(style: &Style, source: &str) -> tessella_source::dem::Encoding {
     let Some(tessella_style::Source::RasterDem(tiles)) = style.source(source) else {
         return tessella_source::dem::Encoding::default();
     };

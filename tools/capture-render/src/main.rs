@@ -40,7 +40,9 @@ use tessella_capture_abi::ring::Ring;
 use tessella_glyph::fonts::Fonts;
 use tessella_orchestrate::SlabArena;
 use tessella_orchestrate::frame::{self, Frame};
-use tessella_orchestrate::tile::{TileId, build_mvt_tile, build_raster_tile, build_sourceless};
+use tessella_orchestrate::tile::{
+    TileId, build_mvt_tile, build_raster_tile, build_sourceless, build_terrain_tile_on,
+};
 use tessella_source::mvt::Tile;
 use tessella_style::Style;
 use tessella_style::light::Light;
@@ -110,6 +112,13 @@ struct Args {
     glyphs: Option<String>,
     /// A picture for the raster layers, decoded and placed at the same address as the tile.
     raster: Option<String>,
+    /// A DEM for the ground, decoded and placed at the same address as the tile.
+    ///
+    /// Without one a style with a `terrain` block emits no ground and raises nothing, so every
+    /// capture this tool has written is flat whatever the style says. With one, the drawables on
+    /// that tile carry `DrawFlags::ON_TERRAIN` and the layers that stand on the ground get their
+    /// elevation block -- which is what a consumer needs to draw a raised frame at all.
+    dem: Option<String>,
     /// Where the tile belongs, as `z/x/y`.
     ///
     /// `None` means it is drawn at every address the cover names, which is a diagnostic rather
@@ -134,6 +143,7 @@ fn parse_args() -> Result<Args, String> {
     let mut glyphs = None;
     let mut at = None;
     let mut raster = None;
+    let mut dem = None;
     let mut capture = None;
     let (mut lon, mut lat, mut zoom) = (0.0, 0.0, 0.0);
     let (mut width, mut height) = (1024.0, 768.0);
@@ -153,6 +163,7 @@ fn parse_args() -> Result<Args, String> {
             "--glyphs" => glyphs = Some(value()?),
             "--tile-at" => at = Some(address(&value()?)?),
             "--raster" => raster = Some(value()?),
+            "--dem" => dem = Some(value()?),
             "--capture" => capture = Some(value()?),
             "--lon" => lon = number(&value()?)?,
             "--lat" => lat = number(&value()?)?,
@@ -175,6 +186,7 @@ fn parse_args() -> Result<Args, String> {
         source,
         glyphs,
         raster,
+        dem,
         at,
         capture,
         view: camera::settled(&ViewTransform {
@@ -292,7 +304,8 @@ fn dump(ring: &mut Ring, arena: &SlabArena) -> Result<Vec<u8>, String> {
 
 fn usage() -> String {
     "usage: capture-render --style <path> --tile <path.mvt> [--out map.png] [--source src]\n\
-     \x20                     [--glyphs <dir>] [--raster <image>] [--tile-at z/x/y]\n\
+     \x20                     [--glyphs <dir>] [--raster <image>] [--dem <image>]\n\
+      \x20                     [--tile-at z/x/y]\n\
       \x20                     [--capture <path.tslcap>]\n\
       \x20                     [--lon 0] [--lat 0] [--zoom 0]\n\
       \x20                     [--width 1024] [--height 768] [--bearing 0] [--pitch 0]"
@@ -305,6 +318,10 @@ fn run() -> Result<String, String> {
     let text = std::fs::read_to_string(&args.style)
         .map_err(|error| format!("reading {}: {error}", args.style))?;
     let mut style = Style::parse(&text).map_err(|error| format!("parsing the style: {error}"))?;
+    // The ground is a layer the style does not write: `Map::new` synthesizes one over the terrain
+    // source before anything reads the layer list, and so must this, or a `terrain` block names a
+    // source nothing draws from and `build_terrain_tile_on` has no layer to build for.
+    style.synthesize_terrain();
     let rejected = style.reject_uncompilable();
 
     // A raster layer draws from a *picture* rather than from features, so it is decoded here and
@@ -319,6 +336,30 @@ fn run() -> Result<String, String> {
             ))
         }
         None => None,
+    };
+
+    // And the ground, where the style asks for one. A DEM is not a picture of a layer: it is the
+    // surface every other layer stands on, so it is decoded through `Dem` -- which fills the border
+    // by repeating the edge, as a sampler reading past a tile's edge needs -- and read with the
+    // encoding the style names, through the same function the boot path uses.
+    let ground = match (&args.dem, style.terrain_dem()) {
+        (Some(path), Some((source, _))) => {
+            let bytes = std::fs::read(path).map_err(|error| format!("reading {path}: {error}"))?;
+            let image = tessella_source::image::decode(&bytes)
+                .map_err(|error| format!("decoding {path}: {error}"))?;
+            let encoding = tessella_orchestrate::boot::dem_encoding(&style, source);
+            let dem = tessella_source::dem::Dem::new(&image, encoding)
+                .map_err(|error| format!("{path} is not a DEM tile: {error}"))?;
+            Some((source.to_string(), std::sync::Arc::new(dem)))
+        }
+        // A DEM with no `terrain` block in the style is a mistake worth naming: the tool would
+        // otherwise read the file, build nothing from it, and write a flat capture.
+        (Some(path), None) => {
+            return Err(format!(
+                "--dem {path} was given and the style has no terrain source to read it as"
+            ));
+        }
+        (None, _) => None,
     };
 
     let bytes =
@@ -354,6 +395,16 @@ fn run() -> Result<String, String> {
                         &[tessella_tile::mask::WHOLE_TILE],
                     )
                     .map_err(|error| format!("raster {id}: {error}"))?,
+                );
+            }
+            // The ground at the same address, for the same reason: one tile's DEM placed where
+            // that tile is. The cover's other tiles have no ground, so their drawables are not
+            // raised -- which is the ordinary transient state of a terrain style, and the one a
+            // consumer has to batch separately.
+            if let Some((source, dem)) = &ground {
+                built.extend(
+                    build_terrain_tile_on(&style, source, dem, id)
+                        .map_err(|error| format!("ground {id}: {error}"))?,
                 );
             }
             placed += 1;
