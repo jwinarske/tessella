@@ -408,6 +408,76 @@ mod tests {
         }
     }
 
+    /// Exactly the fill-extrusion position and `decimals_ed` pair name a shared buffer.
+    ///
+    /// `AttributeInfo`'s fourth field is `ubo`, and mbgl's Vulkan backend reads it in two places:
+    /// `VertexAttribute::getBufferUsage` adds `STORAGE_BUFFER_BIT` to the buffer when it is set,
+    /// and `Drawable::setSharedBuffers` registers that same buffer at that UBO binding. So the
+    /// bytes are bound twice -- as vertex input and as a storage buffer -- and a consumer that
+    /// gives the buffer only `VERTEX_BUFFER` cannot run `FillExtrusionInstancedShader` at all:
+    /// that body reads the instance *after* its own to get the far end of the wall's edge, which
+    /// an attribute fetch cannot reach and a storage view can.
+    ///
+    /// Pinned both ways. A new `Some` means mbgl shares another buffer and a consumer's usage
+    /// flags have to follow; a lost one means the generator dropped the field again, which it did
+    /// once already by requiring `AttributeInfo` to have exactly three fields.
+    #[test]
+    fn only_the_extrusion_pair_shares_its_buffer() {
+        use super::shader_attributes::instance_attributes;
+
+        let mut shared = Vec::new();
+        for shader in BuiltIn::ALL {
+            for (rate, table) in [
+                ("vertex", attributes(shader)),
+                ("instance", instance_attributes(shader)),
+            ] {
+                for attribute in table {
+                    if let Some(buffer) = attribute.shared_buffer {
+                        shared.push((format!("{shader:?}"), rate, attribute.name, buffer));
+                    }
+                }
+            }
+        }
+
+        // Every one of them is a fill extrusion's, and every one names the same buffer: the file
+        // mbgl declares them in says why -- "idFillExtrusionInstanced is shared between instanced
+        // and non-instanced drawables".
+        for (shader, rate, name, buffer) in &shared {
+            assert!(
+                shader.starts_with("FillExtrusion"),
+                "{shader} ({rate}) shares a buffer for {name}, which is outside fill extrusion"
+            );
+            assert_eq!(
+                *buffer, "idFillExtrusionInstanced",
+                "{shader} ({rate}) shares {buffer} for {name}, not the instance buffer"
+            );
+            assert!(
+                name.ends_with("PosVertexAttribute")
+                    || name.ends_with("OutlinePosAttribute")
+                    || name.ends_with("DecimalsEdAttribute"),
+                "{shader} ({rate}) shares its buffer for {name}, which is not the outline pair"
+            );
+        }
+
+        // Four families: the two extrusion shaders and their two patterned forms, each naming the
+        // pair once. The non-instanced ones carry it on their *vertex* table, because they read
+        // the same bytes as plain attributes -- which is the evidence that the flag is about the
+        // buffer and not about the rate.
+        assert_eq!(
+            shared.len(),
+            8,
+            "the shared-buffer attributes moved: {shared:#?}"
+        );
+        let instanced = shared
+            .iter()
+            .filter(|(_, rate, _, _)| *rate == "instance")
+            .count();
+        assert_eq!(
+            instanced, 4,
+            "half of them belong to an instance table and half to a vertex one: {shared:#?}"
+        );
+    }
+
     /// Field kinds report the sizes their C++ types occupy.
     #[test]
     fn field_kinds_are_sized_as_their_types() {

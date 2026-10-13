@@ -42,6 +42,13 @@ pub struct ShaderAttribute {
     /// Name of the id in `shader_defines.hpp`, for diagnostics -- or this producer's own
     /// name for an attribute mbgl has no id for, which the note at the top lists.
     pub name: &'static str,
+    /// mbgl's name for the UBO binding this attribute's buffer is *also* bound to, as a
+    /// storage buffer -- `AttributeInfo`'s fourth field, `None` for a plain vertex
+    /// attribute. A consumer must give such a buffer both usages: the instanced
+    /// fill-extrusion bodies index the storage view to reach the instance after their
+    /// own, which an attribute fetch cannot do, and the non-instanced ones read the same
+    /// bytes as attributes.
+    pub shared_buffer: Option<&'static str>,
 }
 
 /// Attributes declared by `BackgroundPatternShader`.
@@ -50,6 +57,7 @@ pub const BACKGROUND_PATTERN_SHADER: [ShaderAttribute; 1] = [ShaderAttribute {
     declared: AttributeDataType::Short2,
     attr_id: 0,
     name: "idBackgroundPosVertexAttribute",
+    shared_buffer: None,
 }];
 
 /// Attributes declared by `BackgroundShader`.
@@ -58,6 +66,7 @@ pub const BACKGROUND_SHADER: [ShaderAttribute; 1] = [ShaderAttribute {
     declared: AttributeDataType::Short2,
     attr_id: 0,
     name: "idBackgroundPosVertexAttribute",
+    shared_buffer: None,
 }];
 
 /// Attributes declared by `CircleShader`.
@@ -67,48 +76,56 @@ pub const CIRCLE_SHADER: [ShaderAttribute; 8] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idCirclePosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::Float4,
         attr_id: 1,
         name: "idCircleColorVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Float2,
         attr_id: 2,
         name: "idCircleRadiusVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 3,
         declared: AttributeDataType::Float2,
         attr_id: 3,
         name: "idCircleBlurVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 4,
         declared: AttributeDataType::Float2,
         attr_id: 4,
         name: "idCircleOpacityVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 5,
         declared: AttributeDataType::Float4,
         attr_id: 5,
         name: "idCircleStrokeColorVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 6,
         declared: AttributeDataType::Float2,
         attr_id: 6,
         name: "idCircleStrokeWidthVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 7,
         declared: AttributeDataType::Float2,
         attr_id: 7,
         name: "idCircleStrokeOpacityVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -118,6 +135,7 @@ pub const CLIPPING_MASK_PROGRAM: [ShaderAttribute; 1] = [ShaderAttribute {
     declared: AttributeDataType::Short2,
     attr_id: 0,
     name: "idClippingMaskPosVertexAttribute",
+    shared_buffer: None,
 }];
 
 /// Attributes declared by `CollisionBoxShader`.
@@ -127,30 +145,35 @@ pub const COLLISION_BOX_SHADER: [ShaderAttribute; 5] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idCollisionPosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::Short2,
         attr_id: 1,
         name: "idCollisionAnchorPosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Short2,
         attr_id: 2,
         name: "idCollisionExtrudeVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 3,
         declared: AttributeDataType::UShort2,
         attr_id: 3,
         name: "idCollisionPlacedVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 4,
         declared: AttributeDataType::Float2,
         attr_id: 4,
         name: "idCollisionShiftVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -161,24 +184,28 @@ pub const COLLISION_CIRCLE_SHADER: [ShaderAttribute; 4] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idCollisionPosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::Short2,
         attr_id: 1,
         name: "idCollisionAnchorPosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Short2,
         attr_id: 2,
         name: "idCollisionExtrudeVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 3,
         declared: AttributeDataType::UShort2,
         attr_id: 3,
         name: "idCollisionPlacedVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -189,18 +216,21 @@ pub const COLOR_RELIEF_SHADER: [ShaderAttribute; 3] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idColorReliefPosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::Short2,
         attr_id: 1,
         name: "idColorReliefTexturePosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Short2,
         attr_id: 2,
         name: "tessellaSkirtVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -211,12 +241,14 @@ pub const CUSTOM_GEOMETRY_SHADER: [ShaderAttribute; 2] = [
         declared: AttributeDataType::Float3,
         attr_id: 0,
         name: "idCustomGeometryPosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::Float2,
         attr_id: 1,
         name: "idCustomGeometryTexVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -227,12 +259,14 @@ pub const CUSTOM_SYMBOL_ICON_SHADER: [ShaderAttribute; 2] = [
         declared: AttributeDataType::Float2,
         attr_id: 0,
         name: "idCustomSymbolPosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::Float2,
         attr_id: 1,
         name: "idCustomSymbolTexVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -242,6 +276,7 @@ pub const DEBUG_SHADER: [ShaderAttribute; 1] = [ShaderAttribute {
     declared: AttributeDataType::Short2,
     attr_id: 0,
     name: "idDebugPosVertexAttribute",
+    shared_buffer: None,
 }];
 
 /// Attributes declared by `FillExtrusionInstancedShader`.
@@ -250,6 +285,7 @@ pub const FILL_EXTRUSION_INSTANCED_SHADER: [ShaderAttribute; 1] = [ShaderAttribu
     declared: AttributeDataType::Short2,
     attr_id: 0,
     name: "idFillExtrusionPosVertexAttribute",
+    shared_buffer: None,
 }];
 
 /// Per-instance attributes declared by `FillExtrusionInstancedShader`.
@@ -259,30 +295,35 @@ pub const FILL_EXTRUSION_INSTANCED_SHADER_INSTANCE: [ShaderAttribute; 5] = [
         declared: AttributeDataType::Short2,
         attr_id: 2,
         name: "idFillExtrusionOutlinePosAttribute",
+        shared_buffer: Some("idFillExtrusionInstanced"),
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::UShort2,
         attr_id: 1,
         name: "idFillExtrusionDecimalsEdAttribute",
+        shared_buffer: Some("idFillExtrusionInstanced"),
     },
     ShaderAttribute {
         binding: 3,
         declared: AttributeDataType::Float4,
         attr_id: 4,
         name: "idFillExtrusionColorVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 4,
         declared: AttributeDataType::Float2,
         attr_id: 3,
         name: "idFillExtrusionBaseVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 5,
         declared: AttributeDataType::Float2,
         attr_id: 5,
         name: "idFillExtrusionHeightVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -292,6 +333,7 @@ pub const FILL_EXTRUSION_PATTERN_INSTANCED_SHADER: [ShaderAttribute; 1] = [Shade
     declared: AttributeDataType::Short2,
     attr_id: 0,
     name: "idFillExtrusionPosVertexAttribute",
+    shared_buffer: None,
 }];
 
 /// Per-instance attributes declared by `FillExtrusionPatternInstancedShader`.
@@ -301,36 +343,42 @@ pub const FILL_EXTRUSION_PATTERN_INSTANCED_SHADER_INSTANCE: [ShaderAttribute; 6]
         declared: AttributeDataType::Short2,
         attr_id: 2,
         name: "idFillExtrusionOutlinePosAttribute",
+        shared_buffer: Some("idFillExtrusionInstanced"),
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::UShort2,
         attr_id: 1,
         name: "idFillExtrusionDecimalsEdAttribute",
+        shared_buffer: Some("idFillExtrusionInstanced"),
     },
     ShaderAttribute {
         binding: 3,
         declared: AttributeDataType::Float2,
         attr_id: 3,
         name: "idFillExtrusionBaseVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 4,
         declared: AttributeDataType::Float2,
         attr_id: 5,
         name: "idFillExtrusionHeightVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 5,
         declared: AttributeDataType::UShort4,
         attr_id: 6,
         name: "idFillExtrusionPatternFromVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 6,
         declared: AttributeDataType::UShort4,
         attr_id: 7,
         name: "idFillExtrusionPatternToVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -341,36 +389,42 @@ pub const FILL_EXTRUSION_PATTERN_SHADER: [ShaderAttribute; 6] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idFillExtrusionPosVertexAttribute",
+        shared_buffer: Some("idFillExtrusionInstanced"),
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::UShort2,
         attr_id: 1,
         name: "idFillExtrusionDecimalsEdAttribute",
+        shared_buffer: Some("idFillExtrusionInstanced"),
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Float2,
         attr_id: 3,
         name: "idFillExtrusionBaseVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 3,
         declared: AttributeDataType::Float2,
         attr_id: 5,
         name: "idFillExtrusionHeightVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 4,
         declared: AttributeDataType::UShort4,
         attr_id: 6,
         name: "idFillExtrusionPatternFromVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 5,
         declared: AttributeDataType::UShort4,
         attr_id: 7,
         name: "idFillExtrusionPatternToVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -381,30 +435,35 @@ pub const FILL_EXTRUSION_SHADER: [ShaderAttribute; 5] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idFillExtrusionPosVertexAttribute",
+        shared_buffer: Some("idFillExtrusionInstanced"),
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::UShort2,
         attr_id: 1,
         name: "idFillExtrusionDecimalsEdAttribute",
+        shared_buffer: Some("idFillExtrusionInstanced"),
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Float4,
         attr_id: 4,
         name: "idFillExtrusionColorVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 3,
         declared: AttributeDataType::Float2,
         attr_id: 3,
         name: "idFillExtrusionBaseVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 4,
         declared: AttributeDataType::Float2,
         attr_id: 5,
         name: "idFillExtrusionHeightVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -415,24 +474,28 @@ pub const FILL_OUTLINE_PATTERN_SHADER: [ShaderAttribute; 4] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idFillPosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::UShort4,
         attr_id: 4,
         name: "idFillPatternFromVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::UShort4,
         attr_id: 5,
         name: "idFillPatternToVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 3,
         declared: AttributeDataType::Float2,
         attr_id: 2,
         name: "idFillOpacityVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -443,18 +506,21 @@ pub const FILL_OUTLINE_SHADER: [ShaderAttribute; 3] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idFillPosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::Float4,
         attr_id: 3,
         name: "idFillOutlineColorVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Float2,
         attr_id: 2,
         name: "idFillOpacityVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -465,12 +531,14 @@ pub const FILL_OUTLINE_TRIANGULATED_SHADER: [ShaderAttribute; 2] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idLinePosNormalVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::UByte4,
         attr_id: 1,
         name: "idLineDataVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -481,24 +549,28 @@ pub const FILL_PATTERN_SHADER: [ShaderAttribute; 4] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idFillPosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::UShort4,
         attr_id: 4,
         name: "idFillPatternFromVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::UShort4,
         attr_id: 5,
         name: "idFillPatternToVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 3,
         declared: AttributeDataType::Float2,
         attr_id: 2,
         name: "idFillOpacityVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -509,18 +581,21 @@ pub const FILL_SHADER: [ShaderAttribute; 3] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idFillPosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::Float4,
         attr_id: 1,
         name: "idFillColorVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Float2,
         attr_id: 2,
         name: "idFillOpacityVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -531,18 +606,21 @@ pub const HEATMAP_SHADER: [ShaderAttribute; 3] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idHeatmapPosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::Float2,
         attr_id: 1,
         name: "idHeatmapWeightVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Float2,
         attr_id: 2,
         name: "idHeatmapRadiusVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -552,6 +630,7 @@ pub const HEATMAP_TEXTURE_SHADER: [ShaderAttribute; 1] = [ShaderAttribute {
     declared: AttributeDataType::Short2,
     attr_id: 0,
     name: "idHeatmapPosVertexAttribute",
+    shared_buffer: None,
 }];
 
 /// Attributes declared by `HillshadePrepareShader`.
@@ -561,12 +640,14 @@ pub const HILLSHADE_PREPARE_SHADER: [ShaderAttribute; 2] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idHillshadePosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::Short2,
         attr_id: 1,
         name: "idHillshadeTexturePosVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -577,18 +658,21 @@ pub const HILLSHADE_SHADER: [ShaderAttribute; 3] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idHillshadePosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::Short2,
         attr_id: 1,
         name: "idHillshadeTexturePosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Short2,
         attr_id: 2,
         name: "tessellaSkirtVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -599,42 +683,49 @@ pub const LINE_GRADIENT_SHADER: [ShaderAttribute; 7] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idLinePosNormalVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::UByte4,
         attr_id: 1,
         name: "idLineDataVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Float2,
         attr_id: 3,
         name: "idLineBlurVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 3,
         declared: AttributeDataType::Float2,
         attr_id: 4,
         name: "idLineOpacityVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 4,
         declared: AttributeDataType::Float2,
         attr_id: 5,
         name: "idLineGapWidthVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 5,
         declared: AttributeDataType::Float2,
         attr_id: 6,
         name: "idLineOffsetVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 6,
         declared: AttributeDataType::Float2,
         attr_id: 7,
         name: "idLineWidthVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -645,54 +736,63 @@ pub const LINE_PATTERN_SHADER: [ShaderAttribute; 9] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idLinePosNormalVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::UByte4,
         attr_id: 1,
         name: "idLineDataVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Float2,
         attr_id: 3,
         name: "idLineBlurVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 3,
         declared: AttributeDataType::Float2,
         attr_id: 4,
         name: "idLineOpacityVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 4,
         declared: AttributeDataType::Float2,
         attr_id: 5,
         name: "idLineGapWidthVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 5,
         declared: AttributeDataType::Float2,
         attr_id: 6,
         name: "idLineOffsetVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 6,
         declared: AttributeDataType::Float2,
         attr_id: 7,
         name: "idLineWidthVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 7,
         declared: AttributeDataType::UShort4,
         attr_id: 9,
         name: "idLinePatternFromVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 8,
         declared: AttributeDataType::UShort4,
         attr_id: 10,
         name: "idLinePatternToVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -703,54 +803,63 @@ pub const LINE_SDFSHADER: [ShaderAttribute; 9] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idLinePosNormalVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::UByte4,
         attr_id: 1,
         name: "idLineDataVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Float4,
         attr_id: 2,
         name: "idLineColorVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 3,
         declared: AttributeDataType::Float2,
         attr_id: 3,
         name: "idLineBlurVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 4,
         declared: AttributeDataType::Float2,
         attr_id: 4,
         name: "idLineOpacityVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 5,
         declared: AttributeDataType::Float2,
         attr_id: 5,
         name: "idLineGapWidthVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 6,
         declared: AttributeDataType::Float2,
         attr_id: 6,
         name: "idLineOffsetVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 7,
         declared: AttributeDataType::Float2,
         attr_id: 7,
         name: "idLineWidthVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 8,
         declared: AttributeDataType::Float2,
         attr_id: 8,
         name: "idLineFloorWidthVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -761,48 +870,56 @@ pub const LINE_SHADER: [ShaderAttribute; 8] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idLinePosNormalVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::UByte4,
         attr_id: 1,
         name: "idLineDataVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Float4,
         attr_id: 2,
         name: "idLineColorVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 3,
         declared: AttributeDataType::Float2,
         attr_id: 3,
         name: "idLineBlurVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 4,
         declared: AttributeDataType::Float2,
         attr_id: 4,
         name: "idLineOpacityVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 5,
         declared: AttributeDataType::Float2,
         attr_id: 5,
         name: "idLineGapWidthVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 6,
         declared: AttributeDataType::Float2,
         attr_id: 6,
         name: "idLineOffsetVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 7,
         declared: AttributeDataType::Float2,
         attr_id: 7,
         name: "idLineWidthVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -812,6 +929,7 @@ pub const LOCATION_INDICATOR_SHADER: [ShaderAttribute; 1] = [ShaderAttribute {
     declared: AttributeDataType::Float2,
     attr_id: 0,
     name: "idLocationIndicatorPosVertexAttribute",
+    shared_buffer: None,
 }];
 
 /// Attributes declared by `LocationIndicatorTexturedShader`.
@@ -821,12 +939,14 @@ pub const LOCATION_INDICATOR_TEXTURED_SHADER: [ShaderAttribute; 2] = [
         declared: AttributeDataType::Float2,
         attr_id: 0,
         name: "idLocationIndicatorPosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::Float2,
         attr_id: 1,
         name: "idLocationIndicatorTexVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -837,18 +957,21 @@ pub const RASTER_SHADER: [ShaderAttribute; 3] = [
         declared: AttributeDataType::Short2,
         attr_id: 0,
         name: "idRasterPosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::Short2,
         attr_id: 1,
         name: "idRasterTexturePosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Short2,
         attr_id: 2,
         name: "tessellaSkirtVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -859,36 +982,42 @@ pub const SYMBOL_ICON_SHADER: [ShaderAttribute; 6] = [
         declared: AttributeDataType::Short4,
         attr_id: 0,
         name: "idSymbolPosOffsetVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::UShort4,
         attr_id: 1,
         name: "idSymbolDataVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Short4,
         attr_id: 2,
         name: "idSymbolPixelOffsetVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 3,
         declared: AttributeDataType::Float3,
         attr_id: 3,
         name: "idSymbolProjectedPosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 4,
         declared: AttributeDataType::Float,
         attr_id: 4,
         name: "idSymbolFadeOpacityVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 5,
         declared: AttributeDataType::Float2,
         attr_id: 5,
         name: "idSymbolOpacityVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -899,60 +1028,70 @@ pub const SYMBOL_SDFSHADER: [ShaderAttribute; 10] = [
         declared: AttributeDataType::Short4,
         attr_id: 0,
         name: "idSymbolPosOffsetVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::UShort4,
         attr_id: 1,
         name: "idSymbolDataVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Short4,
         attr_id: 2,
         name: "idSymbolPixelOffsetVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 3,
         declared: AttributeDataType::Float3,
         attr_id: 3,
         name: "idSymbolProjectedPosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 4,
         declared: AttributeDataType::Float,
         attr_id: 4,
         name: "idSymbolFadeOpacityVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 5,
         declared: AttributeDataType::Float4,
         attr_id: 6,
         name: "idSymbolColorVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 6,
         declared: AttributeDataType::Float4,
         attr_id: 7,
         name: "idSymbolHaloColorVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 7,
         declared: AttributeDataType::Float2,
         attr_id: 5,
         name: "idSymbolOpacityVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 8,
         declared: AttributeDataType::Float2,
         attr_id: 8,
         name: "idSymbolHaloWidthVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 9,
         declared: AttributeDataType::Float2,
         attr_id: 9,
         name: "idSymbolHaloBlurVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -963,54 +1102,63 @@ pub const SYMBOL_TEXT_AND_ICON_SHADER: [ShaderAttribute; 9] = [
         declared: AttributeDataType::Short4,
         attr_id: 0,
         name: "idSymbolPosOffsetVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::UShort4,
         attr_id: 1,
         name: "idSymbolDataVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Float3,
         attr_id: 3,
         name: "idSymbolProjectedPosVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 3,
         declared: AttributeDataType::Float,
         attr_id: 4,
         name: "idSymbolFadeOpacityVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 4,
         declared: AttributeDataType::Float4,
         attr_id: 6,
         name: "idSymbolColorVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 5,
         declared: AttributeDataType::Float4,
         attr_id: 7,
         name: "idSymbolHaloColorVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 6,
         declared: AttributeDataType::Float2,
         attr_id: 5,
         name: "idSymbolOpacityVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 7,
         declared: AttributeDataType::Float2,
         attr_id: 8,
         name: "idSymbolHaloWidthVertexAttribute",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 8,
         declared: AttributeDataType::Float2,
         attr_id: 9,
         name: "idSymbolHaloBlurVertexAttribute",
+        shared_buffer: None,
     },
 ];
 
@@ -1021,18 +1169,21 @@ pub const WIDE_VECTOR_SHADER: [ShaderAttribute; 3] = [
         declared: AttributeDataType::Float3,
         attr_id: 0,
         name: "idWideVectorScreenPos",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 1,
         declared: AttributeDataType::Float4,
         attr_id: 1,
         name: "idWideVectorColor",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 2,
         declared: AttributeDataType::Int,
         attr_id: 2,
         name: "idWideVectorIndex",
+        shared_buffer: None,
     },
 ];
 
@@ -1043,24 +1194,28 @@ pub const WIDE_VECTOR_SHADER_INSTANCE: [ShaderAttribute; 4] = [
         declared: AttributeDataType::Float3,
         attr_id: 0,
         name: "idWideVectorInstanceCenter",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 4,
         declared: AttributeDataType::Float4,
         attr_id: 1,
         name: "idWideVectorInstanceColor",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 5,
         declared: AttributeDataType::Int,
         attr_id: 2,
         name: "idWideVectorInstancePrevious",
+        shared_buffer: None,
     },
     ShaderAttribute {
         binding: 6,
         declared: AttributeDataType::Int,
         attr_id: 3,
         name: "idWideVectorInstanceNext",
+        shared_buffer: None,
     },
 ];
 
