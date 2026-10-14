@@ -17,13 +17,18 @@
 //! # Usage
 //!
 //! ```text
-//! capture-render --style <path> --tile <path.mvt> --out map.png \
+//! capture-render --style <path> [--tile <path.mvt>] --out map.png \
 //!                [--lon 0] [--lat 0] [--zoom 0] [--width 1024] [--height 768] [--source src]
 //! ```
 //!
 //! The tile is used for every address in the cover, which is what makes this a *rendering* test
 //! rather than a map: one tile's features repeated is enough to see whether a layer draws, where
 //! it lands, and in what color.
+//!
+//! A style whose source is an **inline GeoJSON** needs no tile at all: its features carry
+//! coordinates, so every tile of the cover is cut from the same set. That is the only way to
+//! capture a `line-gradient`, which reads how far along the whole of a line a piece runs and so
+//! cannot come from tiles that arrive already cut. See [`Features`].
 
 mod glyphs;
 mod png;
@@ -42,10 +47,12 @@ use tessella_orchestrate::SlabArena;
 use tessella_orchestrate::frame::{self, Frame};
 use tessella_orchestrate::tile::{
     PatternLookup, TileId, build_mvt_tile_with_patterns, build_raster_tile, build_sourceless,
-    build_terrain_tile_on,
+    build_terrain_tile_on, build_tile_with_patterns,
 };
 use tessella_source::mvt::Tile;
+use tessella_source::tiling::TilingOptions;
 use tessella_style::Style;
+use tessella_style::document::Source;
 use tessella_style::light::Light;
 use tessella_tile::camera;
 use tessella_tile::cover::{self, ViewTransform};
@@ -106,7 +113,11 @@ fn main() -> ExitCode {
 
 struct Args {
     style: String,
-    tile: String,
+    /// The vector tile to draw, for a style whose source is one.
+    ///
+    /// `None` where the source is an inline GeoJSON, which carries its own features and needs no
+    /// file beside it -- see [`Features`].
+    tile: Option<String>,
     out: String,
     source: String,
     /// A directory laid out as `{fontstack}/{range}.pbf`, for the symbol layers.
@@ -204,7 +215,7 @@ fn parse_args() -> Result<Args, String> {
 
     Ok(Args {
         style: style.ok_or_else(|| format!("--style is required\n\n{}", usage()))?,
-        tile: tile.ok_or_else(|| format!("--tile is required\n\n{}", usage()))?,
+        tile,
         out,
         source,
         glyphs,
@@ -233,6 +244,97 @@ fn alloc_format(message: &str) -> String {
 fn number(text: &str) -> Result<f64, String> {
     text.parse()
         .map_err(|_| format!("`{text}` is not a number"))
+}
+
+/// The features a cover's tiles are cut from, and where they came from.
+///
+/// A style names one source and this tool draws that one. Two kinds reach a bucket builder, and
+/// the difference is not only which function to call:
+///
+/// - A **vector tile** is already cut. It belongs at one address, holds one tile's features, and
+///   the other tiles of the cover get nothing -- which is what `--tile-at` and the `placed` count
+///   are about.
+/// - A **GeoJSON** source is not cut at all. It carries the whole of every feature, so each tile of
+///   the cover is cut from the same set and every one of them may have geometry. That is also what
+///   makes `lineMetrics` meaningful: a line crossing a tile edge is one line here and the tiler
+///   spreads its progress over the whole of it, which `line-gradient` reads.
+///
+/// Inline only. A `data` that is a URL is a fetch, and this tool makes none -- the style fixtures
+/// that carry gradients and dashes are inline for the same reason.
+enum Features {
+    /// A decoded vector tile and the path it was read from.
+    Vector { decoded: Tile, path: String },
+    /// Every feature of an inline GeoJSON source.
+    GeoJson {
+        features: Vec<tessella_source::geojson::GeoJsonFeature>,
+        options: TilingOptions,
+    },
+}
+
+impl Features {
+    /// Reads whichever the style's source is.
+    ///
+    /// # Errors
+    ///
+    /// When `--tile` is missing for a vector source, when the file cannot be read or decoded, or
+    /// when an inline GeoJSON does not parse.
+    fn read(style: &Style, args: &Args) -> Result<Self, String> {
+        if let Some(Source::Geojson(geojson)) = style.sources.get(&args.source)
+            && geojson.is_inline()
+        {
+            let features = tessella_source::geojson::read(&geojson.data)
+                .map_err(|error| format!("{}: {error:?}", args.source))?;
+            // The source's own buffer and tolerance where it sets them, which no fixture here
+            // does -- so this part is unexercised rather than checked. `lineMetrics` is not among
+            // them: `build_tile` reads that off the style itself, which is what makes a line cut
+            // by a tile edge keep its progress over the whole of itself.
+            let options = TilingOptions {
+                buffer: geojson
+                    .buffer
+                    .map_or(TilingOptions::default().buffer, |buffer| buffer as u16),
+                tolerance: geojson
+                    .tolerance
+                    .unwrap_or(TilingOptions::default().tolerance),
+                maxzoom: TilingOptions::default().maxzoom,
+            };
+            return Ok(Self::GeoJson { features, options });
+        }
+        let path = args
+            .tile
+            .clone()
+            .ok_or_else(|| format!("--tile is required for a vector source\n\n{}", usage()))?;
+        let bytes = std::fs::read(&path).map_err(|error| format!("reading {path}: {error}"))?;
+        let decoded = Tile::decode(&bytes).map_err(|error| format!("decoding {path}: {error}"))?;
+        Ok(Self::Vector { decoded, path })
+    }
+
+    /// One tile's buckets.
+    ///
+    /// # Errors
+    ///
+    /// Whatever the bucket builder refuses: a layer whose paint will not resolve, a geometry the
+    /// tiler cannot cut.
+    fn build(
+        &self,
+        style: &Style,
+        source: &str,
+        tile: TileId,
+        patterns: Option<&frame::Patterns<'_>>,
+    ) -> Result<Vec<tessella_orchestrate::tile::LayerBucket>, tessella_orchestrate::tile::TileError>
+    {
+        let lookup = patterns.map(|patterns| patterns as &dyn PatternLookup);
+        match self {
+            // With the patterns where there are any: a data-driven `fill-pattern` resolves to a
+            // *pair of rectangles per feature*, which is bucket-build work rather than frame work,
+            // and a bucket built without them carries none however the frame is emitted.
+            Self::Vector { decoded, .. } => {
+                build_mvt_tile_with_patterns(style, source, tile, decoded, lookup)
+            }
+            Self::GeoJson { features, options } => {
+                build_tile_with_patterns(style, source, tile, features, *options, lookup)
+            }
+        }
+    }
 }
 
 /// Parses `z/x/y`.
@@ -327,7 +429,8 @@ fn dump(ring: &mut Ring, arena: &SlabArena) -> Result<Vec<u8>, String> {
 }
 
 fn usage() -> String {
-    "usage: capture-render --style <path> --tile <path.mvt> [--out map.png] [--source src]\n\
+    "usage: capture-render --style <path> [--tile <path.mvt>] [--out map.png] [--source src]\n\
+     \x20                     (--tile is required unless the style\'s source is an inline GeoJSON)\n\
      \x20                     [--glyphs <dir>] [--raster <image>] [--dem <image>]\n\
       \x20                     [--sprite <base>]\n\
       \x20                     [--tile-at z/x/y]\n\
@@ -442,15 +545,18 @@ fn run() -> Result<String, String> {
         }
     });
 
-    let bytes =
-        std::fs::read(&args.tile).map_err(|error| format!("reading {}: {error}", args.tile))?;
-    let decoded =
-        Tile::decode(&bytes).map_err(|error| format!("decoding {}: {error}", args.tile))?;
+    let features = Features::read(&style, &args)?;
 
     let tiles = cover::cover(&args.view).map_err(|error| format!("covering: {error}"))?;
     // Where this tile's features actually belong. Given, or read off the filename, or nowhere —
     // and "nowhere" means every address, which repeats the tile across the viewport.
-    let at = args.at.or_else(|| address_from_name(&args.tile));
+    //
+    // A GeoJSON source has no such address: its features carry coordinates and every tile of the
+    // cover is cut from the same set, so each gets its own piece and `--tile-at` means nothing.
+    let at = match &features {
+        Features::Vector { path, .. } => args.at.or_else(|| address_from_name(path)),
+        Features::GeoJson { .. } => None,
+    };
 
     let mut buckets = Vec::new();
     let mut placed = 0;
@@ -464,16 +570,9 @@ fn run() -> Result<String, String> {
             // With the patterns where there are any: a data-driven `fill-pattern` resolves to a
             // *pair of rectangles per feature*, which is bucket-build work rather than frame work,
             // and a bucket built without them carries none however the frame is emitted.
-            built = build_mvt_tile_with_patterns(
-                &style,
-                &args.source,
-                id,
-                &decoded,
-                patterns
-                    .as_ref()
-                    .map(|patterns| patterns as &dyn PatternLookup),
-            )
-            .map_err(|error| format!("building {id}: {error}"))?;
+            built = features
+                .build(&style, &args.source, id, patterns.as_ref())
+                .map_err(|error| format!("building {id}: {error}"))?;
             // A raster layer draws from a *picture*, not from features, so it is built by its
             // own path -- the same picture at the same address, which is what a raster source
             // would have fetched for this tile.
