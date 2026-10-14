@@ -432,7 +432,8 @@ fn a_camera_with_an_unknown_projection_is_refused() {
             .expect("room");
     }
     host.read(ring.consumer());
-    assert_eq!(host.progress().malformed, 0, "nothing refused yet");
+    assert_eq!(host.progress().unsupported, 0, "nothing refused yet");
+    assert_eq!(host.progress().malformed, 0);
     assert_eq!(
         host.plan(ViewId(0)).expect("a frame").plan.epoch,
         OrderEpoch(1)
@@ -452,9 +453,14 @@ fn a_camera_with_an_unknown_projection_is_refused() {
 
     let progress = host.progress();
     assert_eq!(
-        progress.malformed, 1,
+        progress.unsupported, 1,
         "the camera was refused -- counted as tessella#364 settled for this wire's other \
          discriminants, and as `ViewDeclare`'s camera_mode is"
+    );
+    assert_eq!(
+        progress.malformed, 0,
+        "and not as malformed: these bytes parse, and a producer one revision ahead is not a \
+         corrupt stream"
     );
     assert_eq!(progress.unknown, 0, "not as unknown: the kind is known");
     assert_eq!(
@@ -1058,9 +1064,10 @@ fn a_declared_view_carries_its_camera_mode() {
 ///
 /// The mode decides what a per-drawable matrix *means*, so guessing it is how geometry gets placed
 /// through a camera that is not the one drawing. Refused the same way an unknown texture format is,
-/// which tessella#364 settled for the other two discriminants on this wire.
+/// which tessella#364 settled for the other two discriminants on this wire -- and counted apart
+/// from a malformed record, because the bytes parse.
 #[test]
-fn an_unknown_camera_mode_is_malformed() {
+fn an_unknown_camera_mode_is_unsupported() {
     let mut ring = Ring::new(CAPACITY);
     {
         let (producer, _) = ring.split();
@@ -1075,7 +1082,8 @@ fn an_unknown_camera_mode_is_malformed() {
     }
     let mut host = Host::new();
     let progress = host.read(ring.consumer());
-    assert_eq!(progress.malformed, 1);
+    assert_eq!(progress.unsupported, 1);
+    assert_eq!(progress.malformed, 0, "the bytes parse");
     assert!(
         !host.declared(ViewId(4)),
         "a view whose mode did not decode is not declared"
@@ -1227,6 +1235,52 @@ fn a_target_of_an_undeclared_view_is_dropped() {
             "view {view} parent {parent}: one of them is not declared"
         );
         assert!(host.target(ViewId(view)).is_none());
+    }
+}
+
+/// A target whose format this build does not know is refused, and counted apart.
+///
+/// The fourth field on this wire with a discriminant, and the one with the least excuse for a
+/// guess: the format decides what image the consumer creates for the pass to draw into, and a
+/// guess is a render target the second pass then samples. Refused like the other three, and like
+/// them counted as unsupported rather than malformed -- the record parses, and a pixel type this
+/// build has no case for is a producer one revision ahead.
+#[test]
+fn a_target_whose_format_is_unknown_is_unsupported() {
+    for (format, channel) in [
+        (200, TextureChannelDataType::HalfFloat as u8),
+        (TexturePixelType::RGBA as u8, 7),
+    ] {
+        let mut ring = Ring::new(CAPACITY);
+        let mut host = Host::new();
+        {
+            let (producer, _) = ring.split();
+            declare(producer, 0);
+            declare(producer, 1);
+            let record = ViewTarget {
+                view: ViewId(1),
+                parent: ViewId(0),
+                texture: TextureId(70),
+                scale_num: 1,
+                scale_den: 2,
+                format,
+                channel_type: channel,
+                _pad: [0; 2],
+            };
+            producer
+                .write(EnvelopeKind::ViewTarget, record.as_bytes(), &[])
+                .expect("room");
+        }
+        let progress = host.read(ring.consumer());
+        assert_eq!(
+            progress.unsupported, 1,
+            "format {format}, channel {channel}: the target was not refused"
+        );
+        assert_eq!(progress.malformed, 0, "the record parses");
+        assert!(
+            host.target(ViewId(1)).is_none(),
+            "a refused target was kept anyway"
+        );
     }
 }
 

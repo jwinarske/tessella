@@ -344,12 +344,15 @@ fn an_empty_update_is_legal() {
     assert_eq!(host.uploads().held(), 0);
 }
 
-/// A pixel format this consumer does not know is malformed, not passed on.
+/// A pixel format this consumer does not know is refused, not passed on.
 ///
 /// The backend picks an image format from it. Passing an unknown discriminant through would have
 /// it choose from a number it cannot interpret, on a texture it would then sample.
+///
+/// Counted as unsupported rather than malformed: the record parses, and a format this build has no
+/// case for is a newer producer.
 #[test]
-fn an_unknown_pixel_format_is_malformed() {
+fn an_unknown_pixel_format_is_unsupported() {
     let mut one = tessella_capture_abi::envelope::TextureUpdate::from_bytes(&texture(
         1,
         &[rect(0, 0, 1, 1)],
@@ -366,16 +369,18 @@ fn an_unknown_pixel_format_is_malformed() {
             .write(EnvelopeKind::TextureUpdate, one.as_bytes(), &[0; 4])
             .expect("room");
     }
-    assert_eq!(host.read(ring.consumer()).malformed, 1);
+    let progress = host.read(ring.consumer());
+    assert_eq!(progress.unsupported, 1);
+    assert_eq!(progress.malformed, 0, "the record parses");
     assert!(host.uploads().work().is_empty());
 }
 
-/// A channel type this consumer does not know is malformed too.
+/// A channel type this consumer does not know is refused too.
 ///
 /// The other half of mbgl's two-part format, and the half that decides how many bytes a channel
 /// is. A guess here is a stride.
 #[test]
-fn an_unknown_channel_type_is_malformed() {
+fn an_unknown_channel_type_is_unsupported() {
     let mut one = tessella_capture_abi::envelope::TextureUpdate::from_bytes(&texture(
         1,
         &[rect(0, 0, 1, 1)],
@@ -392,7 +397,9 @@ fn an_unknown_channel_type_is_malformed() {
             .write(EnvelopeKind::TextureUpdate, one.as_bytes(), &[0; 4])
             .expect("room");
     }
-    assert_eq!(host.read(ring.consumer()).malformed, 1);
+    let progress = host.read(ring.consumer());
+    assert_eq!(progress.unsupported, 1);
+    assert_eq!(progress.malformed, 0, "the record parses");
     assert!(host.uploads().work().is_empty());
 }
 
