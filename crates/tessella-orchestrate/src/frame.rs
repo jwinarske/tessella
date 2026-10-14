@@ -622,7 +622,7 @@ fn center_elevation(
 /// by the host, which fills [`crate::map::SpriteAtlas::texture`] with the id it uploaded it under.
 /// Published here anyway, because the *constraint* is this file's -- a host that picks a number
 /// out of the air picks it out of a space these bases already divide up, and `texture::placeholders`
-/// takes nought and one before any style content exists.
+/// takes zero and one before any style content exists.
 ///
 /// `tessella_ffi` picked one, and picked `TextureId(1)`: the `1x1` transparent placeholder mbgl
 /// has before a style does, written every frame. A consumer then saw one id declared twice at two

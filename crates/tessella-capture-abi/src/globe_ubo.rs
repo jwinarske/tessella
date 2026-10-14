@@ -30,7 +30,7 @@
 
 /// The slot this block binds at.
 ///
-/// Eleven, because mbgl spans nought to ten and this has to be past *all* of it. Five looked free
+/// Eleven, because mbgl spans zero to ten and this has to be past *all* of it. Five looked free
 /// from `FILL_LAYER_SSBO_COUNT` and is not: every family keeps its evaluated paint there --
 /// `ID_FILL_EVALUATED_PROPS_UBO`, `ID_BACKGROUND_PROPS_UBO` and four more are all five, and the
 /// consumer reads it as `kPropsSlot`. A block that landed there would have overwritten the layer's

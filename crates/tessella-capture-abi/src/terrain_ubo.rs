@@ -20,7 +20,7 @@
 //! # Why the numbers are where they are
 //!
 //! mbgl's `BuiltIn` runs from `None` at zero to `WideVectorShader` at 35, and its uniform slots
-//! span nought to ten with the globe's bend already claiming eleven. Both of these sit at 128 and
+//! span zero to ten with the globe's bend already claiming eleven. Both of these sit at 128 and
 //! above: far enough that a future mbgl family or slot cannot reach them, and far enough that a
 //! number in a dump is obviously not mbgl's to anyone reading one.
 //!
@@ -38,14 +38,14 @@ pub const BUILTIN_TERRAIN_SHADER: i32 = 128;
 
 /// The slot the terrain surface's per-drawable block binds at.
 ///
-/// Past mbgl's nought-to-ten and past the globe bend's eleven.
+/// Past mbgl's zero-to-ten and past the globe bend's eleven.
 pub const ID_TERRAIN_DRAWABLE_UBO: u32 = 128;
 
 /// The texture slot a raised drawable samples the ground's elevation at.
 ///
 /// Not a block but a *texture* binding, and here for the same reason the block's slot is: it is a
 /// number both sides have to agree on and mbgl has none to mirror. Past every slot mbgl's own
-/// families use -- the symbol's two are the highest at nought and one -- so a terrain variant's
+/// families use -- the symbol's two are the highest at zero and one -- so a terrain variant's
 /// extra texture cannot land on one the flat variant already reads.
 ///
 /// It was a private constant of the producer's encoder, which left the consumer to agree with a
@@ -100,7 +100,7 @@ pub const TERRAIN_MESH_STRIDE: u32 = 8;
 ///
 /// Zero, and [`TERRAIN_ELEVATION_SLOT`] is eight, which looks like a contradiction and is not. A
 /// raised *mbgl* family's slots come from mbgl's generated table -- the symbol's two are the
-/// highest, at nought and one -- so the elevation a terrain variant adds has to go past them. The
+/// highest, at zero and one -- so the elevation a terrain variant adds has to go past them. The
 /// ground's family is tessella's own and declares exactly one texture, so its elevation is the
 /// first slot and there is nothing to go past.
 pub const TERRAIN_MESH_ELEVATION_SLOT: u32 = 0;
@@ -345,7 +345,7 @@ mod tests {
     /// Three facts a renderer on either side depends on and neither can see the other checking: the
     /// bindings are what a vertex input is built from, the ids are what a descriptor is matched by,
     /// and the stride has to hold both attributes at their offsets -- which for a pair of `Short2`
-    /// at bindings nought and one is eight bytes with two to spare.
+    /// at bindings zero and one is eight bytes with two to spare.
     #[test]
     fn the_mesh_attributes_fit_the_vertex_they_describe() {
         use crate::AttributeDataType;
