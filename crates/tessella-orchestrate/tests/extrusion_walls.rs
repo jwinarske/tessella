@@ -33,12 +33,74 @@ fn bucket() -> FillExtrusionBucket {
 
 /// Encodes a roof and the walls that stand on it.
 fn encode(atlas: Option<TextureId>) -> (SlabArena, tessella_orchestrate::Encoded) {
+    let (arena, _, walls) = encode_on(atlas, None);
+    (arena, walls)
+}
+
+/// The same, on a ground, and keeping the roof.
+fn encode_on(
+    atlas: Option<TextureId>,
+    elevation: Option<TextureId>,
+) -> (
+    SlabArena,
+    tessella_orchestrate::Encoded,
+    tessella_orchestrate::Encoded,
+) {
     let mut arena = SlabArena::new();
     let bucket = bucket();
     let layout = VertexLayout::default();
-    let (_, shared) = encode_extrusion(&mut arena, GeometryId(1), &bucket, &layout, &[], 0, atlas);
-    let walls = encode_extrusion_walls(&mut arena, GeometryId(2), shared, &layout, 0, atlas);
-    (arena, walls)
+    let (roof, shared) = encode_extrusion(
+        &mut arena,
+        GeometryId(1),
+        &bucket,
+        &layout,
+        &[],
+        0,
+        atlas,
+        elevation,
+    );
+    let walls = encode_extrusion_walls(
+        &mut arena,
+        GeometryId(2),
+        shared,
+        &layout,
+        0,
+        atlas,
+        elevation,
+    );
+    (arena, roof, walls)
+}
+
+/// A raised extrusion names the ground it stands on, roof and walls alike.
+///
+/// The elevation is a texture like any other on the wire, and the raised variant of this family
+/// samples it per vertex -- so a drawable the frame marked `ON_TERRAIN` and did not give one to is
+/// a set the consumer cannot write at all: "the set has 1 texture bindings and 0 arrived", and the
+/// layer draws nothing rather than drawing flat. The fill, the line and the circle each passed it
+/// and these two did not, which nothing could see until a consumer had a raised extrusion module
+/// to bind -- tessella_emblema#123.
+///
+/// Both halves, because they are one building: a wall stands on the ground its roof is on.
+#[test]
+fn a_raised_extrusion_names_the_ground() {
+    use tessella_capture_abi::terrain_ubo::TERRAIN_ELEVATION_SLOT;
+
+    let ground = TextureId(77);
+    let (_, roof, walls) = encode_on(None, Some(ground));
+    for (what, encoded) in [("the roof", &roof), ("the walls", &walls)] {
+        let refs = encoded.texture_refs();
+        assert_eq!(refs.len(), 1, "{what} names {} textures", refs.len());
+        assert_eq!(refs[0].texture, ground, "{what} names another texture");
+        assert_eq!(
+            refs[0].slot, TERRAIN_ELEVATION_SLOT,
+            "{what} binds the ground at a slot the raised module does not sample"
+        );
+    }
+
+    // And a flat one names nothing, which is what every drawable off a style with no terrain is.
+    let (_, flat_roof, flat_walls) = encode_on(None, None);
+    assert!(flat_roof.texture_refs().is_empty());
+    assert!(flat_walls.texture_refs().is_empty());
 }
 
 /// The template is four vertices and six indices, whatever the building is.
@@ -85,9 +147,17 @@ fn the_instances_are_the_roofs_outline() {
     let mut arena = SlabArena::new();
     let bucket = bucket();
     let layout = VertexLayout::default();
-    let (roof, shared) =
-        encode_extrusion(&mut arena, GeometryId(1), &bucket, &layout, &[], 0, None);
-    let walls = encode_extrusion_walls(&mut arena, GeometryId(2), shared, &layout, 0, None);
+    let (roof, shared) = encode_extrusion(
+        &mut arena,
+        GeometryId(1),
+        &bucket,
+        &layout,
+        &[],
+        0,
+        None,
+        None,
+    );
+    let walls = encode_extrusion_walls(&mut arena, GeometryId(2), shared, &layout, 0, None, None);
 
     let instances = walls.instance_attributes();
     assert_eq!(
@@ -162,8 +232,17 @@ fn the_slabs_last_instance_is_flagged_discarded() {
     let mut arena = SlabArena::new();
     let bucket = bucket();
     let layout = VertexLayout::default();
-    let (_, shared) = encode_extrusion(&mut arena, GeometryId(1), &bucket, &layout, &[], 0, None);
-    let walls = encode_extrusion_walls(&mut arena, GeometryId(2), shared, &layout, 0, None);
+    let (_, shared) = encode_extrusion(
+        &mut arena,
+        GeometryId(1),
+        &bucket,
+        &layout,
+        &[],
+        0,
+        None,
+        None,
+    );
+    let walls = encode_extrusion_walls(&mut arena, GeometryId(2), shared, &layout, 0, None, None);
 
     let decimals = walls
         .instance_attributes()
