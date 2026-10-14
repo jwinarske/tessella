@@ -42,7 +42,7 @@ use tessella_tile::renderables::DataTileId;
 
 use crate::binder::{
     CIRCLE_FAMILY, FILL_EXTRUSION_FAMILY, FILL_FAMILY, HEATMAP_FAMILY, LINE_FAMILY, SYMBOL_FAMILY,
-    attribute_ids, layout, permutation_key,
+    attribute_ids, instance_declared_for, layout, permutation_key,
 };
 use crate::camera::CameraBlock;
 use crate::emit::SlabArena;
@@ -3968,6 +3968,26 @@ fn encode_parts(
         });
         (vertex_layout, key)
     };
+    // The same for a family whose data-driven paint advances per *instance*, which is the two
+    // instanced extrusions. `declared_for` reads the per-vertex table alone, and an instanced
+    // shader declares one attribute there -- the wall template's corner. So every paint property
+    // resolved to `None` and bound at -1, which §2.2 defines as "the shader has no slot for this":
+    // the consumer drops the attribute and the body reads the paint block instead, where a
+    // data-driven property's value is its fallback.
+    //
+    // For `fill-extrusion-height` that fallback is zero, so every wall in every frame was a quad
+    // of no height. The walls were built, uploaded, planned and recorded, and rasterized nothing
+    // -- which is the same symptom #114 fixed from the other end by sending the attributes at all,
+    // and the half that was still missing. A consumer that binds by *name* cannot see it, which is
+    // why the Filament side has drawn walls all along.
+    let bind_instanced = |family: &[BuiltIn], shader: BuiltIn| {
+        let ids = attribute_ids(family);
+        let key = permutation_key(&bucket.paint, &ids);
+        let vertex_layout = layout(&bucket.binder, &ids, |attr_id| {
+            instance_declared_for(shader, attr_id).map(|a| (a.binding, a.declared))
+        });
+        (vertex_layout, key)
+    };
 
     // Set by the arms whose second part is built from the first's buffers.
     let mut fill_shared = None;
@@ -3982,7 +4002,6 @@ fn encode_parts(
     let mut puck_shared = None;
     let encoded = match &bucket.content {
         Content::Fill(fill) => {
-            let (vertex_layout, key) = bind(FILL_FAMILY, BuiltIn::FillShader);
             // A pattern binds the atlas and a different shader; without one the layer draws
             // as a plain fill, which is what a frame with no sprites fetched should do.
             let atlas = patterns
@@ -3992,6 +4011,17 @@ fn encode_parts(
                         .is_some()
                 })
                 .map(|patterns| patterns.texture);
+            // Resolved before the bind, because the shader that will draw this is what says where
+            // its paint belongs: `FillPatternShader` declares the two rectangles at locations 1 and
+            // 2 where the plain one has the color, so the opacity sits at 3 there and at 2 here.
+            let (vertex_layout, key) = bind(
+                FILL_FAMILY,
+                if atlas.is_some() {
+                    BuiltIn::FillPatternShader
+                } else {
+                    BuiltIn::FillShader
+                },
+            );
             fill_atlas = atlas;
             let (encoded, buffers) = emit::encode_fill(arena, PLACEHOLDER, fill, &{
                 let draw = emit::FillDraw::new(&vertex_layout, &attributes, key, None, atlas)
@@ -4087,7 +4117,6 @@ fn encode_parts(
             ))
         }
         Content::Fill3d(extrusion) => {
-            let (vertex_layout, key) = bind(FILL_EXTRUSION_FAMILY, BuiltIn::FillExtrusionShader);
             let atlas = patterns
                 .filter(|patterns| {
                     patterns
@@ -4095,6 +4124,21 @@ fn encode_parts(
                         .is_some()
                 })
                 .map(|patterns| patterns.texture);
+            // Resolved before the bind, because which shader draws this decides where its
+            // data-driven paint belongs. `FillExtrusionPatternShader` declares no color -- the
+            // sprite is the surface -- so its base and height bind one slot lower than the plain
+            // family's and the two pattern rectangles take the slots after them. Bound through the
+            // plain table, a patterned layer sends the base where the shader declares the height
+            // and the height where it declares `pattern_from`, which the consumer refuses:
+            // "DeclaredDisagrees { attr_id: 5, wire: Float2, table: UShort4 }".
+            let (vertex_layout, key) = bind(
+                FILL_EXTRUSION_FAMILY,
+                if atlas.is_some() {
+                    BuiltIn::FillExtrusionPatternShader
+                } else {
+                    BuiltIn::FillExtrusionShader
+                },
+            );
             // The walls stand on these, and are not emitted yet: the drawable dispatch here
             // encodes one record per bucket and copies it for the second pass, where an
             // extrusion needs two *different* records — the roof and the instanced walls — each
@@ -4369,7 +4413,17 @@ fn encode_parts(
                 raised.then_some(textures.terrain),
             ));
         } else {
-            let (vertex_layout, key) = bind(FILL_FAMILY, BuiltIn::FillOutlineShader);
+            // The outline's own table, and the patterned one where the fill is patterned: a fill
+            // with `fill-antialias` and a pattern emits a *patterned* outline, whose opacity sits
+            // at 3 for the reason the triangles' does.
+            let (vertex_layout, key) = bind(
+                FILL_FAMILY,
+                if fill_atlas.is_some() {
+                    BuiltIn::FillOutlinePatternShader
+                } else {
+                    BuiltIn::FillOutlineShader
+                },
+            );
             parts.push(
                 emit::encode_fill(
                     arena,
@@ -4415,7 +4469,19 @@ fn encode_parts(
         }
     }
     if let Some(shared) = extrusion_shared {
-        let (wall_layout, key) = bind(FILL_EXTRUSION_FAMILY, BuiltIn::FillExtrusionInstancedShader);
+        // Through the shader `encode_extrusion_walls` will choose, for the reason the roof's bind
+        // gives: the patterned instanced table has no color either, so its base and height are a
+        // slot lower. The walls' *fixed* attributes already came off the right table -- that
+        // function reads `instance_attributes(shader)` -- and the data-driven ones are this
+        // layout's, which is the half that was still the plain family's.
+        let (wall_layout, key) = bind_instanced(
+            FILL_EXTRUSION_FAMILY,
+            if extrusion_atlas.is_some() {
+                BuiltIn::FillExtrusionPatternInstancedShader
+            } else {
+                BuiltIn::FillExtrusionInstancedShader
+            },
+        );
         parts.push(emit::encode_extrusion_walls(
             arena,
             PLACEHOLDER,
