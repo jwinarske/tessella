@@ -224,7 +224,7 @@ fn a_position_is_where_the_label_is_on_the_ground() {
 
 /// Positions are rounded before they are compared, not compared exactly.
 ///
-/// A label does not land on the same coordinate in a parent and a child: the anchor is quantised
+/// A label does not land on the same coordinate in a parent and a child: the anchor is quantized
 /// differently and the geometry was simplified at a different zoom. mbgl's own fixture offsets
 /// its label by one tile unit, which survives either way — this offsets it by fifty, which only
 /// matches once both sides are rounded onto the shared grid.

@@ -207,7 +207,7 @@ fn coordinate(entry: &serde_json::Map<String, Value>, key: &str) -> u32 {
         return 0;
     };
     // `IsUint()` in rapidjson: a non-negative integer. A fractional or negative number is not
-    // one, and falls to the default rather than being rounded towards anything.
+    // one, and falls to the default rather than being rounded toward anything.
     match value.as_u64() {
         Some(number) if number <= MAX_COORDINATE => {
             #[allow(clippy::cast_possible_truncation)]

@@ -407,7 +407,7 @@ pub fn calculate_tile_distances(line: &[(f32, f32)], anchor: &Anchor) -> Vec<f32
 
     // Forward from the anchor to the end, and backward from it to the start. The anchor sits
     // between `segment` and `segment + 1`, so each direction starts with the part-segment
-    // between it and the vertex it is walking towards.
+    // between it and the vertex it is walking toward.
     let mut forward = if segment + 1 < line.len() {
         distance(anchor.point, line[segment + 1])
     } else {

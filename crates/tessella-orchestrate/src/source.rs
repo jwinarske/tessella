@@ -944,7 +944,7 @@ impl<D: TileTransport + 'static> TileSource<D> {
         // dependencies need is asked for, not just the ones the last fetch did not have.
         let asks = tessella_glyph::fonts::Fonts::new(url.clone()).wanted(&wanted);
         if asks.is_empty() {
-            // Nothing to ask the origin for -- every codepoint is above the BMP and rasterised
+            // Nothing to ask the origin for -- every codepoint is above the BMP and rasterized
             // locally. There is still an atlas to build, so this goes straight to the accepting
             // half rather than clearing `running` and forgetting about it.
             self.finish_glyphs(GlyphFetch {

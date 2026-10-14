@@ -1003,7 +1003,7 @@ pub struct StoredRegion {
 /// What a region has downloaded so far.
 ///
 /// The other half of a progress bar is [`crate::offline::Estimate`], which says what it is
-/// working towards — and which is a lower bound until every source manifest has arrived.
+/// working toward — and which is a lower bound until every source manifest has arrived.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct RegionProgress {
     /// Resources stored and claimed.

@@ -114,7 +114,7 @@ argument about fixtures.
 Worth noting how the earlier mistake happened: `real-world-0-0-0.mvt` is byte-identical to
 maplibre-native's `0-0-0.vector.pbf`, its *test* fixture. They benchmark the zoom-10 tile and
 test with the zoom-0 one. We vendored the test tile and benchmarked against it, which is how a
-zoom-0 view of the whole world came to weigh every optimisation decision.
+zoom-0 view of the whole world came to weigh every optimization decision.
 
 ## `../live-fixtures/` — the real-style parity corpus
 

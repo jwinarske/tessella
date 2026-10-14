@@ -1013,7 +1013,7 @@ pub const fn depth_slot(layer_index: i32, layer_count: u32) -> u32 {
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 #[repr(C)]
 pub struct Light {
-    /// Direction towards the light, cartesian.
+    /// Direction toward the light, cartesian.
     pub direction: [f64; 3],
     /// Light color, RGBA.
     pub color: [f64; 4],

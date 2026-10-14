@@ -168,7 +168,7 @@ fn start_on_local_minimum(points: &mut Vec<[f64; 2]>) {
 }
 
 /// Takes the chain running downward from `at`, if there is one.
-fn bound_towards_maximum(points: &[[f64; 2]], at: &mut usize) -> Option<Bound> {
+fn bound_toward_maximum(points: &[[f64; 2]], at: &mut usize) -> Option<Bound> {
     if points.len().checked_sub(*at)? < 2 {
         return None;
     }
@@ -200,7 +200,7 @@ fn bound_towards_maximum(points: &[[f64; 2]], at: &mut usize) -> Option<Bound> {
 ///
 /// Every bound starts at a minimum, whichever direction the ring was traveling — which is what
 /// lets one scan handle both sides of a shape.
-fn bound_towards_minimum(points: &[[f64; 2]], at: &mut usize) -> Option<Bound> {
+fn bound_toward_minimum(points: &[[f64; 2]], at: &mut usize) -> Option<Bound> {
     if points.len().checked_sub(*at)? < 2 {
         return None;
     }
@@ -217,7 +217,7 @@ fn bound_towards_minimum(points: &[[f64; 2]], at: &mut usize) -> Option<Bound> {
     if next - begin < 2 {
         return None;
     }
-    // Exclusive, for the reason [`bound_towards_maximum`] gives.
+    // Exclusive, for the reason [`bound_toward_maximum`] gives.
     let mut chain = points[begin..next.min(points.len())].to_vec();
     chain.reverse();
     Some(Bound {
@@ -249,8 +249,8 @@ fn build_bounds(
     let mut at = 0usize;
     while at < points.len() {
         let before = at;
-        let to_max = bound_towards_maximum(&points, &mut at);
-        let to_min = bound_towards_minimum(&points, &mut at);
+        let to_max = bound_toward_maximum(&points, &mut at);
+        let to_min = bound_toward_minimum(&points, &mut at);
         for bound in [to_max, to_min].into_iter().flatten() {
             // A chain with no vertical extent is a horizontal edge, and a horizontal edge is
             // never crossed by a scanline — it lies along one. Keeping it costs nothing in the

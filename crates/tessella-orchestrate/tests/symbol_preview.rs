@@ -1,4 +1,4 @@
-//! A picture of a frame, rasterised from the wire format.
+//! A picture of a frame, rasterized from the wire format.
 //!
 //! `#[ignore]`d: it writes a file and asserts almost nothing. It exists because every other test
 //! here checks a number, and a map is a thing you look at — shaping that is subtly wrong reads
@@ -729,7 +729,7 @@ fn draw_the_icon_atlas() {
     let atlas = sprites.atlas();
     let (width, height) = atlas.size();
 
-    // A chequerboard behind it, so transparent padding reads as padding rather than as black.
+    // A checkerboard behind it, so transparent padding reads as padding rather than as black.
     // A solid ground would make a missing alpha channel look correct.
     let mut canvas = vec![0u8; (width as usize) * (height as usize) * 4];
     for y in 0..height as usize {

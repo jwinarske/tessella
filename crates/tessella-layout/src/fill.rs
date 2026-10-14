@@ -83,7 +83,7 @@ pub struct FillBucket {
     ///
     /// # Why a fill's outline is drawn twice over
     ///
-    /// The outline pass is a fill's whole antialiasing: the triangles rasterise hard and mbgl
+    /// The outline pass is a fill's whole antialiasing: the triangles rasterize hard and mbgl
     /// runs no MSAA, so what softens a polygon's boundary is a one-pixel fade in the outline.
     /// mbgl gets the room for that fade by drawing the line **two pixels wide** --
     /// `constexpr auto lineWidth = 2.0f` in `render_fill_layer.cpp` -- and a backend that cannot

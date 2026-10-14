@@ -18,7 +18,7 @@
 //!
 //! # What it was worth
 //!
-//! Four roads, two drawn west to east and two east to west, labelled along the line. Measured
+//! Four roads, two drawn west to east and two east to west, labeled along the line. Measured
 //! with `tools/parity/parity.sh` at 51.509/-0.11 z14 over 600x600:
 //!
 //! | style | gross |

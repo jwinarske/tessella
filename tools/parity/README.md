@@ -287,7 +287,7 @@ that.
 
   The camera sat a fixed distance above the *plane* -- `camera_to_center_distance`, a property of
   the viewport -- while a height in meters reaches the screen multiplied by pixels-per-meter,
-  which doubles with every zoom level. So the ground climbed towards a camera that did not climb
+  which doubles with every zoom level. So the ground climbed toward a camera that did not climb
   with it, and far enough in it arrived: at this build's 1152-pixel camera, 400 meters of ground
   exaggerated by 1.5 stands 826 pixels up at z16 and 1651 at z17. Past that the camera is
   underground and the frame is whatever the background is. The prediction and the measurement

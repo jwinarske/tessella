@@ -2,7 +2,7 @@
 //!
 //! mbgl's `Shaping.ZWSP` fixes the line *count* for four specific inputs at four specific
 //! widths. Those are the cases worth having: they are chosen so that a greedy fill gets a
-//! different answer than the badness-minimising path, which is the whole reason the algorithm is
+//! different answer than the badness-minimizing path, which is the whole reason the algorithm is
 //! not a greedy fill.
 
 use tessella_glyph::shaping::{Char, line_breaks, split_lines};

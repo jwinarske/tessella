@@ -133,14 +133,14 @@ pub const fn dynamic_vertex(anchor: (f32, f32), label_angle: f32) -> [f32; 3] {
 
 /// The opacity vertex: a fade and a placement flag in one float.
 ///
-/// Opacity is quantised to seven bits and shifted up one, with `placed` in the bit that
+/// Opacity is quantized to seven bits and shifted up one, with `placed` in the bit that
 /// vacates. The shader wants both and a float carries both, which saves an attribute against
 /// the eight-attribute limit the layout above is already fighting.
 #[must_use]
 pub fn opacity_vertex(placed: bool, opacity: f32) -> f32 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let quantised = (opacity * 127.0) as u8;
-    f32::from((quantised << 1) | u8::from(placed))
+    let quantized = (opacity * 127.0) as u8;
+    f32::from((quantized << 1) | u8::from(placed))
 }
 
 /// A symbol layer's geometry for one tile.

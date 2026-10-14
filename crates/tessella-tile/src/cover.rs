@@ -414,7 +414,7 @@ pub fn fold_copies(tiles: Vec<TileCoord>, copies: WorldCopies) -> Vec<TileCoord>
 ///
 /// # Why not the bounding rectangle
 ///
-/// A pitched view sees a trapezoid receding towards the horizon, and its bounding rectangle is
+/// A pitched view sees a trapezoid receding toward the horizon, and its bounding rectangle is
 /// very much larger than it: at fifty-five degrees the rectangle holds several times the tiles
 /// the view can see, and each one is a fetch, a decode and a build for ground nobody looks at.
 ///

@@ -295,7 +295,7 @@ pub enum CastKind {
 ///
 /// `Copy`, deliberately: `Type` is `Copy` and const-usable throughout, and a boxed element type
 /// would cost that everywhere to express a nesting the spec does not have. An array's elements
-/// are scalars or unconstrained, and never another parameterised array.
+/// are scalars or unconstrained, and never another parameterized array.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ArrayType {
     /// The element type, or `None` for the spec's `value` — unconstrained.
@@ -840,7 +840,7 @@ pub enum Expr {
     Pitch,
     /// How far the feature is from the center of the viewport.
     ///
-    /// The other v3 addition, and the one mbgl went furthest towards without arriving: it
+    /// The other v3 addition, and the one mbgl went furthest toward without arriving: it
     /// reserved `Dependency::Location = 1 << 3` and commented it "not used yet,
     /// \"distance-from-center\" not supported".
     ///

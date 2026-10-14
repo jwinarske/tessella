@@ -27,7 +27,7 @@ use tessella_tile::polygon::{Cover, Polygon};
 
 use crate::url::ZoomRange;
 
-/// How a source's zooms are quantised into tile zooms.
+/// How a source's zooms are quantized into tile zooms.
 ///
 /// A vector tile is 512 units and floors; a raster tile may be 256 and rounds. The difference
 /// is mbgl's `coveringZoomLevel`, and it is not cosmetic: a 256-pixel raster source needs one
@@ -271,10 +271,10 @@ pub struct Region {
 #[must_use]
 pub fn covering_zoom_range(region: &Region, kind: SourceKind, source: ZoomRange) -> (u8, u8) {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let quantise = |zoom: f64| kind.covering_zoom(zoom).clamp(0.0, 30.0) as u8;
+    let quantize = |zoom: f64| kind.covering_zoom(zoom).clamp(0.0, 30.0) as u8;
     (
-        quantise(region.min_zoom).max(source.min),
-        quantise(region.max_zoom).min(source.max),
+        quantize(region.min_zoom).max(source.min),
+        quantize(region.max_zoom).min(source.max),
     )
 }
 

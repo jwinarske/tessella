@@ -198,7 +198,7 @@ fn a_truncated_stream_is_refused() {
 /// The exponential filter is `2^e * m`, with the exponent in the top byte.
 ///
 /// What a buildings tile's positions are stored as: a shared exponent per component and an
-/// integer mantissa, which keeps coordinates at the precision they were quantised to rather than
+/// integer mantissa, which keeps coordinates at the precision they were quantized to rather than
 /// spending float bits on precision that is not there.
 #[test]
 fn the_exponential_filter_reconstructs_a_float() {
