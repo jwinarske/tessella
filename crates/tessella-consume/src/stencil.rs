@@ -19,8 +19,17 @@
 //! as a constant. A consumer that draws in one pass may need to keep bits back for something else
 //! — the Filament mirror reserves the top one for a 3D layer's draw-once mask, because it has no
 //! depth attachment in its main pass and nothing else can bound how many times a translucent
-//! surface blends. A consumer that owns a depth attachment has no such need and can spend all
-//! eight. Baking one answer in would make this crate the wrong shape for the second caller.
+//! surface blends. Baking one answer in would make this crate the wrong shape for the second
+//! caller.
+//!
+//! A consumer that owns a depth attachment needs that mask too, which this said it did not. The
+//! depth buffer bounds the blending a long way — an extrusion's prepass writes the nearest surface
+//! and the color pass tests `LessEqual` — and it cannot close it, because what is left is the
+//! surfaces depth cannot separate: the ones at the *same* depth, a wall shared by two footprints
+//! or a roof meeting the wall raised off it. The Vulkan consumer measured that at 1,910 pixels of
+//! a captured pitched frame. It spends all eight here anyway and takes the top bit for its own
+//! mask only where the fields left it free, which is the other way round from reserving one: a
+//! frame whose fields need the whole byte keeps its clipping and loses the draw-once.
 //!
 //! Pure, so it is tested without a GPU: the caller paints what this returns.
 
