@@ -304,3 +304,51 @@ fn segments_reach_the_record() {
         "segments cover the buffer"
     );
 }
+
+/// The ground describes itself with the table the ABI publishes, not with numbers typed here.
+///
+/// The ground is the one family mbgl has none of, so nothing generates its attribute table and
+/// both renderers would otherwise hold a copy -- a consumer planning its vertex input against one
+/// set of ids and bindings while this writes another. `terrain_ubo::TERRAIN_MESH_ATTRIBUTES` is
+/// the single copy, and this says the encoder is built from it: same ids, same bindings, same
+/// declared type, at the published stride.
+///
+/// The offsets are the encoder's own, because the table says what the vertex *is* and not where
+/// this put it. Four is the width of the `Short2` before it.
+#[test]
+fn the_grounds_descriptors_come_from_the_published_table() {
+    use tessella_capture_abi::terrain_ubo::{
+        BUILTIN_TERRAIN_SHADER, TERRAIN_MESH_ATTRIBUTES, TERRAIN_MESH_ELEVATION_SLOT,
+        TERRAIN_MESH_STRIDE,
+    };
+
+    let mut arena = SlabArena::new();
+    let mesh = tessella_layout::terrain::mesh();
+    let elevation = tessella_capture_abi::envelope::TextureId(42);
+    let encoded =
+        tessella_orchestrate::emit::encode_terrain(&mut arena, GeometryId(1), &mesh, elevation);
+
+    assert_eq!(encoded.record.builtin_shader, BUILTIN_TERRAIN_SHADER);
+    let described = encoded.attributes();
+    assert_eq!(described.len(), TERRAIN_MESH_ATTRIBUTES.len());
+    for (desc, attribute) in described.iter().zip(TERRAIN_MESH_ATTRIBUTES) {
+        assert_eq!(desc.attr_id, attribute.attr_id, "{}", attribute.name);
+        assert_eq!(desc.binding, attribute.binding, "{}", attribute.name);
+        assert_eq!(
+            desc.declared_data_type, attribute.declared as u8,
+            "{}",
+            attribute.name
+        );
+        assert_eq!(desc.stride, TERRAIN_MESH_STRIDE, "{}", attribute.name);
+    }
+    // One buffer, read twice at two offsets: the mesh writes a position and a flag per vertex.
+    assert_eq!(described[0].source, described[1].source);
+    assert_eq!(described[0].offset, 0);
+    assert_eq!(described[1].offset, 4);
+
+    // And the DEM, at the slot this family declares it at.
+    let refs = encoded.texture_refs();
+    assert_eq!(refs.len(), 1, "the ground samples one texture");
+    assert_eq!(refs[0].texture, elevation);
+    assert_eq!(refs[0].slot, TERRAIN_MESH_ELEVATION_SLOT);
+}
