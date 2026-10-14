@@ -322,6 +322,44 @@ fn a_data_driven_line_pattern_takes_the_pattern_shader() {
     );
 }
 
+/// And the same over a vector tile, which is the path that resolved nothing.
+///
+/// tessella#392. The MVT line arm built its bucket without ever asking the pattern lookup, so a
+/// `line-pattern` that varies with the feature had rectangles on the GeoJSON side and none here --
+/// the one place the two paths disagreed about what a pattern is. The frame cannot make up the
+/// difference: its own lookup "cannot be answered by a zoom alone" for a data-driven source, so the
+/// layer had no pattern from either half and drew plain, and after tessella#391 drew nothing.
+#[test]
+fn a_data_driven_line_pattern_resolves_on_a_vector_tile() {
+    use tessella_capture_abi::generated::mbgl_enums::BuiltIn;
+
+    const LINE: &str = r#"{"version": 8, "sources": {"s": {"type": "vector", "tiles": []}},
+      "layers": [{"id": "l", "type": "line", "source": "s", "source-layer": "admin",
+                  "paint": {"line-pattern": ["coalesce", ["get", "pattern"], "sand_noise"],
+                            "line-width": 4}}]}"#;
+
+    let positions = atlas();
+    let pixels = vec![0u8; 512 * 512 * 4];
+    let patterns = Patterns {
+        revision: 0,
+        texture: TextureId(20),
+        size: [512, 512],
+        positions: &positions,
+        pixels: &pixels,
+        history: ZoomHistory::new(),
+    };
+    let (shaders, _) = emit_style(LINE, Some(&patterns));
+
+    assert!(
+        shaders.contains_key(&(BuiltIn::LinePatternShader as i32)),
+        "no line pattern shader: {shaders:?}"
+    );
+    assert!(
+        !shaders.contains_key(&(BuiltIn::LineShader as i32)),
+        "a plain line drew instead: {shaders:?}"
+    );
+}
+
 /// Without them the layer draws nothing, rather than drawing plain.
 ///
 /// tessella#383. It drew plain -- 11 for the triangles and 15 for the outline -- and the plain
