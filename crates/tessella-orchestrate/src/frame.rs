@@ -616,6 +616,24 @@ fn center_elevation(
     0.0
 }
 
+/// The texture id a host should upload its sprite atlas as.
+///
+/// The one id in this scheme that is not the producer's to assign: a sheet is fetched and packed
+/// by the host, which fills [`crate::map::SpriteAtlas::texture`] with the id it uploaded it under.
+/// Published here anyway, because the *constraint* is this file's -- a host that picks a number
+/// out of the air picks it out of a space these bases already divide up, and `texture::placeholders`
+/// takes nought and one before any style content exists.
+///
+/// `tessella_ffi` picked one, and picked `TextureId(1)`: the `1x1` transparent placeholder mbgl
+/// has before a style does, written every frame. A consumer then saw one id declared twice at two
+/// sizes -- `tessella_emblema`'s `Images` refuses that outright, which is how it was found, from a
+/// capture written with a sheet for the first time.
+///
+/// A host with its own allocator may still use its own number. What it may not do is use one of
+/// these, and the test beside them is what says so.
+pub const SPRITE_ATLAS_ID: tessella_capture_abi::envelope::TextureId =
+    tessella_capture_abi::envelope::TextureId(10 << 60);
+
 /// The first texture id a terrain tile's elevation takes.
 ///
 /// Its own space beside the color relief's, not shared with it. The two are the same bytes -- both
@@ -6286,10 +6304,27 @@ mod tests {
             ("line gradient", LINE_GRADIENT_TEXTURE_BASE),
             ("dash atlas", DASH_TEXTURE_BASE),
             ("terrain", TERRAIN_TEXTURE_BASE),
+            // The host's, not this file's -- see `SPRITE_ATLAS_ID`. It is here because the
+            // collision it has to avoid is with these, and because the one host that chose its own
+            // number chose the placeholder's.
+            ("sprite atlas", SPRITE_ATLAS_ID.0),
         ];
         for (index, (name, base)) in named.iter().enumerate() {
             for (other, other_base) in &named[index + 1..] {
                 assert_ne!(base, other_base, "{name} and {other} share {base:#x}");
+            }
+        }
+
+        // And none of them is a placeholder. Those two are uploaded by every frame before any
+        // style content exists, so an id that lands on one is a texture declared twice at two
+        // sizes rather than a texture shared.
+        for (name, base) in named {
+            for placeholder in crate::texture::placeholders() {
+                assert_ne!(
+                    base, placeholder.record.texture.0,
+                    "{name} is the {}x{} placeholder's id",
+                    placeholder.record.size.width, placeholder.record.size.height
+                );
             }
         }
     }

@@ -41,7 +41,8 @@ use tessella_glyph::fonts::Fonts;
 use tessella_orchestrate::SlabArena;
 use tessella_orchestrate::frame::{self, Frame};
 use tessella_orchestrate::tile::{
-    TileId, build_mvt_tile, build_raster_tile, build_sourceless, build_terrain_tile_on,
+    PatternLookup, TileId, build_mvt_tile_with_patterns, build_raster_tile, build_sourceless,
+    build_terrain_tile_on,
 };
 use tessella_source::mvt::Tile;
 use tessella_style::Style;
@@ -119,6 +120,26 @@ struct Args {
     /// that tile carry `DrawFlags::ON_TERRAIN` and the layers that stand on the ground get their
     /// elevation block -- which is what a consumer needs to draw a raised frame at all.
     dem: Option<String>,
+    /// A sprite sheet, as the base path its two files sit under: `<base>.json` and `<base>.png`.
+    ///
+    /// The style names a `sprite` URL and a real host fetches both halves from it; this tool has
+    /// no transport, so it is handed the files instead -- the same arrangement `--glyphs` has.
+    ///
+    /// Without one every pattern resolves to nothing, and the producer's own arm for that emits a
+    /// *plain* fill or line in place of the patterned one. So a capture written without this
+    /// carries no `FillPatternShader` and no atlas however many layers name a pattern, and the
+    /// parks layer of the parity scenes comes out the spec default black (tessella#383).
+    ///
+    /// What it does *not* do is draw the pattern: `layer_paint` has no entry for the family, so a
+    /// patterned layer is skipped by the rasterizer and absent from the PNG. The capture is what
+    /// this flag is for.
+    ///
+    /// A capture written with one is four megabytes larger whatever the sheet holds: the atlas is
+    /// `sprite::ATLAS_SIZE` square and goes up whole, because a style's icons are packed into one
+    /// image and a `TextureUpdate` carries its pixels. That is the sheet rather than this flag --
+    /// a real host uploads the same bytes -- and it is why this is a flag rather than something the
+    /// tool does whenever it finds a sheet beside the style.
+    sprite: Option<String>,
     /// Where the tile belongs, as `z/x/y`.
     ///
     /// `None` means it is drawn at every address the cover names, which is a diagnostic rather
@@ -144,6 +165,7 @@ fn parse_args() -> Result<Args, String> {
     let mut at = None;
     let mut raster = None;
     let mut dem = None;
+    let mut sprite = None;
     let mut capture = None;
     let (mut lon, mut lat, mut zoom) = (0.0, 0.0, 0.0);
     let (mut width, mut height) = (1024.0, 768.0);
@@ -164,6 +186,7 @@ fn parse_args() -> Result<Args, String> {
             "--tile-at" => at = Some(address(&value()?)?),
             "--raster" => raster = Some(value()?),
             "--dem" => dem = Some(value()?),
+            "--sprite" => sprite = Some(value()?),
             "--capture" => capture = Some(value()?),
             "--lon" => lon = number(&value()?)?,
             "--lat" => lat = number(&value()?)?,
@@ -187,6 +210,7 @@ fn parse_args() -> Result<Args, String> {
         glyphs,
         raster,
         dem,
+        sprite,
         at,
         capture,
         view: camera::settled(&ViewTransform {
@@ -305,6 +329,7 @@ fn dump(ring: &mut Ring, arena: &SlabArena) -> Result<Vec<u8>, String> {
 fn usage() -> String {
     "usage: capture-render --style <path> --tile <path.mvt> [--out map.png] [--source src]\n\
      \x20                     [--glyphs <dir>] [--raster <image>] [--dem <image>]\n\
+      \x20                     [--sprite <base>]\n\
       \x20                     [--tile-at z/x/y]\n\
       \x20                     [--capture <path.tslcap>]\n\
       \x20                     [--lon 0] [--lat 0] [--zoom 0]\n\
@@ -362,6 +387,61 @@ fn run() -> Result<String, String> {
         (None, _) => None,
     };
 
+    // And the sprite sheet, which is two files rather than one: the index says which rectangle of
+    // the image each name is, and the image is the pixels. Both are needed and neither is useful
+    // alone -- `Sprites::load`'s own words are that "an index without a sheet names rectangles in
+    // an image that does not exist, and a sheet without an index has no names to look them up by".
+    //
+    // Packed into an atlas here rather than used in place: a sheet is the artist's layout and the
+    // atlas is the one the shader samples, with a pixel of padding round each icon that the quad's
+    // border reads. That is the work `Sprites` does, and it is the same work the FFI host does
+    // before handing a `SpriteAtlas` over.
+    let sheet = match (&args.sprite, &style.sprite) {
+        (Some(base), Some(_)) => {
+            let index = std::fs::read(format!("{base}.json"))
+                .map_err(|error| format!("reading {base}.json: {error}"))?;
+            let image = std::fs::read(format!("{base}.png"))
+                .map_err(|error| format!("reading {base}.png: {error}"))?;
+            // The ratio is only the *URL* derivation's -- `Sprites::urls` is what appends `@2x`
+            // -- and this reads the two files it was given, so it says one and never asks.
+            let mut sprites = tessella_glyph::sprite::Sprites::new(base.clone(), 1.0);
+            sprites
+                .load(&index, &image)
+                .map_err(|error| format!("reading the sprite sheet at {base}: {error}"))?;
+            Some(sprites)
+        }
+        // A sheet with no `sprite` in the style is the mistake `--dem` names for a DEM: the tool
+        // would read both files, pack an atlas, and write a capture whose layers resolved their
+        // patterns against a sheet the style never asked for. A style that means to use one says
+        // so.
+        (Some(base), None) => {
+            return Err(format!(
+                "--sprite {base} was given and the style names no sprite"
+            ));
+        }
+        (None, _) => None,
+    };
+    let patterns = sheet.as_ref().map(|sprites| {
+        let (width, height) = sprites.atlas().size();
+        frame::Patterns {
+            // One sheet, loaded once, so there is nothing for a revision to tell apart. It still
+            // reaches the content stamp of every bucket that resolved a pattern, which is why it
+            // is not zero: zero is what a bucket that resolved against *no* sheet carries.
+            revision: 1,
+            texture: tessella_orchestrate::frame::SPRITE_ATLAS_ID,
+            size: [
+                u16::try_from(width).unwrap_or(u16::MAX),
+                u16::try_from(height).unwrap_or(u16::MAX),
+            ],
+            positions: sprites.positions(),
+            pixels: sprites.atlas().pixels(),
+            // No crossfade: this tool draws one settled frame, so there is no zoom crossing for a
+            // pattern to be fading across. `Patterns::crossfade` passes mbgl's "no time" sentinel
+            // for the same reason.
+            history: tessella_style::crossfade::ZoomHistory::default(),
+        }
+    });
+
     let bytes =
         std::fs::read(&args.tile).map_err(|error| format!("reading {}: {error}", args.tile))?;
     let decoded =
@@ -381,8 +461,19 @@ fn run() -> Result<String, String> {
         // rest of the viewport unpainted rather than empty.
         let mut built = Vec::new();
         if at.is_none_or(|(z, x, y)| (z, x, y) == (tile.z, tile.x, tile.y)) {
-            built = build_mvt_tile(&style, &args.source, id, &decoded)
-                .map_err(|error| format!("building {id}: {error}"))?;
+            // With the patterns where there are any: a data-driven `fill-pattern` resolves to a
+            // *pair of rectangles per feature*, which is bucket-build work rather than frame work,
+            // and a bucket built without them carries none however the frame is emitted.
+            built = build_mvt_tile_with_patterns(
+                &style,
+                &args.source,
+                id,
+                &decoded,
+                patterns
+                    .as_ref()
+                    .map(|patterns| patterns as &dyn PatternLookup),
+            )
+            .map_err(|error| format!("building {id}: {error}"))?;
             // A raster layer draws from a *picture*, not from features, so it is built by its
             // own path -- the same picture at the same address, which is what a raster source
             // would have fetched for this tile.
@@ -481,7 +572,7 @@ fn run() -> Result<String, String> {
                 origins: &[],
                 light: &Light::default(),
                 fonts: fonts.as_ref(),
-                patterns: None,
+                patterns: patterns.as_ref(),
                 states: None,
             },
         )
@@ -701,6 +792,12 @@ fn layer_paint(scene: &Scene, shader: BuiltIn, layer_index: u32) -> Option<Paint
         // A raster's block has no color at all -- its pixels are the color. Only the opacity
         // is read, from where the generated layout puts it.
         BuiltIn::RasterShader => (ubo_slots::ID_RASTER_EVALUATED_PROPS_UBO, usize::MAX, None),
+        // Everything else is skipped, and `--sprite` adds a family to that list rather than to
+        // this one: a patterned fill's color *is* its sprite, so there is no color in its blocks
+        // to read and drawing it would mean sampling the atlas through `get_pattern_pos` --
+        // the shader's arithmetic, in a rasterizer that has none of it. So a patterned layer is
+        // absent from the PNG where without a sheet it was a flat fill of the spec default
+        // (tessella#383). The capture carries it either way, which is what the flag is for.
         _ => return None,
     };
     let bytes = scene.ubo(layer_index, slot)?;
