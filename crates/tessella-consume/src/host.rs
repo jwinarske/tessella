@@ -66,10 +66,25 @@ pub struct Progress {
     /// first is a producer out of order, not a producer sending rubbish, and the two are worth
     /// telling apart when a map comes out blank.
     pub undeclared: u64,
+    /// Records that parsed and named a value this build does not know, and were refused for it.
+    ///
+    /// `unknown` counts a *kind* a newer producer sent; this counts a *field*. A `ViewTarget` whose
+    /// format is a pixel type this build has no case for, a `CameraUpdate` whose projection is a
+    /// surface it cannot draw -- the record is well-formed and the producer is newer, which is the
+    /// same situation one category up and wants the same answer.
+    ///
+    /// Refusing is what the ABI asks for rather than a choice: a projection's own field says *"A
+    /// consumer that does not know a value must refuse the camera rather than fall back to the
+    /// plane: falling back draws a flat map where a round one was asked for, which looks like a bug
+    /// in the style."* What was missing was the *category*. Counted as malformed, a producer one
+    /// revision ahead reads as a corrupt stream, and the first thing anyone does about a corrupt
+    /// stream is look for the corruption.
+    pub unsupported: u64,
     /// Records this build knows but could not read, the bytes being malformed.
     ///
-    /// Separate from `unknown` on purpose. An unknown kind is a newer producer; a known kind that
-    /// will not parse is a corrupt stream or a size disagreement, and the two want different
+    /// Separate from `unknown` and `unsupported` on purpose, and the distinction is the same one
+    /// twice: an unknown kind or an unknown discriminant is a newer producer, a known kind that
+    /// will not parse at all is a corrupt stream or a size disagreement, and the two want different
     /// answers from whoever is looking.
     pub malformed: u64,
 }
@@ -79,6 +94,7 @@ impl Progress {
         self.records += other.records;
         self.unknown += other.unknown;
         self.undeclared += other.undeclared;
+        self.unsupported += other.unsupported;
         self.malformed += other.malformed;
     }
 }
@@ -413,6 +429,7 @@ impl Host {
                 Outcome::Unknown => did.unknown += 1,
                 Outcome::Malformed => did.malformed += 1,
                 Outcome::Undeclared => did.undeclared += 1,
+                Outcome::Unsupported => did.unsupported += 1,
             }
             did.records += 1;
             consumer.advance(consumed);
@@ -701,7 +718,7 @@ impl Host {
                 // discriminant this build does not know is refused rather than defaulted. Guessing
                 // it is how geometry gets placed through a camera that is not the one drawing.
                 let Some(mode) = CameraMode::from_repr(declare.camera_mode) else {
-                    return Outcome::Malformed;
+                    return Outcome::Unsupported;
                 };
                 self.views.insert(declare.view, mode);
                 Outcome::Read
@@ -730,10 +747,10 @@ impl Host {
                     return Outcome::Malformed;
                 }
                 let Some(format) = TexturePixelType::from_repr(target.format) else {
-                    return Outcome::Malformed;
+                    return Outcome::Unsupported;
                 };
                 let Some(channel) = TextureChannelDataType::from_repr(target.channel_type) else {
-                    return Outcome::Malformed;
+                    return Outcome::Unsupported;
                 };
                 self.targets.insert(
                     target.view,
@@ -838,10 +855,10 @@ impl Host {
                 // discriminants: a value neither enum knows is a producer this consumer cannot
                 // read, and passing it on would have the backend choose an image format from it.
                 let Some(format) = TexturePixelType::from_repr(update.format) else {
-                    return Outcome::Malformed;
+                    return Outcome::Unsupported;
                 };
                 let Some(channel) = TextureChannelDataType::from_repr(update.channel_type) else {
-                    return Outcome::Malformed;
+                    return Outcome::Unsupported;
                 };
                 // The rects and the bytes have to describe the same thing. The producer tests this
                 // before it packs and sends the texture whole when it fails; `TextureUpdate::packed`
@@ -877,10 +894,14 @@ impl Host {
                     // tessella#364 settled for the other discriminants on this wire, and the same
                     // one `ViewDeclare`'s `camera_mode` gets above.
                     //
+                    // Counted as unsupported rather than malformed: these bytes parse, and a
+                    // producer one revision ahead is not a corrupt stream. See
+                    // `Progress::unsupported`.
+                    //
                     // Refused whole -- not stored -- so the view keeps the last camera it could
                     // read and draws stale rather than blank.
                     if camera.projection().is_none() {
-                        return Outcome::Malformed;
+                        return Outcome::Unsupported;
                     }
                     self.cameras.insert(camera.view, camera);
                     Outcome::Read
@@ -898,6 +919,14 @@ enum Outcome {
     Malformed,
     /// The record parsed and named a view that was never declared.
     Undeclared,
+    /// The record parsed and named a discriminant this build does not know.
+    ///
+    /// Every such field is refused rather than defaulted, each for a reason its own doc gives --
+    /// a guessed projection draws a flat map where a round one was asked for, a guessed camera
+    /// mode places geometry through a camera that is not the one drawing, a guessed pixel format
+    /// has the backend choose an image format from a number it does not recognize. What this
+    /// variant adds is which *kind* of refusal it was: see [`Progress::unsupported`].
+    Unsupported,
 }
 
 /// The bytes a span names, or `None` if the payload does not hold them.
