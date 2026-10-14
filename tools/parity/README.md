@@ -162,20 +162,33 @@ that.
 - `quad_remote` — the four-pane quad's style, read by range out of a planet archive with nothing
   on disk. Used by `quad.sh` rather than by `sweep.sh`, and through the proxy: the URL in it names
   the proxy, which holds the archive's ranges in the snapshot.
-- `extrusion_pattern_p` — `families_p` with `fill-extrusion-pattern` on its buildings layer, and
-  nothing else changed. It exists so that a capture carries `FillExtrusionPatternShader` and
+- `extrusion_pattern_p` — `families_p` with `fill-extrusion-pattern` on its buildings layer. It
+  exists so that a capture carries `FillExtrusionPatternShader` and
   `FillExtrusionPatternInstancedShader`, which no other scene here sets: the two sat in
   `tessella_emblema`'s undrawn table for months on "the producer emits no drawable for it yet",
   and the producer had emitted them all along. A capture of this scene plans 24 of 24 geometries
   across ten families there.
 
-  **Not in the sweep**, and the reason is the oracle's side rather than this one. The Filament
-  consumer has no material for either shader -- `tessella_fluorite/materials` has
-  `fill_extrusion.mat` and `fill_extrusion_instanced.mat` and no patterned pair -- so the layer
-  does not draw there at all. At z14 and a pitch of 45 this scene reads `gross 147603 (18.769%)`
-  where `families_p` at the same camera reads **7**, and the two differ by that one paint
-  property. The number is the missing material, not a parity question, and a sweep row that large
-  would say nothing every morning.
+  Two more things differ from `families_p`, and both are there so the row can fail. The sprite is
+  `interstate_3`, 48x39 and high contrast: the pattern arithmetic is a texture *coordinate*, and
+  over `sand_noise` -- 50x50 with five levels of spread -- every wrong coordinate still samples
+  nearly the same color, so the scene read a clean 41 with the wall's edge distance zeroed. It is
+  also chosen for low spatial frequency, because a sprite's own edges are where two rasterizers
+  disagree: `rer.transilien`, which is 36x18 of fine detail, holds a floor of 1,267 where this one
+  holds 760. And the light is `[1.15, 210, 64]` at intensity 0.8 rather than the default
+  `[1.15, 210, 30]` at 0.5, which is a degenerate input twice over -- `1 - intensity` equals
+  `intensity`, so the unlit floor cannot be mutated, and the roof's `z` of 0.996 drives the
+  directional term into its clamp, so neither can the lit end. At 0.8 and a polar of 64 the roof
+  sits at 0.75 of the range with both ends live.
+
+  In the sweep flat and pitched, which are two different halves: a wall only shows at a pitch, and
+  the sprite is sampled nearest on a flat camera and linearly on a pitched one -- see
+  `extrusion_pattern_filter`, which is mbgl's rule and costs 356 against 37 if it is ignored.
+
+      extrusion_pattern_p  z14 p0    37 of 786432
+      extrusion_pattern_p  z16 p60  760
+
+  Both lean 43% and 56% brighter, which is the antialiasing class.
 - `heat_p` — a heatmap over Berlin's POIs. Captured before any heatmap code existed, so the
   design behind it had a referee rather than an argument; it stood at `gross 271571 (34.532%)`
   then and is at **0** now. Not in the sweep because the sweep is the five-camera gate.

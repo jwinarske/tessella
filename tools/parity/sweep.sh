@@ -45,6 +45,12 @@
 # unmasked. 97.4% of the 378 are darker on this side, which is what a surface blended twice looks
 # like; the 10 are the antialiasing floor. tessella#312.
 #
+# The patterned extrusion holds 37 flat and 760 pitched, and the second is larger for the sprite's
+# own edges rather than for anything about the family: it is a 48x39 picture tiled over every roof
+# and wall, so there are far more edges to round than a colored surface has. Both lean about half
+# brighter. The scene draws nothing at all on a consumer with no patterned material, which is what
+# it read before fluorite-game/tessella_fluorite#40: 147,603.
+#
 # The numbers to hold, as of 2026-09-18: 4 / 16 / 0 / 2 / 30, then 3 / 2, then 0 / 0 / 0; then
 # 0 / 0 and 0 / 0 for the hillshade and relief; 0 / 28 / 0 for the flat terrain; 4 / 16 / 0 / 2
 # / 30 for the families on a flat terrain, the same as without one.
@@ -117,6 +123,12 @@ bash "$P/parity.sh" paint_translate_p 52.52 13.405 16 1024 768 60 0
 # across a neighbor's roof.
 bash "$P/parity.sh" extrusion_one_p 52.52 13.405 16 1024 768 60 0
 bash "$P/parity.sh" extrusion_pair_p 52.52 13.405 16 1024 768 60 0
+# The patterned extrusion, flat and pitched, because the two cameras gate different halves. Flat
+# shows the roofs and the nearest sampler mbgl uses when nothing is foreshortened; pitched is the
+# only camera a wall is visible at, and the only one that reads the edge distance the sprite runs
+# along. See the README for why this scene's sprite and light are not `families_p`'s.
+bash "$P/parity.sh" extrusion_pattern_p 52.52 13.405 14 1024 768 0 0
+bash "$P/parity.sh" extrusion_pattern_p 52.52 13.405 16 1024 768 60 0
 bash "$P/parity.sh" terrain_families_p 52.52 13.405 9 2400 900 0
 # Five cameras, not two. The first two were the gate for a while and they are the two kindest in
 # the whole space: every other pitch and every zoom past the DEM's own is far worse, and holding

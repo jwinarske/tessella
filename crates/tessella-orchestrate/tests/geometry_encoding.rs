@@ -11,6 +11,7 @@
 //! step and produces geometry made of noise — which renders, and is wrong.
 
 use tessella_capture_abi::envelope::GeometryId;
+use tessella_capture_abi::envelope::TextureFilter;
 use tessella_capture_abi::{AttributeDataType, BuiltIn, declared_for};
 use tessella_orchestrate::binder::{
     CIRCLE_FAMILY, FILL_EXTRUSION_FAMILY, LINE_FAMILY, attribute_ids, layout, permutation_key,
@@ -82,6 +83,7 @@ fn encode(kind: &str, extra: &str, family: &[BuiltIn], shader: BuiltIn) -> Encod
                 data,
                 key,
                 None,
+                TextureFilter::Linear,
                 None,
             )
             .0

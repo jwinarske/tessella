@@ -17,6 +17,7 @@
 //! taught that mbgl wraps their `using` declarations and declares their per-instance attributes
 //! in a second array. The assertions below are the capture's `iattr` lines.
 
+use tessella_capture_abi::envelope::TextureFilter;
 use tessella_capture_abi::envelope::{GeometryId, TextureId};
 use tessella_capture_abi::{AttributeDataType, BuiltIn};
 use tessella_layout::fill_extrusion::{self, FillExtrusionBucket};
@@ -57,6 +58,7 @@ fn encode_on(
         &[],
         0,
         atlas,
+        TextureFilter::Linear,
         elevation,
     );
     let walls = encode_extrusion_walls(
@@ -66,6 +68,7 @@ fn encode_on(
         &layout,
         0,
         atlas,
+        TextureFilter::Linear,
         elevation,
     );
     (arena, roof, walls)
@@ -155,9 +158,19 @@ fn the_instances_are_the_roofs_outline() {
         &[],
         0,
         None,
+        TextureFilter::Linear,
         None,
     );
-    let walls = encode_extrusion_walls(&mut arena, GeometryId(2), shared, &layout, 0, None, None);
+    let walls = encode_extrusion_walls(
+        &mut arena,
+        GeometryId(2),
+        shared,
+        &layout,
+        0,
+        None,
+        TextureFilter::Linear,
+        None,
+    );
 
     let instances = walls.instance_attributes();
     assert_eq!(
@@ -240,9 +253,19 @@ fn the_slabs_last_instance_is_flagged_discarded() {
         &[],
         0,
         None,
+        TextureFilter::Linear,
         None,
     );
-    let walls = encode_extrusion_walls(&mut arena, GeometryId(2), shared, &layout, 0, None, None);
+    let walls = encode_extrusion_walls(
+        &mut arena,
+        GeometryId(2),
+        shared,
+        &layout,
+        0,
+        None,
+        TextureFilter::Linear,
+        None,
+    );
 
     let decimals = walls
         .instance_attributes()
