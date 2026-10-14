@@ -180,11 +180,16 @@ use tessella_tile::screen;
 
 /// The texture the sprite atlas is uploaded as.
 ///
-/// Fixed rather than allocated: there is one sheet per style and the consumer learns of it from
-/// the `TextureUpdate` that carries its pixels, so a number chosen here is a number nothing has
-/// to agree on.
+/// The producer's own [`tessella_orchestrate::frame::SPRITE_ATLAS_ID`], which is where the
+/// constraint lives: one sheet per style, so the number is fixed rather than allocated -- and it
+/// has to miss both the texture spaces `frame` divides up and the two placeholders every frame
+/// uploads before any style content exists.
+///
+/// It was `TextureId(1)`, on the reasoning that "a number chosen here is a number nothing has to
+/// agree on". One is the `1x1` transparent placeholder. A consumer saw that id declared twice at
+/// two sizes, which `tessella_emblema`'s `Images` refuses outright.
 const SPRITE_TEXTURE: tessella_capture_abi::envelope::TextureId =
-    tessella_capture_abi::envelope::TextureId(1);
+    tessella_orchestrate::frame::SPRITE_ATLAS_ID;
 
 /// A live map, opaque to C.
 ///
