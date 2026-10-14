@@ -195,6 +195,19 @@ const PATTERNED_FILL: &str = r#"{"version": 8, "sources": {"s": {"type": "vector
   "layers": [{"id": "f", "type": "fill", "source": "s", "source-layer": "water",
               "paint": {"fill-pattern": "sand_noise", "fill-opacity": ["get", "o"]}}]}"#;
 
+/// A pattern that varies with the feature, which resolves somewhere else entirely.
+///
+/// A constant pattern is one rectangle pair the *frame* looks up; this is a pair per feature,
+/// resolved while the bucket is built. Both are the same shader and the same table, and reading
+/// only the first bound this through the plain one -- with the rectangles still in the vertices, at
+/// the slots the pattern table gives them. The consumer refuses it outright:
+/// `DeclaredDisagrees { attr_id: 4, wire: UShort4, table: Float4 }`, the rectangles arriving where
+/// `FillShader` declares its color.
+const DATA_DRIVEN_FILL: &str = r#"{"version": 8, "sources": {"s": {"type": "vector", "tiles": []}},
+  "layers": [{"id": "f", "type": "fill", "source": "s", "source-layer": "water",
+              "paint": {"fill-pattern": ["coalesce", ["get", "pattern"], "sand_noise"],
+                        "fill-opacity": ["get", "o"]}}]}"#;
+
 /// Every descriptor binds where its shader declares it, or at -1 where it declares nothing.
 #[test]
 fn every_attribute_binds_where_its_shader_declares_it() {
@@ -205,6 +218,7 @@ fn every_attribute_binds_where_its_shader_declares_it() {
         ("the patterned extrusion", PATTERNED_EXTRUSION, true),
         ("the fill", FILL, false),
         ("the patterned fill", PATTERNED_FILL, true),
+        ("the data-driven fill", DATA_DRIVEN_FILL, true),
     ] {
         for drawable in sent(style, sprites) {
             // The ground is tessella's own shader and has no row in mbgl's tables; its attributes

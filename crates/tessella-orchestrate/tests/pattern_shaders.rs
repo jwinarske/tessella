@@ -24,7 +24,9 @@ use tessella_glyph::atlas::Rect;
 use tessella_glyph::sprite::IconPosition;
 use tessella_orchestrate::SlabArena;
 use tessella_orchestrate::frame::{self, Frame, Patterns};
-use tessella_orchestrate::tile::{TileId, build_mvt_tile, build_sourceless};
+use tessella_orchestrate::tile::{
+    PatternLookup, TileId, build_mvt_tile_with_patterns, build_sourceless,
+};
 use tessella_source::mvt::Tile;
 use tessella_style::Style;
 use tessella_style::crossfade::ZoomHistory;
@@ -38,9 +40,63 @@ const STYLE: &str = r#"{"version": 8, "sources": {"s": {"type": "vector", "tiles
   "layers": [{"id": "f", "type": "fill", "source": "s", "source-layer": "water",
               "paint": {"fill-pattern": "sand_noise"}}]}"#;
 
+/// A pattern that varies with the feature, which resolves in the bucket rather than in the frame.
+const DATA_DRIVEN: &str = r#"{"version": 8, "sources": {"s": {"type": "vector", "tiles": []}},
+  "layers": [{"id": "f", "type": "fill", "source": "s", "source-layer": "water",
+              "paint": {"fill-pattern": ["coalesce", ["get", "pattern"], "sand_noise"]}}]}"#;
+
 /// Emits the style with and without sprites, returning shader counts and texture-ref totals.
 fn emit_with(sprites: Option<&Patterns<'_>>) -> (BTreeMap<i32, usize>, u32) {
-    let style = Style::parse(STYLE).expect("parses");
+    emit_style(STYLE, sprites)
+}
+
+/// The same over an inline GeoJSON source, which is the path a line's per-feature pattern takes.
+///
+/// A vector tile's line bucket is built without the pattern lookup at all -- tessella#392 -- so a
+/// data-driven `line-pattern` has rectangles only on this side. The features come from the style's
+/// own `data`, as `capture-render` reads them.
+fn emit_geojson(text: &str, sprites: Option<&Patterns<'_>>) -> (BTreeMap<i32, usize>, u32) {
+    use tessella_orchestrate::tile::build_tile_with_patterns;
+    use tessella_source::tiling::TilingOptions;
+
+    let style = Style::parse(text).expect("parses");
+    let Some(tessella_style::document::Source::Geojson(source)) = style.sources.get("s") else {
+        panic!("the style's source is an inline GeoJSON");
+    };
+    let features = tessella_source::geojson::read(&source.data).expect("features read");
+    let view = camera::settled(&ViewTransform {
+        longitude: 0.0,
+        latitude: 0.0,
+        zoom: 2.0,
+        width: 512.0,
+        height: 512.0,
+        bearing: 0.0,
+        pitch: 0.0,
+        ground_below: 0.0,
+    });
+    let tiles = cover::cover(&view).expect("covers");
+    let mut buckets = Vec::new();
+    for tile in &tiles {
+        let id = TileId::new(tile.z, tile.x, tile.y);
+        let mut built = build_tile_with_patterns(
+            &style,
+            "s",
+            id,
+            &features,
+            TilingOptions::default(),
+            sprites.map(|sprites| sprites as &dyn PatternLookup),
+        )
+        .expect("builds");
+        built.extend(build_sourceless(&style, id).expect("background"));
+        built.sort_by_key(|bucket| bucket.layer_index);
+        buckets.push((id, Arc::new(built)));
+    }
+    emit_buckets(&style, &view, &tiles, &buckets, sprites)
+}
+
+/// The same, for a style of the caller's choosing.
+fn emit_style(text: &str, sprites: Option<&Patterns<'_>>) -> (BTreeMap<i32, usize>, u32) {
+    let style = Style::parse(text).expect("parses");
     let view = camera::settled(&ViewTransform {
         longitude: 0.0,
         latitude: 0.0,
@@ -56,12 +112,33 @@ fn emit_with(sprites: Option<&Patterns<'_>>) -> (BTreeMap<i32, usize>, u32) {
     let mut buckets = Vec::new();
     for tile in &tiles {
         let id = TileId::new(tile.z, tile.x, tile.y);
-        let mut built = build_mvt_tile(&style, "s", id, &decoded).expect("builds");
+        // With the sheet where there is one, which is the *bucket's* half of a pattern: a
+        // data-driven one resolves to a pair of rectangles per feature here, and a build that
+        // never saw the sprites carries none however the frame is emitted.
+        let mut built = build_mvt_tile_with_patterns(
+            &style,
+            "s",
+            id,
+            &decoded,
+            sprites.map(|sprites| sprites as &dyn PatternLookup),
+        )
+        .expect("builds");
         built.extend(build_sourceless(&style, id).expect("background"));
         built.sort_by_key(|bucket| bucket.layer_index);
         buckets.push((id, Arc::new(built)));
     }
 
+    emit_buckets(&style, &view, &tiles, &buckets, sprites)
+}
+
+/// Emits a frame from buckets already built, returning shader counts and texture-ref totals.
+fn emit_buckets(
+    style: &Style,
+    view: &tessella_tile::cover::ViewTransform,
+    tiles: &[tessella_tile::cover::TileCoord],
+    buckets: &[(TileId, Arc<Vec<tessella_orchestrate::tile::LayerBucket>>)],
+    sprites: Option<&Patterns<'_>>,
+) -> (BTreeMap<i32, usize>, u32) {
     let mut arena = SlabArena::new();
     let mut ring = Ring::new(1 << 22);
     let (producer, consumer) = ring.split();
@@ -71,11 +148,11 @@ fn emit_with(sprites: Option<&Patterns<'_>>) -> (BTreeMap<i32, usize>, u32) {
         &Frame {
             published_projection: None,
             projection: ProjectionMode::Mercator,
-            style: &style,
-            view: &view,
+            style,
+            view,
             view_id: ViewId(0),
-            tiles: &tiles,
-            buckets: &buckets,
+            tiles,
+            buckets,
             origins: &[],
             light: &Light::default(),
             fonts: None,
@@ -150,6 +227,98 @@ fn a_resolved_pattern_binds_the_pattern_shaders() {
         textures as usize,
         shaders.values().sum::<usize>(),
         "every pattern drawable binds the atlas exactly once"
+    );
+}
+
+/// A pattern that varies with the feature is a pattern, and takes the pattern shader.
+///
+/// It did not. A constant `fill-pattern` is one rectangle pair the *frame* looks up; a data-driven
+/// one is a pair per feature, resolved while the bucket is built -- and a frame-level lookup cannot
+/// answer it at all, because `image_at` says a data-driven source "cannot be answered by a zoom
+/// alone". Reading only the frame's half left the layer with no atlas, so it was bound through the
+/// *plain* table with its rectangles still in the vertices, at the slots the pattern table gives
+/// them.
+///
+/// What that drew is nothing, loudly: the consumer refuses the drawable --
+/// `DeclaredDisagrees { attr_id: 4, wire: UShort4, table: Float4 }`, the rectangles arriving where
+/// `FillShader` declares its color -- so a capture of the style came back three geometries short.
+/// The attributes are why it is worth a test of its own rather than a line in
+/// `attribute_bindings.rs`: with the atlas missing the layer now draws *nothing at all*, so there
+/// is no drawable left for a binding check to look at.
+#[test]
+fn a_data_driven_pattern_takes_the_pattern_shader() {
+    let positions = atlas();
+    let pixels = vec![0u8; 512 * 512 * 4];
+    let patterns = Patterns {
+        revision: 0,
+        texture: TextureId(20),
+        size: [512, 512],
+        positions: &positions,
+        pixels: &pixels,
+        history: ZoomHistory::new(),
+    };
+    let (shaders, textures) = emit_style(DATA_DRIVEN, Some(&patterns));
+
+    assert!(shaders.contains_key(&13), "no pattern shader: {shaders:?}");
+    assert!(
+        !shaders.contains_key(&11),
+        "a plain fill drew instead: {shaders:?}"
+    );
+    assert_eq!(
+        shaders.get(&13).copied(),
+        shaders.get(&14).copied(),
+        "the outline did not follow the triangles: {shaders:?}"
+    );
+    assert_eq!(
+        textures as usize,
+        shaders.values().sum::<usize>(),
+        "every pattern drawable binds the atlas exactly once"
+    );
+}
+
+/// And a line's, which resolves the same way and was dropped rather than refused.
+///
+/// A data-driven `line-pattern` is the same two rectangles a fill puts at ids four and five, "at
+/// different slots because the line shader has already spent its low bindings". The frame sends
+/// them only where it has an atlas -- `pattern_vertices: atlas.and(..)` -- so a layer whose pattern
+/// resolved per feature and not at the frame kept its rectangles in the bucket and lost them on the
+/// way out, and the line drew plain in the `line-color` default. Quieter than the fill's refusal
+/// and the same cause.
+///
+/// Over a GeoJSON source, because that is the path that resolves a line's rectangles: the MVT one
+/// builds a line bucket without asking the lookup at all, so a data-driven `line-pattern` on vector
+/// tiles has none to send. That is tessella#392 and not this.
+#[test]
+fn a_data_driven_line_pattern_takes_the_pattern_shader() {
+    use tessella_capture_abi::generated::mbgl_enums::BuiltIn;
+
+    const LINE: &str = r#"{"version": 8,
+      "sources": {"s": {"type": "geojson", "data": {"type": "FeatureCollection", "features": [
+        {"type": "Feature", "properties": {},
+         "geometry": {"type": "LineString", "coordinates": [[-1, 0], [1, 0], [1, 1]]}}]}}},
+      "layers": [{"id": "l", "type": "line", "source": "s",
+                  "paint": {"line-pattern": ["coalesce", ["get", "pattern"], "sand_noise"],
+                            "line-width": 4}}]}"#;
+
+    let positions = atlas();
+    let pixels = vec![0u8; 512 * 512 * 4];
+    let patterns = Patterns {
+        revision: 0,
+        texture: TextureId(20),
+        size: [512, 512],
+        positions: &positions,
+        pixels: &pixels,
+        history: ZoomHistory::new(),
+    };
+    let (shaders, _) = emit_geojson(LINE, Some(&patterns));
+
+    assert!(
+        shaders.contains_key(&(BuiltIn::LinePatternShader as i32)),
+        "no line pattern shader: {shaders:?}"
+    );
+    assert!(
+        !shaders.contains_key(&(BuiltIn::LineShader as i32)),
+        "a plain line drew instead: {shaders:?}"
     );
 }
 
@@ -243,7 +412,8 @@ fn the_atlas_is_uploaded_and_the_placements_are_written() {
     let mut buckets = Vec::new();
     for tile in &tiles {
         let id = TileId::new(tile.z, tile.x, tile.y);
-        let mut built = build_mvt_tile(&style, "s", id, &decoded).expect("builds");
+        let mut built =
+            build_mvt_tile_with_patterns(&style, "s", id, &decoded, None).expect("builds");
         built.extend(build_sourceless(&style, id).expect("background"));
         built.sort_by_key(|bucket| bucket.layer_index);
         buckets.push((id, Arc::new(built)));
@@ -404,7 +574,8 @@ fn an_extrusion_pattern_binds_its_own_shader() {
     let mut buckets = Vec::new();
     for tile in &tiles {
         let id = TileId::new(tile.z, tile.x, tile.y);
-        let mut built = build_mvt_tile(&style, "s", id, &decoded).expect("builds");
+        let mut built =
+            build_mvt_tile_with_patterns(&style, "s", id, &decoded, None).expect("builds");
         built.extend(build_sourceless(&style, id).expect("background"));
         built.sort_by_key(|bucket| bucket.layer_index);
         buckets.push((id, Arc::new(built)));
