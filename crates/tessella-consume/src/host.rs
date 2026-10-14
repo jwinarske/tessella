@@ -212,8 +212,12 @@ impl Clips {
         self.groups
             .insert(layer, tiles.iter().map(|tile| tile.tile).collect());
 
-        // Every bit of the byte. A consumer holding some back for its own use would pass fewer --
-        // this one has its own depth attachment, so the stencil is entirely the clip's.
+        // Every bit of the byte, and the clip has first claim on it. A consumer holding some back
+        // for its own use would pass fewer; this one does not, and takes what the fields leave --
+        // `tessella_emblema::record::DrawOnce` reads the assignments and uses the top bit for a 3D
+        // layer's draw-once mask only when no field holds it, counting the runs it cannot serve.
+        // So a frame whose clip fields need all eight keeps its clipping and loses the mask, which
+        // is the right way round: the masks are what keeps every other layer inside its tile.
         let every: BTreeSet<TileId> = self.groups.values().flatten().copied().collect();
         self.partition = stencil::partition(&every, &self.groups, stencil::ALL_BITS);
 
