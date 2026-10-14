@@ -3,7 +3,7 @@
 //! # Why a pitched cover is a different algorithm
 //!
 //! Unpitched, the visible ground is a rectangle: project the viewport's corners, take the
-//! bounding box, walk it. Pitched, it is a *trapezoid* that widens towards the horizon, and its
+//! bounding box, walk it. Pitched, it is a *trapezoid* that widens toward the horizon, and its
 //! bounding box is enormously larger than the trapezoid — at fifty-five degrees the box holds
 //! several times the tiles the view can see, and every one of them is a fetch and a build.
 //!

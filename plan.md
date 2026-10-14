@@ -1164,7 +1164,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   reachable at all.
   The decision loop closes the per-view half. Candidates are offered in the style's order — by
   `symbol-sort-key`, then feature order — and what fits is placed and inserted so it blocks
-  whatever comes after. There is no global optimisation, deliberately: a cartographer decides
+  whatever comes after. There is no global optimization, deliberately: a cartographer decides
   what matters rather than an algorithm, and a set that re-optimized as the camera moved would be
   a map where labels swap places while you watch. `allow-overlap` and `ignore-placement` are
   different permissions — one skips the test, the other skips the insert — and a label with both
@@ -1820,7 +1820,7 @@ across the §13.3 sweep. Pre-warm: warmed-but-unused ratio within budget (R-10).
   mbgl, and a packer that shears a row, drops a channel or mislays the padding produces
   arithmetic that checks out and a picture that does not. mbgl's own `emerald` sheet packs to
   seventy-three icons: shields, pins and roundels, colors intact and unsheared. It is drawn over
-  a chequerboard rather than a ground, so the transparent padding reads as padding — a solid
+  a checkerboard rather than a ground, so the transparent padding reads as padding — a solid
   ground would make a dropped alpha channel look correct, which is the failure most worth seeing.
   A security pass over the untrusted decoders then puts a stated ceiling on every one of them.
   Every byte this build parses came off a network and a source is not a trusted party — an origin
@@ -2874,7 +2874,7 @@ better on the same hardware, and where the architecture stands in the way the ar
 Parity with mbgl is the *oracle's* job — what the stream says — and it is not the bar for what
 the frontend costs to produce it.
 
-What that rules out is optimising by assertion. Every claim below is a number or it is not a
+What that rules out is optimizing by assertion. Every claim below is a number or it is not a
 claim, and the order of work follows from that.
 
 **Step one is to make it work with the fewest changes that can be made.** Not the fastest
@@ -3014,7 +3014,7 @@ style nor `symbol_style.json` does, and the asynchronous path goes to
 
 So the scopes differ, but not that way. mbgl's `render()` carries paint-property evaluation, draw
 assembly and the capture backend's own diffing, none of which `tick` does; `tick` carries
-encoding geometry into slabs, which is the analogue of the second. Neither carries tiling or
+encoding geometry into slabs, which is the analog of the second. Neither carries tiling or
 layout, which are on a worker on both sides.
 
 **The second bias was predicted backwards, which is worth recording.** The expectation was that a
@@ -5561,7 +5561,7 @@ against; none is scheduled.
   The flat sweep, thirteen scenes against a freshly built oracle: nine at zero gross pixels,
   including every symbol family. `families`, `one_buildings` and `only_extrusion` share the same
   eight -- eight *isolated single pixels* on building edges, each about 20/255 out, which is
-  rasteriser tie-breaking at polygon boundaries and about the floor for a different rasteriser.
+  rasterizer tie-breaking at polygon boundaries and about the floor for a different rasterizer.
   `icons_only` is 272, and that is one 18-by-17 icon this does not draw and mbgl does: 96 against
   97, so one collision decision.
 
@@ -5911,7 +5911,7 @@ against; none is scheduled.
   And one experiment that did *not* say what it first appeared to. Forcing a single worker made the
   pitched scene deterministic across five runs at 34,121, which looked like confirmation that
   concurrent landing order was the cause. It is not: the same knob makes the *flat* icon scene
-  give 21,318, 12,070 and 12,070 where it otherwise gives a reliable 272. Serialising the pool does
+  give 21,318, 12,070 and 12,070 where it otherwise gives a reliable 272. Serializing the pool does
   not order the arrivals so much as starve the settle, so the run ends earlier with less in it. The
   arrival path is still implicated and the mechanism is still not isolated.
 
@@ -5942,7 +5942,7 @@ against; none is scheduled.
 
   Every flat scene is unchanged, which is what a sign that only matters when it is non-zero should
   do. What is left at bearing is symbol contention of the same shape as everywhere else, plus the
-  45 on buildings that is the extrusion rasteriser floor.
+  45 on buildings that is the extrusion rasterizer floor.
 
   This is the answer to how much a whole untested axis is worth: the largest single visible defect
   found in this frontend, sitting behind a camera parameter nothing had ever varied.
@@ -5997,7 +5997,7 @@ against; none is scheduled.
   are 36 pitched, 7,480 rotated, and 46,038 doing both. That shape says the residue is not one
   missing term but something that both axes feed, which is what a shared projection or a shared
   collision space would look like. Extrusions are the worst of it and were never expected to be:
-  8 flat is the rasteriser floor, 46,038 is not.
+  8 flat is the rasterizer floor, 46,038 is not.
 
   Where to start is not in doubt. The ancestor substitution above is the only known defect that
   scales with tile count, both axes raise tile count, and it is the one thing already proven to
@@ -7911,7 +7911,7 @@ The single-family table at z15, pitch 45, after:
 Seven of eleven scenes are pixel-exact at both angles. What is left is not symbols: `one_water` and
 `one_buildings` are fills, and they are the two largest numbers on the page now.
 
-### The fills are at the rasterisation floor, not carrying a defect
+### The fills are at the rasterization floor, not carrying a defect
 
 `one_water` was the largest number left at 0.031%, and it is not extra water. Its 197 differing
 pixels form **170 runs, of which 143 are a single pixel and none is longer than two**: isolated
@@ -7928,7 +7928,7 @@ roll are zero, and the far plane is `cameraToSeaLevelDistance / (1 - tanMultiple
 This version of mbgl has no horizon clamp to be missing.
 
 So there is no fill defect to chase. Seven of eleven single-family scenes are pixel-exact at both
-angles and the other four differ only along edges, which is where two independent rasterisers stop
+angles and the other four differ only along edges, which is where two independent rasterizers stop
 agreeing.
 
 ### Placement is exact, and the remainder is the flip
@@ -9196,7 +9196,7 @@ hundred lines were nearly spent on the strength of an inference.
 
 The rest was the instrument. `capture-render` is a *tool*, not the consumer: every parity figure in
 this document comes from `render_probe`, which is Filament through Fluorite. Measuring the z0 tile
-with `capture-render` compared two rasterisers as well as two geometries and inflated the number
+with `capture-render` compared two rasterizers as well as two geometries and inflated the number
 four-fold -- 3.001% against the 0.729% the consumer actually draws. **A parity figure is only a
 parity figure when `render_probe` produced it**, and the 10.2% above is `capture-render`'s too, so
 it overstates the fault it found by about the same factor.

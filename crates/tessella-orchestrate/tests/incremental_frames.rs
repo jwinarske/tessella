@@ -407,7 +407,7 @@ fn a_shared_tile_outlives_one_views_pan() {
 
 /// Four views, which §13 requires and the ABI caps at eight.
 ///
-/// Not a generalisation of the two-view case for its own sake: `TSL_MAX_VIEWS` is eight and the
+/// Not a generalization of the two-view case for its own sake: `TSL_MAX_VIEWS` is eight and the
 /// product needs four, so the case that has to hold is four sharing one style and one registry.
 /// The accounting is a set of users per drawable, so nothing about it is arity-specific — but
 /// "nothing about it is arity-specific" is exactly the claim a test should make rather than a

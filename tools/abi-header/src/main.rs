@@ -952,7 +952,7 @@ fn structs() -> Vec<Struct> {
                 (
                     direction,
                     "double direction[3]",
-                    "Direction towards the light, cartesian."
+                    "Direction toward the light, cartesian."
                 ),
                 (color, "double color[4]", "Light color, RGBA."),
                 (intensity, "double intensity", "Light intensity."),

@@ -176,7 +176,7 @@ Nine line layers over them vary `line-join`, `line-cap`, `line-round-limit`, `li
 golden that carries a translate at all.
 
 What the test reads is the vertex count in each drawable's name and the index count in its `idx=`
-field, totalled per layer. That is the oracle's own answer for how much geometry a join policy
+field, totaled per layer. That is the oracle's own answer for how much geometry a join policy
 costs, and it moves the moment a join resolves differently.
 
 ### The one that is not hermetic

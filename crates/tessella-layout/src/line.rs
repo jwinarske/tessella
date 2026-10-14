@@ -758,7 +758,7 @@ impl LineBucket {
                         let mut t = f64::from(m) / f64::from(n);
                         if t != 0.5 {
                             // Approximate geometric slerp; a plain lerp would bunch the fan's
-                            // triangles towards the middle of the arc.
+                            // triangles toward the middle of the arc.
                             let t2 = t - 0.5;
                             let a = 1.0904
                                 + cos_angle
@@ -1081,7 +1081,7 @@ mod tests {
             &LineOptions::default(),
         );
         for v in &bucket.vertices {
-            // The bytes are already quantised, so a NaN extrusion would have clamped rather
+            // The bytes are already quantized, so a NaN extrusion would have clamped rather
             // than propagated; what it cannot do is stay within one unit of the unextruded
             // midpoint on both axes at once.
             assert!(v.data[0] != 128 || v.data[1] != 128, "an unextruded vertex");

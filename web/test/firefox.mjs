@@ -117,11 +117,11 @@ export async function firefox(url, { until, timeoutMs = 120_000, windowSize = "5
       // otherwise stop a module that awaits four hundred ticks before it finished the first one.
       'user_pref("browser.dom.window.dump.enabled", true);',
       'user_pref("dom.max_script_run_time", 0);',
-      // A runner with no GPU still has Mesa's software rasteriser; these are what let Firefox
+      // A runner with no GPU still has Mesa's software rasterizer; these are what let Firefox
       // reach it rather than refusing WebGL outright.
       'user_pref("webgl.force-enabled", true);',
       'user_pref("gfx.webrender.software", true);',
-      // A software rasteriser is a "major performance caveat", and refusing the context over
+      // A software rasterizer is a "major performance caveat", and refusing the context over
       // that is exactly what a headless runner does not want.
       'user_pref("webgl.disable-fail-if-major-performance-caveat", true);',
       'user_pref("webgl.enable-surface-texture", false);',

@@ -6,7 +6,7 @@
 //! form of that: a parked view costs exactly one camera block a frame and wants no geometry.
 //! What neither says is whether the producer *woke up* to discover it had nothing to send.
 //!
-//! A DVFS governor reads utilisation, not usefulness. A producer busy a little of every tick
+//! A DVFS governor reads utilization, not usefulness. A producer busy a little of every tick
 //! holds the part at a middling frequency for as long as it runs, which costs more than the same
 //! work done in bursts with the part idle between them. §12.8 says so — "sustained-idle-then-
 //! burst beats constant medium load" — and until now nothing measured it.

@@ -563,7 +563,7 @@ const EXTENT_UNITS: u16 = 8192;
 /// The camera sits a fixed distance above the *plane* -- `camera_to_center_distance`, which is a
 /// property of the viewport and not of the ground -- while a height in meters reaches the screen
 /// multiplied by pixels-per-meter, which doubles with every zoom level. So the ground climbs
-/// towards a camera that does not climb with it, and far enough in it arrives: at this build's
+/// toward a camera that does not climb with it, and far enough in it arrives: at this build's
 /// 1152-pixel camera, 400 meters of ground exaggerated by 1.5 stands 826 pixels up at z16 and
 /// 1651 at z17. Past that the camera is underground and the frame is whatever the background is.
 ///

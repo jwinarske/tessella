@@ -398,7 +398,7 @@ impl Pool {
 
     /// True when nothing is queued and nothing is running.
     ///
-    /// For tests and for the §9.3 counters. Not a synchronisation primitive: by the time it
+    /// For tests and for the §9.3 counters. Not a synchronization primitive: by the time it
     /// answers, a job may have arrived.
     #[must_use]
     pub fn is_idle(&self) -> bool {

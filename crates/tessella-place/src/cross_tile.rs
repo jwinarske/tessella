@@ -12,7 +12,7 @@
 //! # Matching is by key and by *rounded* position
 //!
 //! A label does not sit at exactly the same tile coordinate in a parent and a child — the
-//! anchor is quantised differently, and the geometry it was placed against was simplified at a
+//! anchor is quantized differently, and the geometry it was placed against was simplified at a
 //! different zoom. So positions are scaled into one common space and rounded onto a grid of
 //! roughly four pixels, and two symbols with the same text within a grid unit are the same
 //! label.

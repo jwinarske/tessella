@@ -675,7 +675,7 @@ fn a_second_process_starts_warm() {
 /// The response cache also covers what a cold start needs before it has a cover.
 ///
 /// A TileJSON manifest is a round trip on the critical path, and §12.5 calls it out as the
-/// thing serialising startup. It goes through the same file source as the tiles, so it is
+/// thing serializing startup. It goes through the same file source as the tiles, so it is
 /// cached by the same mechanism — which is worth asserting rather than assuming, because the
 /// manifest is fetched on a different code path from the tiles.
 #[test]

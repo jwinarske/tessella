@@ -1879,7 +1879,7 @@ pub fn encode_line(
 ///
 /// # Why a fill's outline is worth a second geometry
 ///
-/// The outline pass is a fill's whole antialiasing: the triangles rasterise hard and mbgl runs
+/// The outline pass is a fill's whole antialiasing: the triangles rasterize hard and mbgl runs
 /// no MSAA, so the only thing softening a polygon's boundary is a one-pixel fade in the outline
 /// fragment. mbgl gives that fade room by drawing the line **two pixels wide** --
 /// `constexpr auto lineWidth = 2.0f` -- and a one-pixel line generates no fragment further than
@@ -2635,7 +2635,7 @@ pub struct ExtrusionShared {
     /// The walls need it as much as the roof does, and for the same reason: `fill-extrusion-height`
     /// is `["get", "height"]` in every real style, so a wall that reads the paint block instead
     /// gets the fallback -- zero -- and every wall in the tile is a quad of no height, built and
-    /// uploaded and rasterising nothing. mbgl feeds the same properties in as instance attributes
+    /// uploaded and rasterizing nothing. mbgl feeds the same properties in as instance attributes
     /// (`readDataDrivenPaintProperties<FillExtrusionBase, FillExtrusionColor, FillExtrusionHeight,
     /// FillExtrusionPattern>`), which is what this carries them for.
     pub interleaved: SlabRef,
@@ -2743,7 +2743,7 @@ pub fn encode_extrusion_walls(
     //
     // Omitting these is what left every wall flat: `fill-extrusion-height` is data-driven in every
     // real style, so the shader fell back to the paint block's value, which for a data-driven
-    // property is its fallback of zero. The walls were built, uploaded, and rasterised nothing --
+    // property is its fallback of zero. The walls were built, uploaded, and rasterized nothing --
     // 318,084 triangles of it, which is why the counter said they were there.
     for attribute in &layout.attributes {
         instances.push(AttributeDesc {

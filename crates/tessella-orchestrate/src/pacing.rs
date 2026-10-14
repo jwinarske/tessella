@@ -16,7 +16,7 @@
 //!
 //! # Why waking cheaply is not the same as working cheaply
 //!
-//! A DVFS governor reads utilisation, not usefulness. A producer that wakes every tick and does
+//! A DVFS governor reads utilization, not usefulness. A producer that wakes every tick and does
 //! a little work each time holds the part at a middling frequency indefinitely, which costs more
 //! than the same work done in bursts with the part idle between them — that is §12.8's
 //! "sustained-idle-then-burst beats constant medium load", and it is why §10's "parked bytes are

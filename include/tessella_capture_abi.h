@@ -2228,7 +2228,7 @@ TSL_ASSERT(offsetof(tsl_order_update, entries) == 16, "tsl_order_update.entries 
  * Mirrors `Light`.
  */
 typedef struct tsl_light {
-    /* Direction towards the light, cartesian. */
+    /* Direction toward the light, cartesian. */
     double direction[3];
     /* Light color, RGBA. */
     double color[4];
