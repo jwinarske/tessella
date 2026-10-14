@@ -153,27 +153,39 @@ fn a_resolved_pattern_binds_the_pattern_shaders() {
     );
 }
 
-/// Without them the layer draws plain, rather than not drawing.
+/// Without them the layer draws nothing, rather than drawing plain.
 ///
-/// Plain all the way through: the outline is 15, `FillOutlineTriangulatedShader`, because the
-/// layer's outline color and opacity are constant and the pattern branch is the one thing that
-/// would have kept it on the line-primitive path. `build_fill_content` builds the polyline for
-/// exactly this case -- a style that names a sprite the frame could not resolve.
+/// tessella#383. It drew plain -- 11 for the triangles and 15 for the outline -- and the plain
+/// family paints the layer's evaluated `fill-color`, which a style that asked for a pattern never
+/// set. That is the spec default `#000000`, so a park waiting on its sprites came out black, which
+/// is the loudest possible wrong answer and was found by replaying a capture rather than by
+/// reading the code.
+///
+/// mbgl branches on the style's own property rather than on whether a sprite resolved
+/// (`render_fill_layer.cpp:347`) and draws nothing where the program for it is missing (`:464`).
+/// Absent beats wrong: the layer appears when its sheet lands.
 #[test]
-fn an_unresolved_pattern_draws_as_a_fill() {
+fn an_unresolved_pattern_draws_nothing() {
     let (shaders, textures) = emit_with(None);
-    assert!(shaders.contains_key(&11), "no plain fill: {shaders:?}");
-    assert!(shaders.contains_key(&15), "no outline: {shaders:?}");
+    assert!(!shaders.contains_key(&11), "a plain fill: {shaders:?}");
+    assert!(!shaders.contains_key(&15), "an outline: {shaders:?}");
     assert!(!shaders.contains_key(&13), "a pattern shader with no atlas");
     assert_eq!(textures, 0, "nothing to bind");
+    // The style is the one patterned layer, so an empty frame is the whole statement. That it is
+    // the *layer* and not the frame is what `a_resolved_pattern_binds_the_pattern_shaders` says:
+    // the same style with a sheet draws 13 and 14.
+    assert!(shaders.is_empty(), "something drew: {shaders:?}");
 }
 
-/// A sprite the atlas does not hold is not a pattern.
+/// A sprite the atlas does not hold is not a pattern, and is not a plain fill either.
 ///
-/// The layer names `sand_noise`; this atlas has something else. Binding the pattern shader
-/// anyway would sample whatever was packed at a rectangle that describes nothing.
+/// The layer names `sand_noise`; this atlas has something else. Binding the pattern shader anyway
+/// would sample whatever was packed at a rectangle that describes nothing -- and drawing it plain
+/// paints a color the style never set, which is tessella#383. This one does not resolve when the
+/// sheet lands, because the sheet has landed: a style naming a sprite its sheet does not hold stays
+/// absent, which is the answer mbgl gives it too.
 #[test]
-fn a_missing_sprite_draws_as_a_fill() {
+fn a_missing_sprite_draws_nothing() {
     let mut positions = atlas();
     positions.remove("sand_noise");
     positions.insert("something_else".to_owned(), atlas()["sand_noise"]);
@@ -188,9 +200,10 @@ fn a_missing_sprite_draws_as_a_fill() {
     };
     let (shaders, textures) = emit_with(Some(&patterns));
     assert!(
-        shaders.contains_key(&11),
-        "should fall back to a fill: {shaders:?}"
+        !shaders.contains_key(&11),
+        "fell back to a fill: {shaders:?}"
     );
+    assert!(shaders.is_empty(), "something drew: {shaders:?}");
     assert_eq!(textures, 0);
 }
 

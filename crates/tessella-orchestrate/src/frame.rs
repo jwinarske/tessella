@@ -1996,6 +1996,7 @@ fn emit_group(
                     arena,
                     bucket,
                     &Encoding {
+                        layer: style.layers.get(bucket.layer_index),
                         patterns,
                         textures,
                         pitched: view.pitch.abs() > f64::EPSILON,
@@ -2456,6 +2457,13 @@ fn camera_key(view: &ViewTransform) -> crate::damage::CameraKey {
 #[derive(Clone, Copy)]
 struct Encoding<'a> {
     /// Sprites, for a layer with a pattern.
+    /// The style layer this bucket was built from, where the style has one.
+    ///
+    /// For the one question the *resolved* paint cannot answer: whether the style wrote a
+    /// property at all. `resolve_paint` walks every spec and gives an unset property its default
+    /// as a constant -- "so every property has one and nothing downstream special-cases absence"
+    /// -- which is right for drawing and wrong for asking. See [`pattern_pending`].
+    layer: Option<&'a tessella_style::Layer>,
     patterns: Option<&'a Patterns<'a>>,
     /// Where this tile's own pictures went -- imagery, slope field, elevation.
     textures: TileTextures,
@@ -3929,6 +3937,7 @@ fn encode_parts(
     context: &Encoding<'_>,
 ) -> Option<alloc::vec::Vec<emit::Encoded>> {
     let &Encoding {
+        layer,
         patterns,
         textures,
         pitched,
@@ -4002,8 +4011,7 @@ fn encode_parts(
     let mut puck_shared = None;
     let encoded = match &bucket.content {
         Content::Fill(fill) => {
-            // A pattern binds the atlas and a different shader; without one the layer draws
-            // as a plain fill, which is what a frame with no sprites fetched should do.
+            // A pattern binds the atlas and a different shader.
             let atlas = patterns
                 .filter(|patterns| {
                     patterns
@@ -4011,6 +4019,16 @@ fn encode_parts(
                         .is_some()
                 })
                 .map(|patterns| patterns.texture);
+            // And without one, a layer that asked for a pattern draws nothing rather than a plain
+            // fill in a color nobody chose. See `pattern_pending`.
+            if pattern_pending(
+                layer,
+                "fill-pattern",
+                atlas,
+                bucket.pattern_vertices.covers(fill.vertices.len()),
+            ) {
+                return None;
+            }
             // Resolved before the bind, because the shader that will draw this is what says where
             // its paint belongs: `FillPatternShader` declares the two rectangles at locations 1 and
             // 2 where the plain one has the color, so the opacity sits at 3 there and at 2 here.
@@ -4056,6 +4074,16 @@ fn encode_parts(
                 .get(bucket.layer_index)
                 .filter(|_| dash.is_none() && atlas.is_none())
                 .map(|gradient| gradient.texture);
+            // A line whose pattern has not resolved draws nothing, for the fill's reason -- the
+            // plain family would paint it the `line-color` default, which is the same black. Only
+            // where nothing else claims the layer: a dasharray takes precedence and a gradient is
+            // its own color, so neither is waiting on a sheet.
+            if dash.is_none()
+                && gradient.is_none()
+                && pattern_pending(layer, "line-pattern", atlas, false)
+            {
+                return None;
+            }
             // A pattern binds against the plain shader's table, which is what it did before the
             // SDF branch existed and is left alone here: `LinePatternShader` drops the color
             // attribute and shifts every binding after it down one, so switching to its table
@@ -4124,6 +4152,11 @@ fn encode_parts(
                         .is_some()
                 })
                 .map(|patterns| patterns.texture);
+            // And nothing where the sprites have not arrived, for the fill's reason: the plain
+            // family paints `fill-extrusion-color`, which a patterned layer never set.
+            if pattern_pending(layer, "fill-extrusion-pattern", atlas, false) {
+                return None;
+            }
             // Resolved before the bind, because which shader draws this decides where its
             // data-driven paint belongs. `FillExtrusionPatternShader` declares no color -- the
             // sprite is the surface -- so its base and height bind one slot lower than the plain
@@ -4378,6 +4411,12 @@ fn encode_parts(
                         .is_some()
                 })
                 .map(|patterns| patterns.texture);
+            // A backdrop is the one layer whose absence is the whole frame's, and it is still
+            // right: `background-color` is `#000000` by default too, so a style waiting on its
+            // sheet would paint the map black rather than leave it to whatever is behind.
+            if pattern_pending(layer, "background-pattern", atlas, false) {
+                return None;
+            }
             Some(emit::encode_background_on(
                 arena,
                 PLACEHOLDER,
@@ -4494,6 +4533,45 @@ fn encode_parts(
         ));
     }
     Some(parts)
+}
+
+/// Whether a layer names a pattern its sprites cannot draw yet.
+///
+/// A pattern is a *fetch*. Until the sheet arrives -- or if it arrives without the sprite the style
+/// named -- there is no atlas to bind and no rectangles to put in the tile block, and the layer has
+/// to do one of two things: draw as the plain family, or not draw.
+///
+/// It drew plain, and that is tessella#383: the plain family paints the layer's evaluated color,
+/// which a style that asked for a pattern never set, so it is the spec default `#000000`. A park
+/// waiting on its sprites came out black -- "the loudest possible wrong answer", found by replaying
+/// a capture rather than by reading the code.
+///
+/// mbgl branches on the *style's* property rather than on whether a sprite resolved:
+/// `render_fill_layer.cpp:347` is `unevaluated.get<FillPattern>().isUndefined()`,
+/// `render_line_layer.cpp:400` and `render_background_layer.cpp:140` are the same shape, and
+/// `render_fill_extrusion_layer.cpp:153` is `hasPattern`. So a layer whose style names a pattern
+/// takes the pattern path whatever the atlas did, and where the program for it is missing mbgl
+/// draws nothing at all (`:464`, `continue`).
+///
+/// This emits nothing, which is the same outcome by the only route this wire has: a drawable naming
+/// a texture that was never uploaded is refused by the consumer, so "the pattern shader with no
+/// atlas" is not a thing that can be sent. The layer is absent while its sprites are in flight and
+/// appears when they land -- and a style naming a sprite its sheet does not hold stays absent,
+/// which is the same answer mbgl gives it.
+///
+/// `per_feature` is the case this must not catch. A *data-driven* pattern resolves to a pair of
+/// rectangles per feature while the bucket is built, and a frame-level placement cannot answer it
+/// at all -- `image_at` says so: "a data-driven one cannot be answered by a zoom alone". So such a
+/// layer has no atlas here and is not waiting for one: its sprites arrived and are in its vertices.
+/// Dropping it would take a layer that draws today and make it absent, which is the opposite of
+/// what this is for.
+fn pattern_pending(
+    layer: Option<&tessella_style::Layer>,
+    property: &str,
+    atlas: Option<tessella_capture_abi::envelope::TextureId>,
+    per_feature: bool,
+) -> bool {
+    atlas.is_none() && !per_feature && layer.is_some_and(|layer| layer.paint.contains_key(property))
 }
 
 /// Writes one layer's clip masks and uniform blocks.
