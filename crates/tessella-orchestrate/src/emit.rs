@@ -2059,17 +2059,15 @@ fn location_indicator_part(
 /// the terrain block binds at -- the same kind of fact, agreed in the same place.
 use tessella_capture_abi::terrain_ubo::TERRAIN_ELEVATION_SLOT;
 
-/// Where the skirt flag rides, beside the position.
-const TERRAIN_SKIRT_ATTRIBUTE: u32 = 1;
-
-/// Bytes per terrain vertex: three `i16` -- the tile position and the skirt flag -- and a fourth
-/// that is padding.
+/// The ground mesh's vertex, which the ABI publishes for the consumer to plan against.
 ///
-/// Eight, not six. Filament refuses a vertex attribute whose stride is not a multiple of four --
-/// "attribute 0 stride=6 is not multiple of 4", raised as a precondition panic rather than a
-/// return -- so the three shorts are written into four. The cost is two bytes a vertex over a mesh
-/// the whole frame shares: 35 KB once, against a buffer per tile.
-const TERRAIN_STRIDE: u32 = 8;
+/// Was two constants of this module's own -- the skirt's attribute id and the stride -- which a
+/// consumer had to agree with by reading this file. They are
+/// `tessella_capture_abi::terrain_ubo`'s now, beside the shader id and the block, and the
+/// descriptors below are built from the table rather than from numbers typed here.
+use tessella_capture_abi::terrain_ubo::{
+    TERRAIN_MESH_ATTRIBUTES, TERRAIN_MESH_ELEVATION_SLOT, TERRAIN_MESH_STRIDE as TERRAIN_STRIDE,
+};
 
 /// Puts the terrain surface into a slab and announces it.
 ///
@@ -2117,34 +2115,25 @@ pub fn encode_terrain(
         },
     );
 
-    // Two attributes over one buffer rather than one of three components. Filament draws nothing
-    // at all from a `Short3` position -- 72 renderables, 72 primitives, zero fragments, with the
-    // vertex stage reading zeros -- while the same bytes declared `Short2` draw immediately. So
-    // the pair is the position and the skirt flag beside it, at an offset of four.
-    let descriptors = [
-        AttributeDesc {
-            attr_id: POSITION_ATTRIBUTE,
-            binding: 0,
+    // From the published table rather than from numbers written here: two attributes over one
+    // buffer, the position and the skirt flag beside it. The offset is the one thing the table does
+    // not carry -- it is where this encoder put the bytes -- and it is the attribute's own width
+    // times its binding, which for a pair of `Short2` is four.
+    let descriptors: Vec<AttributeDesc> = TERRAIN_MESH_ATTRIBUTES
+        .iter()
+        .map(|attribute| AttributeDesc {
+            attr_id: attribute.attr_id,
+            binding: attribute.binding,
             source: vertices,
-            offset: 0,
+            #[allow(clippy::cast_sign_loss)]
+            offset: attribute.binding as u32 * 4,
             vertex_offset: 0,
             stride: TERRAIN_STRIDE,
-            data_type: AttributeDataType::Short2 as u8,
-            declared_data_type: AttributeDataType::Short2 as u8,
+            data_type: attribute.declared as u8,
+            declared_data_type: attribute.declared as u8,
             _pad: [0; 2],
-        },
-        AttributeDesc {
-            attr_id: TERRAIN_SKIRT_ATTRIBUTE,
-            binding: 1,
-            source: vertices,
-            offset: 4,
-            vertex_offset: 0,
-            stride: TERRAIN_STRIDE,
-            data_type: AttributeDataType::Short2 as u8,
-            declared_data_type: AttributeDataType::Short2 as u8,
-            _pad: [0; 2],
-        },
-    ];
+        })
+        .collect();
 
     let mut payload = Vec::new();
     let attrs = push_span(&mut payload, &descriptors);
@@ -2158,14 +2147,14 @@ pub fn encode_terrain(
             index_length: mesh.indices.len() as u32,
         }],
     );
-    // One texture and its slot is zero, because the family declares one and it is the elevation.
-    // Not through `texture_refs`, which reads mbgl's own table and has no row for a family mbgl
-    // does not have.
+    // One texture, at the slot the ABI publishes for this family: it declares one and it is the
+    // elevation. Not through `texture_refs`, which reads mbgl's own table and has no row for a
+    // family mbgl does not have.
     let textures = push_span(
         &mut payload,
         &[TextureRef {
             texture: elevation,
-            slot: 0,
+            slot: TERRAIN_MESH_ELEVATION_SLOT,
             filter: TextureFilter::Linear as u32,
         }],
     );

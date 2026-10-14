@@ -54,6 +54,57 @@ pub const ID_TERRAIN_DRAWABLE_UBO: u32 = 128;
 /// agreed rather than derived". Published here, it is derived.
 pub const TERRAIN_ELEVATION_SLOT: u32 = 8;
 
+/// The attributes the ground's mesh supplies, in the shape mbgl's own tables take.
+///
+/// Hand-written because nothing generates it: the generator mirrors mbgl's shaders and mbgl has no
+/// terrain. Here rather than in either renderer for the reason
+/// [`TERRAIN_ELEVATION_SLOT`] is here -- a consumer plans its vertex input against this and the
+/// producer writes its descriptors from it, so the two agree by construction instead of by two
+/// people writing `1` in two files.
+///
+/// # Two attributes over one buffer
+///
+/// The vertex is a tile position and a skirt flag, which is three shorts and would be one
+/// `Short3`. It is a `Short2` and a `Short2` at an offset of four instead: Filament draws nothing
+/// at all from a `Short3` position -- 72 renderables, 72 primitives, zero fragments, the vertex
+/// stage reading zeros -- while the same bytes declared as a pair draw immediately.
+///
+/// The flag's own `Short2` reads the skirt in `x` and the padding short in `y`, which nothing
+/// reads. See [`TERRAIN_MESH_STRIDE`] for why the padding is there.
+pub const TERRAIN_MESH_ATTRIBUTES: [crate::generated::shader_attributes::ShaderAttribute; 2] = [
+    crate::generated::shader_attributes::ShaderAttribute {
+        binding: 0,
+        declared: crate::generated::mbgl_enums::AttributeDataType::Short2,
+        attr_id: 0,
+        name: "tessellaTerrainPosVertexAttribute",
+        shared_buffer: None,
+    },
+    crate::generated::shader_attributes::ShaderAttribute {
+        binding: 1,
+        declared: crate::generated::mbgl_enums::AttributeDataType::Short2,
+        attr_id: 1,
+        name: "tessellaTerrainSkirtVertexAttribute",
+        shared_buffer: None,
+    },
+];
+
+/// Bytes between the ground mesh's vertices.
+///
+/// Eight, not six. Filament refuses a vertex attribute whose stride is not a multiple of four --
+/// "attribute 0 stride=6 is not multiple of 4", raised as a precondition panic rather than a
+/// return -- so the three shorts are written into four. The cost is two bytes a vertex over a mesh
+/// the whole frame shares: 35 KB once, against a buffer per tile.
+pub const TERRAIN_MESH_STRIDE: u32 = 8;
+
+/// The texture slot the ground's own family samples its DEM at.
+///
+/// Zero, and [`TERRAIN_ELEVATION_SLOT`] is eight, which looks like a contradiction and is not. A
+/// raised *mbgl* family's slots come from mbgl's generated table -- the symbol's two are the
+/// highest, at nought and one -- so the elevation a terrain variant adds has to go past them. The
+/// ground's family is tessella's own and declares exactly one texture, so its elevation is the
+/// first slot and there is nothing to go past.
+pub const TERRAIN_MESH_ELEVATION_SLOT: u32 = 0;
+
 /// One terrain tile's block.
 ///
 /// # Why the sampling is pre-scaled
@@ -287,6 +338,57 @@ mod tests {
         let (scale, offset) = TerrainDrawableUbo::sampling(0, 8192);
         assert_eq!(scale, 0.0);
         assert!((offset - 0.5).abs() < f32::EPSILON, "{offset}");
+    }
+
+    /// The mesh's two attributes are distinct, consecutive, and fit the stride.
+    ///
+    /// Three facts a renderer on either side depends on and neither can see the other checking: the
+    /// bindings are what a vertex input is built from, the ids are what a descriptor is matched by,
+    /// and the stride has to hold both attributes at their offsets -- which for a pair of `Short2`
+    /// at bindings nought and one is eight bytes with two to spare.
+    #[test]
+    fn the_mesh_attributes_fit_the_vertex_they_describe() {
+        use crate::AttributeDataType;
+
+        let [position, skirt] = TERRAIN_MESH_ATTRIBUTES;
+        assert_eq!(position.binding, 0);
+        assert_eq!(skirt.binding, 1);
+        assert_ne!(position.attr_id, skirt.attr_id, "one id for two attributes");
+        for attribute in TERRAIN_MESH_ATTRIBUTES {
+            assert_eq!(
+                attribute.declared,
+                AttributeDataType::Short2,
+                "{} is not the pair of shorts the mesh writes",
+                attribute.name
+            );
+            assert!(
+                attribute.shared_buffer.is_none(),
+                "{} is not also a storage buffer",
+                attribute.name
+            );
+            // Four bytes of `Short2` at an offset of four times the binding.
+            #[allow(clippy::cast_sign_loss)]
+            let past = attribute.binding as u32 * 4 + 4;
+            assert!(
+                past <= TERRAIN_MESH_STRIDE,
+                "{} ends at {past}, past the stride",
+                attribute.name
+            );
+        }
+        // The stride is a multiple of four, which is what Filament refuses a vertex buffer for.
+        assert_eq!(TERRAIN_MESH_STRIDE % 4, 0);
+    }
+
+    /// The ground's own elevation slot is the first, and a raised family's is past mbgl's.
+    ///
+    /// The two are different numbers for the same picture and the distinction is the table each
+    /// family's slots come from -- see each constant's own note.
+    #[test]
+    fn the_two_elevation_slots_are_each_what_their_family_declares() {
+        assert_eq!(TERRAIN_MESH_ELEVATION_SLOT, 0);
+        // A raised mbgl family's elevation has to clear the slots its own table uses, and the
+        // ground's has nothing to clear. Both are constants, so the comparison is one too.
+        const { assert!(TERRAIN_ELEVATION_SLOT > TERRAIN_MESH_ELEVATION_SLOT) };
     }
 
     /// Neither number collides with anything mbgl has.
