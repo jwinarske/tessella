@@ -60,7 +60,9 @@ use alloc::vec::Vec;
 
 use tessella_capture_abi::AttributeDataType;
 use tessella_capture_abi::generated::mbgl_enums::BuiltIn;
-use tessella_capture_abi::generated::shader_attributes::attributes;
+use tessella_capture_abi::generated::shader_attributes::{
+    ShaderAttribute, attributes, instance_attributes,
+};
 use tessella_layout::paint::PaintBinder;
 use tessella_style::property::{Binding, Color, ResolvedProperty};
 
@@ -310,6 +312,26 @@ pub fn attribute_ids(
         }
     }
     ids
+}
+
+/// What a shader declares for an attribute id *per instance*.
+///
+/// [`tessella_capture_abi::declared_for`]'s counterpart over the other table. An instanced family
+/// splits its inputs in two: the template's corner advances per vertex and everything else -- the
+/// outline point, the packed decimals and every data-driven paint property -- advances per
+/// instance. `declared_for` reads the per-vertex table alone, so asking it about a paint property
+/// of an instanced shader answers `None`, which means "no slot" and binds at -1.
+///
+/// That is the right answer for a property the shader genuinely does not declare and the wrong one
+/// here, and the difference is invisible to a consumer that binds attributes by name. The Vulkan
+/// one binds by slot: it dropped the walls' base and height, the bodies fell back to the paint
+/// block, and a data-driven height's value there is its fallback of zero.
+#[must_use]
+pub fn instance_declared_for(shader: BuiltIn, attr_id: u32) -> Option<ShaderAttribute> {
+    instance_attributes(shader)
+        .iter()
+        .find(|attribute| attribute.attr_id == attr_id)
+        .copied()
 }
 
 /// The fill shaders, which share one attribute id space.

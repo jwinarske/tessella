@@ -162,6 +162,20 @@ that.
 - `quad_remote` — the four-pane quad's style, read by range out of a planet archive with nothing
   on disk. Used by `quad.sh` rather than by `sweep.sh`, and through the proxy: the URL in it names
   the proxy, which holds the archive's ranges in the snapshot.
+- `extrusion_pattern_p` — `families_p` with `fill-extrusion-pattern` on its buildings layer, and
+  nothing else changed. It exists so that a capture carries `FillExtrusionPatternShader` and
+  `FillExtrusionPatternInstancedShader`, which no other scene here sets: the two sat in
+  `tessella_emblema`'s undrawn table for months on "the producer emits no drawable for it yet",
+  and the producer had emitted them all along. A capture of this scene plans 24 of 24 geometries
+  across ten families there.
+
+  **Not in the sweep**, and the reason is the oracle's side rather than this one. The Filament
+  consumer has no material for either shader -- `tessella_fluorite/materials` has
+  `fill_extrusion.mat` and `fill_extrusion_instanced.mat` and no patterned pair -- so the layer
+  does not draw there at all. At z14 and a pitch of 45 this scene reads `gross 147603 (18.769%)`
+  where `families_p` at the same camera reads **7**, and the two differ by that one paint
+  property. The number is the missing material, not a parity question, and a sweep row that large
+  would say nothing every morning.
 - `heat_p` — a heatmap over Berlin's POIs. Captured before any heatmap code existed, so the
   design behind it had a referee rather than an argument; it stood at `gross 271571 (34.532%)`
   then and is at **0** now. Not in the sweep because the sweep is the five-camera gate.
