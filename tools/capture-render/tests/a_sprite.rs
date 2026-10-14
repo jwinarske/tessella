@@ -9,11 +9,15 @@
 //! > A pattern binds the atlas and a different shader; without one the layer draws as a plain fill,
 //! > which is what a frame with no sprites fetched should do.
 //!
-//! -- and that is right for a frame whose sheet has not arrived. It is wrong as the *only* thing a
-//! capture tool can write, because then nothing downstream of this tool has ever seen a resolved
-//! pattern: no `FillPatternShader`, no atlas, no `TextureRef` naming one.
+//! -- and it is not right any more. tessella#383 is what that arm drew: the plain family paints the
+//! layer's evaluated `fill-color`, which a style that asked for a pattern never set, so a park
+//! waiting on its sprites came out the spec default black. A layer whose style names a pattern now
+//! draws *nothing* until the sheet arrives, which is mbgl's answer and the one an embedder with a
+//! slow fetch should see.
 //!
-//! So the check is the pair, and the two halves are the same run with one flag.
+//! So without the flag the patterned layers are absent and the background is not, and with it they
+//! draw through the pattern shaders with an atlas under them. The check is the pair, and the two
+//! halves are the same run with one flag.
 //!
 //! Run as a process rather than as a function, for `tests/a_ground.rs`'s reason: what is under test
 //! is the tool's own assembly of a frame, and none of that is reachable from a library.
@@ -194,13 +198,21 @@ const ATLAS: u32 = 1024;
 fn a_sheet_resolves_the_pattern_and_the_atlas_goes_up_with_it() {
     let flat = written(false);
     assert!(
-        flat.shaders.contains(&(BuiltIn::FillShader as i32)),
-        "the patterned layer did not draw at all without a sheet: {:?}",
+        !flat.shaders.contains(&(BuiltIn::FillPatternShader as i32)),
+        "a pattern resolved with no sheet to resolve it against"
+    );
+    // And not as a plain fill either, which is tessella#383: a layer whose style names a pattern
+    // draws nothing until its sprites arrive. The plain family would paint the layer's evaluated
+    // `fill-color`, which a style that asked for a pattern never set -- the spec default black.
+    assert!(
+        !flat.shaders.contains(&(BuiltIn::FillShader as i32)),
+        "a patterned layer drew plain with no sheet: {:?}",
         flat.shaders
     );
     assert!(
-        !flat.shaders.contains(&(BuiltIn::FillPatternShader as i32)),
-        "a pattern resolved with no sheet to resolve it against"
+        flat.shaders.contains(&(BuiltIn::BackgroundShader as i32)),
+        "the background went with them, so this says nothing: {:?}",
+        flat.shaders
     );
     assert!(
         !flat
