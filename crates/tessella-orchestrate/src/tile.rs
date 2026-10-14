@@ -2413,6 +2413,13 @@ pub fn build_mvt_tile_on_with_patterns(
                 // Vertices already attributed. The next feature's geometry begins where the
                 // last one's ended, so this is its start.
                 let mut recorded_to = 0usize;
+                // And the features a data-driven pattern resolves against, with where each one's
+                // vertices end. The fill arm above keeps the same pair for the same reason; this
+                // one kept neither, so a `line-pattern` that varies with the feature resolved to
+                // nothing at all on a vector tile -- tessella#392, and the one place in this file
+                // where the two paths disagreed about what a pattern is.
+                let mut kept = Vec::new();
+                let mut ends: Vec<usize> = Vec::new();
                 if let Some(named) = named {
                     // Once per layer. `named.feature` indexes, so a permutation costs no
                     // collect -- see `layout_order`.
@@ -2460,8 +2467,24 @@ pub fn build_mvt_tile_on_with_patterns(
                             })?;
                         recording.add(&feature, recorded_to, bucket.vertices.len());
                         recorded_to = bucket.vertices.len();
+                        // After the geometry, because the end is what says which vertices are
+                        // this feature's -- and a feature whose rings added none leaves an end
+                        // equal to the last, which resolves a range of no vertices.
+                        ends.push(bucket.vertices.len());
+                        kept.push(feature);
                     }
                 }
+                let borrowed_features: Vec<&dyn tessella_style::expression::Feature> = kept
+                    .iter()
+                    .map(|feature| feature as &dyn tessella_style::expression::Feature)
+                    .collect();
+                pattern_vertices = resolve_pattern_vertices(
+                    patterns,
+                    layer,
+                    bucket_zoom,
+                    &borrowed_features,
+                    &ends,
+                );
                 Content::Line(bucket)
             }
             // A raster layer over a *feature* source draws nothing, and that is not a silent
