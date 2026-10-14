@@ -4011,22 +4011,29 @@ fn encode_parts(
     let mut puck_shared = None;
     let encoded = match &bucket.content {
         Content::Fill(fill) => {
-            // A pattern binds the atlas and a different shader.
+            // A pattern binds the atlas and a different shader, and it resolves in two places. A
+            // *constant* `fill-pattern` is one rectangle pair for the layer, which the frame looks
+            // up here. A *data-driven* one is a pair per feature, resolved while the bucket was
+            // built -- and a frame-level lookup cannot answer it at all, because `image_at` says a
+            // data-driven source "cannot be answered by a zoom alone".
+            //
+            // Either resolves the layer's pattern, so either takes the atlas. Reading only the
+            // first left a data-driven pattern bound through the *plain* table with its rectangles
+            // still in the vertices, which the consumer refuses outright --
+            // `DeclaredDisagrees { attr_id: 4, wire: UShort4, table: Float4 }`, the rectangles
+            // arriving where `FillShader` declares its color.
+            let per_feature = bucket.pattern_vertices.covers(fill.vertices.len());
             let atlas = patterns
                 .filter(|patterns| {
-                    patterns
-                        .placement(&bucket.paint, "fill-pattern", zoom)
-                        .is_some()
+                    per_feature
+                        || patterns
+                            .placement(&bucket.paint, "fill-pattern", zoom)
+                            .is_some()
                 })
                 .map(|patterns| patterns.texture);
-            // And without one, a layer that asked for a pattern draws nothing rather than a plain
-            // fill in a color nobody chose. See `pattern_pending`.
-            if pattern_pending(
-                layer,
-                "fill-pattern",
-                atlas,
-                bucket.pattern_vertices.covers(fill.vertices.len()),
-            ) {
+            // And without either, a layer that asked for a pattern draws nothing rather than a
+            // plain fill in a color nobody chose. See `pattern_pending`.
+            if pattern_pending(layer, "fill-pattern", atlas) {
                 return None;
             }
             // Resolved before the bind, because the shader that will draw this is what says where
@@ -4061,12 +4068,19 @@ fn encode_parts(
             // one the drawable will name -- the SDF shader declares `floorwidth` where the plain
             // one does not, and binding against the wrong table drops or invents a slot.
             let dash = dashes.get(bucket.layer_index);
+            // Either half resolves the pattern, as a fill's does: the frame looks up a constant
+            // `line-pattern` and the bucket resolved a data-driven one per feature -- "exactly as
+            // a `fill-pattern` does", at ids nine and ten rather than four and five. Read only the
+            // first and a data-driven line keeps its rectangles and loses its atlas, which drops
+            // them: `pattern_vertices: atlas.and(..)` below is the line that does it.
+            let per_feature = bucket.pattern_vertices.covers(line.vertices.len());
             let atlas = patterns
                 .filter(|_| dash.is_none())
                 .filter(|patterns| {
-                    patterns
-                        .placement(&bucket.paint, "line-pattern", zoom)
-                        .is_some()
+                    per_feature
+                        || patterns
+                            .placement(&bucket.paint, "line-pattern", zoom)
+                            .is_some()
                 })
                 .map(|patterns| patterns.texture);
             // And a gradient only after both, which is the order mbgl's `update` tests them in.
@@ -4078,9 +4092,7 @@ fn encode_parts(
             // plain family would paint it the `line-color` default, which is the same black. Only
             // where nothing else claims the layer: a dasharray takes precedence and a gradient is
             // its own color, so neither is waiting on a sheet.
-            if dash.is_none()
-                && gradient.is_none()
-                && pattern_pending(layer, "line-pattern", atlas, false)
+            if dash.is_none() && gradient.is_none() && pattern_pending(layer, "line-pattern", atlas)
             {
                 return None;
             }
@@ -4154,7 +4166,7 @@ fn encode_parts(
                 .map(|patterns| patterns.texture);
             // And nothing where the sprites have not arrived, for the fill's reason: the plain
             // family paints `fill-extrusion-color`, which a patterned layer never set.
-            if pattern_pending(layer, "fill-extrusion-pattern", atlas, false) {
+            if pattern_pending(layer, "fill-extrusion-pattern", atlas) {
                 return None;
             }
             // Resolved before the bind, because which shader draws this decides where its
@@ -4414,7 +4426,7 @@ fn encode_parts(
             // A backdrop is the one layer whose absence is the whole frame's, and it is still
             // right: `background-color` is `#000000` by default too, so a style waiting on its
             // sheet would paint the map black rather than leave it to whatever is behind.
-            if pattern_pending(layer, "background-pattern", atlas, false) {
+            if pattern_pending(layer, "background-pattern", atlas) {
                 return None;
             }
             Some(emit::encode_background_on(
@@ -4559,19 +4571,15 @@ fn encode_parts(
 /// appears when they land -- and a style naming a sprite its sheet does not hold stays absent,
 /// which is the same answer mbgl gives it.
 ///
-/// `per_feature` is the case this must not catch. A *data-driven* pattern resolves to a pair of
-/// rectangles per feature while the bucket is built, and a frame-level placement cannot answer it
-/// at all -- `image_at` says so: "a data-driven one cannot be answered by a zoom alone". So such a
-/// layer has no atlas here and is not waiting for one: its sprites arrived and are in its vertices.
-/// Dropping it would take a layer that draws today and make it absent, which is the opposite of
-/// what this is for.
+/// A *data-driven* pattern is not waiting either, and is not caught here: its rectangles resolved
+/// per feature while the bucket was built, so the caller takes the atlas on that alone and this
+/// sees a pattern with an atlas rather than one with none.
 fn pattern_pending(
     layer: Option<&tessella_style::Layer>,
     property: &str,
     atlas: Option<tessella_capture_abi::envelope::TextureId>,
-    per_feature: bool,
 ) -> bool {
-    atlas.is_none() && !per_feature && layer.is_some_and(|layer| layer.paint.contains_key(property))
+    atlas.is_none() && layer.is_some_and(|layer| layer.paint.contains_key(property))
 }
 
 /// Writes one layer's clip masks and uniform blocks.
