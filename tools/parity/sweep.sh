@@ -51,6 +51,12 @@
 # brighter. The scene draws nothing at all on a consumer with no patterned material, which is what
 # it read before fluorite-game/tessella_fluorite#40: 147,603.
 #
+# The patterned line holds 6 and 124, and the second number is the one with something in it: the
+# z16 camera draws z15 tiles, because the scene's source stops there, and a pattern's period is
+# measured against the *view's* integer zoom. Measured against the tile's own level instead it is
+# the same sixteen at every zoom and the sprite is drawn over twice the distance -- 27,557. The
+# scene draws nothing at all on a consumer with no patterned line material: 230,876.
+#
 # The numbers to hold, as of 2026-09-18: 4 / 16 / 0 / 2 / 30, then 3 / 2, then 0 / 0 / 0; then
 # 0 / 0 and 0 / 0 for the hillshade and relief; 0 / 28 / 0 for the flat terrain; 4 / 16 / 0 / 2
 # / 30 for the families on a flat terrain, the same as without one.
@@ -129,6 +135,13 @@ bash "$P/parity.sh" extrusion_pair_p 52.52 13.405 16 1024 768 60 0
 # along. See the README for why this scene's sprite and light are not `families_p`'s.
 bash "$P/parity.sh" extrusion_pattern_p 52.52 13.405 14 1024 768 0 0
 bash "$P/parity.sh" extrusion_pattern_p 52.52 13.405 16 1024 768 60 0
+# The patterned line, at both levels and north-up, because the second camera is the whole point:
+# `berlin_z15` stops at fifteen, so a z16 camera draws z15 tiles and the pattern's period is the
+# one quantity that has to notice. It read 27,557 there against 124 once the period was measured
+# at the view's zoom rather than the tile's own. Pitched they read 17 and 101, which is the same
+# arithmetic through the plain line's gamma scale and is held by `families_p` already.
+bash "$P/parity.sh" line_pattern_p 52.52 13.405 14 1024 768 0 0
+bash "$P/parity.sh" line_pattern_p 52.52 13.405 16 1024 768 0 0
 bash "$P/parity.sh" terrain_families_p 52.52 13.405 9 2400 900 0
 # Five cameras, not two. The first two were the gate for a while and they are the two kindest in
 # the whole space: every other pitch and every zoom past the DEM's own is far worse, and holding
