@@ -189,6 +189,37 @@ that.
       extrusion_pattern_p  z16 p60  760
 
   Both lean 43% and 56% brighter, which is the antialiasing class.
+- `line_pattern_p` — `families_p` with `line-pattern` on its roads layer, twelve pixels wide at
+  `line-opacity` 0.6 and nothing else changed. `LinePatternShader` is in no other scene here, and
+  the Filament consumer had no material for it: the layer drew nothing at all, 230,876 of 786,432
+  at z14 p0 against `families_p`'s 4. fluorite-game/tessella_fluorite#42.
+
+  The sprite is `interstate_3` for the reasons the patterned extrusion names, and the width is
+  twelve because the pattern's second axis is *across* the line: a two-pixel road has nowhere to
+  put a picture, and the across-line mapping reads 10,049 when it is flipped at this width.
+
+  Both levels and north-up, and the second camera is what the scene is for. `berlin_z15` stops at
+  fifteen, so a z16 camera draws z15 tiles — and the pattern's period is `1 / pixelsToTileUnits(1,
+  intZoom)`, which is the one quantity in the family that has to notice that the cover is coarser
+  than the camera. Measured at the tile's own level the two arguments cancel, the answer is
+  sixteen at every zoom, and the sprite is drawn over twice the distance mbgl draws it over:
+
+      line_pattern_p  z14 p0     6 of 786432
+      line_pattern_p  z16 p0   124          (27,557 before the period was fixed)
+
+  The z16 row leans 46.8% brighter, which is the antialiasing class; six pixels is under the
+  twenty `lean.py` needs for the question to have an answer. Pitched the same cameras read 17 and
+  101, and the 101 leans 49.5%.
+
+  Three terms this row does not gate, said here rather than left to be assumed. The crossfade is
+  pinned: `TSF_NO_FADES` makes the fade's `t` one, so only the `to` sprite is sampled and only
+  `toScale`, which is 1, scales it — `fromScale` and `fade` reach the shader and cannot change the
+  picture. The height clamp, which keeps a wide line inside its own symbol on the sheet, is
+  inactive: it bites only for a line wider than its sprite is tall, and a road wider than 41
+  pixels is not a style this suite has. And `line-opacity` moves 282,927 pixels of this side's own
+  frame while raising the gross from 124 to 195, because a light sprite at 0.6 over a light ground
+  differs from the same sprite at 1.0 by less than the threshold's 48 per channel — the control is
+  `gross.py <before> <after> 8`, and that number is what says the term is read at all.
 - `heat_p` — a heatmap over Berlin's POIs. Captured before any heatmap code existed, so the
   design behind it had a referee rather than an argument; it stood at `gross 271571 (34.532%)`
   then and is at **0** now. Not in the sweep because the sweep is the five-camera gate.

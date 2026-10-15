@@ -811,3 +811,127 @@ fn an_extrusion_patterns_sampler_follows_the_pitch() {
         "a pitched camera samples the sheet linearly: {pitched:?}"
     );
 }
+
+/// A patterned line's period is measured at the *view's* integer zoom, not at the tile's level.
+///
+/// mbgl writes `scale.y` as `1 / tileID.pixelsToTileUnits(1, intZoom)`, and `pixelsToTileUnits`
+/// divides the extent by `2^(zoom - canonical.z)` -- so the quantity says how much of a tile a
+/// pixel is worth *now*, not when the tile was cut. The fragment divides the sprite's display
+/// width by it, which is what holds a pattern's period on the ground rather than in tile units.
+///
+/// Measured at the tile's own level the two arguments cancel and the answer is sixteen
+/// everywhere, which is right exactly while the cover sits at the camera's zoom -- every scene in
+/// the suite until a source runs out of levels. `berlin_z15` stops at fifteen and
+/// `tools/parity/scenes/line_pattern_p` is swept at sixteen, where mbgl's value is twice this
+/// side's: 27,557 gross pixels at z16 p0 against 124 with it measured here.
+///
+/// The dash path has taken the view's zoom per tile since it was written -- "a parent standing in
+/// for a finer tile is stretched" -- so this is the pattern path catching up with its neighbor.
+#[test]
+fn a_line_patterns_period_is_measured_at_the_views_zoom() {
+    use tessella_capture_abi::envelope::UboUpdate;
+    use tessella_capture_abi::generated::ubo_slots;
+
+    /// `scale.y` of the line tile props a frame writes, for a cover at `level` under `zoom`.
+    fn scale_y(zoom: f64, level: u8) -> f32 {
+        const LINE: &str = r#"{"version": 8, "sources": {"s": {"type": "vector", "tiles": []}},
+          "layers": [{"id": "l", "type": "line", "source": "s", "source-layer": "admin",
+                      "paint": {"line-pattern": "sand_noise", "line-width": 4}}]}"#;
+
+        let positions = atlas();
+        let pixels = vec![0u8; 512 * 512 * 4];
+        let patterns = Patterns {
+            revision: 0,
+            texture: TextureId(20),
+            size: [512, 512],
+            positions: &positions,
+            pixels: &pixels,
+            history: ZoomHistory::new(),
+        };
+        let style = Style::parse(LINE).expect("parses");
+        let view = camera::settled(&ViewTransform {
+            longitude: 0.0,
+            latitude: 0.0,
+            zoom,
+            width: 512.0,
+            height: 512.0,
+            bearing: 0.0,
+            pitch: 0.0,
+            ground_below: 0.0,
+        });
+        // The cover's level is the argument rather than the view's, which is what an overzoomed
+        // source gives: the tiles stop at their source's maxzoom and the camera carries on.
+        let tiles = cover::cover_at(&view, level).expect("covers");
+        let decoded = Tile::decode(REAL_TILE).expect("decodes");
+        let mut buckets = Vec::new();
+        for tile in &tiles {
+            let id = TileId::new(tile.z, tile.x, tile.y);
+            let built = build_mvt_tile_with_patterns(
+                &style,
+                "s",
+                id,
+                &decoded,
+                Some(&patterns as &dyn PatternLookup),
+            )
+            .expect("builds");
+            buckets.push((id, Arc::new(built)));
+        }
+
+        let mut arena = SlabArena::new();
+        let mut ring = Ring::new(1 << 22);
+        let (producer, consumer) = ring.split();
+        frame::emit(
+            producer,
+            &mut arena,
+            &Frame {
+                published_projection: None,
+                projection: ProjectionMode::Mercator,
+                style: &style,
+                view: &view,
+                view_id: ViewId(0),
+                tiles: &tiles,
+                buckets: &buckets,
+                origins: &[],
+                light: &Light::default(),
+                fonts: None,
+                patterns: Some(&patterns),
+                states: None,
+            },
+        )
+        .expect("emits");
+
+        let mut props = Vec::new();
+        while let Some(record) = consumer.peek() {
+            if record.kind == EnvelopeKind::UboUpdate
+                && let Some(update) = UboUpdate::from_bytes(record.record)
+                && update.slot == ubo_slots::ID_LINE_TILE_PROPS_UBO
+                && update.layer_index >= 0
+            {
+                let start = update.data.offset as usize;
+                let end = start + update.data.count as usize;
+                if let Some(bytes) = record.payload.get(start..end) {
+                    props = bytes.to_vec();
+                }
+            }
+            let consumed = record.consumed();
+            consumer.advance(consumed);
+        }
+
+        assert!(!props.is_empty(), "no line tile props were written");
+        assert_eq!(props.len() % 64, 0, "whole blocks of the line's layout");
+        f32::from_le_bytes(props[36..40].try_into().expect("four bytes"))
+    }
+
+    // The tile at the camera's own level: the extent over the tile size, sixteen, inverted.
+    assert_eq!(scale_y(2.0, 2), 0.0625, "a cover at the camera's own zoom");
+    // And one level coarser, which is the overzoomed cover: a pixel is worth half as much of it.
+    assert_eq!(scale_y(3.0, 2), 0.125, "a cover one level below the camera");
+    // The *integer* zoom, as mbgl's `state.getIntegerZoom()` is: half a level between tiles is
+    // not half a pattern, and taking the fractional zoom here would shrink the period smoothly
+    // across a zoom rather than at the step where the cover changes level.
+    assert_eq!(
+        scale_y(3.5, 2),
+        0.125,
+        "the camera's integer zoom, not its own"
+    );
+}

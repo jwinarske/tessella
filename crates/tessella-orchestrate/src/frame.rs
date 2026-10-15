@@ -2262,7 +2262,6 @@ fn emit_group(
                 frame,
                 *layer_index,
                 &ordered,
-                tiles,
                 &dashes,
                 &gradients,
                 textures.as_deref_mut(),
@@ -4629,7 +4628,6 @@ fn write_layer_state(
     frame: &Frame<'_>,
     layer_index: i32,
     bindings: &[GeometryBinding],
-    tiles: &[TileCoord],
     dashes: &crate::dash::Dashes,
     gradients: &crate::gradient::Gradients,
     mut textures: Option<&mut Textures>,
@@ -5120,21 +5118,31 @@ fn write_layer_state(
                     ))
                 }) {
                     Some((patterns, placement)) => {
-                        let entry = ubo::LinePatternPlacement {
-                            placement,
-                            pixel_ratio: 1.0,
-                            // Tile units per pixel at the tile's own level, inverted. Every tile of
-                            // a cover is at the same level, so one value serves the layer.
-                            #[allow(clippy::cast_possible_truncation)]
-                            units_per_pixel: tiles.first().map_or(1.0, |tile| {
-                                1.0 / tessella_tile::camera::pixels_to_tile_units(
-                                    tile.z,
-                                    f64::from(tile.z),
-                                ) as f32
-                            }),
-                            crossfade: patterns.crossfade(view.zoom),
-                        };
-                        ubo::pack_line_pattern_tile_props(&alloc::vec![entry; line.len()])
+                        let crossfade = patterns.crossfade(view.zoom);
+                        let entries: Vec<ubo::LinePatternPlacement> = placed
+                            .iter()
+                            .map(|&(z, _, _)| ubo::LinePatternPlacement {
+                                placement,
+                                pixel_ratio: 1.0,
+                                // Tile units per pixel, inverted -- measured at the *view's*
+                                // integer zoom against this tile's level, which is mbgl's
+                                // `1 / tileID.pixelsToTileUnits(1, intZoom)` and the same
+                                // quantity the dash path above takes per tile. Measured at the
+                                // tile's own level instead it is sixteen everywhere, which is
+                                // right only while the two agree: a cover standing in for a
+                                // finer level -- `tools/parity/scenes/line_pattern_p` is swept
+                                // at z16 over a source that stops at z15 -- drew the sprite
+                                // over twice the distance mbgl draws it over.
+                                #[allow(clippy::cast_possible_truncation)]
+                                units_per_pixel: 1.0
+                                    / tessella_tile::camera::pixels_to_tile_units(
+                                        z,
+                                        view.zoom.floor(),
+                                    ) as f32,
+                                crossfade,
+                            })
+                            .collect();
+                        ubo::pack_line_pattern_tile_props(&entries)
                     }
                     None => ubo::pack_tile_props_buffer(
                         line.len(),
