@@ -210,6 +210,7 @@ fn a_resolved_pattern_binds_the_pattern_shaders() {
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
+        pattern_positions: &positions,
         pixels: &pixels,
         history: ZoomHistory::new(),
     };
@@ -254,6 +255,7 @@ fn a_data_driven_pattern_takes_the_pattern_shader() {
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
+        pattern_positions: &positions,
         pixels: &pixels,
         history: ZoomHistory::new(),
     };
@@ -307,6 +309,7 @@ fn a_data_driven_line_pattern_takes_the_pattern_shader() {
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
+        pattern_positions: &positions,
         pixels: &pixels,
         history: ZoomHistory::new(),
     };
@@ -345,6 +348,7 @@ fn a_data_driven_line_pattern_resolves_on_a_vector_tile() {
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
+        pattern_positions: &positions,
         pixels: &pixels,
         history: ZoomHistory::new(),
     };
@@ -402,6 +406,7 @@ fn a_missing_sprite_draws_nothing() {
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
+        pattern_positions: &positions,
         pixels: &pixels,
         history: ZoomHistory::new(),
     };
@@ -430,6 +435,7 @@ fn the_atlas_is_uploaded_and_the_placements_are_written() {
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
+        pattern_positions: &positions,
         pixels: &pixels,
         history: ZoomHistory::new(),
     };
@@ -552,6 +558,7 @@ fn an_unseeded_history_does_not_look_like_zooming_in() {
         texture: TextureId(20),
         size: [1, 1],
         positions: &positions,
+        pattern_positions: &positions,
         pixels: &pixels,
         history: ZoomHistory::new(),
     };
@@ -584,6 +591,7 @@ fn an_extrusion_pattern_binds_its_own_shader() {
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
+        pattern_positions: &positions,
         pixels: &pixels,
         history: ZoomHistory::new(),
     };
@@ -718,6 +726,7 @@ fn an_extrusion_patterns_sampler_follows_the_pitch() {
             texture: TextureId(20),
             size: [512, 512],
             positions: &positions,
+            pattern_positions: &positions,
             pixels: &pixels,
             history: ZoomHistory::new(),
         };
@@ -845,6 +854,7 @@ fn a_line_patterns_period_is_measured_at_the_views_zoom() {
             texture: TextureId(20),
             size: [512, 512],
             positions: &positions,
+            pattern_positions: &positions,
             pixels: &pixels,
             history: ZoomHistory::new(),
         };
@@ -964,6 +974,7 @@ fn a_patterned_background_carries_its_tiles_origin() {
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
+        pattern_positions: &positions,
         pixels: &pixels,
         history: ZoomHistory::new(),
     };
@@ -1083,6 +1094,7 @@ fn the_sheets_size_reaches_the_frame_wide_block_when_it_lands() {
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
+        pattern_positions: &positions,
         pixels: &pixels,
         history: ZoomHistory::new(),
     };

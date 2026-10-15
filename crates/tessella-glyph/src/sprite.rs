@@ -512,6 +512,9 @@ pub struct Sprites {
     added: BTreeMap<String, (Sheet, Sprite)>,
     atlas: IconAtlas,
     positions: Positions,
+    /// The same sprites packed a second time, bordered for tiling. See
+    /// [`Self::pattern_positions`].
+    pattern_positions: Positions,
     /// Whether the sheet has been uploaded since it last changed — §6.4's damage, for a
     /// resource that changes exactly once.
     dirty: bool,
@@ -531,6 +534,7 @@ impl Sprites {
             added: BTreeMap::new(),
             atlas: IconAtlas::new(ATLAS_SIZE, ATLAS_SIZE),
             positions: Positions::new(),
+            pattern_positions: Positions::new(),
             dirty: false,
         }
     }
@@ -620,9 +624,27 @@ impl Sprites {
             }
         }
 
+        // Then the pattern copies, after every icon rather than beside each one: a sheet that
+        // fills the atlas keeps its icons and loses the tiling borders, which is a seam at a
+        // pattern's edge rather than a missing icon.
+        let mut pattern_positions = Positions::new();
+        if let Some(sheet) = &self.sheet {
+            for (name, sprite) in &self.sheet_index {
+                if let Some(position) = atlas.add_pattern(sheet, sprite) {
+                    pattern_positions.insert(name.clone(), position);
+                }
+            }
+        }
+        for (name, (sheet, sprite)) in &self.added {
+            if let Some(position) = atlas.add_pattern(sheet, sprite) {
+                pattern_positions.insert(name.clone(), position);
+            }
+        }
+
         self.index = index;
         self.atlas = atlas;
         self.positions = positions;
+        self.pattern_positions = pattern_positions;
         self.dirty = true;
     }
 
@@ -702,6 +724,21 @@ impl Sprites {
     #[must_use]
     pub const fn positions(&self) -> &Positions {
         &self.positions
+    }
+
+    /// Where every sprite's *pattern* copy sits, which is what a patterned layer draws from.
+    ///
+    /// A second packing of the same images, with the border filled by the image's opposite edge
+    /// rather than left clear -- see [`IconAtlas::add_pattern`] for why the two cannot be one.
+    /// Every sprite gets one, because which of them a style tiles is not known here: the whole
+    /// sheet is packed for icons on the same terms. The cost is the atlas, and it is small --
+    /// the emerald fixture's 73 sprites take 6% of a 1024-square atlas as icons and 12% with
+    /// their pattern copies. A sheet large enough for that to matter wants the set narrowed to
+    /// the names a style's pattern properties can reach, which is `crossfade::pattern_names`
+    /// over the layers; nothing here has met one.
+    #[must_use]
+    pub const fn pattern_positions(&self) -> &Positions {
+        &self.pattern_positions
     }
 
     /// The atlas itself, for the texture upload.
@@ -804,6 +841,31 @@ impl IconAtlas {
     /// `None` when the atlas is full. The icon is skipped rather than the sheet refused, the way
     /// a glyph that does not fit is.
     pub fn add(&mut self, sheet: &Sheet, sprite: &Sprite) -> Option<IconPosition> {
+        self.add_with(sheet, sprite, Padding::Transparent)
+    }
+
+    /// The same, packed for use as a *pattern*.
+    ///
+    /// A pattern is tiled, so the texel outside one copy is the texel inside the next: mbgl
+    /// writes the image's opposite edge into the one-pixel border its rectangle reports --
+    /// `DynamicTextureAtlas`'s "Add 1 pixel wrapped padding on each side of the image" -- and a
+    /// linear sample at the seam then blends the sprite with itself rather than with whatever
+    /// the atlas was cleared to.
+    ///
+    /// A second slot rather than a different border on the first, because an icon's quad samples
+    /// that same border and must find the clear there: padding every sprite this way costs
+    /// `families_p` 4 gross pixels against 5,625. mbgl keeps the two apart the same way, as
+    /// separate entries of one atlas.
+    pub fn add_pattern(&mut self, sheet: &Sheet, sprite: &Sprite) -> Option<IconPosition> {
+        self.add_with(sheet, sprite, Padding::Wrapped)
+    }
+
+    fn add_with(
+        &mut self,
+        sheet: &Sheet,
+        sprite: &Sprite,
+        padding: Padding,
+    ) -> Option<IconPosition> {
         use crate::atlas::PADDING;
 
         let key = self.next_key;
@@ -826,6 +888,10 @@ impl IconAtlas {
             self.pixels[to..to + run].copy_from_slice(&sheet.pixels[from..from + run]);
         }
 
+        if padding == Padding::Wrapped {
+            self.wrap_edges(slot, sprite.width, sprite.height);
+        }
+
         self.dirty.push(slot);
         Some(IconPosition {
             // One pixel of the two is reported, which is the pixel the quad's border samples.
@@ -842,4 +908,51 @@ impl IconAtlas {
             text_fit_height: sprite.text_fit_height,
         })
     }
+
+    /// Copies the image's opposite edges into the one-pixel border around it.
+    ///
+    /// The border *inside* the reported rectangle, which is the pixel a sample at the seam
+    /// reaches; the second pixel of `PADDING` stays clear and keeps neighbors apart. mbgl's four
+    /// copies, in its order: top from the bottom row, bottom from the top, left from the right
+    /// column, right from the left.
+    fn wrap_edges(&mut self, slot: crate::atlas::Rect, width: u32, height: u32) {
+        use crate::atlas::PADDING;
+
+        let (x, y) = (slot.x + PADDING, slot.y + PADDING);
+        let run = (width as usize) * 4;
+        let row = |pixels: &[u8], at: u32| -> Vec<u8> {
+            let start = ((at * self.width + x) as usize) * 4;
+            pixels[start..start + run].to_vec()
+        };
+        let (top, bottom) = (row(&self.pixels, y), row(&self.pixels, y + height - 1));
+        let above = (((y - 1) * self.width + x) as usize) * 4;
+        self.pixels[above..above + run].copy_from_slice(&bottom);
+        let below = (((y + height) * self.width + x) as usize) * 4;
+        self.pixels[below..below + run].copy_from_slice(&top);
+        for offset in 0..height {
+            let at = |column: u32| (((y + offset) * self.width + column) as usize) * 4;
+            let left: [u8; 4] = self.pixels[at(x)..at(x) + 4]
+                .try_into()
+                .expect("four bytes");
+            let right: [u8; 4] = self.pixels[at(x + width - 1)..at(x + width - 1) + 4]
+                .try_into()
+                .expect("four bytes");
+            let (to_left, to_right) = (at(x - 1), at(x + width));
+            self.pixels[to_left..to_left + 4].copy_from_slice(&right);
+            self.pixels[to_right..to_right + 4].copy_from_slice(&left);
+        }
+    }
+}
+
+/// What goes in the border around a packed sprite.
+///
+/// Behind the same feature as the atlas that reads it: a build without an image decoder packs
+/// nothing.
+#[cfg(feature = "image")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Padding {
+    /// Whatever the atlas was cleared to, which an icon's quad samples deliberately.
+    Transparent,
+    /// The image's opposite edge, so a tiled sprite wraps into itself. See [`IconAtlas::add_pattern`].
+    Wrapped,
 }

@@ -175,7 +175,7 @@ that.
   nearly the same color, so the scene read a clean 41 with the wall's edge distance zeroed. It is
   also chosen for low spatial frequency, because a sprite's own edges are where two rasterizers
   disagree: `rer.transilien`, which is 36x18 of fine detail, holds a floor of 1,267 where this one
-  holds 760. And the light is `[1.15, 210, 64]` at intensity 0.8 rather than the default
+  holds 725. And the light is `[1.15, 210, 64]` at intensity 0.8 rather than the default
   `[1.15, 210, 30]` at 0.5, which is a degenerate input twice over -- `1 - intensity` equals
   `intensity`, so the unlit floor cannot be mutated, and the roof's `z` of 0.996 drives the
   directional term into its clamp, so neither can the lit end. At 0.8 and a polar of 64 the roof
@@ -186,9 +186,9 @@ that.
   `extrusion_pattern_filter`, which is mbgl's rule and costs 356 against 37 if it is ignored.
 
       extrusion_pattern_p  z14 p0    37 of 786432
-      extrusion_pattern_p  z16 p60  760
+      extrusion_pattern_p  z16 p60  725
 
-  Both lean 43% and 56% brighter, which is the antialiasing class.
+  Both lean 43% and 54% brighter, which is the antialiasing class.
 - `line_pattern_p` — `families_p` with `line-pattern` on its roads layer, twelve pixels wide at
   `line-opacity` 0.6 and nothing else changed. `LinePatternShader` is in no other scene here, and
   the Filament consumer had no material for it: the layer drew nothing at all, 230,876 of 786,432
@@ -205,9 +205,9 @@ that.
   sixteen at every zoom, and the sprite is drawn over twice the distance mbgl draws it over:
 
       line_pattern_p  z14 p0     6 of 786432
-      line_pattern_p  z16 p0   124          (27,557 before the period was fixed)
+      line_pattern_p  z16 p0   123          (27,557 before the period was fixed)
 
-  The z16 row leans 46.8% brighter, which is the antialiasing class; six pixels is under the
+  The z16 row leans 47.2% brighter, which is the antialiasing class; six pixels is under the
   twenty `lean.py` needs for the question to have an answer. Pitched the same cameras read 17 and
   101, and the 101 leans 49.5%.
 
@@ -236,26 +236,33 @@ that.
                                       21,823              both fixed
                                            0              and the pass right
 
-  **In the sweep at z14 north-up, where it reads 0.** The 21,823 was the *pass*. mbgl marks a
-  background `Opaque | Translucent` only when it is opaque; one with a pattern, an opacity under
-  one, or a color that is not opaque is `Translucent` alone (`render_background_layer.cpp:59`).
-  This side marked both for every background, and the opaque pass is drawn by replacement -- so
-  the sprite's transparent texels were written over the frame instead of blended, which is every
-  pixel of the sprite's padding and every antialiased edge inside it. That is also why it scaled
-  with the sprite's own contrast:
+  **In the sweep at both levels north-up, where it reads 0 and 0**, and it found two defects to
+  get there.
 
-      interstate_3    contrast 244   21,823 -> 0
-      grass_pattern   contrast  14      174 -> 0
-      sand_noise      contrast   9        0
+  The *pass*: mbgl marks a background `Opaque | Translucent` only when it is opaque, and one with
+  a pattern, an opacity under one, or a color that is not opaque is `Translucent` alone
+  (`render_background_layer.cpp:59`). This side marked both for every background, and the opaque
+  pass is drawn by replacement -- so the sprite's transparent texels were written over the frame
+  instead of blended. 21,823 at z14, and the scene's whole number until tessella#401.
 
-  The scene keeps `interstate_3` because that contrast is what makes it catch anything: over
-  `sand_noise` the broken drawable block of tessella#398 read 0 as well.
+  The *atlas*: the border around a packed sprite was the atlas's clear, where mbgl fills a
+  pattern's border with the image's own opposite edge so that a tiled copy wraps into itself.
+  A linear sample at the seam blended with nothing instead, which is a thin outline around every
+  copy -- 4,396 at z16, in 21 columns spaced exactly one pattern period apart, and below the
+  threshold at z14 where the seams fall differently against the pixel grid. tessella#397.
 
-  **The other cameras are not held, and tessella#397 stays open for them.** z16 reads 4,396 and
-  the pitched pair 3,168 and 3,442. It is not a phase difference and not a scale one -- folding
-  both frames over the 48-by-39 lattice and correlating gives a best lag of zero on both axes at
-  both zooms -- and it is the background alone: a `fill-pattern` of the same sprite over the same
-  viewport reads **0** at z16 and at pitch 60.
+      background_pattern_p  z14 p0   462,804 of 786,432   the drawable block and the atlas size
+                                      21,823              the pass
+                                           0              the border
+      background_pattern_p  z16 p0     4,396 -> 0         the border, where it crosses 48
+
+  The two had to be found in that order: with the pass still wrong the border is a fifth of the
+  number, and an experiment that wrapped the border alone moved 21,823 to 22,090 and read as a
+  disproof. See `a-residual-needs-a-control` for the rule that cost.
+
+  The scene keeps `interstate_3` because its contrast is what makes it catch anything: over
+  `sand_noise` the broken drawable block read 0 as well. Pitched it reads 4 and 3, which is the
+  antialiasing floor of a pattern whose every copy has an edge.
 
 - `heat_p` — a heatmap over Berlin's POIs. Captured before any heatmap code existed, so the
   design behind it had a referee rather than an argument; it stood at `gross 271571 (34.532%)`

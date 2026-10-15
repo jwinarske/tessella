@@ -120,6 +120,7 @@ fn sent(style: &str, sprites: bool) -> Vec<Sent> {
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
+        pattern_positions: &positions,
         pixels: &pixels,
         history: ZoomHistory::new(),
     };

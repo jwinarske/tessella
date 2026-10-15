@@ -105,6 +105,7 @@ fn each_feature_gets_the_sprite_its_expression_names() {
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
+        pattern_positions: &positions,
         pixels: &pixels,
         history: ZoomHistory::new(),
     };
@@ -183,6 +184,7 @@ fn an_atlas_without_the_sprites_resolves_to_nothing() {
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
+        pattern_positions: &positions,
         pixels: &pixels,
         history: ZoomHistory::new(),
     };

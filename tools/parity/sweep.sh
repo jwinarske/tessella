@@ -45,15 +45,15 @@
 # unmasked. 97.4% of the 378 are darker on this side, which is what a surface blended twice looks
 # like; the 10 are the antialiasing floor. tessella#312.
 #
-# The patterned extrusion holds 37 flat and 760 pitched, and the second is larger for the sprite's
+# The patterned extrusion holds 37 flat and 725 pitched, and the second is larger for the sprite's
 # own edges rather than for anything about the family: it is a 48x39 picture tiled over every roof
 # and wall, so there are far more edges to round than a colored surface has. Both lean about half
 # brighter. The scene draws nothing at all on a consumer with no patterned material, which is what
 # it read before fluorite-game/tessella_fluorite#40: 147,603.
 #
-# The patterned background holds 0, which is what a family with nothing left over reads.
+# The patterned background holds 0 and 0, which is what a family with nothing left over reads.
 #
-# The patterned line holds 6 and 124, and the second number is the one with something in it: the
+# The patterned line holds 6 and 123, and the second number is the one with something in it: the
 # z16 camera draws z15 tiles, because the scene's source stops there, and a pattern's period is
 # measured against the *view's* integer zoom. Measured against the tile's own level instead it is
 # the same sixteen at every zoom and the sprite is drawn over twice the distance -- 27,557. The
@@ -144,13 +144,15 @@ bash "$P/parity.sh" extrusion_pattern_p 52.52 13.405 16 1024 768 60 0
 # arithmetic through the plain line's gamma scale and is held by `families_p` already.
 bash "$P/parity.sh" line_pattern_p 52.52 13.405 14 1024 768 0 0
 bash "$P/parity.sh" line_pattern_p 52.52 13.405 16 1024 768 0 0
-# The patterned background, north-up at street zoom, where it is exact. The layer is the whole
-# viewport, which is what makes it the sharpest test of a pattern's placement here -- and what
-# made the pass it is drawn in visible: marked for the opaque pass, which draws by replacement,
-# it wrote the sprite's transparent texels over the frame rather than blending them, for 21,823.
-# The other cameras are not held: z16 reads 4,396 and the pitched pair 3,168 and 3,442, which is
-# neither a phase nor a scale difference and is not understood yet. See the README and #397.
+# The patterned background at both levels, north-up, where it is exact. The layer is the whole
+# viewport, which is what makes it the sharpest test of a pattern's placement here -- and it
+# found two defects at once. The pass: marked for the opaque pass, which draws by replacement, it
+# wrote the sprite's transparent texels over the frame rather than blending them, for 21,823. And
+# the atlas: the border around a sprite was the clear where mbgl wraps the image's opposite edge
+# into it, so a linear sample at the seam between two copies blended with nothing -- 4,396 at
+# z16, where the seams fall across pixel centers, and under the threshold at z14.
 bash "$P/parity.sh" background_pattern_p 52.52 13.405 14 1024 768 0 0
+bash "$P/parity.sh" background_pattern_p 52.52 13.405 16 1024 768 0 0
 bash "$P/parity.sh" terrain_families_p 52.52 13.405 9 2400 900 0
 # Five cameras, not two. The first two were the gate for a while and they are the two kindest in
 # the whole space: every other pitch and every zoom past the DEM's own is far worse, and holding

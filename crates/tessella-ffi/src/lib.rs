@@ -448,6 +448,9 @@ fn hand_over_sheet(state: &mut MapState) {
             u16::try_from(height).unwrap_or(u16::MAX),
         ],
         positions: sheet.positions().clone(),
+        // The second packing, bordered for tiling. A patterned layer reads it and a symbol's
+        // icons do not -- see `IconAtlas::add_pattern`.
+        pattern_positions: sheet.pattern_positions().clone(),
         pixels: sheet.atlas().pixels().to_vec(),
     });
 }

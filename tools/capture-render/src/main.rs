@@ -537,6 +537,7 @@ fn run() -> Result<String, String> {
                 u16::try_from(height).unwrap_or(u16::MAX),
             ],
             positions: sprites.positions(),
+            pattern_positions: sprites.pattern_positions(),
             pixels: sprites.atlas().pixels(),
             // No crossfade: this tool draws one settled frame, so there is no zoom crossing for a
             // pattern to be fading across. `Patterns::crossfade` passes mbgl's "no time" sentinel

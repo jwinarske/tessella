@@ -72,6 +72,10 @@ pub struct SpriteAtlas {
     pub size: [u16; 2],
     /// Where each sprite was packed, by name.
     pub positions: alloc::collections::BTreeMap<alloc::string::String, IconPosition>,
+    /// Where each sprite's *pattern* copy was packed: the same images with their borders filled
+    /// by their own opposite edges, so a tiled one wraps into itself. A caller with no such
+    /// packing may hand over the icon map again, which is the picture this drew before.
+    pub pattern_positions: alloc::collections::BTreeMap<alloc::string::String, IconPosition>,
     /// The pixels, RGBA. Uploaded before any drawable names the texture.
     pub pixels: Vec<u8>,
 }
@@ -1482,6 +1486,7 @@ impl Map {
             texture: sprites.texture,
             size: sprites.size,
             positions: &sprites.positions,
+            pattern_positions: &sprites.pattern_positions,
             pixels: &sprites.pixels,
             history: self.zoom,
         });
