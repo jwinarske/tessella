@@ -1503,3 +1503,68 @@ fn a_dash_atlas_is_sent_once_per_atlas_and_not_per_frame() {
          per-frame cost: {textures_per_frame:?}"
     );
 }
+
+/// A drawable this frame announced is not displaced in the same frame.
+///
+/// DR-21's displacement is for a drawable the consumer already holds: the release and the
+/// forgetting are how the *next* frame comes to announce it into a fresh slab. Applied to one
+/// this frame has just announced, it releases the bytes of the record it has just written — the
+/// arena sweeps that slab at the frame's commit, before a consumer draining at its own pace has
+/// read a record of the frame — and tells the consumer to drop a drawable it was given a moment
+/// ago. Both halves of that are wrong and the consumer cannot tell: the announcement arrives with
+/// an index reference that resolves to nothing and is dropped at the far end against a counter.
+///
+/// tessella#403 is what it cost: four of a basemap's label drawables, announced and displaced in
+/// the same frame, on a frame that then settled with nothing to follow it. 857 gross pixels on
+/// `display-a-popup-on-hover`, and invisible on a moving map because the next frame repairs it.
+#[test]
+fn a_drawable_announced_this_frame_is_not_displaced() {
+    use tessella_orchestrate::registry::{DrawableKey, GeometryRegistry};
+
+    let mut arena = SlabArena::new();
+    // A slab mostly nobody wants: a kilobyte written and sixteen bytes of it held. The
+    // threshold the frame uses is a quarter, so 0.015 is far below it and the slab is exactly
+    // what displacement exists for.
+    let held = arena.alloc(&[7u8; 16]);
+    let _dead = arena.alloc(&[0u8; 1008]);
+    arena.seal();
+    arena.retain(held);
+    let fraction = arena
+        .live_fraction(held.slab)
+        .expect("the slab is sealed and this is its id");
+    assert!(
+        fraction > 0.0 && fraction < 0.25,
+        "the slab has to be below the compaction threshold for this to be about anything: \
+         {fraction}"
+    );
+
+    let key = DrawableKey {
+        tile: None,
+        layer_index: 3,
+        sub_layer_index: 0,
+    };
+    let mut registry = GeometryRegistry::default();
+    registry.begin_frame(tessella_capture_abi::envelope::ViewId(0));
+    let id = registry.id_for(key, [1; 5]);
+    registry.record_refs(key, vec![held], 0);
+
+    assert!(
+        registry.displaceable(&arena, 0.25).is_empty(),
+        "geometry {} was announced by this very frame and must not be displaced in it",
+        id.0
+    );
+
+    // And the frame after, which is what displacement is for: the consumer holds it now, so
+    // letting it go to move its bytes is the whole point.
+    registry.begin_frame(tessella_capture_abi::envelope::ViewId(0));
+    registry.id_for(key, [1; 5]);
+    assert_eq!(
+        registry
+            .displaceable(&arena, 0.25)
+            .into_iter()
+            .map(|(_, id)| id.0)
+            .collect::<Vec<_>>(),
+        vec![id.0],
+        "a frame later it is displaceable, or compaction never happens at all"
+    );
+}

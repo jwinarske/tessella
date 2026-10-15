@@ -80,23 +80,33 @@ The sweep's numbers as of 2026-09-16, which is the gate:
 `holes` is the other measure, for the one scene nothing can be compared against: pixels of a color
 the scene uses for nothing but its background. See `terrain_cover_p` below.
 
-### Where the example suite's residual is, as of 2026-09-24
+### Where the example suite's residual is, as of 2026-10-15
 
-`examples.sh` reads **2,233 gross over 59 cameras**, with **30 of the 59 at exactly zero**. That is
+`examples.sh` reads **2,032 gross over 59 cameras**, with **30 of the 59 at exactly zero**. That is
 measured with fill outlines off, which is what that suite compares now and why: mbgl's two outline
 paths disagree with each other and this side can only take one of them, so leaving them in put 90%
 of the number beyond reach of any change. See `no_fill_antialias.py`.
 
-Every one of the 2,233 is accounted for, by running `lean.py` over the ranking:
+Every one of the 2,032 is accounted for, by running `lean.py` over the ranking:
 
 | | gross | |
 |---|---|---|
-| antialiasing jitter | 989 | 44% -- reads near 50%, finished |
-| the circle-edge floor | 711 | 32% -- one-sided by construction, see the golden README |
-| tessella#297 | 237 | 11% -- a translucent fill-extrusion blended once per tile that carries it |
-| mixed | 223 | 10% -- `add-a-pattern-to-a-polygon`, `render-world-copies` and one more |
+| antialiasing jitter | 989 | 49% -- reads near 50%, finished |
+| the circle-edge floor | 711 | 35% -- one-sided by construction, see the golden README |
+| mixed | 223 | 11% -- `add-a-pattern-to-a-polygon` 139, `render-world-copies` 64 and one more |
 | silhouette and edge effects | 65 | 3% -- `display-buildings-in-3d` 41 and the multidirectional hillshade 24 |
-| everything else | 8 | across seven slugs |
+| the viewport-anchored light | 20 | `animate-map-camera-around-a-point`, 95% one-sided |
+| everything else | 24 | across forty-one slugs, none above eight |
+
+Two rows left this table since the figure above was 2,233 on 2026-09-24, and both are worth more
+than the arithmetic. **tessella#297's 237** went when the Filament consumer gained its draw-once
+stencil mask (fluorite-game/tessella_fluorite#37): `extrude-polygons-for-3d-indoor-mapping` reads 4.
+And **857** went with tessella#403, which is a *regression this suite caught and the five-camera
+sweep did not*: four of a basemap's label drawables, announced and displaced in the same frame, on
+`display-a-popup-on-hover`. It read 1 before tessella#303 and 858 after, and every row of the sweep
+stayed where it was through both -- which is the argument for keeping this suite rather than a
+claim about why. A hundred and twenty layers of somebody else's basemap is a shape none of the
+scenes here have.
 
 **The largest single camera not covered by a named cause is 41 pixels.** That is the useful form of
 this table: not that the suite is finished, but that nothing is hiding in it above forty pixels, so
@@ -109,10 +119,10 @@ pixel. It is a boundary effect of the same kind as the two floors above, which i
 with them rather than carried as an open question -- and it is emphatically not tessella#297, whose
 signature needs a translucent layer and a depth pass.
 
-`#297` is worth the note that it covers two examples, not one -- `extrude-polygons-for-3d-indoor-mapping`
-at `fill-extrusion-opacity` 0.5 and `animate-map-camera-around-a-point` at 0.8. A third extrusion
-example, `display-buildings-in-3d`, leaves its opacity at the default and is therefore opaque, which
-is why its 41 is *not* that issue and stays unexplained.
+`#297` covered two examples rather than one -- `extrude-polygons-for-3d-indoor-mapping` at
+`fill-extrusion-opacity` 0.5 and `animate-map-camera-around-a-point` at 0.8 -- and both are below
+twenty now. A third extrusion example, `display-buildings-in-3d`, leaves its opacity at the default
+and is therefore opaque, which is why its 41 was *not* that issue and is in the silhouette row.
 
 ## Properties no camera here can settle
 
