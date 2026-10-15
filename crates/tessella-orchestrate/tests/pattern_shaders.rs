@@ -689,3 +689,125 @@ fn an_extrusion_pattern_binds_its_own_shader() {
     );
     assert_eq!([word(32), word(36)], [512.0, 512.0], "the atlas size");
 }
+
+/// A patterned extrusion's sprite is sampled as mbgl samples it: nearest flat, linear pitched.
+///
+/// mbgl binds the sheet through `DrawableAtlasesTweaker` with `sdfIcons` false, where the
+/// patterned *fill* passes true and says "to force linear filter" beside it. What is left of
+/// `sdfIcons || isChanging || iconScaled || transformed` for this family is `transformed`, which
+/// for a layer with no rotation alignment is the pitch alone.
+///
+/// Measured rather than deduced: sampling it linearly on a flat camera costs
+/// `tools/parity/scenes/extrusion_pattern_p` 356 gross pixels at z14 against 37, and a sprite with
+/// finer detail than `interstate_3` costs tens of thousands.
+///
+/// What this does not hold is the elevation reference that rides in the same list on a raised
+/// frame. It takes `TextureFilter::Linear` outright -- see `geometry_add_textured` -- because a
+/// DEM read nearest steps the ground at a texel boundary, and that is a property of the slot
+/// rather than of the camera.
+#[test]
+fn an_extrusion_patterns_sampler_follows_the_pitch() {
+    use tessella_capture_abi::envelope::{TextureFilter, TextureRef};
+
+    /// Every filter the patterned extrusion drawables of one frame ask for, at this pitch.
+    fn filters(pitch: f64) -> Vec<u32> {
+        let positions = atlas();
+        let pixels = vec![0u8; 512 * 512 * 4];
+        let patterns = Patterns {
+            revision: 0,
+            texture: TextureId(20),
+            size: [512, 512],
+            positions: &positions,
+            pixels: &pixels,
+            history: ZoomHistory::new(),
+        };
+        let style = Style::parse(
+            r#"{"version": 8, "sources": {"s": {"type": "vector", "tiles": []}},
+                "layers": [{"id": "e", "type": "fill-extrusion", "source": "s",
+                            "source-layer": "water",
+                            "paint": {"fill-extrusion-pattern": "sand_noise",
+                                      "fill-extrusion-height": 20}}]}"#,
+        )
+        .expect("parses");
+        let view = camera::settled(&ViewTransform {
+            longitude: 0.0,
+            latitude: 0.0,
+            zoom: 2.0,
+            width: 512.0,
+            height: 512.0,
+            bearing: 0.0,
+            pitch,
+            ground_below: 0.0,
+        });
+        let tiles = cover::cover(&view).expect("covers");
+        let decoded = Tile::decode(REAL_TILE).expect("decodes");
+        let mut buckets = Vec::new();
+        for tile in &tiles {
+            let id = TileId::new(tile.z, tile.x, tile.y);
+            let built =
+                build_mvt_tile_with_patterns(&style, "s", id, &decoded, None).expect("builds");
+            buckets.push((id, Arc::new(built)));
+        }
+
+        let mut arena = SlabArena::new();
+        let mut ring = Ring::new(1 << 24);
+        let (producer, consumer) = ring.split();
+        frame::emit(
+            producer,
+            &mut arena,
+            &Frame {
+                published_projection: None,
+                projection: ProjectionMode::Mercator,
+                style: &style,
+                view: &view,
+                view_id: ViewId(0),
+                tiles: &tiles,
+                buckets: &buckets,
+                origins: &[],
+                light: &Light::default(),
+                fonts: None,
+                patterns: Some(&patterns),
+                states: None,
+            },
+        )
+        .expect("emits");
+
+        let size = core::mem::size_of::<TextureRef>();
+        let mut found = Vec::new();
+        while let Some(record) = consumer.peek() {
+            if record.kind == EnvelopeKind::GeometryAdd
+                && let Some(add) = GeometryAdd::from_bytes(record.record)
+                // 18 and 19: the patterned roof and its walls.
+                && (add.builtin_shader == 18 || add.builtin_shader == 19)
+            {
+                let start = add.texture_refs.offset as usize;
+                found.extend((0..add.texture_refs.count as usize).filter_map(|index| {
+                    record
+                        .payload
+                        .get(start + index * size..)
+                        .and_then(TextureRef::from_bytes)
+                        .map(|reference| reference.filter)
+                }));
+            }
+            let consumed = record.consumed();
+            consumer.advance(consumed);
+        }
+        found
+    }
+
+    let flat = filters(0.0);
+    assert!(!flat.is_empty(), "no patterned extrusion was emitted");
+    assert!(
+        flat.iter().all(|&f| f == TextureFilter::Nearest as u32),
+        "a flat camera samples the sheet nearest: {flat:?}"
+    );
+
+    // Not the same count as the flat camera's: a pitched cover reaches further and holds more
+    // tiles. What is held is that every one of them asks for the other sampler.
+    let pitched = filters(45.0);
+    assert!(!pitched.is_empty(), "no patterned extrusion was emitted");
+    assert!(
+        pitched.iter().all(|&f| f == TextureFilter::Linear as u32),
+        "a pitched camera samples the sheet linearly: {pitched:?}"
+    );
+}

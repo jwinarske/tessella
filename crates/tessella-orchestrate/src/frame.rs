@@ -2467,11 +2467,12 @@ struct Encoding<'a> {
     patterns: Option<&'a Patterns<'a>>,
     /// Where this tile's own pictures went -- imagery, slope field, elevation.
     textures: TileTextures,
-    /// Whether the camera is pitched at all, which decides an icon's sampler.
+    /// Whether the camera is pitched at all, which decides a sampler for two families.
     ///
     /// mbgl's `iconTransformed`: `rotationAlignment == Map || state.getPitch() != 0`. A pitched
     /// icon is being resampled whatever its size says, so nearest leaves its edges hard where
-    /// mbgl's are blended.
+    /// mbgl's are blended. A patterned extrusion reads the same term through
+    /// [`extrusion_pattern_filter`], where it is the whole of the test rather than one half of it.
     pitched: bool,
     /// The camera's zoom, which a pattern's fade is chosen at.
     zoom: f64,
@@ -4199,6 +4200,7 @@ fn encode_parts(
                 &attributes,
                 key,
                 atlas,
+                extrusion_pattern_filter(pitched),
                 // The ground the building stands on, where one is under it.
                 raised.then_some(textures.terrain),
             );
@@ -4540,11 +4542,42 @@ fn encode_parts(
             &wall_layout,
             key,
             extrusion_atlas,
+            // The roof's filter, for the roof's reason: the two are one building and sample one
+            // sprite.
+            extrusion_pattern_filter(pitched),
             // The same ground as the roof's: the two are one building.
             extrusion_elevation,
         ));
     }
     Some(parts)
+}
+
+/// How a patterned extrusion's sprite sheet is sampled.
+///
+/// mbgl binds it through `DrawableAtlasesTweaker` and takes
+/// `sdfIcons || isChanging || iconScaled || transformed` for the filter, with `sdfIcons` false --
+/// where the patterned *fill* passes true and says "to force linear filter" beside it, which is
+/// why only this family needs the test. `iconScaled` is an icon's business and a frame rendered
+/// to completion is not changing, so what is left is `transformed`: a rotation alignment this
+/// family has none of, or a pitch.
+///
+/// So: nearest on a flat camera, which keeps the sprite's texels on pixel boundaries, and linear
+/// the moment the roof is foreshortened. Sampling it linearly either way costs 356 gross pixels
+/// of `extrusion_pattern_p` at z14 against 37, and a sprite with finer detail costs thousands.
+///
+/// Asked for every extrusion rather than only a patterned one, and that costs nothing: a layer
+/// with no sheet binds no texture, so the answer reaches no reference. The ground a raised
+/// extrusion stands on is not one either -- see `geometry_add_textured`, which gives the elevation
+/// its own filter.
+///
+/// See [`SymbolLayout::icons_need_linear`](tessella_layout::symbol_layout) for the same test on
+/// an icon, which reads the style as well because an icon has a size to be scaled by.
+fn extrusion_pattern_filter(pitched: bool) -> tessella_capture_abi::envelope::TextureFilter {
+    if pitched {
+        tessella_capture_abi::envelope::TextureFilter::Linear
+    } else {
+        tessella_capture_abi::envelope::TextureFilter::Nearest
+    }
 }
 
 /// Whether a layer names a pattern its sprites cannot draw yet.

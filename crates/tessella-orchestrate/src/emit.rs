@@ -1722,7 +1722,12 @@ fn geometry_add_textured(
             refs.push(TextureRef {
                 texture: elevation,
                 slot: TERRAIN_ELEVATION_SLOT,
-                filter: filter as u32,
+                // Linear, and not the caller's. `filter` is how slot zero is sampled -- an icon
+                // at its own size wants nearest, and a patterned extrusion on a flat camera wants
+                // it too -- and the ground a drawable stands on has nothing to do with either. A
+                // DEM read nearest steps the height a tile at a texel boundary, which is a
+                // terrace across every raised surface.
+                filter: TextureFilter::Linear as u32,
             });
         }
         refs
@@ -2563,6 +2568,7 @@ pub fn encode_extrusion(
     attributes: &[u8],
     permutation_key: u64,
     pattern_atlas: Option<TextureId>,
+    filter: TextureFilter,
     elevation: Option<TextureId>,
 ) -> (Encoded, ExtrusionShared) {
     let mut vertex_bytes = Vec::with_capacity(bucket.vertices.len() * EXTRUSION_STRIDE as usize);
@@ -2614,7 +2620,7 @@ pub fn encode_extrusion(
         &bucket.segments,
         shader,
         pattern_atlas.as_slice(),
-        TextureFilter::Linear,
+        filter,
         elevation,
     );
     (roof, shared)
@@ -2681,6 +2687,7 @@ const WALL_STRIDE: u32 = 4;
 /// table is what says which binding each takes, and it disagrees with the non-instanced shader's
 /// numbering: `idFillExtrusionOutlinePosAttribute` is attribute 2 at binding 1 where the roof's
 /// attribute 2 is its normal.
+#[allow(clippy::too_many_arguments)]
 pub fn encode_extrusion_walls(
     arena: &mut SlabArena,
     geometry: GeometryId,
@@ -2688,6 +2695,7 @@ pub fn encode_extrusion_walls(
     layout: &VertexLayout,
     permutation_key: u64,
     pattern_atlas: Option<TextureId>,
+    filter: TextureFilter,
     elevation: Option<TextureId>,
 ) -> Encoded {
     let shader = if pattern_atlas.is_some() {
@@ -2780,7 +2788,7 @@ pub fn encode_extrusion_walls(
         core::slice::from_ref(&segment),
         shader,
         pattern_atlas.as_slice(),
-        TextureFilter::Linear,
+        filter,
         elevation,
     )
 }

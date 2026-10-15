@@ -1,6 +1,14 @@
 {
  "version": 8,
  "name": "extrusion pattern",
+ "light": {
+  "position": [
+   1.15,
+   210,
+   64
+  ],
+  "intensity": 0.8
+ },
  "glyphs": "http://127.0.0.1:8081/glyphs/{fontstack}/{range}.pbf",
  "sprite": "http://127.0.0.1:8081/sprites/emerald",
  "sources": {
@@ -79,7 +87,7 @@
      "min_height"
     ],
     "fill-extrusion-opacity": 0.9,
-    "fill-extrusion-pattern": "sand_noise"
+    "fill-extrusion-pattern": "interstate_3"
    }
   },
   {
