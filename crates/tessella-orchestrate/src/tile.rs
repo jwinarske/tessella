@@ -1357,6 +1357,30 @@ fn copy_reaches(feature: &GeoJsonFeature, tile: TileId, shift: i8, lo: f64, hi: 
     x(west) <= hi && x(east) >= lo
 }
 
+/// Whether a background layer draws in the translucent pass alone.
+///
+/// mbgl's rule, `render_background_layer.cpp:59`: a background with a pattern, an opacity under
+/// one, or a color that is not opaque is `Translucent`; one that is opaque is
+/// `Opaque | Translucent` and the consumer's cutoff decides. The distinction is not cosmetic --
+/// the opaque pass draws by replacement, so a patterned background placed in it writes the
+/// sprite's transparent texels over the frame instead of blending them.
+///
+/// The *pattern* test is whether the style wrote the property, not whether it resolved:
+/// `resolve_paint` gives every property its spec default, so asking the resolved paint would
+/// answer for every style ever written. `frame`'s own `pattern_pending` makes the same
+/// distinction for the same reason.
+#[must_use]
+pub fn background_is_translucent(layer: &tessella_style::Layer, zoom: f64) -> bool {
+    if layer.paint.contains_key("background-pattern") {
+        return true;
+    }
+    let Ok(paint) = resolve_paint(layer) else {
+        return false;
+    };
+    crate::ubo::background_opacity(&paint, zoom) < 1.0
+        || crate::ubo::background_color_alpha(&paint, zoom) < 1.0
+}
+
 /// Whether the style's background is the one the oracle replaces with a clear.
 ///
 /// mbgl does not draw such a layer at all. `RenderOrchestrator` recognizes it —

@@ -477,3 +477,72 @@ fn rebuilding_an_identical_order_is_not_a_change() {
     }
     assert_eq!(producer.head(), head);
 }
+
+/// A background's passes come from its paint, which is mbgl's rule and not the family's.
+///
+/// `render_background_layer.cpp:59`:
+///
+/// ```text
+/// passes = opacity == 0 ? None
+///        : (pattern defined || opacity < 1 || color.a < 1) ? Translucent
+///        : Opaque | Translucent;
+/// ```
+///
+/// The middle arm is what this holds. It is not bookkeeping: the opaque pass is drawn *by
+/// replacement*, so a patterned background marked for it writes the sprite's transparent texels
+/// over the frame rather than blending them -- `tools/parity/scenes/background_pattern_p` read
+/// 21,823 gross pixels of 786,432 against the oracle and reads **0** with the pass right.
+///
+/// The opaque case is held here too, because dropping the opaque half from every background
+/// would be the other way to be wrong: mbgl marks an opaque one for both and leaves the choice
+/// to the consumer's own `opaquePassCutoff`.
+#[test]
+fn a_backgrounds_passes_come_from_its_paint() {
+    use tessella_capture_abi::generated::mbgl_enums::RenderPass;
+    use tessella_orchestrate::tile::background_is_translucent;
+
+    let style = |paint: &str| {
+        Style::parse(&format!(
+            r#"{{"version": 8, "sources": {{}},
+                "layers": [{{"id": "bg", "type": "background", "paint": {paint}}}]}}"#
+        ))
+        .expect("parses")
+    };
+    let translucent = |paint: &str| {
+        let style = style(paint);
+        background_is_translucent(style.layers.first().expect("one layer"), 14.0)
+    };
+
+    assert!(
+        !translucent(r##"{"background-color": "#ffffff"}"##),
+        "an opaque background is marked for both passes"
+    );
+    assert!(
+        translucent(r#"{"background-pattern": "sand_noise"}"#),
+        "a patterned background is translucent, whatever the sprite resolves to"
+    );
+    assert!(
+        translucent(r##"{"background-color": "#ffffff", "background-opacity": 0.5}"##),
+        "an opacity under one is translucent"
+    );
+    assert!(
+        translucent(r#"{"background-color": "rgba(255, 255, 255, 0.5)"}"#),
+        "a color that is not opaque is translucent"
+    );
+    // The style's own property, not the resolved one: `resolve_paint` gives every property its
+    // spec default, so asking the resolved paint would answer yes for every style ever written.
+    assert!(
+        !translucent(r#"{}"#),
+        "a background that sets nothing is the opaque case"
+    );
+
+    // And the two values that reach the wire, so the test fails if either constant moves.
+    assert_eq!(
+        tessella_orchestrate::view::background_pass(),
+        RenderPass::OPAQUE | RenderPass::TRANSLUCENT
+    );
+    assert_eq!(
+        tessella_orchestrate::view::background_translucent_pass(),
+        RenderPass::TRANSLUCENT
+    );
+}

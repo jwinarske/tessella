@@ -1384,6 +1384,27 @@ pub fn fill_props_from_paint(
     )
 }
 
+/// A background's evaluated opacity, for the pass test.
+///
+/// The same reader the block uses, so the pass and the uniform cannot disagree about what the
+/// style asked for.
+#[must_use]
+pub fn background_opacity(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    zoom: f64,
+) -> f32 {
+    uniform_number(paint, "background-opacity", zoom)
+}
+
+/// A background's evaluated color alpha, for the same test.
+#[must_use]
+pub fn background_color_alpha(
+    paint: &alloc::collections::BTreeMap<&'static str, ResolvedProperty>,
+    zoom: f64,
+) -> f32 {
+    uniform_color(paint, "background-color", zoom).a
+}
+
 /// A background layer's properties, from its resolved paint.
 #[must_use]
 pub fn background_props_from_paint(

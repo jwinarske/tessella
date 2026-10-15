@@ -234,25 +234,29 @@ that.
 
       background_pattern_p  z14 p0   462,804 of 786,432   both wrong
                                       21,823              both fixed
+                                           0              and the pass right
 
-  **Not in the sweep**, and tessella#397 is why. What is left reads as a softer sample rather than
-  a displaced one: both sides repeat at 48 by 39 pixels and the best alignment between them is
-  (0, 0) in every window, but folding the frame over that lattice and averaging gives a cell with
-  *less contrast* on this side -- a column profile of 110 to 125 against the oracle's 116 to 130.
-  It scales with the sprite's own contrast and with nothing else:
+  **In the sweep at z14 north-up, where it reads 0.** The 21,823 was the *pass*. mbgl marks a
+  background `Opaque | Translucent` only when it is opaque; one with a pattern, an opacity under
+  one, or a color that is not opaque is `Translucent` alone (`render_background_layer.cpp:59`).
+  This side marked both for every background, and the opaque pass is drawn by replacement -- so
+  the sprite's transparent texels were written over the frame instead of blended, which is every
+  pixel of the sprite's padding and every antialiased edge inside it. That is also why it scaled
+  with the sprite's own contrast:
 
-      interstate_3    contrast 244   21,823
-      grass_pattern   contrast  14      174
+      interstate_3    contrast 244   21,823 -> 0
+      grass_pattern   contrast  14      174 -> 0
       sand_noise      contrast   9        0
 
-  And it is the background rather than the sprite or the atlas: `families_p` with
-  `fill-pattern: interstate_3` on its parks reads **15** over 229,833 pixels of parks, four
-  hundred times less per covered pixel, through the same sheet, the same rectangles and the same
-  arithmetic.
+  The scene keeps `interstate_3` because that contrast is what makes it catch anything: over
+  `sand_noise` the broken drawable block of tessella#398 read 0 as well.
 
-  The scene keeps `interstate_3` even so, because that contrast is what makes it catch the
-  arithmetic at all: over `sand_noise` the broken drawable block reads 0 too. The row joins the
-  sweep when the sampling does.
+  **The other cameras are not held, and tessella#397 stays open for them.** z16 reads 4,396 and
+  the pitched pair 3,168 and 3,442. It is not a phase difference and not a scale one -- folding
+  both frames over the 48-by-39 lattice and correlating gives a best lag of zero on both axes at
+  both zooms -- and it is the background alone: a `fill-pattern` of the same sprite over the same
+  viewport reads **0** at z16 and at pitch 60.
+
 - `heat_p` — a heatmap over Berlin's POIs. Captured before any heatmap code existed, so the
   design behind it had a referee rather than an argument; it stood at `gross 271571 (34.532%)`
   then and is at **0** now. Not in the sweep because the sweep is the five-camera gate.

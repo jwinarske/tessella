@@ -61,14 +61,35 @@ pub fn tiled_flags() -> DrawFlags {
     DrawFlags::ENABLE_STENCIL | DrawFlags::ENABLE_DEPTH | DrawFlags::ENABLE_COLOR
 }
 
-/// The pass a background draws in.
+/// The pass a background draws in when nothing about its paint says otherwise.
 ///
-/// `Opaque | Translucent`, which is what the oracle emits. A background is opaque where its
-/// color is opaque, and marking both leaves the choice to the consumer's own opaque-pass
-/// cutoff rather than committing per frame.
+/// `Opaque | Translucent`, which is what the oracle emits for an *opaque* background: it is
+/// marked for both and the consumer's own opaque-pass cutoff decides. A background that is not
+/// opaque takes [`background_translucent_pass`] instead, and the test is
+/// [`crate::tile::background_is_translucent`] -- which the frame applies, because the answer
+/// depends on the zoom and a bucket is built knowing none.
 #[must_use]
 pub fn background_pass() -> RenderPass {
     RenderPass::OPAQUE | RenderPass::TRANSLUCENT
+}
+
+/// The pass a background draws in when its paint is not opaque.
+///
+/// mbgl's rule, `render_background_layer.cpp:59`:
+///
+/// ```text
+/// passes = opacity == 0 ? None
+///        : (pattern defined || opacity < 1 || color.a < 1) ? Translucent
+///        : Opaque | Translucent;
+/// ```
+///
+/// The middle arm is the one this is. It matters because the opaque pass is drawn *by
+/// replacement*: a patterned background put in it writes the sprite's transparent texels over
+/// the frame rather than blending them, which is every pixel of the pattern's own padding and
+/// every antialiased edge inside it.
+#[must_use]
+pub fn background_translucent_pass() -> RenderPass {
+    RenderPass::TRANSLUCENT
 }
 
 /// Draw state for a circle.
