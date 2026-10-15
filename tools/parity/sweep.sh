@@ -51,6 +51,8 @@
 # brighter. The scene draws nothing at all on a consumer with no patterned material, which is what
 # it read before fluorite-game/tessella_fluorite#40: 147,603.
 #
+# The patterned background holds 0, which is what a family with nothing left over reads.
+#
 # The patterned line holds 6 and 124, and the second number is the one with something in it: the
 # z16 camera draws z15 tiles, because the scene's source stops there, and a pattern's period is
 # measured against the *view's* integer zoom. Measured against the tile's own level instead it is
@@ -142,6 +144,13 @@ bash "$P/parity.sh" extrusion_pattern_p 52.52 13.405 16 1024 768 60 0
 # arithmetic through the plain line's gamma scale and is held by `families_p` already.
 bash "$P/parity.sh" line_pattern_p 52.52 13.405 14 1024 768 0 0
 bash "$P/parity.sh" line_pattern_p 52.52 13.405 16 1024 768 0 0
+# The patterned background, north-up at street zoom, where it is exact. The layer is the whole
+# viewport, which is what makes it the sharpest test of a pattern's placement here -- and what
+# made the pass it is drawn in visible: marked for the opaque pass, which draws by replacement,
+# it wrote the sprite's transparent texels over the frame rather than blending them, for 21,823.
+# The other cameras are not held: z16 reads 4,396 and the pitched pair 3,168 and 3,442, which is
+# neither a phase nor a scale difference and is not understood yet. See the README and #397.
+bash "$P/parity.sh" background_pattern_p 52.52 13.405 14 1024 768 0 0
 bash "$P/parity.sh" terrain_families_p 52.52 13.405 9 2400 900 0
 # Five cameras, not two. The first two were the gate for a while and they are the two kindest in
 # the whole space: every other pitch and every zoom past the DEM's own is far worse, and holding

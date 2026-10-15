@@ -1589,6 +1589,26 @@ fn emit_group(
         let mut bindings =
             order::bindings_for(view_id, at, tile_buckets, &mut next_id, fonts.is_some());
 
+        // A background's passes are a property of its paint, which a bucket is built knowing
+        // nothing of -- `bindings_for` emits `Opaque | Translucent`, mbgl's answer for an
+        // opaque one. mbgl drops the opaque half for a background with a pattern, an opacity
+        // under one, or a color that is not opaque (`render_background_layer.cpp:59`), and the
+        // opaque pass is drawn *by replacement*: a patterned background left in it writes the
+        // sprite's transparent texels over the frame rather than blending them. Measured on
+        // `background_pattern_p`, which is what found this.
+        for binding in &mut bindings {
+            let translucent = usize::try_from(binding.layer_index)
+                .ok()
+                .and_then(|index| style.layers.get(index))
+                .is_some_and(|layer| {
+                    matches!(layer.kind, tessella_style::LayerKind::Background)
+                        && crate::tile::background_is_translucent(layer, view.zoom)
+                });
+            if translucent {
+                binding.pass = crate::view::background_translucent_pass();
+            }
+        }
+
         // Raised, where this tile carries an elevation to raise it from. Marked here rather than
         // inside `bindings_for` because it is a property of the *frame* -- which style is drawn
         // and on what surface -- and a bucket is built knowing neither. The consumer reads it to
