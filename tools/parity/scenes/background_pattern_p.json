@@ -1,0 +1,30 @@
+{
+ "version": 8,
+ "name": "background pattern",
+ "sprite": "http://127.0.0.1:8081/sprites/emerald",
+ "sources": {
+  "berlin": {
+   "type": "vector",
+   "url": "http://127.0.0.1:8080/berlin_z15.json"
+  }
+ },
+ "layers": [
+  {
+   "id": "bg",
+   "type": "background",
+   "paint": {
+    "background-pattern": "interstate_3"
+   }
+  },
+  {
+   "id": "roads",
+   "type": "line",
+   "source": "berlin",
+   "source-layer": "roads",
+   "paint": {
+    "line-color": "#333333",
+    "line-width": 2.5
+   }
+  }
+ ]
+}

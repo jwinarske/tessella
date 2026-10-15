@@ -881,6 +881,9 @@ fn emit_into(
                 }
                 arena.sweep();
                 session.record_camera(frame.view_id, key);
+                // And the atlas size, which gates the same block and does not move with the
+                // camera: the sheet lands on the frame it lands on.
+                session.record_atlas(frame.view_id, atlas_size(frame.patterns));
                 session.record_declared(frame.view_id);
                 // And what the consumer now holds. Written here for the reason the camera is:
                 // a texture staged by an attempt that then failed never reached the consumer,
@@ -1276,17 +1279,27 @@ fn emit_group(
         )?;
     }
 
-    // Derived from the viewport, so it moves when the camera does and not otherwise -- and
-    // `camera_key` covers the viewport, so a resize counts as a move. Sound where the per-layer
-    // gate below was not, because this slot is durable on the consumer and `declare` guarantees
-    // a first write: a quiet frame reads the last value, which is still the right one.
-    if camera_moved || declare {
-        // The atlas's own size, not a constant. Nothing reads this field today -- a fill's
-        // pattern texsize reaches the shader through the per-tile properties block -- so [64, 64]
-        // cost nothing and was still a value the wire claimed and did not have.
-        let atlas = patterns.map_or([0.0, 0.0], |patterns| {
-            [f32::from(patterns.size[0]), f32::from(patterns.size[1])]
-        });
+    // Mostly derived from the viewport, so it moves when the camera does -- and `camera_key`
+    // covers the viewport, so a resize counts as a move. Sound where the per-layer gate below
+    // was not, because this slot is durable on the consumer and `declare` guarantees a first
+    // write: a quiet frame reads the last value, which is still the right one.
+    //
+    // Mostly, and the exception is the atlas's own size. A background pattern is the one family that reads
+    // it -- mbgl's `BackgroundPatternShader` takes `paintParams.pattern_atlas_texsize` where a
+    // fill and a line carry the size in their own blocks -- and it divides its rectangles by it,
+    // so a stale zero here draws the layer out of the atlas's edge rather than out of the
+    // sprite.
+    let atlas = atlas_size(patterns);
+    // The camera is not the only thing this block depends on. Everything else in it is derived
+    // from the viewport, which is what made the camera the gate; the sheet is fetched, and it
+    // lands on whatever frame it lands on -- typically with the camera still, which is exactly
+    // when this would not be rewritten. Measured: `background_pattern_p` drew the atlas's corner
+    // over the whole viewport, because the block still said the size it had before the sheet
+    // arrived.
+    let atlas_changed = stream
+        .as_deref()
+        .is_none_or(|session| session.atlas_differs(view_id, atlas));
+    if camera_moved || declare || atlas_changed {
         let global = ubo::GlobalPaintParams::for_view(view, atlas, 1.0).pack();
         ubo::write(
             producer,
@@ -2436,6 +2449,15 @@ const COMPACTION_THRESHOLD: f64 = 0.25;
 #[must_use]
 pub fn camera_key_of(view: &ViewTransform) -> crate::damage::CameraKey {
     camera_key(view)
+}
+
+/// The sprite atlas's size, as the frame-wide block carries it.
+///
+/// Zero where no sheet has arrived, which is a value the block holds until one does.
+fn atlas_size(patterns: Option<&Patterns<'_>>) -> [f32; 2] {
+    patterns.map_or([0.0, 0.0], |patterns| {
+        [f32::from(patterns.size[0]), f32::from(patterns.size[1])]
+    })
 }
 
 fn camera_key(view: &ViewTransform) -> crate::damage::CameraKey {
@@ -4748,10 +4770,49 @@ fn write_layer_state(
                 } else {
                     entries(0)
                 };
-            let buffer = ubo::pack_drawable_buffer(
-                &drawables,
-                ubo_layouts::BACKGROUND_DRAWABLE_UNION_UBO.stride,
-            );
+            // A patterned background writes a wider block at the same slot, and takes the
+            // per-tile path to fill it: `background_covers_viewport` already refuses the
+            // viewport quad for this layer, because the pattern is anchored in world space
+            // through the tile's own origin and a viewport quad has no tile to anchor to.
+            //
+            // The plain block here is a matrix and nothing else, so writing it where the
+            // patterned one is expected leaves the origin and the ratio at zero -- see
+            // `BackgroundPatternDrawableEntry`, and the fill's entry for the same trap found
+            // earlier in the family that has two reasons to carry an origin.
+            let patterned = patterns.is_some_and(|patterns| {
+                patterns
+                    .background_placement(
+                        &paint,
+                        view.zoom,
+                        ubo::uniform_number(&paint, "background-opacity", view.zoom),
+                    )
+                    .is_some()
+            });
+            let buffer = if patterned {
+                let pattern: Vec<ubo::BackgroundPatternDrawableEntry> = matrices(0)
+                    .filter_map(|tile| {
+                        ubo::BackgroundPatternDrawableEntry::for_tile(
+                            view,
+                            projection,
+                            tile.z,
+                            tile.x,
+                            tile.y,
+                            i32::from(tile.wrap),
+                            layer_index,
+                        )
+                        .ok()
+                    })
+                    .collect();
+                ubo::pack_background_pattern_drawable_buffer(
+                    &pattern,
+                    ubo_layouts::BACKGROUND_DRAWABLE_UNION_UBO.stride,
+                )
+            } else {
+                ubo::pack_drawable_buffer(
+                    &drawables,
+                    ubo_layouts::BACKGROUND_DRAWABLE_UNION_UBO.stride,
+                )
+            };
             ubo::write(
                 producer,
                 view_id,

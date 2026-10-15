@@ -727,6 +727,13 @@ struct ViewMemory {
     camera: Option<crate::damage::CameraKey>,
     /// Whether the view has been declared and the constant textures sent.
     declared: bool,
+    /// The sprite atlas's size, as the frame-wide block last carried it.
+    ///
+    /// That block is written when the camera moves, because everything else in it is derived
+    /// from the viewport. The atlas size is not: a sheet that lands while the camera is still
+    /// leaves the block saying the size it had before, which for a sheet that had not arrived
+    /// is zero -- and a background pattern divides its rectangles by it.
+    atlas: Option<[f32; 2]>,
 }
 
 impl Session {
@@ -847,6 +854,23 @@ impl Session {
     /// Records the camera a frame has just sent.
     pub fn record_camera(&mut self, view: ViewId, camera: crate::damage::CameraKey) {
         self.views.entry(view.0).or_default().camera = Some(camera);
+    }
+
+    /// Whether the sprite atlas's size differs from what the frame-wide block last carried.
+    ///
+    /// The second half of the camera gate on that block: a sheet lands on whatever frame it
+    /// lands on, and that is usually a frame the camera gate would call quiet.
+    #[must_use]
+    pub fn atlas_differs(&self, view: ViewId, atlas: [f32; 2]) -> bool {
+        self.views
+            .get(&view.0)
+            .and_then(|memory| memory.atlas)
+            .is_none_or(|last| last != atlas)
+    }
+
+    /// Records the atlas size a frame has just sent.
+    pub fn record_atlas(&mut self, view: ViewId, atlas: [f32; 2]) {
+        self.views.entry(view.0).or_default().atlas = Some(atlas);
     }
 
     /// Whether this view still needs its declaration and the constant textures.
