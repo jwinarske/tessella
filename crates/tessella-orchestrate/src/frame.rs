@@ -253,8 +253,17 @@ pub struct Patterns<'a> {
     pub texture: tessella_capture_abi::envelope::TextureId,
     /// Its dimensions, which the shader needs to turn a rectangle into texture coordinates.
     pub size: [u16; 2],
-    /// Where each sprite was packed, by name.
+    /// Where each sprite was packed, by name. The *icon* packing: a symbol's quad samples the
+    /// one-pixel border this reports and finds the atlas's clear there.
     pub positions: &'a alloc::collections::BTreeMap<alloc::string::String, IconPosition>,
+    /// Where each sprite's pattern copy was packed, which is what every lookup here reads.
+    ///
+    /// The same images with their borders filled by their own opposite edges. A pattern is
+    /// tiled, so the texel outside one copy is the texel inside the next, and a linear sample at
+    /// the seam has to find the sprite rather than the clear. Falls back to [`Self::positions`]
+    /// for a name the pattern packing does not hold, which is the picture this drew before the
+    /// second packing existed.
+    pub pattern_positions: &'a alloc::collections::BTreeMap<alloc::string::String, IconPosition>,
     /// The atlas's pixels, RGBA, which go up before any drawable names the texture.
     pub pixels: &'a [u8],
     /// Which way the camera last crossed an integer zoom, which chooses a fade's `from`.
@@ -262,6 +271,13 @@ pub struct Patterns<'a> {
 }
 
 impl Patterns<'_> {
+    /// One sprite's pattern packing, or its icon packing where there is none.
+    fn packed(&self, name: &str) -> Option<&IconPosition> {
+        self.pattern_positions
+            .get(name)
+            .or_else(|| self.positions.get(name))
+    }
+
     /// The mix a pattern is at, and how each of its two images is scaled.
     ///
     /// No clock is threaded through: `crossfade` is given mbgl's "no time" sentinel, which
@@ -312,8 +328,8 @@ impl Patterns<'_> {
         };
         let pair = faded(image, zoom, &self.seeded(zoom));
         Some((
-            ubo::atlas_rect(self.positions.get(pair.from?.as_str())?),
-            ubo::atlas_rect(self.positions.get(pair.to?.as_str())?),
+            ubo::atlas_rect(self.packed(pair.from?.as_str())?),
+            ubo::atlas_rect(self.packed(pair.to?.as_str())?),
         ))
     }
 
@@ -333,8 +349,8 @@ impl Patterns<'_> {
 
         let source = paint.get("background-pattern")?;
         let pair = faded(|z| source.image_at(z), zoom, &self.seeded(zoom));
-        let from = self.positions.get(pair.from?.as_str())?;
-        let to = self.positions.get(pair.to?.as_str())?;
+        let from = self.packed(pair.from?.as_str())?;
+        let to = self.packed(pair.to?.as_str())?;
         Some(ubo::BackgroundPatternPlacement {
             placement: ubo::pattern_placement(Some(from), Some(to), self.size)?,
             display: [ubo::display_size(from), ubo::display_size(to)],
@@ -360,8 +376,8 @@ impl Patterns<'_> {
         let source = paint.get(property)?;
         let pair = faded(|z| source.image_at(z), zoom, &self.seeded(zoom));
         ubo::pattern_placement(
-            self.positions.get(pair.from?.as_str()),
-            self.positions.get(pair.to?.as_str()),
+            self.packed(pair.from?.as_str()),
+            self.packed(pair.to?.as_str()),
             self.size,
         )
     }

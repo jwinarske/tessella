@@ -447,6 +447,59 @@ mod atlas {
         assert_eq!(&atlas.pixels()[inside..inside + 4], &[255, 0, 0, 255]);
     }
 
+    /// A pattern copy's border is the image's opposite edge, so a tiled sprite wraps into itself.
+    ///
+    /// mbgl's `DynamicTextureAtlas` writes four copies -- top from the bottom row, bottom from
+    /// the top, left from the right column, right from the left -- into the one-pixel border its
+    /// rectangle reports. A linear sample at the seam between two copies then blends the sprite
+    /// with itself; left clear, it blends with the atlas, which is a thin outline around every
+    /// copy of the pattern. Measured on `tools/parity/scenes/background_pattern_p`: 4,396 gross
+    /// pixels of 786,432 at z16, and 0 with the border wrapped.
+    ///
+    /// The icon packing of the same sprite keeps its clear border, which is the other half of
+    /// why these are two slots rather than one: an icon's quad samples that pixel on purpose.
+    #[test]
+    fn a_pattern_copy_is_bordered_with_its_own_edges() {
+        let sheet = decode_sheet(&flush_sheet()).expect("decodes");
+        let index =
+            tessella_glyph::sprite::parse(INDEX.as_bytes(), Some(sheet.size())).expect("parses");
+
+        let mut atlas = IconAtlas::new(64, 64);
+        let icon = atlas.add(&sheet, &index["red"]).expect("it fits");
+        let pattern = atlas.add_pattern(&sheet, &index["red"]).expect("it fits");
+
+        let (width, _) = atlas.size();
+        let texel = |x: u32, y: u32| {
+            let at = ((y * width + x) as usize) * 4;
+            let mut out = [0u8; 4];
+            out.copy_from_slice(&atlas.pixels()[at..at + 4]);
+            out
+        };
+
+        // The pattern copy: the image is four red pixels, so every border pixel around it is the
+        // red it wrapped from.
+        let (x, y) = (pattern.padded_rect.x + 1, pattern.padded_rect.y + 1);
+        assert_eq!(texel(x, y - 1), [255, 0, 0, 255], "the row above");
+        assert_eq!(texel(x, y + 4), [255, 0, 0, 255], "the row below");
+        assert_eq!(texel(x - 1, y), [255, 0, 0, 255], "the column to the left");
+        assert_eq!(texel(x + 4, y), [255, 0, 0, 255], "the column to the right");
+
+        // And the icon copy of the same sprite still finds the clear there.
+        let (ix, iy) = (icon.padded_rect.x + 1, icon.padded_rect.y + 1);
+        assert_eq!(
+            texel(ix, iy - 1),
+            [0, 0, 0, 0],
+            "an icon's border is the atlas, which is what its quad samples"
+        );
+
+        // Two slots, not one.
+        assert_ne!(
+            (icon.padded_rect.x, icon.padded_rect.y),
+            (pattern.padded_rect.x, pattern.padded_rect.y),
+            "the pattern copy was packed over the icon's"
+        );
+    }
+
     /// A retina icon keeps its ratio through the packing.
     #[test]
     fn the_pixel_ratio_survives_packing() {

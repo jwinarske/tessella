@@ -120,6 +120,7 @@ fn build() -> Vec<tessella_orchestrate::tile::LayerBucket> {
         texture: TextureId(20),
         size: [512, 512],
         positions: &positions,
+        pattern_positions: &positions,
         pixels: &pixels,
         history: ZoomHistory::new(),
     };
