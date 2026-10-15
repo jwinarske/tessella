@@ -235,19 +235,24 @@ that.
       background_pattern_p  z14 p0   462,804 of 786,432   both wrong
                                       21,823              both fixed
 
-  **Not in the sweep**, and tessella#397 is why. What is left is a thin outline around every copy
-  of the sprite, 100% of it brighter on this side: the atlas pads each image with a transparent
-  pixel where mbgl pads a *pattern* with the image's opposite edge, so that a tiled sprite wraps
-  into itself under a linear sampler. It scales with the sprite's own contrast and with nothing
-  else:
+  **Not in the sweep**, and tessella#397 is why. What is left reads as a softer sample rather than
+  a displaced one: both sides repeat at 48 by 39 pixels and the best alignment between them is
+  (0, 0) in every window, but folding the frame over that lattice and averaging gives a cell with
+  *less contrast* on this side -- a column profile of 110 to 125 against the oracle's 116 to 130.
+  It scales with the sprite's own contrast and with nothing else:
 
       interstate_3    contrast 244   21,823
       grass_pattern   contrast  14      174
       sand_noise      contrast   9        0
 
+  And it is the background rather than the sprite or the atlas: `families_p` with
+  `fill-pattern: interstate_3` on its parks reads **15** over 229,833 pixels of parks, four
+  hundred times less per covered pixel, through the same sheet, the same rectangles and the same
+  arithmetic.
+
   The scene keeps `interstate_3` even so, because that contrast is what makes it catch the
   arithmetic at all: over `sand_noise` the broken drawable block reads 0 too. The row joins the
-  sweep when the padding does.
+  sweep when the sampling does.
 - `heat_p` — a heatmap over Berlin's POIs. Captured before any heatmap code existed, so the
   design behind it had a referee rather than an argument; it stood at `gross 271571 (34.532%)`
   then and is at **0** now. Not in the sweep because the sweep is the five-camera gate.
